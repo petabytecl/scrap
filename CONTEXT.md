@@ -1,0 +1,11 @@
+# S.C.R.A.P. Domain Context
+
+S.C.R.A.P. stands for Strategic Cache Relay And Persistence.
+
+The system is being designed as a storage gateway for a billing ETL platform. The platform handles very large numbers of relatively small immutable documents, such as XML and PDF files. Each ETL transaction creates roughly 2 to 7 documents, including ephemeral workflow artifacts and permanent definitive records.
+
+The gateway should give the service fleet a transparent storage interface while hiding whether bytes are served from local hot storage, replicated peer storage, or an external object backend. For the service fleet, the gateway is the storage system. S3, GCS, Azure Blob, or filesystem storage are backend implementations behind the gateway.
+
+The central physical abstraction is a block: an immutable byte container with an index mapping each logical document to `block_id + offset + length + checksum`.
+
+The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md).

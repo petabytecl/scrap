@@ -1,0 +1,570 @@
+# Storage Gateway Design Notes
+
+## Reader And Goal
+
+This note is for an internal engineer resuming the storage gateway architecture discussion.
+
+After reading it, they should be able to continue the design review from the current frontier: block format, metadata storage, shard replication, backend upload policy, and failure-domain planning.
+
+Design status: exploratory. The settled points below are the current working direction, not a final ADR.
+
+## Current Summary
+
+S.C.R.A.P. is a transaction-scoped document storage gateway for billing ETL workflows.
+
+The gateway stores immutable documents addressed by:
+
+```text
+tenant_id
+transaction_id
+document_name
+```
+
+Each transaction produces roughly 2 to 7 immutable documents. Documents may be ephemeral workflow artifacts or permanent definitive records retained for years. A document is invisible while it is being streamed. Once finalize succeeds, it is complete, checksummed, replicated, indexed, and immediately readable.
+
+The service fleet talks to S.C.R.A.P. through a custom gRPC API. Object backends such as S3, GCS, Azure Blob, or filesystem storage are implementation details behind the gateway.
+
+The physical storage abstraction is a unified immutable block format. Every document is stored as a byte range inside a block:
+
+```text
+document -> block_id + offset + length + checksum
+```
+
+Blocks are stored locally for the hot path and uploaded to the backend for durable long-term storage.
+
+## Problem
+
+The billing ETL platform has many microservices that need frequent access to documents such as XML and PDF files. The corpus may reach billions of relatively small files. During a workflow, services may read and write documents multiple times, but each document itself is immutable after creation.
+
+The goal is to build a fast gateway that:
+
+- serves metadata and bytes with low latency;
+- supports streaming reads and writes;
+- keeps hot documents close to the ETL fleet;
+- asynchronously uploads permanent data to external object storage;
+- reduces repeated object-backend reads and writes;
+- supports cold storage management;
+- avoids excessive backend object-count and prefix hot-spotting.
+
+## Workload Facts
+
+- Each `transaction_id` creates roughly 2 to 7 documents.
+- Document names are transaction-local path-like names such as `bill.xml`, `accountants/payroll.xml`, or `sales/bill_1.pdf`.
+- All documents are immutable. There are no document versions in the current model.
+- p50 document size is small.
+- p99 document size is medium.
+- Maximum document size is 128 MiB.
+- Metadata lookup target is single-digit milliseconds at p95.
+- Small-document first byte target is single-digit milliseconds at p95 from the local hot tier.
+- Small-document full read target is low tens of milliseconds at p95, depending on network conditions.
+
+## Non-Negotiable Constraints
+
+- File loss is catastrophic.
+- Continued availability is required during multi-node loss.
+- After a successful write acknowledgment, the gateway is the source of truth.
+- For the service fleet, the gateway is the permanent storage interface.
+- Backend upload may be asynchronous, but post-ack durability cannot be best-effort.
+- `HeadDocument`, `ReadDocument`, and transaction-scoped `FindDocuments` must be strongly consistent after finalize.
+- Global/admin listing, analytics scans, and lifecycle reports may be eventual or snapshot-based.
+
+## API Shape
+
+The primary API is custom gRPC. S3-compatible client behavior is not a v1 goal. Backend portability is a goal.
+
+Core v1 API:
+
+```text
+WriteDocument(stream WriteDocumentRequest) -> WriteDocumentResult
+HeadDocument(transaction_id, document_name) -> DocumentMetadata
+ReadDocument(transaction_id, document_name, range?) -> stream ReadDocumentResponse
+FindDocuments(transaction_id, filters) -> DocumentMetadata[]
+CompleteTransaction(transaction_id) -> TransactionState
+```
+
+`WriteDocument` is a single client-streaming RPC in v1. The first message carries metadata; later messages carry bytes.
+
+The write metadata includes:
+
+```text
+tenant_id
+transaction_id
+document_name
+document_class = permanent | ephemeral
+priority_class = critical_ingest | normal | bulk
+content_type
+expected_length?
+expected_sha256?
+workflow metadata/tags?
+```
+
+`tenant_id` and `priority_class` are supplied by internal callers, trusted for normal operation, and recorded immutably for audit. Optional guardrails can reject unknown tenants, unknown priorities, or emergency-downgrade a noisy service.
+
+`ReadDocument` returns metadata in the first response message, followed by byte chunks:
+
+```text
+response #1:
+  metadata
+  selected range
+  storage_source = local | peer | backend
+
+response #2..N:
+  bytes
+```
+
+Default API chunk size is 1 MiB. Allowed API chunk size range is 64 KiB to 4 MiB. API chunking is separate from block layout and crypto frame size.
+
+## Document Identity
+
+The public document identity is:
+
+```text
+(tenant_id, transaction_id, document_name)
+```
+
+`document_name` is a relative, transaction-local virtual path. It is not a POSIX path and does not create real directories.
+
+Recommended validation:
+
+- normalize separators to `/`;
+- reject absolute paths;
+- reject `..`;
+- reject empty segments;
+- reject duplicate slashes;
+- reject leading or trailing slash;
+- reject control characters;
+- enforce maximum length.
+
+If a service writes the same `(tenant_id, transaction_id, document_name)` twice:
+
+- if the first write is finalized and bytes differ, return `409 Conflict`;
+- if the content hash and compatible metadata match, treat it as an idempotent retry;
+- if another write is in progress, reject or block with a short write lease;
+- every write has an internal attempt/session ID.
+
+## Metadata And Query Scope
+
+The gateway owns system and workflow metadata. It is not a business search engine in v1.
+
+Core metadata includes:
+
+```text
+tenant_id
+transaction_id
+document_name
+document_class
+priority_class
+content_type
+byte_length
+logical_sha256
+stored_sha256
+ciphertext_sha256?
+created_at
+created_by_service
+workflow_stage?
+tags?
+storage_locations
+lifecycle_state
+```
+
+`FindDocuments` is transaction-scoped and strongly consistent. It may filter by:
+
+```text
+document_name exact/prefix
+document_class
+content_type
+workflow_stage
+created_by_service
+created_at range
+tags
+```
+
+Arbitrary cross-transaction business search should live in a separate indexed system.
+
+## Write Visibility
+
+Documents are visible only after finalize succeeds.
+
+Write flow:
+
+```text
+client streams document
+gateway computes length and hashes
+gateway stores bytes locally
+gateway replicates bytes according to priority policy
+gateway commits metadata through the shard consensus group
+gateway publishes the document in the transaction index
+gateway enqueues upload/lifecycle work
+ACK
+```
+
+Partial writes are never visible to readers. If streaming fails before finalize, no valid document exists.
+
+## Sharding And Routing
+
+Shard by `transaction_id`.
+
+All documents for a transaction live in the same shard group. This keeps `FindDocuments(transaction_id, filters)`, lifecycle decisions, and per-transaction accounting local to one shard.
+
+Any gateway may accept any API request. Internally:
+
+- writes are routed to the shard leader early;
+- the leader coordinates byte replication and metadata commit;
+- reads may be served by any shard member with safe metadata and committed local bytes;
+- non-member gateways forward internally to an appropriate shard member.
+
+Every gateway keeps a small routing index. Shard members keep hot in-memory document indexes for their owned or replicated shards. Do not keep a full global billion-document index on every gateway.
+
+## Replication And Availability
+
+Each shard group has five voting replicas as the baseline. This targets continued availability during two node failures, assuming placement across independent failure domains.
+
+Consensus, such as Raft, stores metadata, ownership, lifecycle state, upload journal entries, and commit state. Document bytes are replicated through a separate data path. Bytes should not be embedded in the consensus log.
+
+Commit protocol:
+
+```text
+writer/leader stores bytes locally
+leader replicates bytes to target peers
+peers fsync and checksum prepared bytes
+leader commits metadata through consensus
+replicas mark bytes committed/readable
+ACK to client
+```
+
+Write durability policy:
+
+```text
+critical_ingest:
+  ACK after bytes are durable on all 5 replicas
+  metadata committed by consensus quorum
+
+normal / bulk:
+  ACK after bytes are durable on quorum, usually 3 of 5
+  metadata committed by consensus quorum
+  repair to all 5 replicas immediately
+```
+
+Repair target for quorum-written documents:
+
+```text
+target full replication: under 10 seconds
+hard alert: over 60 seconds
+throttle writes if repair backlog exceeds safety threshold
+```
+
+Verified backend storage counts for durability. Only committed local replicas count for hot read availability.
+
+## Read Path
+
+Reads prefer local hot storage.
+
+Read order:
+
+```text
+lookup shard route
+lookup committed metadata in memory
+if local committed physical ref exists:
+  stream local block range
+else if peer committed physical ref exists:
+  stream peer block range
+else:
+  stream from backend block range
+```
+
+Metadata may be served by the leader or by lease-safe/read-index-valid followers. Bytes may be served by any committed checksum-valid replica.
+
+Priority does not affect read scheduling in the current model. Priority is write-side only.
+
+## Transaction Lifecycle
+
+Transaction state is used for lifecycle, cleanup, compaction, upload urgency, quotas, and reporting. It does not control document visibility.
+
+Transaction lifecycle:
+
+```text
+active
+  -> completed_explicit
+  -> inactive_by_policy
+  -> expired
+```
+
+Completion is both explicit and policy-driven:
+
+- ETL orchestration may call `CompleteTransaction(transaction_id)`;
+- fallback inactivity timeout is 24 hours after the last finalized document.
+
+Document lifecycle:
+
+```text
+writing
+  -> finalized/readable
+  -> uploaded
+  -> compacted
+  -> local_cache_only
+  -> evicted_locally
+  -> expired/tombstoned
+```
+
+Document class default is `permanent`. Ephemeral must be explicit or policy-derived.
+
+Classification priority:
+
+```text
+explicit writer metadata
+  > transaction/workflow policy
+  > document_name prefix policy
+  > gateway default permanent
+```
+
+Ephemeral retention default is 7 days after explicit completion or inactivity-by-policy.
+
+Normal services do not delete documents directly. Deletion is lifecycle/admin-driven, represented by tombstone metadata, and byte reclamation is asynchronous after retention and reconciliation rules pass.
+
+## Block Storage Model
+
+The physical storage unit is a block.
+
+Every document is stored as a byte range inside a block:
+
+```text
+block_id
+offset
+length
+checksum
+```
+
+Blocks are scoped by:
+
+```text
+shard_id
+lifecycle_class = permanent | ephemeral
+size_class = small | medium
+```
+
+Size classes:
+
+```text
+small: <= 1 MiB
+medium: > 1 MiB and <= 128 MiB
+reject: > 128 MiB
+```
+
+Block sizing:
+
+```text
+target block size: 256 MiB
+maximum block size: 512 MiB
+maximum open age: 30-60 seconds
+```
+
+Blocks are appendable only while open. Open blocks are local to the shard leader. A block becomes immutable when sealed.
+
+Documents inside an open block can be finalized and read immediately. The block itself becomes eligible for backend upload after it is sealed.
+
+Replica-local layouts are allowed. A document may live at different block offsets on different replicas:
+
+```text
+replica A: block_a offset 100 length 42
+replica B: block_b offset 900 length 42
+replica C: block_c offset 12 length 42
+```
+
+The logical document record is cluster-wide. Physical refs are replica-specific.
+
+## Local Block Files
+
+Local hot storage uses `.blk` plus `.idx`.
+
+Open local block:
+
+```text
+<block_id>.blk
+open-block journal
+```
+
+Sealed local block:
+
+```text
+<block_id>.blk
+<block_id>.idx
+metadata DB entries
+in-memory index entries
+```
+
+The hot read path uses the in-memory index and local metadata store. The local `.idx` exists for recovery, scrubbing, and repair.
+
+If the metadata DB is lost but block files remain:
+
+1. consensus snapshot/log restores authoritative committed metadata;
+2. local `.idx` files prove which physical byte ranges exist locally;
+3. checksums verify block/document bytes;
+4. gateway rebuilds local readable physical refs.
+
+## Backend Block Storage
+
+The backend stores sealed blocks. V1 uses two backend objects per block:
+
+```text
+<block_id>.blk
+<block_id>.idx
+```
+
+The leader's sealed block is the canonical backend block in v1:
+
+```text
+leader local block sealed
+verify block checksum
+upload block and index to backend
+commit backend block location
+documents now have backend refs: block_id + offset + length
+```
+
+If the leader fails before upload, recovery may upload another replica's sealed block or rebuild a canonical backend block from committed documents.
+
+Reads prefer local replica physical refs, then peer refs, then backend canonical block refs.
+
+## Backend Abstraction
+
+The internal model is backend-portable, not S3-specific.
+
+Backend interface:
+
+```text
+put_object(key, stream, metadata, checksum)
+get_object_range(key, offset, length)
+head_object(key)
+delete_object(key)
+list_prefix?     # operational only, not hot path
+```
+
+Initial deployment uses one primary durable backend. Metadata should support multiple backend locations later for disaster recovery or cross-cloud replication.
+
+Never depend on backend `LIST` for normal reads or transaction queries. The gateway metadata index is the source of truth.
+
+## Backend Key Layout And Rate Control
+
+Application virtual paths must not be used directly as backend key prefixes. Backend keys need high-cardinality physical prefixes to avoid hot partitions.
+
+Example physical layout:
+
+```text
+blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.blk
+blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.idx
+```
+
+The uploader is a first-class subsystem:
+
+```text
+partitioned durable queues
+per-backend concurrency control
+per-physical-prefix token buckets
+adaptive retry/backoff on backend throttling
+burst smoothing
+priority lanes
+backlog metrics and alerts
+```
+
+Upload lanes:
+
+```text
+permanent-block-upload
+ephemeral-spill-if-policy-requires
+repair/reconciliation
+disaster-recovery-secondary
+```
+
+Under local disk pressure:
+
+1. delete only expired/eligible ephemeral data;
+2. throttle by tenant/workload using fair-share policy;
+3. reject new writes with retryable errors before durability becomes unsafe;
+4. never acknowledge a write that cannot be durably protected.
+
+## Permanent And Ephemeral Backend Policy
+
+Permanent documents are uploaded to the configured backend after local durable commit and block seal.
+
+Ephemeral documents default to local replicated storage only. They are not uploaded to the backend unless policy allows spill during disk pressure or long retention.
+
+Backend upload state may reduce durability repair urgency, but it does not replace local replicas for low-latency active workflow reads.
+
+## Encryption And Compression
+
+Backend encryption is policy-driven. It is primarily important for external object storage such as S3. Local hot storage may remain application-plaintext by default, relying on node/disk/Kubernetes controls.
+
+Recommended encryption model:
+
+- use OpenBao Transit for envelope encryption;
+- do not send whole blocks to Transit for encryption;
+- request a data key from Transit;
+- encrypt block data locally;
+- store the encrypted data key and encryption metadata in block metadata;
+- discard plaintext keys after use, subject to a bounded in-memory cache.
+
+Efficient backend range reads require framed block encryption.
+
+Recommended encrypted block shape:
+
+```text
+block header / index:
+  block_id
+  encryption_mode
+  frame_size
+  frame_count
+  encrypted_data_key
+  algorithm
+  frame table
+
+frame:
+  plaintext_offset
+  plaintext_length
+  ciphertext_offset
+  ciphertext_length
+  nonce
+  auth tag / checksum
+```
+
+Default crypto frame size is 1 MiB, with 4 MiB as a possible tuning option.
+
+Encryption is transparent to clients. Normal reads return original logical document bytes.
+
+Compression default is none. Optional per-document compression may be used for compressible content such as XML. Compression happens before storage/encryption. Avoid whole-block or whole-frame compression in v1 because it complicates efficient range reads.
+
+Hashes:
+
+```text
+logical_sha256: original client-visible bytes
+stored_sha256: bytes stored inside the block before backend encryption
+ciphertext_sha256: encrypted backend bytes when applicable
+```
+
+## Open Questions
+
+These are the known gray areas to resolve before turning this into an ADR or implementation plan.
+
+- What are the exact failure domains for replica placement: nodes, racks, zones, regions, or Kubernetes node pools?
+- Which consensus implementation should back shard metadata?
+- Which local durable metadata store should back each shard member?
+- What is the exact block binary format and `.idx` schema?
+- Should block IDs be generated, content-addressed, or hybrid?
+- What is the OpenBao key hierarchy, cache TTL, rotation, and outage behavior?
+- What are the exact backend key prefix counts and token-bucket limits per provider?
+- How much local disk is required for the worst multinational bulk burst plus backend slowdown?
+- What are the write admission thresholds for disk pressure and repair backlog?
+- What are the scrubbing, checksum verification, and repair schedules?
+- How should shard movement, resharding, and replica replacement work?
+- What is the admin API for transaction listing, incomplete uploads, and lifecycle reporting?
+- What authorization model protects internal APIs, even if caller metadata is trusted?
+- Should there be a dedicated disaster-recovery backend in v1 or only schema support for it?
+
+## Next Discussion Frontier
+
+Resume by choosing the first implementation-level foundation:
+
+1. block format and index schema;
+2. shard metadata store and consensus library;
+3. write commit protocol and repair state machine;
+4. backend uploader queue/rate-control design.
+
+The recommended next topic is the block format and index schema, because it influences local reads, backend upload, encryption frames, recovery, and metadata shape.
