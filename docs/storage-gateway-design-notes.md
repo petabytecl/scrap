@@ -8,6 +8,8 @@ After reading it, they should be able to continue the design review from the cur
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
+Accepted ADRs for the hard-to-reverse decisions extracted from this discussion live in `docs/adr/`. This note remains the detailed working notebook and should continue to hold rationale, defaults, and unresolved questions that are too detailed for short ADRs.
+
 ## Current Summary
 
 S.C.R.A.P. is a transaction-scoped document storage gateway for billing ETL workflows.
@@ -3471,15 +3473,15 @@ These are the known gray areas to resolve before turning this into an ADR or imp
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, published metadata format, DR drill model, admin API shape, and internal authorization model are concrete enough to move toward ADRs and implementation spikes.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, published metadata format, DR drill model, admin API shape, and internal authorization model are concrete enough to move toward implementation spikes.
 
 Resume by choosing between:
 
-1. convert the settled design into ADRs for the hard-to-reverse decisions;
-2. define the first implementation spike and benchmark harness;
-3. review the reserved business/opinion questions above;
-4. turn the design into initial GitHub issues/PRD slices.
+1. define the first implementation spike and benchmark harness;
+2. review the reserved business/opinion questions above;
+3. turn the design into initial GitHub issues/PRD slices;
+4. refine concrete production profile examples after real deployment numbers exist.
 
-The recommended next topic is ADR extraction. The architecture now has enough concrete decisions that the risky, expensive-to-change choices should be promoted from exploratory notes into short decision records before implementation work starts.
+The recommended next topic is the first implementation spike. The architecture now has enough concrete decisions and accepted ADRs to validate the highest-risk assumptions with a disposable Go spike before production code is written.
 
 The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.
