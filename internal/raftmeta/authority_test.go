@@ -29,6 +29,14 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	}, completedAt, map[string]string{"closed_by": "test"}, "cmd-2"); err != nil {
 		t.Fatalf("complete transaction: %v", err)
 	}
+	if err := authority.RecordUploadIntent(context.Background(), metastore.UploadIntent{
+		BlockID:           document.Location.BlockID,
+		BackendObjectKey:  "objects/block-1.blk",
+		IndexObjectKey:    "objects/block-1.idx",
+		EnvelopeObjectKey: "objects/block-1.env",
+	}, "cmd-3", time.Unix(300, 0).UTC()); err != nil {
+		t.Fatalf("record upload intent: %v", err)
+	}
 	closeTestAuthority(t, authority, metadata)
 
 	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
@@ -57,6 +65,13 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	}
 	if transaction.Tags["closed_by"] != "test" {
 		t.Fatalf("rebuilt tags = %#v, want closed_by=test", transaction.Tags)
+	}
+	intent, err := rebuiltMetadata.GetUploadIntent(document.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get rebuilt upload intent: %v", err)
+	}
+	if intent.BackendObjectKey != "objects/block-1.blk" || intent.State != metastore.UploadStatePending {
+		t.Fatalf("rebuilt upload intent = %#v, want pending objects/block-1.blk", intent)
 	}
 }
 

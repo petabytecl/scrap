@@ -99,6 +99,29 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 	return a.store.GetTransaction(transaction)
 }
 
+func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.UploadIntent, commandID string, proposedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_RecordUploadIntent{
+			RecordUploadIntent: &metastorev1.RecordUploadIntentCommand{
+				BlockId:           intent.BlockID,
+				BackendObjectKey:  intent.BackendObjectKey,
+				IndexObjectKey:    intent.IndexObjectKey,
+				EnvelopeObjectKey: intent.EnvelopeObjectKey,
+			},
+		},
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appendAndApply(command)
+}
+
 func (a *Authority) replay() error {
 	entries, err := a.log.Replay()
 	if err != nil {

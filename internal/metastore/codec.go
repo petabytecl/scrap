@@ -87,6 +87,36 @@ func unmarshalTransactionRecord(data []byte) (*metastorev1.TransactionRecord, er
 	return &record, nil
 }
 
+func marshalUploadIntent(intent UploadIntent) ([]byte, error) {
+	return marshalUploadIntentRecord(uploadIntentToProto(intent))
+}
+
+func unmarshalUploadIntent(data []byte) (UploadIntent, error) {
+	record, err := unmarshalUploadIntentRecord(data)
+	if err != nil {
+		return UploadIntent{}, err
+	}
+	return uploadIntentFromProto(record), nil
+}
+
+func marshalUploadIntentRecord(record *metastorev1.UploadIntentRecord) ([]byte, error) {
+	if err := validateSchemaVersion("upload intent", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return protoMarshal.Marshal(record)
+}
+
+func unmarshalUploadIntentRecord(data []byte) (*metastorev1.UploadIntentRecord, error) {
+	var record metastorev1.UploadIntentRecord
+	if err := proto.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	if err := validateSchemaVersion("upload intent", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 func validateSchemaVersion(recordKind string, version uint32) error {
 	if version != CurrentSchemaVersion {
 		return fmt.Errorf("%w: %s record version %d", ErrUnsupportedSchemaVersion, recordKind, version)
@@ -194,6 +224,35 @@ func transactionFromProto(record *metastorev1.TransactionRecord) Transaction {
 		transaction.TimeoutAt = &timeoutAt
 	}
 	return transaction
+}
+
+func uploadIntentToProto(intent UploadIntent) *metastorev1.UploadIntentRecord {
+	return &metastorev1.UploadIntentRecord{
+		SchemaVersion:     CurrentSchemaVersion,
+		BlockId:           intent.BlockID,
+		BackendObjectKey:  intent.BackendObjectKey,
+		IndexObjectKey:    intent.IndexObjectKey,
+		EnvelopeObjectKey: intent.EnvelopeObjectKey,
+		State:             metastorev1.UploadState(intent.State),
+		LastError:         optionalStringPointer(intent.LastError, intent.HasLastError),
+		UpdatedAt:         timestamppb.New(intent.UpdatedAt),
+	}
+}
+
+func uploadIntentFromProto(record *metastorev1.UploadIntentRecord) UploadIntent {
+	intent := UploadIntent{
+		BlockID:           record.GetBlockId(),
+		BackendObjectKey:  record.GetBackendObjectKey(),
+		IndexObjectKey:    record.GetIndexObjectKey(),
+		EnvelopeObjectKey: record.GetEnvelopeObjectKey(),
+		State:             UploadState(record.GetState()),
+		LastError:         record.GetLastError(),
+		HasLastError:      record.LastError != nil,
+	}
+	if record.GetUpdatedAt() != nil {
+		intent.UpdatedAt = record.GetUpdatedAt().AsTime()
+	}
+	return intent
 }
 
 func locationToProto(location blockstore.Record) *metastorev1.Location {

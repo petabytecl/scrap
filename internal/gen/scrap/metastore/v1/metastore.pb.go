@@ -828,6 +828,122 @@ func (x *TransactionRecord) GetCommittedIndex() uint64 {
 	return 0
 }
 
+type UploadIntentRecord struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	BlockId           string                 `protobuf:"bytes,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	BackendObjectKey  string                 `protobuf:"bytes,2,opt,name=backend_object_key,json=backendObjectKey,proto3" json:"backend_object_key,omitempty"`
+	IndexObjectKey    string                 `protobuf:"bytes,3,opt,name=index_object_key,json=indexObjectKey,proto3" json:"index_object_key,omitempty"`
+	EnvelopeObjectKey string                 `protobuf:"bytes,4,opt,name=envelope_object_key,json=envelopeObjectKey,proto3" json:"envelope_object_key,omitempty"`
+	State             UploadState            `protobuf:"varint,5,opt,name=state,proto3,enum=scrap.metastore.v1.UploadState" json:"state,omitempty"`
+	LastError         *string                `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3,oneof" json:"last_error,omitempty"`
+	UpdatedAt         *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	SchemaVersion     uint32                 `protobuf:"varint,20,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ShardId           string                 `protobuf:"bytes,21,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	CommittedIndex    uint64                 `protobuf:"varint,22,opt,name=committed_index,json=committedIndex,proto3" json:"committed_index,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *UploadIntentRecord) Reset() {
+	*x = UploadIntentRecord{}
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadIntentRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadIntentRecord) ProtoMessage() {}
+
+func (x *UploadIntentRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadIntentRecord.ProtoReflect.Descriptor instead.
+func (*UploadIntentRecord) Descriptor() ([]byte, []int) {
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *UploadIntentRecord) GetBlockId() string {
+	if x != nil {
+		return x.BlockId
+	}
+	return ""
+}
+
+func (x *UploadIntentRecord) GetBackendObjectKey() string {
+	if x != nil {
+		return x.BackendObjectKey
+	}
+	return ""
+}
+
+func (x *UploadIntentRecord) GetIndexObjectKey() string {
+	if x != nil {
+		return x.IndexObjectKey
+	}
+	return ""
+}
+
+func (x *UploadIntentRecord) GetEnvelopeObjectKey() string {
+	if x != nil {
+		return x.EnvelopeObjectKey
+	}
+	return ""
+}
+
+func (x *UploadIntentRecord) GetState() UploadState {
+	if x != nil {
+		return x.State
+	}
+	return UploadState_UPLOAD_STATE_UNSPECIFIED
+}
+
+func (x *UploadIntentRecord) GetLastError() string {
+	if x != nil && x.LastError != nil {
+		return *x.LastError
+	}
+	return ""
+}
+
+func (x *UploadIntentRecord) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *UploadIntentRecord) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *UploadIntentRecord) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+func (x *UploadIntentRecord) GetCommittedIndex() uint64 {
+	if x != nil {
+		return x.CommittedIndex
+	}
+	return 0
+}
+
 type ShardCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -849,7 +965,7 @@ type ShardCommand struct {
 
 func (x *ShardCommand) Reset() {
 	*x = ShardCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[6]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -861,7 +977,7 @@ func (x *ShardCommand) String() string {
 func (*ShardCommand) ProtoMessage() {}
 
 func (x *ShardCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[6]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -874,7 +990,7 @@ func (x *ShardCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardCommand.ProtoReflect.Descriptor instead.
 func (*ShardCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{6}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ShardCommand) GetSchemaVersion() uint32 {
@@ -1015,7 +1131,7 @@ type CommitDocumentCommand struct {
 
 func (x *CommitDocumentCommand) Reset() {
 	*x = CommitDocumentCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[7]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1027,7 +1143,7 @@ func (x *CommitDocumentCommand) String() string {
 func (*CommitDocumentCommand) ProtoMessage() {}
 
 func (x *CommitDocumentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[7]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1040,7 +1156,7 @@ func (x *CommitDocumentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitDocumentCommand.ProtoReflect.Descriptor instead.
 func (*CommitDocumentCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{7}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CommitDocumentCommand) GetDocument() *DocumentRecord {
@@ -1062,7 +1178,7 @@ type CompleteTransactionCommand struct {
 
 func (x *CompleteTransactionCommand) Reset() {
 	*x = CompleteTransactionCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1074,7 +1190,7 @@ func (x *CompleteTransactionCommand) String() string {
 func (*CompleteTransactionCommand) ProtoMessage() {}
 
 func (x *CompleteTransactionCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1087,7 +1203,7 @@ func (x *CompleteTransactionCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteTransactionCommand.ProtoReflect.Descriptor instead.
 func (*CompleteTransactionCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{8}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CompleteTransactionCommand) GetTenantId() string {
@@ -1130,7 +1246,7 @@ type RecordUploadIntentCommand struct {
 
 func (x *RecordUploadIntentCommand) Reset() {
 	*x = RecordUploadIntentCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1142,7 +1258,7 @@ func (x *RecordUploadIntentCommand) String() string {
 func (*RecordUploadIntentCommand) ProtoMessage() {}
 
 func (x *RecordUploadIntentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1155,7 +1271,7 @@ func (x *RecordUploadIntentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordUploadIntentCommand.ProtoReflect.Descriptor instead.
 func (*RecordUploadIntentCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{9}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RecordUploadIntentCommand) GetBlockId() string {
@@ -1199,7 +1315,7 @@ type UpdateRestoreStateCommand struct {
 
 func (x *UpdateRestoreStateCommand) Reset() {
 	*x = UpdateRestoreStateCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1211,7 +1327,7 @@ func (x *UpdateRestoreStateCommand) String() string {
 func (*UpdateRestoreStateCommand) ProtoMessage() {}
 
 func (x *UpdateRestoreStateCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1224,7 +1340,7 @@ func (x *UpdateRestoreStateCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRestoreStateCommand.ProtoReflect.Descriptor instead.
 func (*UpdateRestoreStateCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{10}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UpdateRestoreStateCommand) GetTenantId() string {
@@ -1276,7 +1392,7 @@ type RecordRepairStateCommand struct {
 
 func (x *RecordRepairStateCommand) Reset() {
 	*x = RecordRepairStateCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1288,7 +1404,7 @@ func (x *RecordRepairStateCommand) String() string {
 func (*RecordRepairStateCommand) ProtoMessage() {}
 
 func (x *RecordRepairStateCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1301,7 +1417,7 @@ func (x *RecordRepairStateCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordRepairStateCommand.ProtoReflect.Descriptor instead.
 func (*RecordRepairStateCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{11}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RecordRepairStateCommand) GetTenantId() string {
@@ -1359,7 +1475,7 @@ type TombstoneDocumentCommand struct {
 
 func (x *TombstoneDocumentCommand) Reset() {
 	*x = TombstoneDocumentCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1371,7 +1487,7 @@ func (x *TombstoneDocumentCommand) String() string {
 func (*TombstoneDocumentCommand) ProtoMessage() {}
 
 func (x *TombstoneDocumentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1384,7 +1500,7 @@ func (x *TombstoneDocumentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TombstoneDocumentCommand.ProtoReflect.Descriptor instead.
 func (*TombstoneDocumentCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{12}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TombstoneDocumentCommand) GetTenantId() string {
@@ -1515,7 +1631,21 @@ const file_scrap_metastore_v1_metastore_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x0f\n" +
 	"\r_completed_atB\r\n" +
-	"\v_timeout_at\"\xf7\x05\n" +
+	"\v_timeout_at\"\xc7\x03\n" +
+	"\x12UploadIntentRecord\x12\x19\n" +
+	"\bblock_id\x18\x01 \x01(\tR\ablockId\x12,\n" +
+	"\x12backend_object_key\x18\x02 \x01(\tR\x10backendObjectKey\x12(\n" +
+	"\x10index_object_key\x18\x03 \x01(\tR\x0eindexObjectKey\x12.\n" +
+	"\x13envelope_object_key\x18\x04 \x01(\tR\x11envelopeObjectKey\x125\n" +
+	"\x05state\x18\x05 \x01(\x0e2\x1f.scrap.metastore.v1.UploadStateR\x05state\x12\"\n" +
+	"\n" +
+	"last_error\x18\x06 \x01(\tH\x00R\tlastError\x88\x01\x01\x129\n" +
+	"\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12%\n" +
+	"\x0eschema_version\x18\x14 \x01(\rR\rschemaVersion\x12\x19\n" +
+	"\bshard_id\x18\x15 \x01(\tR\ashardId\x12'\n" +
+	"\x0fcommitted_index\x18\x16 \x01(\x04R\x0ecommittedIndexB\r\n" +
+	"\v_last_error\"\xf7\x05\n" +
 	"\fShardCommand\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\tR\ashardId\x12\x1d\n" +
@@ -1593,7 +1723,7 @@ func file_scrap_metastore_v1_metastore_proto_rawDescGZIP() []byte {
 }
 
 var file_scrap_metastore_v1_metastore_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_scrap_metastore_v1_metastore_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_scrap_metastore_v1_metastore_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_scrap_metastore_v1_metastore_proto_goTypes = []any{
 	(RestoreState)(0),                  // 0: scrap.metastore.v1.RestoreState
 	(UploadState)(0),                   // 1: scrap.metastore.v1.UploadState
@@ -1603,49 +1733,52 @@ var file_scrap_metastore_v1_metastore_proto_goTypes = []any{
 	(*ReplicaRef)(nil),                 // 5: scrap.metastore.v1.ReplicaRef
 	(*EnvelopeRef)(nil),                // 6: scrap.metastore.v1.EnvelopeRef
 	(*TransactionRecord)(nil),          // 7: scrap.metastore.v1.TransactionRecord
-	(*ShardCommand)(nil),               // 8: scrap.metastore.v1.ShardCommand
-	(*CommitDocumentCommand)(nil),      // 9: scrap.metastore.v1.CommitDocumentCommand
-	(*CompleteTransactionCommand)(nil), // 10: scrap.metastore.v1.CompleteTransactionCommand
-	(*RecordUploadIntentCommand)(nil),  // 11: scrap.metastore.v1.RecordUploadIntentCommand
-	(*UpdateRestoreStateCommand)(nil),  // 12: scrap.metastore.v1.UpdateRestoreStateCommand
-	(*RecordRepairStateCommand)(nil),   // 13: scrap.metastore.v1.RecordRepairStateCommand
-	(*TombstoneDocumentCommand)(nil),   // 14: scrap.metastore.v1.TombstoneDocumentCommand
-	nil,                                // 15: scrap.metastore.v1.DocumentRecord.TagsEntry
-	nil,                                // 16: scrap.metastore.v1.TransactionRecord.TagsEntry
-	nil,                                // 17: scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
-	(*timestamppb.Timestamp)(nil),      // 18: google.protobuf.Timestamp
+	(*UploadIntentRecord)(nil),         // 8: scrap.metastore.v1.UploadIntentRecord
+	(*ShardCommand)(nil),               // 9: scrap.metastore.v1.ShardCommand
+	(*CommitDocumentCommand)(nil),      // 10: scrap.metastore.v1.CommitDocumentCommand
+	(*CompleteTransactionCommand)(nil), // 11: scrap.metastore.v1.CompleteTransactionCommand
+	(*RecordUploadIntentCommand)(nil),  // 12: scrap.metastore.v1.RecordUploadIntentCommand
+	(*UpdateRestoreStateCommand)(nil),  // 13: scrap.metastore.v1.UpdateRestoreStateCommand
+	(*RecordRepairStateCommand)(nil),   // 14: scrap.metastore.v1.RecordRepairStateCommand
+	(*TombstoneDocumentCommand)(nil),   // 15: scrap.metastore.v1.TombstoneDocumentCommand
+	nil,                                // 16: scrap.metastore.v1.DocumentRecord.TagsEntry
+	nil,                                // 17: scrap.metastore.v1.TransactionRecord.TagsEntry
+	nil,                                // 18: scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
+	(*timestamppb.Timestamp)(nil),      // 19: google.protobuf.Timestamp
 }
 var file_scrap_metastore_v1_metastore_proto_depIdxs = []int32{
-	18, // 0: scrap.metastore.v1.DocumentRecord.created_at:type_name -> google.protobuf.Timestamp
-	18, // 1: scrap.metastore.v1.DocumentRecord.finalized_at:type_name -> google.protobuf.Timestamp
-	15, // 2: scrap.metastore.v1.DocumentRecord.tags:type_name -> scrap.metastore.v1.DocumentRecord.TagsEntry
+	19, // 0: scrap.metastore.v1.DocumentRecord.created_at:type_name -> google.protobuf.Timestamp
+	19, // 1: scrap.metastore.v1.DocumentRecord.finalized_at:type_name -> google.protobuf.Timestamp
+	16, // 2: scrap.metastore.v1.DocumentRecord.tags:type_name -> scrap.metastore.v1.DocumentRecord.TagsEntry
 	3,  // 3: scrap.metastore.v1.DocumentRecord.location:type_name -> scrap.metastore.v1.Location
 	6,  // 4: scrap.metastore.v1.DocumentRecord.envelope_ref:type_name -> scrap.metastore.v1.EnvelopeRef
 	0,  // 5: scrap.metastore.v1.DocumentRecord.restore_state:type_name -> scrap.metastore.v1.RestoreState
 	1,  // 6: scrap.metastore.v1.DocumentRecord.upload_state:type_name -> scrap.metastore.v1.UploadState
 	4,  // 7: scrap.metastore.v1.Location.frames:type_name -> scrap.metastore.v1.FrameRecord
 	5,  // 8: scrap.metastore.v1.Location.replicas:type_name -> scrap.metastore.v1.ReplicaRef
-	18, // 9: scrap.metastore.v1.TransactionRecord.created_at:type_name -> google.protobuf.Timestamp
-	18, // 10: scrap.metastore.v1.TransactionRecord.completed_at:type_name -> google.protobuf.Timestamp
-	18, // 11: scrap.metastore.v1.TransactionRecord.timeout_at:type_name -> google.protobuf.Timestamp
-	16, // 12: scrap.metastore.v1.TransactionRecord.tags:type_name -> scrap.metastore.v1.TransactionRecord.TagsEntry
-	18, // 13: scrap.metastore.v1.ShardCommand.proposed_at:type_name -> google.protobuf.Timestamp
-	9,  // 14: scrap.metastore.v1.ShardCommand.commit_document:type_name -> scrap.metastore.v1.CommitDocumentCommand
-	10, // 15: scrap.metastore.v1.ShardCommand.complete_transaction:type_name -> scrap.metastore.v1.CompleteTransactionCommand
-	11, // 16: scrap.metastore.v1.ShardCommand.record_upload_intent:type_name -> scrap.metastore.v1.RecordUploadIntentCommand
-	12, // 17: scrap.metastore.v1.ShardCommand.update_restore_state:type_name -> scrap.metastore.v1.UpdateRestoreStateCommand
-	13, // 18: scrap.metastore.v1.ShardCommand.record_repair_state:type_name -> scrap.metastore.v1.RecordRepairStateCommand
-	14, // 19: scrap.metastore.v1.ShardCommand.tombstone_document:type_name -> scrap.metastore.v1.TombstoneDocumentCommand
-	2,  // 20: scrap.metastore.v1.CommitDocumentCommand.document:type_name -> scrap.metastore.v1.DocumentRecord
-	18, // 21: scrap.metastore.v1.CompleteTransactionCommand.completed_at:type_name -> google.protobuf.Timestamp
-	17, // 22: scrap.metastore.v1.CompleteTransactionCommand.tags:type_name -> scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
-	0,  // 23: scrap.metastore.v1.UpdateRestoreStateCommand.restore_state:type_name -> scrap.metastore.v1.RestoreState
-	18, // 24: scrap.metastore.v1.TombstoneDocumentCommand.tombstoned_at:type_name -> google.protobuf.Timestamp
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	19, // 9: scrap.metastore.v1.TransactionRecord.created_at:type_name -> google.protobuf.Timestamp
+	19, // 10: scrap.metastore.v1.TransactionRecord.completed_at:type_name -> google.protobuf.Timestamp
+	19, // 11: scrap.metastore.v1.TransactionRecord.timeout_at:type_name -> google.protobuf.Timestamp
+	17, // 12: scrap.metastore.v1.TransactionRecord.tags:type_name -> scrap.metastore.v1.TransactionRecord.TagsEntry
+	1,  // 13: scrap.metastore.v1.UploadIntentRecord.state:type_name -> scrap.metastore.v1.UploadState
+	19, // 14: scrap.metastore.v1.UploadIntentRecord.updated_at:type_name -> google.protobuf.Timestamp
+	19, // 15: scrap.metastore.v1.ShardCommand.proposed_at:type_name -> google.protobuf.Timestamp
+	10, // 16: scrap.metastore.v1.ShardCommand.commit_document:type_name -> scrap.metastore.v1.CommitDocumentCommand
+	11, // 17: scrap.metastore.v1.ShardCommand.complete_transaction:type_name -> scrap.metastore.v1.CompleteTransactionCommand
+	12, // 18: scrap.metastore.v1.ShardCommand.record_upload_intent:type_name -> scrap.metastore.v1.RecordUploadIntentCommand
+	13, // 19: scrap.metastore.v1.ShardCommand.update_restore_state:type_name -> scrap.metastore.v1.UpdateRestoreStateCommand
+	14, // 20: scrap.metastore.v1.ShardCommand.record_repair_state:type_name -> scrap.metastore.v1.RecordRepairStateCommand
+	15, // 21: scrap.metastore.v1.ShardCommand.tombstone_document:type_name -> scrap.metastore.v1.TombstoneDocumentCommand
+	2,  // 22: scrap.metastore.v1.CommitDocumentCommand.document:type_name -> scrap.metastore.v1.DocumentRecord
+	19, // 23: scrap.metastore.v1.CompleteTransactionCommand.completed_at:type_name -> google.protobuf.Timestamp
+	18, // 24: scrap.metastore.v1.CompleteTransactionCommand.tags:type_name -> scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
+	0,  // 25: scrap.metastore.v1.UpdateRestoreStateCommand.restore_state:type_name -> scrap.metastore.v1.RestoreState
+	19, // 26: scrap.metastore.v1.TombstoneDocumentCommand.tombstoned_at:type_name -> google.protobuf.Timestamp
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_scrap_metastore_v1_metastore_proto_init() }
@@ -1656,7 +1789,8 @@ func file_scrap_metastore_v1_metastore_proto_init() {
 	file_scrap_metastore_v1_metastore_proto_msgTypes[0].OneofWrappers = []any{}
 	file_scrap_metastore_v1_metastore_proto_msgTypes[1].OneofWrappers = []any{}
 	file_scrap_metastore_v1_metastore_proto_msgTypes[5].OneofWrappers = []any{}
-	file_scrap_metastore_v1_metastore_proto_msgTypes[6].OneofWrappers = []any{
+	file_scrap_metastore_v1_metastore_proto_msgTypes[6].OneofWrappers = []any{}
+	file_scrap_metastore_v1_metastore_proto_msgTypes[7].OneofWrappers = []any{
 		(*ShardCommand_CommitDocument)(nil),
 		(*ShardCommand_CompleteTransaction)(nil),
 		(*ShardCommand_RecordUploadIntent)(nil),
@@ -1664,14 +1798,14 @@ func file_scrap_metastore_v1_metastore_proto_init() {
 		(*ShardCommand_RecordRepairState)(nil),
 		(*ShardCommand_TombstoneDocument)(nil),
 	}
-	file_scrap_metastore_v1_metastore_proto_msgTypes[10].OneofWrappers = []any{}
+	file_scrap_metastore_v1_metastore_proto_msgTypes[11].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_metastore_v1_metastore_proto_rawDesc), len(file_scrap_metastore_v1_metastore_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

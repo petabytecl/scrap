@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/blockstore"
+	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestPutHeadFindDocument(t *testing.T) {
@@ -133,6 +135,78 @@ func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestRecordUploadIntentPersistsAndLists(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleUploadIntent("block-1")
+	second := sampleUploadIntent("block-2")
+	if err := store.RecordUploadIntent(first); err != nil {
+		t.Fatalf("record first upload intent: %v", err)
+	}
+	if err := store.RecordUploadIntent(second); err != nil {
+		t.Fatalf("record second upload intent: %v", err)
+	}
+
+	got, err := store.GetUploadIntent(first.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if got != first {
+		t.Fatalf("upload intent = %#v, want %#v", got, first)
+	}
+	intents, err := store.ListUploadIntents()
+	if err != nil {
+		t.Fatalf("list upload intents: %v", err)
+	}
+	if len(intents) != 2 || intents[0].BlockID != "block-1" || intents[1].BlockID != "block-2" {
+		t.Fatalf("upload intents = %#v, want block-1 then block-2", intents)
+	}
+}
+
+func TestRecordUploadIntentIsIdempotentAndConflictsOnDifferentKeys(t *testing.T) {
+	store := openTestStore(t)
+	intent := sampleUploadIntent("block-1")
+	if err := store.RecordUploadIntent(intent); err != nil {
+		t.Fatalf("record upload intent: %v", err)
+	}
+	if err := store.RecordUploadIntent(intent); err != nil {
+		t.Fatalf("idempotent upload intent: %v", err)
+	}
+	conflict := intent
+	conflict.BackendObjectKey = "other-object"
+	if err := store.RecordUploadIntent(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflict error = %v, want %v", err, ErrConflict)
+	}
+}
+
+func TestApplyRecordUploadIntentCommand(t *testing.T) {
+	store := openTestStore(t)
+	proposedAt := time.Unix(30, 0).UTC()
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "upload-1",
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_RecordUploadIntent{
+			RecordUploadIntent: &metastorev1.RecordUploadIntentCommand{
+				BlockId:           "block-1",
+				BackendObjectKey:  "objects/block-1.blk",
+				IndexObjectKey:    "objects/block-1.idx",
+				EnvelopeObjectKey: "objects/block-1.env",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply upload intent command: %v", err)
+	}
+	intent, err := store.GetUploadIntent("block-1")
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != UploadStatePending || !intent.UpdatedAt.Equal(proposedAt) {
+		t.Fatalf("intent state/updated_at = %d/%v, want pending/%v", intent.State, intent.UpdatedAt, proposedAt)
+	}
+}
+
 func TestFindDocumentsFilters(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.PutDocument(sampleDocument("invoice.xml", DocumentClassPermanent)); err != nil {
@@ -210,5 +284,16 @@ func sampleDocument(name string, class DocumentClass) Document {
 				},
 			},
 		},
+	}
+}
+
+func sampleUploadIntent(blockID string) UploadIntent {
+	return UploadIntent{
+		BlockID:           blockID,
+		BackendObjectKey:  "objects/" + blockID + ".blk",
+		IndexObjectKey:    "objects/" + blockID + ".idx",
+		EnvelopeObjectKey: "objects/" + blockID + ".env",
+		State:             UploadStatePending,
+		UpdatedAt:         time.Unix(20, 0).UTC(),
 	}
 }

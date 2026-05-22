@@ -100,6 +100,19 @@ message TransactionRecord {
   uint64 committed_index = 22;
 }
 
+message UploadIntentRecord {
+  string block_id = 1;
+  string backend_object_key = 2;
+  string index_object_key = 3;
+  string envelope_object_key = 4;
+  UploadState state = 5;
+  optional string last_error = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  uint32 schema_version = 20;
+  string shard_id = 21;
+  uint64 committed_index = 22;
+}
+
 message ShardCommand {
   uint32 schema_version = 1;
   string shard_id = 2;

@@ -12,6 +12,7 @@ type PriorityClass uint16
 type Availability uint16
 type LifecycleState uint16
 type TransactionStateKind uint16
+type UploadState uint16
 
 const (
 	DocumentClassPermanent DocumentClass = 1
@@ -37,6 +38,13 @@ const (
 	TransactionStateOpen      TransactionStateKind = 1
 	TransactionStateCompleted TransactionStateKind = 2
 	TransactionStateTimedOut  TransactionStateKind = 3
+)
+
+const (
+	UploadStateNotRequired UploadState = 1
+	UploadStatePending     UploadState = 2
+	UploadStateUploaded    UploadState = 3
+	UploadStateFailed      UploadState = 4
 )
 
 type Document struct {
@@ -72,6 +80,17 @@ type Transaction struct {
 	CompletedAt            *time.Time
 	TimeoutAt              *time.Time
 	Tags                   map[string]string
+}
+
+type UploadIntent struct {
+	BlockID           string
+	BackendObjectKey  string
+	IndexObjectKey    string
+	EnvelopeObjectKey string
+	State             UploadState
+	LastError         string
+	HasLastError      bool
+	UpdatedAt         time.Time
 }
 
 type DocumentFilter struct {

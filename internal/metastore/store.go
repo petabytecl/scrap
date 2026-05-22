@@ -166,6 +166,65 @@ func (s *Store) CompleteTransaction(transaction identity.Transaction, completedA
 	return current, nil
 }
 
+func (s *Store) RecordUploadIntent(intent UploadIntent) error {
+	if intent.State == 0 {
+		intent.State = UploadStatePending
+	}
+	if intent.UpdatedAt.IsZero() {
+		intent.UpdatedAt = time.Now().UTC()
+	}
+	value, err := marshalUploadIntent(intent)
+	if err != nil {
+		return err
+	}
+	key := uploadIntentKey(intent.BlockID)
+	if existingValue, ok, err := s.get(key); err != nil {
+		return err
+	} else if ok {
+		if bytes.Equal(existingValue, value) {
+			return nil
+		}
+		return fmt.Errorf("%w: upload intent already exists with different metadata", ErrConflict)
+	}
+	return s.db.Set(key, value, pebble.Sync)
+}
+
+func (s *Store) GetUploadIntent(blockID string) (UploadIntent, error) {
+	value, ok, err := s.get(uploadIntentKey(blockID))
+	if err != nil {
+		return UploadIntent{}, err
+	}
+	if !ok {
+		return UploadIntent{}, ErrNotFound
+	}
+	return unmarshalUploadIntent(value)
+}
+
+func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
+	prefix := uploadIntentPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var intents []UploadIntent
+	for valid := iter.First(); valid; valid = iter.Next() {
+		intent, err := unmarshalUploadIntent(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, intent)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return intents, nil
+}
+
 func (s *Store) GetTransaction(transaction identity.Transaction) (Transaction, error) {
 	current, ok, err := s.getTransaction(transaction.TenantID, transaction.TransactionID)
 	if err != nil {
@@ -249,6 +308,14 @@ func transactionDocumentKey(doc identity.Document) []byte {
 		TenantID:      doc.TenantID,
 		TransactionID: doc.TransactionID,
 	}), []byte(doc.DocumentName)...)
+}
+
+func uploadIntentPrefix() []byte {
+	return []byte("upload_intent\x00")
+}
+
+func uploadIntentKey(blockID string) []byte {
+	return append(uploadIntentPrefix(), []byte(blockID)...)
 }
 
 func prefixUpperBound(prefix []byte) []byte {

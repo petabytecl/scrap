@@ -39,6 +39,17 @@ func TestAuthoritativeDocumentRecordSchemaShape(t *testing.T) {
 	requireField(t, location, "envelope_object_key")
 }
 
+func TestUploadIntentRecordSchemaShape(t *testing.T) {
+	intent := metastorev1.File_scrap_metastore_v1_metastore_proto.Messages().ByName("UploadIntentRecord")
+	requireField(t, intent, "schema_version")
+	requireField(t, intent, "block_id")
+	requireField(t, intent, "backend_object_key")
+	requireField(t, intent, "index_object_key")
+	requireField(t, intent, "envelope_object_key")
+	requireField(t, intent, "state")
+	requireField(t, intent, "updated_at")
+}
+
 func TestPublishedMetadataBoundaryExcludesInternalState(t *testing.T) {
 	document := publishedv1.File_scrap_published_v1_metadata_proto.Messages().ByName("PublishedDocument")
 	requireField(t, document, "tenant_id")
