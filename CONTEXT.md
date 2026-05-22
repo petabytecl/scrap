@@ -26,4 +26,12 @@ Replica placement targets distinct Kubernetes storage nodes in v1. S.C.R.A.P. tr
 
 Administrative operations are exposed as typed, audited control-plane actions. Expensive or dangerous operations such as restore, drain, repair, tombstone, and capacity override are planned, idempotent, and tracked as durable jobs.
 
+Bit rot is treated as a durability threat. S.C.R.A.P. must detect corruption with its own end-to-end checksums, quarantine suspect bytes, repair from verified sources, and report integrity incidents when no valid copy remains.
+
+Block, index, and envelope formats are long-lived compatibility contracts. New binaries read old formats, but writers use the shard's active committed format until a feature gate changes it.
+
+V1 disaster recovery targets primary-backend recovery, not always-on secondary replication. S.C.R.A.P. stores metadata recovery artifacts in the primary backend and provides tooling to rebuild a new cluster from verified backend objects.
+
+The admin API uses typed workflow RPCs and a shared durable operation model. The CLI is an operator client over that API, not a separate control path.
+
 The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md).

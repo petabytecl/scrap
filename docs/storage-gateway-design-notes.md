@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: scrub scheduling, repair admission thresholds, block format compatibility, and disaster-recovery backend scope.
+After reading it, they should be able to continue the design review from the current frontier: implementation language/runtime choices, concrete provider profiles, exact protobuf field schemas, and deployment-specific numeric budgets.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -39,6 +39,10 @@ Backend encryption uses OpenBao Transit envelope encryption. Routine KEK rotatio
 Backend upload capacity is controlled by explicit provider profiles and local disk runway. Internal authorization is based on workload identity plus service capabilities, not caller-supplied metadata.
 
 V1 replica placement targets distinct Kubernetes storage nodes. Admin operations are typed, audited, idempotent control-plane jobs exposed through a gRPC admin service and CLI.
+
+Bit rot is treated as a first-class durability threat. Block, index, and envelope formats are long-lived compatibility contracts because immutable data may remain archived for years.
+
+V1 disaster recovery targets rebuild from the primary backend plus metadata recovery artifacts. Always-on secondary backend writes are not part of the v1 durability contract.
 
 ## Problem
 
@@ -728,6 +732,29 @@ read path detects missing or corrupt bytes
 backend upload/reconciliation finds divergent state
 ```
 
+Bit rot is explicitly in scope for v1. S.C.R.A.P. cannot prevent all media corruption, but it must:
+
+```text
+detect corruption
+avoid serving suspect bytes
+quarantine evidence
+repair from a verified source
+report integrity incidents when no valid source remains
+```
+
+S.C.R.A.P. end-to-end hashes are authoritative:
+
+```text
+logical_sha256: client-visible document bytes
+stored_sha256: bytes stored inside local/plaintext block representation
+ciphertext_sha256: encrypted backend object bytes when applicable
+frame checksums
+whole-block checksums
+idx/envelope integrity checks
+```
+
+Provider checksums and filesystem checksums are useful supporting signals, but they are not the correctness contract.
+
 Preferred repair source order:
 
 ```text
@@ -748,6 +775,34 @@ avoid serving the suspect bytes
 do not delete the only remaining evidence until another valid ref exists
 ```
 
+Read-path corruption behavior:
+
+```text
+quarantine suspect source
+retry the requested range from an alternate verified replica or backend source
+return only bytes that pass S.C.R.A.P. verification
+enqueue repair for the bad ref
+```
+
+If every known local and backend source for the requested document/frame fails verification:
+
+```text
+return typed integrity-failure error
+freeze/quarantine available evidence
+page operators
+prevent reclamation of related evidence
+never return least-bad bytes
+```
+
+Corruption evidence retention:
+
+```text
+retain bad-ref metadata, checksums, source, block/frame ids, and incident context
+retain corrupt bytes only when policy allows
+keep evidence through repair plus configured forensic TTL
+do not retain corrupt bytes forever by default
+```
+
 A returning node must catch up through Raft and verify local refs before serving reads. Catching up metadata alone is not sufficient to become a byte-serving replica.
 
 Repair lanes:
@@ -759,6 +814,67 @@ scrub
 ```
 
 Critical repair protects degraded critical-ingest writes and has the tightest target. Scrub repair must not starve write safety, normal repair, or foreground reads.
+
+Scrub coverage:
+
+```text
+local .blk/.idx/.openlog where present
+backend .blk/.idx/.env inventory and integrity
+local metadata references against consensus state
+backend object refs against consensus inventory
+```
+
+Backend scrub is tiered:
+
+```text
+frequent metadata/head/checksum inventory checks
+continuous sampled byte verification
+risk-prioritized byte reads for older, recently restored, provider-suspect, or previously repaired blocks
+annual full-equivalent backend byte verification target where cost allows
+```
+
+Local scrub schedule:
+
+```text
+continuous low-rate background scrub
+target full local block coverage: 7 days
+immediate event-driven scrub after crashes, disk errors, return from quarantine, suspicious reads, or repair completion
+```
+
+Scrub priority:
+
+```text
+routine scrub: lowest-priority lane
+evidence-driven verification: may jump to repair/verification lane
+known corruption repair outranks routine scrub
+foreground reads/writes and critical repair outrank routine scrub
+```
+
+Repair admission uses runway-based thresholds, not raw job counts. Inputs include:
+
+```text
+estimated time to restore full replica health
+critical repair age
+bytes under repair
+placement risk
+disk runway
+repair source availability
+```
+
+Default general repair/admission thresholds:
+
+```text
+warn: estimated time to safe replica health > 1 minute
+throttle lower-priority writes: > 5 minutes
+reject new writes retryably before unsafe ACK: > 15 minutes
+```
+
+Critical-ingest degraded repair keeps the stricter target:
+
+```text
+target: under 2 seconds
+alert: over 10 seconds
+```
 
 ## Transaction Lifecycle
 
@@ -893,6 +1009,79 @@ UUIDv7: raw bytes[16]
 fingerprints: raw bytes[16]
 SHA-256: raw bytes[32]
 ```
+
+## Block Format Compatibility
+
+The `.blk`, `.idx`, and `.env` formats are long-lived compatibility contracts. Permanent documents may remain archived for years, so old readers cannot be removed just because new writers exist.
+
+Format versions use major/minor semantics:
+
+```text
+format_major: breaking compatibility boundary
+format_minor: additive/backward-compatible extension
+```
+
+Rolling upgrade rule:
+
+```text
+new binaries must read old live formats
+writers keep using the shard's active committed format
+new writable format is enabled only by explicit shard consensus feature gate
+binary default must not silently change persisted format
+```
+
+The shard consensus state machine owns the active writable format for:
+
+```text
+.blk
+.idx
+.env
+crypto profile
+compression profile when introduced
+```
+
+Deployment config may declare allowed formats, but it does not decide what a shard writes at runtime. This avoids config skew during rolling upgrades.
+
+Unknown fields and flags:
+
+```text
+unknown required/incompatible flag: fail closed
+unknown optional section: skip only if section is length-delimited and declared skippable
+unknown crypto/compression mode: fail closed
+unknown checksum mode: fail closed
+```
+
+Additive minor versions should prefer length-delimited optional sections over changing fixed record layouts. If a fixed record layout must change, use a new record size and format gate so old readers reject safely.
+
+Migration strategy:
+
+```text
+old immutable blocks remain readable in place
+new sealed blocks use the active writable format
+repair/rehydration/re-encryption may rewrite into the active format when bytes are rewritten anyway
+no eager full-corpus rewrite for routine format upgrades
+```
+
+Reader retention:
+
+```text
+keep old major readers until shard/backend inventory proves no live object uses that major
+do not retire reader code on a fixed calendar window
+deprecation requires inventory/audit proof, like Transit key-version retirement
+```
+
+Format inventory is authoritative in shard metadata. Each committed block/envelope record should track:
+
+```text
+blk_format_major/minor
+idx_format_major/minor
+env_format_major/minor when encrypted
+crypto_profile
+compression_profile when used
+required feature flags
+```
+
+Backend scans may reconcile this inventory, but backend `LIST` is not the source of truth.
 
 Block IDs use a generated UUIDv7 plus a separate `shard_id`; content hashes verify integrity but are not the primary block name.
 
@@ -1214,6 +1403,87 @@ Backend selection is deployment-level configuration. Tenant-based backend routin
 `tenant_id` remains part of document identity, auditing, quotas, and fingerprints. It does not choose the durable backend.
 
 Never depend on backend `LIST` for normal reads or transaction queries. The gateway metadata index is the source of truth.
+
+## Disaster Recovery Scope
+
+V1 disaster recovery scope is schema plus tooling, not active always-on secondary backend replication.
+
+V1 DR contract:
+
+```text
+recover from local cluster loss using:
+  primary backend .blk/.idx/.env objects
+  shard metadata snapshots/checkpoints
+  compact uploaded metadata tail segments
+  OpenBao Transit key material and policy restored separately
+```
+
+The v1 contract is primary-backend recovery. Cross-region or cross-cloud RPO is not promised until active secondary replication, lag SLOs, and failover tests become product requirements.
+
+Metadata recovery artifacts:
+
+```text
+periodic shard metadata snapshot/checkpoint objects
+default snapshot target: every 5 minutes
+compact async metadata tail segments between snapshots
+stored in the primary backend
+```
+
+Backend latency must not enter the metadata commit path. Snapshot and tail uploads are asynchronous durability/recovery jobs, but recovery RPO should be observable from their lag.
+
+DR ordering rule:
+
+```text
+metadata snapshots/tails may reference only verified backend data
+required objects for an encrypted block: .blk + .idx + .env
+required objects for an unencrypted block: .blk + .idx
+```
+
+A recovered cluster must not see committed backend refs that point to missing or unverified backend objects.
+
+DR restore tooling:
+
+```text
+load metadata snapshots/checkpoints
+replay compact metadata tail segments
+verify referenced .blk/.idx/.env objects and checksums
+verify OpenBao Transit availability, key versions, context policy, and decrypt permissions
+rebuild shard inventory and routing state
+admit reads/writes only after safety gates pass
+```
+
+OpenBao DR is a hard dependency for encrypted backend data. S.C.R.A.P. must not persist emergency plaintext DEKs in snapshots.
+
+Secondary backend support in v1:
+
+```text
+metadata model supports multiple backend locations
+admin jobs can copy and verify data to a secondary backend
+secondary copies are not part of write ACK
+secondary copies do not define a v1 RPO/RTO contract
+```
+
+Secondary copy/verify jobs may target:
+
+```text
+metadata snapshot/checkpoint
+shard
+transaction
+block
+```
+
+Successful v1 DR drill:
+
+```text
+start a fresh cluster
+restore metadata snapshot plus tail
+verify backend inventory
+verify OpenBao decrypt path
+serve sampled document reads
+report missing/corrupt objects and recovery timing
+```
+
+Full-corpus byte reads may be scheduled as separate audit work, but they are not required for every DR drill.
 
 ## Backend Key Layout And Rate Control
 
@@ -1575,9 +1845,46 @@ restore and prewarm cold backend blocks
 cordon/drain storage members
 inspect and enqueue bounded repair
 prepare and execute lifecycle tombstones
+plan/copy/verify disaster-recovery artifacts
 inspect capacity, backlog, placement, and runway
 apply bounded emergency capacity/write-admission overrides
 inspect key-rotation and rewrap status
+```
+
+Admin RPC shape:
+
+```text
+resource-specific workflow RPCs
+shared durable Operation model
+typed target messages
+separate Plan* and Start*/Execute* calls for costly or dangerous operations
+GetOperation for polling
+WatchOperation server-stream for live progress
+```
+
+Avoid a single generic `AdminAction` RPC. It is too weakly typed for dangerous storage operations. Avoid raw free-form target strings on the wire; the CLI may parse friendly target strings into typed protobuf messages.
+
+V1 admin RPC groups:
+
+```text
+InspectService
+OperationService
+RestoreService
+RepairService
+MemberService
+LifecycleService
+DisasterRecoveryService
+```
+
+Common typed targets:
+
+```text
+DocumentTarget: tenant_id + transaction_id + document_name
+TransactionTarget: tenant_id + transaction_id
+BlockTarget: shard_id + block_id
+ShardTarget: shard_id
+StorageMemberTarget: storage_member_id
+SnapshotTarget: snapshot_id or shard_id + checkpoint id
 ```
 
 Every mutating admin request requires an `operation_id`:
@@ -1606,6 +1913,15 @@ audit metadata
 
 The CLI may poll or stream job status. Retrying a command with the same `operation_id` must return the existing operation state rather than creating duplicate work.
 
+Plan/execute model:
+
+```text
+Plan* RPCs are non-mutating
+Plan* RPCs return affected targets, estimated impact, warnings, and plan token/hash
+Start*/Execute* RPCs mutate state and require operation_id
+dangerous/costly Start*/Execute* RPCs require a recent plan token/hash
+```
+
 Dry-run is required for costly or dangerous operations:
 
 ```text
@@ -1613,6 +1929,7 @@ restore/prewarm
 member drain
 force/bounded repair
 lifecycle tombstone
+disaster-recovery copy/verify
 capacity/write-admission override
 ```
 
@@ -1682,6 +1999,32 @@ bounded by hard safety ceilings
 cannot force ACKs that violate durability invariants
 ```
 
+Disaster-recovery admin API:
+
+```text
+plan restore from primary backend snapshot/tail
+start restore inventory rebuild
+plan secondary copy/verify by snapshot, shard, transaction, or block
+start secondary copy/verify jobs
+inspect DR snapshot/tail freshness and recovery readiness
+run DR drill and report sampled read results
+```
+
+DR admin operations use the same operation model and typed targets as other admin workflows.
+
+CLI vocabulary:
+
+```text
+scrapctl inspect cluster|shard|document|block|member
+scrapctl operation get|watch|cancel
+scrapctl restore plan|start|status
+scrapctl repair inspect|plan|enqueue|status
+scrapctl member inspect|cordon|drain|status
+scrapctl lifecycle tombstone plan|execute|status
+scrapctl dr snapshot|restore-plan|restore-start|copy-plan|copy-start|verify|drill
+scrapctl capacity inspect|override-plan|override-start
+```
+
 Admin operations require the specific service capability documented in the authorization section. A broad admin bit is not sufficient for dangerous operations such as tombstone, key rotation, repair override, or capacity override.
 
 ## Internal Authorization
@@ -1721,6 +2064,7 @@ admin_force_repair
 admin_lifecycle_tombstone
 admin_capacity_override
 admin_key_rotation
+admin_disaster_recovery
 ```
 
 Priority authorization:
@@ -1788,24 +2132,22 @@ Normal hot reads and ordinary writes do not require full audit logging by defaul
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
 - Which concrete Raft and LSM implementations should be used once the implementation language/runtime is chosen?
-- What are the block format versioning rules and compatibility guarantees?
 - What concrete provider profiles and numeric token-bucket budgets should be used per deployment?
 - What are the expected peak ingress rates for capacity sizing against the 24h durability window?
-- What are the repair backlog and critical downgrade thresholds that should affect write admission?
-- What are the scrubbing and checksum verification schedules?
-- What is the exact admin RPC schema for inspection, operations, and status streaming?
-- What CLI command vocabulary should wrap the admin API?
-- Should there be a dedicated disaster-recovery backend in v1 or only schema support for it?
+- What concrete numeric repair runway thresholds should each deployment use beyond the defaults?
+- What exact scrub rate limits and backend byte-read budgets should be configured per deployment?
+- What exact protobuf package, service, and field schemas should implement the admin API?
+- What concrete DR drill cadence and sampled-read size should each deployment use?
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, repair basics, consensus/store substrate, backend capacity model, replica placement model, admin API shape, and internal authorization model are concrete enough to move to verification and compatibility.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, consensus/store substrate, backend capacity model, replica placement model, DR scope, admin API shape, and internal authorization model are concrete enough to move to implementation choices and deployment profiles.
 
 Resume by choosing between:
 
-1. scrub/checksum schedule and repair admission thresholds;
-2. block format versioning and compatibility guarantees;
-3. disaster-recovery backend scope;
-4. concrete implementation language/runtime and library choices.
+1. concrete implementation language/runtime and library choices;
+2. concrete provider profiles and per-deployment numeric budgets;
+3. exact protobuf schema for public/admin APIs;
+4. deployment topology and operational runbooks.
 
-The recommended next topic is scrub/checksum schedule and repair admission thresholds. The system now has placement and repair primitives, so the next decision should define how quickly corruption is detected, how repair competes with foreground work, and when repair backlog must throttle writes.
+The recommended next topic is implementation language/runtime and library choices. The architecture now defines the major consistency, durability, storage, admin, and recovery contracts, so the next decision should choose the implementation substrate that can satisfy them.
