@@ -13,6 +13,7 @@ import (
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/published"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -52,7 +53,9 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runRepairOperation(ctx, store, operation)
 		case "drain":
 			succeeded, err = a.runDrainOperation(ctx, store, operation)
-		case "metadata-restore", "copy-verify", "dr-drill":
+		case "copy-verify":
+			succeeded, err = a.runCopyVerifyOperation(ctx, store, operation)
+		case "metadata-restore", "dr-drill":
 			succeeded, err = a.runDisasterRecoveryOperation(ctx, store, operation)
 		default:
 			result.Skipped++
@@ -210,6 +213,60 @@ func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *o
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running copy-verify operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	checkpoint, err := a.verifyCurrentCheckpoint(ctx)
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "copy-verify operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_DR_COPY_VERIFY_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	message := "copy-verify operation succeeded"
+	if operation.GetDryRun() {
+		message = "copy-verify dry-run succeeded"
+	}
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(checkpoint.VerifiedObjects),
+		WorkUnitsCompleted: uint64(checkpoint.VerifiedObjects),
+		Message:            message,
+		Counters: map[string]string{
+			"generation":       fmt.Sprintf("%d", checkpoint.Pointer.GetGeneration()),
+			"manifest_id":      checkpoint.Manifest.GetManifestId(),
+			"verified_objects": fmt.Sprintf("%d", checkpoint.VerifiedObjects),
+		},
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) verifyCurrentCheckpoint(ctx context.Context) (published.CheckpointVerification, error) {
+	if a.backendStore == nil {
+		return published.CheckpointVerification{}, fmt.Errorf("localstorage: backend store is not configured")
+	}
+	return published.VerifyCurrentCheckpoint(ctx, a.backendStore, localPublishedCellID)
 }
 
 func (a *Application) runDrainOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {

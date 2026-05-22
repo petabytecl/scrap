@@ -1133,6 +1133,62 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	}
 }
 
+func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(600, 0).UTC())
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("copy verify bytes"))
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         testDocumentIdentity(),
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("copy verify bytes")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	publication, err := app.PublishMetadataSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("publish metadata snapshot: %v", err)
+	}
+
+	store := openTestOperationStore(t)
+	operation := queuedOperation("copy-verify-op-1", "copy-verify", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one successful copy verification", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["manifest_id"] != publication.Manifest.GetManifestId() ||
+		finished.GetProgress().GetCounters()["verified_objects"] == "" {
+		t.Fatalf("finished operation = %#v, want successful verified checkpoint", finished)
+	}
+}
+
 func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
