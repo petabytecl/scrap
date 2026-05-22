@@ -221,6 +221,44 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		block.GetBackendObjectKey() != "blocks/"+blockID+".blk" {
 		t.Fatalf("inspect block = %#v, want local block metadata", block)
 	}
+	summaryResp, err := inspectClient.GetClusterSummary(context.Background(), &adminv1.GetClusterSummaryRequest{})
+	if err != nil {
+		t.Fatalf("GetClusterSummary: %v", err)
+	}
+	if summaryResp.GetSummary().GetShardCount() != 1 ||
+		summaryResp.GetSummary().GetStorageMemberCount() != 1 ||
+		summaryResp.GetSummary().GetLocalBytesUsed() == 0 ||
+		summaryResp.GetSummary().GetLocalBytesCapacity() == 0 {
+		t.Fatalf("cluster summary = %#v, want local single-member summary", summaryResp.GetSummary())
+	}
+	shardResp, err := inspectClient.GetShard(context.Background(), &adminv1.GetShardRequest{ShardId: "local"})
+	if err != nil {
+		t.Fatalf("GetShard: %v", err)
+	}
+	if shardResp.GetShard().GetLeaderMemberId() != "local" ||
+		len(shardResp.GetShard().GetVoterMemberIds()) != 1 ||
+		shardResp.GetShard().GetAppliedIndex() == 0 {
+		t.Fatalf("shard = %#v, want local shard metadata", shardResp.GetShard())
+	}
+	memberResp, err := inspectClient.GetMember(context.Background(), &adminv1.GetMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+	})
+	if err != nil {
+		t.Fatalf("GetMember: %v", err)
+	}
+	if memberResp.GetStorageMember().GetState() != adminv1.MemberState_MEMBER_STATE_ONLINE ||
+		memberResp.GetStorageMember().GetBytesCapacity() == 0 {
+		t.Fatalf("member = %#v, want online local member", memberResp.GetStorageMember())
+	}
+	runwayResp, err := inspectClient.GetCapacityRunway(context.Background(), &adminv1.GetCapacityRunwayRequest{})
+	if err != nil {
+		t.Fatalf("GetCapacityRunway: %v", err)
+	}
+	if runwayResp.GetRunway().GetCapacityProfileId() != "local-non-production" ||
+		runwayResp.GetRunway().GetUsableBytesRemaining() == 0 ||
+		len(runwayResp.GetRunway().GetWarnings()) == 0 {
+		t.Fatalf("runway = %#v, want local non-production runway", runwayResp.GetRunway())
+	}
 
 	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{

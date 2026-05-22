@@ -78,6 +78,50 @@ func TestAdminServerCordonMemberValidatesOverGRPC(t *testing.T) {
 	requireViolation(t, violations, "reason", identity.ReasonRequired)
 }
 
+func TestAdminServerGetClusterSummaryUsesInspectApplication(t *testing.T) {
+	expected := &adminv1.ClusterSummary{
+		ShardCount:         1,
+		StorageMemberCount: 1,
+		LocalBytesUsed:     100,
+		LocalBytesCapacity: 1000,
+	}
+	inspect := &fakeInspectApplication{summary: expected}
+	client, cleanup := newAdminInspectClient(t, inspect)
+	defer cleanup()
+
+	resp, err := client.GetClusterSummary(context.Background(), &adminv1.GetClusterSummaryRequest{})
+	if err != nil {
+		t.Fatalf("get cluster summary: %v", err)
+	}
+	if !proto.Equal(resp.GetSummary(), expected) {
+		t.Fatalf("summary = %#v, want %#v", resp.GetSummary(), expected)
+	}
+}
+
+func TestAdminServerGetShardUsesInspectApplication(t *testing.T) {
+	expected := &adminv1.Shard{
+		ShardId:        "local",
+		LeaderMemberId: "local",
+		VoterMemberIds: []string{"local"},
+		CommittedIndex: 7,
+		AppliedIndex:   7,
+	}
+	inspect := &fakeInspectApplication{shard: expected}
+	client, cleanup := newAdminInspectClient(t, inspect)
+	defer cleanup()
+
+	resp, err := client.GetShard(context.Background(), &adminv1.GetShardRequest{ShardId: "local"})
+	if err != nil {
+		t.Fatalf("get shard: %v", err)
+	}
+	if inspect.gotShard != "local" {
+		t.Fatalf("inspect got shard = %q, want local", inspect.gotShard)
+	}
+	if !proto.Equal(resp.GetShard(), expected) {
+		t.Fatalf("shard = %#v, want %#v", resp.GetShard(), expected)
+	}
+}
+
 func TestAdminServerGetDocumentUsesInspectApplication(t *testing.T) {
 	expected := &adminv1.AdminDocument{
 		Document: &adminv1.DocumentTarget{
@@ -140,6 +184,57 @@ func TestAdminServerGetBlockUsesInspectApplication(t *testing.T) {
 	}
 	if !proto.Equal(resp.GetBlock(), expected) {
 		t.Fatalf("block = %#v, want %#v", resp.GetBlock(), expected)
+	}
+}
+
+func TestAdminServerGetMemberUsesInspectApplication(t *testing.T) {
+	expected := &adminv1.StorageMember{
+		StorageMemberId: "local",
+		CellId:          "local",
+		State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+		BytesUsed:       100,
+		BytesCapacity:   1000,
+		LastSeenAt:      timestamppb.New(time.Unix(100, 0).UTC()),
+	}
+	inspect := &fakeInspectApplication{member: expected}
+	client, cleanup := newAdminInspectClient(t, inspect)
+	defer cleanup()
+
+	resp, err := client.GetMember(context.Background(), &adminv1.GetMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+	})
+	if err != nil {
+		t.Fatalf("get member: %v", err)
+	}
+	if inspect.gotMember != "local" {
+		t.Fatalf("inspect got member = %q, want local", inspect.gotMember)
+	}
+	if !proto.Equal(resp.GetStorageMember(), expected) {
+		t.Fatalf("member = %#v, want %#v", resp.GetStorageMember(), expected)
+	}
+}
+
+func TestAdminServerGetCapacityRunwayUsesInspectApplication(t *testing.T) {
+	expected := &adminv1.CapacityRunway{
+		CapacityProfileId:    "local-non-production",
+		UsableBytesRemaining: 900,
+		Warnings:             []*adminv1.OperationWarning{{Code: "SCRAP_NON_PRODUCTION_CAPACITY_PROFILE"}},
+	}
+	inspect := &fakeInspectApplication{runway: expected}
+	client, cleanup := newAdminInspectClient(t, inspect)
+	defer cleanup()
+
+	resp, err := client.GetCapacityRunway(context.Background(), &adminv1.GetCapacityRunwayRequest{
+		CapacityProfileId: ptr("local-non-production"),
+	})
+	if err != nil {
+		t.Fatalf("get capacity runway: %v", err)
+	}
+	if inspect.gotCapacityProfileID != "local-non-production" {
+		t.Fatalf("inspect got profile = %q, want local-non-production", inspect.gotCapacityProfileID)
+	}
+	if !proto.Equal(resp.GetRunway(), expected) {
+		t.Fatalf("runway = %#v, want %#v", resp.GetRunway(), expected)
 	}
 }
 
@@ -556,10 +651,26 @@ func ptr[T any](value T) *T {
 }
 
 type fakeInspectApplication struct {
-	got      identity.Document
-	gotBlock BlockTarget
-	document *adminv1.AdminDocument
-	block    *adminv1.Block
+	got                  identity.Document
+	gotBlock             BlockTarget
+	gotShard             string
+	gotMember            string
+	gotCapacityProfileID string
+	summary              *adminv1.ClusterSummary
+	shard                *adminv1.Shard
+	document             *adminv1.AdminDocument
+	block                *adminv1.Block
+	member               *adminv1.StorageMember
+	runway               *adminv1.CapacityRunway
+}
+
+func (f *fakeInspectApplication) GetAdminClusterSummary(context.Context) (*adminv1.ClusterSummary, error) {
+	return f.summary, nil
+}
+
+func (f *fakeInspectApplication) GetAdminShard(_ context.Context, shardID string) (*adminv1.Shard, error) {
+	f.gotShard = shardID
+	return f.shard, nil
 }
 
 func (f *fakeInspectApplication) GetAdminDocument(_ context.Context, doc identity.Document) (*adminv1.AdminDocument, error) {
@@ -570,4 +681,14 @@ func (f *fakeInspectApplication) GetAdminDocument(_ context.Context, doc identit
 func (f *fakeInspectApplication) GetAdminBlock(_ context.Context, target BlockTarget) (*adminv1.Block, error) {
 	f.gotBlock = target
 	return f.block, nil
+}
+
+func (f *fakeInspectApplication) GetAdminMember(_ context.Context, memberID string) (*adminv1.StorageMember, error) {
+	f.gotMember = memberID
+	return f.member, nil
+}
+
+func (f *fakeInspectApplication) GetAdminCapacityRunway(_ context.Context, capacityProfileID string) (*adminv1.CapacityRunway, error) {
+	f.gotCapacityProfileID = capacityProfileID
+	return f.runway, nil
 }

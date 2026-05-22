@@ -24,8 +24,12 @@ type AdminServer struct {
 }
 
 type InspectApplication interface {
+	GetAdminClusterSummary(context.Context) (*adminv1.ClusterSummary, error)
+	GetAdminShard(context.Context, string) (*adminv1.Shard, error)
 	GetAdminDocument(context.Context, identity.Document) (*adminv1.AdminDocument, error)
 	GetAdminBlock(context.Context, BlockTarget) (*adminv1.Block, error)
+	GetAdminMember(context.Context, string) (*adminv1.StorageMember, error)
+	GetAdminCapacityRunway(context.Context, string) (*adminv1.CapacityRunway, error)
 }
 
 const (
@@ -70,15 +74,46 @@ func RegisterAdminServer(registrar grpc.ServiceRegistrar, server *AdminServer) {
 	adminv1.RegisterDisasterRecoveryServiceServer(registrar, server)
 }
 
-func (s *AdminServer) GetClusterSummary(context.Context, *adminv1.GetClusterSummaryRequest) (*adminv1.GetClusterSummaryResponse, error) {
-	return nil, unimplementedAdmin("GetClusterSummary")
+func (s *AdminServer) GetClusterSummary(ctx context.Context, req *adminv1.GetClusterSummaryRequest) (*adminv1.GetClusterSummaryResponse, error) {
+	if req == nil {
+		var problems violations
+		problems.add("request", identity.ReasonRequired, "request is required")
+		return nil, problems.err()
+	}
+	if s.inspect == nil {
+		return nil, unimplementedAdmin("GetClusterSummary")
+	}
+	summary, err := s.inspect.GetAdminClusterSummary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations != nil {
+		pending, err := s.operations.List(operations.ListFilter{
+			States: []adminv1.OperationState{
+				adminv1.OperationState_OPERATION_STATE_QUEUED,
+				adminv1.OperationState_OPERATION_STATE_RUNNING,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		summary.PendingOperationCount = uint32(len(pending))
+	}
+	return &adminv1.GetClusterSummaryResponse{Summary: summary}, nil
 }
 
-func (s *AdminServer) GetShard(_ context.Context, req *adminv1.GetShardRequest) (*adminv1.GetShardResponse, error) {
+func (s *AdminServer) GetShard(ctx context.Context, req *adminv1.GetShardRequest) (*adminv1.GetShardResponse, error) {
 	if err := validateRequiredRequestText(req, "shard_id", func(req *adminv1.GetShardRequest) string { return req.ShardId }); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetShard")
+	if s.inspect == nil {
+		return nil, unimplementedAdmin("GetShard")
+	}
+	shard, err := s.inspect.GetAdminShard(ctx, req.ShardId)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetShardResponse{Shard: shard}, nil
 }
 
 func (s *AdminServer) GetDocument(ctx context.Context, req *adminv1.GetDocumentRequest) (*adminv1.GetDocumentResponse, error) {
@@ -125,20 +160,27 @@ func (s *AdminServer) GetBlock(ctx context.Context, req *adminv1.GetBlockRequest
 	return &adminv1.GetBlockResponse{Block: block}, nil
 }
 
-func (s *AdminServer) GetMember(_ context.Context, req *adminv1.GetMemberRequest) (*adminv1.GetMemberResponse, error) {
+func (s *AdminServer) GetMember(ctx context.Context, req *adminv1.GetMemberRequest) (*adminv1.GetMemberResponse, error) {
 	var problems violations
 	if req == nil {
 		problems.add("request", identity.ReasonRequired, "request is required")
 		return nil, problems.err()
 	}
-	validateStorageMemberTarget("storage_member", req.StorageMember, &problems)
+	memberID := validateStorageMemberTarget("storage_member", req.StorageMember, &problems)
 	if err := problems.err(); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetMember")
+	if s.inspect == nil {
+		return nil, unimplementedAdmin("GetMember")
+	}
+	member, err := s.inspect.GetAdminMember(ctx, memberID)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetMemberResponse{StorageMember: member}, nil
 }
 
-func (s *AdminServer) GetCapacityRunway(_ context.Context, req *adminv1.GetCapacityRunwayRequest) (*adminv1.GetCapacityRunwayResponse, error) {
+func (s *AdminServer) GetCapacityRunway(ctx context.Context, req *adminv1.GetCapacityRunwayRequest) (*adminv1.GetCapacityRunwayResponse, error) {
 	var problems violations
 	if req == nil {
 		problems.add("request", identity.ReasonRequired, "request is required")
@@ -148,7 +190,14 @@ func (s *AdminServer) GetCapacityRunway(_ context.Context, req *adminv1.GetCapac
 	if err := problems.err(); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetCapacityRunway")
+	if s.inspect == nil {
+		return nil, unimplementedAdmin("GetCapacityRunway")
+	}
+	runway, err := s.inspect.GetAdminCapacityRunway(ctx, req.GetCapacityProfileId())
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetCapacityRunwayResponse{Runway: runway}, nil
 }
 
 func (s *AdminServer) GetOperation(_ context.Context, req *adminv1.GetOperationRequest) (*adminv1.GetOperationResponse, error) {

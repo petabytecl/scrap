@@ -47,6 +47,13 @@ func (a *Authority) Close() error {
 	return a.log.Close()
 }
 
+func (a *Authority) AppliedIndex() uint64 {
+	if a == nil || a.log == nil {
+		return 0
+	}
+	return a.log.LastIndex()
+}
+
 func (a *Authority) CommitDocument(ctx context.Context, document metastore.Document, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -25,6 +25,7 @@ import (
 )
 
 type Application struct {
+	dir              string
 	blocks           *blockstore.Store
 	backendStore     backend.Store
 	metadata         *metastore.Store
@@ -74,6 +75,7 @@ func Open(dir string) (*Application, error) {
 		return nil, err
 	}
 	return &Application{
+		dir:              dir,
 		blocks:           blocks,
 		metadata:         metadata,
 		authority:        authority,

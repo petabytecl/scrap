@@ -106,6 +106,15 @@ func (l *Log) Replay() ([]Entry, error) {
 	return readEntries(l.path)
 }
 
+func (l *Log) LastIndex() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.nextIndex == 0 {
+		return 0
+	}
+	return l.nextIndex - 1
+}
+
 func readEntries(path string) ([]Entry, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {

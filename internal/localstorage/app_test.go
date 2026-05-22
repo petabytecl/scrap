@@ -700,6 +700,7 @@ func TestRunQueuedOperationsOnceAppliesDocumentTombstone(t *testing.T) {
 func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(200, 0).UTC())
 	doc := testDocumentIdentity()
 	data := []byte("inspect me")
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
@@ -743,6 +744,55 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 		adminBlock.GetReplicaMemberIds()[0] != "local" ||
 		adminBlock.GetBackendObjectKey() != "blocks/"+stored.Location.BlockID+".blk" {
 		t.Fatalf("admin block = %#v, want local block metadata", adminBlock)
+	}
+
+	shard, err := app.GetAdminShard(ctx, "local")
+	if err != nil {
+		t.Fatalf("get admin shard: %v", err)
+	}
+	if shard.GetShardId() != "local" ||
+		shard.GetLeaderMemberId() != "local" ||
+		len(shard.GetVoterMemberIds()) != 1 ||
+		shard.GetVoterMemberIds()[0] != "local" ||
+		shard.GetCommittedIndex() == 0 ||
+		shard.GetAppliedIndex() != shard.GetCommittedIndex() {
+		t.Fatalf("admin shard = %#v, want local shard metadata", shard)
+	}
+
+	member, err := app.GetAdminMember(ctx, "local")
+	if err != nil {
+		t.Fatalf("get admin member: %v", err)
+	}
+	if member.GetStorageMemberId() != "local" ||
+		member.GetCellId() != "local" ||
+		member.GetState() != adminv1.MemberState_MEMBER_STATE_ONLINE ||
+		member.GetBytesUsed() == 0 ||
+		member.GetBytesCapacity() == 0 ||
+		member.GetLastSeenAt().AsTime() != time.Unix(200, 0).UTC() {
+		t.Fatalf("admin member = %#v, want local member metadata", member)
+	}
+
+	summary, err := app.GetAdminClusterSummary(ctx)
+	if err != nil {
+		t.Fatalf("get admin cluster summary: %v", err)
+	}
+	if summary.GetShardCount() != 1 ||
+		summary.GetStorageMemberCount() != 1 ||
+		summary.GetLocalBytesUsed() == 0 ||
+		summary.GetLocalBytesCapacity() == 0 {
+		t.Fatalf("cluster summary = %#v, want local single-member summary", summary)
+	}
+
+	runway, err := app.GetAdminCapacityRunway(ctx, "")
+	if err != nil {
+		t.Fatalf("get admin capacity runway: %v", err)
+	}
+	if runway.GetCapacityProfileId() != "local-non-production" ||
+		runway.GetUsableBytesRemaining() == 0 ||
+		runway.GetEstimatedBytesPerDay() != 0 ||
+		runway.GetRunwayDays() != 0 ||
+		len(runway.GetWarnings()) == 0 {
+		t.Fatalf("capacity runway = %#v, want non-production capacity warning", runway)
 	}
 }
 
