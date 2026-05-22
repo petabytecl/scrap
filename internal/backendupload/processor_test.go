@@ -18,6 +18,9 @@ func TestProcessorUploadsPendingIntentAndRecordsUploaded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append block: %v", err)
 	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
 	intent := testUploadIntent(record.BlockID)
 	updater := &recordingIntentStateUpdater{}
 
@@ -134,6 +137,9 @@ func TestProcessorReturnsUpdaterErrorAfterUpload(t *testing.T) {
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block bytes")))
 	if err != nil {
 		t.Fatalf("append block: %v", err)
+	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
 	}
 	intent := testUploadIntent(record.BlockID)
 	updateErr := errors.New("raft unavailable")

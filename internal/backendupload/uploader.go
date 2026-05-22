@@ -26,6 +26,13 @@ func (s LocalBlockSource) OpenBlock(ctx context.Context, blockID string) (io.Rea
 	if s.Blocks == nil {
 		return nil, fmt.Errorf("backendupload: block source is not configured")
 	}
+	sealed, err := s.Blocks.IsSealed(blockID)
+	if err != nil {
+		return nil, err
+	}
+	if !sealed {
+		return nil, blockstore.ErrBlockOpen
+	}
 	file, err := os.Open(s.Blocks.BlockPath(blockID))
 	if err != nil {
 		return nil, err

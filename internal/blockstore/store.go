@@ -25,6 +25,8 @@ const (
 var (
 	ErrChecksumMismatch = errors.New("blockstore: checksum mismatch")
 	ErrInvalidRange     = errors.New("blockstore: invalid range")
+	ErrBlockOpen        = errors.New("blockstore: block is still open")
+	ErrEmptyBlock       = errors.New("blockstore: cannot seal empty block")
 )
 
 type Store struct {
@@ -59,12 +61,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 
-	blockID, err := identity.NewUUIDv7()
-	if err != nil {
-		return nil, err
-	}
-	blockPath := filepath.Join(blocksDir, blockID+".blk")
-	blockFile, err := os.OpenFile(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	blockID, blockPath, blockFile, err := createBlockFile(blocksDir, DefaultFrameSize)
 	if err != nil {
 		return nil, err
 	}
@@ -76,14 +73,6 @@ func Open(dir string) (*Store, error) {
 		blockFile:   blockFile,
 		blockOffset: HeaderLength,
 		frameSize:   DefaultFrameSize,
-	}
-	if err := store.writeHeader(); err != nil {
-		_ = blockFile.Close()
-		return nil, err
-	}
-	if err := blockFile.Sync(); err != nil {
-		_ = blockFile.Close()
-		return nil, err
 	}
 	if err := syncDir(blocksDir); err != nil {
 		_ = blockFile.Close()
@@ -105,6 +94,64 @@ func (s *Store) Close() error {
 
 func (s *Store) BlockPath(blockID string) string {
 	return filepath.Join(s.blocksDir, blockID+".blk")
+}
+
+func (s *Store) SealPath(blockID string) string {
+	return filepath.Join(s.blocksDir, blockID+".sealed")
+}
+
+func (s *Store) IsSealed(blockID string) (bool, error) {
+	if _, err := os.Stat(s.SealPath(blockID)); err == nil {
+		return true, nil
+	} else if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else {
+		return false, err
+	}
+}
+
+func (s *Store) SealCurrent(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.blockFile == nil {
+		return "", errors.New("blockstore: store is closed")
+	}
+	if s.blockOffset == HeaderLength {
+		return "", ErrEmptyBlock
+	}
+	sealedBlockID := s.blockID
+	if err := s.blockFile.Sync(); err != nil {
+		return "", err
+	}
+	if err := writeSealMarker(s.SealPath(sealedBlockID)); err != nil {
+		return "", err
+	}
+	if err := syncDir(s.blocksDir); err != nil {
+		return "", err
+	}
+	if err := s.blockFile.Close(); err != nil {
+		return "", err
+	}
+
+	blockID, blockPath, blockFile, err := createBlockFile(s.blocksDir, s.frameSize)
+	if err != nil {
+		s.blockFile = nil
+		return "", err
+	}
+	if err := syncDir(s.blocksDir); err != nil {
+		_ = blockFile.Close()
+		s.blockFile = nil
+		return "", err
+	}
+	s.blockID = blockID
+	s.blockPath = blockPath
+	s.blockFile = blockFile
+	s.blockOffset = HeaderLength
+	return sealedBlockID, nil
 }
 
 func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
@@ -317,23 +364,58 @@ func verifyFrame(file *os.File, frame FrameRecord) error {
 	return nil
 }
 
-func (s *Store) writeHeader() error {
+func createBlockFile(blocksDir string, frameSize uint64) (string, string, *os.File, error) {
+	blockID, err := identity.NewUUIDv7()
+	if err != nil {
+		return "", "", nil, err
+	}
+	blockPath := filepath.Join(blocksDir, blockID+".blk")
+	blockFile, err := os.OpenFile(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if err := writeHeader(blockFile, blockID, frameSize); err != nil {
+		_ = blockFile.Close()
+		return "", "", nil, err
+	}
+	if err := blockFile.Sync(); err != nil {
+		_ = blockFile.Close()
+		return "", "", nil, err
+	}
+	return blockID, blockPath, blockFile, nil
+}
+
+func writeHeader(blockFile *os.File, blockID string, frameSize uint64) error {
 	header := make([]byte, HeaderLength)
 	copy(header[0:8], "SCRAPBLK")
 	binary.BigEndian.PutUint16(header[8:10], formatMajor)
 	binary.BigEndian.PutUint16(header[10:12], formatMinor)
 	binary.BigEndian.PutUint32(header[12:16], HeaderLength)
-	blockBytes, err := identity.UUIDBytes(s.blockID)
+	blockBytes, err := identity.UUIDBytes(blockID)
 	if err != nil {
 		return err
 	}
 	copy(header[16:32], blockBytes[:])
-	binary.BigEndian.PutUint32(header[40:44], uint32(s.frameSize))
-	if _, err := s.blockFile.WriteAt(header, 0); err != nil {
+	binary.BigEndian.PutUint32(header[40:44], uint32(frameSize))
+	if _, err := blockFile.WriteAt(header, 0); err != nil {
 		return err
 	}
-	_, err = s.blockFile.Seek(HeaderLength, io.SeekStart)
+	_, err = blockFile.Seek(HeaderLength, io.SeekStart)
 	return err
+}
+
+func writeSealMarker(path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write([]byte("sealed\n")); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	return errors.Join(file.Sync(), file.Close())
 }
 
 func syncDir(path string) error {

@@ -98,6 +98,49 @@ func TestFailedAppendIsTruncated(t *testing.T) {
 	}
 }
 
+func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	first, err := store.Append(ctx, bytes.NewReader([]byte("first")))
+	if err != nil {
+		t.Fatalf("append first: %v", err)
+	}
+
+	sealedBlockID, err := store.SealCurrent(ctx)
+	if err != nil {
+		t.Fatalf("seal current: %v", err)
+	}
+	if sealedBlockID != first.BlockID {
+		t.Fatalf("sealed block id = %q, want %q", sealedBlockID, first.BlockID)
+	}
+	sealed, err := store.IsSealed(first.BlockID)
+	if err != nil {
+		t.Fatalf("is sealed: %v", err)
+	}
+	if !sealed {
+		t.Fatalf("block %q was not marked sealed", first.BlockID)
+	}
+
+	second, err := store.Append(ctx, bytes.NewReader([]byte("second")))
+	if err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+	if second.BlockID == first.BlockID {
+		t.Fatalf("second append used sealed block %q", second.BlockID)
+	}
+	if second.StoredOffset != HeaderLength {
+		t.Fatalf("second stored offset = %d, want %d", second.StoredOffset, HeaderLength)
+	}
+}
+
+func TestSealCurrentRejectsEmptyBlock(t *testing.T) {
+	store := openTestStore(t)
+	_, err := store.SealCurrent(context.Background())
+	if !errors.Is(err, ErrEmptyBlock) {
+		t.Fatalf("seal error = %v, want %v", err, ErrEmptyBlock)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(t.TempDir())

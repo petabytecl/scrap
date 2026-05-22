@@ -23,6 +23,9 @@ func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append block: %v", err)
 	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
 	intent := testUploadIntent(record.BlockID)
 
 	object, err := Uploader{
@@ -54,6 +57,9 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append block: %v", err)
 	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
 	uploader := Uploader{Backend: store, Source: LocalBlockSource{Blocks: blocks}}
 	intent := testUploadIntent(record.BlockID)
 
@@ -77,6 +83,23 @@ func TestUploadBlockRequiresBackendObjectKey(t *testing.T) {
 	}.UploadBlock(context.Background(), metastore.UploadIntent{BlockID: "block-1"})
 	if err == nil {
 		t.Fatal("expected missing backend object key error")
+	}
+}
+
+func TestUploadBlockRequiresSealedLocalBlock(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("open block")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+
+	_, err = Uploader{
+		Backend: openTestBackendStore(t),
+		Source:  LocalBlockSource{Blocks: blocks},
+	}.UploadBlock(ctx, testUploadIntent(record.BlockID))
+	if !errors.Is(err, blockstore.ErrBlockOpen) {
+		t.Fatalf("upload error = %v, want %v", err, blockstore.ErrBlockOpen)
 	}
 }
 

@@ -332,6 +332,9 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	if err != nil {
 		t.Fatalf("head stored document: %v", err)
 	}
+	if _, err := app.blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal current block: %v", err)
+	}
 	backendStore, err := backendfs.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open backend store: %v", err)
