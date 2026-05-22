@@ -138,11 +138,34 @@ func (s *AdminServer) GetOperation(_ context.Context, req *adminv1.GetOperationR
 	return &adminv1.GetOperationResponse{Operation: operation}, nil
 }
 
-func (s *AdminServer) WatchOperation(req *adminv1.WatchOperationRequest, _ grpc.ServerStreamingServer[adminv1.WatchOperationResponse]) error {
+func (s *AdminServer) WatchOperation(req *adminv1.WatchOperationRequest, stream grpc.ServerStreamingServer[adminv1.WatchOperationResponse]) error {
 	if err := validateOperationIDRequest(req, "operation_id", func(req *adminv1.WatchOperationRequest) string { return req.OperationId }); err != nil {
 		return err
 	}
-	return unimplementedAdmin("WatchOperation")
+	if s.operations == nil {
+		return unimplementedAdmin("WatchOperation")
+	}
+	operation, err := s.operations.Get(req.GetOperationId())
+	if errors.Is(err, operations.ErrNotFound) {
+		return status.Error(codes.NotFound, "operation not found")
+	}
+	if err != nil {
+		return err
+	}
+	const snapshotSequence uint64 = 1
+	if req.GetAfterSequence() >= snapshotSequence {
+		return nil
+	}
+	return stream.Send(&adminv1.WatchOperationResponse{
+		Sequence:  snapshotSequence,
+		Operation: operation,
+		Delta: &adminv1.OperationDelta{
+			State:     operation.GetState(),
+			Progress:  operation.GetProgress(),
+			Warnings:  operation.GetWarnings(),
+			LastError: operation.GetLastError(),
+		},
+	})
 }
 
 func (s *AdminServer) ListOperations(_ context.Context, req *adminv1.ListOperationsRequest) (*adminv1.ListOperationsResponse, error) {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -142,6 +143,69 @@ func TestAdminServerCancelOperationUpdatesDurableStore(t *testing.T) {
 	}
 	if stored.GetState() != adminv1.OperationState_OPERATION_STATE_CANCELED {
 		t.Fatalf("stored state = %s, want canceled", stored.GetState())
+	}
+}
+
+func TestAdminServerWatchOperationStreamsDurableSnapshot(t *testing.T) {
+	store := openTestOperationStore(t)
+	operation := testOperation(validUUIDv7(), "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
+	operation.Progress = &adminv1.OperationProgress{WorkUnitsTotal: 10, WorkUnitsCompleted: 3, Message: "repairing"}
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+	client, cleanup := newAdminOperationClient(t, store)
+	defer cleanup()
+
+	stream, err := client.WatchOperation(context.Background(), &adminv1.WatchOperationRequest{OperationId: validUUIDv7()})
+	if err != nil {
+		t.Fatalf("watch operation: %v", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv watch snapshot: %v", err)
+	}
+	if resp.GetSequence() != 1 ||
+		resp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_RUNNING ||
+		resp.GetDelta().GetProgress().GetWorkUnitsCompleted() != 3 {
+		t.Fatalf("watch response = %#v, want current operation snapshot", resp)
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Fatalf("second recv error = %v, want EOF", err)
+	}
+}
+
+func TestAdminServerWatchOperationHonorsAfterSequence(t *testing.T) {
+	store := openTestOperationStore(t)
+	if err := store.Put(testOperation(validUUIDv7(), "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+	client, cleanup := newAdminOperationClient(t, store)
+	defer cleanup()
+
+	stream, err := client.WatchOperation(context.Background(), &adminv1.WatchOperationRequest{
+		OperationId:   validUUIDv7(),
+		AfterSequence: ptr(uint64(1)),
+	})
+	if err != nil {
+		t.Fatalf("watch operation: %v", err)
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Fatalf("recv error = %v, want EOF after already-seen sequence", err)
+	}
+}
+
+func TestAdminServerWatchOperationReturnsNotFound(t *testing.T) {
+	store := openTestOperationStore(t)
+	client, cleanup := newAdminOperationClient(t, store)
+	defer cleanup()
+
+	stream, err := client.WatchOperation(context.Background(), &adminv1.WatchOperationRequest{OperationId: validUUIDv7()})
+	if err != nil {
+		t.Fatalf("watch operation: %v", err)
+	}
+	_, err = stream.Recv()
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("code = %s, want %s; err = %v", code, codes.NotFound, err)
 	}
 }
 
