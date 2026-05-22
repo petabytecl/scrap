@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/metastore"
 )
 
@@ -28,6 +30,7 @@ type Processor struct {
 type RunResult struct {
 	Scanned  int
 	Skipped  int
+	Deferred int
 	Uploaded int
 	Failed   int
 }
@@ -56,6 +59,10 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 		if _, err := p.Uploader.UploadBlock(ctx, intent); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return result, ctxErr
+			}
+			if errors.Is(err, blockstore.ErrBlockOpen) {
+				result.Deferred++
+				continue
 			}
 			if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateFailed, err.Error()); err != nil {
 				return result, err

@@ -110,6 +110,12 @@ func (s *Store) IsSealed(blockID string) (bool, error) {
 	}
 }
 
+func (s *Store) CurrentBlockLength() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blockOffset
+}
+
 func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

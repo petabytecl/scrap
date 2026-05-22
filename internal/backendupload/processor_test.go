@@ -103,6 +103,32 @@ func TestProcessorRetriesFailedIntentAndRecordsUploaded(t *testing.T) {
 	}
 }
 
+func TestProcessorDefersOpenLocalBlockWithoutRecordingFailure(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("open block bytes")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	intent := testUploadIntent(record.BlockID)
+	updater := &recordingIntentStateUpdater{}
+
+	result, err := Processor{
+		Uploader: Uploader{Backend: openTestBackendStore(t), Source: LocalBlockSource{Blocks: blocks}},
+		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
+		Updater:  updater,
+	}.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("run processor: %v", err)
+	}
+	if result.Scanned != 1 || result.Deferred != 1 || result.Failed != 0 || result.Uploaded != 0 {
+		t.Fatalf("result = %#v, want one deferred open block", result)
+	}
+	if len(updater.calls) != 0 {
+		t.Fatalf("state calls = %#v, want none for deferred open block", updater.calls)
+	}
+}
+
 func TestProcessorRecordsFailedUploadAndContinues(t *testing.T) {
 	sourceErr := errors.New("source unavailable")
 	first := testUploadIntent("block-1")

@@ -13,6 +13,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/api"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
+	"github.com/petabytecl/scrap/internal/blockstore"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -373,6 +374,48 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	}
 	if intent.State != metastore.UploadStateUploaded {
 		t.Fatalf("rebuilt upload intent = %#v, want uploaded", intent)
+	}
+}
+
+func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("seal and upload")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	storedDocument, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+
+	result, err := app.RunBackendUploadOnce(ctx, backendStore)
+	if err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	if !result.Sealed || result.SealedBlockID != storedDocument.Location.BlockID {
+		t.Fatalf("seal result = %#v, want sealed block %q", result, storedDocument.Location.BlockID)
+	}
+	if result.Upload.Scanned != 1 || result.Upload.Uploaded != 1 || result.Upload.Failed != 0 || result.Upload.Deferred != 0 {
+		t.Fatalf("upload result = %#v, want one uploaded sealed block", result.Upload)
+	}
+	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStateUploaded {
+		t.Fatalf("upload intent = %#v, want uploaded", intent)
 	}
 }
 

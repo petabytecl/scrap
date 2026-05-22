@@ -24,11 +24,20 @@ import (
 )
 
 type Application struct {
-	blocks    *blockstore.Store
-	metadata  *metastore.Store
-	authority *raftmeta.Authority
-	prepare   *prepareLog
-	now       func() time.Time
+	blocks           *blockstore.Store
+	metadata         *metastore.Store
+	authority        *raftmeta.Authority
+	prepare          *prepareLog
+	sealBlockAtBytes uint64
+	now              func() time.Time
+}
+
+const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
+
+type BackendUploadOnceResult struct {
+	SealedBlockID string
+	Sealed        bool
+	Upload        backendupload.RunResult
 }
 
 func Open(dir string) (*Application, error) {
@@ -62,11 +71,12 @@ func Open(dir string) (*Application, error) {
 		return nil, err
 	}
 	return &Application{
-		blocks:    blocks,
-		metadata:  metadata,
-		authority: authority,
-		prepare:   prepare,
-		now:       func() time.Time { return time.Now().UTC() },
+		blocks:           blocks,
+		metadata:         metadata,
+		authority:        authority,
+		prepare:          prepare,
+		sealBlockAtBytes: DefaultSealBlockAtBytes,
+		now:              func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -87,6 +97,32 @@ func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.
 		Updater: a.authority,
 		Now:     a.now,
 	}
+}
+
+func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.Store) (BackendUploadOnceResult, error) {
+	var result BackendUploadOnceResult
+	sealedBlockID, sealed, err := a.SealCurrentBlockIfDue(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.SealedBlockID = sealedBlockID
+	result.Sealed = sealed
+	result.Upload, err = a.BackendUploadProcessor(store).RunOnce(ctx)
+	return result, err
+}
+
+func (a *Application) SealCurrentBlockIfDue(ctx context.Context) (string, bool, error) {
+	if a.sealBlockAtBytes == 0 || a.blocks.CurrentBlockLength() < a.sealBlockAtBytes {
+		return "", false, nil
+	}
+	blockID, err := a.blocks.SealCurrent(ctx)
+	if errors.Is(err, blockstore.ErrEmptyBlock) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return blockID, true, nil
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {

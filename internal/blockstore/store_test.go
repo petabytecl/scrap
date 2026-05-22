@@ -105,6 +105,9 @@ func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append first: %v", err)
 	}
+	if got, want := store.CurrentBlockLength(), HeaderLength+first.StoredLength; got != want {
+		t.Fatalf("current block length = %d, want %d", got, want)
+	}
 
 	sealedBlockID, err := store.SealCurrent(ctx)
 	if err != nil {
@@ -130,6 +133,9 @@ func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	}
 	if second.StoredOffset != HeaderLength {
 		t.Fatalf("second stored offset = %d, want %d", second.StoredOffset, HeaderLength)
+	}
+	if got, want := store.CurrentBlockLength(), HeaderLength+second.StoredLength; got != want {
+		t.Fatalf("rotated block length = %d, want %d", got, want)
 	}
 }
 
