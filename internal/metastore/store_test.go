@@ -32,6 +32,9 @@ func TestPutHeadFindDocument(t *testing.T) {
 	if got.Location.StoredOffset != doc.Location.StoredOffset {
 		t.Fatalf("stored offset = %d, want %d", got.Location.StoredOffset, doc.Location.StoredOffset)
 	}
+	if got.RestoreState != RestoreStateHot || got.UploadState != UploadStatePending {
+		t.Fatalf("restore/upload state = %d/%d, want hot/pending", got.RestoreState, got.UploadState)
+	}
 
 	found, err := store.FindDocuments(identity.Transaction{
 		TenantID:      doc.Identity.TenantID,
@@ -267,6 +270,8 @@ func sampleDocument(name string, class DocumentClass) Document {
 		FinalizedAt:      now,
 		Availability:     AvailabilityHot,
 		LifecycleState:   LifecycleStateActive,
+		RestoreState:     RestoreStateHot,
+		UploadState:      UploadStatePending,
 		Tags: map[string]string{
 			"workflow": "billing",
 		},

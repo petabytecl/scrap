@@ -12,6 +12,7 @@ type PriorityClass uint16
 type Availability uint16
 type LifecycleState uint16
 type TransactionStateKind uint16
+type RestoreState uint16
 type UploadState uint16
 
 const (
@@ -41,6 +42,13 @@ const (
 )
 
 const (
+	RestoreStateHot               RestoreState = 1
+	RestoreStateCold              RestoreState = 2
+	RestoreStateRestorePending    RestoreState = 3
+	RestoreStateCryptoUnavailable RestoreState = 4
+)
+
+const (
 	UploadStateNotRequired UploadState = 1
 	UploadStatePending     UploadState = 2
 	UploadStateUploaded    UploadState = 3
@@ -64,6 +72,8 @@ type Document struct {
 	FinalizedAt                 time.Time
 	Availability                Availability
 	LifecycleState              LifecycleState
+	RestoreState                RestoreState
+	UploadState                 UploadState
 	Tags                        map[string]string
 	Location                    blockstore.Record
 	ClientIdempotencyKey        string

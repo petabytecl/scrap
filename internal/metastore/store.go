@@ -52,6 +52,12 @@ func (s *Store) PutDocument(document Document) error {
 	if document.LifecycleState == 0 {
 		document.LifecycleState = LifecycleStateActive
 	}
+	if document.RestoreState == 0 {
+		document.RestoreState = RestoreStateHot
+	}
+	if document.UploadState == 0 {
+		document.UploadState = UploadStatePending
+	}
 
 	value, err := marshalDocument(document)
 	if err != nil {
