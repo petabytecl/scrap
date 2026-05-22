@@ -99,3 +99,61 @@ message TransactionRecord {
   string shard_id = 21;
   uint64 committed_index = 22;
 }
+
+message ShardCommand {
+  uint32 schema_version = 1;
+  string shard_id = 2;
+  string command_id = 3;
+  google.protobuf.Timestamp proposed_at = 4;
+  oneof command {
+    CommitDocumentCommand commit_document = 10;
+    CompleteTransactionCommand complete_transaction = 11;
+    RecordUploadIntentCommand record_upload_intent = 12;
+    UpdateRestoreStateCommand update_restore_state = 13;
+    RecordRepairStateCommand record_repair_state = 14;
+    TombstoneDocumentCommand tombstone_document = 15;
+  }
+}
+
+message CommitDocumentCommand {
+  DocumentRecord document = 1;
+}
+
+message CompleteTransactionCommand {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  map<string, string> tags = 4;
+}
+
+message RecordUploadIntentCommand {
+  string block_id = 1;
+  string backend_object_key = 2;
+  string index_object_key = 3;
+  string envelope_object_key = 4;
+}
+
+message UpdateRestoreStateCommand {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  optional string document_name = 3;
+  RestoreState restore_state = 4;
+  string reason = 5;
+}
+
+message RecordRepairStateCommand {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  string document_name = 3;
+  string physical_ref = 4;
+  string incident_id = 5;
+  bool quarantined = 6;
+}
+
+message TombstoneDocumentCommand {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  string document_name = 3;
+  google.protobuf.Timestamp tombstoned_at = 4;
+  string operation_id = 5;
+}

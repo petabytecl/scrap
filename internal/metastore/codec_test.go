@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAuthoritativeDocumentRecordSchemaShape(t *testing.T) {
@@ -102,6 +104,99 @@ func TestAuthoritativeDocumentRecordPreservesUnknownForwardFields(t *testing.T) 
 	}
 	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
+	}
+}
+
+func TestShardCommandSchemaShape(t *testing.T) {
+	command := metastorev1.File_scrap_metastore_v1_metastore_proto.Messages().ByName("ShardCommand")
+	requireField(t, command, "schema_version")
+	requireField(t, command, "shard_id")
+	requireField(t, command, "command_id")
+	requireField(t, command, "proposed_at")
+	if command.Oneofs().ByName("command") == nil {
+		t.Fatal("ShardCommand.command oneof missing")
+	}
+
+	for _, name := range []protoreflect.Name{
+		"CommitDocumentCommand",
+		"CompleteTransactionCommand",
+		"RecordUploadIntentCommand",
+		"UpdateRestoreStateCommand",
+		"RecordRepairStateCommand",
+		"TombstoneDocumentCommand",
+	} {
+		if metastorev1.File_scrap_metastore_v1_metastore_proto.Messages().ByName(name) == nil {
+			t.Fatalf("%s descriptor missing", name)
+		}
+	}
+}
+
+func TestShardCommandRejectsUnsupportedSchemaVersion(t *testing.T) {
+	command := sampleShardCommand()
+	command.SchemaVersion = CurrentSchemaVersion + 1
+	data, err := proto.Marshal(command)
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+
+	_, err = UnmarshalShardCommand(data)
+	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
+		t.Fatalf("error = %v, want %v", err, ErrUnsupportedSchemaVersion)
+	}
+}
+
+func TestShardCommandRequiresCommandBody(t *testing.T) {
+	_, err := MarshalShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "cmd-1",
+		ProposedAt:    timestamppb.New(time.Unix(100, 0).UTC()),
+	})
+	if err == nil {
+		t.Fatal("expected missing command body error")
+	}
+}
+
+func TestShardCommandPreservesUnknownForwardFields(t *testing.T) {
+	data, err := MarshalShardCommand(sampleShardCommand())
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	unknown := appendUnknownVarint(nil, 1000, 123)
+	data = append(data, unknown...)
+
+	decoded, err := UnmarshalShardCommand(data)
+	if err != nil {
+		t.Fatalf("unmarshal command: %v", err)
+	}
+	if got := decoded.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
+		t.Fatalf("unknown fields = %x, want %x", got, unknown)
+	}
+
+	roundTrip, err := MarshalShardCommand(decoded)
+	if err != nil {
+		t.Fatalf("marshal round trip: %v", err)
+	}
+	var reparsed metastorev1.ShardCommand
+	if err := proto.Unmarshal(roundTrip, &reparsed); err != nil {
+		t.Fatalf("reparse command: %v", err)
+	}
+	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
+		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
+	}
+}
+
+func sampleShardCommand() *metastorev1.ShardCommand {
+	return &metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "cmd-1",
+		ProposedAt:    timestamppb.New(time.Unix(100, 0).UTC()),
+		Command: &metastorev1.ShardCommand_CommitDocument{
+			CommitDocument: &metastorev1.CommitDocumentCommand{
+				Document: documentToProto(sampleDocument("invoice.xml", DocumentClassPermanent)),
+			},
+		},
 	}
 }
 
