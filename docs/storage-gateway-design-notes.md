@@ -1100,7 +1100,7 @@ Raft integration tests use an in-process multi-node harnessed transport around `
 
 Backend and OpenBao tests use deterministic fakes for correctness and separate smoke tests for real native SDK/OpenBao compatibility. The fake backend must support range reads, missing objects, corrupted objects, throttling, retryable errors, restore-pending behavior, and upload verification. The fake Transit service must support wrap, unwrap, rewrap, key-version behavior, and outage/error modes.
 
-The first Go spike is representative but disposable. It should include real `grpc-go` streaming, real file IO, real Pebble, real checksums, a minimal real subset of the block/openlog/index concepts, a fake commit barrier instead of real Raft, and fake backend/OpenBao adapters. The spike code should not become production code by default; preserve benchmark reports, failure cases, and distilled tests as the reusable output.
+The first Go spike is representative but disposable. It should include real `grpc-go` streaming, real file IO, real Pebble, real checksums, a minimal real subset of the block/openlog/index concepts, fake and in-process Raft commit barriers, and fake backend/OpenBao adapters. The spike code should not become production code by default; preserve benchmark reports, failure cases, and distilled tests as the reusable output.
 
 The initial synthetic workload is ETL-biased and trace-replay-ready:
 
@@ -3491,5 +3491,7 @@ Resume by choosing between:
 4. draft operational runbooks from the accepted topology and admin API model.
 
 The recommended next topic is the first implementation spike. The architecture now has enough concrete decisions and accepted ADRs to validate the highest-risk assumptions with a disposable Go spike before production code is written.
+
+The active spike charter is [Write Path Implementation Spike](spikes/0001-write-path-spike.md).
 
 The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.
