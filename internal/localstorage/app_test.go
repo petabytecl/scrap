@@ -14,6 +14,7 @@ import (
 	"github.com/petabytecl/scrap/internal/api"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/metastore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -58,6 +59,18 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 	}
 	if len(prepared) != 1 || prepared[0].Identity != doc {
 		t.Fatalf("prepare log records = %#v, want written document", prepared)
+	}
+	storedDocument, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStatePending ||
+		intent.BackendObjectKey != "blocks/"+storedDocument.Location.BlockID+".blk" {
+		t.Fatalf("upload intent = %#v, want pending block upload", intent)
 	}
 
 	head, err := app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
@@ -276,6 +289,17 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	}
 	if transaction.Tags["closed_by"] != "projection-rebuild-test" {
 		t.Fatalf("rebuilt transaction tags = %#v", transaction.Tags)
+	}
+	storedDocument, err := reopened.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head rebuilt document for upload intent: %v", err)
+	}
+	intent, err := reopened.metadata.GetUploadIntent(storedDocument.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get rebuilt upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStatePending {
+		t.Fatalf("rebuilt upload intent = %#v, want pending", intent)
 	}
 	sender := &recordingReadSender{}
 	if err := reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {

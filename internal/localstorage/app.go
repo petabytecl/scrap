@@ -126,6 +126,10 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
+	uploadIntent := uploadIntentForDocument(document)
+	if err := a.authority.RecordUploadIntent(ctx, uploadIntent, recordUploadIntentCommandID(uploadIntent), now); err != nil {
+		return api.WriteDocumentResult{}, mapError(err)
+	}
 	return api.WriteDocumentResult{
 		Metadata:             documentToAPI(document),
 		DesiredReplicaCount:  1,
@@ -494,6 +498,27 @@ func completeTransactionCommandID(transaction identity.Transaction, completedAt 
 		parts = append(parts, key, tags[key])
 	}
 	return stableCommandID("complete-transaction", parts...)
+}
+
+func uploadIntentForDocument(document metastore.Document) metastore.UploadIntent {
+	blockID := document.Location.BlockID
+	return metastore.UploadIntent{
+		BlockID:           blockID,
+		BackendObjectKey:  "blocks/" + blockID + ".blk",
+		IndexObjectKey:    "blocks/" + blockID + ".idx",
+		EnvelopeObjectKey: "blocks/" + blockID + ".env",
+		State:             metastore.UploadStatePending,
+	}
+}
+
+func recordUploadIntentCommandID(intent metastore.UploadIntent) string {
+	return stableCommandID(
+		"record-upload-intent",
+		intent.BlockID,
+		intent.BackendObjectKey,
+		intent.IndexObjectKey,
+		intent.EnvelopeObjectKey,
+	)
 }
 
 func stableCommandID(prefix string, parts ...string) string {
