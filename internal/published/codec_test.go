@@ -2,7 +2,9 @@ package published
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -86,6 +88,98 @@ func TestSnapshotAndTailRecordsValidateSchemaVersion(t *testing.T) {
 	}
 	if _, err := UnmarshalTailRecord(tailData); err != nil {
 		t.Fatalf("unmarshal tail: %v", err)
+	}
+}
+
+func TestSnapshotArtifactRecordsRoundTripAndEOF(t *testing.T) {
+	first := &publishedv1.SnapshotRecord{
+		SchemaVersion:   CurrentSchemaVersion,
+		SourceNamespace: "billing-prod",
+		ShardId:         "tenant-txn",
+		HighWatermark:   10,
+		Record: &publishedv1.SnapshotRecord_Document{
+			Document: sampleDocument(),
+		},
+	}
+	second := proto.Clone(first).(*publishedv1.SnapshotRecord)
+	second.HighWatermark = 11
+
+	var buf bytes.Buffer
+	if err := WriteSnapshotRecord(&buf, first); err != nil {
+		t.Fatalf("write first snapshot: %v", err)
+	}
+	if err := WriteSnapshotRecord(&buf, second); err != nil {
+		t.Fatalf("write second snapshot: %v", err)
+	}
+
+	gotFirst, err := ReadSnapshotRecord(&buf)
+	if err != nil {
+		t.Fatalf("read first snapshot: %v", err)
+	}
+	if !proto.Equal(gotFirst, first) {
+		t.Fatalf("first snapshot = %#v, want %#v", gotFirst, first)
+	}
+	gotSecond, err := ReadSnapshotRecord(&buf)
+	if err != nil {
+		t.Fatalf("read second snapshot: %v", err)
+	}
+	if !proto.Equal(gotSecond, second) {
+		t.Fatalf("second snapshot = %#v, want %#v", gotSecond, second)
+	}
+	if _, err := ReadSnapshotRecord(&buf); !errors.Is(err, io.EOF) {
+		t.Fatalf("final read error = %v, want EOF", err)
+	}
+}
+
+func TestTailArtifactRecordRejectsChecksumMismatch(t *testing.T) {
+	record := &publishedv1.TailRecord{
+		SchemaVersion:   CurrentSchemaVersion,
+		SourceNamespace: "billing-prod",
+		ShardId:         "tenant-txn",
+		LogIndex:        11,
+		Mutation: &publishedv1.TailRecord_FinalizedDocument{
+			FinalizedDocument: sampleDocument(),
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteTailRecord(&buf, record); err != nil {
+		t.Fatalf("write tail: %v", err)
+	}
+	data := buf.Bytes()
+	if len(data) < 6 {
+		t.Fatalf("framed data too short: %d", len(data))
+	}
+	data[5] ^= 0xff
+
+	_, err := ReadTailRecord(bytes.NewReader(data))
+	if !errors.Is(err, ErrArtifactChecksumMismatch) {
+		t.Fatalf("read error = %v, want checksum mismatch", err)
+	}
+}
+
+func TestArtifactRecordRejectsTruncationAndOversize(t *testing.T) {
+	record := &publishedv1.TailRecord{
+		SchemaVersion:   CurrentSchemaVersion,
+		SourceNamespace: "billing-prod",
+		ShardId:         "tenant-txn",
+		LogIndex:        11,
+		Mutation: &publishedv1.TailRecord_FinalizedDocument{
+			FinalizedDocument: sampleDocument(),
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteTailRecord(&buf, record); err != nil {
+		t.Fatalf("write tail: %v", err)
+	}
+	truncated := buf.Bytes()[:buf.Len()-1]
+	if _, err := ReadTailRecord(bytes.NewReader(truncated)); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncated read error = %v, want unexpected EOF", err)
+	}
+
+	var oversizedHeader [4]byte
+	binary.BigEndian.PutUint32(oversizedHeader[:], maxArtifactRecordPayload+1)
+	if _, err := ReadTailRecord(bytes.NewReader(oversizedHeader[:])); !errors.Is(err, ErrArtifactRecordTooLarge) {
+		t.Fatalf("oversized read error = %v, want record too large", err)
 	}
 }
 
