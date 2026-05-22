@@ -50,6 +50,13 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 	if !bytes.Equal(result.Metadata.LogicalSHA256, sum[:]) {
 		t.Fatal("write logical sha was not returned")
 	}
+	prepared, err := app.prepare.Recover()
+	if err != nil {
+		t.Fatalf("recover prepare log: %v", err)
+	}
+	if len(prepared) != 1 || prepared[0].Identity != doc {
+		t.Fatalf("prepare log records = %#v, want written document", prepared)
+	}
 
 	head, err := app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	if err != nil {
@@ -130,11 +137,15 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 }
 
 func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
-	app := openTestApplication(t)
+	dir := t.TempDir()
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
 	doc := testDocumentIdentity()
 	badSHA := bytes.Repeat([]byte{9}, 32)
 
-	_, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+	_, err = app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
@@ -145,6 +156,65 @@ func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
 
 	_, err = app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	requireCode(t, err, codes.NotFound)
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	_, err = reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	requireCode(t, err, codes.NotFound)
+	prepared, err := reopened.prepare.Recover()
+	if err != nil {
+		t.Fatalf("recover prepare log: %v", err)
+	}
+	if len(prepared) != 0 {
+		t.Fatalf("prepare records = %#v, want no visible prepare for rejected write", prepared)
+	}
+}
+
+func TestCommittedWriteSurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("durable local bytes")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	if err != nil {
+		t.Fatalf("head after reopen: %v", err)
+	}
+	if head.Length != uint64(len(data)) {
+		t.Fatalf("head length after reopen = %d, want %d", head.Length, len(data))
+	}
+	sender := &recordingReadSender{}
+	if err := reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read after reopen: %v", err)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("read after reopen = %q, want %q", got, data)
+	}
 }
 
 func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {

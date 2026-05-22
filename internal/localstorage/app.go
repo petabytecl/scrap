@@ -19,6 +19,7 @@ import (
 type Application struct {
 	blocks   *blockstore.Store
 	metadata *metastore.Store
+	prepare  *prepareLog
 	now      func() time.Time
 }
 
@@ -32,9 +33,22 @@ func Open(dir string) (*Application, error) {
 		_ = blocks.Close()
 		return nil, err
 	}
+	prepare, err := openPrepareLog(dir)
+	if err != nil {
+		_ = metadata.Close()
+		_ = blocks.Close()
+		return nil, err
+	}
+	if _, err := prepare.Recover(); err != nil {
+		_ = prepare.Close()
+		_ = metadata.Close()
+		_ = blocks.Close()
+		return nil, err
+	}
 	return &Application{
 		blocks:   blocks,
 		metadata: metadata,
+		prepare:  prepare,
 		now:      func() time.Time { return time.Now().UTC() },
 	}, nil
 }
@@ -43,7 +57,7 @@ func (a *Application) Close() error {
 	if a == nil {
 		return nil
 	}
-	return errors.Join(a.blocks.Close(), a.metadata.Close())
+	return errors.Join(a.prepare.Close(), a.metadata.Close(), a.blocks.Close())
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {
@@ -90,6 +104,9 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 		Location:                    record,
 		ClientIdempotencyKey:        init.ClientIdempotencyKey,
 		HasClientIdempotencyKey:     init.ClientIdempotencyKey != "",
+	}
+	if err := a.prepare.Append(document); err != nil {
+		return api.WriteDocumentResult{}, err
 	}
 	if err := a.metadata.PutDocument(document); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
