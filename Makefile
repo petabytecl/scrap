@@ -1,5 +1,7 @@
 .PHONY: proto
 .PHONY: proto-check
+.PHONY: test
+.PHONY: build
 .PHONY: spike-write-path
 .PHONY: spike-write-path-raft
 .PHONY: spike-write-path-raft-durable
@@ -20,6 +22,12 @@ proto-check:
 	fi
 	buf generate
 	git diff --exit-code -- internal/gen
+
+test:
+	go test ./...
+
+build:
+	go build ./cmd/scrapd ./cmd/scrap-spike
 
 spike-write-path:
 	go run ./cmd/scrap-spike
