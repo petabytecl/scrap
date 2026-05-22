@@ -23,6 +23,10 @@ func MarshalDocument(document Document) ([]byte, error) {
 	return marshalDocument(document)
 }
 
+func DocumentRecord(document Document) *metastorev1.DocumentRecord {
+	return documentToProto(document)
+}
+
 func unmarshalDocument(data []byte) (Document, error) {
 	record, err := unmarshalDocumentRecord(data)
 	if err != nil {

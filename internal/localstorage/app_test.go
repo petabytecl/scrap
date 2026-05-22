@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -214,6 +216,73 @@ func TestCommittedWriteSurvivesReopen(t *testing.T) {
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read after reopen = %q, want %q", got, data)
+	}
+}
+
+func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("durable local bytes")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	app.now = fixedClock(time.Unix(100, 0).UTC())
+	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	completedAt := time.Unix(200, 0).UTC()
+	app.now = fixedClock(completedAt)
+	if _, err := app.CompleteTransaction(context.Background(), api.CompleteTransactionRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+		Tags: map[string]string{
+			"closed_by": "projection-rebuild-test",
+		},
+	}); err != nil {
+		t.Fatalf("complete transaction: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
+		t.Fatalf("remove metadata projection: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	if err != nil {
+		t.Fatalf("head rebuilt document: %v", err)
+	}
+	if head.Length != uint64(len(data)) {
+		t.Fatalf("rebuilt length = %d, want %d", head.Length, len(data))
+	}
+	transaction, err := reopened.GetTransaction(context.Background(), api.GetTransactionRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+	})
+	if err != nil {
+		t.Fatalf("get rebuilt transaction: %v", err)
+	}
+	if transaction.CompletedAt == nil || !transaction.CompletedAt.Equal(completedAt) {
+		t.Fatalf("rebuilt completed_at = %v, want %v", transaction.CompletedAt, completedAt)
+	}
+	if transaction.Tags["closed_by"] != "projection-rebuild-test" {
+		t.Fatalf("rebuilt transaction tags = %#v", transaction.Tags)
+	}
+	sender := &recordingReadSender{}
+	if err := reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read rebuilt document: %v", err)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("read rebuilt document = %q, want %q", got, data)
 	}
 }
 

@@ -4,23 +4,29 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
+	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/raftmeta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type Application struct {
-	blocks   *blockstore.Store
-	metadata *metastore.Store
-	prepare  *prepareLog
-	now      func() time.Time
+	blocks    *blockstore.Store
+	metadata  *metastore.Store
+	authority *raftmeta.Authority
+	prepare   *prepareLog
+	now       func() time.Time
 }
 
 func Open(dir string) (*Application, error) {
@@ -33,23 +39,32 @@ func Open(dir string) (*Application, error) {
 		_ = blocks.Close()
 		return nil, err
 	}
+	authority, err := raftmeta.OpenAuthority(filepath.Join(dir, "raftmeta"), "local", metadata)
+	if err != nil {
+		_ = metadata.Close()
+		_ = blocks.Close()
+		return nil, err
+	}
 	prepare, err := openPrepareLog(dir)
 	if err != nil {
+		_ = authority.Close()
 		_ = metadata.Close()
 		_ = blocks.Close()
 		return nil, err
 	}
 	if _, err := prepare.Recover(); err != nil {
 		_ = prepare.Close()
+		_ = authority.Close()
 		_ = metadata.Close()
 		_ = blocks.Close()
 		return nil, err
 	}
 	return &Application{
-		blocks:   blocks,
-		metadata: metadata,
-		prepare:  prepare,
-		now:      func() time.Time { return time.Now().UTC() },
+		blocks:    blocks,
+		metadata:  metadata,
+		authority: authority,
+		prepare:   prepare,
+		now:       func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -57,7 +72,7 @@ func (a *Application) Close() error {
 	if a == nil {
 		return nil
 	}
-	return errors.Join(a.prepare.Close(), a.metadata.Close(), a.blocks.Close())
+	return errors.Join(a.prepare.Close(), a.authority.Close(), a.metadata.Close(), a.blocks.Close())
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {
@@ -108,7 +123,7 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	if err := a.prepare.Append(document); err != nil {
 		return api.WriteDocumentResult{}, err
 	}
-	if err := a.metadata.PutDocument(document); err != nil {
+	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
 	return api.WriteDocumentResult{
@@ -172,8 +187,9 @@ func (a *Application) FindDocuments(_ context.Context, req api.FindDocumentsRequ
 	return result, nil
 }
 
-func (a *Application) CompleteTransaction(_ context.Context, req api.CompleteTransactionRequest) (api.TransactionState, error) {
-	transaction, err := a.metadata.CompleteTransaction(req.Transaction, a.now(), cloneTags(req.Tags))
+func (a *Application) CompleteTransaction(ctx context.Context, req api.CompleteTransactionRequest) (api.TransactionState, error) {
+	completedAt := a.now()
+	transaction, err := a.authority.CompleteTransaction(ctx, req.Transaction, completedAt, cloneTags(req.Tags), completeTransactionCommandID(req.Transaction, completedAt, req.Tags))
 	if err != nil {
 		return api.TransactionState{}, mapError(err)
 	}
@@ -436,6 +452,44 @@ func documentIdentityFingerprint(parts ...string) [16]byte {
 	var out [16]byte
 	copy(out[:], hasher.Sum(nil))
 	return out
+}
+
+func commitDocumentCommandID(document metastore.Document) string {
+	return stableCommandID(
+		"commit-document",
+		document.Identity.TenantID,
+		document.Identity.TransactionID,
+		document.Identity.DocumentName,
+		document.ClientIdempotencyKey,
+	)
+}
+
+func completeTransactionCommandID(transaction identity.Transaction, completedAt time.Time, tags map[string]string) string {
+	parts := []string{
+		transaction.TenantID,
+		transaction.TransactionID,
+		completedAt.Format(time.RFC3339Nano),
+	}
+	keys := make([]string, 0, len(tags))
+	for key := range tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts = append(parts, key, tags[key])
+	}
+	return stableCommandID("complete-transaction", parts...)
+}
+
+func stableCommandID(prefix string, parts ...string) string {
+	hasher := sha256.New()
+	_, _ = hasher.Write([]byte(prefix))
+	for _, part := range parts {
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(part))
+	}
+	sum := hasher.Sum(nil)
+	return prefix + ":" + hex.EncodeToString(sum[:16])
 }
 
 func cloneTags(tags map[string]string) map[string]string {
