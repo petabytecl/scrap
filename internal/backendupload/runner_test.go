@@ -88,6 +88,36 @@ func TestRunnerReportsErrorsAndContinues(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesRunOnceFunc(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := make(chan time.Time)
+	observed := make(chan RunResult, 1)
+	calls := 0
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Runner{
+			RunOnceFunc: func(context.Context) (RunResult, error) {
+				calls++
+				return RunResult{Scanned: calls}, nil
+			},
+			Report: func(result RunResult, _ error) {
+				observed <- result
+			},
+		}.run(ctx, ticks)
+	}()
+
+	first := receiveRunResult(t, observed)
+	if first.Scanned != 1 {
+		t.Fatalf("first result = %#v, want callback result", first)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runner returned error: %v", err)
+	}
+}
+
 func TestRunnerRejectsNonPositiveInterval(t *testing.T) {
 	err := Runner{}.Run(context.Background())
 	if err == nil {

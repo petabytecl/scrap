@@ -7,9 +7,10 @@ import (
 )
 
 type Runner struct {
-	Processor Processor
-	Interval  time.Duration
-	Report    func(RunResult, error)
+	Processor   Processor
+	RunOnceFunc func(context.Context) (RunResult, error)
+	Interval    time.Duration
+	Report      func(RunResult, error)
 }
 
 func (r Runner) Run(ctx context.Context) error {
@@ -23,7 +24,7 @@ func (r Runner) Run(ctx context.Context) error {
 
 func (r Runner) run(ctx context.Context, ticks <-chan time.Time) error {
 	for {
-		result, err := r.Processor.RunOnce(ctx)
+		result, err := r.runOnce(ctx)
 		if err != nil && ctx.Err() != nil {
 			return nil
 		}
@@ -36,4 +37,11 @@ func (r Runner) run(ctx context.Context, ticks <-chan time.Time) error {
 		case <-ticks:
 		}
 	}
+}
+
+func (r Runner) runOnce(ctx context.Context) (RunResult, error) {
+	if r.RunOnceFunc != nil {
+		return r.RunOnceFunc(ctx)
+	}
+	return r.Processor.RunOnce(ctx)
 }

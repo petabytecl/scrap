@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 const (
-	DefaultPublicListenAddress = "127.0.0.1:18080"
-	DefaultAdminListenAddress  = "127.0.0.1:18081"
+	DefaultPublicListenAddress   = "127.0.0.1:18080"
+	DefaultAdminListenAddress    = "127.0.0.1:18081"
+	DefaultBackendUploadInterval = 30 * time.Second
 )
 
 type Config struct {
@@ -17,12 +19,16 @@ type Config struct {
 	AdminListenAddress              string
 	LocalDataDir                    string
 	EnableLocalNonProductionStorage bool
+	EnableLocalFilesystemBackend    bool
+	LocalBackendDataDir             string
+	BackendUploadInterval           time.Duration
 }
 
 func Default() Config {
 	return Config{
-		PublicListenAddress: DefaultPublicListenAddress,
-		AdminListenAddress:  DefaultAdminListenAddress,
+		PublicListenAddress:   DefaultPublicListenAddress,
+		AdminListenAddress:    DefaultAdminListenAddress,
+		BackendUploadInterval: DefaultBackendUploadInterval,
 	}
 }
 
@@ -42,6 +48,19 @@ func (c Config) Validate() error {
 		}
 	} else if strings.TrimSpace(c.LocalDataDir) != "" {
 		return errors.New("local_data_dir requires local non-production storage to be explicitly enabled")
+	}
+	if c.BackendUploadInterval <= 0 {
+		return errors.New("backend_upload_interval must be positive")
+	}
+	if c.EnableLocalFilesystemBackend {
+		if !c.EnableLocalNonProductionStorage {
+			return errors.New("local filesystem backend requires local non-production storage to be enabled")
+		}
+		if strings.TrimSpace(c.LocalBackendDataDir) == "" {
+			return errors.New("local_backend_data_dir is required when local filesystem backend is enabled")
+		}
+	} else if strings.TrimSpace(c.LocalBackendDataDir) != "" {
+		return errors.New("local_backend_data_dir requires local filesystem backend to be explicitly enabled")
 	}
 	return nil
 }

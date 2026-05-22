@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDefaultConfigValidates(t *testing.T) {
 	if err := Default().Validate(); err != nil {
@@ -60,5 +63,56 @@ func TestLocalNonProductionStorageRequiresExplicitEnableAndDataDir(t *testing.T)
 	cfg.LocalDataDir = t.TempDir()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("local non-production config did not validate: %v", err)
+	}
+}
+
+func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testing.T) {
+	tests := map[string]Config{
+		"enabled without local storage": {
+			PublicListenAddress:          DefaultPublicListenAddress,
+			AdminListenAddress:           DefaultAdminListenAddress,
+			EnableLocalFilesystemBackend: true,
+			LocalBackendDataDir:          "/tmp/scrap-backend",
+			BackendUploadInterval:        DefaultBackendUploadInterval,
+		},
+		"enabled without backend data dir": {
+			PublicListenAddress:             DefaultPublicListenAddress,
+			AdminListenAddress:              DefaultAdminListenAddress,
+			EnableLocalNonProductionStorage: true,
+			LocalDataDir:                    "/tmp/scrap",
+			EnableLocalFilesystemBackend:    true,
+			BackendUploadInterval:           DefaultBackendUploadInterval,
+		},
+		"backend data dir without enable": {
+			PublicListenAddress:             DefaultPublicListenAddress,
+			AdminListenAddress:              DefaultAdminListenAddress,
+			EnableLocalNonProductionStorage: true,
+			LocalDataDir:                    "/tmp/scrap",
+			LocalBackendDataDir:             "/tmp/scrap-backend",
+			BackendUploadInterval:           DefaultBackendUploadInterval,
+		},
+		"non-positive upload interval": {
+			PublicListenAddress:   DefaultPublicListenAddress,
+			AdminListenAddress:    DefaultAdminListenAddress,
+			BackendUploadInterval: 0,
+		},
+	}
+
+	for name, cfg := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+
+	cfg := Default()
+	cfg.EnableLocalNonProductionStorage = true
+	cfg.LocalDataDir = t.TempDir()
+	cfg.EnableLocalFilesystemBackend = true
+	cfg.LocalBackendDataDir = t.TempDir()
+	cfg.BackendUploadInterval = 10 * time.Millisecond
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("local filesystem backend config did not validate: %v", err)
 	}
 }
