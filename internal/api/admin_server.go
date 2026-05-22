@@ -21,6 +21,7 @@ type AdminServer struct {
 	inspect    InspectApplication
 	repair     RepairApplication
 	member     MemberApplication
+	dr         DisasterRecoveryApplication
 	operations *operations.Store
 	now        func() time.Time
 }
@@ -42,6 +43,10 @@ type MemberApplication interface {
 	CordonMember(context.Context, MemberMutationRequest) (*adminv1.StorageMember, error)
 	UncordonMember(context.Context, MemberMutationRequest) (*adminv1.StorageMember, error)
 	GetEvictionSafety(context.Context, string) (*adminv1.EvictionSafety, error)
+}
+
+type DisasterRecoveryApplication interface {
+	GetRecoveryReadiness(context.Context) (*adminv1.RecoveryReadiness, error)
 }
 
 const (
@@ -85,6 +90,12 @@ func WithRepairApplication(repair RepairApplication) AdminOption {
 func WithMemberApplication(member MemberApplication) AdminOption {
 	return func(server *AdminServer) {
 		server.member = member
+	}
+}
+
+func WithDisasterRecoveryApplication(dr DisasterRecoveryApplication) AdminOption {
+	return func(server *AdminServer) {
+		server.dr = dr
 	}
 }
 
@@ -536,36 +547,80 @@ func (s *AdminServer) StartTombstone(_ context.Context, req *adminv1.StartTombst
 	return &adminv1.StartTombstoneResponse{Operation: operation}, nil
 }
 
-func (s *AdminServer) GetRecoveryReadiness(context.Context, *adminv1.GetRecoveryReadinessRequest) (*adminv1.GetRecoveryReadinessResponse, error) {
-	return nil, unimplementedAdmin("GetRecoveryReadiness")
+func (s *AdminServer) GetRecoveryReadiness(ctx context.Context, req *adminv1.GetRecoveryReadinessRequest) (*adminv1.GetRecoveryReadinessResponse, error) {
+	if req == nil {
+		var problems violations
+		problems.add("request", identity.ReasonRequired, "request is required")
+		return nil, problems.err()
+	}
+	if s.dr == nil {
+		return nil, unimplementedAdmin("GetRecoveryReadiness")
+	}
+	readiness, err := s.dr.GetRecoveryReadiness(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetRecoveryReadinessResponse{Readiness: readiness}, nil
 }
 
 func (s *AdminServer) PlanRecovery(_ context.Context, req *adminv1.PlanRecoveryRequest) (*adminv1.PlanRecoveryResponse, error) {
-	if _, err := ValidatePlanRecoveryRequest(req); err != nil {
+	planReq, err := ValidatePlanRecoveryRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("PlanRecovery")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanRecovery")
+	}
+	plan, err := s.createOperationPlan("recovery", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanRecoveryResponse{Plan: plan}, nil
 }
 
 func (s *AdminServer) StartMetadataRestore(_ context.Context, req *adminv1.StartMetadataRestoreRequest) (*adminv1.StartMetadataRestoreResponse, error) {
-	if _, err := ValidateStartMetadataRestoreRequest(req); err != nil {
+	startReq, err := ValidateStartMetadataRestoreRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartMetadataRestore")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartMetadataRestore")
+	}
+	operation, err := s.startPlannedOperationFromPlan("recovery", "metadata-restore", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartMetadataRestoreResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) StartCopyVerify(_ context.Context, req *adminv1.StartCopyVerifyRequest) (*adminv1.StartCopyVerifyResponse, error) {
-	if _, err := ValidateStartCopyVerifyRequest(req); err != nil {
+	startReq, err := ValidateStartCopyVerifyRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartCopyVerify")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartCopyVerify")
+	}
+	operation, err := s.startPlannedOperationFromPlan("recovery", "copy-verify", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartCopyVerifyResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) StartDRDrill(_ context.Context, req *adminv1.StartDRDrillRequest) (*adminv1.StartDRDrillResponse, error) {
-	if _, err := ValidateStartDRDrillRequest(req); err != nil {
+	startReq, err := ValidateStartDRDrillRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartDRDrill")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartDRDrill")
+	}
+	operation, err := s.startPlannedOperationFromPlan("recovery", "dr-drill", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartDRDrillResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) createOperationPlan(operationType string, req OperationPlanRequest) (*adminv1.OperationPlan, error) {
@@ -605,6 +660,10 @@ func (s *AdminServer) createOperationPlan(operationType string, req OperationPla
 }
 
 func (s *AdminServer) startPlannedOperation(operationType string, req OperationStartRequest) (*adminv1.Operation, error) {
+	return s.startPlannedOperationFromPlan(operationType, operationType, req)
+}
+
+func (s *AdminServer) startPlannedOperationFromPlan(planType string, operationType string, req OperationStartRequest) (*adminv1.Operation, error) {
 	plan, err := s.operations.GetPlan(req.OperationPlanID)
 	if errors.Is(err, operations.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "operation plan not found")
@@ -615,7 +674,7 @@ func (s *AdminServer) startPlannedOperation(operationType string, req OperationS
 	if plan.GetPlanHash() != req.PlanHash {
 		return nil, status.Error(codes.FailedPrecondition, "plan hash does not match operation plan")
 	}
-	if plan.GetMetadata()[adminOperationTypeMetadata] != operationType {
+	if plan.GetMetadata()[adminOperationTypeMetadata] != planType {
 		return nil, status.Error(codes.FailedPrecondition, "operation plan type does not match start request")
 	}
 	if plan.GetExpiresAt().AsTime().Before(s.now()) {

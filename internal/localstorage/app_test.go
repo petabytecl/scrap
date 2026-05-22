@@ -1026,6 +1026,18 @@ func TestLocalMemberCordonStatePersists(t *testing.T) {
 	}
 }
 
+func TestLocalRecoveryReadinessFailsClosedWithoutPublishedMetadata(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	readiness, err := app.GetRecoveryReadiness(ctx)
+	if err != nil {
+		t.Fatalf("get recovery readiness: %v", err)
+	}
+	if readiness.GetReady() || len(readiness.GetWarnings()) < 2 {
+		t.Fatalf("readiness = %#v, want not ready with missing metadata/backend warnings", readiness)
+	}
+}
+
 func TestRunQueuedOperationsOnceFailsUnsafeDrainInSingleMemberMode(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)

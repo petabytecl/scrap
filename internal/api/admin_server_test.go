@@ -288,6 +288,24 @@ func TestAdminServerMemberLifecycleUsesMemberApplication(t *testing.T) {
 	}
 }
 
+func TestAdminServerGetRecoveryReadinessUsesDisasterRecoveryApplication(t *testing.T) {
+	expected := &adminv1.RecoveryReadiness{
+		Ready:    false,
+		Warnings: []*adminv1.OperationWarning{{Code: "SCRAP_DR_METADATA_EXPORT_MISSING"}},
+	}
+	dr := &fakeDisasterRecoveryApplication{readiness: expected}
+	client, cleanup := newAdminDisasterRecoveryClient(t, dr, nil)
+	defer cleanup()
+
+	resp, err := client.GetRecoveryReadiness(context.Background(), &adminv1.GetRecoveryReadinessRequest{})
+	if err != nil {
+		t.Fatalf("get recovery readiness: %v", err)
+	}
+	if dr.calls != 1 || !proto.Equal(resp.GetReadiness(), expected) {
+		t.Fatalf("readiness = %#v calls=%d, want fake readiness", resp.GetReadiness(), dr.calls)
+	}
+}
+
 func TestAdminServerGetOperationReadsDurableStore(t *testing.T) {
 	store := openTestOperationStore(t)
 	operation := testOperation(validUUIDv7(), "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
@@ -535,6 +553,65 @@ func TestAdminServerPlanAndStartRepairUseDurableOperationStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerPlanRecoveryStartsDRSuboperations(t *testing.T) {
+	store := openTestOperationStore(t)
+	drClient, cleanup := newAdminDisasterRecoveryClient(t, nil, store)
+	defer cleanup()
+
+	planResp, err := drClient.PlanRecovery(context.Background(), &adminv1.PlanRecoveryRequest{
+		Targets: []*adminv1.Target{snapshotAdminTarget()},
+		Metadata: map[string]string{
+			"reason": "quarterly-drill",
+		},
+	})
+	if err != nil {
+		t.Fatalf("plan recovery: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "recovery" ||
+		plan.GetMetadata()["reason"] != "quarterly-drill" ||
+		len(plan.GetTargets()) != 1 {
+		t.Fatalf("plan = %#v, want recovery plan", plan)
+	}
+
+	metadataRestore, err := drClient.StartMetadataRestore(context.Background(), &adminv1.StartMetadataRestoreRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789abc",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start metadata restore: %v", err)
+	}
+	if metadataRestore.GetOperation().GetOperationType() != "metadata-restore" ||
+		metadataRestore.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED {
+		t.Fatalf("metadata restore operation = %#v, want queued metadata restore", metadataRestore.GetOperation())
+	}
+
+	copyVerify, err := drClient.StartCopyVerify(context.Background(), &adminv1.StartCopyVerifyRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789abd",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start copy verify: %v", err)
+	}
+	if copyVerify.GetOperation().GetOperationType() != "copy-verify" {
+		t.Fatalf("copy verify operation = %#v, want copy-verify", copyVerify.GetOperation())
+	}
+
+	drill, err := drClient.StartDRDrill(context.Background(), &adminv1.StartDRDrillRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789abe",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start dr drill: %v", err)
+	}
+	if drill.GetOperation().GetOperationType() != "dr-drill" {
+		t.Fatalf("drill operation = %#v, want dr-drill", drill.GetOperation())
+	}
+}
+
 func TestAdminServerGetRepairQueueUsesRepairApplication(t *testing.T) {
 	expected := []*adminv1.RepairQueueItem{
 		{
@@ -677,6 +754,35 @@ func newAdminMemberClient(t *testing.T, member MemberApplication) (adminv1.Membe
 	return adminv1.NewMemberServiceClient(conn), cleanup
 }
 
+func newAdminDisasterRecoveryClient(t *testing.T, dr DisasterRecoveryApplication, store *operations.Store) (adminv1.DisasterRecoveryServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithDisasterRecoveryApplication(dr), WithOperationStore(store)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewDisasterRecoveryServiceClient(conn), cleanup
+}
+
 func newAdminOperationClient(t *testing.T, store *operations.Store) (adminv1.OperationServiceClient, func()) {
 	t.Helper()
 
@@ -778,6 +884,17 @@ func documentAdminTarget() *adminv1.Target {
 	}
 }
 
+func snapshotAdminTarget() *adminv1.Target {
+	return &adminv1.Target{
+		Target: &adminv1.Target_Snapshot{
+			Snapshot: &adminv1.SnapshotTarget{
+				ShardId:    ptr("local"),
+				SnapshotId: "snapshot-1",
+			},
+		},
+	}
+}
+
 func ptr[T any](value T) *T {
 	return &value
 }
@@ -857,4 +974,14 @@ func (f *fakeMemberApplication) UncordonMember(_ context.Context, req MemberMuta
 func (f *fakeMemberApplication) GetEvictionSafety(_ context.Context, memberID string) (*adminv1.EvictionSafety, error) {
 	f.safetyMemberID = memberID
 	return f.safety, nil
+}
+
+type fakeDisasterRecoveryApplication struct {
+	calls     int
+	readiness *adminv1.RecoveryReadiness
+}
+
+func (f *fakeDisasterRecoveryApplication) GetRecoveryReadiness(context.Context) (*adminv1.RecoveryReadiness, error) {
+	f.calls++
+	return f.readiness, nil
 }

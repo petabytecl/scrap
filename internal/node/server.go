@@ -19,6 +19,7 @@ type Applications struct {
 	Inspect      api.InspectApplication
 	Repair       api.RepairApplication
 	Member       api.MemberApplication
+	DR           api.DisasterRecoveryApplication
 	Operations   *operations.Store
 }
 
@@ -55,6 +56,7 @@ func newServer(publicListener net.Listener, adminListener net.Listener, apps App
 		api.WithInspectApplication(apps.Inspect),
 		api.WithRepairApplication(apps.Repair),
 		api.WithMemberApplication(apps.Member),
+		api.WithDisasterRecoveryApplication(apps.DR),
 		api.WithOperationStore(apps.Operations),
 	))
 	return &Server{

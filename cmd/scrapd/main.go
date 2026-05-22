@@ -50,6 +50,7 @@ func main() {
 		apps.Inspect = localApp
 		apps.Repair = localApp
 		apps.Member = localApp
+		apps.DR = localApp
 		apps.Operations = operationStore
 		log.Printf("WARNING: local non-production storage enabled at %s; this does not satisfy the production write ACK contract", cfg.LocalDataDir)
 		if cfg.EnableLocalFilesystemBackend {

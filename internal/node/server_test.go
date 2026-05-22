@@ -83,6 +83,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		Inspect:      app,
 		Repair:       app,
 		Member:       app,
+		DR:           app,
 		Operations:   operationStore,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -291,6 +292,14 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	}
 	if safetyResp.GetSafety().GetSafeToEvict() || len(safetyResp.GetSafety().GetWarnings()) == 0 {
 		t.Fatalf("eviction safety = %#v, want unsafe warning", safetyResp.GetSafety())
+	}
+	drClient := adminv1.NewDisasterRecoveryServiceClient(adminConn)
+	readinessResp, err := drClient.GetRecoveryReadiness(context.Background(), &adminv1.GetRecoveryReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetRecoveryReadiness: %v", err)
+	}
+	if readinessResp.GetReadiness().GetReady() || len(readinessResp.GetReadiness().GetWarnings()) == 0 {
+		t.Fatalf("recovery readiness = %#v, want not ready warnings", readinessResp.GetReadiness())
 	}
 
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
