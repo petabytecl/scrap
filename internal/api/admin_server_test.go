@@ -373,6 +373,18 @@ func TestAdminServerCancelOperationUpdatesDurableStore(t *testing.T) {
 	if stored.GetState() != adminv1.OperationState_OPERATION_STATE_CANCELED {
 		t.Fatalf("stored state = %s, want canceled", stored.GetState())
 	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 ||
+		events[0].GetEventType() != adminAuditEventOperationCanceled ||
+		events[0].GetOperationId() != validUUIDv7() ||
+		events[0].GetOperationType() != "repair" ||
+		events[0].GetActorIdentity() != adminAuditActorIdentity ||
+		events[0].GetOccurredAt() == nil {
+		t.Fatalf("audit events = %#v, want operation_canceled event", events)
+	}
 }
 
 func TestAdminServerWatchOperationStreamsDurableSnapshot(t *testing.T) {
@@ -498,6 +510,68 @@ func TestAdminServerPlanAndStartRestoreUseDurableOperationStore(t *testing.T) {
 	}
 	if retryResp.GetOperation().GetRequestedAt().AsTime() != operation.GetRequestedAt().AsTime() {
 		t.Fatal("idempotent retry did not return the existing operation")
+	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 ||
+		events[0].GetEventType() != adminAuditEventOperationStarted ||
+		events[0].GetOperationId() != startReq.GetOperationId() ||
+		events[0].GetOperationType() != "restore" ||
+		events[0].GetActorIdentity() != adminAuditActorIdentity ||
+		events[0].GetMetadata()["ticket"] != "INC-1" ||
+		len(events[0].GetTargets()) != 1 {
+		t.Fatalf("audit events = %#v, want operation_started restore event", events)
+	}
+}
+
+func TestAdminServerMemberLifecycleWritesAuditEvents(t *testing.T) {
+	store := openTestOperationStore(t)
+	expected := &adminv1.StorageMember{
+		StorageMemberId: "local",
+		CellId:          "local",
+		State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+		Cordoned:        true,
+	}
+	member := &fakeMemberApplication{cordoned: expected, uncordoned: proto.Clone(expected).(*adminv1.StorageMember)}
+	member.uncordoned.Cordoned = false
+	client, cleanup := newAdminMemberClientWithStore(t, member, store)
+	defer cleanup()
+
+	if _, err := client.CordonMember(context.Background(), &adminv1.CordonMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		Reason:        "maintenance",
+		OperationId:   "018f6d86-7a22-7abc-8def-123456789abc",
+	}); err != nil {
+		t.Fatalf("cordon member: %v", err)
+	}
+	if _, err := client.UncordonMember(context.Background(), &adminv1.UncordonMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		OperationId:   "018f6d86-7a22-7abc-8def-123456789abd",
+	}); err != nil {
+		t.Fatalf("uncordon member: %v", err)
+	}
+
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("audit events = %#v, want cordon and uncordon events", events)
+	}
+	if events[0].GetEventType() != adminAuditEventMemberCordoned ||
+		events[0].GetOperationType() != "cordon-member" ||
+		events[0].GetMetadata()["reason"] != "maintenance" ||
+		len(events[0].GetTargets()) != 1 ||
+		events[0].GetTargets()[0].GetStorageMember().GetStorageMemberId() != "local" {
+		t.Fatalf("cordon audit event = %#v, want member_cordoned local event", events[0])
+	}
+	if events[1].GetEventType() != adminAuditEventMemberUncordoned ||
+		events[1].GetOperationType() != "uncordon-member" ||
+		len(events[1].GetTargets()) != 1 ||
+		events[1].GetTargets()[0].GetStorageMember().GetStorageMemberId() != "local" {
+		t.Fatalf("uncordon audit event = %#v, want member_uncordoned local event", events[1])
 	}
 }
 
@@ -767,6 +841,35 @@ func newAdminMemberClient(t *testing.T, member MemberApplication) (adminv1.Membe
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
 	RegisterAdminServer(server, NewAdminServer(WithMemberApplication(member)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewMemberServiceClient(conn), cleanup
+}
+
+func newAdminMemberClientWithStore(t *testing.T, member MemberApplication, store *operations.Store) (adminv1.MemberServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithMemberApplication(member), WithOperationStore(store)))
 	go func() {
 		_ = server.Serve(listener)
 	}()

@@ -51,10 +51,16 @@ type DisasterRecoveryApplication interface {
 
 const (
 	adminOperationPlanTTL        = 15 * time.Minute
+	adminAuditActorIdentity      = "pre-production-admin-api"
 	adminOperationTypeMetadata   = "scrap.operation_type"
 	adminOperationPlanIDMetadata = "scrap.operation_plan_id"
 	adminPlanHashMetadata        = "scrap.plan_hash"
 	adminDryRunMetadata          = "scrap.dry_run"
+
+	adminAuditEventOperationStarted  = "operation_started"
+	adminAuditEventOperationCanceled = "operation_canceled"
+	adminAuditEventMemberCordoned    = "member_cordoned"
+	adminAuditEventMemberUncordoned  = "member_uncordoned"
 )
 
 var deterministicProtoMarshal = proto.MarshalOptions{Deterministic: true}
@@ -329,6 +335,11 @@ func (s *AdminServer) CancelOperation(_ context.Context, req *adminv1.CancelOper
 	if err != nil {
 		return nil, err
 	}
+	if operation.GetState() == adminv1.OperationState_OPERATION_STATE_CANCELED {
+		if err := s.auditOperationCanceled(operation); err != nil {
+			return nil, err
+		}
+	}
 	return &adminv1.CancelOperationResponse{Operation: operation}, nil
 }
 
@@ -484,6 +495,9 @@ func (s *AdminServer) CordonMember(ctx context.Context, req *adminv1.CordonMembe
 	if err != nil {
 		return nil, err
 	}
+	if err := s.auditMemberMutation(adminAuditEventMemberCordoned, "cordon-member", validated); err != nil {
+		return nil, err
+	}
 	return &adminv1.CordonMemberResponse{StorageMember: member}, nil
 }
 
@@ -497,6 +511,9 @@ func (s *AdminServer) UncordonMember(ctx context.Context, req *adminv1.UncordonM
 	}
 	member, err := s.member.UncordonMember(ctx, validated)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.auditMemberMutation(adminAuditEventMemberUncordoned, "uncordon-member", validated); err != nil {
 		return nil, err
 	}
 	return &adminv1.UncordonMemberResponse{StorageMember: member}, nil
@@ -712,6 +729,9 @@ func (s *AdminServer) startPlannedOperationFromPlan(planType string, operationTy
 	}
 	if existing, err := s.operations.Get(req.OperationID); err == nil {
 		if isSameStartedOperation(existing, operationType, req) {
+			if err := s.auditOperationStarted(existing); err != nil {
+				return nil, err
+			}
 			return existing, nil
 		}
 		return nil, status.Error(codes.AlreadyExists, "operation id already exists with different metadata")
@@ -747,7 +767,93 @@ func (s *AdminServer) startPlannedOperationFromPlan(planType string, operationTy
 	if err != nil {
 		return nil, err
 	}
+	if err := s.auditOperationStarted(created); err != nil {
+		return nil, err
+	}
 	return created, nil
+}
+
+func (s *AdminServer) auditOperationStarted(operation *adminv1.Operation) error {
+	if s.operations == nil {
+		return nil
+	}
+	return s.operations.AppendAuditEvent(&adminv1.AuditEvent{
+		EventId:       auditEventID(adminAuditEventOperationStarted, operation.GetOperationId()),
+		EventType:     adminAuditEventOperationStarted,
+		OperationId:   operation.GetOperationId(),
+		OperationType: operation.GetOperationType(),
+		ActorIdentity: auditActorIdentity(operation.GetRequestedByIdentity()),
+		OccurredAt:    auditOperationRequestedAt(operation, s.now()),
+		Targets:       cloneTargets(operation.GetTargets()),
+		Metadata:      cloneTags(operation.GetMetadata()),
+	})
+}
+
+func (s *AdminServer) auditOperationCanceled(operation *adminv1.Operation) error {
+	if s.operations == nil {
+		return nil
+	}
+	return s.operations.AppendAuditEvent(&adminv1.AuditEvent{
+		EventId:       auditEventID(adminAuditEventOperationCanceled, operation.GetOperationId()),
+		EventType:     adminAuditEventOperationCanceled,
+		OperationId:   operation.GetOperationId(),
+		OperationType: operation.GetOperationType(),
+		ActorIdentity: adminAuditActorIdentity,
+		OccurredAt:    auditOperationFinishedAt(operation, s.now()),
+		Targets:       cloneTargets(operation.GetTargets()),
+		Metadata:      cloneTags(operation.GetMetadata()),
+	})
+}
+
+func (s *AdminServer) auditMemberMutation(eventType string, operationType string, req MemberMutationRequest) error {
+	if s.operations == nil {
+		return nil
+	}
+	metadata := map[string]string{"storage_member": req.StorageMember}
+	if req.Reason != "" {
+		metadata["reason"] = req.Reason
+	}
+	return s.operations.AppendAuditEvent(&adminv1.AuditEvent{
+		EventId:       auditEventID(eventType, req.OperationID),
+		EventType:     eventType,
+		OperationId:   req.OperationID,
+		OperationType: operationType,
+		ActorIdentity: adminAuditActorIdentity,
+		OccurredAt:    timestamppb.New(s.now()),
+		Targets: []*adminv1.Target{
+			{
+				Target: &adminv1.Target_StorageMember{
+					StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: req.StorageMember},
+				},
+			},
+		},
+		Metadata: metadata,
+	})
+}
+
+func auditEventID(eventType string, operationID string) string {
+	return eventType + ":" + operationID
+}
+
+func auditActorIdentity(actor string) string {
+	if actor == "" {
+		return adminAuditActorIdentity
+	}
+	return actor
+}
+
+func auditOperationRequestedAt(operation *adminv1.Operation, fallback time.Time) *timestamppb.Timestamp {
+	if operation.GetRequestedAt() != nil {
+		return operation.GetRequestedAt()
+	}
+	return timestamppb.New(fallback)
+}
+
+func auditOperationFinishedAt(operation *adminv1.Operation, fallback time.Time) *timestamppb.Timestamp {
+	if operation.GetFinishedAt() != nil {
+		return operation.GetFinishedAt()
+	}
+	return timestamppb.New(fallback)
 }
 
 func isSameStartedOperation(operation *adminv1.Operation, operationType string, req OperationStartRequest) bool {

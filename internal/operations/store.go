@@ -180,6 +180,51 @@ func (s *Store) Cancel(operationID string, finishedAt time.Time) (*adminv1.Opera
 	return operation, nil
 }
 
+func (s *Store) AppendAuditEvent(event *adminv1.AuditEvent) error {
+	if err := validateAuditEvent(event); err != nil {
+		return err
+	}
+	value, err := protoMarshal.Marshal(event)
+	if err != nil {
+		return err
+	}
+	key := auditEventKey(event.GetEventId())
+	if existing, ok, err := s.get(key); err != nil {
+		return err
+	} else if ok {
+		if bytes.Equal(existing, value) {
+			return nil
+		}
+		return fmt.Errorf("%w: audit event already exists with different metadata", ErrConflict)
+	}
+	return s.db.Set(key, value, pebble.Sync)
+}
+
+func (s *Store) ListAuditEvents() ([]*adminv1.AuditEvent, error) {
+	prefix := auditEventPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var events []*adminv1.AuditEvent
+	for valid := iter.First(); valid; valid = iter.Next() {
+		event, err := unmarshalAuditEvent(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 func validateOperation(operation *adminv1.Operation) error {
 	if operation == nil {
 		return fmt.Errorf("%w: operation is required", ErrInvalid)
@@ -192,6 +237,28 @@ func validateOperation(operation *adminv1.Operation) error {
 	}
 	if operation.GetState() == adminv1.OperationState_OPERATION_STATE_UNSPECIFIED {
 		return fmt.Errorf("%w: state is required", ErrInvalid)
+	}
+	return nil
+}
+
+func validateAuditEvent(event *adminv1.AuditEvent) error {
+	if event == nil {
+		return fmt.Errorf("%w: audit event is required", ErrInvalid)
+	}
+	if event.GetEventId() == "" {
+		return fmt.Errorf("%w: audit event_id is required", ErrInvalid)
+	}
+	if event.GetEventType() == "" {
+		return fmt.Errorf("%w: audit event_type is required", ErrInvalid)
+	}
+	if event.GetActorIdentity() == "" {
+		return fmt.Errorf("%w: audit actor_identity is required", ErrInvalid)
+	}
+	if event.GetOccurredAt() == nil {
+		return fmt.Errorf("%w: audit occurred_at is required", ErrInvalid)
+	}
+	if err := event.GetOccurredAt().CheckValid(); err != nil {
+		return fmt.Errorf("%w: audit occurred_at is invalid", ErrInvalid)
 	}
 	return nil
 }
@@ -252,6 +319,17 @@ func unmarshalOperationPlan(data []byte) (*adminv1.OperationPlan, error) {
 	return &plan, nil
 }
 
+func unmarshalAuditEvent(data []byte) (*adminv1.AuditEvent, error) {
+	var event adminv1.AuditEvent
+	if err := proto.Unmarshal(data, &event); err != nil {
+		return nil, err
+	}
+	if err := validateAuditEvent(&event); err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
 func (s *Store) get(key []byte) ([]byte, bool, error) {
 	value, closer, err := s.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -278,6 +356,14 @@ func operationPlanPrefix() []byte {
 
 func operationPlanKey(operationPlanID string) []byte {
 	return append(operationPlanPrefix(), []byte(operationPlanID)...)
+}
+
+func auditEventPrefix() []byte {
+	return []byte("audit_event\x00")
+}
+
+func auditEventKey(eventID string) []byte {
+	return append(auditEventPrefix(), []byte(eventID)...)
 }
 
 func prefixUpperBound(prefix []byte) []byte {

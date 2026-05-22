@@ -103,6 +103,17 @@ message OperationPlan {
   map<string, string> metadata = 7;
 }
 
+message AuditEvent {
+  string event_id = 1;
+  string event_type = 2;
+  string operation_id = 3;
+  string operation_type = 4;
+  string actor_identity = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+  repeated Target targets = 7;
+  map<string, string> metadata = 8;
+}
+
 message OperationImpact {
   uint64 bytes_to_read = 1;
   uint64 bytes_to_write = 2;

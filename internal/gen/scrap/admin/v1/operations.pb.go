@@ -964,6 +964,106 @@ func (x *OperationPlan) GetMetadata() map[string]string {
 	return nil
 }
 
+type AuditEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	EventType     string                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	OperationId   string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OperationType string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	ActorIdentity string                 `protobuf:"bytes,5,opt,name=actor_identity,json=actorIdentity,proto3" json:"actor_identity,omitempty"`
+	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	Targets       []*Target              `protobuf:"bytes,7,rep,name=targets,proto3" json:"targets,omitempty"`
+	Metadata      map[string]string      `protobuf:"bytes,8,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditEvent) Reset() {
+	*x = AuditEvent{}
+	mi := &file_scrap_admin_v1_operations_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditEvent) ProtoMessage() {}
+
+func (x *AuditEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_operations_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditEvent.ProtoReflect.Descriptor instead.
+func (*AuditEvent) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_operations_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AuditEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetOperationType() string {
+	if x != nil {
+		return x.OperationType
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetActorIdentity() string {
+	if x != nil {
+		return x.ActorIdentity
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetOccurredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return nil
+}
+
+func (x *AuditEvent) GetTargets() []*Target {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *AuditEvent) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 type OperationImpact struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	BytesToRead            uint64                 `protobuf:"varint,1,opt,name=bytes_to_read,json=bytesToRead,proto3" json:"bytes_to_read,omitempty"`
@@ -977,7 +1077,7 @@ type OperationImpact struct {
 
 func (x *OperationImpact) Reset() {
 	*x = OperationImpact{}
-	mi := &file_scrap_admin_v1_operations_proto_msgTypes[12]
+	mi := &file_scrap_admin_v1_operations_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -989,7 +1089,7 @@ func (x *OperationImpact) String() string {
 func (*OperationImpact) ProtoMessage() {}
 
 func (x *OperationImpact) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_operations_proto_msgTypes[12]
+	mi := &file_scrap_admin_v1_operations_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1002,7 +1102,7 @@ func (x *OperationImpact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationImpact.ProtoReflect.Descriptor instead.
 func (*OperationImpact) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_operations_proto_rawDescGZIP(), []int{12}
+	return file_scrap_admin_v1_operations_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *OperationImpact) GetBytesToRead() uint64 {
@@ -1125,6 +1225,21 @@ const file_scrap_admin_v1_operations_proto_rawDesc = "" +
 	"\bmetadata\x18\a \x03(\v2+.scrap.admin.v1.OperationPlan.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa9\x03\n" +
+	"\n" +
+	"AuditEvent\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12%\n" +
+	"\x0eoperation_type\x18\x04 \x01(\tR\roperationType\x12%\n" +
+	"\x0eactor_identity\x18\x05 \x01(\tR\ractorIdentity\x12;\n" +
+	"\voccurred_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\x120\n" +
+	"\atargets\x18\a \x03(\v2\x16.scrap.admin.v1.TargetR\atargets\x12D\n" +
+	"\bmetadata\x18\b \x03(\v2(.scrap.admin.v1.AuditEvent.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x02\n" +
 	"\x0fOperationImpact\x12\"\n" +
 	"\rbytes_to_read\x18\x01 \x01(\x04R\vbytesToRead\x12$\n" +
@@ -1155,7 +1270,7 @@ func file_scrap_admin_v1_operations_proto_rawDescGZIP() []byte {
 }
 
 var file_scrap_admin_v1_operations_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_scrap_admin_v1_operations_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_scrap_admin_v1_operations_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_scrap_admin_v1_operations_proto_goTypes = []any{
 	(OperationState)(0),           // 0: scrap.admin.v1.OperationState
 	(*Target)(nil),                // 1: scrap.admin.v1.Target
@@ -1170,11 +1285,13 @@ var file_scrap_admin_v1_operations_proto_goTypes = []any{
 	(*OperationWarning)(nil),      // 10: scrap.admin.v1.OperationWarning
 	(*OperationError)(nil),        // 11: scrap.admin.v1.OperationError
 	(*OperationPlan)(nil),         // 12: scrap.admin.v1.OperationPlan
-	(*OperationImpact)(nil),       // 13: scrap.admin.v1.OperationImpact
-	nil,                           // 14: scrap.admin.v1.Operation.MetadataEntry
-	nil,                           // 15: scrap.admin.v1.OperationProgress.CountersEntry
-	nil,                           // 16: scrap.admin.v1.OperationPlan.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	(*AuditEvent)(nil),            // 13: scrap.admin.v1.AuditEvent
+	(*OperationImpact)(nil),       // 14: scrap.admin.v1.OperationImpact
+	nil,                           // 15: scrap.admin.v1.Operation.MetadataEntry
+	nil,                           // 16: scrap.admin.v1.OperationProgress.CountersEntry
+	nil,                           // 17: scrap.admin.v1.OperationPlan.MetadataEntry
+	nil,                           // 18: scrap.admin.v1.AuditEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 19: google.protobuf.Timestamp
 }
 var file_scrap_admin_v1_operations_proto_depIdxs = []int32{
 	2,  // 0: scrap.admin.v1.Target.document:type_name -> scrap.admin.v1.DocumentTarget
@@ -1184,27 +1301,30 @@ var file_scrap_admin_v1_operations_proto_depIdxs = []int32{
 	6,  // 4: scrap.admin.v1.Target.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
 	7,  // 5: scrap.admin.v1.Target.snapshot:type_name -> scrap.admin.v1.SnapshotTarget
 	0,  // 6: scrap.admin.v1.Operation.state:type_name -> scrap.admin.v1.OperationState
-	17, // 7: scrap.admin.v1.Operation.requested_at:type_name -> google.protobuf.Timestamp
-	17, // 8: scrap.admin.v1.Operation.started_at:type_name -> google.protobuf.Timestamp
-	17, // 9: scrap.admin.v1.Operation.finished_at:type_name -> google.protobuf.Timestamp
+	19, // 7: scrap.admin.v1.Operation.requested_at:type_name -> google.protobuf.Timestamp
+	19, // 8: scrap.admin.v1.Operation.started_at:type_name -> google.protobuf.Timestamp
+	19, // 9: scrap.admin.v1.Operation.finished_at:type_name -> google.protobuf.Timestamp
 	1,  // 10: scrap.admin.v1.Operation.targets:type_name -> scrap.admin.v1.Target
 	9,  // 11: scrap.admin.v1.Operation.progress:type_name -> scrap.admin.v1.OperationProgress
 	10, // 12: scrap.admin.v1.Operation.warnings:type_name -> scrap.admin.v1.OperationWarning
 	11, // 13: scrap.admin.v1.Operation.last_error:type_name -> scrap.admin.v1.OperationError
-	14, // 14: scrap.admin.v1.Operation.metadata:type_name -> scrap.admin.v1.Operation.MetadataEntry
-	15, // 15: scrap.admin.v1.OperationProgress.counters:type_name -> scrap.admin.v1.OperationProgress.CountersEntry
+	15, // 14: scrap.admin.v1.Operation.metadata:type_name -> scrap.admin.v1.Operation.MetadataEntry
+	16, // 15: scrap.admin.v1.OperationProgress.counters:type_name -> scrap.admin.v1.OperationProgress.CountersEntry
 	1,  // 16: scrap.admin.v1.OperationWarning.target:type_name -> scrap.admin.v1.Target
 	1,  // 17: scrap.admin.v1.OperationError.target:type_name -> scrap.admin.v1.Target
-	17, // 18: scrap.admin.v1.OperationPlan.expires_at:type_name -> google.protobuf.Timestamp
+	19, // 18: scrap.admin.v1.OperationPlan.expires_at:type_name -> google.protobuf.Timestamp
 	1,  // 19: scrap.admin.v1.OperationPlan.targets:type_name -> scrap.admin.v1.Target
-	13, // 20: scrap.admin.v1.OperationPlan.estimated_impact:type_name -> scrap.admin.v1.OperationImpact
+	14, // 20: scrap.admin.v1.OperationPlan.estimated_impact:type_name -> scrap.admin.v1.OperationImpact
 	10, // 21: scrap.admin.v1.OperationPlan.warnings:type_name -> scrap.admin.v1.OperationWarning
-	16, // 22: scrap.admin.v1.OperationPlan.metadata:type_name -> scrap.admin.v1.OperationPlan.MetadataEntry
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	17, // 22: scrap.admin.v1.OperationPlan.metadata:type_name -> scrap.admin.v1.OperationPlan.MetadataEntry
+	19, // 23: scrap.admin.v1.AuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	1,  // 24: scrap.admin.v1.AuditEvent.targets:type_name -> scrap.admin.v1.Target
+	18, // 25: scrap.admin.v1.AuditEvent.metadata:type_name -> scrap.admin.v1.AuditEvent.MetadataEntry
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_scrap_admin_v1_operations_proto_init() }
@@ -1228,7 +1348,7 @@ func file_scrap_admin_v1_operations_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_admin_v1_operations_proto_rawDesc), len(file_scrap_admin_v1_operations_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

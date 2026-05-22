@@ -6,6 +6,7 @@ import (
 	"time"
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -187,6 +188,50 @@ func TestStoreCancelLeavesTerminalOperationUnchanged(t *testing.T) {
 	}
 }
 
+func TestStoreAppendAuditEventPersistsAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	event := sampleAuditEvent("operation_started:op-1", "operation_started", "op-1")
+	if err := store.AppendAuditEvent(event); err != nil {
+		t.Fatalf("append audit event: %v", err)
+	}
+	if err := store.AppendAuditEvent(event); err != nil {
+		t.Fatalf("idempotent append audit event: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	events, err := reopened.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 || !proto.Equal(events[0], event) {
+		t.Fatalf("events = %#v, want persisted audit event %#v", events, event)
+	}
+}
+
+func TestStoreAppendAuditEventRejectsConflictingEventID(t *testing.T) {
+	store := openTestStore(t)
+	event := sampleAuditEvent("operation_started:op-1", "operation_started", "op-1")
+	if err := store.AppendAuditEvent(event); err != nil {
+		t.Fatalf("append audit event: %v", err)
+	}
+	conflict := sampleAuditEvent("operation_started:op-1", "operation_started", "op-1")
+	conflict.Metadata["ticket"] = "INC-2"
+	if err := store.AppendAuditEvent(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflict error = %v, want %v", err, ErrConflict)
+	}
+}
+
 func TestStoreRejectsInvalidOperations(t *testing.T) {
 	store := openTestStore(t)
 	tests := map[string]*adminv1.Operation{
@@ -209,6 +254,29 @@ func TestStoreRejectsInvalidOperations(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsInvalidAuditEvents(t *testing.T) {
+	store := openTestStore(t)
+	tests := map[string]*adminv1.AuditEvent{
+		"nil":           nil,
+		"missing id":    sampleAuditEvent("", "operation_started", "op-1"),
+		"missing type":  sampleAuditEvent("operation_started:op-1", "", "op-1"),
+		"missing actor": sampleAuditEvent("operation_started:op-1", "operation_started", "op-1"),
+		"missing time":  sampleAuditEvent("operation_started:op-1", "operation_started", "op-1"),
+		"invalid time":  sampleAuditEvent("operation_started:op-1", "operation_started", "op-1"),
+	}
+	tests["missing actor"].ActorIdentity = ""
+	tests["missing time"].OccurredAt = nil
+	tests["invalid time"].OccurredAt = timestamppb.New(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC))
+	for name, event := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := store.AppendAuditEvent(event)
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error = %v, want %v", err, ErrInvalid)
+			}
+		})
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(t.TempDir())
@@ -221,6 +289,19 @@ func openTestStore(t *testing.T) *Store {
 		}
 	})
 	return store
+}
+
+func sampleAuditEvent(eventID string, eventType string, operationID string) *adminv1.AuditEvent {
+	return &adminv1.AuditEvent{
+		EventId:       eventID,
+		EventType:     eventType,
+		OperationId:   operationID,
+		OperationType: "repair",
+		ActorIdentity: "test-operator",
+		OccurredAt:    timestamppb.New(time.Unix(500, 0).UTC()),
+		Targets:       samplePlan("plan-1", "hash-1").GetTargets(),
+		Metadata:      map[string]string{"ticket": "INC-1"},
+	}
 }
 
 func sampleOperation(operationID string, operationType string, state adminv1.OperationState) *adminv1.Operation {
