@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: backend rate and capacity planning, internal authorization, repair scheduling, and failure-domain planning.
+After reading it, they should be able to continue the design review from the current frontier: scrub scheduling, repair admission thresholds, block format compatibility, and disaster-recovery backend scope.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -35,6 +35,10 @@ Blocks are stored locally for the hot path and uploaded to the backend for durab
 Shard consensus metadata is the authority for document visibility, physical refs, encryption envelopes, restore state, and background jobs. Local in-memory indexes are derived read accelerators.
 
 Backend encryption uses OpenBao Transit envelope encryption. Routine KEK rotation rewraps small per-block envelopes; it does not re-encrypt block payload data.
+
+Backend upload capacity is controlled by explicit provider profiles and local disk runway. Internal authorization is based on workload identity plus service capabilities, not caller-supplied metadata.
+
+V1 replica placement targets distinct Kubernetes storage nodes. Admin operations are typed, audited, idempotent control-plane jobs exposed through a gRPC admin service and CLI.
 
 ## Problem
 
@@ -475,6 +479,125 @@ throttle writes if repair backlog exceeds safety threshold
 Verified backend storage counts for durability. Only committed local replicas count for hot read availability.
 
 Once metadata is committed, reads may use any checksum-valid committed replica even if full replication repair is still pending.
+
+## Replica Placement And Failure Domains
+
+V1 failure domain target:
+
+```text
+failure domain: Kubernetes worker node
+formal promise: survive loss of any two Kubernetes worker nodes that host shard replicas
+not promised in v1: zone, region, rack, or cloud-provider failure-domain survival
+```
+
+Each shard group has five voting replicas on five distinct eligible storage nodes. This is a hard placement requirement for production. If five distinct eligible nodes are not available, the replica stays pending or the shard is reported placement-unhealthy rather than silently weakening the two-node-loss model.
+
+Zone spread is preferred when topology labels exist, but it is not required for v1 correctness. Zone placement should avoid concentrating all five voters in one zone when the cluster can do better.
+
+Eligible nodes:
+
+```text
+dedicated storage node pool
+labeled and tainted for S.C.R.A.P. storage members
+fast local disks with expected capacity and durability
+predictable network and operational treatment
+```
+
+Production minimum:
+
+```text
+minimum eligible storage nodes: 7
+reason: 5 active voters + replacement headroom + maintenance/failure headroom
+```
+
+Kubernetes pod model:
+
+```text
+stable stateful storage-member pods
+local PV/PVC per storage member
+many shard replicas assigned internally to each member
+Kubernetes places storage members
+S.C.R.A.P. manages shard replica membership and byte safety
+```
+
+V1 does not use one pod per shard replica. That would make pod count and scheduling churn scale with shard count rather than storage-member count.
+
+Kubernetes scheduling guardrails:
+
+```text
+hard node anti-affinity for voting replicas of the same shard
+preferred topology spread across zones
+PodDisruptionBudget: maxUnavailable = 1 for storage members
+```
+
+PDBs only protect voluntary disruption. They do not replace S.C.R.A.P.'s own placement health, membership, and byte-verification rules.
+
+Shard membership changes use Raft joint consensus. Kubernetes may add capacity, but only the shard consensus state machine decides when a member is added or removed from a shard group.
+
+Replacement safety:
+
+```text
+new replica catches up Raft metadata
+new replica verifies required local byte refs/checksums
+new replica becomes read-eligible
+old replica may then be removed through joint consensus
+```
+
+Do not remove an old replica only because a new pod started or caught up metadata. Metadata catch-up without verified bytes weakens hot-read availability and local durability.
+
+Returning member policy:
+
+```text
+returning member starts non-serving
+catch up Raft metadata
+verify local refs and checksums
+serve only verified refs
+repair or discard stale/corrupt local data after safe replacement exists
+```
+
+Pod readiness is not storage readiness. A storage member is not byte-serving until S.C.R.A.P. verifies that its local refs match committed metadata.
+
+Scaling and rebalancing:
+
+```text
+storage-member scaling: manual/operator-controlled
+automatic actions: replacement and capacity rebalance inside available pool
+deferred from v1: automatic hot-shard splitting
+```
+
+S.C.R.A.P. may move shard replicas off failed, full, draining, or skewed members to restore placement health and disk balance. Shard-key semantics remain stable.
+
+Planned maintenance uses S.C.R.A.P.-aware drain:
+
+```text
+operator marks storage member draining
+dry-run reports affected shards, bytes, and estimated movement
+S.C.R.A.P. moves/re-replicates shard replicas safely
+member reports safe-to-evict only after affected shards are healthy elsewhere
+Kubernetes drain proceeds after S.C.R.A.P. safety gate
+```
+
+Placement health gate:
+
+```text
+5 voters on 5 distinct eligible nodes
+Raft quorum healthy
+local byte refs verified
+repair backlog below configured threshold
+no unsafe drain/replacement in progress
+```
+
+Raft quorum alone is not placement health. Pod readiness alone is not placement health.
+
+If a shard is under-replicated or placement-unhealthy but still has quorum, writes may continue only with guardrails:
+
+```text
+allow writes while quorum and durability policy can be satisfied
+alert placement risk
+accelerate repair/rebalance
+throttle lower-priority writes if backlog or placement risk grows
+reject retryably before ACK safety is compromised
+```
 
 ## Shard Consensus And Metadata Store
 
@@ -1096,12 +1219,45 @@ Never depend on backend `LIST` for normal reads or transaction queries. The gate
 
 Application virtual paths must not be used directly as backend key prefixes. Backend keys need high-cardinality physical prefixes to avoid hot partitions.
 
+Backend capacity is configured through an explicit deployment profile. The core scheduler is provider-neutral; each backend implementation supplies the concrete limits and retry semantics for that provider.
+
+Provider profile inputs:
+
+```text
+backend type: s3 | gcs | azure_blob | filesystem | other
+physical hash fanout
+per-backend request budgets
+per-physical-prefix request budgets when applicable
+bytes/sec upload and restore budgets
+provider retryable status/error classes
+provider ramp-up rules
+object lifecycle hints
+cost/restore class hints
+```
+
+Do not hardcode S3 rate constants into the core design. S3, GCS, Azure Blob, and future backends expose different scaling boundaries. The default first-production S3-like profile uses fixed hash fanout and provider-calibrated token buckets.
+
+Default physical fanout:
+
+```text
+hash prefixes per backend profile: 256
+hash source: block identity
+not based on tenant_id, transaction_id, document_name, or wall-clock time
+```
+
 Example physical layout:
 
 ```text
 blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.blk
 blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.idx
 blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.env
+```
+
+Backend sizing uses sealed blocks per second plus bytes per second as the primary unit. Document rate still matters for API and metadata capacity, but backend request pressure is driven by sealed block upload sets:
+
+```text
+unencrypted block: .blk + .idx
+encrypted block: .blk + .idx + .env
 ```
 
 The uploader is a first-class subsystem:
@@ -1136,12 +1292,108 @@ encrypted block: .blk + .idx + .env
 
 Upload retries use exponential backoff plus per-backend and per-physical-prefix token buckets. Upload backlog alone does not stop write ACKs; local replicated durability remains the immediate source of truth. Write admission stops only when disk/backlog guards show that continued local acceptance would make durability unsafe.
 
+Token bucket scope:
+
+```text
+shard-local lane limits
+node-level backend aggregate limits
+node-level physical-prefix limits
+no global distributed rate limiter in v1
+```
+
+Capacity is shared by lane and shard fair-share. Tenant fair-share is not part of the v1 backend uploader because tenant-based durable routing was rejected and tenant sets are dynamic.
+
+Default constrained-capacity lane order:
+
+```text
+1. repair/reconciliation
+2. permanent-block-upload
+3. restore/prewarm
+4. rewrap-envelope-sync
+5. disaster-recovery-secondary
+```
+
+Permanent backend upload lag SLO under healthy backend conditions:
+
+```text
+95% of sealed permanent blocks uploaded and verified within 15 minutes
+```
+
+Backend lag alone does not make acknowledged writes unsafe. The local replicated tier is sized to absorb backend outage or brownout.
+
+Default local durability window:
+
+```text
+24 hours of accepted peak ingress
+```
+
+Capacity planning formula:
+
+```text
+required local bytes =
+  peak accepted ingress bytes/sec
+  * durability window seconds
+  * replica overhead
+  + open block slack
+  + repair churn slack
+  + safety margin
+
+default safety margin: 30%
+```
+
+Average daily ingest is not sufficient for this workload because massive multinational bulk bursts can exceed normal backend upload rate while still needing safe local ACKs.
+
 Under local disk pressure:
 
 1. delete only expired/eligible ephemeral data;
-2. throttle by tenant/workload using fair-share policy;
-3. reject new writes with retryable errors before durability becomes unsafe;
-4. never acknowledge a write that cannot be durably protected.
+2. increase upload/cleanup pressure;
+3. throttle by workload class, lane, and shard fair-share policy;
+4. reject new writes with retryable errors before durability becomes unsafe;
+5. never acknowledge a write that cannot be durably protected.
+
+Default disk guard bands:
+
+```text
+70% used: pressure cleanup, upload acceleration, early warning
+80% used: throttle bulk and normal write classes
+90% used: reject new writes except configured critical reserve
+```
+
+`critical_ingest` may continue at the 90% guard only from preconfigured reserved capacity. When the critical reserve is exhausted, critical writes are rejected retryably too. Critical writes are never allowed to consume the last unsafe bytes.
+
+Burst handling:
+
+```text
+absorb within the 24h local durability window
+throttle/shedding order: bulk, then normal, then critical reserve
+avoid a hard cliff at disk exhaustion
+```
+
+Mandatory capacity metrics:
+
+```text
+upload backlog bytes
+oldest upload backlog age
+per-lane queue depth and age
+disk used/free/reserved/runway
+critical reserve usage
+throttle and reject counts by class
+provider error classes and retry delay
+backend/prefix token saturation
+upload SLO compliance
+```
+
+High-severity alerts fire before write rejection when:
+
+```text
+disk runway drops below configured hours
+oldest permanent upload exceeds SLO
+persistent provider throttling occurs
+critical reserve is being consumed
+backend backlog growth exceeds drain capacity
+```
+
+The write admission controller must reject safely before any durability invariant is at risk.
 
 ## Permanent And Ephemeral Backend Policy
 
@@ -1304,31 +1556,256 @@ stored_sha256: bytes stored inside the block before backend encryption
 ciphertext_sha256: encrypted backend bytes when applicable
 ```
 
+## Admin API And Operator Control Plane
+
+V1 exposes admin operations through:
+
+```text
+typed gRPC admin service
+operator CLI built on the gRPC service
+```
+
+The CLI is an operator client, not a separate source of truth. Automation should be able to use the same typed gRPC service.
+
+Admin API scope:
+
+```text
+inspect cluster/shard/document/block state
+restore and prewarm cold backend blocks
+cordon/drain storage members
+inspect and enqueue bounded repair
+prepare and execute lifecycle tombstones
+inspect capacity, backlog, placement, and runway
+apply bounded emergency capacity/write-admission overrides
+inspect key-rotation and rewrap status
+```
+
+Every mutating admin request requires an `operation_id`:
+
+```text
+operation_id: caller-supplied or CLI-generated UUIDv7
+purpose: idempotent retry, deduplication, status lookup, audit correlation
+```
+
+Mutating admin operations create durable operation jobs. Long-running operations are not hidden in logs or tied to a single synchronous RPC.
+
+Operation job model:
+
+```text
+operation_id
+operation_type
+requested_by_identity
+requested_at
+dry_run flag
+state: planned | queued | running | succeeded | failed | canceled
+progress counters
+affected shards / blocks / documents / members
+last_error
+audit metadata
+```
+
+The CLI may poll or stream job status. Retrying a command with the same `operation_id` must return the existing operation state rather than creating duplicate work.
+
+Dry-run is required for costly or dangerous operations:
+
+```text
+restore/prewarm
+member drain
+force/bounded repair
+lifecycle tombstone
+capacity/write-admission override
+```
+
+Read-only inspection should expose:
+
+```text
+cluster placement health
+storage member state
+shard membership and leader
+document metadata and physical refs
+block refs, upload state, restore state, envelope state
+capacity backlog and disk runway
+repair backlog and bad/quarantined refs
+authorization/audit policy status
+```
+
+Restore/prewarm API:
+
+```text
+accepted targets: transaction, document, block
+dry-run expands targets to physical block set
+plan reports current restore state, estimated backend action, cost/storage class hints, and optional pin impact
+execute queues durable restore jobs
+optional pin_until is bounded by config and refused under disk pressure
+```
+
+Restore is physically block-level even when requested by transaction or document.
+
+Drain API:
+
+```text
+cordon storage member
+dry-run reports affected shards, bytes, placement risk, and estimated movement
+execute moves/re-replicates shard replicas safely
+status reports safe_to_evict when all affected shards are placement-healthy elsewhere
+```
+
+Kubernetes drain should wait for S.C.R.A.P. `safe_to_evict`. PDBs are a guardrail, not the drain protocol.
+
+Repair API:
+
+```text
+inspect bad, missing, under-replicated, or quarantined refs
+enqueue bounded repair by shard, block, document, or storage member
+report repair source, target, checksum result, and consensus update
+```
+
+Operators may ask S.C.R.A.P. to repair. They must not hand-edit committed document refs or bypass consensus state.
+
+Lifecycle/tombstone API:
+
+```text
+two-step prepare and execute
+prepare reports affected documents, blocks, backend refs, and retention/audit impact
+execute records durable tombstones
+reclamation is asynchronous and separately observable
+```
+
+There is no ordinary direct delete API. Tombstones are administrative, audited, and durable.
+
+Capacity override API:
+
+```text
+time-limited emergency override
+audited and capability-protected
+bounded by hard safety ceilings
+cannot force ACKs that violate durability invariants
+```
+
+Admin operations require the specific service capability documented in the authorization section. A broad admin bit is not sufficient for dangerous operations such as tombstone, key rotation, repair override, or capacity override.
+
+## Internal Authorization
+
+S.C.R.A.P. is internal infrastructure, but authorization still protects expensive and safety-critical operations.
+
+Authentication source:
+
+```text
+primary identity: mTLS workload identity
+recommended identity form: SPIFFE-style or Kubernetes workload identity equivalent
+caller-supplied created_by_service: audit metadata only
+caller-supplied tenant_id: document identity/audit/quotas/fingerprints only
+```
+
+Caller metadata is trusted for normal business meaning after validation, but it is not the security principal. A caller cannot gain critical priority, retention behavior, restore rights, or admin rights by setting request fields.
+
+Authorization model:
+
+```text
+authenticated service identity -> configured capabilities
+```
+
+V1 does not enforce per-tenant ACLs. All services may handle all tenants if their service capability allows the operation. This matches the dynamic tenant set and avoids a tenant-policy system in the hot path.
+
+Recommended service capabilities:
+
+```text
+write_documents
+write_critical_ingest
+write_permanent
+write_ephemeral
+read_documents
+restore_prewarm
+admin_inspect
+admin_force_repair
+admin_lifecycle_tombstone
+admin_capacity_override
+admin_key_rotation
+```
+
+Priority authorization:
+
+```text
+critical_ingest requires write_critical_ingest
+unauthorized critical_ingest request: PERMISSION_DENIED
+do not silently downgrade unauthorized critical writes
+```
+
+Document class authorization:
+
+```text
+permanent requires write_permanent
+ephemeral requires write_ephemeral
+unauthorized class request: PERMISSION_DENIED
+do not silently promote ephemeral to permanent
+```
+
+Read authorization:
+
+```text
+read_documents allows service-level reads across tenants
+tenant-level read ACLs are out of scope for v1
+```
+
+Restore/prewarm authorization:
+
+```text
+explicit prewarm requires restore_prewarm
+automatic restore-on-read is governed by read authorization and restore scheduler limits
+bulk prewarm is cost-impacting and must not be available to every reader by default
+```
+
+Admin authorization is split by operation. Do not use one broad admin bit for dangerous actions such as tombstone, key rotation, repair override, or capacity override.
+
+Policy source:
+
+```text
+static deployment policy
+hot reload supported
+startup without valid policy: fail closed
+bad hot reload: reject new policy, keep last valid policy, alert
+```
+
+The authorization policy is deployment configuration, not shard consensus metadata in v1. Avoid an external policy engine until the operational need is proven.
+
+Mandatory authorization audit events:
+
+```text
+all denied requests
+successful critical_ingest writes
+successful ephemeral writes
+explicit restore/prewarm requests
+admin operations
+key rotation/config operations
+lifecycle tombstone operations
+capacity override operations
+```
+
+Normal hot reads and ordinary writes do not require full audit logging by default. They remain observable through request logs, metrics, traces, and immutable document metadata unless a later compliance mode requires per-access audit.
+
 ## Open Questions
 
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
-- What are the exact failure domains for replica placement: nodes, racks, zones, regions, or Kubernetes node pools?
 - Which concrete Raft and LSM implementations should be used once the implementation language/runtime is chosen?
 - What are the block format versioning rules and compatibility guarantees?
-- What are the exact backend key prefix counts and token-bucket limits per provider?
-- How much local disk is required for the worst multinational bulk burst plus backend slowdown?
-- What are the write admission thresholds for disk pressure, repair backlog, and critical downgrade rates?
+- What concrete provider profiles and numeric token-bucket budgets should be used per deployment?
+- What are the expected peak ingress rates for capacity sizing against the 24h durability window?
+- What are the repair backlog and critical downgrade thresholds that should affect write admission?
 - What are the scrubbing and checksum verification schedules?
-- How should shard movement, resharding, and replica replacement work?
-- What is the admin API for transaction listing, incomplete uploads, restore/prewarm, and lifecycle reporting?
-- What authorization model protects internal APIs, even if caller metadata is trusted?
+- What is the exact admin RPC schema for inspection, operations, and status streaming?
+- What CLI command vocabulary should wrap the admin API?
 - Should there be a dedicated disaster-recovery backend in v1 or only schema support for it?
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, repair basics, and consensus/store substrate are concrete enough to move to operational limits and security boundaries.
+The write path, block format, OpenBao envelope policy, cold-read semantics, repair basics, consensus/store substrate, backend capacity model, replica placement model, admin API shape, and internal authorization model are concrete enough to move to verification and compatibility.
 
 Resume by choosing between:
 
-1. backend uploader queue/rate-control and burst capacity sizing;
-2. internal authorization and service identity;
-3. replica placement/failure-domain policy;
+1. scrub/checksum schedule and repair admission thresholds;
+2. block format versioning and compatibility guarantees;
+3. disaster-recovery backend scope;
 4. concrete implementation language/runtime and library choices.
 
-The recommended next topic is backend rate/capacity planning. The storage design now depends on concrete limits for backend request shaping, local disk guardrails, and burst survival.
+The recommended next topic is scrub/checksum schedule and repair admission thresholds. The system now has placement and repair primitives, so the next decision should define how quickly corruption is detected, how repair competes with foreground work, and when repair backlog must throttle writes.

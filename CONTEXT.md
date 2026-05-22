@@ -18,4 +18,12 @@ Backend encryption uses an envelope model: OpenBao Transit provides a deployment
 
 Cold backend reads are explicit. `HeadDocument` can confirm existence from metadata, while `ReadDocument` returns a structured restore-pending or crypto-unavailable response when bytes cannot be served immediately.
 
+Backend capacity is governed by deployment profiles. S.C.R.A.P. shapes backend writes and restores around provider-specific rate limits while preserving local replicated durability as the immediate source of truth.
+
+Internal access is authorized by workload identity and service capabilities. Caller-supplied fields such as `tenant_id`, `priority_class`, and `created_by_service` are recorded and validated, but they are not the security principal.
+
+Replica placement targets distinct Kubernetes storage nodes in v1. S.C.R.A.P. treats pod readiness as insufficient for storage safety; replicas must be caught up and byte-verified before they can serve reads or replace old members.
+
+Administrative operations are exposed as typed, audited control-plane actions. Expensive or dangerous operations such as restore, drain, repair, tombstone, and capacity override are planned, idempotent, and tracked as durable jobs.
+
 The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md).
