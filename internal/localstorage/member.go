@@ -9,6 +9,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/api"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -71,7 +72,7 @@ func (a *Application) GetEvictionSafety(ctx context.Context, memberID string) (*
 	}, nil
 }
 
-func (a *Application) requireWriteAdmission() error {
+func (a *Application) requireWriteAdmission(ctx context.Context, expectedLength *uint64) error {
 	state := a.currentLocalMemberState()
 	if state.Draining {
 		return status.Error(codes.FailedPrecondition, "local storage member is draining and cannot accept new writes")
@@ -79,7 +80,49 @@ func (a *Application) requireWriteAdmission() error {
 	if state.Cordoned {
 		return status.Error(codes.FailedPrecondition, "local storage member is cordoned and cannot accept new writes")
 	}
-	return nil
+	return a.requireCapacityAdmission(ctx, expectedLength)
+}
+
+func (a *Application) requireCapacityAdmission(ctx context.Context, expectedLength *uint64) error {
+	required := a.minUsableBytesAfterWrite
+	if expectedLength != nil {
+		required = saturatingAddUint64(required, *expectedLength)
+	}
+	if required == 0 {
+		return nil
+	}
+	stats, err := a.localDiskStats(ctx)
+	if err != nil {
+		return err
+	}
+	if stats.usableBytesRemaining >= required {
+		return nil
+	}
+	return unsafeCapacityError(required, stats.usableBytesRemaining, []string{
+		"SCRAP_LOCAL_CAPACITY_GUARD",
+		"SCRAP_NON_PRODUCTION_CAPACITY_PROFILE",
+	})
+}
+
+func unsafeCapacityError(requiredBytes uint64, availableBytes uint64, warnings []string) error {
+	st := status.New(codes.ResourceExhausted, "local capacity profile cannot admit write")
+	withDetails, err := st.WithDetails(&scrapv1.UnsafeCapacityDetail{
+		CapacityProfileId: localCapacityProfileID,
+		RequiredBytes:     requiredBytes,
+		AvailableBytes:    availableBytes,
+		Warnings:          append([]string(nil), warnings...),
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+func saturatingAddUint64(left uint64, right uint64) uint64 {
+	if right > ^uint64(0)-left {
+		return ^uint64(0)
+	}
+	return left + right
 }
 
 func (a *Application) updateLocalMemberState(mutator func(*localMemberState)) error {

@@ -28,16 +28,17 @@ import (
 )
 
 type Application struct {
-	dir              string
-	blocks           *blockstore.Store
-	backendStore     backend.Store
-	metadata         *metastore.Store
-	authority        *raftmeta.Authority
-	prepare          *prepareLog
-	memberMu         sync.Mutex
-	memberState      localMemberState
-	sealBlockAtBytes uint64
-	now              func() time.Time
+	dir                      string
+	blocks                   *blockstore.Store
+	backendStore             backend.Store
+	metadata                 *metastore.Store
+	authority                *raftmeta.Authority
+	prepare                  *prepareLog
+	memberMu                 sync.Mutex
+	memberState              localMemberState
+	sealBlockAtBytes         uint64
+	minUsableBytesAfterWrite uint64
+	now                      func() time.Time
 }
 
 const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
@@ -193,7 +194,7 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	} else if !errors.Is(err, metastore.ErrNotFound) {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
-	if err := a.requireWriteAdmission(); err != nil {
+	if err := a.requireWriteAdmission(ctx, init.ExpectedLength); err != nil {
 		return api.WriteDocumentResult{}, err
 	}
 

@@ -204,6 +204,35 @@ func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
 	}
 }
 
+func TestUnsafeCapacityAdmissionLeavesDocumentInvisible(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.minUsableBytesAfterWrite = ^uint64(0)
+	doc := testDocumentIdentity()
+	data := []byte("capacity rejected bytes")
+	expectedLength := uint64(len(data))
+
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		ExpectedLength:   &expectedLength,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	requireCode(t, err, codes.ResourceExhausted)
+	detail := requireUnsafeCapacityDetail(t, err)
+	if detail.GetCapacityProfileId() != localCapacityProfileID ||
+		detail.GetRequiredBytes() <= detail.GetAvailableBytes() ||
+		len(detail.GetWarnings()) == 0 {
+		t.Fatalf("capacity detail = %#v, want unsafe local capacity detail", detail)
+	}
+	if got := app.blocks.CurrentBlockLength(); got != blockstore.HeaderLength {
+		t.Fatalf("open block length = %d, want rejected write to avoid append", got)
+	}
+	_, err = app.HeadDocument(ctx, api.HeadDocumentRequest{Identity: doc})
+	requireCode(t, err, codes.NotFound)
+}
+
 func TestCommittedWriteSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	doc := testDocumentIdentity()
@@ -1775,5 +1804,20 @@ func requireCryptoUnavailableDetail(t *testing.T, err error) *scrapv1.CryptoUnav
 		}
 	}
 	t.Fatalf("status details = %#v, want CryptoUnavailableDetail", st.Details())
+	return nil
+}
+
+func requireUnsafeCapacityDetail(t *testing.T, err error) *scrapv1.UnsafeCapacityDetail {
+	t.Helper()
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("error is not a status error: %v", err)
+	}
+	for _, detail := range st.Details() {
+		if capacity, ok := detail.(*scrapv1.UnsafeCapacityDetail); ok {
+			return capacity
+		}
+	}
+	t.Fatalf("status details = %#v, want UnsafeCapacityDetail", st.Details())
 	return nil
 }
