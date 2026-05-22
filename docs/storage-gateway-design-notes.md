@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: deployment topology, per-deployment numeric capacity budgets, DR drill numbers, and operational runbooks.
+After reading it, they should be able to continue the design review from the current frontier: numeric capacity budgets, cell import lag/cache sizing, DR drill numbers, and repair/scrub thresholds.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -43,6 +43,8 @@ V1 replica placement targets distinct Kubernetes storage nodes. Admin operations
 Bit rot is treated as a first-class durability threat. Block, index, and envelope formats are long-lived compatibility contracts because immutable data may remain archived for years.
 
 V1 disaster recovery targets rebuild from the primary backend plus metadata recovery artifacts. Always-on secondary backend writes are not part of the v1 durability contract.
+
+V1 includes a cell model for federated read cache deployments. A cell is a S.C.R.A.P. deployment that owns a disjoint `source_namespace` for writes. Other cells may import published metadata snapshots/tails read-only and serve bounded-staleness cached reads, but they do not join the source cell's shard consensus or write authoritative metadata.
 
 ## Problem
 
@@ -438,6 +440,104 @@ Any gateway may accept any API request. Internally:
 
 Every gateway keeps a small routing index. Shard members keep hot in-memory document indexes for their owned or replicated shards. Do not keep a full global billion-document index on every gateway.
 
+## Cells And Federated Read Cache
+
+Do not call a Kubernetes deployment a shard. In this document:
+
+```text
+shard = transaction-keyed Raft group inside one S.C.R.A.P. deployment
+cell  = S.C.R.A.P. deployment/private Kubernetes deployment that owns writes for a source namespace
+```
+
+The cell model is part of core v1 scope. It is not a later optional extension, because bulk read-cache deployments and private Kubernetes locations affect document visibility, source ownership, cache invalidation, crypto permissions, and operator runbooks.
+
+Cell ownership model:
+
+```text
+public document identity:
+  tenant_id + transaction_id + document_name
+
+write ownership:
+  source_namespace -> authoritative cell
+
+backend physical prefix:
+  cells/<cell_id>/...
+```
+
+`source_namespace` is ownership metadata. It is not part of public document identity and must not leak into normal caller keys. Two authoritative cells must not own the same `source_namespace` at the same time.
+
+Simple topology:
+
+```text
+              published metadata snapshots/tails
+        +---------------------------------------------+
+        |                                             v
++-------------------+       shared backend     +-------------------+
+| Cell A            |  .blk/.idx/.env objects  | Cell B            |
+| authoritative     +------------------------->| read-only import  |
+| source_namespace=a|                         | cache/catalog     |
++-------------------+                         +-------------------+
+        ^                                             |
+        | local strong reads/writes                   | bounded-staleness reads
+        |                                             v
+   ETL writers/readers                          bulk readers
+```
+
+Authoritative cells publish verified metadata snapshots and compact metadata tails. Importing cells must build local read-only catalogs from those published metadata artifacts, not by scanning backend buckets or discovering blocks with `LIST`.
+
+Read order inside a cell:
+
+```text
+1. local authoritative shard metadata
+2. imported read-only catalogs
+3. structured NOT_FOUND / restore-pending / stale-import response
+```
+
+If the same public document identity exists in local authoritative metadata and an imported catalog, the read must fail closed as a conflict and alert. S.C.R.A.P. must not guess which cell is correct.
+
+Imported read consistency is bounded by the imported source metadata version:
+
+```text
+imported read sees: source metadata version N
+not guaranteed: source writes after version N
+```
+
+Imported read misses return a versioned response that includes the source, imported version, and lag information when available. A cache cell must not search backend blocks directly to answer a miss.
+
+Imported metadata is stored in a separate read-only keyspace/catalog. It is not merged into local authoritative shard consensus state. This keeps the source of truth clear:
+
+```text
+authoritative metadata: local shard consensus
+imported metadata: verified source snapshot/tail projection
+local cache bytes: rebuildable acceleration
+```
+
+Read-only cache cells use a cache profile:
+
+```text
+storage nodes: 1 or more rebuildable cache nodes
+writer SLA: none
+local writes: cache/catalog/index only
+promotion to writer: not allowed in this mode
+```
+
+A read-only cache cell cannot become an authoritative writer by accident. DR takeover or failover is a separate workflow that requires source fencing, ownership transfer, metadata validation, and explicit operator action.
+
+Cache invalidation follows source metadata. If imported source metadata declares a tombstone, reclaim, block supersession, or ref invalidation, the importing cell must evict or quarantine matching local cache bytes before serving from them.
+
+Encrypted imports require read-only decrypt/unwrap grants for the source cell's envelopes. They must not require encrypt, rewrap, key-admin, or source write privileges.
+
+Open design details for the cell model:
+
+```text
+exact source_namespace config format
+published metadata snapshot/tail object format
+per-import lag SLOs
+imported catalog compaction policy
+cache sizing and admission policy for bulk read cells
+conflict alert severity and operator workflow
+```
+
 ## Replication And Availability
 
 Each shard group has five voting replicas as the baseline. This targets continued availability during two node failures, assuming placement across independent failure domains.
@@ -501,11 +601,13 @@ Zone spread is preferred when topology labels exist, but it is not required for 
 Eligible nodes:
 
 ```text
-dedicated storage node pool
+preferred dedicated storage node pool
 labeled and tainted for S.C.R.A.P. storage members
 fast local disks with expected capacity and durability
 predictable network and operational treatment
 ```
+
+Dedicated storage nodes are the normal production profile, but they are not a hard product assumption. A deployment may intentionally relax onto a shared node pool only through an explicit risk mode. Shared-pool risk mode must warn loudly and must be excluded from strict production SLO claims.
 
 Production minimum:
 
@@ -514,9 +616,12 @@ minimum eligible storage nodes: 7
 reason: 5 active voters + replacement headroom + maintenance/failure headroom
 ```
 
+If fewer than seven eligible storage nodes are available in production mode, the deployment is placement-unhealthy. It must not silently weaken the failure model.
+
 Kubernetes pod model:
 
 ```text
+single storage-member StatefulSet
 stable stateful storage-member pods
 local PV/PVC per storage member
 many shard replicas assigned internally to each member
@@ -524,11 +629,14 @@ Kubernetes places storage members
 S.C.R.A.P. manages shard replica membership and byte safety
 ```
 
-V1 does not use one pod per shard replica. That would make pod count and scheduling churn scale with shard count rather than storage-member count.
+V1 does not use a separate stateless ingress tier. Storage-member pods expose the service API and forward internally when the local member is not the right shard leader or safe read replica.
+
+V1 also does not use one pod per shard replica. That would make pod count and scheduling churn scale with shard count rather than storage-member count.
 
 Kubernetes scheduling guardrails:
 
 ```text
+hard pod anti-affinity: one storage-member pod per Kubernetes worker node
 hard node anti-affinity for voting replicas of the same shard
 preferred topology spread across zones
 PodDisruptionBudget: maxUnavailable = 1 for storage members
@@ -601,6 +709,109 @@ alert placement risk
 accelerate repair/rebalance
 throttle lower-priority writes if backlog or placement risk grows
 reject retryably before ACK safety is compromised
+```
+
+## Kubernetes Deployment Topology And Operations
+
+Authoritative v1 deployment shape:
+
+```text
+one storage-member StatefulSet
+one durable data PVC per storage member
+client-facing Service for public gRPC traffic
+headless member Service for stable peer discovery
+separate logical ports for client, admin, and peer traffic
+NetworkPolicies around admin and peer ports
+```
+
+Storage-member pods are both gateways and storage members. Any member can accept a client request, then serve it locally or forward it internally to the shard leader or a safe read replica.
+
+Durable paths:
+
+```text
+metadata KV / WAL / Raft state: durable data PVC
+local block files and indexes: durable data PVC
+temporary write/seal files that affect recovery: durable data PVC
+pure scratch that can be discarded safely: optional non-durable scratch
+```
+
+Do not use `emptyDir` for prepared bytes, open block state, metadata WALs, or any temporary file needed to recover an acknowledged or potentially committed write.
+
+Kubernetes readiness is routability, not storage safety. S.C.R.A.P. exposes detailed storage conditions separately:
+
+```text
+process_ready
+routable
+byte_serving
+placement_healthy
+safe_to_evict
+disk_pressure
+repair_lag
+```
+
+Liveness should catch a dead process or hard deadlock. It must not restart a pod merely because a shard is degraded, a backend is slow, or repair is lagging.
+
+Rollout and drain:
+
+```text
+StatefulSet rollout: ordered and gated by S.C.R.A.P. safety
+planned drain: plan -> start -> wait for safe_to_evict -> Kubernetes drain
+PDB: maxUnavailable = 1
+```
+
+The drain plan should report affected shards, byte movement, expected catch-up work, and blockers. Kubernetes should act after S.C.R.A.P. reports `safe_to_evict`; PDBs are only a coarse guardrail.
+
+Bootstrap and replacement:
+
+```text
+cluster bootstrap: explicit cluster-init/admin operation
+member identity: persistent member ID on the data PVC
+pod ordinal: scheduling identity only, not storage identity
+permanent node/PV loss: operator-declared lost workflow
+replacement: catch up metadata, verify bytes, then joint-consensus membership change
+```
+
+A pod restart or ordinal reuse must not create a new storage identity by accident. If a data PVC is gone, the operator declares the member lost and S.C.R.A.P. performs safe replica replacement.
+
+Admin exposure:
+
+```text
+admin API: cluster-internal
+authentication: mTLS/workload identity
+authorization: capability policy
+auditing: mandatory for dangerous operations
+```
+
+Core runbooks required before production:
+
+```text
+bootstrap cluster
+scale out storage members
+planned drain / maintenance
+node or PV declared lost
+rolling upgrade
+disk pressure
+readiness / byte-serving debugging
+```
+
+Core alerts:
+
+```text
+placement-unhealthy
+unsafe drain
+node/PV loss
+PVC missing or identity mismatch
+member not byte-serving
+quorum risk
+disk pressure
+repair lag above threshold
+```
+
+Dev topology mode:
+
+```text
+single-node / multi-member dev: allowed only in explicit unsafe dev mode
+production SLO claims: never
 ```
 
 ## Shard Consensus And Metadata Store
@@ -2062,6 +2273,8 @@ Backend selection is deployment-level configuration. Tenant-based backend routin
 
 Never depend on backend `LIST` for normal reads or transaction queries. The gateway metadata index is the source of truth.
 
+Federated cells may share the same backend account or bucket, but ownership is separated by cell/source metadata and physical prefixes such as `cells/<cell_id>/...`. This is not tenant-based backend routing; it is a safety boundary for source ownership, import, and recovery.
+
 ## Disaster Recovery Scope
 
 V1 disaster recovery scope is schema plus tooling, not active always-on secondary backend replication.
@@ -2172,6 +2385,17 @@ hash prefixes per backend profile: 256
 hash source: block identity
 not based on tenant_id, transaction_id, document_name, or wall-clock time
 ```
+
+Default physical key shape:
+
+```text
+cells/<cell_id>/blocks/<hash_prefix>/<block_id>.blk
+cells/<cell_id>/blocks/<hash_prefix>/<block_id>.idx
+cells/<cell_id>/blocks/<hash_prefix>/<block_id>.env
+cells/<cell_id>/metadata/<shard_or_snapshot_id>/...
+```
+
+The `cell_id` prefix separates source ownership and import/recovery boundaries. It is not a tenant routing mechanism.
 
 Provider profiles are explicit deployment configuration. They are not inferred from provider type alone.
 
@@ -2912,18 +3136,23 @@ These are the known gray areas to resolve before turning this into an ADR or imp
 - What concrete per-deployment backend byte budgets, lane budgets, ramp thresholds, and circuit-breaker thresholds should be configured?
 - What concrete numeric repair runway thresholds should each deployment use beyond the defaults?
 - What exact scrub rate limits and backend byte-read budgets should be configured per deployment?
-- What concrete Kubernetes deployment topology, StatefulSet/PV layout, readiness gates, and operational runbooks should be used?
+- What concrete per-cell `source_namespace` ownership configuration format should be used?
+- What exact imported-catalog lag SLOs, cache sizing, and admission policy should read-only cache cells use?
+- What exact published metadata snapshot/tail object format should support both DR rebuild and read-only import?
 - What concrete DR drill cadence and sampled-read size should each deployment use?
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, replica placement model, DR scope, admin API shape, and internal authorization model are concrete enough to move to deployment topology and numeric capacity budgets.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, replica placement model, Kubernetes deployment topology, cell/read-only import model, DR scope, admin API shape, and internal authorization model are concrete enough to move to numeric capacity budgets and import mechanics.
 
 Resume by choosing between:
 
-1. Kubernetes deployment topology, StatefulSets, local PVs, readiness gates, and operational runbooks;
-2. concrete per-deployment ingress, backend byte-budget, lane-budget, ramp, and circuit-breaker numbers;
+1. concrete per-deployment ingress, backend byte-budget, lane-budget, ramp, and circuit-breaker numbers;
+2. concrete per-cell import lag SLOs, imported-catalog sizing, and cache admission/eviction policy;
 3. concrete DR drill cadence, sampled-read size, and recovery evidence reports;
-4. concrete repair/scrub numeric thresholds and backend byte-read budgets.
+4. concrete repair/scrub numeric thresholds and backend byte-read budgets;
+5. concrete source namespace configuration and conflict-handling operator workflow.
 
-The recommended next topic is deployment topology. The architecture now defines the storage semantics, Go substrate, API schema direction, build/release policy, and backend profile model, so the next decision should map those contracts onto Kubernetes storage members, local persistent volumes, readiness gates, rollout/drain behavior, and operator runbooks.
+The recommended next topic is numeric capacity budgets. The architecture now defines the storage semantics, Go substrate, API schema direction, build/release policy, backend profile model, Kubernetes topology, and cell import model, so the next decision should turn those contracts into ingress rates, byte budgets, queue lanes, ramp rules, circuit breakers, and import lag targets.
+
+The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.

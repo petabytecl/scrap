@@ -8,6 +8,10 @@ The gateway should give the service fleet a transparent storage interface while 
 
 Backend selection is deployment-level configuration. `tenant_id` is part of document identity, auditing, quotas, and fingerprints, but it does not route data to different durable backends in the current design.
 
+Within a S.C.R.A.P. deployment, a shard is a transaction-keyed consensus group. Do not use shard to mean a Kubernetes deployment, cluster, or regional fleet.
+
+A cell is a S.C.R.A.P. deployment that owns a disjoint source namespace for writes. Other cells may import its published metadata read-only to serve bounded-staleness cache reads, but they do not join its shard consensus or mutate its authoritative metadata.
+
 The central physical abstraction is a block: an immutable byte container with an index mapping each logical document to `block_id + stored_offset + stored_length + checksums`.
 
 The write path is leader-coordinated: bytes are prepared durably first, consensus metadata controls visibility, and backend upload intent is recorded after commit.
