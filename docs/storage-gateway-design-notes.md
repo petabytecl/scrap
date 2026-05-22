@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: numeric capacity budgets, cell import lag/cache sizing, DR drill numbers, and repair/scrub thresholds.
+After reading it, they should be able to continue the design review from the current frontier: cell import lag/cache sizing, published metadata import format, DR drill numbers, and repair/scrub thresholds.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -36,7 +36,7 @@ Shard consensus metadata is the authority for document visibility, physical refs
 
 Backend encryption uses OpenBao Transit envelope encryption. Routine KEK rotation rewraps small per-block envelopes; it does not re-encrypt block payload data.
 
-Backend upload capacity is controlled by explicit provider profiles and local disk runway. Internal authorization is based on workload identity plus service capabilities, not caller-supplied metadata.
+Backend upload capacity is controlled by explicit provider profiles, local disk runway, and fail-closed production validation. Internal authorization is based on workload identity plus service capabilities, not caller-supplied metadata.
 
 V1 replica placement targets distinct Kubernetes storage nodes. Admin operations are typed, audited, idempotent control-plane jobs exposed through a gRPC admin service and CLI.
 
@@ -2407,6 +2407,14 @@ backend_type: s3 | gcs | azure_blob | filesystem | other
 physical_hash_fanout
 key_layout_version
 
+accepted_ingress_budgets:
+  peak_5m_mib_per_sec
+  rolling_1h_mib_per_sec
+  daily_bytes
+  max_docs_per_sec
+  max_sealed_blocks_per_sec
+  critical_ingest_reserve_percent
+
 request_budgets:
   per_backend_put_per_sec
   per_backend_get_per_sec
@@ -2443,13 +2451,33 @@ ramp_policy:
   max_increase_per_window
   throttle_backoff_window
 
+admission_guards:
+  local_durability_window_hours
+  disk_warn_percent
+  disk_throttle_percent
+  disk_reject_percent
+  runway_warn_hours
+  runway_throttle_hours
+  runway_reject_hours
+
 lifecycle_hints:
   provider-neutral storage intent
   provider class name
   estimated restore delay/cost hints
 ```
 
-Production profiles require explicit upload and restore MiB/sec budgets. Do not start production with unbounded backend byte budgets. Request-count defaults may exist for the S3-like profile only; GCS, Azure Blob, filesystem, and future providers require measured deployment-specific request budgets before production acceptance.
+Production profiles require explicit measured budgets. Do not start production with unbounded accepted ingress, upload, restore, scrub, DR-copy, or circuit-breaker budgets. Request-count defaults may exist for the S3-like profile only; GCS, Azure Blob, filesystem, and future providers require measured deployment-specific request budgets before production acceptance.
+
+Primary capacity units are bytes:
+
+```text
+MiB/sec
+bytes/day
+backlog bytes
+disk runway hours
+```
+
+Document rate and sealed-block rate are still required secondary limits. Document rate protects API and metadata capacity. Sealed-block rate protects backend request pressure and object-count behavior.
 
 The first concrete default is an S3-like profile:
 
@@ -2487,7 +2515,7 @@ PERMANENT
 
 Scheduler retries use capped exponential backoff with jitter, coordinated with token-bucket feedback. Provider SDK retries may still be used locally by an adapter, but they must not hide retry storms or bypass S.C.R.A.P. lane/backlog accounting.
 
-Circuit breakers are per backend and lane, not one global backend switch. A restore/prewarm outage should not automatically stop permanent uploads or repair if those lanes remain healthy. Auth failures, sustained throttling, and persistent provider errors should trip lane-specific circuits, emit alerts, and preserve local ACK safety through backlog/runway gates.
+Circuit breakers are per backend and lane, not one global backend switch. A restore/prewarm outage should not automatically stop permanent uploads or repair if those lanes remain healthy. Auth or permission failures trip immediately. Sustained throttling or transient lane failure trips after a default 5-minute unhealthy window unless the production profile declares a stricter threshold. Lane circuits emit alerts and preserve local ACK safety through backlog/runway gates.
 
 Backend adapters may use multipart or resumable upload internally. Core metadata still treats `.blk`, `.idx`, and `.env` as whole logical backend objects. Provider-specific upload parts must not leak into shard consensus metadata.
 
@@ -2514,7 +2542,7 @@ estimated_restore_cost_hint
 
 Actual retention, tiering, and legal-hold policies remain backend/infrastructure concerns unless a future requirement expands S.C.R.A.P. into an active lifecycle-policy engine. Restore planning should show profile estimates plus observed backend restore state; it must not promise exact provider restore timing.
 
-Profile validation is fail-closed. Startup rejects missing, invalid, or unsafe backend profiles. Bad hot reload keeps the last valid profile and alerts. If configured backend capacity is lower than expected ingest, startup may continue only if local durability window sizing and runway alerts remain safe; write admission must still throttle or reject before durability is threatened.
+Profile validation is fail-closed in production. Startup rejects missing, invalid, or mathematically unsafe backend profiles unless an explicit non-production risk mode is enabled. Bad hot reload keeps the last valid profile and alerts. If configured backend capacity is lower than accepted ingress, production startup is unsafe unless the profile proves local durability window sizing, backlog drain, and runway guards remain safe. Write admission must still throttle or reject before durability is threatened.
 
 Example physical layout:
 
@@ -2543,7 +2571,7 @@ priority lanes
 backlog metrics and alerts
 ```
 
-Upload lanes:
+Backend scheduler lanes:
 
 ```text
 permanent-block-upload
@@ -2552,6 +2580,7 @@ repair/reconciliation
 disaster-recovery-secondary
 restore/prewarm
 rewrap-envelope-sync
+routine-scrub
 ```
 
 Backend upload is committed only after every required object for the block is uploaded and verified:
@@ -2563,7 +2592,17 @@ encrypted block: .blk + .idx + .env
 
 Upload retries use exponential backoff plus per-backend and per-physical-prefix token buckets. Upload backlog alone does not stop write ACKs; local replicated durability remains the immediate source of truth. Write admission stops only when disk/backlog guards show that continued local acceptance would make durability unsafe.
 
-Token bucket scope:
+Backend capacity goal:
+
+```text
+drain accepted daily load
+drain accepted bursts within the configured local durability window
+do not require backend capacity to match instantaneous write burst peak
+```
+
+This is the production sizing target. The local replicated tier absorbs short peaks and backend brownouts; the backend budget must still prove that the deployment can drain what it accepts before the local durability window becomes unsafe.
+
+V1 uses sliced local rate limiting:
 
 ```text
 shard-local lane limits
@@ -2572,9 +2611,26 @@ node-level physical-prefix limits
 no global distributed rate limiter in v1
 ```
 
+Each storage member receives a configured budget slice and enforces it with local token buckets. This avoids a global distributed limiter in the write safety path while still bounding aggregate backend pressure.
+
 Capacity is shared by lane and shard fair-share. Tenant fair-share is not part of the v1 backend uploader because tenant-based durable routing was rejected and tenant sets are dynamic.
 
-Default constrained-capacity lane order:
+Lane budgets use floors plus borrowing. Each lane has a minimum floor and a maximum cap. Idle capacity may be borrowed by higher-priority backlog, but operator-triggered work must give capacity back when upload or repair runway is threatened.
+
+Default production lane floors:
+
+```text
+permanent-block-upload: 70%
+repair/reconciliation: 20%
+restore/prewarm: 5%
+rewrap-envelope-sync: 3%
+disaster-recovery-secondary: 2% if explicitly enabled, otherwise 0%
+routine-scrub: opportunistic unused capacity only
+```
+
+If `disaster-recovery-secondary` is disabled, its 2% default floor returns to the borrowable pool.
+
+Default constrained-capacity lane priority:
 
 ```text
 1. repair/reconciliation
@@ -2590,12 +2646,20 @@ Permanent backend upload lag SLO under healthy backend conditions:
 95% of sealed permanent blocks uploaded and verified within 15 minutes
 ```
 
+A missed upload SLO alerts. It does not directly throttle writes. Throttling and rejection are driven by disk/runway safety math.
+
 Backend lag alone does not make acknowledged writes unsafe. The local replicated tier is sized to absorb backend outage or brownout.
 
 Default local durability window:
 
 ```text
 24 hours of accepted peak ingress
+```
+
+Default write reserve:
+
+```text
+critical_ingest reserve: 10% of usable local write capacity
 ```
 
 Capacity planning formula:
@@ -2614,6 +2678,19 @@ default safety margin: 30%
 
 Average daily ingest is not sufficient for this workload because massive multinational bulk bursts can exceed normal backend upload rate while still needing safe local ACKs.
 
+Admission uses multi-window math:
+
+```text
+current 5-minute accepted ingress rate
+rolling 1-hour accepted ingress rate
+rolling 24-hour accepted bytes
+backend drain rate by lane
+local disk free/reserved bytes
+computed hours until unsafe
+```
+
+The deployment has one accepted-ingress budget plus the critical reserve. Priority class controls throttling order. Per-service budgets may be added later if operational evidence requires them. Per-tenant write admission is not part of v1.
+
 Under local disk pressure:
 
 1. delete only expired/eligible ephemeral data;
@@ -2630,7 +2707,27 @@ Default disk guard bands:
 90% used: reject new writes except configured critical reserve
 ```
 
+Default disk runway guard bands:
+
+```text
+runway < 12 hours: warn and accelerate cleanup/upload
+runway < 6 hours: throttle bulk and normal write classes
+runway < 2 hours: reject new normal writes except configured critical reserve
+```
+
 `critical_ingest` may continue at the 90% guard only from preconfigured reserved capacity. When the critical reserve is exhausted, critical writes are rejected retryably too. Critical writes are never allowed to consume the last unsafe bytes.
+
+Operator-triggered restore, DR copy, rewrap, and scrub jobs run only inside explicit lane budgets by default. They pause or shed borrowed capacity when disk/runway guards show risk to permanent upload or repair.
+
+Emergency capacity overrides:
+
+```text
+requires admin_capacity_override
+requires dry-run plan and reason
+must have a TTL
+is audited
+rolls back automatically to the last valid profile
+```
 
 Burst handling:
 
@@ -2658,10 +2755,12 @@ High-severity alerts fire before write rejection when:
 
 ```text
 disk runway drops below configured hours
+runway falls below 12/6/2h thresholds
 oldest permanent upload exceeds SLO
 persistent provider throttling occurs
 critical reserve is being consumed
 backend backlog growth exceeds drain capacity
+capacity override is active or near expiry
 ```
 
 The write admission controller must reject safely before any durability invariant is at risk.
@@ -3132,8 +3231,6 @@ Normal hot reads and ordinary writes do not require full audit logging by defaul
 
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
-- What are the expected peak ingress rates for capacity sizing against the 24h durability window?
-- What concrete per-deployment backend byte budgets, lane budgets, ramp thresholds, and circuit-breaker thresholds should be configured?
 - What concrete numeric repair runway thresholds should each deployment use beyond the defaults?
 - What exact scrub rate limits and backend byte-read budgets should be configured per deployment?
 - What concrete per-cell `source_namespace` ownership configuration format should be used?
@@ -3143,16 +3240,16 @@ These are the known gray areas to resolve before turning this into an ADR or imp
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, replica placement model, Kubernetes deployment topology, cell/read-only import model, DR scope, admin API shape, and internal authorization model are concrete enough to move to numeric capacity budgets and import mechanics.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, DR scope, admin API shape, and internal authorization model are concrete enough to move to import mechanics and operational drills.
 
 Resume by choosing between:
 
-1. concrete per-deployment ingress, backend byte-budget, lane-budget, ramp, and circuit-breaker numbers;
-2. concrete per-cell import lag SLOs, imported-catalog sizing, and cache admission/eviction policy;
+1. concrete per-cell import lag SLOs, imported-catalog sizing, and cache admission/eviction policy;
+2. concrete published metadata snapshot/tail format for both DR rebuild and read-only import;
 3. concrete DR drill cadence, sampled-read size, and recovery evidence reports;
 4. concrete repair/scrub numeric thresholds and backend byte-read budgets;
 5. concrete source namespace configuration and conflict-handling operator workflow.
 
-The recommended next topic is numeric capacity budgets. The architecture now defines the storage semantics, Go substrate, API schema direction, build/release policy, backend profile model, Kubernetes topology, and cell import model, so the next decision should turn those contracts into ingress rates, byte budgets, queue lanes, ramp rules, circuit breakers, and import lag targets.
+The recommended next topic is published metadata import mechanics. The architecture now defines the storage semantics, Go substrate, API schema direction, build/release policy, backend profile model, capacity budget model, Kubernetes topology, and cell import model, so the next decision should specify the snapshot/tail format that supports both DR rebuild and read-only imported catalogs.
 
 The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.
