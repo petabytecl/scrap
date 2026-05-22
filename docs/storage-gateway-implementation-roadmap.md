@@ -34,6 +34,9 @@ The next technical gate before storage-format implementation is:
 3. `#18` Audit library and substrate ADR coverage, captured in
    [Storage Gateway Library And Substrate ADR Audit](storage-gateway-library-substrate-adr-audit.md).
 
+Production-readiness test policy for issue `#19` is captured in
+[Storage Gateway Correctness Harness And CI Tiers](storage-gateway-correctness-harness.md).
+
 ## Purpose
 
 Build the S.C.R.A.P. storage gateway so billing ETL services can write and read
