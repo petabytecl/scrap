@@ -224,6 +224,7 @@ message StartRestoreRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartRestoreResponse {
@@ -245,6 +246,7 @@ message StartPrewarmRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartPrewarmResponse {
@@ -282,6 +284,7 @@ message StartRepairRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartRepairResponse {
@@ -291,6 +294,7 @@ message StartRepairResponse {
 message CordonMemberRequest {
   StorageMemberTarget storage_member = 1;
   string reason = 2;
+  string operation_id = 3;
 }
 
 message CordonMemberResponse {
@@ -299,6 +303,7 @@ message CordonMemberResponse {
 
 message UncordonMemberRequest {
   StorageMemberTarget storage_member = 1;
+  string operation_id = 2;
 }
 
 message UncordonMemberResponse {
@@ -333,6 +338,7 @@ message StartDrainRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartDrainResponse {
@@ -353,6 +359,7 @@ message StartTombstoneRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartTombstoneResponse {
@@ -385,6 +392,7 @@ message StartMetadataRestoreRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartMetadataRestoreResponse {
@@ -395,6 +403,7 @@ message StartCopyVerifyRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartCopyVerifyResponse {
@@ -405,6 +414,7 @@ message StartDRDrillRequest {
   string operation_plan_id = 1;
   string plan_hash = 2;
   map<string, string> metadata = 3;
+  string operation_id = 4;
 }
 
 message StartDRDrillResponse {

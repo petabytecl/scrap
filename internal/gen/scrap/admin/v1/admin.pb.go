@@ -1683,6 +1683,7 @@ type StartRestoreRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1736,6 +1737,13 @@ func (x *StartRestoreRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *StartRestoreRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
 }
 
 type StartRestoreResponse struct {
@@ -1899,6 +1907,7 @@ type StartPrewarmRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1952,6 +1961,13 @@ func (x *StartPrewarmRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *StartPrewarmRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
 }
 
 type StartPrewarmResponse struct {
@@ -2279,6 +2295,7 @@ type StartRepairRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2334,6 +2351,13 @@ func (x *StartRepairRequest) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *StartRepairRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type StartRepairResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Operation     *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
@@ -2382,6 +2406,7 @@ type CordonMemberRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StorageMember *StorageMemberTarget   `protobuf:"bytes,1,opt,name=storage_member,json=storageMember,proto3" json:"storage_member,omitempty"`
 	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	OperationId   string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2426,6 +2451,13 @@ func (x *CordonMemberRequest) GetStorageMember() *StorageMemberTarget {
 func (x *CordonMemberRequest) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *CordonMemberRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
 	}
 	return ""
 }
@@ -2477,6 +2509,7 @@ func (x *CordonMemberResponse) GetStorageMember() *StorageMember {
 type UncordonMemberRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StorageMember *StorageMemberTarget   `protobuf:"bytes,1,opt,name=storage_member,json=storageMember,proto3" json:"storage_member,omitempty"`
+	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2516,6 +2549,13 @@ func (x *UncordonMemberRequest) GetStorageMember() *StorageMemberTarget {
 		return x.StorageMember
 	}
 	return nil
+}
+
+func (x *UncordonMemberRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
 }
 
 type UncordonMemberResponse struct {
@@ -2819,6 +2859,7 @@ type StartDrainRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2872,6 +2913,13 @@ func (x *StartDrainRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *StartDrainRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
 }
 
 type StartDrainResponse struct {
@@ -3027,6 +3075,7 @@ type StartTombstoneRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3080,6 +3129,13 @@ func (x *StartTombstoneRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *StartTombstoneRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
 }
 
 type StartTombstoneResponse struct {
@@ -3375,6 +3431,7 @@ type StartMetadataRestoreRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3430,6 +3487,13 @@ func (x *StartMetadataRestoreRequest) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *StartMetadataRestoreRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type StartMetadataRestoreResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Operation     *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
@@ -3479,6 +3543,7 @@ type StartCopyVerifyRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3534,6 +3599,13 @@ func (x *StartCopyVerifyRequest) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *StartCopyVerifyRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type StartCopyVerifyResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Operation     *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
@@ -3583,6 +3655,7 @@ type StartDRDrillRequest struct {
 	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
 	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3636,6 +3709,13 @@ func (x *StartDRDrillRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *StartDRDrillRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
 }
 
 type StartDRDrillResponse struct {
@@ -3802,11 +3882,12 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +
 	"\x13PlanRestoreResponse\x121\n" +
-	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\xea\x01\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x8d\x02\n" +
 	"\x13StartRestoreRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12M\n" +
-	"\bmetadata\x18\x03 \x03(\v21.scrap.admin.v1.StartRestoreRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v21.scrap.admin.v1.StartRestoreRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"O\n" +
@@ -3823,11 +3904,12 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\n" +
 	"_pin_until\"H\n" +
 	"\x13PlanPrewarmResponse\x121\n" +
-	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\xea\x01\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x8d\x02\n" +
 	"\x13StartPrewarmRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12M\n" +
-	"\bmetadata\x18\x03 \x03(\v21.scrap.admin.v1.StartPrewarmRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v21.scrap.admin.v1.StartPrewarmRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"O\n" +
@@ -3857,23 +3939,26 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
 	"\x12PlanRepairResponse\x121\n" +
-	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\xe8\x01\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x8b\x02\n" +
 	"\x12StartRepairRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12L\n" +
-	"\bmetadata\x18\x03 \x03(\v20.scrap.admin.v1.StartRepairRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v20.scrap.admin.v1.StartRepairRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"N\n" +
 	"\x13StartRepairResponse\x127\n" +
-	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"y\n" +
+	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\x9c\x01\n" +
 	"\x13CordonMemberRequest\x12J\n" +
 	"\x0estorage_member\x18\x01 \x01(\v2#.scrap.admin.v1.StorageMemberTargetR\rstorageMember\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\\\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\"\\\n" +
 	"\x14CordonMemberResponse\x12D\n" +
-	"\x0estorage_member\x18\x01 \x01(\v2\x1d.scrap.admin.v1.StorageMemberR\rstorageMember\"c\n" +
+	"\x0estorage_member\x18\x01 \x01(\v2\x1d.scrap.admin.v1.StorageMemberR\rstorageMember\"\x86\x01\n" +
 	"\x15UncordonMemberRequest\x12J\n" +
-	"\x0estorage_member\x18\x01 \x01(\v2#.scrap.admin.v1.StorageMemberTargetR\rstorageMember\"^\n" +
+	"\x0estorage_member\x18\x01 \x01(\v2#.scrap.admin.v1.StorageMemberTargetR\rstorageMember\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\"^\n" +
 	"\x16UncordonMemberResponse\x12D\n" +
 	"\x0estorage_member\x18\x01 \x01(\v2\x1d.scrap.admin.v1.StorageMemberR\rstorageMember\"f\n" +
 	"\x18GetEvictionSafetyRequest\x12J\n" +
@@ -3892,11 +3977,12 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"F\n" +
 	"\x11PlanDrainResponse\x121\n" +
-	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\xe6\x01\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x89\x02\n" +
 	"\x11StartDrainRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12K\n" +
-	"\bmetadata\x18\x03 \x03(\v2/.scrap.admin.v1.StartDrainRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v2/.scrap.admin.v1.StartDrainRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"M\n" +
@@ -3910,11 +3996,12 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"J\n" +
 	"\x15PlanTombstoneResponse\x121\n" +
-	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\xee\x01\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x91\x02\n" +
 	"\x15StartTombstoneRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12O\n" +
-	"\bmetadata\x18\x03 \x03(\v23.scrap.admin.v1.StartTombstoneRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v23.scrap.admin.v1.StartTombstoneRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
@@ -3935,29 +4022,32 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"I\n" +
 	"\x14PlanRecoveryResponse\x121\n" +
-	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\xfa\x01\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x9d\x02\n" +
 	"\x1bStartMetadataRestoreRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12U\n" +
-	"\bmetadata\x18\x03 \x03(\v29.scrap.admin.v1.StartMetadataRestoreRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v29.scrap.admin.v1.StartMetadataRestoreRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"W\n" +
 	"\x1cStartMetadataRestoreResponse\x127\n" +
-	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\xf0\x01\n" +
+	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\x93\x02\n" +
 	"\x16StartCopyVerifyRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12P\n" +
-	"\bmetadata\x18\x03 \x03(\v24.scrap.admin.v1.StartCopyVerifyRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v24.scrap.admin.v1.StartCopyVerifyRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"R\n" +
 	"\x17StartCopyVerifyResponse\x127\n" +
-	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\xea\x01\n" +
+	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\x8d\x02\n" +
 	"\x13StartDRDrillRequest\x12*\n" +
 	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
 	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12M\n" +
-	"\bmetadata\x18\x03 \x03(\v21.scrap.admin.v1.StartDRDrillRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x03 \x03(\v21.scrap.admin.v1.StartDRDrillRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"O\n" +

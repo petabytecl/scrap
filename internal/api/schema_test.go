@@ -126,6 +126,33 @@ func TestAdminOperationModelShape(t *testing.T) {
 	requirePresence(t, operation, "last_error")
 }
 
+func TestAdminMutatingRequestsCarryOperationID(t *testing.T) {
+	for _, name := range []protoreflect.Name{
+		"StartRestoreRequest",
+		"StartPrewarmRequest",
+		"StartRepairRequest",
+		"CordonMemberRequest",
+		"UncordonMemberRequest",
+		"StartDrainRequest",
+		"StartTombstoneRequest",
+		"StartMetadataRestoreRequest",
+		"StartCopyVerifyRequest",
+		"StartDRDrillRequest",
+	} {
+		message := adminv1.File_scrap_admin_v1_admin_proto.Messages().ByName(name)
+		if message == nil {
+			t.Fatalf("%s descriptor missing", name)
+		}
+		field := message.Fields().ByName("operation_id")
+		if field == nil {
+			t.Fatalf("%s.operation_id descriptor missing", name)
+		}
+		if field.Kind() != protoreflect.StringKind {
+			t.Fatalf("%s.operation_id kind = %s, want string", name, field.Kind())
+		}
+	}
+}
+
 func requireService(t *testing.T, file protoreflect.FileDescriptor, name protoreflect.Name) protoreflect.ServiceDescriptor {
 	t.Helper()
 	service := file.Services().ByName(name)
