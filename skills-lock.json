@@ -1,17 +1,59 @@
 {
   "version": 1,
   "skills": {
+    "a-philosophy-of-software-design": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "a-philosophy-of-software-design/a-philosophy-of-software-design.mini.md",
+      "computedHash": "ad8d9bd764179c0d2fea95f2bee3e25d443589a12fec84bfead52bdd94b4645a"
+    },
     "caveman": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/productivity/caveman/SKILL.md",
       "computedHash": "934433479903febc585bf6deb5f0cebc63137e3f86b7babe0aab1ecb94d6d7a4"
     },
+    "clean-architecture": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "clean-architecture/clean-architecture.mini.md",
+      "computedHash": "fbead04fa4479bc0d23b8df92e1d04f555e85b9e27994a60209eb311bf342e63"
+    },
+    "clean-code": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "clean-code/clean-code.mini.md",
+      "computedHash": "a2cd7e30a03376037e441056a5615e7a15c396642daf16f7875a0f5139b65e67"
+    },
+    "code-complete": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "code-complete/code-complete.mini.md",
+      "computedHash": "88ff0d5bade2b840ae1296b2757a3eee492d505985ea04e4deee158efa127cd7"
+    },
+    "designing-data-intensive-applications": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "designing-data-intensive-applications/designing-data-intensive-applications.mini.md",
+      "computedHash": "cb4ca5fa4dc4fe179772f6fc42f4cd8899a7b95677e5cee13602229099063a12"
+    },
     "diagnose": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/diagnose/SKILL.md",
       "computedHash": "15939a26f86edec2d4862042b8564e5a062cb81d04e047a0cea6305c8830b5f5"
+    },
+    "domain-driven-design": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "domain-driven-design/domain-driven-design.mini.md",
+      "computedHash": "ed6febaa19d3b8c59a67ce61ee6e950e472743f0aa6655a6fed5d6d1d1e8691a"
+    },
+    "domain-driven-design-distilled": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "domain-driven-design-distilled/domain-driven-design-distilled.mini.md",
+      "computedHash": "830e1792c886ed8751a3fa80f2c10af6da2ec280fe462dd63584d9ab48c7364a"
     },
     "git-commit": {
       "source": "github/awesome-copilot",
@@ -37,11 +79,23 @@
       "skillPath": "skills/productivity/handoff/SKILL.md",
       "computedHash": "1a78d774f8a59db5daa6e65e20a6596872fa8cde769f9a6e3a09b678dd5ae8cc"
     },
+    "implementing-domain-driven-design": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "implementing-domain-driven-design/implementing-domain-driven-design.mini.md",
+      "computedHash": "9c1a6bd647823e514320840a32cf06ab26b04ec03656d63820e75db959858249"
+    },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
       "computedHash": "ef32aea0a8fab9b365ff9e08a95f8d353e20ca21ea46ec2e73587c86dd341351"
+    },
+    "patterns-of-enterprise-application-architecture": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "patterns-of-enterprise-application-architecture/patterns-of-enterprise-application-architecture.mini.md",
+      "computedHash": "f4ffcc47f78c524195ea687a7030d5629cc2761bd86cfb9948533e4212a01f4d"
     },
     "postgresql-code-review": {
       "source": "github/awesome-copilot",
@@ -55,6 +109,24 @@
       "skillPath": "skills/engineering/prototype/SKILL.md",
       "computedHash": "e4d0c8f8cb3fc096ee99405a15491da466545cf4a3694bee5a0c9db2fa621a43"
     },
+    "refactoring": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "refactoring/refactoring.mini.md",
+      "computedHash": "dc3dc62dad43d9178a57aa768cab7be909bf48bbeb0f040401f90a22cd7c8c2c"
+    },
+    "refactoring-guru": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "refactoring-guru/refactoring-guru.mini.md",
+      "computedHash": "c7c752b794400cbc0527c5a721c323531dfe3c0e963ab95f7c92c51603006054"
+    },
+    "release-it": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "release-it/release-it.mini.md",
+      "computedHash": "21f3e9cdef379f4980b8883d36b587770e56917f0862fac46e57cd1e58d18855"
+    },
     "setup-matt-pocock-skills": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -66,6 +138,12 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/tdd/SKILL.md",
       "computedHash": "15a7b5e36383ebadb2dec5e586679e55e9663d292da418926b8da6fc0ef27d84"
+    },
+    "the-pragmatic-programmer": {
+      "source": "mattpocock/agent-rules-books",
+      "sourceType": "github",
+      "skillPath": "the-pragmatic-programmer/the-pragmatic-programmer.mini.md",
+      "computedHash": "8c0bfde32f29be00e595cf6c103a04b395d258c266784846ac57f2c3944f470f"
     },
     "to-issues": {
       "source": "mattpocock/skills",
