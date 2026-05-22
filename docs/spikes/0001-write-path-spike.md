@@ -1,10 +1,72 @@
 # Write Path Implementation Spike
 
-Status: active prototype
+Status: completed evidence
 
-This spike is disposable. Its job is to produce evidence about the storage
+Completed: 2026-05-22
+
+This spike is disposable. Its job was to produce evidence about the storage
 gateway write/read lifecycle before production code is created. Keep the code
-easy to delete or absorb deliberately.
+easy to delete or absorb deliberately; do not promote spike internals into
+production code without a separate implementation roadmap slice and review.
+
+## Evidence Summary
+
+The spike completed the intended evidence loop:
+
+- streaming writes and reads through `grpc-go`;
+- local block append with explicit sync boundaries;
+- `.openlog` prepare records before visibility;
+- Pebble as a visible metadata projection;
+- whole-document and frame-level checksum verification;
+- failed-stream, crash-boundary, corruption, and reopen tests;
+- fake peer-prepare ordering;
+- single-node, durable single-node, and three-node in-process Raft metadata
+  commit barriers;
+- ReadIndex freshness gating in the three-node Raft harness;
+- repeatable synthetic ETL runs with zero invariant errors.
+
+The most reusable conclusion is not the prototype package layout. The reusable
+conclusion is the ordering contract:
+
+1. local block bytes sync;
+2. `.openlog` prepare sync;
+3. required peer prepare;
+4. Raft metadata command applied on quorum;
+5. derived metadata projection commit;
+6. client ACK and immediate read visibility.
+
+## Reusable Conclusions
+
+- The proposed write/read lifecycle is viable without whole-document buffering
+  by design.
+- Consensus metadata should be the authority for document visibility and
+  physical refs; Pebble-like local stores are derived projections that must be
+  rebuildable.
+- `ReadDocument` should stay all-or-error for v1. The expected workload makes
+  the verification-before-streaming tradeoff acceptable: 128 MiB documents are
+  edge cases, while most documents are expected to be below roughly 200 KiB.
+- Frame-level checksums are necessary for safe ranged reads. A whole-document
+  checksum alone is too coarse once ranged reads are part of the API.
+- Local and required peer durability must complete before metadata visibility;
+  asynchronous backend upload is not part of the client ACK safety boundary.
+- Three-node Raft and ReadIndex evidence supports the intended visibility and
+  fresh-read direction, but only as a deterministic prototype harness.
+
+## Remaining Gaps
+
+- Production Raft persistence, snapshots, membership changes, transport,
+  restart, and compaction are not designed or implemented.
+- Production block, index, envelope, and metadata encodings are not decided by
+  the spike.
+- Backend upload, restore, scrub, repair, OpenBao, encryption, compression,
+  and capacity shaping remain unimplemented in production form.
+- Peer byte replication is only a fake prepare hook, not a production data
+  transfer protocol.
+- The public/admin API schemas, validation layers, and server shells are
+  pre-production scaffolding and do not prove the storage service is ready.
+- The spike workload is synthetic and local. It is not a production benchmark
+  and does not replace crash-injection, upgrade, soak, security, or capacity
+  gates.
 
 ## Question
 
@@ -473,3 +535,45 @@ Interpretation:
   three-node quorum-applied Raft command.
 - The run is still not production performance evidence; the cluster is
   in-process, memory-backed, and deterministic.
+
+### Run 6: final default write-path check
+
+Date: 2026-05-22
+
+Command:
+
+```bash
+make spike-write-path
+```
+
+Result:
+
+```text
+transactions: 25
+documents_planned: 112
+documents_completed: 112
+concurrency: 4
+chunk_size: 1048576
+bytes_written: 320022481
+bytes_read: 320022481
+invariant_errors: 0
+
+write_ack: n=112 p50=6.315967ms p95=56.283759ms p99=246.565202ms
+head_document: n=112 p50=246.295µs p95=615.075µs p99=769.398µs
+read_first_byte: n=112 p50=916.933µs p95=3.415393ms p99=3.92507ms
+read_full: n=112 p50=947.545µs p95=11.846028ms p99=39.762683ms
+
+heap_alloc: 19145056
+total_alloc: 3920412760
+gc_cycles: 232
+gc_pause_total_ns: 38051776
+goroutines: 39
+```
+
+Interpretation:
+
+- The final default run completed all planned documents with zero invariant
+  errors after the frame-checksum, crash-boundary, peer-prepare, and Raft
+  evidence slices had been added.
+- This closes the spike as evidence. The next work should be roadmap and ADR
+  planning, not automatic production implementation.

@@ -3489,17 +3489,17 @@ There are no remaining design-policy blockers in the current notes. The remainin
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, published metadata format, DR drill model, admin API shape, and internal authorization model are concrete enough to move toward implementation spikes.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, published metadata format, DR drill model, admin API shape, and internal authorization model are concrete enough for implementation planning.
 
-Resume by choosing between:
+The completed spike evidence is captured in [Write Path Implementation Spike](spikes/0001-write-path-spike.md). The spike validates ordering and failure-boundary assumptions; it does not make production implementation the default next step.
 
-1. define the first implementation spike and benchmark harness;
-2. turn the design into initial GitHub issues/PRD slices;
+Resume from the planning roadmap:
+
+1. complete the planning gate and ADR review in [Storage Gateway Implementation Roadmap](storage-gateway-implementation-roadmap.md);
+2. turn the roadmap into initial GitHub issues or PRD slices when implementation scheduling is needed;
 3. refine concrete production profile examples after real deployment numbers exist;
 4. draft operational runbooks from the accepted topology and admin API model.
 
-The recommended next topic is the first implementation spike. The architecture now has enough concrete decisions and accepted ADRs to validate the highest-risk assumptions with a disposable Go spike before production code is written.
-
-The active spike charter is [Write Path Implementation Spike](spikes/0001-write-path-spike.md).
+The recommended next topic is the roadmap planning gate. Production implementation should resume only after the roadmap, accepted ADRs, and risk gates identify the first safe slice.
 
 The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.
