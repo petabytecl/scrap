@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -107,6 +109,22 @@ func (s *Store) List(filter ListFilter) ([]*adminv1.Operation, error) {
 	return operations, nil
 }
 
+func (s *Store) Cancel(operationID string, finishedAt time.Time) (*adminv1.Operation, error) {
+	operation, err := s.Get(operationID)
+	if err != nil {
+		return nil, err
+	}
+	if isTerminal(operation.GetState()) {
+		return operation, nil
+	}
+	operation.State = adminv1.OperationState_OPERATION_STATE_CANCELED
+	operation.FinishedAt = timestamppb.New(finishedAt)
+	if err := s.Put(operation); err != nil {
+		return nil, err
+	}
+	return operation, nil
+}
+
 func validateOperation(operation *adminv1.Operation) error {
 	if operation == nil {
 		return fmt.Errorf("%w: operation is required", ErrInvalid)
@@ -121,6 +139,18 @@ func validateOperation(operation *adminv1.Operation) error {
 		return fmt.Errorf("%w: state is required", ErrInvalid)
 	}
 	return nil
+}
+
+func isTerminal(state adminv1.OperationState) bool {
+	switch state {
+	case adminv1.OperationState_OPERATION_STATE_SUCCEEDED,
+		adminv1.OperationState_OPERATION_STATE_FAILED,
+		adminv1.OperationState_OPERATION_STATE_CANCELED,
+		adminv1.OperationState_OPERATION_STATE_EXPIRED:
+		return true
+	default:
+		return false
+	}
 }
 
 func unmarshalOperation(data []byte) (*adminv1.Operation, error) {

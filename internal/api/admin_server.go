@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"time"
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -14,12 +15,13 @@ import (
 
 type AdminServer struct {
 	operations *operations.Store
+	now        func() time.Time
 }
 
 type AdminOption func(*AdminServer)
 
 func NewAdminServer(options ...AdminOption) *AdminServer {
-	server := &AdminServer{}
+	server := &AdminServer{now: func() time.Time { return time.Now().UTC() }}
 	for _, option := range options {
 		option(server)
 	}
@@ -166,7 +168,17 @@ func (s *AdminServer) CancelOperation(_ context.Context, req *adminv1.CancelOper
 	if err := validateOperationIDRequest(req, "operation_id", func(req *adminv1.CancelOperationRequest) string { return req.OperationId }); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("CancelOperation")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("CancelOperation")
+	}
+	operation, err := s.operations.Cancel(req.GetOperationId(), s.now())
+	if errors.Is(err, operations.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "operation not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.CancelOperationResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) PlanRestore(_ context.Context, req *adminv1.PlanRestoreRequest) (*adminv1.PlanRestoreResponse, error) {

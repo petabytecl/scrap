@@ -85,6 +85,42 @@ func TestStoreListFiltersByStateAndType(t *testing.T) {
 	}
 }
 
+func TestStoreCancelMarksNonTerminalOperationCanceled(t *testing.T) {
+	store := openTestStore(t)
+	operation := sampleOperation("op-1", "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+	finishedAt := time.Unix(300, 0).UTC()
+	canceled, err := store.Cancel("op-1", finishedAt)
+	if err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+	if canceled.GetState() != adminv1.OperationState_OPERATION_STATE_CANCELED ||
+		canceled.GetFinishedAt() == nil ||
+		!canceled.GetFinishedAt().AsTime().Equal(finishedAt) {
+		t.Fatalf("canceled operation = %#v, want canceled at %v", canceled, finishedAt)
+	}
+}
+
+func TestStoreCancelLeavesTerminalOperationUnchanged(t *testing.T) {
+	store := openTestStore(t)
+	operation := sampleOperation("op-1", "repair", adminv1.OperationState_OPERATION_STATE_SUCCEEDED)
+	finishedAt := time.Unix(200, 0).UTC()
+	operation.FinishedAt = timestamppb.New(finishedAt)
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+	got, err := store.Cancel("op-1", time.Unix(300, 0).UTC())
+	if err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+	if got.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		!got.GetFinishedAt().AsTime().Equal(finishedAt) {
+		t.Fatalf("terminal operation changed to %#v", got)
+	}
+}
+
 func TestStoreRejectsInvalidOperations(t *testing.T) {
 	store := openTestStore(t)
 	tests := map[string]*adminv1.Operation{

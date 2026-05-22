@@ -120,6 +120,31 @@ func TestAdminServerListOperationsFiltersDurableStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerCancelOperationUpdatesDurableStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	operation := testOperation(validUUIDv7(), "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+	client, cleanup := newAdminOperationClient(t, store)
+	defer cleanup()
+
+	resp, err := client.CancelOperation(context.Background(), &adminv1.CancelOperationRequest{OperationId: validUUIDv7()})
+	if err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+	if resp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_CANCELED || resp.GetOperation().GetFinishedAt() == nil {
+		t.Fatalf("operation = %#v, want canceled with finished_at", resp.GetOperation())
+	}
+	stored, err := store.Get(validUUIDv7())
+	if err != nil {
+		t.Fatalf("get stored operation: %v", err)
+	}
+	if stored.GetState() != adminv1.OperationState_OPERATION_STATE_CANCELED {
+		t.Fatalf("stored state = %s, want canceled", stored.GetState())
+	}
+}
+
 func newAdminTestClients(
 	t *testing.T,
 ) (adminv1.RestoreServiceClient, adminv1.MemberServiceClient, func()) {
