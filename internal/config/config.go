@@ -13,8 +13,10 @@ const (
 )
 
 type Config struct {
-	PublicListenAddress string
-	AdminListenAddress  string
+	PublicListenAddress             string
+	AdminListenAddress              string
+	LocalDataDir                    string
+	EnableLocalNonProductionStorage bool
 }
 
 func Default() Config {
@@ -33,6 +35,13 @@ func (c Config) Validate() error {
 	}
 	if c.PublicListenAddress == c.AdminListenAddress {
 		return errors.New("public and admin listen addresses must be distinct")
+	}
+	if c.EnableLocalNonProductionStorage {
+		if strings.TrimSpace(c.LocalDataDir) == "" {
+			return errors.New("local_data_dir is required when local non-production storage is enabled")
+		}
+	} else if strings.TrimSpace(c.LocalDataDir) != "" {
+		return errors.New("local_data_dir requires local non-production storage to be explicitly enabled")
 	}
 	return nil
 }
