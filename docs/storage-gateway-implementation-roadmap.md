@@ -19,6 +19,12 @@ The tracked v1 PRD is GitHub issue `#2`. Its child Feature issues are:
 - `#14` Control plane and operator workflows;
 - `#15` Production readiness gate.
 
+Human-owned deployment and compliance inputs for the first production profile
+are captured in
+[Production Capacity and Compliance Signoff Inputs](production-capacity-compliance-signoff.md).
+That record tracks GitHub issue `#48` and must be completed before the
+production readiness gate can be signed off.
+
 The next technical gate before storage-format implementation is:
 
 1. `#16` Document package architecture and dependency rules;
