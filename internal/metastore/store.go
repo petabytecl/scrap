@@ -127,6 +127,33 @@ func (s *Store) HeadDocument(doc identity.Document) (Document, error) {
 	return unmarshalDocument(value)
 }
 
+func (s *Store) ListDocuments(filter DocumentFilter) ([]Document, error) {
+	prefix := documentPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var documents []Document
+	for valid := iter.First(); valid; valid = iter.Next() {
+		document, err := unmarshalDocument(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		if matchesFilter(document, filter) {
+			documents = append(documents, document)
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return documents, nil
+}
+
 func (s *Store) FindDocuments(transaction identity.Transaction, filter DocumentFilter) ([]Document, error) {
 	prefix := transactionDocumentsPrefix(transaction)
 	iter, err := s.db.NewIter(&pebble.IterOptions{
@@ -497,6 +524,10 @@ func matchesFilter(document Document, filter DocumentFilter) bool {
 
 func documentKey(doc identity.Document) []byte {
 	return []byte("document\x00" + doc.TenantID + "\x00" + doc.TransactionID + "\x00" + doc.DocumentName)
+}
+
+func documentPrefix() []byte {
+	return []byte("document\x00")
 }
 
 func transactionKey(transaction identity.Transaction) []byte {

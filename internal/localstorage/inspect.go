@@ -200,6 +200,9 @@ func directorySize(root string) (uint64, error) {
 	var total uint64
 	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if entry.IsDir() {
@@ -207,6 +210,9 @@ func directorySize(root string) (uint64, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		size := info.Size()

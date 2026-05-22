@@ -189,6 +189,35 @@ func TestListBlockDocuments(t *testing.T) {
 	}
 }
 
+func TestListDocumentsFiltersAndOrdersByIdentity(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleDocument("invoice.xml", DocumentClassPermanent)
+	second := sampleDocument("summary.pdf", DocumentClassPermanent)
+	ephemeral := sampleDocument("scratch.tmp", DocumentClassEphemeral)
+	otherTenant := sampleDocument("adjustment.xml", DocumentClassPermanent)
+	otherTenant.Identity.TenantID = "tenant-b"
+	for _, doc := range []Document{otherTenant, second, ephemeral, first} {
+		if err := store.PutDocument(doc); err != nil {
+			t.Fatalf("put document %s/%s: %v", doc.Identity.TenantID, doc.Identity.DocumentName, err)
+		}
+	}
+
+	documents, err := store.ListDocuments(DocumentFilter{
+		DocumentClass:    DocumentClassPermanent,
+		HasDocumentClass: true,
+	})
+	if err != nil {
+		t.Fatalf("list documents: %v", err)
+	}
+	if len(documents) != 3 ||
+		documents[0].Identity.DocumentName != "invoice.xml" ||
+		documents[1].Identity.DocumentName != "summary.pdf" ||
+		documents[2].Identity.TenantID != "tenant-b" ||
+		documents[2].Identity.DocumentName != "adjustment.xml" {
+		t.Fatalf("documents = %#v, want permanent documents ordered by identity", documents)
+	}
+}
+
 func TestRecordUploadIntentIsIdempotentAndConflictsOnDifferentKeys(t *testing.T) {
 	store := openTestStore(t)
 	intent := sampleUploadIntent("block-1")
