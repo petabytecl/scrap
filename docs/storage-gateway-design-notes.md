@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: cell import lag/cache sizing, published metadata import format, DR drill numbers, and repair/scrub thresholds.
+After reading it, they should be able to continue the design review from the current frontier: business-specific DR targets, stale-import availability policy, compliance retention, and implementation ADR boundaries.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -527,16 +527,166 @@ Cache invalidation follows source metadata. If imported source metadata declares
 
 Encrypted imports require read-only decrypt/unwrap grants for the source cell's envelopes. They must not require encrypt, rewrap, key-admin, or source write privileges.
 
-Open design details for the cell model:
+V1 source namespace configuration:
 
 ```text
-exact source_namespace config format
-published metadata snapshot/tail object format
-per-import lag SLOs
-imported catalog compaction policy
-cache sizing and admission policy for bulk read cells
-conflict alert severity and operator workflow
+cell_id: stable operator-assigned backend/logging identifier
+mode: authoritative | read_only_cache
+source_namespace: stable operator-assigned ownership namespace
+default source_namespace: cell_id
+authoritative namespaces per cell in v1: exactly one
+read-only imported namespaces per cache cell: many
 ```
+
+`cell_id` and `source_namespace` should be lowercase ASCII slugs safe for backend keys and operations tooling. They are configuration identities, not runtime-generated UUIDs. Changing either is a migration event.
+
+There is no global runtime source-namespace registry in v1. Cross-cell uniqueness is an infrastructure and deployment contract. S.C.R.A.P. validates local config, records source identity in published metadata, and fails closed on observed conflicts.
+
+Authority movement is out of band. To move a `source_namespace` to another cell:
+
+1. fence or stop writes in the old authoritative cell;
+2. copy/verify backend data and published metadata as needed;
+3. deploy the new cell with the same `source_namespace` and intended backend root;
+4. validate recovered metadata and byte refs;
+5. explicitly enable writes in the new cell.
+
+Do not make authority movement an automatic background behavior in v1.
+
+## Published Metadata And Imported Catalogs
+
+Authoritative cells publish metadata artifacts for two consumers:
+
+```text
+DR restore tooling
+read-only cache cells
+```
+
+The published format is provider-neutral and independent of local Pebble/Raft internals. Artifacts use versioned length-prefixed Protobuf records with per-record CRC32C and whole-object SHA-256 recorded in the manifest. Do not publish JSON as the canonical metadata format.
+
+Default metadata artifact layout:
+
+```text
+cells/<cell_id>/metadata/v1/current.pointer
+cells/<cell_id>/metadata/v1/manifests/<manifest_id>.manifest
+cells/<cell_id>/metadata/v1/snapshots/shard=<shard_id>/<snapshot_id>.snap
+cells/<cell_id>/metadata/v1/tails/shard=<shard_id>/<from_index>-<to_index>.tail
+```
+
+`current.pointer` is the only mutable well-known object. It contains the latest manifest id, manifest checksum, source namespace, generation, and published timestamp. Importers poll `current.pointer`; they do not use backend `LIST` to discover current metadata.
+
+Publish protocol:
+
+```text
+write immutable snapshot/tail artifacts
+verify artifact length and checksum
+write immutable manifest that references only verified artifacts
+verify manifest length and checksum
+update current.pointer last
+```
+
+If pointer update fails, older importers continue using the previous complete manifest. If pointer update succeeds but a referenced artifact is unavailable or fails checksum, importers reject that manifest and keep the last valid imported version.
+
+Manifest contents:
+
+```text
+format version
+cell_id
+source_namespace
+manifest_id and generation
+published_at
+per-shard high watermarks
+snapshot artifact refs and checksums
+tail artifact refs and checksums
+required block/index/envelope object refs
+tombstone/reclaim watermarks
+OpenBao Transit key/context metadata needed for decrypt checks
+producer build/schema versions
+```
+
+Snapshot contents:
+
+```text
+complete committed shard metadata at a high watermark
+transactions and documents
+physical block/index/envelope refs
+restore/tombstone/reclaim state
+checksums and format versions
+no document bytes
+no hot in-memory indexes
+```
+
+Tail contents:
+
+```text
+idempotent committed metadata mutations after a snapshot
+monotonic shard log/index range
+document finalize records
+block/backend/envelope state changes
+tombstone/reclaim records
+repair-visible physical-ref changes
+```
+
+Default publication cadence:
+
+```text
+metadata snapshot target: every 5 minutes
+metadata tail target: every 30 seconds
+metadata tail size cap: 64 MiB before forced roll
+```
+
+Read-only import rules:
+
+```text
+install only checksum-valid manifests
+apply snapshot, then complete ordered tails
+store imported state in separate read-only keyspaces
+never merge imported state into authoritative shard consensus
+mark source degraded if an import gap cannot be filled
+```
+
+Default import lag SLOs under healthy backend/source conditions:
+
+```text
+target: p95 imported metadata lag <= 60 seconds
+warning: lag > 5 minutes
+degraded: lag > 15 minutes
+serve-imported-reads default: refuse when lag > 15 minutes
+```
+
+The conservative v1 default is to fail closed when imported metadata is beyond the serve lag. Known immutable bytes might still be correct, but stale metadata can miss tombstones, reclaim decisions, or policy changes.
+
+Imported catalog sizing:
+
+```text
+metadata_catalog_bytes: explicit profile budget
+byte_cache_bytes: explicit profile budget
+catalog completeness: all-or-source-degraded
+byte cache: rebuildable and evictable
+```
+
+If a cache cell cannot fit the configured source catalog, it marks that source degraded and does not expose a partial catalog as complete. Byte cache pressure may evict cached blocks/ranges, but it must not corrupt catalog completeness.
+
+Read-only cache byte admission:
+
+```text
+cache key: source_namespace + source_version + block_id + range/frame
+verify source checksum before serving or admitting
+prefer prewarm/pinned bulk jobs within TTL and budget
+use scan-resistant admission for opportunistic read-through
+evict on source tombstone/reclaim/ref invalidation
+```
+
+Read-only cache cells do not initiate source authority operations by default. They do not rewrap source envelopes, mutate source metadata, or issue source-side lifecycle/restore changes. If a needed backend object is archived, the read-only cache returns restore-pending/stale-source detail rather than pretending it can make the source warm.
+
+Conflict handling:
+
+```text
+same public document identity in local authoritative metadata and imported catalog: fail closed
+same public document identity from two imported sources: fail closed
+same source_namespace from two source cells: fail closed
+```
+
+Conflict alerts are high severity. Operators inspect the conflicting source manifests and either correct import config, fence one source, or run an explicit recovery/migration workflow. S.C.R.A.P. must not pick a winner automatically.
 
 ## Replication And Availability
 
@@ -1745,6 +1895,42 @@ target: under 2 seconds
 alert: over 10 seconds
 ```
 
+Default replica-health posture:
+
+```text
+5 verified local refs: healthy
+4 verified local refs: degraded, repair promptly
+3 verified local refs: quorum-only risk, page if older than 5 minutes
+<3 verified local refs: unsafe for the normal write durability model
+```
+
+If a shard is at quorum-only risk and repair cannot restore a fourth verified ref within the 5-minute throttle threshold, throttle bulk and normal writes for that shard. Reject new writes retryably before accepting a write that cannot meet the selected durability policy.
+
+Routine scrub budgets are deployment-profile values with conservative defaults:
+
+```text
+local scrub cap: 5% of measured per-node sequential read bandwidth
+local scrub target: full local block coverage within 7 days
+backend inventory/head cap: 5% of backend HEAD/read-metadata budget
+backend sampled-byte cap: 1% of backend restore/read byte budget
+backend sampled-byte borrow cap: 5% when upload/repair runway is healthy
+archive-tier byte scrub: disabled unless explicitly budgeted
+```
+
+If the local scrub cap cannot meet the 7-day local coverage target, S.C.R.A.P. alerts instead of silently increasing scrub pressure. Foreground reads, writes, repair, and upload runway remain higher priority than routine scrub.
+
+Backend scrub defaults:
+
+```text
+manifest/object-ref inventory: daily
+metadata/head verification: weekly full logical inventory
+sampled byte verification: continuous within scrub byte budget
+risk-prioritized byte verification: immediately after restore, repair, provider anomaly, or checksum mismatch
+full-equivalent backend byte verification: annual target where cost allows
+```
+
+Routine backend sampled reads must not trigger archive restore by default. Archive-class verification requires an explicit audit/DR budget because it can create large provider cost and long restore queues.
+
 ## Transaction Lifecycle
 
 Transaction state is used for lifecycle, cleanup, compaction, upload urgency, quotas, and reporting. It does not control document visibility.
@@ -2356,6 +2542,52 @@ report missing/corrupt objects and recovery timing
 
 Full-corpus byte reads may be scheduled as separate audit work, but they are not required for every DR drill.
 
+Default DR evidence cadence:
+
+```text
+daily: validate latest metadata manifest, pointer, checksums, and OpenBao decrypt health
+weekly: restore latest metadata snapshot/tail into an offline verifier
+monthly: disposable-environment sampled byte-read drill
+quarterly: operator-led fresh-cluster recovery exercise
+```
+
+Default sampled-read drill size:
+
+```text
+sample at least 10,000 documents
+also sample at least 0.001% of documents represented by the manifest
+cap backend byte reads at 1 TiB per routine monthly drill unless explicitly approved
+```
+
+Samples are stratified rather than purely random:
+
+```text
+newest 24h
+oldest retained permanent documents
+largest documents
+small hot documents
+recently repaired documents
+recently restored documents
+encrypted backend blocks
+cold/archive-class blocks when the drill budget allows restore
+multiple shards and storage members
+```
+
+Every drill report includes:
+
+```text
+snapshot/tail source and lag
+restore start/end timestamps
+metadata object counts and checksum results
+sampled document count and byte count
+OpenBao key/context validation result
+missing/corrupt/unreadable object list
+operator actions required
+measured RTO/RPO evidence
+```
+
+V1 documents measured recovery evidence, but it does not invent business RTO/RPO promises. Business RTO/RPO targets remain a product/operations decision.
+
 ## Backend Key Layout And Rate Control
 
 Application virtual paths must not be used directly as backend key prefixes. Backend keys need high-cardinality physical prefixes to avoid hot partitions.
@@ -2389,10 +2621,10 @@ not based on tenant_id, transaction_id, document_name, or wall-clock time
 Default physical key shape:
 
 ```text
-cells/<cell_id>/blocks/<hash_prefix>/<block_id>.blk
-cells/<cell_id>/blocks/<hash_prefix>/<block_id>.idx
-cells/<cell_id>/blocks/<hash_prefix>/<block_id>.env
-cells/<cell_id>/metadata/<shard_or_snapshot_id>/...
+cells/<cell_id>/blocks/v1/p=<hash_prefix>/shard=<shard_id>/<block_id>.blk
+cells/<cell_id>/blocks/v1/p=<hash_prefix>/shard=<shard_id>/<block_id>.idx
+cells/<cell_id>/blocks/v1/p=<hash_prefix>/shard=<shard_id>/<block_id>.env
+cells/<cell_id>/metadata/v1/...
 ```
 
 The `cell_id` prefix separates source ownership and import/recovery boundaries. It is not a tenant routing mechanism.
@@ -2547,9 +2779,9 @@ Profile validation is fail-closed in production. Startup rejects missing, invali
 Example physical layout:
 
 ```text
-blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.blk
-blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.idx
-blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.env
+cells/<cell_id>/blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.blk
+cells/<cell_id>/blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.idx
+cells/<cell_id>/blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.env
 ```
 
 Backend sizing uses sealed blocks per second plus bytes per second as the primary unit. Document rate still matters for API and metadata capacity, but backend request pressure is driven by sealed block upload sets:
@@ -3231,25 +3463,23 @@ Normal hot reads and ordinary writes do not require full audit logging by defaul
 
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
-- What concrete numeric repair runway thresholds should each deployment use beyond the defaults?
-- What exact scrub rate limits and backend byte-read budgets should be configured per deployment?
-- What concrete per-cell `source_namespace` ownership configuration format should be used?
-- What exact imported-catalog lag SLOs, cache sizing, and admission policy should read-only cache cells use?
-- What exact published metadata snapshot/tail object format should support both DR rebuild and read-only import?
-- What concrete DR drill cadence and sampled-read size should each deployment use?
+- What business RTO/RPO targets should the product promise beyond measured DR evidence?
+- Should read-only cache cells ever serve known immutable documents when imported metadata lag exceeds the default 15-minute serve limit?
+- What compliance policy should govern corrupt-byte forensic retention, legal hold, and audit evidence retention?
+- What real production ingress, disk, backend, and OpenBao capacity numbers should each deployment profile use?
+- Should active secondary backend replication become a v1 product requirement, or remain a post-v1 extension?
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, DR scope, admin API shape, and internal authorization model are concrete enough to move to import mechanics and operational drills.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, capacity budget model, replica placement model, Kubernetes deployment topology, cell/read-only import model, published metadata format, DR drill model, admin API shape, and internal authorization model are concrete enough to move toward ADRs and implementation spikes.
 
 Resume by choosing between:
 
-1. concrete per-cell import lag SLOs, imported-catalog sizing, and cache admission/eviction policy;
-2. concrete published metadata snapshot/tail format for both DR rebuild and read-only import;
-3. concrete DR drill cadence, sampled-read size, and recovery evidence reports;
-4. concrete repair/scrub numeric thresholds and backend byte-read budgets;
-5. concrete source namespace configuration and conflict-handling operator workflow.
+1. convert the settled design into ADRs for the hard-to-reverse decisions;
+2. define the first implementation spike and benchmark harness;
+3. review the reserved business/opinion questions above;
+4. turn the design into initial GitHub issues/PRD slices.
 
-The recommended next topic is published metadata import mechanics. The architecture now defines the storage semantics, Go substrate, API schema direction, build/release policy, backend profile model, capacity budget model, Kubernetes topology, and cell import model, so the next decision should specify the snapshot/tail format that supports both DR rebuild and read-only imported catalogs.
+The recommended next topic is ADR extraction. The architecture now has enough concrete decisions that the risky, expensive-to-change choices should be promoted from exploratory notes into short decision records before implementation work starts.
 
 The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.
