@@ -1038,6 +1038,73 @@ func TestLocalRecoveryReadinessFailsClosedWithoutPublishedMetadata(t *testing.T)
 	}
 }
 
+func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	operation := queuedOperation("metadata-restore-op-1", "metadata-restore", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: "snapshot-1"},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		t.Fatalf("operation result = %#v, want one failed DR operation", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		finished.GetLastError().GetCode() != "SCRAP_DR_NOT_READY" ||
+		len(finished.GetWarnings()) == 0 {
+		t.Fatalf("finished operation = %#v, want DR not-ready failure with warnings", finished)
+	}
+}
+
+func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	operation := queuedOperation("dr-drill-dry-run-1", "dr-drill", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: "snapshot-1"},
+			},
+		},
+	})
+	operation.DryRun = true
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one dry-run success", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetWorkUnitsCompleted() != 1 ||
+		len(finished.GetWarnings()) == 0 {
+		t.Fatalf("finished operation = %#v, want dry-run success with readiness warnings", finished)
+	}
+}
+
 func TestRunQueuedOperationsOnceFailsUnsafeDrainInSingleMemberMode(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -1257,6 +1324,10 @@ func (s *recordingReadSender) SendChunk(data []byte) error {
 
 func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
+}
+
+func ptr[T any](value T) *T {
+	return &value
 }
 
 func requireCode(t *testing.T, err error, code codes.Code) {

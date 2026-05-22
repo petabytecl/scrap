@@ -52,6 +52,8 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runRepairOperation(ctx, store, operation)
 		case "drain":
 			succeeded, err = a.runDrainOperation(ctx, store, operation)
+		case "metadata-restore", "copy-verify", "dr-drill":
+			succeeded, err = a.runDisasterRecoveryOperation(ctx, store, operation)
 		default:
 			result.Skipped++
 			continue
@@ -137,6 +139,72 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 		WorkUnitsTotal:     uint64(workUnits),
 		WorkUnitsCompleted: uint64(workUnits),
 		Message:            "repair operation succeeded",
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running " + operation.GetOperationType() + " operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	readiness, err := a.GetRecoveryReadiness(ctx)
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if readiness != nil {
+		finished.Warnings = append(finished.Warnings, cloneWarnings(readiness.GetWarnings())...)
+	}
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: operation.GetOperationType() + " operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_DR_READINESS_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+	workUnits := len(finished.GetTargets())
+	if operation.GetDryRun() {
+		finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+		finished.Progress = &adminv1.OperationProgress{
+			WorkUnitsTotal:     uint64(workUnits),
+			WorkUnitsCompleted: uint64(workUnits),
+			Message:            operation.GetOperationType() + " dry-run succeeded",
+		}
+		if err := store.Put(finished); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !readiness.GetReady() {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: operation.GetOperationType() + " operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_DR_NOT_READY",
+			Message: "recovery readiness gates are not satisfied",
+		}
+		if err := store.Put(finished); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(workUnits),
+		WorkUnitsCompleted: uint64(workUnits),
+		Message:            operation.GetOperationType() + " operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err
