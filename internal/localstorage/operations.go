@@ -296,14 +296,15 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(restore.Documents + restore.UploadIntents),
-		WorkUnitsCompleted: uint64(restore.Documents + restore.UploadIntents),
+		WorkUnitsTotal:     uint64(restore.Documents + restore.Transactions + restore.UploadIntents),
+		WorkUnitsCompleted: uint64(restore.Documents + restore.Transactions + restore.UploadIntents),
 		Message:            message,
 		Counters: map[string]string{
 			"blocks_restored": fmt.Sprintf("%d", restore.BlocksRestored),
 			"documents":       fmt.Sprintf("%d", restore.Documents),
 			"snapshots":       fmt.Sprintf("%d", restore.Snapshots),
 			"tombstones":      fmt.Sprintf("%d", restore.Tombstones),
+			"transactions":    fmt.Sprintf("%d", restore.Transactions),
 			"upload_intents":  fmt.Sprintf("%d", restore.UploadIntents),
 			"verified":        fmt.Sprintf("%d", restore.Verified),
 		},
@@ -346,14 +347,15 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(drill.Documents + drill.UploadIntents),
-		WorkUnitsCompleted: uint64(drill.Documents + drill.UploadIntents),
+		WorkUnitsTotal:     uint64(drill.Documents + drill.Transactions + drill.UploadIntents),
+		WorkUnitsCompleted: uint64(drill.Documents + drill.Transactions + drill.UploadIntents),
 		Message:            message,
 		Counters: map[string]string{
 			"blocks_restored": fmt.Sprintf("%d", drill.BlocksRestored),
 			"documents":       fmt.Sprintf("%d", drill.Documents),
 			"snapshots":       fmt.Sprintf("%d", drill.Snapshots),
 			"tombstones":      fmt.Sprintf("%d", drill.Tombstones),
+			"transactions":    fmt.Sprintf("%d", drill.Transactions),
 			"upload_intents":  fmt.Sprintf("%d", drill.UploadIntents),
 			"verified":        fmt.Sprintf("%d", drill.Verified),
 		},

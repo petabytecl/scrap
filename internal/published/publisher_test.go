@@ -32,6 +32,20 @@ func TestPublishSnapshotWritesSnapshotManifestAndCurrentPointer(t *testing.T) {
 	}
 	metadata := staticSnapshotMetadata{
 		documents: []metastore.Document{publishedTestDocument("block-1", blockData)},
+		transactions: []metastore.Transaction{
+			{
+				Identity: identity.Transaction{
+					TenantID:      "tenant-a",
+					TransactionID: "tx-a",
+				},
+				State:                  metastore.TransactionStateCompleted,
+				DocumentCount:          1,
+				PermanentDocumentCount: 1,
+				CreatedAt:              time.Unix(1, 0).UTC(),
+				CompletedAt:            timePtr(time.Unix(3, 0).UTC()),
+				Tags:                   map[string]string{"closed_by": "test"},
+			},
+		},
 		intents: []metastore.UploadIntent{
 			{
 				BlockID:          "block-1",
@@ -45,6 +59,9 @@ func TestPublishSnapshotWritesSnapshotManifestAndCurrentPointer(t *testing.T) {
 	first := publishTestSnapshot(t, ctx, store, metadata, "snapshot-1", "manifest-1", 7, 42, time.Unix(100, 0).UTC())
 	if first.DocumentCount != 1 {
 		t.Fatalf("document count = %d, want 1", first.DocumentCount)
+	}
+	if first.TransactionCount != 1 {
+		t.Fatalf("transaction count = %d, want 1", first.TransactionCount)
 	}
 
 	pointer := readCurrentPointerObject(t, ctx, store, first.PointerKey)
@@ -72,6 +89,14 @@ func TestPublishSnapshotWritesSnapshotManifestAndCurrentPointer(t *testing.T) {
 	location := record.GetDocument().GetLocations()[0]
 	if location.GetBackendObjectKey() != blockObject.Key || location.GetIndexObjectKey() != indexObject.Key {
 		t.Fatalf("published location = %#v, want backend and index keys", location)
+	}
+	transactionRecord, err := ReadSnapshotRecord(recordReader)
+	if err != nil {
+		t.Fatalf("read transaction record: %v", err)
+	}
+	if transactionRecord.GetTransaction().GetTransactionId() != "tx-a" ||
+		transactionRecord.GetTransaction().GetTags()["closed_by"] != "test" {
+		t.Fatalf("transaction record = %#v, want published transaction", transactionRecord.GetTransaction())
 	}
 	if _, err := ReadSnapshotRecord(recordReader); !errors.Is(err, io.EOF) {
 		t.Fatalf("next snapshot record error = %v, want EOF", err)
@@ -216,8 +241,9 @@ func openPublisherBackend(t *testing.T) *backendfs.Store {
 }
 
 type staticSnapshotMetadata struct {
-	documents []metastore.Document
-	intents   []metastore.UploadIntent
+	documents    []metastore.Document
+	transactions []metastore.Transaction
+	intents      []metastore.UploadIntent
 }
 
 func (s staticSnapshotMetadata) ListDocuments(metastore.DocumentFilter) ([]metastore.Document, error) {
@@ -226,4 +252,12 @@ func (s staticSnapshotMetadata) ListDocuments(metastore.DocumentFilter) ([]metas
 
 func (s staticSnapshotMetadata) ListUploadIntents() ([]metastore.UploadIntent, error) {
 	return append([]metastore.UploadIntent(nil), s.intents...), nil
+}
+
+func (s staticSnapshotMetadata) ListTransactions() ([]metastore.Transaction, error) {
+	return append([]metastore.Transaction(nil), s.transactions...), nil
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }

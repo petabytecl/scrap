@@ -107,6 +107,39 @@ func TestWriteDocumentSnapshotRecordsProjectsTombstones(t *testing.T) {
 	}
 }
 
+func TestWriteMetadataSnapshotRecordsProjectsTransactions(t *testing.T) {
+	completedAt := time.Unix(200, 0).UTC()
+	first := sampleMetastoreTransaction("txn-a")
+	first.State = metastore.TransactionStateCompleted
+	first.CompletedAt = &completedAt
+	first.Tags = map[string]string{"closed_by": "test"}
+	second := sampleMetastoreTransaction("txn-b")
+
+	var buf bytes.Buffer
+	if err := WriteMetadataSnapshotRecords(&buf, SnapshotOptions{
+		SourceNamespace: "billing-prod",
+		ShardID:         "local",
+		HighWatermark:   55,
+	}, nil, []metastore.Transaction{second, first}); err != nil {
+		t.Fatalf("write snapshot records: %v", err)
+	}
+	records := readSnapshotRecords(t, &buf)
+	if len(records) != 2 {
+		t.Fatalf("records = %#v, want two transactions", records)
+	}
+	if records[0].GetTransaction().GetTransactionId() != "txn-a" ||
+		records[1].GetTransaction().GetTransactionId() != "txn-b" {
+		t.Fatalf("records = %#v, want deterministic transaction order", records)
+	}
+	transaction := records[0].GetTransaction()
+	if transaction.GetState() != uint32(metastore.TransactionStateCompleted) ||
+		transaction.GetDocumentCount() != 1 ||
+		transaction.GetCompletedAt().AsTime() != completedAt ||
+		transaction.GetTags()["closed_by"] != "test" {
+		t.Fatalf("transaction = %#v, want projected completed transaction", transaction)
+	}
+}
+
 func TestWriteDocumentSnapshotRecordsValidatesRequiredOptions(t *testing.T) {
 	var buf bytes.Buffer
 	if err := WriteDocumentSnapshotRecords(nil, SnapshotOptions{SourceNamespace: "billing-prod", ShardID: "local"}, nil); err == nil {
@@ -179,5 +212,18 @@ func sampleMetastoreDocument(name string) metastore.Document {
 				},
 			},
 		},
+	}
+}
+
+func sampleMetastoreTransaction(transactionID string) metastore.Transaction {
+	return metastore.Transaction{
+		Identity: identity.Transaction{
+			TenantID:      "tenant",
+			TransactionID: transactionID,
+		},
+		State:                  metastore.TransactionStateOpen,
+		DocumentCount:          1,
+		PermanentDocumentCount: 1,
+		CreatedAt:              time.Unix(100, 0).UTC(),
 	}
 }

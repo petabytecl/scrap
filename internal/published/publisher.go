@@ -15,6 +15,7 @@ import (
 
 type SnapshotMetadataSource interface {
 	ListDocuments(metastore.DocumentFilter) ([]metastore.Document, error)
+	ListTransactions() ([]metastore.Transaction, error)
 	ListUploadIntents() ([]metastore.UploadIntent, error)
 }
 
@@ -34,15 +35,16 @@ type SnapshotPublishOptions struct {
 }
 
 type SnapshotPublication struct {
-	PointerKey     string
-	ManifestKey    string
-	SnapshotKey    string
-	PointerObject  backend.Object
-	ManifestObject backend.Object
-	SnapshotObject backend.Object
-	Pointer        *publishedv1.CurrentPointer
-	Manifest       *publishedv1.Manifest
-	DocumentCount  int
+	PointerKey       string
+	ManifestKey      string
+	SnapshotKey      string
+	PointerObject    backend.Object
+	ManifestObject   backend.Object
+	SnapshotObject   backend.Object
+	Pointer          *publishedv1.CurrentPointer
+	Manifest         *publishedv1.Manifest
+	DocumentCount    int
+	TransactionCount int
 }
 
 func PublishSnapshot(ctx context.Context, options SnapshotPublishOptions) (SnapshotPublication, error) {
@@ -58,6 +60,10 @@ func PublishSnapshot(ctx context.Context, options SnapshotPublishOptions) (Snaps
 	if err != nil {
 		return publication, err
 	}
+	transactions, err := options.Metadata.ListTransactions()
+	if err != nil {
+		return publication, err
+	}
 	intents, err := options.Metadata.ListUploadIntents()
 	if err != nil {
 		return publication, err
@@ -68,12 +74,12 @@ func PublishSnapshot(ctx context.Context, options SnapshotPublishOptions) (Snaps
 	}
 
 	var snapshotData bytes.Buffer
-	if err := WriteDocumentSnapshotRecords(&snapshotData, SnapshotOptions{
+	if err := WriteMetadataSnapshotRecords(&snapshotData, SnapshotOptions{
 		SourceNamespace: options.SourceNamespace,
 		ShardID:         options.ShardID,
 		HighWatermark:   options.HighWatermark,
 		LocationObjects: locationObjects,
-	}, documents); err != nil {
+	}, documents, transactions); err != nil {
 		return publication, err
 	}
 	snapshotKey, err := SnapshotObjectKey(options.CellID, options.ShardID, options.SnapshotID)
@@ -145,15 +151,16 @@ func PublishSnapshot(ctx context.Context, options SnapshotPublishOptions) (Snaps
 	}
 
 	return SnapshotPublication{
-		PointerKey:     pointerKey,
-		ManifestKey:    manifestKey,
-		SnapshotKey:    snapshotKey,
-		PointerObject:  pointerObject,
-		ManifestObject: manifestObject,
-		SnapshotObject: snapshotObject,
-		Pointer:        pointer,
-		Manifest:       manifest,
-		DocumentCount:  len(documents),
+		PointerKey:       pointerKey,
+		ManifestKey:      manifestKey,
+		SnapshotKey:      snapshotKey,
+		PointerObject:    pointerObject,
+		ManifestObject:   manifestObject,
+		SnapshotObject:   snapshotObject,
+		Pointer:          pointer,
+		Manifest:         manifest,
+		DocumentCount:    len(documents),
+		TransactionCount: len(transactions),
 	}, nil
 }
 

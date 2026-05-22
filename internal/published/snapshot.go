@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"time"
 
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -24,6 +25,10 @@ type SnapshotOptions struct {
 }
 
 func WriteDocumentSnapshotRecords(writer io.Writer, options SnapshotOptions, documents []metastore.Document) error {
+	return WriteMetadataSnapshotRecords(writer, options, documents, nil)
+}
+
+func WriteMetadataSnapshotRecords(writer io.Writer, options SnapshotOptions, documents []metastore.Document, transactions []metastore.Transaction) error {
 	if writer == nil {
 		return fmt.Errorf("published metadata: snapshot writer is required")
 	}
@@ -47,6 +52,21 @@ func WriteDocumentSnapshotRecords(writer io.Writer, options SnapshotOptions, doc
 	})
 	for _, document := range ordered {
 		record := snapshotRecord(options, document)
+		if err := WriteSnapshotRecord(writer, record); err != nil {
+			return err
+		}
+	}
+	orderedTransactions := append([]metastore.Transaction(nil), transactions...)
+	sort.Slice(orderedTransactions, func(i int, j int) bool {
+		left := orderedTransactions[i].Identity
+		right := orderedTransactions[j].Identity
+		if left.TenantID != right.TenantID {
+			return left.TenantID < right.TenantID
+		}
+		return left.TransactionID < right.TransactionID
+	})
+	for _, transaction := range orderedTransactions {
+		record := transactionSnapshotRecord(options, transaction)
 		if err := WriteSnapshotRecord(writer, record); err != nil {
 			return err
 		}
@@ -133,11 +153,45 @@ func publishedTombstone(document metastore.Document, tombstonedAtIndex uint64) *
 	return tombstone
 }
 
+func transactionSnapshotRecord(options SnapshotOptions, transaction metastore.Transaction) *publishedv1.SnapshotRecord {
+	return &publishedv1.SnapshotRecord{
+		SchemaVersion:   CurrentSchemaVersion,
+		SourceNamespace: options.SourceNamespace,
+		ShardId:         options.ShardID,
+		HighWatermark:   options.HighWatermark,
+		Record: &publishedv1.SnapshotRecord_Transaction{
+			Transaction: publishedTransaction(transaction),
+		},
+	}
+}
+
+func publishedTransaction(transaction metastore.Transaction) *publishedv1.PublishedTransaction {
+	return &publishedv1.PublishedTransaction{
+		TenantId:               transaction.Identity.TenantID,
+		TransactionId:          transaction.Identity.TransactionID,
+		State:                  uint32(transaction.State),
+		DocumentCount:          transaction.DocumentCount,
+		PermanentDocumentCount: transaction.PermanentDocumentCount,
+		EphemeralDocumentCount: transaction.EphemeralDocumentCount,
+		CreatedAt:              timestamppb.New(transaction.CreatedAt),
+		CompletedAt:            optionalPublishedTime(transaction.CompletedAt),
+		TimeoutAt:              optionalPublishedTime(transaction.TimeoutAt),
+		Tags:                   clonePublishedTags(transaction.Tags),
+	}
+}
+
 func optionalPublishedString(value string, present bool) *string {
 	if !present {
 		return nil
 	}
 	return &value
+}
+
+func optionalPublishedTime(value *time.Time) *timestamppb.Timestamp {
+	if value == nil {
+		return nil
+	}
+	return timestamppb.New(*value)
 }
 
 func clonePublishedTags(tags map[string]string) map[string]string {

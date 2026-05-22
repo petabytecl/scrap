@@ -63,6 +63,7 @@ func publishedSnapshotID(generation uint64, publishedAt time.Time) string {
 type MetadataRestoreResult struct {
 	Snapshots      int
 	Documents      int
+	Transactions   int
 	UploadIntents  int
 	Tombstones     int
 	Verified       int
@@ -89,6 +90,7 @@ func (a *Application) RestorePublishedMetadataCheckpoint(ctx context.Context, ap
 		result.Snapshots++
 		result.Tombstones += contents.Tombstones
 		result.Documents += len(contents.Documents)
+		result.Transactions += len(contents.Transactions)
 		result.UploadIntents += len(contents.UploadIntents)
 		if !apply {
 			continue
@@ -126,6 +128,13 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	}
 	if len(documents) != result.Documents {
 		return result, fmt.Errorf("localstorage: DR drill restored %d documents, expected %d", len(documents), result.Documents)
+	}
+	transactions, err := drillApp.metadata.ListTransactions()
+	if err != nil {
+		return result, err
+	}
+	if len(transactions) != result.Transactions {
+		return result, fmt.Errorf("localstorage: DR drill restored %d transactions, expected %d", len(transactions), result.Transactions)
 	}
 	restoredBlocks, err := drillApp.restoreImportedBlocks(ctx, documents, a.now())
 	if err != nil {
@@ -177,7 +186,35 @@ func (a *Application) applyPublishedSnapshotContents(ctx context.Context, manife
 			return err
 		}
 	}
+	for _, transaction := range contents.Transactions {
+		if err := a.applyPublishedTransaction(ctx, manifestID, transaction); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (a *Application) applyPublishedTransaction(ctx context.Context, manifestID string, transaction metastore.Transaction) error {
+	switch transaction.State {
+	case metastore.TransactionStateOpen:
+		return nil
+	case metastore.TransactionStateCompleted:
+		if transaction.CompletedAt == nil {
+			return fmt.Errorf("localstorage: completed published transaction %s/%s has no completed_at", transaction.Identity.TenantID, transaction.Identity.TransactionID)
+		}
+		_, err := a.authority.CompleteTransaction(
+			ctx,
+			transaction.Identity,
+			*transaction.CompletedAt,
+			transaction.Tags,
+			importPublishedTransactionCommandID(manifestID, transaction),
+		)
+		return err
+	case metastore.TransactionStateTimedOut:
+		return fmt.Errorf("localstorage: published timed-out transaction import is not supported")
+	default:
+		return fmt.Errorf("localstorage: unsupported published transaction state %d", transaction.State)
+	}
 }
 
 func importPublishedDocumentCommandID(manifestID string, document metastore.Document) string {
@@ -197,4 +234,13 @@ func importPublishedIntentCommandID(manifestID string, intent metastore.UploadIn
 
 func importPublishedIntentStateCommandID(manifestID string, intent metastore.UploadIntent) string {
 	return stableCommandID("import-published-intent-state", manifestID, intent.BlockID)
+}
+
+func importPublishedTransactionCommandID(manifestID string, transaction metastore.Transaction) string {
+	return stableCommandID(
+		"import-published-transaction",
+		manifestID,
+		transaction.Identity.TenantID,
+		transaction.Identity.TransactionID,
+	)
 }

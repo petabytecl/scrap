@@ -138,6 +138,29 @@ func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestListTransactionsReturnsCommittedTransactions(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleDocument("a.xml", DocumentClassPermanent)
+	second := sampleDocument("b.xml", DocumentClassEphemeral)
+	second.Identity.TransactionID = "txn-b"
+	if err := store.PutDocument(second); err != nil {
+		t.Fatalf("put second document: %v", err)
+	}
+	if err := store.PutDocument(first); err != nil {
+		t.Fatalf("put first document: %v", err)
+	}
+
+	transactions, err := store.ListTransactions()
+	if err != nil {
+		t.Fatalf("list transactions: %v", err)
+	}
+	if len(transactions) != 2 ||
+		transactions[0].Identity.TransactionID != "txn" ||
+		transactions[1].Identity.TransactionID != "txn-b" {
+		t.Fatalf("transactions = %#v, want ordered transaction records", transactions)
+	}
+}
+
 func TestRecordUploadIntentPersistsAndLists(t *testing.T) {
 	store := openTestStore(t)
 	first := sampleUploadIntent("block-1")

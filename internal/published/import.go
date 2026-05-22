@@ -13,6 +13,7 @@ import (
 
 type SnapshotContents struct {
 	Documents     []metastore.Document
+	Transactions  []metastore.Transaction
 	UploadIntents []metastore.UploadIntent
 	Tombstones    int
 }
@@ -35,6 +36,12 @@ func ReadSnapshotContents(reader io.Reader) (SnapshotContents, error) {
 			}
 			contents.Documents = append(contents.Documents, document)
 			contents.UploadIntents = append(contents.UploadIntents, intent)
+		case *publishedv1.SnapshotRecord_Transaction:
+			transaction, err := importTransaction(typed.Transaction)
+			if err != nil {
+				return contents, err
+			}
+			contents.Transactions = append(contents.Transactions, transaction)
 		case *publishedv1.SnapshotRecord_Tombstone:
 			contents.Tombstones++
 		default:
@@ -111,6 +118,35 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 		State:             metastore.UploadStateUploaded,
 	}
 	return imported, intent, nil
+}
+
+func importTransaction(transaction *publishedv1.PublishedTransaction) (metastore.Transaction, error) {
+	if transaction == nil {
+		return metastore.Transaction{}, fmt.Errorf("published metadata: transaction record is required")
+	}
+	imported := metastore.Transaction{
+		Identity: identity.Transaction{
+			TenantID:      transaction.GetTenantId(),
+			TransactionID: transaction.GetTransactionId(),
+		},
+		State:                  metastore.TransactionStateKind(transaction.GetState()),
+		DocumentCount:          transaction.GetDocumentCount(),
+		PermanentDocumentCount: transaction.GetPermanentDocumentCount(),
+		EphemeralDocumentCount: transaction.GetEphemeralDocumentCount(),
+		Tags:                   clonePublishedTags(transaction.GetTags()),
+	}
+	if transaction.GetCreatedAt() != nil {
+		imported.CreatedAt = transaction.GetCreatedAt().AsTime()
+	}
+	if transaction.GetCompletedAt() != nil {
+		completedAt := transaction.GetCompletedAt().AsTime()
+		imported.CompletedAt = &completedAt
+	}
+	if transaction.GetTimeoutAt() != nil {
+		timeoutAt := transaction.GetTimeoutAt().AsTime()
+		imported.TimeoutAt = &timeoutAt
+	}
+	return imported, nil
 }
 
 func importFrames(frames []*publishedv1.PublishedFrame) ([]blockstore.FrameRecord, error) {

@@ -1214,6 +1214,14 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 	}, newChunkReader([][]byte{[]byte("metadata restore bytes")})); err != nil {
 		t.Fatalf("write source document: %v", err)
 	}
+	completedAt := time.Unix(710, 0).UTC()
+	source.now = fixedClock(completedAt)
+	if _, err := source.CompleteTransaction(ctx, api.CompleteTransactionRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+		Tags:        map[string]string{"closed_by": "metadata-restore-test"},
+	}); err != nil {
+		t.Fatalf("complete source transaction: %v", err)
+	}
 	if _, err := source.RunBackendUploadOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
@@ -1250,8 +1258,9 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetCounters()["documents"] != "1" ||
+		finished.GetProgress().GetCounters()["transactions"] != "1" ||
 		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
-		t.Fatalf("finished operation = %#v, want imported document and upload intent", finished)
+		t.Fatalf("finished operation = %#v, want imported document, transaction, and upload intent", finished)
 	}
 
 	restored, err := restoredApp.metadata.HeadDocument(doc)
@@ -1269,6 +1278,16 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 	}
 	if intent.State != metastore.UploadStateUploaded || intent.BackendObjectKey == "" {
 		t.Fatalf("restored intent = %#v, want uploaded backend object", intent)
+	}
+	transaction, err := restoredApp.metadata.GetTransaction(identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID})
+	if err != nil {
+		t.Fatalf("get restored transaction: %v", err)
+	}
+	if transaction.State != metastore.TransactionStateCompleted ||
+		transaction.CompletedAt == nil ||
+		!transaction.CompletedAt.Equal(completedAt) ||
+		transaction.Tags["closed_by"] != "metadata-restore-test" {
+		t.Fatalf("restored transaction = %#v, want completed transaction state", transaction)
 	}
 	err = restoredApp.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)

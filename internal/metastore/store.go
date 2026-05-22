@@ -448,6 +448,31 @@ func (s *Store) GetTransaction(transaction identity.Transaction) (Transaction, e
 	return current, nil
 }
 
+func (s *Store) ListTransactions() ([]Transaction, error) {
+	prefix := transactionPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var transactions []Transaction
+	for valid := iter.First(); valid; valid = iter.Next() {
+		transaction, err := unmarshalTransaction(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		transactions = append(transactions, transaction)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return transactions, nil
+}
+
 func (s *Store) replaceDocument(document Document) error {
 	value, err := marshalDocument(document)
 	if err != nil {
@@ -530,8 +555,12 @@ func documentPrefix() []byte {
 	return []byte("document\x00")
 }
 
+func transactionPrefix() []byte {
+	return []byte("transaction\x00")
+}
+
 func transactionKey(transaction identity.Transaction) []byte {
-	return []byte("transaction\x00" + transaction.TenantID + "\x00" + transaction.TransactionID)
+	return append(transactionPrefix(), []byte(transaction.TenantID+"\x00"+transaction.TransactionID)...)
 }
 
 func transactionDocumentsPrefix(transaction identity.Transaction) []byte {
