@@ -425,6 +425,55 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	}
 }
 
+func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("backend fallback bytes")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+
+	sender := &recordingReadSender{}
+	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read document: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_BACKEND {
+		t.Fatalf("read source = %s, want backend", sender.metadata.Source)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("read bytes = %q, want %q", got, data)
+	}
+}
+
 func TestCorruptReadFailsBeforeSendingMetadata(t *testing.T) {
 	app := openTestApplication(t)
 	doc := testDocumentIdentity()

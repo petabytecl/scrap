@@ -25,6 +25,7 @@ import (
 
 type Application struct {
 	blocks           *blockstore.Store
+	backendStore     backend.Store
 	metadata         *metastore.Store
 	authority        *raftmeta.Authority
 	prepare          *prepareLog
@@ -33,6 +34,7 @@ type Application struct {
 }
 
 const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
+const backendReadChunkSize = 1024 * 1024
 
 type BackendUploadOnceResult struct {
 	SealedBlockID string
@@ -101,6 +103,10 @@ func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.
 		Updater: a.authority,
 		Now:     a.now,
 	}
+}
+
+func (a *Application) SetBackendStore(store backend.Store) {
+	a.backendStore = store
 }
 
 func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.Store) (BackendUploadOnceResult, error) {
@@ -222,7 +228,7 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 	}
 	selectedRange := api.ReadRange{Offset: offset, Length: &readLength}
 	if err := a.blocks.VerifyRange(document.Location, offset, &readLength); err != nil {
-		return mapError(err)
+		return a.readDocumentFromBackend(ctx, document, selectedRange, sender, err)
 	}
 	if err := sender.SendMetadata(api.ReadDocumentMetadata{
 		Metadata:      documentToAPI(document),
@@ -232,6 +238,133 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 		return err
 	}
 	return mapError(a.blocks.ReadRange(ctx, document.Location, offset, &readLength, senderWriter{sender: sender}))
+}
+
+func (a *Application) readDocumentFromBackend(ctx context.Context, document metastore.Document, selectedRange api.ReadRange, sender api.ReadDocumentSender, localErr error) error {
+	if a.backendStore == nil {
+		return mapError(localErr)
+	}
+	intent, err := a.metadata.GetUploadIntent(document.Location.BlockID)
+	if err != nil || intent.State != metastore.UploadStateUploaded {
+		return mapError(localErr)
+	}
+	data, err := a.readVerifiedBackendRange(ctx, document, intent, selectedRange)
+	if err != nil {
+		return mapError(err)
+	}
+	if err := sender.SendMetadata(api.ReadDocumentMetadata{
+		Metadata:      documentToAPI(document),
+		SelectedRange: selectedRange,
+		Source:        scrapv1.StorageSource_STORAGE_SOURCE_BACKEND,
+	}); err != nil {
+		return err
+	}
+	for len(data) > 0 {
+		n := backendReadChunkSize
+		if n > len(data) {
+			n = len(data)
+		}
+		if err := sender.SendChunk(data[:n]); err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+func (a *Application) readVerifiedBackendRange(ctx context.Context, document metastore.Document, intent metastore.UploadIntent, selectedRange api.ReadRange) ([]byte, error) {
+	if selectedRange.Length == nil {
+		return nil, blockstore.ErrInvalidRange
+	}
+	readLength := *selectedRange.Length
+	if readLength == 0 {
+		return nil, nil
+	}
+	verifyStart, verifyEnd, err := verificationWindow(document.Location, selectedRange.Offset, readLength)
+	if err != nil {
+		return nil, err
+	}
+	fetchLength := verifyEnd - verifyStart
+	var fetched bytes.Buffer
+	if err := a.backendStore.ReadObjectRange(ctx, intent.BackendObjectKey, backend.Range{
+		Offset: verifyStart,
+		Length: &fetchLength,
+	}, &fetched); err != nil {
+		return nil, err
+	}
+	data := fetched.Bytes()
+	if err := verifyFetchedBackendWindow(document.Location, selectedRange.Offset, readLength, verifyStart, data); err != nil {
+		return nil, err
+	}
+	selectedStart := document.Location.StoredOffset + selectedRange.Offset
+	start := selectedStart - verifyStart
+	end := start + readLength
+	if end > uint64(len(data)) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return append([]byte(nil), data[start:end]...), nil
+}
+
+func verificationWindow(record blockstore.Record, offset uint64, length uint64) (uint64, uint64, error) {
+	if offset+length < offset || offset+length > record.StoredLength {
+		return 0, 0, blockstore.ErrInvalidRange
+	}
+	if len(record.Frames) == 0 {
+		return record.StoredOffset, record.StoredOffset + record.StoredLength, nil
+	}
+	selectedStart := record.StoredOffset + offset
+	selectedEnd := selectedStart + length
+	var verifyStart uint64
+	var verifyEnd uint64
+	for _, frame := range record.Frames {
+		frameStart := frame.SegmentOffset
+		frameEnd := frame.SegmentOffset + frame.SegmentLength
+		if frameEnd <= selectedStart || frameStart >= selectedEnd {
+			continue
+		}
+		if verifyStart == 0 || frameStart < verifyStart {
+			verifyStart = frameStart
+		}
+		if frameEnd > verifyEnd {
+			verifyEnd = frameEnd
+		}
+	}
+	if verifyStart == 0 || verifyEnd < selectedEnd {
+		return 0, 0, io.ErrUnexpectedEOF
+	}
+	return verifyStart, verifyEnd, nil
+}
+
+func verifyFetchedBackendWindow(record blockstore.Record, offset uint64, length uint64, verifyStart uint64, data []byte) error {
+	if len(record.Frames) == 0 {
+		if uint64(len(data)) != record.StoredLength {
+			return io.ErrUnexpectedEOF
+		}
+		got := sha256.Sum256(data)
+		if got != record.LogicalSHA256 {
+			return blockstore.ErrChecksumMismatch
+		}
+		return nil
+	}
+	selectedStart := record.StoredOffset + offset
+	selectedEnd := selectedStart + length
+	for _, frame := range record.Frames {
+		frameStart := frame.SegmentOffset
+		frameEnd := frame.SegmentOffset + frame.SegmentLength
+		if frameEnd <= selectedStart || frameStart >= selectedEnd {
+			continue
+		}
+		start := frameStart - verifyStart
+		end := start + frame.SegmentLength
+		if end > uint64(len(data)) {
+			return io.ErrUnexpectedEOF
+		}
+		got := sha256.Sum256(data[start:end])
+		if got != frame.SHA256 {
+			return blockstore.ErrChecksumMismatch
+		}
+	}
+	return nil
 }
 
 func (a *Application) FindDocuments(_ context.Context, req api.FindDocumentsRequest) (api.FindDocumentsResult, error) {
@@ -358,6 +491,10 @@ func mapError(err error) error {
 		return status.Error(codes.InvalidArgument, "read range is outside document bounds")
 	case errors.Is(err, blockstore.ErrChecksumMismatch):
 		return status.Error(codes.DataLoss, "stored document bytes failed checksum verification")
+	case errors.Is(err, backend.ErrChecksumMismatch):
+		return status.Error(codes.DataLoss, "backend document bytes failed checksum verification")
+	case errors.Is(err, backend.ErrNotFound):
+		return status.Error(codes.DataLoss, "backend document bytes are missing")
 	default:
 		return err
 	}

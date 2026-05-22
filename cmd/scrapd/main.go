@@ -52,6 +52,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("open local filesystem backend: %v", err)
 			}
+			localApp.SetBackendStore(backendStore)
 			uploadRunner = &backendupload.Runner{
 				RunOnceFunc: func(ctx context.Context) (backendupload.RunResult, error) {
 					result, err := localApp.RunBackendUploadOnce(ctx, backendStore)
