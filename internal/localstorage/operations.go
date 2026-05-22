@@ -51,6 +51,8 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runRestoreOperation(ctx, store, operation)
 		case "repair":
 			succeeded, err = a.runRepairOperation(ctx, store, operation)
+		case "scrub":
+			succeeded, err = a.runScrubOperation(ctx, store, operation)
 		case "drain":
 			succeeded, err = a.runDrainOperation(ctx, store, operation)
 		case "metadata-restore":
@@ -106,6 +108,59 @@ func (a *Application) runTombstoneOperation(ctx context.Context, store *operatio
 		WorkUnitsTotal:     uint64(len(finished.GetTargets())),
 		WorkUnitsCompleted: uint64(len(finished.GetTargets())),
 		Message:            "tombstone operation succeeded",
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+type scrubSummary struct {
+	DocumentsScanned   int
+	RepairQueued       int
+	SkippedUnavailable int
+}
+
+func (a *Application) runScrubOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running scrub operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	summary, err := a.applyScrubOperation(ctx, running, now)
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "scrub operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_SCRUB_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	message := "scrub operation succeeded"
+	if operation.GetDryRun() {
+		message = "scrub dry-run succeeded"
+	}
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(summary.DocumentsScanned),
+		WorkUnitsCompleted: uint64(summary.DocumentsScanned),
+		Message:            message,
+		Counters: map[string]string{
+			"documents_scanned":   fmt.Sprintf("%d", summary.DocumentsScanned),
+			"repair_queued":       fmt.Sprintf("%d", summary.RepairQueued),
+			"skipped_unavailable": fmt.Sprintf("%d", summary.SkippedUnavailable),
+		},
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err
@@ -458,6 +513,122 @@ func drainOperationMember(operation *adminv1.Operation) (string, error) {
 		return "", metastore.ErrNotFound
 	}
 	return memberID, nil
+}
+
+func (a *Application) applyScrubOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (scrubSummary, error) {
+	documents, err := a.scrubTargets(operation)
+	if err != nil {
+		return scrubSummary{}, err
+	}
+	summary := scrubSummary{DocumentsScanned: len(documents)}
+	for _, document := range documents {
+		if err := ctx.Err(); err != nil {
+			return summary, err
+		}
+		if document.RestoreState != metastore.RestoreStateHot || document.Availability != metastore.AvailabilityHot {
+			summary.SkippedUnavailable++
+			continue
+		}
+		length := document.Length
+		err := a.blocks.VerifyRange(document.Location, 0, &length)
+		if err == nil {
+			continue
+		}
+		if !isIntegrityFailure(err) {
+			return summary, err
+		}
+		summary.RepairQueued++
+		if operation.GetDryRun() {
+			continue
+		}
+		if err := a.recordDocumentRepairState(ctx, document, integrityEvidenceID(document), true, now); err != nil {
+			return summary, err
+		}
+	}
+	return summary, nil
+}
+
+func (a *Application) scrubTargets(operation *adminv1.Operation) ([]metastore.Document, error) {
+	var documents []metastore.Document
+	seen := make(map[identity.Document]bool)
+	add := func(document metastore.Document) {
+		if seen[document.Identity] {
+			return
+		}
+		seen[document.Identity] = true
+		documents = append(documents, document)
+	}
+	addAll := func() error {
+		all, err := a.metadata.ListDocuments(metastore.DocumentFilter{})
+		if err != nil {
+			return err
+		}
+		for _, document := range all {
+			add(document)
+		}
+		return nil
+	}
+	if len(operation.GetTargets()) == 0 {
+		if err := addAll(); err != nil {
+			return nil, err
+		}
+		return documents, nil
+	}
+	for _, target := range operation.GetTargets() {
+		switch typed := target.GetTarget().(type) {
+		case *adminv1.Target_Document:
+			document, err := a.metadata.HeadDocument(adminDocumentIdentity(typed.Document))
+			if err != nil {
+				return nil, err
+			}
+			add(document)
+		case *adminv1.Target_Transaction:
+			docs, err := a.metadata.FindDocuments(identity.Transaction{
+				TenantID:      typed.Transaction.GetTenantId(),
+				TransactionID: typed.Transaction.GetTransactionId(),
+			}, metastore.DocumentFilter{})
+			if err != nil {
+				return nil, err
+			}
+			if len(docs) == 0 {
+				return nil, metastore.ErrNotFound
+			}
+			for _, document := range docs {
+				add(document)
+			}
+		case *adminv1.Target_Block:
+			if typed.Block.GetShardId() != "local" {
+				return nil, metastore.ErrNotFound
+			}
+			docs, err := a.metadata.ListBlockDocuments(typed.Block.GetBlockId())
+			if err != nil {
+				return nil, err
+			}
+			if len(docs) == 0 {
+				return nil, metastore.ErrNotFound
+			}
+			for _, document := range docs {
+				add(document)
+			}
+		case *adminv1.Target_Shard:
+			if typed.Shard.GetShardId() != "local" {
+				return nil, metastore.ErrNotFound
+			}
+			if err := addAll(); err != nil {
+				return nil, err
+			}
+		case *adminv1.Target_StorageMember:
+			if typed.StorageMember.GetStorageMemberId() != "local" {
+				return nil, metastore.ErrNotFound
+			}
+			if err := addAll(); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("localstorage: unsupported scrub target %T", target.GetTarget())
+		}
+	}
+	return documents, nil
 }
 
 func (a *Application) applyRepairOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {

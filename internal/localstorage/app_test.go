@@ -703,6 +703,73 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(260, 0).UTC())
+	store := openTestOperationStore(t)
+	data := []byte("scrub detects corruption")
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+	operation := queuedOperation("scrub-op-1", "scrub", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Shard{
+				Shard: &adminv1.ShardTarget{ShardId: "local"},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one successful scrub", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["documents_scanned"] != "1" ||
+		finished.GetProgress().GetCounters()["repair_queued"] != "1" {
+		t.Fatalf("finished operation = %#v, want scrub repair counter", finished)
+	}
+	queue, err := app.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 1 ||
+		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
+		queue[0].GetDetectedAt().AsTime() != time.Unix(260, 0).UTC() {
+		t.Fatalf("repair queue = %#v, want scrub-queued repair", queue)
+	}
+}
+
 func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
