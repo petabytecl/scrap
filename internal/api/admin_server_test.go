@@ -113,6 +113,36 @@ func TestAdminServerGetDocumentUsesInspectApplication(t *testing.T) {
 	}
 }
 
+func TestAdminServerGetBlockUsesInspectApplication(t *testing.T) {
+	expected := &adminv1.Block{
+		ShardId:          "local",
+		BlockId:          "block-a",
+		Length:           456,
+		Checksum:         []byte{4, 5, 6},
+		ReplicaMemberIds: []string{"member-a"},
+		BackendObjectKey: "blocks/block-a.blk",
+	}
+	inspect := &fakeInspectApplication{block: expected}
+	client, cleanup := newAdminInspectClient(t, inspect)
+	defer cleanup()
+
+	resp, err := client.GetBlock(context.Background(), &adminv1.GetBlockRequest{
+		Block: &adminv1.BlockTarget{
+			ShardId: "local",
+			BlockId: "block-a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("get block: %v", err)
+	}
+	if inspect.gotBlock != (BlockTarget{ShardID: "local", BlockID: "block-a"}) {
+		t.Fatalf("inspect got block = %#v, want requested block", inspect.gotBlock)
+	}
+	if !proto.Equal(resp.GetBlock(), expected) {
+		t.Fatalf("block = %#v, want %#v", resp.GetBlock(), expected)
+	}
+}
+
 func TestAdminServerGetOperationReadsDurableStore(t *testing.T) {
 	store := openTestOperationStore(t)
 	operation := testOperation(validUUIDv7(), "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
@@ -527,10 +557,17 @@ func ptr[T any](value T) *T {
 
 type fakeInspectApplication struct {
 	got      identity.Document
+	gotBlock BlockTarget
 	document *adminv1.AdminDocument
+	block    *adminv1.Block
 }
 
 func (f *fakeInspectApplication) GetAdminDocument(_ context.Context, doc identity.Document) (*adminv1.AdminDocument, error) {
 	f.got = doc
 	return f.document, nil
+}
+
+func (f *fakeInspectApplication) GetAdminBlock(_ context.Context, target BlockTarget) (*adminv1.Block, error) {
+	f.gotBlock = target
+	return f.block, nil
 }

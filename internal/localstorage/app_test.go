@@ -730,6 +730,20 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 		adminDoc.GetRepairRequired() {
 		t.Fatalf("admin document = %#v, want stored physical metadata", adminDoc)
 	}
+
+	adminBlock, err := app.GetAdminBlock(ctx, api.BlockTarget{ShardID: "local", BlockID: stored.Location.BlockID})
+	if err != nil {
+		t.Fatalf("get admin block: %v", err)
+	}
+	if adminBlock.GetShardId() != "local" ||
+		adminBlock.GetBlockId() != stored.Location.BlockID ||
+		adminBlock.GetLength() != blockstore.HeaderLength+uint64(len(data)) ||
+		len(adminBlock.GetChecksum()) != sha256.Size ||
+		len(adminBlock.GetReplicaMemberIds()) != 1 ||
+		adminBlock.GetReplicaMemberIds()[0] != "local" ||
+		adminBlock.GetBackendObjectKey() != "blocks/"+stored.Location.BlockID+".blk" {
+		t.Fatalf("admin block = %#v, want local block metadata", adminBlock)
+	}
 }
 
 func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {

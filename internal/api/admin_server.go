@@ -25,6 +25,7 @@ type AdminServer struct {
 
 type InspectApplication interface {
 	GetAdminDocument(context.Context, identity.Document) (*adminv1.AdminDocument, error)
+	GetAdminBlock(context.Context, BlockTarget) (*adminv1.Block, error)
 }
 
 const (
@@ -104,17 +105,24 @@ func (s *AdminServer) GetDocument(ctx context.Context, req *adminv1.GetDocumentR
 	return &adminv1.GetDocumentResponse{Document: document}, nil
 }
 
-func (s *AdminServer) GetBlock(_ context.Context, req *adminv1.GetBlockRequest) (*adminv1.GetBlockResponse, error) {
+func (s *AdminServer) GetBlock(ctx context.Context, req *adminv1.GetBlockRequest) (*adminv1.GetBlockResponse, error) {
 	var problems violations
 	if req == nil {
 		problems.add("request", identity.ReasonRequired, "request is required")
 		return nil, problems.err()
 	}
-	validateBlockTarget("block", req.Block, &problems)
+	target := validateBlockTarget("block", req.Block, &problems)
 	if err := problems.err(); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetBlock")
+	if s.inspect == nil {
+		return nil, unimplementedAdmin("GetBlock")
+	}
+	block, err := s.inspect.GetAdminBlock(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetBlockResponse{Block: block}, nil
 }
 
 func (s *AdminServer) GetMember(_ context.Context, req *adminv1.GetMemberRequest) (*adminv1.GetMemberResponse, error) {

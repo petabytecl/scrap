@@ -204,6 +204,23 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		inspected.GetRepairRequired() {
 		t.Fatalf("inspect document = %#v, want local physical metadata", inspected)
 	}
+	blockID := inspected.GetBlockIds()[0]
+	blockResp, err := inspectClient.GetBlock(context.Background(), &adminv1.GetBlockRequest{
+		Block: &adminv1.BlockTarget{ShardId: "local", BlockId: blockID},
+	})
+	if err != nil {
+		t.Fatalf("GetBlock: %v", err)
+	}
+	block := blockResp.GetBlock()
+	if block.GetShardId() != "local" ||
+		block.GetBlockId() != blockID ||
+		block.GetLength() <= expectedLength ||
+		len(block.GetChecksum()) != sha256.Size ||
+		len(block.GetReplicaMemberIds()) != 1 ||
+		block.GetReplicaMemberIds()[0] != "local" ||
+		block.GetBackendObjectKey() != "blocks/"+blockID+".blk" {
+		t.Fatalf("inspect block = %#v, want local block metadata", block)
+	}
 
 	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
