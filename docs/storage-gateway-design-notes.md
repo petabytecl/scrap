@@ -657,6 +657,8 @@ serve-imported-reads default: refuse when lag > 15 minutes
 
 The conservative v1 default is to fail closed when imported metadata is beyond the serve lag. Known immutable bytes might still be correct, but stale metadata can miss tombstones, reclaim decisions, or policy changes.
 
+This is the v1 policy, not only a default. Read-only cache cells must not serve already-known documents after the imported metadata lag exceeds the serve limit. If a future compliance or bulk-download mode wants stale-known-document reads, it needs a separate ADR because it weakens tombstone and reclaim safety.
+
 Imported catalog sizing:
 
 ```text
@@ -1819,10 +1821,13 @@ Corruption evidence retention:
 
 ```text
 retain bad-ref metadata, checksums, source, block/frame ids, and incident context
-retain corrupt bytes only when policy allows
+default corrupt-byte retention: no byte retention
+retain corrupt bytes only under explicit policy or legal hold
 keep evidence through repair plus configured forensic TTL
 do not retain corrupt bytes forever by default
 ```
+
+The default forensic policy is metadata-only. S.C.R.A.P. keeps enough evidence to prove what failed and how it was repaired, but it does not retain corrupt document payload bytes by default because those bytes may carry the same sensitivity and retention obligations as the original document.
 
 A returning node must catch up through Raft and verify local refs before serving reads. Catching up metadata alone is not sufficient to become a byte-serving replica.
 
@@ -2588,7 +2593,9 @@ operator actions required
 measured RTO/RPO evidence
 ```
 
-V1 documents measured recovery evidence, but it does not invent business RTO/RPO promises. Business RTO/RPO targets remain a product/operations decision.
+V1 documents measured recovery evidence, but it does not make a formal business RTO/RPO promise. Recovery reports show observed RTO/RPO from drills and real restores; they are evidence for future SLOs, not a v1 product contract.
+
+Active secondary backend replication remains post-v1. V1 may keep schema and admin copy/verify hooks that make a later secondary design possible, but it must not imply a cross-region or cross-cloud failover guarantee.
 
 ## Backend Key Layout And Rate Control
 
@@ -2701,6 +2708,8 @@ lifecycle_hints:
 ```
 
 Production profiles require explicit measured budgets. Do not start production with unbounded accepted ingress, upload, restore, scrub, DR-copy, or circuit-breaker budgets. Request-count defaults may exist for the S3-like profile only; GCS, Azure Blob, filesystem, and future providers require measured deployment-specific request budgets before production acceptance.
+
+Docs may provide formulas, required fields, and example non-production templates, but they must not define fake small/medium/large production presets. Real production ingress, disk, backend, and OpenBao capacity values are measured per deployment and reviewed as part of deployment readiness.
 
 Primary capacity units are bytes:
 
@@ -3461,15 +3470,14 @@ capacity override operations
 
 Normal hot reads and ordinary writes do not require full audit logging by default. They remain observable through request logs, metrics, traces, and immutable document metadata unless a later compliance mode requires per-access audit.
 
-## Open Questions
+## Remaining Inputs
 
-These are the known gray areas to resolve before turning this into an ADR or implementation plan.
+There are no remaining design-policy blockers in the current notes. The remaining inputs are deployment or compliance facts that must be supplied by operators or product owners before production rollout.
 
-- What business RTO/RPO targets should the product promise beyond measured DR evidence?
-- Should read-only cache cells ever serve known immutable documents when imported metadata lag exceeds the default 15-minute serve limit?
-- What compliance policy should govern corrupt-byte forensic retention, legal hold, and audit evidence retention?
-- What real production ingress, disk, backend, and OpenBao capacity numbers should each deployment profile use?
-- Should active secondary backend replication become a v1 product requirement, or remain a post-v1 extension?
+- Real ingress, disk, backend, and OpenBao capacity values for each deployment profile.
+- Compliance-specific legal hold and audit evidence retention overrides, if metadata-only corrupt-byte evidence is not enough.
+- Future business RTO/RPO targets if the product later needs formal promises beyond measured DR evidence.
+- Future decision on active secondary backend replication if cross-region or cross-cloud failover becomes a v1 or post-v1 requirement.
 
 ## Next Discussion Frontier
 
@@ -3478,9 +3486,9 @@ The write path, block format, OpenBao envelope policy, cold-read semantics, bit-
 Resume by choosing between:
 
 1. define the first implementation spike and benchmark harness;
-2. review the reserved business/opinion questions above;
-3. turn the design into initial GitHub issues/PRD slices;
-4. refine concrete production profile examples after real deployment numbers exist.
+2. turn the design into initial GitHub issues/PRD slices;
+3. refine concrete production profile examples after real deployment numbers exist;
+4. draft operational runbooks from the accepted topology and admin API model.
 
 The recommended next topic is the first implementation spike. The architecture now has enough concrete decisions and accepted ADRs to validate the highest-risk assumptions with a disposable Go spike before production code is written.
 
