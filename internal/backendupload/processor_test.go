@@ -67,6 +67,39 @@ func TestProcessorSkipsNonPendingIntents(t *testing.T) {
 	}
 }
 
+func TestProcessorRetriesFailedIntentAndRecordsUploaded(t *testing.T) {
+	ctx := context.Background()
+	intent := testUploadIntent("block-1")
+	intent.State = metastore.UploadStateFailed
+	intent.LastError = "backend throttled"
+	intent.HasLastError = true
+	store := openTestBackendStore(t)
+	updater := &recordingIntentStateUpdater{}
+
+	result, err := Processor{
+		Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("recovered block")}},
+		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
+		Updater:  updater,
+		Now:      fixedTime(time.Unix(501, 0).UTC()),
+	}.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("run processor: %v", err)
+	}
+	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 || result.Skipped != 0 {
+		t.Fatalf("result = %#v, want failed intent retried and uploaded", result)
+	}
+	if len(updater.calls) != 1 ||
+		updater.calls[0].blockID != intent.BlockID ||
+		updater.calls[0].state != metastore.UploadStateUploaded ||
+		updater.calls[0].lastError != "" ||
+		!updater.calls[0].proposedAt.Equal(time.Unix(501, 0).UTC()) {
+		t.Fatalf("state calls = %#v, want uploaded retry call", updater.calls)
+	}
+	if _, err := store.HeadObject(ctx, intent.BackendObjectKey); err != nil {
+		t.Fatalf("head uploaded object: %v", err)
+	}
+}
+
 func TestProcessorRecordsFailedUploadAndContinues(t *testing.T) {
 	sourceErr := errors.New("source unavailable")
 	first := testUploadIntent("block-1")

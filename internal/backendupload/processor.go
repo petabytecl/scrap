@@ -49,7 +49,7 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 			return result, err
 		}
 		result.Scanned++
-		if intent.State != metastore.UploadStatePending {
+		if !shouldUpload(intent.State) {
 			result.Skipped++
 			continue
 		}
@@ -69,6 +69,10 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 		result.Uploaded++
 	}
 	return result, nil
+}
+
+func shouldUpload(state metastore.UploadState) bool {
+	return state == metastore.UploadStatePending || state == metastore.UploadStateFailed
 }
 
 func (p Processor) recordState(ctx context.Context, blockID string, state metastore.UploadState, lastError string) error {
