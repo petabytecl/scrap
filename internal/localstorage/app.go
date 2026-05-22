@@ -161,6 +161,9 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	} else if !errors.Is(err, metastore.ErrNotFound) {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
+	if err := a.requireWriteAdmission(); err != nil {
+		return api.WriteDocumentResult{}, err
+	}
 
 	record, err := a.blocks.Append(ctx, &chunkReader{chunks: chunks})
 	if err != nil {

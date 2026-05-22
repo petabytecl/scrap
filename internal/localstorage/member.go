@@ -10,6 +10,8 @@ import (
 	"github.com/petabytecl/scrap/internal/api"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const localMemberStateFile = "local-member-state.json"
@@ -67,6 +69,17 @@ func (a *Application) GetEvictionSafety(ctx context.Context, memberID string) (*
 			},
 		},
 	}, nil
+}
+
+func (a *Application) requireWriteAdmission() error {
+	state := a.currentLocalMemberState()
+	if state.Draining {
+		return status.Error(codes.FailedPrecondition, "local storage member is draining and cannot accept new writes")
+	}
+	if state.Cordoned {
+		return status.Error(codes.FailedPrecondition, "local storage member is cordoned and cannot accept new writes")
+	}
+	return nil
 }
 
 func (a *Application) updateLocalMemberState(mutator func(*localMemberState)) error {

@@ -1026,6 +1026,47 @@ func TestLocalMemberCordonStatePersists(t *testing.T) {
 	}
 }
 
+func TestCordonedLocalMemberRejectsNewWritesButAllowsReplay(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("invoice")
+	length := uint64(len(data))
+	sum := sha256.Sum256(data)
+	init := api.WriteDocumentInit{
+		Identity:             doc,
+		DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		ExpectedLength:       &length,
+		ExpectedSHA256:       sum[:],
+		ClientIdempotencyKey: "write-1",
+		CreatedByService:     "billing-etl",
+	}
+	if _, err := app.WriteDocument(ctx, init, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write initial document: %v", err)
+	}
+	if _, err := app.CordonMember(ctx, api.MemberMutationRequest{
+		OperationID:   "cordon-1",
+		StorageMember: "local",
+		Reason:        "maintenance",
+	}); err != nil {
+		t.Fatalf("cordon member: %v", err)
+	}
+
+	newDoc := init
+	newDoc.Identity.DocumentName = "new-invoice.xml"
+	_, err := app.WriteDocument(ctx, newDoc, newChunkReader([][]byte{[]byte("new invoice")}))
+	requireCode(t, err, codes.FailedPrecondition)
+
+	replayed, err := app.WriteDocument(ctx, init, newChunkReader([][]byte{data}))
+	if err != nil {
+		t.Fatalf("replay existing document while cordoned: %v", err)
+	}
+	if !replayed.IdempotentReplay {
+		t.Fatalf("replay = %#v, want idempotent replay", replayed)
+	}
+}
+
 func TestLocalRecoveryReadinessFailsClosedWithoutPublishedMetadata(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
