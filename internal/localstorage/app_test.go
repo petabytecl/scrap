@@ -474,6 +474,68 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	}
 }
 
+func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("cold bytes")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateRestorePending, "restore requested", "restore-state-1", time.Unix(200, 0).UTC()); err != nil {
+		t.Fatalf("update restore state: %v", err)
+	}
+
+	sender := &recordingReadSender{}
+	err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.Unavailable)
+	detail := requireRestorePendingDetail(t, err)
+	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
+		len(detail.GetAffectedBlockIds()) != 1 ||
+		detail.GetRestoreState() != "restore_pending" ||
+		!detail.GetRestoreQueued() ||
+		!detail.GetRetryHint().GetRetryable() {
+		t.Fatalf("restore detail = %#v, want restore-pending detail", detail)
+	}
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d before restore-pending error", sender.sentMetadata, len(sender.chunks))
+	}
+}
+
+func TestReadDocumentReturnsCryptoUnavailableDetail(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("encrypted bytes")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCryptoUnavailable, "key unavailable", "crypto-state-1", time.Unix(201, 0).UTC()); err != nil {
+		t.Fatalf("update restore state: %v", err)
+	}
+
+	sender := &recordingReadSender{}
+	err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.Unavailable)
+	detail := requireCryptoUnavailableDetail(t, err)
+	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
+		detail.GetKeyScope() != "backend" ||
+		!detail.GetRetryHint().GetRetryable() {
+		t.Fatalf("crypto detail = %#v, want crypto-unavailable detail", detail)
+	}
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d before crypto-unavailable error", sender.sentMetadata, len(sender.chunks))
+	}
+}
+
 func TestCorruptReadFailsBeforeSendingMetadata(t *testing.T) {
 	app := openTestApplication(t)
 	doc := testDocumentIdentity()
@@ -664,5 +726,35 @@ func requireIntegrityDetail(t *testing.T, err error) *scrapv1.IntegrityFailureDe
 		}
 	}
 	t.Fatalf("status details = %#v, want IntegrityFailureDetail", st.Details())
+	return nil
+}
+
+func requireRestorePendingDetail(t *testing.T, err error) *scrapv1.RestorePendingDetail {
+	t.Helper()
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("error is not a status error: %v", err)
+	}
+	for _, detail := range st.Details() {
+		if restore, ok := detail.(*scrapv1.RestorePendingDetail); ok {
+			return restore
+		}
+	}
+	t.Fatalf("status details = %#v, want RestorePendingDetail", st.Details())
+	return nil
+}
+
+func requireCryptoUnavailableDetail(t *testing.T, err error) *scrapv1.CryptoUnavailableDetail {
+	t.Helper()
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("error is not a status error: %v", err)
+	}
+	for _, detail := range st.Details() {
+		if crypto, ok := detail.(*scrapv1.CryptoUnavailableDetail); ok {
+			return crypto
+		}
+	}
+	t.Fatalf("status details = %#v, want CryptoUnavailableDetail", st.Details())
 	return nil
 }

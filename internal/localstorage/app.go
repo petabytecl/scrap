@@ -213,6 +213,9 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 	if err != nil {
 		return mapError(err)
 	}
+	if err := unavailableReadStateError(document); err != nil {
+		return err
+	}
 	offset := uint64(0)
 	if req.Range != nil {
 		offset = req.Range.Offset
@@ -524,6 +527,74 @@ func readIntegrityError(document metastore.Document, attemptedSources []string, 
 		return st.Err()
 	}
 	return withDetails.Err()
+}
+
+func unavailableReadStateError(document metastore.Document) error {
+	switch document.Availability {
+	case metastore.AvailabilityCold, metastore.AvailabilityRestorePending:
+		return restorePendingError(document)
+	case metastore.AvailabilityCryptoUnavailable:
+		return cryptoUnavailableError(document)
+	default:
+		return nil
+	}
+}
+
+func restorePendingError(document metastore.Document) error {
+	st := status.New(codes.Unavailable, "document bytes require backend restore")
+	withDetails, err := st.WithDetails(&scrapv1.RestorePendingDetail{
+		Identity: &scrapv1.DocumentIdentity{
+			TenantId:      document.Identity.TenantID,
+			TransactionId: document.Identity.TransactionID,
+			DocumentName:  document.Identity.DocumentName,
+		},
+		AffectedBlockIds: []string{document.Location.BlockID},
+		RestoreState:     restoreStateText(document.RestoreState),
+		RestoreQueued:    document.RestoreState == metastore.RestoreStateRestorePending,
+		RetryHint: &scrapv1.RetryHint{
+			Retryable: true,
+			Reason:    "restore_pending",
+		},
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+func cryptoUnavailableError(document metastore.Document) error {
+	st := status.New(codes.Unavailable, "document bytes require unavailable crypto material")
+	withDetails, err := st.WithDetails(&scrapv1.CryptoUnavailableDetail{
+		Identity: &scrapv1.DocumentIdentity{
+			TenantId:      document.Identity.TenantID,
+			TransactionId: document.Identity.TransactionID,
+			DocumentName:  document.Identity.DocumentName,
+		},
+		KeyScope: "backend",
+		RetryHint: &scrapv1.RetryHint{
+			Retryable: true,
+			Reason:    "crypto_unavailable",
+		},
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+func restoreStateText(state metastore.RestoreState) string {
+	switch state {
+	case metastore.RestoreStateHot:
+		return "hot"
+	case metastore.RestoreStateCold:
+		return "cold"
+	case metastore.RestoreStateRestorePending:
+		return "restore_pending"
+	case metastore.RestoreStateCryptoUnavailable:
+		return "crypto_unavailable"
+	default:
+		return "unknown"
+	}
 }
 
 func isIntegrityFailure(err error) bool {
