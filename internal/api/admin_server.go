@@ -19,6 +19,7 @@ import (
 
 type AdminServer struct {
 	inspect    InspectApplication
+	repair     RepairApplication
 	operations *operations.Store
 	now        func() time.Time
 }
@@ -30,6 +31,10 @@ type InspectApplication interface {
 	GetAdminBlock(context.Context, BlockTarget) (*adminv1.Block, error)
 	GetAdminMember(context.Context, string) (*adminv1.StorageMember, error)
 	GetAdminCapacityRunway(context.Context, string) (*adminv1.CapacityRunway, error)
+}
+
+type RepairApplication interface {
+	GetRepairQueue(context.Context, string) ([]*adminv1.RepairQueueItem, error)
 }
 
 const (
@@ -61,6 +66,12 @@ func WithOperationStore(store *operations.Store) AdminOption {
 func WithInspectApplication(inspect InspectApplication) AdminOption {
 	return func(server *AdminServer) {
 		server.inspect = inspect
+	}
+}
+
+func WithRepairApplication(repair RepairApplication) AdminOption {
+	return func(server *AdminServer) {
+		server.repair = repair
 	}
 }
 
@@ -357,7 +368,7 @@ func (s *AdminServer) StartPrewarm(_ context.Context, req *adminv1.StartPrewarmR
 	return &adminv1.StartPrewarmResponse{Operation: operation}, nil
 }
 
-func (s *AdminServer) GetRepairQueue(_ context.Context, req *adminv1.GetRepairQueueRequest) (*adminv1.GetRepairQueueResponse, error) {
+func (s *AdminServer) GetRepairQueue(ctx context.Context, req *adminv1.GetRepairQueueRequest) (*adminv1.GetRepairQueueResponse, error) {
 	var problems violations
 	if req == nil {
 		problems.add("request", identity.ReasonRequired, "request is required")
@@ -367,7 +378,14 @@ func (s *AdminServer) GetRepairQueue(_ context.Context, req *adminv1.GetRepairQu
 	if err := problems.err(); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetRepairQueue")
+	if s.repair == nil {
+		return nil, unimplementedAdmin("GetRepairQueue")
+	}
+	items, err := s.repair.GetRepairQueue(ctx, req.GetShardId())
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetRepairQueueResponse{Items: items}, nil
 }
 
 func (s *AdminServer) PlanRepair(_ context.Context, req *adminv1.PlanRepairRequest) (*adminv1.PlanRepairResponse, error) {

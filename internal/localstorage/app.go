@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -260,6 +261,11 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 			return readIntegrityError(document, []string{"local", "backend"}, err)
 		}
 		return mapError(err)
+	}
+	if isIntegrityFailure(localErr) {
+		if err := a.recordRepairState(ctx, document); err != nil {
+			return err
+		}
 	}
 	if err := sender.SendMetadata(api.ReadDocumentMetadata{
 		Metadata:      documentToAPI(document),
@@ -615,6 +621,18 @@ func integrityEvidenceID(document metastore.Document) string {
 		document.Identity.TransactionID,
 		document.Identity.DocumentName,
 	)
+}
+
+func (a *Application) recordRepairState(ctx context.Context, document metastore.Document) error {
+	incidentID := integrityEvidenceID(document)
+	now := a.now()
+	return a.authority.RecordRepairState(ctx, metastore.RepairState{
+		Identity:    document.Identity,
+		PhysicalRef: fmt.Sprintf("local/%s/%d/%d", document.Location.BlockID, document.Location.StoredOffset, document.Location.StoredLength),
+		IncidentID:  incidentID,
+		Quarantined: true,
+		UpdatedAt:   now,
+	}, stableCommandID("record-repair-state", incidentID), now)
 }
 
 func documentToAPI(document metastore.Document) api.DocumentMetadata {

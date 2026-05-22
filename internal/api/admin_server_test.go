@@ -485,6 +485,30 @@ func TestAdminServerPlanAndStartRepairUseDurableOperationStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerGetRepairQueueUsesRepairApplication(t *testing.T) {
+	expected := []*adminv1.RepairQueueItem{
+		{
+			Target:     documentAdminTarget(),
+			Reason:     "quarantined local reference",
+			DetectedAt: timestamppb.New(time.Unix(400, 0).UTC()),
+		},
+	}
+	repair := &fakeRepairApplication{items: expected}
+	client, cleanup := newAdminRepairClient(t, repair)
+	defer cleanup()
+
+	resp, err := client.GetRepairQueue(context.Background(), &adminv1.GetRepairQueueRequest{ShardId: ptr("local")})
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if repair.gotShardID != "local" {
+		t.Fatalf("repair got shard = %q, want local", repair.gotShardID)
+	}
+	if len(resp.GetItems()) != 1 || !proto.Equal(resp.GetItems()[0], expected[0]) {
+		t.Fatalf("repair queue = %#v, want %#v", resp.GetItems(), expected)
+	}
+}
+
 func newAdminTestClients(
 	t *testing.T,
 ) (adminv1.RestoreServiceClient, adminv1.MemberServiceClient, func()) {
@@ -543,6 +567,35 @@ func newAdminInspectClient(t *testing.T, inspect InspectApplication) (adminv1.In
 		_ = listener.Close()
 	}
 	return adminv1.NewInspectServiceClient(conn), cleanup
+}
+
+func newAdminRepairClient(t *testing.T, repair RepairApplication) (adminv1.RepairServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithRepairApplication(repair)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewRepairServiceClient(conn), cleanup
 }
 
 func newAdminOperationClient(t *testing.T, store *operations.Store) (adminv1.OperationServiceClient, func()) {
@@ -691,4 +744,14 @@ func (f *fakeInspectApplication) GetAdminMember(_ context.Context, memberID stri
 func (f *fakeInspectApplication) GetAdminCapacityRunway(_ context.Context, capacityProfileID string) (*adminv1.CapacityRunway, error) {
 	f.gotCapacityProfileID = capacityProfileID
 	return f.runway, nil
+}
+
+type fakeRepairApplication struct {
+	gotShardID string
+	items      []*adminv1.RepairQueueItem
+}
+
+func (f *fakeRepairApplication) GetRepairQueue(_ context.Context, shardID string) ([]*adminv1.RepairQueueItem, error) {
+	f.gotShardID = shardID
+	return f.items, nil
 }

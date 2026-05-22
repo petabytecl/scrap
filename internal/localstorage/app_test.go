@@ -431,6 +431,7 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(250, 0).UTC())
 	data := []byte("backend fallback bytes")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
@@ -474,6 +475,16 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read bytes = %q, want %q", got, data)
+	}
+	queue, err := app.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 1 ||
+		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
+		queue[0].GetReason() == "" ||
+		queue[0].GetDetectedAt().AsTime() != time.Unix(250, 0).UTC() {
+		t.Fatalf("repair queue = %#v, want quarantined local ref", queue)
 	}
 }
 

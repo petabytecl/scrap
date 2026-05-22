@@ -81,6 +81,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		Documents:    app,
 		Transactions: app,
 		Inspect:      app,
+		Repair:       app,
 		Operations:   operationStore,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -261,6 +262,15 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	}
 
 	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
+	repairClient := adminv1.NewRepairServiceClient(adminConn)
+	repairQueue, err := repairClient.GetRepairQueue(context.Background(), &adminv1.GetRepairQueueRequest{ShardId: stringPtr("local")})
+	if err != nil {
+		t.Fatalf("GetRepairQueue: %v", err)
+	}
+	if len(repairQueue.GetItems()) != 0 {
+		t.Fatalf("repair queue = %#v, want empty queue", repairQueue.GetItems())
+	}
+
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
 		Targets: []*adminv1.Target{
 			{

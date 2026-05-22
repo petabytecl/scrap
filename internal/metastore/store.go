@@ -324,6 +324,31 @@ func (s *Store) GetRepairState(doc identity.Document, incidentID string) (Repair
 	return unmarshalRepairState(value)
 }
 
+func (s *Store) ListRepairStates() ([]RepairState, error) {
+	prefix := repairStatesPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var states []RepairState
+	for valid := iter.First(); valid; valid = iter.Next() {
+		state, err := unmarshalRepairState(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, state)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
 func (s *Store) GetUploadIntent(blockID string) (UploadIntent, error) {
 	value, ok, err := s.get(uploadIntentKey(blockID))
 	if err != nil {
@@ -505,8 +530,12 @@ func uploadIntentKey(blockID string) []byte {
 	return append(uploadIntentPrefix(), []byte(blockID)...)
 }
 
+func repairStatesPrefix() []byte {
+	return []byte("repair_state\x00")
+}
+
 func repairStatePrefix(doc identity.Document) []byte {
-	return []byte("repair_state\x00" + doc.TenantID + "\x00" + doc.TransactionID + "\x00" + doc.DocumentName + "\x00")
+	return append(repairStatesPrefix(), []byte(doc.TenantID+"\x00"+doc.TransactionID+"\x00"+doc.DocumentName+"\x00")...)
 }
 
 func repairStateKey(doc identity.Document, incidentID string) []byte {

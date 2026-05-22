@@ -480,6 +480,13 @@ func TestApplyRecordRepairStateCommand(t *testing.T) {
 	if !state.Quarantined || state.PhysicalRef != "member-a/block-1/64" || !state.UpdatedAt.Equal(proposedAt) {
 		t.Fatalf("repair state = %#v, want quarantined physical ref at proposed time", state)
 	}
+	states, err := store.ListRepairStates()
+	if err != nil {
+		t.Fatalf("list repair states: %v", err)
+	}
+	if len(states) != 1 || states[0].IncidentID != "incident-1" {
+		t.Fatalf("repair states = %#v, want recorded incident", states)
+	}
 }
 
 func TestApplyTombstoneDocumentCommand(t *testing.T) {
