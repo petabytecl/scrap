@@ -18,8 +18,13 @@ import (
 )
 
 type AdminServer struct {
+	inspect    InspectApplication
 	operations *operations.Store
 	now        func() time.Time
+}
+
+type InspectApplication interface {
+	GetAdminDocument(context.Context, identity.Document) (*adminv1.AdminDocument, error)
 }
 
 const (
@@ -48,6 +53,12 @@ func WithOperationStore(store *operations.Store) AdminOption {
 	}
 }
 
+func WithInspectApplication(inspect InspectApplication) AdminOption {
+	return func(server *AdminServer) {
+		server.inspect = inspect
+	}
+}
+
 func RegisterAdminServer(registrar grpc.ServiceRegistrar, server *AdminServer) {
 	adminv1.RegisterInspectServiceServer(registrar, server)
 	adminv1.RegisterOperationServiceServer(registrar, server)
@@ -69,7 +80,7 @@ func (s *AdminServer) GetShard(_ context.Context, req *adminv1.GetShardRequest) 
 	return nil, unimplementedAdmin("GetShard")
 }
 
-func (s *AdminServer) GetDocument(_ context.Context, req *adminv1.GetDocumentRequest) (*adminv1.GetDocumentResponse, error) {
+func (s *AdminServer) GetDocument(ctx context.Context, req *adminv1.GetDocumentRequest) (*adminv1.GetDocumentResponse, error) {
 	var problems violations
 	if req == nil {
 		problems.add("request", identity.ReasonRequired, "request is required")
@@ -79,7 +90,18 @@ func (s *AdminServer) GetDocument(_ context.Context, req *adminv1.GetDocumentReq
 	if err := problems.err(); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetDocument")
+	if s.inspect == nil {
+		return nil, unimplementedAdmin("GetDocument")
+	}
+	document, err := s.inspect.GetAdminDocument(ctx, identity.Document{
+		TenantID:      req.Document.GetTenantId(),
+		TransactionID: req.Document.GetTransactionId(),
+		DocumentName:  req.Document.GetDocumentName(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetDocumentResponse{Document: document}, nil
 }
 
 func (s *AdminServer) GetBlock(_ context.Context, req *adminv1.GetBlockRequest) (*adminv1.GetBlockResponse, error) {

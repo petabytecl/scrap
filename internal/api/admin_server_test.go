@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -75,6 +76,41 @@ func TestAdminServerCordonMemberValidatesOverGRPC(t *testing.T) {
 	})
 	violations := requireBadRequest(t, err)
 	requireViolation(t, violations, "reason", identity.ReasonRequired)
+}
+
+func TestAdminServerGetDocumentUsesInspectApplication(t *testing.T) {
+	expected := &adminv1.AdminDocument{
+		Document: &adminv1.DocumentTarget{
+			TenantId:      "tenant",
+			TransactionId: "txn",
+			DocumentName:  "invoice.xml",
+		},
+		ShardId:        "shard-a",
+		BlockIds:       []string{"block-a"},
+		Length:         123,
+		LogicalSha256:  []byte{1, 2, 3},
+		RepairRequired: true,
+	}
+	inspect := &fakeInspectApplication{document: expected}
+	client, cleanup := newAdminInspectClient(t, inspect)
+	defer cleanup()
+
+	resp, err := client.GetDocument(context.Background(), &adminv1.GetDocumentRequest{
+		Document: &adminv1.DocumentTarget{
+			TenantId:      "tenant",
+			TransactionId: "txn",
+			DocumentName:  "invoice.xml",
+		},
+	})
+	if err != nil {
+		t.Fatalf("get document: %v", err)
+	}
+	if inspect.got != (identity.Document{TenantID: "tenant", TransactionID: "txn", DocumentName: "invoice.xml"}) {
+		t.Fatalf("inspect got identity = %#v, want requested document", inspect.got)
+	}
+	if !proto.Equal(resp.GetDocument(), expected) {
+		t.Fatalf("document = %#v, want %#v", resp.GetDocument(), expected)
+	}
 }
 
 func TestAdminServerGetOperationReadsDurableStore(t *testing.T) {
@@ -355,6 +391,35 @@ func newAdminTestClients(
 	return adminv1.NewRestoreServiceClient(conn), adminv1.NewMemberServiceClient(conn), cleanup
 }
 
+func newAdminInspectClient(t *testing.T, inspect InspectApplication) (adminv1.InspectServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithInspectApplication(inspect)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewInspectServiceClient(conn), cleanup
+}
+
 func newAdminOperationClient(t *testing.T, store *operations.Store) (adminv1.OperationServiceClient, func()) {
 	t.Helper()
 
@@ -458,4 +523,14 @@ func documentAdminTarget() *adminv1.Target {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+type fakeInspectApplication struct {
+	got      identity.Document
+	document *adminv1.AdminDocument
+}
+
+func (f *fakeInspectApplication) GetAdminDocument(_ context.Context, doc identity.Document) (*adminv1.AdminDocument, error) {
+	f.got = doc
+	return f.document, nil
 }

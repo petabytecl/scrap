@@ -16,6 +16,7 @@ import (
 type Applications struct {
 	Documents    api.DocumentApplication
 	Transactions api.TransactionApplication
+	Inspect      api.InspectApplication
 	Operations   *operations.Store
 }
 
@@ -48,7 +49,10 @@ func newServer(publicListener net.Listener, adminListener net.Listener, apps App
 	publicGRPC := grpc.NewServer()
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions))
 	adminGRPC := grpc.NewServer()
-	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(api.WithOperationStore(apps.Operations)))
+	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(
+		api.WithInspectApplication(apps.Inspect),
+		api.WithOperationStore(apps.Operations),
+	))
 	return &Server{
 		publicListener: publicListener,
 		adminListener:  adminListener,

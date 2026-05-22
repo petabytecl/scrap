@@ -80,6 +80,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	server := newServer(publicListener, adminListener, Applications{
 		Documents:    app,
 		Transactions: app,
+		Inspect:      app,
 		Operations:   operationStore,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,6 +184,27 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 
 	adminConn := dialTestServer(t, adminListener)
 	defer adminConn.Close()
+	inspectClient := adminv1.NewInspectServiceClient(adminConn)
+	inspectResp, err := inspectClient.GetDocument(context.Background(), &adminv1.GetDocumentRequest{
+		Document: &adminv1.DocumentTarget{
+			TenantId:      "tenant",
+			TransactionId: "txn",
+			DocumentName:  "invoice.xml",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	inspected := inspectResp.GetDocument()
+	if inspected.GetShardId() != "local" ||
+		inspected.GetLength() != expectedLength ||
+		!bytes.Equal(inspected.GetLogicalSha256(), sum[:]) ||
+		len(inspected.GetBlockIds()) != 1 ||
+		inspected.GetBlockIds()[0] == "" ||
+		inspected.GetRepairRequired() {
+		t.Fatalf("inspect document = %#v, want local physical metadata", inspected)
+	}
+
 	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
 		Targets: []*adminv1.Target{

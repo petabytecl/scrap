@@ -697,6 +697,41 @@ func TestRunQueuedOperationsOnceAppliesDocumentTombstone(t *testing.T) {
 	}
 }
 
+func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("inspect me")
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head document: %v", err)
+	}
+
+	adminDoc, err := app.GetAdminDocument(ctx, doc)
+	if err != nil {
+		t.Fatalf("get admin document: %v", err)
+	}
+	if adminDoc.GetShardId() != "local" ||
+		adminDoc.GetLength() != uint64(len(data)) ||
+		!bytes.Equal(adminDoc.GetLogicalSha256(), stored.LogicalSHA256[:]) ||
+		adminDoc.GetDocument().GetTenantId() != doc.TenantID ||
+		adminDoc.GetDocument().GetTransactionId() != doc.TransactionID ||
+		adminDoc.GetDocument().GetDocumentName() != doc.DocumentName ||
+		len(adminDoc.GetBlockIds()) != 1 ||
+		adminDoc.GetBlockIds()[0] != stored.Location.BlockID ||
+		adminDoc.GetRepairRequired() {
+		t.Fatalf("admin document = %#v, want stored physical metadata", adminDoc)
+	}
+}
+
 func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
