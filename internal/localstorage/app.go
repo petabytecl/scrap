@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -73,6 +75,18 @@ func (a *Application) Close() error {
 		return nil
 	}
 	return errors.Join(a.prepare.Close(), a.authority.Close(), a.metadata.Close(), a.blocks.Close())
+}
+
+func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.Processor {
+	return backendupload.Processor{
+		Uploader: backendupload.Uploader{
+			Backend: store,
+			Source:  backendupload.LocalBlockSource{Blocks: a.blocks},
+		},
+		Intents: a.metadata,
+		Updater: a.authority,
+		Now:     a.now,
+	}
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {

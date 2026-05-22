@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/api"
+	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -307,6 +308,68 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read rebuilt document = %q, want %q", got, data)
+	}
+}
+
+func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("backend upload bytes")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	storedDocument, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	result, err := app.BackendUploadProcessor(backendStore).RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("run backend upload processor: %v", err)
+	}
+	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 {
+		t.Fatalf("upload result = %#v, want one uploaded intent", result)
+	}
+	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStateUploaded {
+		t.Fatalf("upload intent = %#v, want uploaded", intent)
+	}
+	if _, err := backendStore.HeadObject(ctx, intent.BackendObjectKey); err != nil {
+		t.Fatalf("head backend object: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
+		t.Fatalf("remove metadata projection: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	intent, err = reopened.metadata.GetUploadIntent(storedDocument.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get rebuilt upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStateUploaded {
+		t.Fatalf("rebuilt upload intent = %#v, want uploaded", intent)
 	}
 }
 
