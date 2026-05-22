@@ -122,6 +122,30 @@ func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.Upl
 	return a.appendAndApply(command)
 }
 
+func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError string, commandID string, proposedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_UpdateUploadIntentState{
+			UpdateUploadIntentState: &metastorev1.UpdateUploadIntentStateCommand{
+				BlockId: blockID,
+				State:   metastorev1.UploadState(state),
+			},
+		},
+	}
+	if lastError != "" {
+		command.GetUpdateUploadIntentState().LastError = &lastError
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appendAndApply(command)
+}
+
 func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity.Document, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err

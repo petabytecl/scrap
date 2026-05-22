@@ -176,6 +176,9 @@ func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 	if intent.State == 0 {
 		intent.State = UploadStatePending
 	}
+	if err := validateUploadIntentState(intent.State); err != nil {
+		return err
+	}
 	if intent.UpdatedAt.IsZero() {
 		intent.UpdatedAt = time.Now().UTC()
 	}
@@ -193,6 +196,31 @@ func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 		return fmt.Errorf("%w: upload intent already exists with different metadata", ErrConflict)
 	}
 	return s.db.Set(key, value, pebble.Sync)
+}
+
+func (s *Store) UpdateUploadIntentState(blockID string, state UploadState, lastError string, updatedAt time.Time) (UploadIntent, error) {
+	if err := validateUploadIntentState(state); err != nil {
+		return UploadIntent{}, err
+	}
+	intent, err := s.GetUploadIntent(blockID)
+	if err != nil {
+		return UploadIntent{}, err
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	intent.State = state
+	intent.LastError = lastError
+	intent.HasLastError = lastError != ""
+	intent.UpdatedAt = updatedAt
+	value, err := marshalUploadIntent(intent)
+	if err != nil {
+		return UploadIntent{}, err
+	}
+	if err := s.db.Set(uploadIntentKey(intent.BlockID), value, pebble.Sync); err != nil {
+		return UploadIntent{}, err
+	}
+	return intent, nil
 }
 
 func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreState) (Document, error) {
@@ -440,6 +468,15 @@ func repairStatePrefix(doc identity.Document) []byte {
 
 func repairStateKey(doc identity.Document, incidentID string) []byte {
 	return append(repairStatePrefix(doc), []byte(incidentID)...)
+}
+
+func validateUploadIntentState(state UploadState) error {
+	switch state {
+	case UploadStatePending, UploadStateUploaded, UploadStateFailed:
+		return nil
+	default:
+		return fmt.Errorf("metastore: unsupported upload intent state %d", state)
+	}
 }
 
 func availabilityFromRestoreState(state RestoreState) (Availability, error) {

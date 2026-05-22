@@ -181,6 +181,15 @@ func TestRecordUploadIntentIsIdempotentAndConflictsOnDifferentKeys(t *testing.T)
 	}
 }
 
+func TestRecordUploadIntentRejectsInvalidState(t *testing.T) {
+	store := openTestStore(t)
+	intent := sampleUploadIntent("block-1")
+	intent.State = UploadStateNotRequired
+	if err := store.RecordUploadIntent(intent); err == nil {
+		t.Fatal("invalid upload intent state succeeded")
+	}
+}
+
 func TestApplyRecordUploadIntentCommand(t *testing.T) {
 	store := openTestStore(t)
 	proposedAt := time.Unix(30, 0).UTC()
@@ -207,6 +216,96 @@ func TestApplyRecordUploadIntentCommand(t *testing.T) {
 	}
 	if intent.State != UploadStatePending || !intent.UpdatedAt.Equal(proposedAt) {
 		t.Fatalf("intent state/updated_at = %d/%v, want pending/%v", intent.State, intent.UpdatedAt, proposedAt)
+	}
+}
+
+func TestApplyUpdateUploadIntentStateCommand(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {
+		t.Fatalf("record upload intent: %v", err)
+	}
+	proposedAt := time.Unix(31, 0).UTC()
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "upload-complete-1",
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_UpdateUploadIntentState{
+			UpdateUploadIntentState: &metastorev1.UpdateUploadIntentStateCommand{
+				BlockId: "block-1",
+				State:   metastorev1.UploadState_UPLOAD_STATE_UPLOADED,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply upload intent state command: %v", err)
+	}
+	intent, err := store.GetUploadIntent("block-1")
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != UploadStateUploaded || intent.HasLastError || !intent.UpdatedAt.Equal(proposedAt) {
+		t.Fatalf("intent = %#v, want uploaded without last error at %v", intent, proposedAt)
+	}
+}
+
+func TestApplyUpdateUploadIntentStateCommandRecordsFailure(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {
+		t.Fatalf("record upload intent: %v", err)
+	}
+	lastError := "backend throttled"
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "upload-failed-1",
+		ProposedAt:    timestamppb.New(time.Unix(32, 0).UTC()),
+		Command: &metastorev1.ShardCommand_UpdateUploadIntentState{
+			UpdateUploadIntentState: &metastorev1.UpdateUploadIntentStateCommand{
+				BlockId:   "block-1",
+				State:     metastorev1.UploadState_UPLOAD_STATE_FAILED,
+				LastError: &lastError,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply upload intent failed command: %v", err)
+	}
+	intent, err := store.GetUploadIntent("block-1")
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != UploadStateFailed || !intent.HasLastError || intent.LastError != lastError {
+		t.Fatalf("intent = %#v, want failed with last error", intent)
+	}
+}
+
+func TestApplyUpdateUploadIntentStateRejectsInvalidState(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {
+		t.Fatalf("record upload intent: %v", err)
+	}
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "upload-invalid-1",
+		ProposedAt:    timestamppb.New(time.Unix(33, 0).UTC()),
+		Command: &metastorev1.ShardCommand_UpdateUploadIntentState{
+			UpdateUploadIntentState: &metastorev1.UpdateUploadIntentStateCommand{
+				BlockId: "block-1",
+				State:   metastorev1.UploadState_UPLOAD_STATE_UNSPECIFIED,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("invalid upload intent state succeeded")
+	}
+	intent, err := store.GetUploadIntent("block-1")
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != UploadStatePending {
+		t.Fatalf("intent state = %d, want pending after rejected transition", intent.State)
 	}
 }
 

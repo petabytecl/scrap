@@ -146,6 +146,7 @@ func TestShardCommandSchemaShape(t *testing.T) {
 		"CommitDocumentCommand",
 		"CompleteTransactionCommand",
 		"RecordUploadIntentCommand",
+		"UpdateUploadIntentStateCommand",
 		"UpdateRestoreStateCommand",
 		"RecordRepairStateCommand",
 		"TombstoneDocumentCommand",

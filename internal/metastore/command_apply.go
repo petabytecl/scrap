@@ -20,6 +20,8 @@ func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
 		return s.applyCompleteTransaction(typed.CompleteTransaction)
 	case *metastorev1.ShardCommand_RecordUploadIntent:
 		return s.applyRecordUploadIntent(typed.RecordUploadIntent, command.GetProposedAt())
+	case *metastorev1.ShardCommand_UpdateUploadIntentState:
+		return s.applyUpdateUploadIntentState(typed.UpdateUploadIntentState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateRestoreState:
 		return s.applyUpdateRestoreState(typed.UpdateRestoreState)
 	case *metastorev1.ShardCommand_RecordRepairState:
@@ -72,6 +74,23 @@ func (s *Store) applyRecordUploadIntent(command *metastorev1.RecordUploadIntentC
 		State:             UploadStatePending,
 		UpdatedAt:         updatedAt,
 	})
+}
+
+func (s *Store) applyUpdateUploadIntentState(command *metastorev1.UpdateUploadIntentStateCommand, proposedAt *timestamppb.Timestamp) error {
+	if command == nil {
+		return fmt.Errorf("metastore: update upload intent state command is required")
+	}
+	updatedAt := time.Time{}
+	if proposedAt != nil {
+		updatedAt = proposedAt.AsTime()
+	}
+	_, err := s.UpdateUploadIntentState(
+		command.GetBlockId(),
+		UploadState(command.GetState()),
+		command.GetLastError(),
+		updatedAt,
+	)
+	return err
 }
 
 func (s *Store) applyUpdateRestoreState(command *metastorev1.UpdateRestoreStateCommand) error {

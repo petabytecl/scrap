@@ -37,7 +37,10 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	}, "cmd-3", time.Unix(300, 0).UTC()); err != nil {
 		t.Fatalf("record upload intent: %v", err)
 	}
-	if err := authority.UpdateDocumentRestoreState(context.Background(), document.Identity, metastore.RestoreStateCold, "cooled", "cmd-4", time.Unix(400, 0).UTC()); err != nil {
+	if err := authority.UpdateUploadIntentState(context.Background(), document.Location.BlockID, metastore.UploadStateUploaded, "", "cmd-4", time.Unix(350, 0).UTC()); err != nil {
+		t.Fatalf("update upload intent state: %v", err)
+	}
+	if err := authority.UpdateDocumentRestoreState(context.Background(), document.Identity, metastore.RestoreStateCold, "cooled", "cmd-5", time.Unix(400, 0).UTC()); err != nil {
 		t.Fatalf("update restore state: %v", err)
 	}
 	if err := authority.RecordRepairState(context.Background(), metastore.RepairState{
@@ -45,11 +48,11 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 		PhysicalRef: "member-a/block-1/64",
 		IncidentID:  "incident-1",
 		Quarantined: true,
-	}, "cmd-5", time.Unix(500, 0).UTC()); err != nil {
+	}, "cmd-6", time.Unix(500, 0).UTC()); err != nil {
 		t.Fatalf("record repair state: %v", err)
 	}
 	tombstonedAt := time.Unix(600, 0).UTC()
-	if err := authority.TombstoneDocument(context.Background(), document.Identity, tombstonedAt, "operation-1", "cmd-6"); err != nil {
+	if err := authority.TombstoneDocument(context.Background(), document.Identity, tombstonedAt, "operation-1", "cmd-7"); err != nil {
 		t.Fatalf("tombstone document: %v", err)
 	}
 	closeTestAuthority(t, authority, metadata)
@@ -91,8 +94,8 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get rebuilt upload intent: %v", err)
 	}
-	if intent.BackendObjectKey != "objects/block-1.blk" || intent.State != metastore.UploadStatePending {
-		t.Fatalf("rebuilt upload intent = %#v, want pending objects/block-1.blk", intent)
+	if intent.BackendObjectKey != "objects/block-1.blk" || intent.State != metastore.UploadStateUploaded {
+		t.Fatalf("rebuilt upload intent = %#v, want uploaded objects/block-1.blk", intent)
 	}
 	repair, err := rebuiltMetadata.GetRepairState(document.Identity, "incident-1")
 	if err != nil {

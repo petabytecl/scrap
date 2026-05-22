@@ -140,6 +140,7 @@ message ShardCommand {
     UpdateRestoreStateCommand update_restore_state = 13;
     RecordRepairStateCommand record_repair_state = 14;
     TombstoneDocumentCommand tombstone_document = 15;
+    UpdateUploadIntentStateCommand update_upload_intent_state = 16;
   }
 }
 
@@ -159,6 +160,12 @@ message RecordUploadIntentCommand {
   string backend_object_key = 2;
   string index_object_key = 3;
   string envelope_object_key = 4;
+}
+
+message UpdateUploadIntentStateCommand {
+  string block_id = 1;
+  UploadState state = 2;
+  optional string last_error = 3;
 }
 
 message UpdateRestoreStateCommand {
