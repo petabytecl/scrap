@@ -238,6 +238,56 @@ func TestAdminServerGetCapacityRunwayUsesInspectApplication(t *testing.T) {
 	}
 }
 
+func TestAdminServerMemberLifecycleUsesMemberApplication(t *testing.T) {
+	expected := &adminv1.StorageMember{
+		StorageMemberId: "local",
+		CellId:          "local",
+		State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+		Cordoned:        true,
+	}
+	safety := &adminv1.EvictionSafety{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		SafeToEvict:   false,
+	}
+	member := &fakeMemberApplication{cordoned: expected, uncordoned: proto.Clone(expected).(*adminv1.StorageMember), safety: safety}
+	member.uncordoned.Cordoned = false
+	client, cleanup := newAdminMemberClient(t, member)
+	defer cleanup()
+
+	cordonResp, err := client.CordonMember(context.Background(), &adminv1.CordonMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		Reason:        "maintenance",
+		OperationId:   validUUIDv7(),
+	})
+	if err != nil {
+		t.Fatalf("cordon member: %v", err)
+	}
+	if member.cordonReq.StorageMember != "local" || !proto.Equal(cordonResp.GetStorageMember(), expected) {
+		t.Fatalf("cordon = %#v req=%#v, want cordoned local", cordonResp.GetStorageMember(), member.cordonReq)
+	}
+
+	uncordonResp, err := client.UncordonMember(context.Background(), &adminv1.UncordonMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		OperationId:   validUUIDv7(),
+	})
+	if err != nil {
+		t.Fatalf("uncordon member: %v", err)
+	}
+	if member.uncordonReq.StorageMember != "local" || uncordonResp.GetStorageMember().GetCordoned() {
+		t.Fatalf("uncordon = %#v req=%#v, want uncordoned local", uncordonResp.GetStorageMember(), member.uncordonReq)
+	}
+
+	safetyResp, err := client.GetEvictionSafety(context.Background(), &adminv1.GetEvictionSafetyRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+	})
+	if err != nil {
+		t.Fatalf("get eviction safety: %v", err)
+	}
+	if member.safetyMemberID != "local" || !proto.Equal(safetyResp.GetSafety(), safety) {
+		t.Fatalf("safety = %#v member=%q, want local safety", safetyResp.GetSafety(), member.safetyMemberID)
+	}
+}
+
 func TestAdminServerGetOperationReadsDurableStore(t *testing.T) {
 	store := openTestOperationStore(t)
 	operation := testOperation(validUUIDv7(), "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
@@ -598,6 +648,35 @@ func newAdminRepairClient(t *testing.T, repair RepairApplication) (adminv1.Repai
 	return adminv1.NewRepairServiceClient(conn), cleanup
 }
 
+func newAdminMemberClient(t *testing.T, member MemberApplication) (adminv1.MemberServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithMemberApplication(member)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewMemberServiceClient(conn), cleanup
+}
+
 func newAdminOperationClient(t *testing.T, store *operations.Store) (adminv1.OperationServiceClient, func()) {
 	t.Helper()
 
@@ -754,4 +833,28 @@ type fakeRepairApplication struct {
 func (f *fakeRepairApplication) GetRepairQueue(_ context.Context, shardID string) ([]*adminv1.RepairQueueItem, error) {
 	f.gotShardID = shardID
 	return f.items, nil
+}
+
+type fakeMemberApplication struct {
+	cordonReq      MemberMutationRequest
+	uncordonReq    MemberMutationRequest
+	safetyMemberID string
+	cordoned       *adminv1.StorageMember
+	uncordoned     *adminv1.StorageMember
+	safety         *adminv1.EvictionSafety
+}
+
+func (f *fakeMemberApplication) CordonMember(_ context.Context, req MemberMutationRequest) (*adminv1.StorageMember, error) {
+	f.cordonReq = req
+	return f.cordoned, nil
+}
+
+func (f *fakeMemberApplication) UncordonMember(_ context.Context, req MemberMutationRequest) (*adminv1.StorageMember, error) {
+	f.uncordonReq = req
+	return f.uncordoned, nil
+}
+
+func (f *fakeMemberApplication) GetEvictionSafety(_ context.Context, memberID string) (*adminv1.EvictionSafety, error) {
+	f.safetyMemberID = memberID
+	return f.safety, nil
 }

@@ -20,6 +20,7 @@ import (
 type AdminServer struct {
 	inspect    InspectApplication
 	repair     RepairApplication
+	member     MemberApplication
 	operations *operations.Store
 	now        func() time.Time
 }
@@ -35,6 +36,12 @@ type InspectApplication interface {
 
 type RepairApplication interface {
 	GetRepairQueue(context.Context, string) ([]*adminv1.RepairQueueItem, error)
+}
+
+type MemberApplication interface {
+	CordonMember(context.Context, MemberMutationRequest) (*adminv1.StorageMember, error)
+	UncordonMember(context.Context, MemberMutationRequest) (*adminv1.StorageMember, error)
+	GetEvictionSafety(context.Context, string) (*adminv1.EvictionSafety, error)
 }
 
 const (
@@ -72,6 +79,12 @@ func WithInspectApplication(inspect InspectApplication) AdminOption {
 func WithRepairApplication(repair RepairApplication) AdminOption {
 	return func(server *AdminServer) {
 		server.repair = repair
+	}
+}
+
+func WithMemberApplication(member MemberApplication) AdminOption {
+	return func(server *AdminServer) {
+		server.member = member
 	}
 }
 
@@ -418,25 +431,49 @@ func (s *AdminServer) StartRepair(_ context.Context, req *adminv1.StartRepairReq
 	return &adminv1.StartRepairResponse{Operation: operation}, nil
 }
 
-func (s *AdminServer) CordonMember(_ context.Context, req *adminv1.CordonMemberRequest) (*adminv1.CordonMemberResponse, error) {
-	if _, err := ValidateCordonMemberRequest(req); err != nil {
+func (s *AdminServer) CordonMember(ctx context.Context, req *adminv1.CordonMemberRequest) (*adminv1.CordonMemberResponse, error) {
+	validated, err := ValidateCordonMemberRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("CordonMember")
+	if s.member == nil {
+		return nil, unimplementedAdmin("CordonMember")
+	}
+	member, err := s.member.CordonMember(ctx, validated)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.CordonMemberResponse{StorageMember: member}, nil
 }
 
-func (s *AdminServer) UncordonMember(_ context.Context, req *adminv1.UncordonMemberRequest) (*adminv1.UncordonMemberResponse, error) {
-	if _, err := ValidateUncordonMemberRequest(req); err != nil {
+func (s *AdminServer) UncordonMember(ctx context.Context, req *adminv1.UncordonMemberRequest) (*adminv1.UncordonMemberResponse, error) {
+	validated, err := ValidateUncordonMemberRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("UncordonMember")
+	if s.member == nil {
+		return nil, unimplementedAdmin("UncordonMember")
+	}
+	member, err := s.member.UncordonMember(ctx, validated)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.UncordonMemberResponse{StorageMember: member}, nil
 }
 
-func (s *AdminServer) GetEvictionSafety(_ context.Context, req *adminv1.GetEvictionSafetyRequest) (*adminv1.GetEvictionSafetyResponse, error) {
-	if _, err := ValidateGetEvictionSafetyRequest(req); err != nil {
+func (s *AdminServer) GetEvictionSafety(ctx context.Context, req *adminv1.GetEvictionSafetyRequest) (*adminv1.GetEvictionSafetyResponse, error) {
+	validated, err := ValidateGetEvictionSafetyRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetEvictionSafety")
+	if s.member == nil {
+		return nil, unimplementedAdmin("GetEvictionSafety")
+	}
+	safety, err := s.member.GetEvictionSafety(ctx, validated.StorageMember)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetEvictionSafetyResponse{Safety: safety}, nil
 }
 
 func (s *AdminServer) PlanDrain(_ context.Context, req *adminv1.PlanDrainRequest) (*adminv1.PlanDrainResponse, error) {

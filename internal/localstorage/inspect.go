@@ -108,11 +108,16 @@ func (a *Application) GetAdminMember(ctx context.Context, memberID string) (*adm
 	if err != nil {
 		return nil, err
 	}
+	memberState := a.currentLocalMemberState()
+	state := adminv1.MemberState_MEMBER_STATE_ONLINE
+	if memberState.Draining {
+		state = adminv1.MemberState_MEMBER_STATE_DRAINING
+	}
 	return &adminv1.StorageMember{
 		StorageMemberId: "local",
 		CellId:          "local",
-		State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
-		Cordoned:        false,
+		State:           state,
+		Cordoned:        memberState.Cordoned,
 		BytesUsed:       stats.bytesUsed,
 		BytesCapacity:   stats.bytesCapacity,
 		LastSeenAt:      timestamppb.New(a.now()),

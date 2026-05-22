@@ -973,6 +973,59 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 	}
 }
 
+func TestLocalMemberCordonStatePersists(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	member, err := app.CordonMember(ctx, api.MemberMutationRequest{
+		OperationID:   "cordon-1",
+		StorageMember: "local",
+		Reason:        "maintenance",
+	})
+	if err != nil {
+		t.Fatalf("cordon member: %v", err)
+	}
+	if !member.GetCordoned() {
+		t.Fatalf("member = %#v, want cordoned", member)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	member, err = reopened.GetAdminMember(ctx, "local")
+	if err != nil {
+		t.Fatalf("get reopened member: %v", err)
+	}
+	if !member.GetCordoned() {
+		t.Fatalf("reopened member = %#v, want persisted cordon", member)
+	}
+	safety, err := reopened.GetEvictionSafety(ctx, "local")
+	if err != nil {
+		t.Fatalf("get eviction safety: %v", err)
+	}
+	if safety.GetSafeToEvict() || len(safety.GetWarnings()) == 0 {
+		t.Fatalf("eviction safety = %#v, want unsafe single-member warning", safety)
+	}
+	member, err = reopened.UncordonMember(ctx, api.MemberMutationRequest{
+		OperationID:   "uncordon-1",
+		StorageMember: "local",
+	})
+	if err != nil {
+		t.Fatalf("uncordon member: %v", err)
+	}
+	if member.GetCordoned() {
+		t.Fatalf("member = %#v, want uncordoned", member)
+	}
+}
+
 func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)

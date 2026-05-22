@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/api"
@@ -32,6 +33,8 @@ type Application struct {
 	metadata         *metastore.Store
 	authority        *raftmeta.Authority
 	prepare          *prepareLog
+	memberMu         sync.Mutex
+	memberState      localMemberState
 	sealBlockAtBytes uint64
 	now              func() time.Time
 }
@@ -75,12 +78,21 @@ func Open(dir string) (*Application, error) {
 		_ = blocks.Close()
 		return nil, err
 	}
+	memberState, err := readLocalMemberState(dir)
+	if err != nil {
+		_ = prepare.Close()
+		_ = authority.Close()
+		_ = metadata.Close()
+		_ = blocks.Close()
+		return nil, err
+	}
 	return &Application{
 		dir:              dir,
 		blocks:           blocks,
 		metadata:         metadata,
 		authority:        authority,
 		prepare:          prepare,
+		memberState:      memberState,
 		sealBlockAtBytes: DefaultSealBlockAtBytes,
 		now:              func() time.Time { return time.Now().UTC() },
 	}, nil

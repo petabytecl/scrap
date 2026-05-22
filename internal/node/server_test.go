@@ -82,6 +82,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		Transactions: app,
 		Inspect:      app,
 		Repair:       app,
+		Member:       app,
 		Operations:   operationStore,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -269,6 +270,27 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	}
 	if len(repairQueue.GetItems()) != 0 {
 		t.Fatalf("repair queue = %#v, want empty queue", repairQueue.GetItems())
+	}
+	memberClient := adminv1.NewMemberServiceClient(adminConn)
+	cordonResp, err := memberClient.CordonMember(context.Background(), &adminv1.CordonMemberRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		Reason:        "maintenance",
+		OperationId:   "018f6d86-7a22-7abc-8def-123456789abc",
+	})
+	if err != nil {
+		t.Fatalf("CordonMember: %v", err)
+	}
+	if !cordonResp.GetStorageMember().GetCordoned() {
+		t.Fatalf("cordon response = %#v, want cordoned", cordonResp.GetStorageMember())
+	}
+	safetyResp, err := memberClient.GetEvictionSafety(context.Background(), &adminv1.GetEvictionSafetyRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+	})
+	if err != nil {
+		t.Fatalf("GetEvictionSafety: %v", err)
+	}
+	if safetyResp.GetSafety().GetSafeToEvict() || len(safetyResp.GetSafety().GetWarnings()) == 0 {
+		t.Fatalf("eviction safety = %#v, want unsafe warning", safetyResp.GetSafety())
 	}
 
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
