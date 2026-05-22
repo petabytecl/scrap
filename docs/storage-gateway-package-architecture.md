@@ -20,7 +20,7 @@ layers.
 
 | Layer | Packages | Responsibility |
 | --- | --- | --- |
-| Commands and composition | `cmd/scrapd`, `cmd/scrapctl`, `internal/node` | Process startup, config loading, dependency wiring, listeners, shutdown, and CLI entrypoints. |
+| Commands and composition | `cmd/scrapd`, future `cmd/scrapctl`, `internal/node` | Process startup, config loading, dependency wiring, listeners, shutdown, and CLI entrypoints. |
 | Transport adapters | `internal/api`, future `internal/admin` | gRPC service handlers, request validation, authorization calls, protobuf mapping, streaming mechanics, and gRPC status mapping. |
 | Application workflow | future `internal/shard`, `internal/operations`, `internal/placement`, `internal/replication`, `internal/backendupload` | Storage use cases: write lifecycle, visibility, placement, peer prepare, upload intent, restore, repair, scrub, and admin operation orchestration. |
 | Storage policy and durable contracts | `internal/metastore`, `internal/raftmeta`, `internal/storageformat`, `internal/published`, `internal/identity` | Authoritative metadata records, command encoding, schema compatibility, published metadata contracts, identities, invariants, and deterministic storage formats. |
@@ -32,8 +32,9 @@ layers.
 adapters and workflow packages to assemble the process. Lower layers must not
 import `internal/node`.
 
-`cmd/scrapctl` is a client command. It must import generated admin clients and
-ordinary CLI support only. It must not import server internals such as
+Future `cmd/scrapctl` is a planned client command. When added, it must import
+generated admin clients and ordinary CLI support only. It must not import server
+internals such as
 `internal/node`, shard implementation packages, block stores, metadata stores,
 or backend adapters.
 
@@ -42,7 +43,7 @@ or backend adapters.
 | Package or future package | Owner boundary |
 | --- | --- |
 | `cmd/scrapd` | Minimal daemon entrypoint. Parse flags/env enough to call `internal/node`; no storage decisions. |
-| `cmd/scrapctl` | Operator CLI over the admin gRPC API. No separate control path and no server-internal imports. |
+| future `cmd/scrapctl` | Operator CLI over the admin gRPC API. No separate control path and no server-internal imports. |
 | `internal/node` | Process lifecycle, dependency wiring, server listeners, shard registry, node-level worker pools, shutdown, and health/readiness aggregation. |
 | `internal/shard` | One authoritative Raft metadata group: write lifecycle, command proposal, visibility, idempotency, hot index ownership, restore/repair state coordination. This package does not exist yet; current local-only orchestration is transitional. |
 | `internal/localstorage` | Transitional non-production local application used by current server tests and scaffolding. New production work should move toward the `node`/`shard`/store boundaries described here instead of expanding this package as the final architecture. |
@@ -97,8 +98,8 @@ These rules are intentionally reviewable now and automatable later.
 
 1. `cmd/scrapd` may import `internal/node` and package-level version/config
    helpers. It must not contain storage workflow logic.
-2. `cmd/scrapctl` may import generated admin clients and CLI formatting
-   helpers. It must not import server-internal packages.
+2. Future `cmd/scrapctl` may import generated admin clients and CLI formatting
+   helpers. It must not import server-internal packages when added.
 3. `internal/node` may import concrete implementations and wire them together.
    No package may import `internal/node`.
 4. `internal/api` may import generated protobuf/gRPC packages, authz,
@@ -128,14 +129,14 @@ architecture decisions into a framework. Their types should not leak into
 storage-core public APIs unless issue `#18` records an explicit substrate
 decision.
 
-DI and lifecycle frameworks, including `uber/fx`, are composition-root tools
-only. If adopted, they are allowed in `cmd/scrapd` and `internal/node`; they
-are not allowed in `internal/shard`, `internal/blockstore`,
+DI and lifecycle frameworks, including `go.uber.org/fx`, are composition-root
+tools only. If adopted, they are allowed in `cmd/scrapd` and `internal/node`;
+they are not allowed in `internal/shard`, `internal/blockstore`,
 `internal/metastore`, `internal/raftmeta`, `internal/backend`, `internal/api`,
 or storage-format packages. Until issue `#18` accepts such a framework, use
 explicit constructors and small consumer-owned interfaces.
 
-Error helpers such as `uber/multierr` may be used for local cleanup or
+Error helpers such as `go.uber.org/multierr` may be used for local cleanup or
 shutdown aggregation when the caller still receives a typed primary failure
 with retryability and failure class preserved. They must not replace domain
 error classification or become the transport mapping mechanism.
@@ -154,7 +155,7 @@ minimum interfaces or value objects they need.
 
 ```text
 cmd/scrapd -> internal/node
-cmd/scrapctl -> internal/gen/scrap/admin/v1
+future cmd/scrapctl -> internal/gen/scrap/admin/v1
 internal/node -> internal/api
 internal/node -> internal/backend/fs
 internal/api -> internal/gen/scrap/v1
@@ -178,8 +179,8 @@ internal/raftmeta -> internal/backend/s3
 internal/backend -> internal/backend/fs
 internal/shard -> github.com/openbao/openbao/api
 internal/api -> cmd/scrapd
-cmd/scrapctl -> internal/node
-cmd/scrapctl -> internal/blockstore
+future cmd/scrapctl -> internal/node
+future cmd/scrapctl -> internal/blockstore
 internal/identity -> internal/gen/scrap/v1 request/response types
 internal/storageformat -> go.uber.org/fx
 ```
