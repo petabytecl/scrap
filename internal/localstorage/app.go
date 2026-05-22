@@ -163,6 +163,9 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 		readLength = *req.Range.Length
 	}
 	selectedRange := api.ReadRange{Offset: offset, Length: &readLength}
+	if err := a.blocks.VerifyRange(document.Location, offset, &readLength); err != nil {
+		return mapError(err)
+	}
 	if err := sender.SendMetadata(api.ReadDocumentMetadata{
 		Metadata:      documentToAPI(document),
 		SelectedRange: selectedRange,

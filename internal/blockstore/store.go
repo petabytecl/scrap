@@ -175,15 +175,9 @@ func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
 }
 
 func (s *Store) ReadRange(ctx context.Context, record Record, offset uint64, length *uint64, writer io.Writer) error {
-	if offset > record.StoredLength {
-		return ErrInvalidRange
-	}
-	readLength := record.StoredLength - offset
-	if length != nil {
-		if *length > record.StoredLength-offset {
-			return ErrInvalidRange
-		}
-		readLength = *length
+	readLength, err := normalizeRange(record, offset, length)
+	if err != nil {
+		return err
 	}
 	if readLength == 0 {
 		return nil
@@ -218,6 +212,17 @@ func (s *Store) ReadRange(ctx context.Context, record Record, offset uint64, len
 	}
 }
 
+func (s *Store) VerifyRange(record Record, offset uint64, length *uint64) error {
+	readLength, err := normalizeRange(record, offset, length)
+	if err != nil {
+		return err
+	}
+	if readLength == 0 {
+		return nil
+	}
+	return s.verifyReadableRange(record, offset, readLength)
+}
+
 func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64) error {
 	if offset+length < offset || offset+length > record.StoredLength {
 		return ErrInvalidRange
@@ -239,6 +244,20 @@ func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64)
 		return verifyWholeRecord(file, record)
 	}
 	return verifyFrameRange(file, record, offset, length)
+}
+
+func normalizeRange(record Record, offset uint64, length *uint64) (uint64, error) {
+	if offset > record.StoredLength {
+		return 0, ErrInvalidRange
+	}
+	readLength := record.StoredLength - offset
+	if length != nil {
+		if *length > record.StoredLength-offset {
+			return 0, ErrInvalidRange
+		}
+		readLength = *length
+	}
+	return readLength, nil
 }
 
 func verifyWholeRecord(file *os.File, record Record) error {

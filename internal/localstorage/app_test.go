@@ -286,6 +286,44 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	}
 }
 
+func TestCorruptReadFailsBeforeSendingMetadata(t *testing.T) {
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("verified before metadata")
+	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+
+	sender := &recordingReadSender{}
+	err = app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.DataLoss)
+	if sender.sentMetadata {
+		t.Fatal("metadata was sent before corruption was detected")
+	}
+	if len(sender.chunks) != 0 {
+		t.Fatalf("sent %d chunks before corruption error", len(sender.chunks))
+	}
+}
+
 func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	app := openTestApplication(t)
 	doc := testDocumentIdentity()
@@ -386,12 +424,14 @@ func (r *chunkReaderStub) Recv() ([]byte, error) {
 }
 
 type recordingReadSender struct {
-	metadata api.ReadDocumentMetadata
-	chunks   [][]byte
+	metadata     api.ReadDocumentMetadata
+	sentMetadata bool
+	chunks       [][]byte
 }
 
 func (s *recordingReadSender) SendMetadata(metadata api.ReadDocumentMetadata) error {
 	s.metadata = metadata
+	s.sentMetadata = true
 	return nil
 }
 
