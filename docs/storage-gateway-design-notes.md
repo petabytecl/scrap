@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: block format, metadata storage, shard replication, backend upload policy, and failure-domain planning.
+After reading it, they should be able to continue the design review from the current frontier: backend rate and capacity planning, internal authorization, repair scheduling, and failure-domain planning.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -31,6 +31,10 @@ document -> block_id + stored_offset + stored_length + checksums
 ```
 
 Blocks are stored locally for the hot path and uploaded to the backend for durable long-term storage.
+
+Shard consensus metadata is the authority for document visibility, physical refs, encryption envelopes, restore state, and background jobs. Local in-memory indexes are derived read accelerators.
+
+Backend encryption uses OpenBao Transit envelope encryption. Routine KEK rotation rewraps small per-block envelopes; it does not re-encrypt block payload data.
 
 ## Problem
 
@@ -323,11 +327,99 @@ ACK
 
 Partial writes are never visible to readers. If streaming fails before finalize, no valid document exists.
 
+## Write State Machine
+
+`WriteDocument` is coordinated by the shard leader. The ingress gateway routes the stream to the leader early so the leader owns block append, peer prepare, metadata commit, and upload intent creation.
+
+V1 write-attempt states:
+
+```text
+RECEIVING
+LOCAL_PREPARED
+PEERS_PREPARED
+COMMITTING
+COMMITTED
+ABORTED
+```
+
+Normal sequence:
+
+```text
+client streams bytes
+leader appends bytes to open .blk
+leader fsyncs .blk
+leader writes and fsyncs .openlog DocumentPrepared
+leader prepares required peer replicas
+peers fsync bytes and verify checksums
+leader commits document metadata through consensus
+document becomes readable
+leader records backend upload intent in the consensus outbox
+client receives success
+```
+
+Prepared bytes are durable but unreadable. Consensus metadata is the source of truth for document visibility after crashes. `.openlog` proves local byte durability and supports recovery, but it does not make a document visible by itself.
+
+`.openlog` commit semantics:
+
+```text
+DocumentPrepared:
+  durable local bytes exist
+  document is still invisible
+
+DocumentFinalized:
+  optional post-commit trace/debug record
+  not required before ACK
+```
+
+ACK does not require fsyncing a post-commit `DocumentFinalized` record. Once consensus commit succeeds, the write is successful. If local post-commit bookkeeping fails after consensus commit, return success and repair local bookkeeping from committed metadata plus prepared bytes.
+
+Consensus document commit records should include:
+
+```text
+document metadata
+prepared replica physical refs
+desired replica count
+achieved replica count
+repair requirement if under full replication
+backend upload-required outbox entry
+```
+
+Upload intent is durable through the shard consensus outbox, not only a local queue. Later repair completions add or remove replica refs through consensus so read routing sees a consistent committed view.
+
+Client-visible write outcomes:
+
+```text
+active duplicate attempt:
+  gRPC ABORTED, retryable
+
+same identity/idempotency/hash already finalized:
+  OK with existing committed metadata
+
+same identity but different bytes or incompatible metadata:
+  ALREADY_EXISTS
+```
+
+Duplicate active writes return in-progress/retryable behavior rather than attaching to the active stream in v1.
+
+Timeout and cleanup defaults:
+
+```text
+write stream idle timeout: 60 seconds
+write stream total timeout: 15 minutes
+aborted/prepared-but-uncommitted cleanup TTL: 24 hours
+```
+
+Cleanup must confirm no committed metadata references the prepared bytes before deleting local block ranges or attempt records.
+
 ## Sharding And Routing
 
-Shard by `transaction_id`.
+Shard by transaction key:
 
-All documents for a transaction live in the same shard group. This keeps `FindDocuments(transaction_id, filters)`, lifecycle decisions, and per-transaction accounting local to one shard.
+```text
+tenant_id + transaction_id
+```
+
+All documents for one tenant-scoped transaction live in the same shard group. This keeps `FindDocuments(transaction_id, filters)`, lifecycle decisions, and per-transaction accounting local to one shard.
 
 Any gateway may accept any API request. Internally:
 
@@ -359,8 +451,12 @@ Write durability policy:
 
 ```text
 critical_ingest:
-  ACK after bytes are durable on all 5 replicas
+  target bytes durable on all 5 replicas before ACK
+  after 2s prepare deadline, may downgrade to quorum ACK
   metadata committed by consensus quorum
+  degraded quorum ACK is tracked in logs/metrics/traces, not persisted per document
+  degraded repair target: under 2 seconds
+  degraded repair alert: over 10 seconds
 
 normal / bulk:
   ACK after bytes are durable on quorum, usually 3 of 5
@@ -378,6 +474,63 @@ throttle writes if repair backlog exceeds safety threshold
 
 Verified backend storage counts for durability. Only committed local replicas count for hot read availability.
 
+Once metadata is committed, reads may use any checksum-valid committed replica even if full replication repair is still pending.
+
+## Shard Consensus And Metadata Store
+
+One shard group is one consensus group. The shard consensus state machine owns:
+
+```text
+transactions
+documents
+committed physical refs
+block lifecycle state
+backend locations
+active encryption envelopes
+restore state
+upload / repair / restore / rewrap outboxes
+replica membership
+```
+
+The consensus log carries deterministic metadata commands only. It must not carry document bytes, full `.idx` payloads, or large block data.
+
+Applied shard state is stored in a local RocksDB-like LSM using typed binary keyspaces and versioned Protobuf values. Exact library selection is deferred until implementation language/runtime selection.
+
+Recommended keyspaces:
+
+```text
+transaction
+document
+document_by_transaction
+block
+block_ref
+envelope
+upload_job
+repair_job
+restore_job
+rewrap_job
+replica_membership
+```
+
+Metadata schemas use versioned Protobuf values and additive-first compatibility. Breaking metadata or block-format changes require explicit feature gates and upgrade choreography so rolling upgrades do not reinterpret old state.
+
+The in-memory/read-optimized index is a derived projection. It exists to hit the metadata lookup latency target for `HeadDocument`, `ReadDocument`, and transaction-scoped `FindDocuments`, but it is never the source of truth. It must be rebuildable from:
+
+```text
+installed shard snapshot
+local applied KV state
+Raft log tail / WAL after snapshot
+verified local `.idx` files for physical byte refs
+```
+
+Strong metadata reads use Raft ReadIndex by default. Lease reads are allowed only as an optimization after the chosen Raft implementation, clock assumptions, and fencing behavior are explicitly validated. If a follower cannot prove freshness, it forwards or redirects to the leader.
+
+Shard snapshots contain metadata, job state, envelope state, restore state, and membership state. They do not contain document bytes or derived hot indexes. After installing a snapshot, a replica must verify referenced local block files and indexes before it can serve byte reads. Missing or corrupt local refs become repair work.
+
+Background work uses a Raft-backed transactional outbox. Upload, repair, restore, and rewrap jobs are at-least-once operations with idempotent external effects. The shard leader owns scheduling and fencing. Capable replicas may execute leased jobs and report completion through consensus.
+
+If a shard cannot reach consensus quorum, it must reject writes and strong metadata reads. The system targets continued availability within the configured fault budget, not split-brain operation after quorum loss.
+
 ## Read Path
 
 Reads prefer local hot storage.
@@ -386,18 +539,103 @@ Read order:
 
 ```text
 lookup shard route
-lookup committed metadata in memory
+lookup committed metadata through safe shard metadata read
 if local committed physical ref exists:
   stream local block range
 else if peer committed physical ref exists:
   stream peer block range
-else:
+else if backend block is warm and decryptable:
   stream from backend block range
+else if backend block is archived/cold:
+  queue block restore and return restore-pending
+else if backend block is warm but crypto material is unavailable:
+  return crypto-unavailable
 ```
 
-Metadata may be served by the leader or by lease-safe/read-index-valid followers. Bytes may be served by any committed checksum-valid replica.
+Metadata may be served by the leader or by ReadIndex-valid followers. Bytes may be served by any committed checksum-valid replica.
 
 Priority does not affect read scheduling in the current model. Priority is write-side only.
+
+`HeadDocument` confirms existence and metadata from shard consensus state even when bytes are no longer local. `ReadDocument` is all-or-error before streaming bytes: it plans the requested range first and does not stream a partial prefix if any required frame needs archive restore or OpenBao decrypt is unavailable.
+
+Cold backend restore is explicit:
+
+```text
+restore trigger: automatic on first cold read, plus admin/prewarm API
+restore unit: physical `.blk` object
+restore targets accepted by API: transaction, document, or block
+restore state: tracked in shard consensus and refreshed from backend metadata
+```
+
+Object-store archive restore is block-level because backend archive classes restore whole objects, not arbitrary document ranges. A document or transaction restore request expands to the affected block set.
+
+When a cold `.blk` becomes readable in the backend, S.C.R.A.P. may serve read-through from the backend and opportunistically rehydrate local replicated cache if disk and admission policy allow. Prewarm may request a bounded `pin_until` TTL, but pinning is capped by configuration and refused under disk pressure.
+
+Restore/prewarm work uses operational lanes such as `interactive-restore`, `planned-prewarm`, and `bulk-audit`. It does not reuse caller-supplied write priorities.
+
+Client-visible cold-read outcomes:
+
+```text
+document missing:
+  NOT_FOUND
+
+document exists but bytes are archived:
+  structured restore-pending error
+  includes affected block ids, restore state, retry_after, restore_queued
+
+document exists and bytes are warm, but OpenBao is unavailable and DEK is not cached:
+  structured crypto-unavailable error
+
+document exists and requested range is immediately serveable:
+  stream metadata first, then bytes
+```
+
+Normal reads use one verified source for the requested range. On corruption or missing bytes, the gateway may retry affected frames from a peer or backend source before failing the read.
+
+## Repair And Scrubbing
+
+Repair is a first-class safety path, not only a background optimization. Repair work is created when:
+
+```text
+write ACK used quorum instead of full replica target
+replica failed during prepare/commit
+returning replica is missing committed refs
+scrub detects checksum mismatch
+read path detects missing or corrupt bytes
+backend upload/reconciliation finds divergent state
+```
+
+Preferred repair source order:
+
+```text
+committed peer local ref
+verified backend block ref
+rebuild from other committed document refs when necessary
+```
+
+Repair unit is a document range or the minimum safe frame range needed to restore the missing/corrupt local ref. Repair completes only after checksum verification and a consensus update that adds the repaired physical ref or clears the repair requirement.
+
+Checksum mismatch behavior:
+
+```text
+quarantine bad local ref
+preserve evidence for operator inspection
+emit repair job
+avoid serving the suspect bytes
+do not delete the only remaining evidence until another valid ref exists
+```
+
+A returning node must catch up through Raft and verify local refs before serving reads. Catching up metadata alone is not sufficient to become a byte-serving replica.
+
+Repair lanes:
+
+```text
+critical
+normal
+scrub
+```
+
+Critical repair protects degraded critical-ingest writes and has the tightest target. Scrub repair must not starve write safety, normal repair, or foreground reads.
 
 ## Transaction Lifecycle
 
@@ -520,7 +758,7 @@ The `.blk` header is fixed at 64 bytes. Frame payload bytes follow the header wi
 .blk = 64-byte header + raw frame payloads
 ```
 
-The document table, frame table, encryption metadata, and checksums live in `.idx`.
+The document table, frame table, envelope reference, and checksums live in `.idx`. Active wrapped DEK material and crypto profile metadata live in `.env` when backend encryption is enabled.
 
 All block and index binary formats use:
 
@@ -645,11 +883,22 @@ offset  size  field
 24      8     ciphertext_offset u64
 32      4     compression_mode u32    # reserved/zero in v1
 36      4     encryption_mode u32
-40      12    nonce bytes[12]
-52      16    auth_tag bytes[16]
-68      4     crc32c u32
-72      24    reserved
+40      16    auth_tag bytes[16]
+56      4     crc32c u32
+60      36    reserved
 ```
+
+Frame nonces are not stored per frame. Encrypted backend objects store a per-block nonce seed in the encryption envelope, and each frame nonce is deterministically derived from:
+
+```text
+nonce_seed
+object_kind = block | index
+crypto_profile
+block_id
+frame_index
+```
+
+This keeps the frame table algorithm-neutral across AES-GCM and XChaCha20-Poly1305 profiles.
 
 For unencrypted blocks:
 
@@ -657,7 +906,7 @@ For unencrypted blocks:
 ciphertext_offset = plaintext_offset
 ciphertext_length = plaintext_length
 encryption_mode = 0
-nonce/auth_tag zeroed
+auth_tag zeroed
 ```
 
 Document records are fixed-width and sorted by `document_key_id` ascending. Variable strings and workflow metadata live in mandatory per-document Protobuf metadata blobs.
@@ -708,7 +957,7 @@ client_idempotency_key
 created_by_service
 ```
 
-Block-level metadata blobs are optional and can carry encryption metadata, future compression dictionary information, or other block-scoped extension data.
+Block-level metadata blobs are optional and can carry future compression dictionary information, envelope identity/hash references, or other block-scoped extension data. Active wrapped DEK material lives in `.env`, not in `.idx`.
 
 The `.idx` footer is fixed at 64 bytes:
 
@@ -784,26 +1033,42 @@ If the metadata DB is lost but block files remain:
 
 ## Backend Block Storage
 
-The backend stores sealed blocks. V1 uses two backend objects per block:
+The backend stores sealed blocks. Unencrypted V1 blocks use two backend objects:
 
 ```text
 <block_id>.blk
 <block_id>.idx
 ```
 
+When backend encryption is enabled, V1 uses a third small warm metadata object:
+
+```text
+<block_id>.env
+```
+
+Backend object roles:
+
+```text
+.blk: large immutable block payload object
+.idx: immutable block index/checksum/document metadata object
+.env: tiny active encryption envelope and crypto metadata
+```
+
+For encrypted backend blocks, `.blk` and `.idx` are protected payloads. `.env` is a cleartext control object containing only wrapped key material and non-secret crypto metadata. `.env` and `.idx` should remain in a warm metadata tier; `.blk` is the object expected to move to cold/archive tiers under backend lifecycle policy.
+
 The leader's sealed block is the canonical backend block in v1:
 
 ```text
 leader local block sealed
 verify block checksum
-upload block and index to backend
+upload block, index, and envelope when applicable to backend
 commit backend block location
 documents now have backend refs: block_id + stored_offset + stored_length
 ```
 
 If the leader fails before upload, recovery may upload another replica's sealed block or rebuild a canonical backend block from committed documents.
 
-Reads prefer local replica physical refs, then peer refs, then backend canonical block refs.
+Reads prefer local replica physical refs, then peer refs, then backend canonical block refs. Routine backend recovery must not depend on object-store `LIST`; shard metadata is the inventory.
 
 ## Backend Abstraction
 
@@ -836,6 +1101,7 @@ Example physical layout:
 ```text
 blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.blk
 blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.idx
+blocks/v1/p=<hash-prefix>/shard=<shard_id>/<block_id>.env
 ```
 
 The uploader is a first-class subsystem:
@@ -857,7 +1123,18 @@ permanent-block-upload
 ephemeral-spill-if-policy-requires
 repair/reconciliation
 disaster-recovery-secondary
+restore/prewarm
+rewrap-envelope-sync
 ```
+
+Backend upload is committed only after every required object for the block is uploaded and verified:
+
+```text
+unencrypted block: .blk + .idx
+encrypted block: .blk + .idx + .env
+```
+
+Upload retries use exponential backoff plus per-backend and per-physical-prefix token buckets. Upload backlog alone does not stop write ACKs; local replicated durability remains the immediate source of truth. Write admission stops only when disk/backlog guards show that continued local acceptance would make durability unsafe.
 
 Under local disk pressure:
 
@@ -878,39 +1155,142 @@ Backend upload state may reduce durability repair urgency, but it does not repla
 
 Backend encryption is policy-driven. It is primarily important for external object storage such as S3. Local hot storage may remain application-plaintext by default, relying on node/disk/Kubernetes controls.
 
-Recommended encryption model:
+Accepted encryption model:
 
-- use OpenBao Transit for envelope encryption;
-- do not send whole blocks to Transit for encryption;
-- request a data key from Transit;
-- encrypt block data locally;
-- store the encrypted data key and encryption metadata in block metadata;
-- discard plaintext keys after use, subject to a bounded in-memory cache.
+```text
+KEK scope: deployment-level OpenBao Transit key
+DEK scope: one data-encryption key per sealed block
+DEK storage: wrapped in per-block `.env` envelope
+payload encryption: local, inside S.C.R.A.P.
+Transit use: datakey, decrypt, rewrap, rotate
+routine rotation: rewrap `.env`, do not re-encrypt `.blk`
+```
+
+Do not send whole blocks, indexes, or frames to OpenBao Transit for encryption. Transit wraps and unwraps DEKs; S.C.R.A.P. encrypts backend payloads locally.
+
+For encrypted backend blocks:
+
+```text
+<block_id>.blk: encrypted block payload frames
+<block_id>.idx: encrypted index/checksum/metadata payload
+<block_id>.env: cleartext envelope with wrapped DEK and crypto metadata
+```
+
+The active envelope is authoritative in shard consensus for hot operations. Backend `.env` is a small warm disaster-recovery/export copy. Rewrap updates consensus first, then syncs and verifies the backend `.env`.
+
+`.env` format:
+
+```text
+fixed magic/version header
+length-prefixed Protobuf body
+CRC/length checks
+```
+
+Envelope body should carry:
+
+```text
+block_id
+shard_id
+crypto_profile
+transit_key_name
+transit_key_version
+wrapped_dek
+nonce_seed
+canonical Transit context/AAD hash
+current envelope hash/version
+previous envelope while backend sync is pending
+rewrap status
+```
+
+Consensus stores the expected envelope hash/version. Transit context/AAD authenticates the wrapped DEK against the canonical block identity. The `.env` object carries local CRC/length checks for corruption diagnostics.
+
+The Transit KEK must be created as a strict non-exportable key:
+
+```text
+exportable: false
+plaintext backup: disabled
+deletion: disabled
+upsert: disabled
+derivation: enabled
+rotation: allowed
+min_decryption_version: changed only by audited operator workflow
+```
+
+Transit calls use canonical derived context plus associated data bound to:
+
+```text
+deployment_id
+shard_id
+block_id
+object_kind = block | index | envelope
+block/index format version
+crypto_profile
+frame_size
+frame_index when encrypting a frame
+```
+
+This makes swapped or cross-deployment envelopes fail authentication instead of silently decrypting under the wrong block identity.
 
 Efficient backend range reads require framed block encryption.
 
-Recommended encrypted block shape:
+Encrypted backend frame shape:
 
 ```text
-block header / index:
-  block_id
-  encryption_mode
-  frame_size
-  frame_count
-  encrypted_data_key
-  algorithm
-  frame table
-
-frame:
+frame record:
   plaintext_offset
   plaintext_length
   ciphertext_offset
   ciphertext_length
-  nonce
-  auth tag / checksum
+  auth_tag
+  checksum
 ```
 
-Default crypto frame size is 1 MiB, with 4 MiB as a possible tuning option.
+Default crypto frame size is 1 MiB, with 4 MiB as a possible tuning option. Frame nonces are derived from the envelope nonce seed and canonical context; they are not stored per frame.
+
+Crypto profiles are configurable. V1 default is AES-256-GCM. XChaCha20-Poly1305 is an explicit allowed profile. "Quantum-ready" in this design means 256-bit symmetric keys plus crypto agility; it does not mean a blanket guarantee against every future quantum-relevant attack.
+
+One OpenBao data key is requested per sealed block. S.C.R.A.P. derives separated subkeys for block payload encryption, index payload encryption, and nonce/AAD domains using context-bound key derivation. Do not reuse the raw DEK directly across object kinds.
+
+Plaintext DEKs:
+
+```text
+never persisted
+cached only in bounded process memory
+default cache TTL: 5 minutes
+evicted by TTL, size cap, restart, or operator action
+wiped on eviction where runtime allows
+```
+
+OpenBao outage behavior:
+
+```text
+local plaintext hot reads continue
+encrypted backend reads continue only when the needed DEK is cached
+new encrypted backend upload/seal work pauses until Transit recovers
+local replicated write ACK may continue until disk/backlog guards reject safely
+never upload plaintext as an encryption fallback
+never use an emergency local wrapping key in v1
+```
+
+Key rotation policy:
+
+```text
+scheduled KEK rotation: every 90 days by default
+incident rotation: immediate operator-triggered rotation
+routine post-rotation work: async `.env` rewrap
+rewrap completion target: 7 days
+old key retirement: audit-proven only
+```
+
+Do not raise `min_decryption_version` or trim old Transit key versions until shard inventory proves no active envelope requires them. Rewrap progress is tracked by consensus inventory and a rewrap outbox; OpenBao audit logs are supporting evidence, not the source of truth.
+
+Rewrap is not retroactive protection after a real compromise. If an attacker has copied old ciphertext and envelopes and also obtains the old KEK or plaintext DEK, routine rewrap does not make that copied data safe. Confirmed KEK-plus-backend, DEK, or algorithm compromise may require affected block re-encryption or breach handling.
+
+OpenBao authentication uses Kubernetes auth with least-privilege policies. Normal gateways should not have broad key-admin rights. Rewrap workers need rewrap permission; operator automation owns rotate/config workflows.
+
+OpenBao DR is part of the durability model. Because KEKs are non-exportable and plaintext key backup is disabled, deployments require OpenBao HA, tested storage snapshots, and tested unseal/recovery procedures. Losing Transit key material makes encrypted backend data unrecoverable.
+
+Crypto audit is mandatory. OpenBao audit devices must be enabled. S.C.R.A.P. logs key name, key version, job ID, block ID, request ID, and status, but never plaintext DEKs or wrapped DEK blobs.
 
 Encryption is transparent to clients. Normal reads return original logical document bytes.
 
@@ -929,28 +1309,26 @@ ciphertext_sha256: encrypted backend bytes when applicable
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
 - What are the exact failure domains for replica placement: nodes, racks, zones, regions, or Kubernetes node pools?
-- Which consensus implementation should back shard metadata?
-- Which local durable metadata store should back each shard member?
+- Which concrete Raft and LSM implementations should be used once the implementation language/runtime is chosen?
 - What are the block format versioning rules and compatibility guarantees?
-- What is the OpenBao key hierarchy, cache TTL, rotation, and outage behavior?
 - What are the exact backend key prefix counts and token-bucket limits per provider?
 - How much local disk is required for the worst multinational bulk burst plus backend slowdown?
-- What are the write admission thresholds for disk pressure and repair backlog?
-- What are the scrubbing, checksum verification, and repair schedules?
+- What are the write admission thresholds for disk pressure, repair backlog, and critical downgrade rates?
+- What are the scrubbing and checksum verification schedules?
 - How should shard movement, resharding, and replica replacement work?
-- What is the admin API for transaction listing, incomplete uploads, and lifecycle reporting?
+- What is the admin API for transaction listing, incomplete uploads, restore/prewarm, and lifecycle reporting?
 - What authorization model protects internal APIs, even if caller metadata is trusted?
 - Should there be a dedicated disaster-recovery backend in v1 or only schema support for it?
 
 ## Next Discussion Frontier
 
-The block and `.idx` schema shape is now concrete enough to move to write-path semantics.
+The write path, block format, OpenBao envelope policy, cold-read semantics, repair basics, and consensus/store substrate are concrete enough to move to operational limits and security boundaries.
 
 Resume by choosing between:
 
-1. write prepare/finalize/retry state machine;
-2. shard metadata store and consensus library;
-3. repair state machine;
-4. backend uploader queue/rate-control design.
+1. backend uploader queue/rate-control and burst capacity sizing;
+2. internal authorization and service identity;
+3. replica placement/failure-domain policy;
+4. concrete implementation language/runtime and library choices.
 
-The recommended next topic is the write state machine. The storage format is now concrete enough to define commit, recovery, retry, and repair states before selecting a metadata engine.
+The recommended next topic is backend rate/capacity planning. The storage design now depends on concrete limits for backend request shaping, local disk guardrails, and burst survival.

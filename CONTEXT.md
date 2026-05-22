@@ -10,4 +10,12 @@ Backend selection is deployment-level configuration. `tenant_id` is part of docu
 
 The central physical abstraction is a block: an immutable byte container with an index mapping each logical document to `block_id + stored_offset + stored_length + checksums`.
 
+The write path is leader-coordinated: bytes are prepared durably first, consensus metadata controls visibility, and backend upload intent is recorded after commit.
+
+Shard consensus metadata is the authority for document visibility, physical byte references, encryption envelopes, restore state, and background work. Local in-memory indexes are read accelerators derived from durable shard metadata.
+
+Backend encryption uses an envelope model: OpenBao Transit provides a deployment-scoped key-encryption key, and S.C.R.A.P. uses per-block data-encryption keys for backend block and index objects. Routine key rotation rewraps small per-block envelopes instead of re-encrypting block data.
+
+Cold backend reads are explicit. `HeadDocument` can confirm existence from metadata, while `ReadDocument` returns a structured restore-pending or crypto-unavailable response when bytes cannot be served immediately.
+
 The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md).
