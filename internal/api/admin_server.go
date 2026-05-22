@@ -2,18 +2,34 @@ package api
 
 import (
 	"context"
+	"errors"
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type AdminServer struct{}
+type AdminServer struct {
+	operations *operations.Store
+}
 
-func NewAdminServer() *AdminServer {
-	return &AdminServer{}
+type AdminOption func(*AdminServer)
+
+func NewAdminServer(options ...AdminOption) *AdminServer {
+	server := &AdminServer{}
+	for _, option := range options {
+		option(server)
+	}
+	return server
+}
+
+func WithOperationStore(store *operations.Store) AdminOption {
+	return func(server *AdminServer) {
+		server.operations = store
+	}
 }
 
 func RegisterAdminServer(registrar grpc.ServiceRegistrar, server *AdminServer) {
@@ -93,7 +109,17 @@ func (s *AdminServer) GetOperation(_ context.Context, req *adminv1.GetOperationR
 	if err := validateOperationIDRequest(req, "operation_id", func(req *adminv1.GetOperationRequest) string { return req.OperationId }); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("GetOperation")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("GetOperation")
+	}
+	operation, err := s.operations.Get(req.GetOperationId())
+	if errors.Is(err, operations.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "operation not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.GetOperationResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) WatchOperation(req *adminv1.WatchOperationRequest, _ grpc.ServerStreamingServer[adminv1.WatchOperationResponse]) error {
@@ -123,7 +149,17 @@ func (s *AdminServer) ListOperations(_ context.Context, req *adminv1.ListOperati
 	if err := problems.err(); err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("ListOperations")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("ListOperations")
+	}
+	result, err := s.operations.List(operations.ListFilter{
+		States:        req.States,
+		OperationType: req.GetOperationType(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.ListOperationsResponse{Operations: result}, nil
 }
 
 func (s *AdminServer) CancelOperation(_ context.Context, req *adminv1.CancelOperationRequest) (*adminv1.CancelOperationResponse, error) {
