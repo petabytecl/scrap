@@ -65,6 +65,20 @@ func TestPutObjectConflictsForDifferentBytes(t *testing.T) {
 	}
 }
 
+func TestPutObjectVerifiesExistingBytesBeforeIdempotentSuccess(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes"))); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
+	if err := os.WriteFile(store.objectPath("blocks/block-1", dataSuffix), []byte("corrupt bytes"), 0o600); err != nil {
+		t.Fatalf("corrupt object: %v", err)
+	}
+	_, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes")))
+	if !errors.Is(err, backend.ErrChecksumMismatch) {
+		t.Fatalf("put error = %v, want %v", err, backend.ErrChecksumMismatch)
+	}
+}
+
 func TestReadObjectRangeDetectsCorruptionBeforeWritingBytes(t *testing.T) {
 	store := openTestStore(t)
 	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes"))); err != nil {

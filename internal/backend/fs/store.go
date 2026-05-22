@@ -50,6 +50,9 @@ func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (ba
 		if err != nil {
 			return backend.Object{}, err
 		}
+		if err := s.verifyObject(ctx, existing); err != nil {
+			return backend.Object{}, err
+		}
 		if existing.Length == incoming.Length && existing.SHA256 == incoming.SHA256 {
 			return existing, nil
 		}
