@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -90,6 +91,36 @@ func (a *Application) RestorePublishedMetadataCheckpoint(ctx context.Context, ap
 		if err := a.applyPublishedSnapshotContents(ctx, checkpoint.Manifest.GetManifestId(), contents, now); err != nil {
 			return result, err
 		}
+	}
+	return result, nil
+}
+
+func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRestoreResult, error) {
+	if !execute {
+		return a.RestorePublishedMetadataCheckpoint(ctx, false)
+	}
+	drillDir, err := os.MkdirTemp("", "scrap-dr-drill-*")
+	if err != nil {
+		return MetadataRestoreResult{}, err
+	}
+	defer os.RemoveAll(drillDir)
+	drillApp, err := Open(drillDir)
+	if err != nil {
+		return MetadataRestoreResult{}, err
+	}
+	defer drillApp.Close()
+	drillApp.now = a.now
+	drillApp.SetBackendStore(a.backendStore)
+	result, err := drillApp.RestorePublishedMetadataCheckpoint(ctx, true)
+	if err != nil {
+		return result, err
+	}
+	documents, err := drillApp.metadata.ListDocuments(metastore.DocumentFilter{})
+	if err != nil {
+		return result, err
+	}
+	if len(documents) != result.Documents {
+		return result, fmt.Errorf("localstorage: DR drill restored %d documents, expected %d", len(documents), result.Documents)
 	}
 	return result, nil
 }

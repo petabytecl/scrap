@@ -30,10 +30,11 @@ func (a *Application) GetRecoveryReadiness(ctx context.Context) (*adminv1.Recove
 	checkpoint, err := published.VerifyCurrentCheckpoint(ctx, a.backendStore, localPublishedCellID)
 	switch {
 	case err == nil:
+		readiness.Ready = true
 		readiness.LatestRestorableCheckpointAt = checkpoint.Pointer.GetPublishedAt()
 		warnings = append(warnings, &adminv1.OperationWarning{
-			Code:    "SCRAP_DR_DRILL_IMPLEMENTATION_MISSING",
-			Message: "published metadata checkpoint exists, but local DR drill execution is not implemented",
+			Code:    "SCRAP_DR_NON_PRODUCTION_MODE",
+			Message: "local non-production recovery artifacts are ready, but production readiness gates are separate",
 		})
 	case errors.Is(err, published.ErrCurrentPointerNotFound):
 		warnings = append(warnings, &adminv1.OperationWarning{

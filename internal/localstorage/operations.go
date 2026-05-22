@@ -58,7 +58,7 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 		case "copy-verify":
 			succeeded, err = a.runCopyVerifyOperation(ctx, store, operation)
 		case "dr-drill":
-			succeeded, err = a.runDisasterRecoveryOperation(ctx, store, operation)
+			succeeded, err = a.runDRDrillOperation(ctx, store, operation)
 		default:
 			result.Skipped++
 			continue
@@ -305,6 +305,55 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 			"tombstones":     fmt.Sprintf("%d", restore.Tombstones),
 			"upload_intents": fmt.Sprintf("%d", restore.UploadIntents),
 			"verified":       fmt.Sprintf("%d", restore.Verified),
+		},
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) runDRDrillOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running dr-drill operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	drill, err := a.RunDRDrill(ctx, !operation.GetDryRun())
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "dr-drill operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_DR_DRILL_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	message := "dr-drill operation succeeded"
+	if operation.GetDryRun() {
+		message = "dr-drill dry-run succeeded"
+	}
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(drill.Documents + drill.UploadIntents),
+		WorkUnitsCompleted: uint64(drill.Documents + drill.UploadIntents),
+		Message:            message,
+		Counters: map[string]string{
+			"documents":      fmt.Sprintf("%d", drill.Documents),
+			"snapshots":      fmt.Sprintf("%d", drill.Snapshots),
+			"tombstones":     fmt.Sprintf("%d", drill.Tombstones),
+			"upload_intents": fmt.Sprintf("%d", drill.UploadIntents),
+			"verified":       fmt.Sprintf("%d", drill.Verified),
 		},
 	}
 	if err := store.Put(finished); err != nil {

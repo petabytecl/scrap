@@ -1126,10 +1126,10 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	if err != nil {
 		t.Fatalf("get recovery readiness: %v", err)
 	}
-	if readiness.GetReady() || readiness.GetLatestRestorableCheckpointAt().AsTime() != app.now() ||
-		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_DRILL_IMPLEMENTATION_MISSING") ||
+	if !readiness.GetReady() || readiness.GetLatestRestorableCheckpointAt().AsTime() != app.now() ||
+		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_NON_PRODUCTION_MODE") ||
 		hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_METADATA_EXPORT_MISSING") {
-		t.Fatalf("readiness = %#v, want checkpoint timestamp but fail-closed drill warning", readiness)
+		t.Fatalf("readiness = %#v, want non-production-ready checkpoint timestamp", readiness)
 	}
 }
 
@@ -1299,20 +1299,41 @@ func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
 		t.Fatalf("get operation: %v", err)
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
-		finished.GetLastError().GetCode() != "SCRAP_DR_NOT_READY" ||
-		len(finished.GetWarnings()) == 0 {
-		t.Fatalf("finished operation = %#v, want DR not-ready failure with warnings", finished)
+		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" {
+		t.Fatalf("finished operation = %#v, want DR drill failure", finished)
 	}
 }
 
 func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(800, 0).UTC())
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("dry-run drill bytes"))
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         testDocumentIdentity(),
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("dry-run drill bytes")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	publication, err := app.PublishMetadataSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("publish metadata snapshot: %v", err)
+	}
 	store := openTestOperationStore(t)
 	operation := queuedOperation("dr-drill-dry-run-1", "dr-drill", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Snapshot{
-				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: "snapshot-1"},
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
 			},
 		},
 	})
@@ -1333,9 +1354,64 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 		t.Fatalf("get operation: %v", err)
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetWorkUnitsCompleted() != 1 ||
-		len(finished.GetWarnings()) == 0 {
-		t.Fatalf("finished operation = %#v, want dry-run success with readiness warnings", finished)
+		finished.GetProgress().GetCounters()["documents"] != "1" ||
+		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
+		t.Fatalf("finished operation = %#v, want dry-run checkpoint verification", finished)
+	}
+}
+
+func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(801, 0).UTC())
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("scratch drill bytes"))
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         testDocumentIdentity(),
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("scratch drill bytes")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	publication, err := app.PublishMetadataSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("publish metadata snapshot: %v", err)
+	}
+	store := openTestOperationStore(t)
+	operation := queuedOperation("dr-drill-op-2", "dr-drill", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one successful DR drill", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["documents"] != "1" ||
+		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
+		t.Fatalf("finished operation = %#v, want scratch drill restore counters", finished)
 	}
 }
 
