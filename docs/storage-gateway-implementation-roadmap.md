@@ -96,7 +96,8 @@ Deliverables:
 - private versioned protobuf messages for published metadata snapshots/tails;
 - block, index, frame-checksum, and envelope record drafts;
 - compatibility rules for old readers, old writers, old stored bytes, and
-  rolling upgrades;
+  rolling upgrades, including the example in
+  [Storage Gateway Schema Evolution Example](storage-gateway-schema-evolution.md);
 - generated-code checks in CI for all private schemas.
 
 Acceptance criteria:
