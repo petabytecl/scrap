@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+import "google/protobuf/timestamp.proto";
+import "scrap/v1/identity.proto";
+
+option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/v1;scrapv1";
+
+service TransactionService {
+  rpc CompleteTransaction(CompleteTransactionRequest) returns (CompleteTransactionResponse);
+  rpc GetTransaction(GetTransactionRequest) returns (GetTransactionResponse);
+}
+
+enum TransactionStateKind {
+  TRANSACTION_STATE_KIND_UNSPECIFIED = 0;
+  TRANSACTION_STATE_KIND_OPEN = 1;
+  TRANSACTION_STATE_KIND_COMPLETED = 2;
+  TRANSACTION_STATE_KIND_TIMED_OUT = 3;
+}
+
+message CompleteTransactionRequest {
+  TransactionIdentity transaction = 1;
+  optional string completed_by_service = 2;
+  map<string, string> tags = 3;
+}
+
+message CompleteTransactionResponse {
+  TransactionState transaction = 1;
+}
+
+message GetTransactionRequest {
+  TransactionIdentity transaction = 1;
+}
+
+message GetTransactionResponse {
+  TransactionState transaction = 1;
+}
+
+message TransactionState {
+  TransactionIdentity transaction = 1;
+  TransactionStateKind state = 2;
+  uint32 document_count = 3;
+  uint32 permanent_document_count = 4;
+  uint32 ephemeral_document_count = 5;
+  google.protobuf.Timestamp created_at = 6;
+  optional google.protobuf.Timestamp completed_at = 7;
+  optional google.protobuf.Timestamp timeout_at = 8;
+  map<string, string> tags = 9;
+}

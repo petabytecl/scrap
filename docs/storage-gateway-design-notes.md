@@ -1276,7 +1276,7 @@ Request/correlation IDs are accepted through gRPC metadata, logged/traced, and e
 `DocumentService` v1 RPCs:
 
 ```text
-WriteDocument(stream WriteDocumentRequest) returns WriteDocumentResult
+WriteDocument(stream WriteDocumentRequest) returns WriteDocumentResponse
 HeadDocument(HeadDocumentRequest) returns HeadDocumentResponse
 ReadDocument(ReadDocumentRequest) returns stream ReadDocumentResponse
 FindDocuments(FindDocumentsRequest) returns FindDocumentsResponse
@@ -1285,8 +1285,8 @@ FindDocuments(FindDocumentsRequest) returns FindDocumentsResponse
 `TransactionService` v1 RPCs:
 
 ```text
-CompleteTransaction(CompleteTransactionRequest) returns TransactionState
-GetTransaction(GetTransactionRequest) returns TransactionState
+CompleteTransaction(CompleteTransactionRequest) returns CompleteTransactionResponse
+GetTransaction(GetTransactionRequest) returns GetTransactionResponse
 ```
 
 `WriteDocument` uses ordered stream messages:
@@ -1315,7 +1315,7 @@ WriteDocumentChunk
 
 The first write-stream message must be `init`; later messages must be `chunk`. The server rejects wrong ordering with `INVALID_ARGUMENT`. `client_idempotency_key` is optional in the schema but required by validation for `CRITICAL_INGEST`.
 
-`WriteDocumentResult`:
+`WriteDocumentResponse`:
 
 ```text
 metadata DocumentMetadata
@@ -1467,8 +1467,14 @@ CompleteTransactionRequest
   completed_by_service optional string
   tags map<string,string>
 
+CompleteTransactionResponse
+  transaction TransactionState
+
 GetTransactionRequest
   transaction TransactionIdentity
+
+GetTransactionResponse
+  transaction TransactionState
 
 TransactionState
   transaction TransactionIdentity
@@ -1597,6 +1603,8 @@ DisasterRecoveryService:
   StartCopyVerify
   StartDRDrill
 ```
+
+Concrete protobuf schemas use per-RPC `*Response` envelopes for strict Buf lint compliance, while reusable resource messages such as `Operation`, `OperationPlan`, and `TransactionState` remain separate typed payloads inside those envelopes.
 
 Dangerous or costly workflows use Plan/Start. Plan RPCs return an `operation_plan_id`, `plan_hash`, `expires_at`, affected targets, estimated impact, and warnings. Start RPCs require the recent plan token/hash. Direct raw membership edits are not exposed; member and replica changes happen through typed workflows.
 

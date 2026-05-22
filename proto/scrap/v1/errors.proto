@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "scrap/v1/identity.proto";
+
+option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/v1;scrapv1";
+
+message RestorePendingDetail {
+  DocumentIdentity identity = 1;
+  repeated string affected_block_ids = 2;
+  string restore_state = 3;
+  bool restore_queued = 4;
+  RetryHint retry_hint = 5;
+}
+
+message CryptoUnavailableDetail {
+  DocumentIdentity identity = 1;
+  string key_scope = 2;
+  RetryHint retry_hint = 3;
+}
+
+message IntegrityFailureDetail {
+  DocumentIdentity identity = 1;
+  repeated string attempted_sources = 2;
+  string evidence_id = 3;
+}
+
+message DuplicateWriteDetail {
+  DocumentIdentity identity = 1;
+  string client_idempotency_key = 2;
+  string active_write_id = 3;
+  RetryHint retry_hint = 4;
+}
+
+message UnsafeCapacityDetail {
+  string capacity_profile_id = 1;
+  uint64 required_bytes = 2;
+  uint64 available_bytes = 3;
+  repeated string warnings = 4;
+}
+
+message RetryHint {
+  bool retryable = 1;
+  optional google.protobuf.Timestamp retry_at = 2;
+  optional google.protobuf.Duration retry_delay = 3;
+  string reason = 4;
+}

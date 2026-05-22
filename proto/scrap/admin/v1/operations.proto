@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package scrap.admin.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1;adminv1";
+
+message Target {
+  oneof target {
+    DocumentTarget document = 1;
+    TransactionTarget transaction = 2;
+    BlockTarget block = 3;
+    ShardTarget shard = 4;
+    StorageMemberTarget storage_member = 5;
+    SnapshotTarget snapshot = 6;
+  }
+}
+
+message DocumentTarget {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  string document_name = 3;
+}
+
+message TransactionTarget {
+  string tenant_id = 1;
+  string transaction_id = 2;
+}
+
+message BlockTarget {
+  string shard_id = 1;
+  string block_id = 2;
+}
+
+message ShardTarget {
+  string shard_id = 1;
+}
+
+message StorageMemberTarget {
+  string storage_member_id = 1;
+}
+
+message SnapshotTarget {
+  optional string shard_id = 1;
+  string snapshot_id = 2;
+  optional string checkpoint_id = 3;
+}
+
+message Operation {
+  string operation_id = 1;
+  string operation_type = 2;
+  OperationState state = 3;
+  string requested_by_identity = 4;
+  google.protobuf.Timestamp requested_at = 5;
+  optional google.protobuf.Timestamp started_at = 6;
+  optional google.protobuf.Timestamp finished_at = 7;
+  bool dry_run = 8;
+  repeated Target targets = 9;
+  OperationProgress progress = 10;
+  repeated OperationWarning warnings = 11;
+  optional OperationError last_error = 12;
+  map<string, string> metadata = 13;
+}
+
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_PLANNED = 1;
+  OPERATION_STATE_QUEUED = 2;
+  OPERATION_STATE_RUNNING = 3;
+  OPERATION_STATE_SUCCEEDED = 4;
+  OPERATION_STATE_FAILED = 5;
+  OPERATION_STATE_CANCELED = 6;
+  OPERATION_STATE_EXPIRED = 7;
+}
+
+message OperationProgress {
+  uint64 work_units_total = 1;
+  uint64 work_units_completed = 2;
+  string message = 3;
+  map<string, string> counters = 4;
+}
+
+message OperationWarning {
+  string code = 1;
+  string message = 2;
+  Target target = 3;
+}
+
+message OperationError {
+  string code = 1;
+  string message = 2;
+  Target target = 3;
+}
+
+message OperationPlan {
+  string operation_plan_id = 1;
+  string plan_hash = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  repeated Target targets = 4;
+  OperationImpact estimated_impact = 5;
+  repeated OperationWarning warnings = 6;
+  map<string, string> metadata = 7;
+}
+
+message OperationImpact {
+  uint64 bytes_to_read = 1;
+  uint64 bytes_to_write = 2;
+  uint32 affected_shard_count = 3;
+  uint32 affected_document_count = 4;
+  bool may_reduce_replica_margin = 5;
+}

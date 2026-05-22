@@ -1,0 +1,153 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+import "google/protobuf/timestamp.proto";
+import "scrap/v1/identity.proto";
+
+option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/v1;scrapv1";
+
+service DocumentService {
+  rpc WriteDocument(stream WriteDocumentRequest) returns (WriteDocumentResponse);
+  rpc HeadDocument(HeadDocumentRequest) returns (HeadDocumentResponse);
+  rpc ReadDocument(ReadDocumentRequest) returns (stream ReadDocumentResponse);
+  rpc FindDocuments(FindDocumentsRequest) returns (FindDocumentsResponse);
+}
+
+enum DocumentClass {
+  DOCUMENT_CLASS_UNSPECIFIED = 0;
+  DOCUMENT_CLASS_PERMANENT = 1;
+  DOCUMENT_CLASS_EPHEMERAL = 2;
+}
+
+enum PriorityClass {
+  PRIORITY_CLASS_UNSPECIFIED = 0;
+  PRIORITY_CLASS_CRITICAL_INGEST = 1;
+  PRIORITY_CLASS_NORMAL = 2;
+  PRIORITY_CLASS_BULK = 3;
+}
+
+enum DocumentAvailability {
+  DOCUMENT_AVAILABILITY_UNSPECIFIED = 0;
+  DOCUMENT_AVAILABILITY_HOT = 1;
+  DOCUMENT_AVAILABILITY_COLD = 2;
+  DOCUMENT_AVAILABILITY_RESTORE_PENDING = 3;
+  DOCUMENT_AVAILABILITY_CRYPTO_UNAVAILABLE = 4;
+  DOCUMENT_AVAILABILITY_DEGRADED_REPAIR = 5;
+}
+
+enum DocumentLifecycleState {
+  DOCUMENT_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  DOCUMENT_LIFECYCLE_STATE_ACTIVE = 1;
+  DOCUMENT_LIFECYCLE_STATE_TRANSACTION_COMPLETED = 2;
+  DOCUMENT_LIFECYCLE_STATE_TOMBSTONED = 3;
+  DOCUMENT_LIFECYCLE_STATE_PENDING_RECLAMATION = 4;
+}
+
+enum StorageSource {
+  STORAGE_SOURCE_UNSPECIFIED = 0;
+  STORAGE_SOURCE_LOCAL = 1;
+  STORAGE_SOURCE_PEER = 2;
+  STORAGE_SOURCE_BACKEND = 3;
+  STORAGE_SOURCE_RESTORED_BACKEND = 4;
+}
+
+message WriteDocumentRequest {
+  oneof message {
+    WriteDocumentInit init = 1;
+    WriteDocumentChunk chunk = 2;
+  }
+}
+
+message WriteDocumentInit {
+  DocumentIdentity identity = 1;
+  DocumentClass document_class = 2;
+  PriorityClass priority_class = 3;
+  optional string content_type = 4;
+  optional uint64 expected_length = 5;
+  optional bytes expected_sha256 = 6;
+  optional string client_idempotency_key = 7;
+  string created_by_service = 8;
+  optional string workflow_stage = 9;
+  map<string, string> tags = 10;
+}
+
+message WriteDocumentChunk {
+  bytes data = 1;
+}
+
+message WriteDocumentResponse {
+  DocumentMetadata metadata = 1;
+  uint32 desired_replica_count = 2;
+  uint32 achieved_replica_count = 3;
+  bool repair_required = 4;
+  bool idempotent_replay = 5;
+}
+
+message HeadDocumentRequest {
+  DocumentIdentity identity = 1;
+}
+
+message HeadDocumentResponse {
+  DocumentMetadata metadata = 1;
+}
+
+message ReadDocumentRequest {
+  DocumentIdentity identity = 1;
+  ReadRange range = 2;
+  optional uint32 chunk_size_hint = 3;
+}
+
+message ReadDocumentResponse {
+  oneof message {
+    ReadDocumentMetadata metadata = 1;
+    ReadDocumentChunk chunk = 2;
+  }
+}
+
+message ReadDocumentMetadata {
+  DocumentMetadata metadata = 1;
+  ReadRange selected_range = 2;
+  StorageSource source = 3;
+}
+
+message ReadDocumentChunk {
+  bytes data = 1;
+}
+
+message DocumentMetadata {
+  DocumentIdentity identity = 1;
+  DocumentClass document_class = 2;
+  PriorityClass priority_class = 3;
+  optional string content_type = 4;
+  uint64 length = 5;
+  bytes logical_sha256 = 6;
+  bytes document_identity_fingerprint = 7;
+  string created_by_service = 8;
+  optional string workflow_stage = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp finalized_at = 11;
+  DocumentAvailability availability = 12;
+  DocumentLifecycleState lifecycle_state = 13;
+  map<string, string> tags = 14;
+}
+
+message FindDocumentsRequest {
+  TransactionIdentity transaction = 1;
+  DocumentFilter filter = 2;
+}
+
+message DocumentFilter {
+  optional string document_name_exact = 1;
+  optional string document_name_prefix = 2;
+  optional DocumentClass document_class = 3;
+  optional string content_type = 4;
+  optional string workflow_stage = 5;
+  optional string created_by_service = 6;
+  TimeRange created_at = 7;
+  map<string, string> tags = 8;
+}
+
+message FindDocumentsResponse {
+  repeated DocumentMetadata documents = 1;
+}
