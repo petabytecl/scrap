@@ -99,6 +99,25 @@ func TestFailedAppendIsTruncated(t *testing.T) {
 	}
 }
 
+func TestValidatedAppendErrorIsTruncated(t *testing.T) {
+	store := openTestStore(t)
+	validationErr := errors.New("validation failed")
+	_, err := store.AppendValidated(context.Background(), bytes.NewReader([]byte("rejected")), func(Record) error {
+		return validationErr
+	})
+	if !errors.Is(err, validationErr) {
+		t.Fatalf("append error = %v, want %v", err, validationErr)
+	}
+
+	record, err := store.Append(context.Background(), bytes.NewReader([]byte("accepted")))
+	if err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+	if record.StoredOffset != HeaderLength {
+		t.Fatalf("stored offset after rejected append = %d, want %d", record.StoredOffset, HeaderLength)
+	}
+}
+
 func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)

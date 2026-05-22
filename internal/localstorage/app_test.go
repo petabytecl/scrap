@@ -173,6 +173,9 @@ func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("real bytes")}))
 	requireCode(t, err, codes.InvalidArgument)
+	if got := app.blocks.CurrentBlockLength(); got != blockstore.HeaderLength {
+		t.Fatalf("open block length = %d, want rejected write rollback to header length %d", got, blockstore.HeaderLength)
+	}
 
 	_, err = app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	requireCode(t, err, codes.NotFound)

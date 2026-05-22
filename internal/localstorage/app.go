@@ -165,15 +165,17 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 		return api.WriteDocumentResult{}, err
 	}
 
-	record, err := a.blocks.Append(ctx, &chunkReader{chunks: chunks})
+	record, err := a.blocks.AppendValidated(ctx, &chunkReader{chunks: chunks}, func(record blockstore.Record) error {
+		if init.ExpectedLength != nil && *init.ExpectedLength != record.StoredLength {
+			return status.Errorf(codes.InvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
+		}
+		if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, record.LogicalSHA256[:]) {
+			return status.Error(codes.InvalidArgument, "expected sha256 does not match written bytes")
+		}
+		return nil
+	})
 	if err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
-	}
-	if init.ExpectedLength != nil && *init.ExpectedLength != record.StoredLength {
-		return api.WriteDocumentResult{}, status.Errorf(codes.InvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
-	}
-	if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, record.LogicalSHA256[:]) {
-		return api.WriteDocumentResult{}, status.Error(codes.InvalidArgument, "expected sha256 does not match written bytes")
 	}
 
 	now := a.now()

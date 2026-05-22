@@ -249,6 +249,10 @@ func (s *Store) EnsureSealedBlock(ctx context.Context, blockID string, expectedL
 }
 
 func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
+	return s.AppendValidated(ctx, reader, nil)
+}
+
+func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate func(Record) error) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -310,6 +314,11 @@ func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
 		Frames:       frames.Records(),
 	}
 	copy(record.LogicalSHA256[:], hasher.Sum(nil))
+	if validate != nil {
+		if err := validate(record); err != nil {
+			return Record{}, err
+		}
+	}
 	s.blockOffset = startOffset + storedLength
 	committed = true
 	return record, nil
