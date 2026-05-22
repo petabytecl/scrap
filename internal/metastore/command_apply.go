@@ -79,6 +79,9 @@ func (s *Store) applyUpdateRestoreState(command *metastorev1.UpdateRestoreStateC
 		return fmt.Errorf("metastore: update restore state command is required")
 	}
 	state := RestoreState(command.GetRestoreState())
+	if _, err := availabilityFromRestoreState(state); err != nil {
+		return err
+	}
 	if command.DocumentName != nil {
 		_, err := s.UpdateDocumentRestoreState(identity.Document{
 			TenantID:      command.GetTenantId(),
@@ -119,14 +122,13 @@ func (s *Store) applyTombstoneDocument(command *metastorev1.TombstoneDocumentCom
 	if command == nil {
 		return fmt.Errorf("metastore: tombstone document command is required")
 	}
-	tombstonedAt := time.Time{}
-	if command.GetTombstonedAt() != nil {
-		tombstonedAt = command.GetTombstonedAt().AsTime()
+	if command.GetTombstonedAt() == nil {
+		return fmt.Errorf("metastore: tombstone document command requires tombstoned_at")
 	}
 	_, err := s.TombstoneDocument(identity.Document{
 		TenantID:      command.GetTenantId(),
 		TransactionID: command.GetTransactionId(),
 		DocumentName:  command.GetDocumentName(),
-	}, tombstonedAt, command.GetOperationId())
+	}, command.GetTombstonedAt().AsTime(), command.GetOperationId())
 	return err
 }

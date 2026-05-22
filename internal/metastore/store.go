@@ -196,12 +196,16 @@ func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 }
 
 func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreState) (Document, error) {
+	availability, err := availabilityFromRestoreState(state)
+	if err != nil {
+		return Document{}, err
+	}
 	document, err := s.HeadDocument(doc)
 	if err != nil {
 		return Document{}, err
 	}
 	document.RestoreState = state
-	document.Availability = availabilityFromRestoreState(state)
+	document.Availability = availability
 	if err := s.replaceDocument(document); err != nil {
 		return Document{}, err
 	}
@@ -209,6 +213,10 @@ func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreS
 }
 
 func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, state RestoreState) ([]Document, error) {
+	availability, err := availabilityFromRestoreState(state)
+	if err != nil {
+		return nil, err
+	}
 	documents, err := s.FindDocuments(transaction, DocumentFilter{})
 	if err != nil {
 		return nil, err
@@ -220,7 +228,7 @@ func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, 
 	defer batch.Close()
 	for i := range documents {
 		documents[i].RestoreState = state
-		documents[i].Availability = availabilityFromRestoreState(state)
+		documents[i].Availability = availability
 		value, err := marshalDocument(documents[i])
 		if err != nil {
 			return nil, err
@@ -239,6 +247,12 @@ func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, 
 }
 
 func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
+	if tombstonedAt.IsZero() {
+		return Document{}, fmt.Errorf("metastore: tombstone requires tombstoned_at")
+	}
+	if operationID == "" {
+		return Document{}, fmt.Errorf("metastore: tombstone requires operation_id")
+	}
 	document, err := s.HeadDocument(doc)
 	if err != nil {
 		return Document{}, err
@@ -428,18 +442,18 @@ func repairStateKey(doc identity.Document, incidentID string) []byte {
 	return append(repairStatePrefix(doc), []byte(incidentID)...)
 }
 
-func availabilityFromRestoreState(state RestoreState) Availability {
+func availabilityFromRestoreState(state RestoreState) (Availability, error) {
 	switch state {
 	case RestoreStateHot:
-		return AvailabilityHot
+		return AvailabilityHot, nil
 	case RestoreStateCold:
-		return AvailabilityCold
+		return AvailabilityCold, nil
 	case RestoreStateRestorePending:
-		return AvailabilityRestorePending
+		return AvailabilityRestorePending, nil
 	case RestoreStateCryptoUnavailable:
-		return AvailabilityCryptoUnavailable
+		return AvailabilityCryptoUnavailable, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("metastore: unsupported restore state %d", state)
 	}
 }
 

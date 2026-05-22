@@ -285,6 +285,40 @@ func TestApplyUpdateRestoreStateCommandForTransaction(t *testing.T) {
 	}
 }
 
+func TestApplyUpdateRestoreStateRejectsUnspecifiedState(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
+	if err := store.PutDocument(doc); err != nil {
+		t.Fatalf("put document: %v", err)
+	}
+	documentName := doc.Identity.DocumentName
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "restore-invalid-1",
+		ProposedAt:    timestamppb.New(time.Unix(30, 0).UTC()),
+		Command: &metastorev1.ShardCommand_UpdateRestoreState{
+			UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+				TenantId:      doc.Identity.TenantID,
+				TransactionId: doc.Identity.TransactionID,
+				DocumentName:  &documentName,
+				RestoreState:  metastorev1.RestoreState_RESTORE_STATE_UNSPECIFIED,
+				Reason:        "invalid state should not mutate projection",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("apply invalid restore state succeeded")
+	}
+	got, err := store.HeadDocument(doc.Identity)
+	if err != nil {
+		t.Fatalf("head document: %v", err)
+	}
+	if got.RestoreState != RestoreStateHot || got.Availability != AvailabilityHot {
+		t.Fatalf("restore/availability mutated to %d/%d, want hot", got.RestoreState, got.Availability)
+	}
+}
+
 func TestApplyRecordRepairStateCommand(t *testing.T) {
 	store := openTestStore(t)
 	proposedAt := time.Unix(40, 0).UTC()
@@ -350,6 +384,55 @@ func TestApplyTombstoneDocumentCommand(t *testing.T) {
 		!got.TombstonedAt.Equal(tombstonedAt) ||
 		got.TombstoneOperationID != "018f6d86-7a22-7abc-8def-123456789abc" {
 		t.Fatalf("tombstoned document = %#v, want tombstone metadata", got)
+	}
+}
+
+func TestApplyTombstoneDocumentRequiresOperationMetadata(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
+	if err := store.PutDocument(doc); err != nil {
+		t.Fatalf("put document: %v", err)
+	}
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "tombstone-invalid-1",
+		ProposedAt:    timestamppb.New(time.Unix(50, 0).UTC()),
+		Command: &metastorev1.ShardCommand_TombstoneDocument{
+			TombstoneDocument: &metastorev1.TombstoneDocumentCommand{
+				TenantId:      doc.Identity.TenantID,
+				TransactionId: doc.Identity.TransactionID,
+				DocumentName:  doc.Identity.DocumentName,
+				OperationId:   "operation-1",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("tombstone without timestamp succeeded")
+	}
+	err = store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "tombstone-invalid-2",
+		ProposedAt:    timestamppb.New(time.Unix(51, 0).UTC()),
+		Command: &metastorev1.ShardCommand_TombstoneDocument{
+			TombstoneDocument: &metastorev1.TombstoneDocumentCommand{
+				TenantId:      doc.Identity.TenantID,
+				TransactionId: doc.Identity.TransactionID,
+				DocumentName:  doc.Identity.DocumentName,
+				TombstonedAt:  timestamppb.New(time.Unix(51, 0).UTC()),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("tombstone without operation id succeeded")
+	}
+	got, err := store.HeadDocument(doc.Identity)
+	if err != nil {
+		t.Fatalf("head document: %v", err)
+	}
+	if got.LifecycleState != LifecycleStateActive || got.TombstonedAt != nil || got.HasTombstoneOperationID {
+		t.Fatalf("document mutated after rejected tombstone = %#v", got)
 	}
 }
 
