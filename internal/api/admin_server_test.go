@@ -553,6 +553,42 @@ func TestAdminServerPlanAndStartRepairUseDurableOperationStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerPlanAndStartScrubUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	_, repairClient, _, _, cleanup := newAdminWorkflowClients(t, store)
+	defer cleanup()
+
+	planResp, err := repairClient.PlanScrub(context.Background(), &adminv1.PlanScrubRequest{
+		Targets: []*adminv1.Target{
+			{
+				Target: &adminv1.Target_Transaction{
+					Transaction: &adminv1.TransactionTarget{
+						TenantId:      "tenant",
+						TransactionId: "txn",
+					},
+				},
+			},
+		},
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("plan scrub: %v", err)
+	}
+	startResp, err := repairClient.StartScrub(context.Background(), &adminv1.StartScrubRequest{
+		OperationId:     validUUIDv7(),
+		OperationPlanId: planResp.GetPlan().GetOperationPlanId(),
+		PlanHash:        planResp.GetPlan().GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start scrub: %v", err)
+	}
+	if startResp.GetOperation().GetOperationType() != "scrub" ||
+		!startResp.GetOperation().GetDryRun() ||
+		startResp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED {
+		t.Fatalf("operation = %#v, want queued scrub dry-run", startResp.GetOperation())
+	}
+}
+
 func TestAdminServerPlanRecoveryStartsDRSuboperations(t *testing.T) {
 	store := openTestOperationStore(t)
 	drClient, cleanup := newAdminDisasterRecoveryClient(t, nil, store)

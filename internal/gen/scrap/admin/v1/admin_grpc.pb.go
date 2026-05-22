@@ -744,6 +744,8 @@ const (
 	RepairService_GetRepairQueue_FullMethodName = "/scrap.admin.v1.RepairService/GetRepairQueue"
 	RepairService_PlanRepair_FullMethodName     = "/scrap.admin.v1.RepairService/PlanRepair"
 	RepairService_StartRepair_FullMethodName    = "/scrap.admin.v1.RepairService/StartRepair"
+	RepairService_PlanScrub_FullMethodName      = "/scrap.admin.v1.RepairService/PlanScrub"
+	RepairService_StartScrub_FullMethodName     = "/scrap.admin.v1.RepairService/StartScrub"
 )
 
 // RepairServiceClient is the client API for RepairService service.
@@ -753,6 +755,8 @@ type RepairServiceClient interface {
 	GetRepairQueue(ctx context.Context, in *GetRepairQueueRequest, opts ...grpc.CallOption) (*GetRepairQueueResponse, error)
 	PlanRepair(ctx context.Context, in *PlanRepairRequest, opts ...grpc.CallOption) (*PlanRepairResponse, error)
 	StartRepair(ctx context.Context, in *StartRepairRequest, opts ...grpc.CallOption) (*StartRepairResponse, error)
+	PlanScrub(ctx context.Context, in *PlanScrubRequest, opts ...grpc.CallOption) (*PlanScrubResponse, error)
+	StartScrub(ctx context.Context, in *StartScrubRequest, opts ...grpc.CallOption) (*StartScrubResponse, error)
 }
 
 type repairServiceClient struct {
@@ -793,6 +797,26 @@ func (c *repairServiceClient) StartRepair(ctx context.Context, in *StartRepairRe
 	return out, nil
 }
 
+func (c *repairServiceClient) PlanScrub(ctx context.Context, in *PlanScrubRequest, opts ...grpc.CallOption) (*PlanScrubResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PlanScrubResponse)
+	err := c.cc.Invoke(ctx, RepairService_PlanScrub_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *repairServiceClient) StartScrub(ctx context.Context, in *StartScrubRequest, opts ...grpc.CallOption) (*StartScrubResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartScrubResponse)
+	err := c.cc.Invoke(ctx, RepairService_StartScrub_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RepairServiceServer is the server API for RepairService service.
 // All implementations should embed UnimplementedRepairServiceServer
 // for forward compatibility.
@@ -800,6 +824,8 @@ type RepairServiceServer interface {
 	GetRepairQueue(context.Context, *GetRepairQueueRequest) (*GetRepairQueueResponse, error)
 	PlanRepair(context.Context, *PlanRepairRequest) (*PlanRepairResponse, error)
 	StartRepair(context.Context, *StartRepairRequest) (*StartRepairResponse, error)
+	PlanScrub(context.Context, *PlanScrubRequest) (*PlanScrubResponse, error)
+	StartScrub(context.Context, *StartScrubRequest) (*StartScrubResponse, error)
 }
 
 // UnimplementedRepairServiceServer should be embedded to have
@@ -817,6 +843,12 @@ func (UnimplementedRepairServiceServer) PlanRepair(context.Context, *PlanRepairR
 }
 func (UnimplementedRepairServiceServer) StartRepair(context.Context, *StartRepairRequest) (*StartRepairResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartRepair not implemented")
+}
+func (UnimplementedRepairServiceServer) PlanScrub(context.Context, *PlanScrubRequest) (*PlanScrubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PlanScrub not implemented")
+}
+func (UnimplementedRepairServiceServer) StartScrub(context.Context, *StartScrubRequest) (*StartScrubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartScrub not implemented")
 }
 func (UnimplementedRepairServiceServer) testEmbeddedByValue() {}
 
@@ -892,6 +924,42 @@ func _RepairService_StartRepair_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RepairService_PlanScrub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PlanScrubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepairServiceServer).PlanScrub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepairService_PlanScrub_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepairServiceServer).PlanScrub(ctx, req.(*PlanScrubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RepairService_StartScrub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartScrubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepairServiceServer).StartScrub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepairService_StartScrub_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepairServiceServer).StartScrub(ctx, req.(*StartScrubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RepairService_ServiceDesc is the grpc.ServiceDesc for RepairService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -910,6 +978,14 @@ var RepairService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StartRepair",
 			Handler:    _RepairService_StartRepair_Handler,
+		},
+		{
+			MethodName: "PlanScrub",
+			Handler:    _RepairService_PlanScrub_Handler,
+		},
+		{
+			MethodName: "StartScrub",
+			Handler:    _RepairService_StartScrub_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

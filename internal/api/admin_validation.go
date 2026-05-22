@@ -83,6 +83,14 @@ var repairTargetKinds = map[AdminTargetKind]bool{
 	AdminTargetStorageMember: true,
 }
 
+var scrubTargetKinds = map[AdminTargetKind]bool{
+	AdminTargetDocument:      true,
+	AdminTargetTransaction:   true,
+	AdminTargetBlock:         true,
+	AdminTargetShard:         true,
+	AdminTargetStorageMember: true,
+}
+
 var tombstoneTargetKinds = map[AdminTargetKind]bool{
 	AdminTargetDocument:    true,
 	AdminTargetTransaction: true,
@@ -118,6 +126,13 @@ func ValidatePlanRepairRequest(req *adminv1.PlanRepairRequest) (OperationPlanReq
 	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, repairTargetKinds)
 }
 
+func ValidatePlanScrubRequest(req *adminv1.PlanScrubRequest) (OperationPlanRequest, error) {
+	if req == nil {
+		return missingPlanRequest()
+	}
+	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, scrubTargetKinds)
+}
+
 func ValidatePlanTombstoneRequest(req *adminv1.PlanTombstoneRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
@@ -147,6 +162,13 @@ func ValidateStartPrewarmRequest(req *adminv1.StartPrewarmRequest) (OperationSta
 }
 
 func ValidateStartRepairRequest(req *adminv1.StartRepairRequest) (OperationStartRequest, error) {
+	if req == nil {
+		return missingStartRequest()
+	}
+	return validateStartRequest(req.OperationId, req.OperationPlanId, req.PlanHash, req.Metadata)
+}
+
+func ValidateStartScrubRequest(req *adminv1.StartScrubRequest) (OperationStartRequest, error) {
 	if req == nil {
 		return missingStartRequest()
 	}

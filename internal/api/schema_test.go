@@ -80,6 +80,8 @@ func TestAdminServiceCatalogShape(t *testing.T) {
 			"GetRepairQueue",
 			"PlanRepair",
 			"StartRepair",
+			"PlanScrub",
+			"StartScrub",
 		},
 		"MemberService": {
 			"CordonMember",
@@ -131,6 +133,7 @@ func TestAdminMutatingRequestsCarryOperationID(t *testing.T) {
 		"StartRestoreRequest",
 		"StartPrewarmRequest",
 		"StartRepairRequest",
+		"StartScrubRequest",
 		"CordonMemberRequest",
 		"UncordonMemberRequest",
 		"StartDrainRequest",

@@ -442,6 +442,36 @@ func (s *AdminServer) StartRepair(_ context.Context, req *adminv1.StartRepairReq
 	return &adminv1.StartRepairResponse{Operation: operation}, nil
 }
 
+func (s *AdminServer) PlanScrub(_ context.Context, req *adminv1.PlanScrubRequest) (*adminv1.PlanScrubResponse, error) {
+	planReq, err := ValidatePlanScrubRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanScrub")
+	}
+	plan, err := s.createOperationPlan("scrub", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanScrubResponse{Plan: plan}, nil
+}
+
+func (s *AdminServer) StartScrub(_ context.Context, req *adminv1.StartScrubRequest) (*adminv1.StartScrubResponse, error) {
+	startReq, err := ValidateStartScrubRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartScrub")
+	}
+	operation, err := s.startPlannedOperation("scrub", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartScrubResponse{Operation: operation}, nil
+}
+
 func (s *AdminServer) CordonMember(ctx context.Context, req *adminv1.CordonMemberRequest) (*adminv1.CordonMemberResponse, error) {
 	validated, err := ValidateCordonMemberRequest(req)
 	if err != nil {
