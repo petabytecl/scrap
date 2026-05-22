@@ -2,6 +2,7 @@ package localstorage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,8 @@ type OperationRunResult struct {
 	Succeeded int
 	Failed    int
 }
+
+var errDrainUnsafe = errors.New("storage member is not safe to drain")
 
 func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operations.Store) (OperationRunResult, error) {
 	var result OperationRunResult
@@ -47,6 +50,8 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runRestoreOperation(ctx, store, operation)
 		case "repair":
 			succeeded, err = a.runRepairOperation(ctx, store, operation)
+		case "drain":
+			succeeded, err = a.runDrainOperation(ctx, store, operation)
 		default:
 			result.Skipped++
 			continue
@@ -137,6 +142,93 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *Application) runDrainOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running drain operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	workUnits, warnings, err := a.applyDrainOperation(ctx, running)
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	finished.Warnings = append(finished.Warnings, warnings...)
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "drain operation failed"}
+		code := "SCRAP_DRAIN_FAILED"
+		if errors.Is(err, errDrainUnsafe) {
+			code = "SCRAP_DRAIN_UNSAFE"
+		}
+		finished.LastError = &adminv1.OperationError{
+			Code:    code,
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(workUnits),
+		WorkUnitsCompleted: uint64(workUnits),
+		Message:            "drain operation succeeded",
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) applyDrainOperation(ctx context.Context, operation *adminv1.Operation) (int, []*adminv1.OperationWarning, error) {
+	memberID, err := drainOperationMember(operation)
+	if err != nil {
+		return 0, nil, err
+	}
+	safety, err := a.GetEvictionSafety(ctx, memberID)
+	if err != nil {
+		return 0, nil, err
+	}
+	warnings := cloneWarnings(safety.GetWarnings())
+	if operation.GetDryRun() {
+		return 1, warnings, nil
+	}
+	if !safety.GetSafeToEvict() {
+		return 1, warnings, fmt.Errorf("%w: storage member %q has no safe eviction path", errDrainUnsafe, memberID)
+	}
+	if err := a.updateLocalMemberState(func(state *localMemberState) {
+		state.Draining = true
+		state.Cordoned = true
+	}); err != nil {
+		return 0, warnings, err
+	}
+	return 1, warnings, nil
+}
+
+func drainOperationMember(operation *adminv1.Operation) (string, error) {
+	if len(operation.GetTargets()) != 1 {
+		return "", fmt.Errorf("localstorage: drain operation requires exactly one storage member target")
+	}
+	target := operation.GetTargets()[0]
+	if target == nil {
+		return "", fmt.Errorf("localstorage: drain operation requires a storage member target")
+	}
+	typed, ok := target.GetTarget().(*adminv1.Target_StorageMember)
+	if !ok {
+		return "", fmt.Errorf("localstorage: unsupported drain target %T", target.GetTarget())
+	}
+	memberID := typed.StorageMember.GetStorageMemberId()
+	if memberID != "local" {
+		return "", metastore.ErrNotFound
+	}
+	return memberID, nil
 }
 
 func (a *Application) applyRepairOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {
@@ -489,4 +581,15 @@ func cloneOperation(operation *adminv1.Operation) *adminv1.Operation {
 		return nil
 	}
 	return proto.Clone(operation).(*adminv1.Operation)
+}
+
+func cloneWarnings(warnings []*adminv1.OperationWarning) []*adminv1.OperationWarning {
+	if len(warnings) == 0 {
+		return nil
+	}
+	out := make([]*adminv1.OperationWarning, 0, len(warnings))
+	for _, warning := range warnings {
+		out = append(out, proto.Clone(warning).(*adminv1.OperationWarning))
+	}
+	return out
 }

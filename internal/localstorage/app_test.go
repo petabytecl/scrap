@@ -1026,6 +1026,87 @@ func TestLocalMemberCordonStatePersists(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceFailsUnsafeDrainInSingleMemberMode(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	operation := queuedOperation("drain-op-1", "drain", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_StorageMember{
+				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		t.Fatalf("operation result = %#v, want one failed drain", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		finished.GetLastError().GetCode() != "SCRAP_DRAIN_UNSAFE" ||
+		len(finished.GetWarnings()) == 0 {
+		t.Fatalf("finished operation = %#v, want unsafe drain failure with warnings", finished)
+	}
+	member, err := app.GetAdminMember(ctx, "local")
+	if err != nil {
+		t.Fatalf("get member: %v", err)
+	}
+	if member.GetState() == adminv1.MemberState_MEMBER_STATE_DRAINING || member.GetCordoned() {
+		t.Fatalf("member = %#v, want failed drain to leave local member online and uncordoned", member)
+	}
+}
+
+func TestRunQueuedOperationsOnceDryRunDrainDoesNotMutateMember(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	operation := queuedOperation("drain-dry-run-1", "drain", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_StorageMember{
+				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+			},
+		},
+	})
+	operation.DryRun = true
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want dry-run success", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetWorkUnitsCompleted() != 1 ||
+		len(finished.GetWarnings()) == 0 {
+		t.Fatalf("finished operation = %#v, want dry-run success with safety warning", finished)
+	}
+	member, err := app.GetAdminMember(ctx, "local")
+	if err != nil {
+		t.Fatalf("get member: %v", err)
+	}
+	if member.GetState() == adminv1.MemberState_MEMBER_STATE_DRAINING || member.GetCordoned() {
+		t.Fatalf("member = %#v, want dry-run drain to leave local member online and uncordoned", member)
+	}
+}
+
 func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
