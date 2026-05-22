@@ -65,6 +65,28 @@ func TestPutObjectConflictsForDifferentBytes(t *testing.T) {
 	}
 }
 
+func TestPutMutableObjectReplacesExistingBytes(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.PutObject(context.Background(), "cells/local/metadata/v1/current.pointer", bytes.NewReader([]byte("pointer v1"))); err != nil {
+		t.Fatalf("put first pointer: %v", err)
+	}
+	object, err := store.PutMutableObject(context.Background(), "cells/local/metadata/v1/current.pointer", bytes.NewReader([]byte("pointer v2")))
+	if err != nil {
+		t.Fatalf("put mutable pointer: %v", err)
+	}
+	if object.Length != uint64(len("pointer v2")) {
+		t.Fatalf("mutable object length = %d, want %d", object.Length, len("pointer v2"))
+	}
+
+	var got bytes.Buffer
+	if err := store.ReadObjectRange(context.Background(), "cells/local/metadata/v1/current.pointer", backend.Range{}, &got); err != nil {
+		t.Fatalf("read mutable pointer: %v", err)
+	}
+	if got.String() != "pointer v2" {
+		t.Fatalf("mutable pointer = %q, want pointer v2", got.String())
+	}
+}
+
 func TestPutObjectVerifiesExistingBytesBeforeIdempotentSuccess(t *testing.T) {
 	store := openTestStore(t)
 	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes"))); err != nil {

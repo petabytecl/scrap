@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/backend"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
@@ -19,6 +20,7 @@ import (
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/published"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1082,6 +1084,55 @@ func TestLocalRecoveryReadinessFailsClosedWithoutPublishedMetadata(t *testing.T)
 	}
 }
 
+func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(500, 0).UTC())
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("published metadata bytes"))
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         testDocumentIdentity(),
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("published metadata bytes")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+
+	publication, err := app.PublishMetadataSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("publish metadata snapshot: %v", err)
+	}
+	if publication.DocumentCount != 1 || publication.PointerKey == "" || publication.ManifestKey == "" || publication.SnapshotKey == "" {
+		t.Fatalf("publication = %#v, want one-document publication with object keys", publication)
+	}
+	pointer, err := published.UnmarshalCurrentPointer(readBackendObject(t, ctx, backendStore, publication.PointerKey))
+	if err != nil {
+		t.Fatalf("unmarshal current pointer: %v", err)
+	}
+	if pointer.GetManifestId() != publication.Manifest.GetManifestId() ||
+		pointer.GetPublishedAt().AsTime() != app.now() {
+		t.Fatalf("pointer = %#v, want published manifest and timestamp", pointer)
+	}
+
+	readiness, err := app.GetRecoveryReadiness(ctx)
+	if err != nil {
+		t.Fatalf("get recovery readiness: %v", err)
+	}
+	if readiness.GetReady() || readiness.GetLatestRestorableCheckpointAt().AsTime() != app.now() ||
+		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_RESTORE_IMPLEMENTATION_MISSING") ||
+		hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_METADATA_EXPORT_MISSING") {
+		t.Fatalf("readiness = %#v, want checkpoint timestamp but fail-closed restore warning", readiness)
+	}
+}
+
 func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -1385,6 +1436,24 @@ func requireCode(t *testing.T, err error, code codes.Code) {
 	if got := status.Code(err); got != code {
 		t.Fatalf("code = %s, want %s; err = %v", got, code, err)
 	}
+}
+
+func readBackendObject(t *testing.T, ctx context.Context, store backend.Store, key string) []byte {
+	t.Helper()
+	var got bytes.Buffer
+	if err := store.ReadObjectRange(ctx, key, backend.Range{}, &got); err != nil {
+		t.Fatalf("read backend object %q: %v", key, err)
+	}
+	return got.Bytes()
+}
+
+func hasWarningCode(warnings []*adminv1.OperationWarning, code string) bool {
+	for _, warning := range warnings {
+		if warning.GetCode() == code {
+			return true
+		}
+	}
+	return false
 }
 
 func requireIntegrityDetail(t *testing.T, err error) *scrapv1.IntegrityFailureDetail {

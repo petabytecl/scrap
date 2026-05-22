@@ -60,7 +60,17 @@ func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (ba
 	} else if !errors.Is(err, backend.ErrNotFound) {
 		return backend.Object{}, err
 	}
+	return s.writeObject(ctx, key, reader)
+}
 
+func (s *Store) PutMutableObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
+	if key == "" {
+		return backend.Object{}, fmt.Errorf("backend fs: object key is required")
+	}
+	return s.writeObject(ctx, key, reader)
+}
+
+func (s *Store) writeObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
 	objectPath := s.objectPath(key, dataSuffix)
 	tempData, err := os.CreateTemp(s.objectsDir, "put-*.data.tmp")
 	if err != nil {

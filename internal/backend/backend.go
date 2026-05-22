@@ -29,3 +29,8 @@ type Store interface {
 	HeadObject(context.Context, string) (Object, error)
 	ReadObjectRange(context.Context, string, Range, io.Writer) error
 }
+
+type MutableStore interface {
+	Store
+	PutMutableObject(context.Context, string, io.Reader) (Object, error)
+}
