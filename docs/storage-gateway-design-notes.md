@@ -501,14 +501,37 @@ Documents do not need to align to frame boundaries. Many small documents may sha
 The `.blk` file includes a tiny fixed header:
 
 ```text
-magic
-format_version
-block_id
-header_length
-flags
+offset  size  field
+0       8     magic = "SCRAPBLK"
+8       2     format_major u16
+10      2     format_minor u16
+12      4     header_length u32 = 64
+16      16    block_id UUIDv7 bytes
+32      4     shard_id u32
+36      4     flags u32
+40      4     frame_size u32
+44      4     reserved
+48      16    reserved
 ```
 
-Frame payload bytes follow the header. The document table, frame table, encryption metadata, and checksums live in `.idx`.
+The `.blk` header is fixed at 64 bytes. Frame payload bytes follow the header with no per-frame mini-header:
+
+```text
+.blk = 64-byte header + raw frame payloads
+```
+
+The document table, frame table, encryption metadata, and checksums live in `.idx`.
+
+All block and index binary formats use:
+
+```text
+endianness: little-endian
+integer sizes: explicit u8/u16/u32/u64
+timestamps: unix epoch milliseconds as u64
+UUIDv7: raw bytes[16]
+fingerprints: raw bytes[16]
+SHA-256: raw bytes[32]
+```
 
 Block IDs use a generated UUIDv7 plus a separate `shard_id`; content hashes verify integrity but are not the primary block name.
 
@@ -551,12 +574,44 @@ V1 `.idx` is intentionally simple and scan-friendly. It does not need a document
 Recommended v1 `.idx` structure:
 
 ```text
-fixed header
-block record
+fixed 128-byte header
 frame records[]
 document records[]
-optional metadata blobs[]
-footer checksum
+metadata blobs[]
+fixed 64-byte footer
+```
+
+The `.idx` fixed header:
+
+```text
+offset  size  field
+0       8     magic = "SCRAPIDX"
+8       2     format_major u16
+10      2     format_minor u16
+12      4     header_length u32 = 128
+16      16    block_id UUIDv7 bytes
+32      4     shard_id u32
+36      4     flags u32
+40      4     frame_size u32
+44      4     frame_count u32
+48      8     block_payload_length u64
+56      32    block_payload_sha256 bytes[32]
+88      8     frame_table_offset u64
+96      8     document_table_offset u64
+104     8     metadata_blob_offset u64
+112     8     footer_offset u64
+120     2     frame_record_size u16 = 96
+122     2     document_record_size u16 = 224
+124     2     footer_size u16 = 64
+126     2     reserved
+```
+
+The header should also allow exact section-boundary validation. If the fields above are too tight during implementation, add a format-minor bump and include explicit section lengths:
+
+```text
+frame_table_length
+document_table_length
+metadata_blob_length
 ```
 
 The `.idx` repeats and verifies `.blk` identity:
@@ -576,7 +631,107 @@ frame checksums
 whole-block checksum
 ```
 
+Frame records are fixed-width and sorted by `frame_index` ascending.
+
+`FrameRecord` is 96 bytes:
+
+```text
+offset  size  field
+0       4     frame_index u32
+4       4     flags u32
+8       8     plaintext_offset u64
+16      4     plaintext_length u32
+20      4     ciphertext_length u32
+24      8     ciphertext_offset u64
+32      4     compression_mode u32    # reserved/zero in v1
+36      4     encryption_mode u32
+40      12    nonce bytes[12]
+52      16    auth_tag bytes[16]
+68      4     crc32c u32
+72      24    reserved
+```
+
+For unencrypted blocks:
+
+```text
+ciphertext_offset = plaintext_offset
+ciphertext_length = plaintext_length
+encryption_mode = 0
+nonce/auth_tag zeroed
+```
+
+Document records are fixed-width and sorted by `document_key_id` ascending. Variable strings and workflow metadata live in mandatory per-document Protobuf metadata blobs.
+
+`DocumentRecord` is 224 bytes:
+
+```text
+offset  size  field
+0       8     document_key_id u64
+8       8     transaction_key_id u64
+16      16    document_name_fingerprint bytes[16]
+32      16    document_identity_fingerprint bytes[16]
+48      8     stored_offset u64
+56      8     stored_length u64
+64      8     logical_length u64
+72      32    logical_sha256 bytes[32]
+104     32    stored_sha256 bytes[32]
+136     4     content_type_id u32
+140     2     document_class u16
+142     2     priority_class u16
+144     8     created_at_ms u64
+152     8     metadata_blob_offset u64
+160     4     metadata_blob_length u32
+164     4     flags u32
+168     16    transaction_fingerprint bytes[16]
+184     4     first_frame_index u32
+188     4     last_frame_index u32
+192     32    reserved
+```
+
+Every `DocumentRecord` must point to a mandatory `DocumentMetadataBlob`:
+
+```text
+metadata_blob_offset != 0
+metadata_blob_length > 0
+```
+
+Metadata blobs are length-prefixed Protobuf messages with optional per-blob CRC32C. Document metadata blobs preserve authoritative caller strings and variable metadata:
+
+```text
+tenant_id
+transaction_id
+document_name
+content_type
+workflow_stage
+tags
+client_idempotency_key
+created_by_service
+```
+
+Block-level metadata blobs are optional and can carry encryption metadata, future compression dictionary information, or other block-scoped extension data.
+
+The `.idx` footer is fixed at 64 bytes:
+
+```text
+offset  size  field
+0       8     magic = "SCRAPEND"
+8       8     idx_file_length u64
+16      32    idx_sha256_without_footer_hash_field bytes[32]
+48      8     created_at_ms u64
+56      8     reserved
+```
+
+Recovery verifies:
+
+```text
+header.footer_offset points to footer
+footer.idx_file_length == actual file length
+idx hash matches
+```
+
 `.idx` is written only when the block seals. While the block is open, `.openlog` records append progress and finalized documents.
+
+After block seal, retain `.openlog` for 24 hours by default for debugging. It may be deleted earlier under disk pressure after `.idx` verification succeeds.
 
 `.openlog` records:
 
@@ -608,6 +763,8 @@ client_idempotency_key?
 ```
 
 `.openlog` uses length-prefixed Protobuf records with a CRC32C per record. Recovery replays it sequentially and stops cleanly at the last complete valid record.
+
+The `.openlog` has a fixed 64-byte header and no footer. It is an append-only crash-cut log, valid up to the last complete CRC-verified record.
 
 Before ACK, the local durable copy must have:
 
@@ -774,8 +931,7 @@ These are the known gray areas to resolve before turning this into an ADR or imp
 - What are the exact failure domains for replica placement: nodes, racks, zones, regions, or Kubernetes node pools?
 - Which consensus implementation should back shard metadata?
 - Which local durable metadata store should back each shard member?
-- What are the exact block binary field layouts, versioning rules, and compatibility guarantees?
-- What is the exact `.idx` schema for frame records, document records, optional metadata blobs, and footer checksums?
+- What are the block format versioning rules and compatibility guarantees?
 - What is the OpenBao key hierarchy, cache TTL, rotation, and outage behavior?
 - What are the exact backend key prefix counts and token-bucket limits per provider?
 - How much local disk is required for the worst multinational bulk burst plus backend slowdown?
@@ -788,11 +944,13 @@ These are the known gray areas to resolve before turning this into an ADR or imp
 
 ## Next Discussion Frontier
 
-Resume by choosing the first implementation-level foundation:
+The block and `.idx` schema shape is now concrete enough to move to write-path semantics.
 
-1. exact block and `.idx` binary schemas;
+Resume by choosing between:
+
+1. write prepare/finalize/retry state machine;
 2. shard metadata store and consensus library;
-3. write commit protocol and repair state machine;
+3. repair state machine;
 4. backend uploader queue/rate-control design.
 
-The recommended next topic is the exact block and `.idx` binary schemas, because the high-level shape is settled but the on-disk compatibility contract still needs to be nailed down.
+The recommended next topic is the write state machine. The storage format is now concrete enough to define commit, recovery, retry, and repair states before selecting a metadata engine.

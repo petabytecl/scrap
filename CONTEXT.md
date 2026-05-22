@@ -6,6 +6,8 @@ The system is being designed as a storage gateway for a billing ETL platform. Th
 
 The gateway should give the service fleet a transparent storage interface while hiding whether bytes are served from local hot storage, replicated peer storage, or an external object backend. For the service fleet, the gateway is the storage system. S3, GCS, Azure Blob, or filesystem storage are backend implementations behind the gateway.
 
+Backend selection is deployment-level configuration. `tenant_id` is part of document identity, auditing, quotas, and fingerprints, but it does not route data to different durable backends in the current design.
+
 The central physical abstraction is a block: an immutable byte container with an index mapping each logical document to `block_id + stored_offset + stored_length + checksums`.
 
 The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md).
