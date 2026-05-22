@@ -107,6 +107,9 @@ func (s *Store) PutDocument(document Document) error {
 	if err := batch.Set(transactionDocumentKey(document.Identity), value, nil); err != nil {
 		return err
 	}
+	if err := batch.Set(blockDocumentKey(document.Location.BlockID, document.Identity), value, nil); err != nil {
+		return err
+	}
 	if err := batch.Set(transactionKey(transaction.Identity), transactionValue, nil); err != nil {
 		return err
 	}
@@ -353,6 +356,31 @@ func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
 	return intents, nil
 }
 
+func (s *Store) ListBlockDocuments(blockID string) ([]Document, error) {
+	prefix := blockDocumentsPrefix(blockID)
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var documents []Document
+	for valid := iter.First(); valid; valid = iter.Next() {
+		document, err := unmarshalDocument(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, document)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return documents, nil
+}
+
 func (s *Store) GetTransaction(transaction identity.Transaction) (Transaction, error) {
 	current, ok, err := s.getTransaction(transaction.TenantID, transaction.TransactionID)
 	if err != nil {
@@ -375,6 +403,9 @@ func (s *Store) replaceDocument(document Document) error {
 		return err
 	}
 	if err := batch.Set(transactionDocumentKey(document.Identity), value, nil); err != nil {
+		return err
+	}
+	if err := batch.Set(blockDocumentKey(document.Location.BlockID, document.Identity), value, nil); err != nil {
 		return err
 	}
 	return batch.Commit(pebble.Sync)
@@ -452,6 +483,14 @@ func transactionDocumentKey(doc identity.Document) []byte {
 		TenantID:      doc.TenantID,
 		TransactionID: doc.TransactionID,
 	}), []byte(doc.DocumentName)...)
+}
+
+func blockDocumentsPrefix(blockID string) []byte {
+	return []byte("document_by_block\x00" + blockID + "\x00")
+}
+
+func blockDocumentKey(blockID string, doc identity.Document) []byte {
+	return append(blockDocumentsPrefix(blockID), []byte(doc.TenantID+"\x00"+doc.TransactionID+"\x00"+doc.DocumentName)...)
 }
 
 func uploadIntentPrefix() []byte {

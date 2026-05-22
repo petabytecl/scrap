@@ -43,25 +43,52 @@ func (s LocalBlockSource) OpenBlock(ctx context.Context, blockID string) (io.Rea
 type Uploader struct {
 	Backend backend.Store
 	Source  BlockSource
+	Index   BlockIndexSource
 }
 
-func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent) (backend.Object, error) {
+type UploadResult struct {
+	Block backend.Object
+	Index *backend.Object
+}
+
+func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent) (UploadResult, error) {
 	if u.Backend == nil {
-		return backend.Object{}, fmt.Errorf("backendupload: backend store is not configured")
+		return UploadResult{}, fmt.Errorf("backendupload: backend store is not configured")
 	}
 	if u.Source == nil {
-		return backend.Object{}, fmt.Errorf("backendupload: block source is not configured")
+		return UploadResult{}, fmt.Errorf("backendupload: block source is not configured")
 	}
 	if intent.BlockID == "" {
-		return backend.Object{}, fmt.Errorf("backendupload: upload intent block id is required")
+		return UploadResult{}, fmt.Errorf("backendupload: upload intent block id is required")
 	}
 	if intent.BackendObjectKey == "" {
-		return backend.Object{}, fmt.Errorf("backendupload: upload intent backend object key is required")
+		return UploadResult{}, fmt.Errorf("backendupload: upload intent backend object key is required")
 	}
 	reader, err := u.Source.OpenBlock(ctx, intent.BlockID)
 	if err != nil {
-		return backend.Object{}, err
+		return UploadResult{}, err
 	}
 	defer reader.Close()
-	return u.Backend.PutObject(ctx, intent.BackendObjectKey, reader)
+	blockObject, err := u.Backend.PutObject(ctx, intent.BackendObjectKey, reader)
+	if err != nil {
+		return UploadResult{}, err
+	}
+	result := UploadResult{Block: blockObject}
+	if intent.IndexObjectKey == "" {
+		return result, nil
+	}
+	if u.Index == nil {
+		return result, fmt.Errorf("backendupload: block index source is not configured")
+	}
+	indexReader, err := u.Index.OpenBlockIndex(ctx, intent, blockObject)
+	if err != nil {
+		return result, err
+	}
+	defer indexReader.Close()
+	indexObject, err := u.Backend.PutObject(ctx, intent.IndexObjectKey, indexReader)
+	if err != nil {
+		return result, err
+	}
+	result.Index = &indexObject
+	return result, nil
 }

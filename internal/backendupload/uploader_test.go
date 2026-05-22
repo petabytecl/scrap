@@ -28,15 +28,20 @@ func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
 	}
 	intent := testUploadIntent(record.BlockID)
 
-	object, err := Uploader{
+	result, err := Uploader{
 		Backend: store,
 		Source:  LocalBlockSource{Blocks: blocks},
+		Index:   staticBlockIndexSource{body: []byte("index bytes")},
 	}.UploadBlock(ctx, intent)
 	if err != nil {
 		t.Fatalf("upload block: %v", err)
 	}
+	object := result.Block
 	if object.Key != intent.BackendObjectKey || object.Length <= record.StoredLength {
 		t.Fatalf("uploaded object = %#v, want key %q and full block length", object, intent.BackendObjectKey)
+	}
+	if result.Index == nil || result.Index.Key != intent.IndexObjectKey {
+		t.Fatalf("uploaded index = %#v, want key %q", result.Index, intent.IndexObjectKey)
 	}
 
 	var got bytes.Buffer
@@ -46,6 +51,13 @@ func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
 	}
 	if !bytes.Equal(got.Bytes(), data) {
 		t.Fatalf("uploaded document bytes = %q, want %q", got.Bytes(), data)
+	}
+	got.Reset()
+	if err := store.ReadObjectRange(ctx, intent.IndexObjectKey, backend.Range{}, &got); err != nil {
+		t.Fatalf("read uploaded index: %v", err)
+	}
+	if got.String() != "index bytes" {
+		t.Fatalf("uploaded index = %q, want index bytes", got.String())
 	}
 }
 
@@ -60,7 +72,11 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
-	uploader := Uploader{Backend: store, Source: LocalBlockSource{Blocks: blocks}}
+	uploader := Uploader{
+		Backend: store,
+		Source:  LocalBlockSource{Blocks: blocks},
+		Index:   staticBlockIndexSource{body: []byte("stable index")},
+	}
 	intent := testUploadIntent(record.BlockID)
 
 	first, err := uploader.UploadBlock(ctx, intent)
@@ -71,8 +87,31 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second upload: %v", err)
 	}
-	if second != first {
+	if second.Block != first.Block ||
+		second.Index == nil ||
+		first.Index == nil ||
+		*second.Index != *first.Index {
 		t.Fatalf("second upload = %#v, want first %#v", second, first)
+	}
+}
+
+func TestUploadBlockRequiresIndexSourceWhenIndexObjectKeyIsSet(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block with index")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
+
+	_, err = Uploader{
+		Backend: openTestBackendStore(t),
+		Source:  LocalBlockSource{Blocks: blocks},
+	}.UploadBlock(ctx, testUploadIntent(record.BlockID))
+	if err == nil {
+		t.Fatal("expected missing index source error")
 	}
 }
 
@@ -141,6 +180,7 @@ func testUploadIntent(blockID string) metastore.UploadIntent {
 	return metastore.UploadIntent{
 		BlockID:          blockID,
 		BackendObjectKey: "objects/" + blockID + ".blk",
+		IndexObjectKey:   "objects/" + blockID + ".idx",
 		State:            metastore.UploadStatePending,
 		UpdatedAt:        time.Unix(100, 0).UTC(),
 	}
@@ -152,6 +192,18 @@ type staticBlockSource struct {
 }
 
 func (s staticBlockSource) OpenBlock(context.Context, string) (io.ReadCloser, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return io.NopCloser(bytes.NewReader(s.body)), nil
+}
+
+type staticBlockIndexSource struct {
+	body []byte
+	err  error
+}
+
+func (s staticBlockIndexSource) OpenBlockIndex(context.Context, metastore.UploadIntent, backend.Object) (io.ReadCloser, error) {
 	if s.err != nil {
 		return nil, s.err
 	}

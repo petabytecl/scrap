@@ -165,6 +165,30 @@ func TestRecordUploadIntentPersistsAndLists(t *testing.T) {
 	}
 }
 
+func TestListBlockDocuments(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleDocument("invoice.xml", DocumentClassPermanent)
+	second := sampleDocument("summary.pdf", DocumentClassPermanent)
+	second.Location.StoredOffset = 128
+	other := sampleDocument("other.xml", DocumentClassPermanent)
+	other.Location.BlockID = "018f6d86-7a22-7abc-8def-222222222222"
+	for _, doc := range []Document{second, other, first} {
+		if err := store.PutDocument(doc); err != nil {
+			t.Fatalf("put document %s: %v", doc.Identity.DocumentName, err)
+		}
+	}
+
+	documents, err := store.ListBlockDocuments(first.Location.BlockID)
+	if err != nil {
+		t.Fatalf("list block documents: %v", err)
+	}
+	if len(documents) != 2 ||
+		documents[0].Identity.DocumentName != "invoice.xml" ||
+		documents[1].Identity.DocumentName != "summary.pdf" {
+		t.Fatalf("block documents = %#v, want invoice and summary", documents)
+	}
+}
+
 func TestRecordUploadIntentIsIdempotentAndConflictsOnDifferentKeys(t *testing.T) {
 	store := openTestStore(t)
 	intent := sampleUploadIntent("block-1")

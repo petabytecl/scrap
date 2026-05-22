@@ -357,6 +357,9 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	if _, err := backendStore.HeadObject(ctx, intent.BackendObjectKey); err != nil {
 		t.Fatalf("head backend object: %v", err)
 	}
+	if _, err := backendStore.HeadObject(ctx, intent.IndexObjectKey); err != nil {
+		t.Fatalf("head backend index object: %v", err)
+	}
 	if err := app.Close(); err != nil {
 		t.Fatalf("close app: %v", err)
 	}
@@ -416,6 +419,9 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	}
 	if intent.State != metastore.UploadStateUploaded {
 		t.Fatalf("upload intent = %#v, want uploaded", intent)
+	}
+	if _, err := backendStore.HeadObject(ctx, intent.IndexObjectKey); err != nil {
+		t.Fatalf("head backend index object: %v", err)
 	}
 }
 

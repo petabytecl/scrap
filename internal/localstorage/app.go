@@ -92,6 +92,10 @@ func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.
 		Uploader: backendupload.Uploader{
 			Backend: store,
 			Source:  backendupload.LocalBlockSource{Blocks: a.blocks},
+			Index: backendupload.LocalBlockIndexSource{
+				Documents: a.metadata,
+				ShardID:   "local",
+			},
 		},
 		Intents: a.metadata,
 		Updater: a.authority,

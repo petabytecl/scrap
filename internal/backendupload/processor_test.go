@@ -25,7 +25,7 @@ func TestProcessorUploadsPendingIntentAndRecordsUploaded(t *testing.T) {
 	updater := &recordingIntentStateUpdater{}
 
 	result, err := Processor{
-		Uploader: Uploader{Backend: store, Source: LocalBlockSource{Blocks: blocks}},
+		Uploader: Uploader{Backend: store, Source: LocalBlockSource{Blocks: blocks}, Index: staticBlockIndexSource{body: []byte("index")}},
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater:  updater,
 		Now:      fixedTime(time.Unix(500, 0).UTC()),
@@ -55,7 +55,7 @@ func TestProcessorSkipsNonPendingIntents(t *testing.T) {
 	updater := &recordingIntentStateUpdater{}
 
 	result, err := Processor{
-		Uploader: Uploader{Backend: openTestBackendStore(t), Source: staticBlockSource{body: []byte("block")}},
+		Uploader: Uploader{Backend: openTestBackendStore(t), Source: staticBlockSource{body: []byte("block")}, Index: staticBlockIndexSource{body: []byte("index")}},
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater:  updater,
 	}.RunOnce(context.Background())
@@ -80,7 +80,7 @@ func TestProcessorRetriesFailedIntentAndRecordsUploaded(t *testing.T) {
 	updater := &recordingIntentStateUpdater{}
 
 	result, err := Processor{
-		Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("recovered block")}},
+		Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("recovered block")}, Index: staticBlockIndexSource{body: []byte("index")}},
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater:  updater,
 		Now:      fixedTime(time.Unix(501, 0).UTC()),
@@ -171,7 +171,7 @@ func TestProcessorReturnsUpdaterErrorAfterUpload(t *testing.T) {
 	updateErr := errors.New("raft unavailable")
 
 	result, err := Processor{
-		Uploader: Uploader{Backend: store, Source: LocalBlockSource{Blocks: blocks}},
+		Uploader: Uploader{Backend: store, Source: LocalBlockSource{Blocks: blocks}, Index: staticBlockIndexSource{body: []byte("index")}},
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater:  &recordingIntentStateUpdater{err: updateErr},
 	}.RunOnce(ctx)

@@ -22,7 +22,7 @@ func TestRunnerRunsImmediatelyAndOnTicks(t *testing.T) {
 	go func() {
 		done <- Runner{
 			Processor: Processor{
-				Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("block")}},
+				Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("block")}, Index: staticBlockIndexSource{body: []byte("index")}},
 				Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 				Updater:  &recordingIntentStateUpdater{},
 			},
@@ -65,7 +65,7 @@ func TestRunnerReportsErrorsAndContinues(t *testing.T) {
 	go func() {
 		done <- Runner{
 			Processor: Processor{
-				Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("block")}},
+				Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("block")}, Index: staticBlockIndexSource{body: []byte("index")}},
 				Intents:  staticIntentLister{err: listerErr},
 				Updater:  &recordingIntentStateUpdater{},
 			},
