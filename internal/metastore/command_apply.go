@@ -20,6 +20,12 @@ func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
 		return s.applyCompleteTransaction(typed.CompleteTransaction)
 	case *metastorev1.ShardCommand_RecordUploadIntent:
 		return s.applyRecordUploadIntent(typed.RecordUploadIntent, command.GetProposedAt())
+	case *metastorev1.ShardCommand_UpdateRestoreState:
+		return s.applyUpdateRestoreState(typed.UpdateRestoreState)
+	case *metastorev1.ShardCommand_RecordRepairState:
+		return s.applyRecordRepairState(typed.RecordRepairState, command.GetProposedAt())
+	case *metastorev1.ShardCommand_TombstoneDocument:
+		return s.applyTombstoneDocument(typed.TombstoneDocument)
 	default:
 		return fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
 	}
@@ -66,4 +72,61 @@ func (s *Store) applyRecordUploadIntent(command *metastorev1.RecordUploadIntentC
 		State:             UploadStatePending,
 		UpdatedAt:         updatedAt,
 	})
+}
+
+func (s *Store) applyUpdateRestoreState(command *metastorev1.UpdateRestoreStateCommand) error {
+	if command == nil {
+		return fmt.Errorf("metastore: update restore state command is required")
+	}
+	state := RestoreState(command.GetRestoreState())
+	if command.DocumentName != nil {
+		_, err := s.UpdateDocumentRestoreState(identity.Document{
+			TenantID:      command.GetTenantId(),
+			TransactionID: command.GetTransactionId(),
+			DocumentName:  command.GetDocumentName(),
+		}, state)
+		return err
+	}
+	_, err := s.UpdateTransactionRestoreState(identity.Transaction{
+		TenantID:      command.GetTenantId(),
+		TransactionID: command.GetTransactionId(),
+	}, state)
+	return err
+}
+
+func (s *Store) applyRecordRepairState(command *metastorev1.RecordRepairStateCommand, proposedAt *timestamppb.Timestamp) error {
+	if command == nil {
+		return fmt.Errorf("metastore: record repair state command is required")
+	}
+	updatedAt := time.Time{}
+	if proposedAt != nil {
+		updatedAt = proposedAt.AsTime()
+	}
+	return s.RecordRepairState(RepairState{
+		Identity: identity.Document{
+			TenantID:      command.GetTenantId(),
+			TransactionID: command.GetTransactionId(),
+			DocumentName:  command.GetDocumentName(),
+		},
+		PhysicalRef: command.GetPhysicalRef(),
+		IncidentID:  command.GetIncidentId(),
+		Quarantined: command.GetQuarantined(),
+		UpdatedAt:   updatedAt,
+	})
+}
+
+func (s *Store) applyTombstoneDocument(command *metastorev1.TombstoneDocumentCommand) error {
+	if command == nil {
+		return fmt.Errorf("metastore: tombstone document command is required")
+	}
+	tombstonedAt := time.Time{}
+	if command.GetTombstonedAt() != nil {
+		tombstonedAt = command.GetTombstonedAt().AsTime()
+	}
+	_, err := s.TombstoneDocument(identity.Document{
+		TenantID:      command.GetTenantId(),
+		TransactionID: command.GetTransactionId(),
+		DocumentName:  command.GetDocumentName(),
+	}, tombstonedAt, command.GetOperationId())
+	return err
 }

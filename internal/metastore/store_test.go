@@ -210,6 +210,149 @@ func TestApplyRecordUploadIntentCommand(t *testing.T) {
 	}
 }
 
+func TestApplyUpdateRestoreStateCommandForDocument(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
+	if err := store.PutDocument(doc); err != nil {
+		t.Fatalf("put document: %v", err)
+	}
+	documentName := doc.Identity.DocumentName
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "restore-1",
+		ProposedAt:    timestamppb.New(time.Unix(30, 0).UTC()),
+		Command: &metastorev1.ShardCommand_UpdateRestoreState{
+			UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+				TenantId:      doc.Identity.TenantID,
+				TransactionId: doc.Identity.TransactionID,
+				DocumentName:  &documentName,
+				RestoreState:  metastorev1.RestoreState_RESTORE_STATE_RESTORE_PENDING,
+				Reason:        "backend restore requested",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply restore state command: %v", err)
+	}
+	got, err := store.HeadDocument(doc.Identity)
+	if err != nil {
+		t.Fatalf("head document: %v", err)
+	}
+	if got.RestoreState != RestoreStateRestorePending || got.Availability != AvailabilityRestorePending {
+		t.Fatalf("restore/availability = %d/%d, want restore pending", got.RestoreState, got.Availability)
+	}
+}
+
+func TestApplyUpdateRestoreStateCommandForTransaction(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleDocument("invoice.xml", DocumentClassPermanent)
+	second := sampleDocument("summary.pdf", DocumentClassPermanent)
+	if err := store.PutDocument(first); err != nil {
+		t.Fatalf("put first document: %v", err)
+	}
+	if err := store.PutDocument(second); err != nil {
+		t.Fatalf("put second document: %v", err)
+	}
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "restore-transaction-1",
+		ProposedAt:    timestamppb.New(time.Unix(30, 0).UTC()),
+		Command: &metastorev1.ShardCommand_UpdateRestoreState{
+			UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+				TenantId:      first.Identity.TenantID,
+				TransactionId: first.Identity.TransactionID,
+				RestoreState:  metastorev1.RestoreState_RESTORE_STATE_COLD,
+				Reason:        "cooled transaction",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply transaction restore state command: %v", err)
+	}
+	found, err := store.FindDocuments(identity.Transaction{TenantID: "tenant", TransactionID: "txn"}, DocumentFilter{})
+	if err != nil {
+		t.Fatalf("find documents: %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("found %d documents, want 2", len(found))
+	}
+	for _, got := range found {
+		if got.RestoreState != RestoreStateCold || got.Availability != AvailabilityCold {
+			t.Fatalf("%s restore/availability = %d/%d, want cold", got.Identity.DocumentName, got.RestoreState, got.Availability)
+		}
+	}
+}
+
+func TestApplyRecordRepairStateCommand(t *testing.T) {
+	store := openTestStore(t)
+	proposedAt := time.Unix(40, 0).UTC()
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "repair-1",
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_RecordRepairState{
+			RecordRepairState: &metastorev1.RecordRepairStateCommand{
+				TenantId:      "tenant",
+				TransactionId: "txn",
+				DocumentName:  "invoice.xml",
+				PhysicalRef:   "member-a/block-1/64",
+				IncidentId:    "incident-1",
+				Quarantined:   true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply repair state command: %v", err)
+	}
+	state, err := store.GetRepairState(identity.Document{TenantID: "tenant", TransactionID: "txn", DocumentName: "invoice.xml"}, "incident-1")
+	if err != nil {
+		t.Fatalf("get repair state: %v", err)
+	}
+	if !state.Quarantined || state.PhysicalRef != "member-a/block-1/64" || !state.UpdatedAt.Equal(proposedAt) {
+		t.Fatalf("repair state = %#v, want quarantined physical ref at proposed time", state)
+	}
+}
+
+func TestApplyTombstoneDocumentCommand(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
+	if err := store.PutDocument(doc); err != nil {
+		t.Fatalf("put document: %v", err)
+	}
+	tombstonedAt := time.Unix(50, 0).UTC()
+	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "tombstone-1",
+		ProposedAt:    timestamppb.New(tombstonedAt),
+		Command: &metastorev1.ShardCommand_TombstoneDocument{
+			TombstoneDocument: &metastorev1.TombstoneDocumentCommand{
+				TenantId:      doc.Identity.TenantID,
+				TransactionId: doc.Identity.TransactionID,
+				DocumentName:  doc.Identity.DocumentName,
+				TombstonedAt:  timestamppb.New(tombstonedAt),
+				OperationId:   "018f6d86-7a22-7abc-8def-123456789abc",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("apply tombstone command: %v", err)
+	}
+	got, err := store.HeadDocument(doc.Identity)
+	if err != nil {
+		t.Fatalf("head document: %v", err)
+	}
+	if got.LifecycleState != LifecycleStateTombstoned ||
+		got.TombstonedAt == nil ||
+		!got.TombstonedAt.Equal(tombstonedAt) ||
+		got.TombstoneOperationID != "018f6d86-7a22-7abc-8def-123456789abc" {
+		t.Fatalf("tombstoned document = %#v, want tombstone metadata", got)
+	}
+}
+
 func TestFindDocumentsFilters(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.PutDocument(sampleDocument("invoice.xml", DocumentClassPermanent)); err != nil {

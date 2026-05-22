@@ -27,12 +27,18 @@ const (
 )
 
 const (
-	AvailabilityHot Availability = 1
+	AvailabilityHot               Availability = 1
+	AvailabilityCold              Availability = 2
+	AvailabilityRestorePending    Availability = 3
+	AvailabilityCryptoUnavailable Availability = 4
+	AvailabilityDegradedRepair    Availability = 5
 )
 
 const (
 	LifecycleStateActive               LifecycleState = 1
 	LifecycleStateTransactionCompleted LifecycleState = 2
+	LifecycleStateTombstoned           LifecycleState = 3
+	LifecycleStatePendingReclamation   LifecycleState = 4
 )
 
 const (
@@ -74,6 +80,9 @@ type Document struct {
 	LifecycleState              LifecycleState
 	RestoreState                RestoreState
 	UploadState                 UploadState
+	TombstonedAt                *time.Time
+	TombstoneOperationID        string
+	HasTombstoneOperationID     bool
 	Tags                        map[string]string
 	Location                    blockstore.Record
 	ClientIdempotencyKey        string
@@ -101,6 +110,14 @@ type UploadIntent struct {
 	LastError         string
 	HasLastError      bool
 	UpdatedAt         time.Time
+}
+
+type RepairState struct {
+	Identity    identity.Document
+	PhysicalRef string
+	IncidentID  string
+	Quarantined bool
+	UpdatedAt   time.Time
 }
 
 type DocumentFilter struct {

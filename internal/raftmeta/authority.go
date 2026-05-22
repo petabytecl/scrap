@@ -122,6 +122,103 @@ func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.Upl
 	return a.appendAndApply(command)
 }
 
+func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity.Document, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	documentName := doc.DocumentName
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_UpdateRestoreState{
+			UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+				TenantId:      doc.TenantID,
+				TransactionId: doc.TransactionID,
+				DocumentName:  &documentName,
+				RestoreState:  metastorev1.RestoreState(state),
+				Reason:        reason,
+			},
+		},
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appendAndApply(command)
+}
+
+func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transaction identity.Transaction, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_UpdateRestoreState{
+			UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+				TenantId:      transaction.TenantID,
+				TransactionId: transaction.TransactionID,
+				RestoreState:  metastorev1.RestoreState(state),
+				Reason:        reason,
+			},
+		},
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appendAndApply(command)
+}
+
+func (a *Authority) RecordRepairState(ctx context.Context, state metastore.RepairState, commandID string, proposedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(proposedAt),
+		Command: &metastorev1.ShardCommand_RecordRepairState{
+			RecordRepairState: &metastorev1.RecordRepairStateCommand{
+				TenantId:      state.Identity.TenantID,
+				TransactionId: state.Identity.TransactionID,
+				DocumentName:  state.Identity.DocumentName,
+				PhysicalRef:   state.PhysicalRef,
+				IncidentId:    state.IncidentID,
+				Quarantined:   state.Quarantined,
+			},
+		},
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appendAndApply(command)
+}
+
+func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID string, commandID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(tombstonedAt),
+		Command: &metastorev1.ShardCommand_TombstoneDocument{
+			TombstoneDocument: &metastorev1.TombstoneDocumentCommand{
+				TenantId:      doc.TenantID,
+				TransactionId: doc.TransactionID,
+				DocumentName:  doc.DocumentName,
+				TombstonedAt:  timestamppb.New(tombstonedAt),
+				OperationId:   operationID,
+			},
+		},
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appendAndApply(command)
+}
+
 func (a *Authority) replay() error {
 	entries, err := a.log.Replay()
 	if err != nil {

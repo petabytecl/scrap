@@ -415,6 +415,14 @@ func availabilityToAPI(value metastore.Availability) scrapv1.DocumentAvailabilit
 	switch value {
 	case metastore.AvailabilityHot:
 		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_HOT
+	case metastore.AvailabilityCold:
+		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_COLD
+	case metastore.AvailabilityRestorePending:
+		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_RESTORE_PENDING
+	case metastore.AvailabilityCryptoUnavailable:
+		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_CRYPTO_UNAVAILABLE
+	case metastore.AvailabilityDegradedRepair:
+		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_DEGRADED_REPAIR
 	default:
 		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_UNSPECIFIED
 	}
@@ -426,6 +434,10 @@ func lifecycleStateToAPI(value metastore.LifecycleState) scrapv1.DocumentLifecyc
 		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_ACTIVE
 	case metastore.LifecycleStateTransactionCompleted:
 		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_TRANSACTION_COMPLETED
+	case metastore.LifecycleStateTombstoned:
+		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_TOMBSTONED
+	case metastore.LifecycleStatePendingReclamation:
+		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_PENDING_RECLAMATION
 	default:
 		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_UNSPECIFIED
 	}

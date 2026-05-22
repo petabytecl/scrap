@@ -32,6 +32,8 @@ message DocumentRecord {
   EnvelopeRef envelope_ref = 23;
   RestoreState restore_state = 24;
   UploadState upload_state = 25;
+  optional google.protobuf.Timestamp tombstoned_at = 26;
+  optional string tombstone_operation_id = 27;
 }
 
 message Location {
@@ -107,6 +109,19 @@ message UploadIntentRecord {
   string envelope_object_key = 4;
   UploadState state = 5;
   optional string last_error = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  uint32 schema_version = 20;
+  string shard_id = 21;
+  uint64 committed_index = 22;
+}
+
+message RepairStateRecord {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  string document_name = 3;
+  string physical_ref = 4;
+  string incident_id = 5;
+  bool quarantined = 6;
   google.protobuf.Timestamp updated_at = 7;
   uint32 schema_version = 20;
   string shard_id = 21;

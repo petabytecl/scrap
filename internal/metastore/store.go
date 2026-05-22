@@ -195,6 +195,86 @@ func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 	return s.db.Set(key, value, pebble.Sync)
 }
 
+func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreState) (Document, error) {
+	document, err := s.HeadDocument(doc)
+	if err != nil {
+		return Document{}, err
+	}
+	document.RestoreState = state
+	document.Availability = availabilityFromRestoreState(state)
+	if err := s.replaceDocument(document); err != nil {
+		return Document{}, err
+	}
+	return document, nil
+}
+
+func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, state RestoreState) ([]Document, error) {
+	documents, err := s.FindDocuments(transaction, DocumentFilter{})
+	if err != nil {
+		return nil, err
+	}
+	if len(documents) == 0 {
+		return nil, ErrNotFound
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for i := range documents {
+		documents[i].RestoreState = state
+		documents[i].Availability = availabilityFromRestoreState(state)
+		value, err := marshalDocument(documents[i])
+		if err != nil {
+			return nil, err
+		}
+		if err := batch.Set(documentKey(documents[i].Identity), value, nil); err != nil {
+			return nil, err
+		}
+		if err := batch.Set(transactionDocumentKey(documents[i].Identity), value, nil); err != nil {
+			return nil, err
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return nil, err
+	}
+	return documents, nil
+}
+
+func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
+	document, err := s.HeadDocument(doc)
+	if err != nil {
+		return Document{}, err
+	}
+	document.LifecycleState = LifecycleStateTombstoned
+	document.TombstonedAt = &tombstonedAt
+	document.TombstoneOperationID = operationID
+	document.HasTombstoneOperationID = operationID != ""
+	if err := s.replaceDocument(document); err != nil {
+		return Document{}, err
+	}
+	return document, nil
+}
+
+func (s *Store) RecordRepairState(state RepairState) error {
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	value, err := marshalRepairState(state)
+	if err != nil {
+		return err
+	}
+	return s.db.Set(repairStateKey(state.Identity, state.IncidentID), value, pebble.Sync)
+}
+
+func (s *Store) GetRepairState(doc identity.Document, incidentID string) (RepairState, error) {
+	value, ok, err := s.get(repairStateKey(doc, incidentID))
+	if err != nil {
+		return RepairState{}, err
+	}
+	if !ok {
+		return RepairState{}, ErrNotFound
+	}
+	return unmarshalRepairState(value)
+}
+
 func (s *Store) GetUploadIntent(blockID string) (UploadIntent, error) {
 	value, ok, err := s.get(uploadIntentKey(blockID))
 	if err != nil {
@@ -240,6 +320,22 @@ func (s *Store) GetTransaction(transaction identity.Transaction) (Transaction, e
 		return Transaction{}, ErrNotFound
 	}
 	return current, nil
+}
+
+func (s *Store) replaceDocument(document Document) error {
+	value, err := marshalDocument(document)
+	if err != nil {
+		return err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set(documentKey(document.Identity), value, nil); err != nil {
+		return err
+	}
+	if err := batch.Set(transactionDocumentKey(document.Identity), value, nil); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 func (s *Store) getTransaction(tenantID string, transactionID string) (Transaction, bool, error) {
@@ -322,6 +418,29 @@ func uploadIntentPrefix() []byte {
 
 func uploadIntentKey(blockID string) []byte {
 	return append(uploadIntentPrefix(), []byte(blockID)...)
+}
+
+func repairStatePrefix(doc identity.Document) []byte {
+	return []byte("repair_state\x00" + doc.TenantID + "\x00" + doc.TransactionID + "\x00" + doc.DocumentName + "\x00")
+}
+
+func repairStateKey(doc identity.Document, incidentID string) []byte {
+	return append(repairStatePrefix(doc), []byte(incidentID)...)
+}
+
+func availabilityFromRestoreState(state RestoreState) Availability {
+	switch state {
+	case RestoreStateHot:
+		return AvailabilityHot
+	case RestoreStateCold:
+		return AvailabilityCold
+	case RestoreStateRestorePending:
+		return AvailabilityRestorePending
+	case RestoreStateCryptoUnavailable:
+		return AvailabilityCryptoUnavailable
+	default:
+		return 0
+	}
 }
 
 func prefixUpperBound(prefix []byte) []byte {

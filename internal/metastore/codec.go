@@ -117,6 +117,36 @@ func unmarshalUploadIntentRecord(data []byte) (*metastorev1.UploadIntentRecord, 
 	return &record, nil
 }
 
+func marshalRepairState(state RepairState) ([]byte, error) {
+	return marshalRepairStateRecord(repairStateToProto(state))
+}
+
+func unmarshalRepairState(data []byte) (RepairState, error) {
+	record, err := unmarshalRepairStateRecord(data)
+	if err != nil {
+		return RepairState{}, err
+	}
+	return repairStateFromProto(record), nil
+}
+
+func marshalRepairStateRecord(record *metastorev1.RepairStateRecord) ([]byte, error) {
+	if err := validateSchemaVersion("repair state", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return protoMarshal.Marshal(record)
+}
+
+func unmarshalRepairStateRecord(data []byte) (*metastorev1.RepairStateRecord, error) {
+	var record metastorev1.RepairStateRecord
+	if err := proto.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	if err := validateSchemaVersion("repair state", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 func validateSchemaVersion(recordKind string, version uint32) error {
 	if version != CurrentSchemaVersion {
 		return fmt.Errorf("%w: %s record version %d", ErrUnsupportedSchemaVersion, recordKind, version)
@@ -145,6 +175,8 @@ func documentToProto(document Document) *metastorev1.DocumentRecord {
 		LifecycleState:              uint32(document.LifecycleState),
 		RestoreState:                metastorev1.RestoreState(document.RestoreState),
 		UploadState:                 metastorev1.UploadState(document.UploadState),
+		TombstonedAt:                optionalTime(document.TombstonedAt),
+		TombstoneOperationId:        optionalStringPointer(document.TombstoneOperationID, document.HasTombstoneOperationID),
 		Tags:                        cloneTags(document.Tags),
 		Location:                    locationToProto(document.Location),
 		ClientIdempotencyKey:        optionalStringPointer(document.ClientIdempotencyKey, document.HasClientIdempotencyKey),
@@ -170,6 +202,8 @@ func documentFromProto(record *metastorev1.DocumentRecord) Document {
 		LifecycleState:          LifecycleState(record.GetLifecycleState()),
 		RestoreState:            RestoreState(record.GetRestoreState()),
 		UploadState:             UploadState(record.GetUploadState()),
+		TombstoneOperationID:    record.GetTombstoneOperationId(),
+		HasTombstoneOperationID: record.TombstoneOperationId != nil,
 		Tags:                    cloneTags(record.GetTags()),
 		Location:                locationFromProto(record.GetLocation()),
 		ClientIdempotencyKey:    record.GetClientIdempotencyKey(),
@@ -184,6 +218,10 @@ func documentFromProto(record *metastorev1.DocumentRecord) Document {
 	}
 	if record.GetFinalizedAt() != nil {
 		document.FinalizedAt = record.GetFinalizedAt().AsTime()
+	}
+	if record.GetTombstonedAt() != nil {
+		tombstonedAt := record.GetTombstonedAt().AsTime()
+		document.TombstonedAt = &tombstonedAt
 	}
 	return document
 }
@@ -257,6 +295,36 @@ func uploadIntentFromProto(record *metastorev1.UploadIntentRecord) UploadIntent 
 		intent.UpdatedAt = record.GetUpdatedAt().AsTime()
 	}
 	return intent
+}
+
+func repairStateToProto(state RepairState) *metastorev1.RepairStateRecord {
+	return &metastorev1.RepairStateRecord{
+		SchemaVersion: CurrentSchemaVersion,
+		TenantId:      state.Identity.TenantID,
+		TransactionId: state.Identity.TransactionID,
+		DocumentName:  state.Identity.DocumentName,
+		PhysicalRef:   state.PhysicalRef,
+		IncidentId:    state.IncidentID,
+		Quarantined:   state.Quarantined,
+		UpdatedAt:     timestamppb.New(state.UpdatedAt),
+	}
+}
+
+func repairStateFromProto(record *metastorev1.RepairStateRecord) RepairState {
+	state := RepairState{
+		Identity: identity.Document{
+			TenantID:      record.GetTenantId(),
+			TransactionID: record.GetTransactionId(),
+			DocumentName:  record.GetDocumentName(),
+		},
+		PhysicalRef: record.GetPhysicalRef(),
+		IncidentID:  record.GetIncidentId(),
+		Quarantined: record.GetQuarantined(),
+	}
+	if record.GetUpdatedAt() != nil {
+		state.UpdatedAt = record.GetUpdatedAt().AsTime()
+	}
+	return state
 }
 
 func locationToProto(location blockstore.Record) *metastorev1.Location {

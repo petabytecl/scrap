@@ -37,6 +37,21 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	}, "cmd-3", time.Unix(300, 0).UTC()); err != nil {
 		t.Fatalf("record upload intent: %v", err)
 	}
+	if err := authority.UpdateDocumentRestoreState(context.Background(), document.Identity, metastore.RestoreStateCold, "cooled", "cmd-4", time.Unix(400, 0).UTC()); err != nil {
+		t.Fatalf("update restore state: %v", err)
+	}
+	if err := authority.RecordRepairState(context.Background(), metastore.RepairState{
+		Identity:    document.Identity,
+		PhysicalRef: "member-a/block-1/64",
+		IncidentID:  "incident-1",
+		Quarantined: true,
+	}, "cmd-5", time.Unix(500, 0).UTC()); err != nil {
+		t.Fatalf("record repair state: %v", err)
+	}
+	tombstonedAt := time.Unix(600, 0).UTC()
+	if err := authority.TombstoneDocument(context.Background(), document.Identity, tombstonedAt, "operation-1", "cmd-6"); err != nil {
+		t.Fatalf("tombstone document: %v", err)
+	}
 	closeTestAuthority(t, authority, metadata)
 
 	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
@@ -52,6 +67,12 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	}
 	if head.Identity != document.Identity || head.Length != document.Length {
 		t.Fatalf("rebuilt document = %#v, want %#v", head, document)
+	}
+	if head.RestoreState != metastore.RestoreStateCold || head.LifecycleState != metastore.LifecycleStateTombstoned {
+		t.Fatalf("rebuilt restore/lifecycle state = %d/%d, want cold/tombstoned", head.RestoreState, head.LifecycleState)
+	}
+	if head.TombstonedAt == nil || !head.TombstonedAt.Equal(tombstonedAt) || head.TombstoneOperationID != "operation-1" {
+		t.Fatalf("rebuilt tombstone metadata = %#v", head)
 	}
 	transaction, err := rebuiltMetadata.GetTransaction(identity.Transaction{
 		TenantID:      document.Identity.TenantID,
@@ -72,6 +93,13 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	}
 	if intent.BackendObjectKey != "objects/block-1.blk" || intent.State != metastore.UploadStatePending {
 		t.Fatalf("rebuilt upload intent = %#v, want pending objects/block-1.blk", intent)
+	}
+	repair, err := rebuiltMetadata.GetRepairState(document.Identity, "incident-1")
+	if err != nil {
+		t.Fatalf("get rebuilt repair state: %v", err)
+	}
+	if !repair.Quarantined || repair.PhysicalRef != "member-a/block-1/64" {
+		t.Fatalf("rebuilt repair state = %#v, want quarantined member-a ref", repair)
 	}
 }
 

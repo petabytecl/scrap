@@ -27,6 +27,8 @@ func TestAuthoritativeDocumentRecordSchemaShape(t *testing.T) {
 	requireField(t, document, "envelope_ref")
 	requireField(t, document, "restore_state")
 	requireField(t, document, "upload_state")
+	requireField(t, document, "tombstoned_at")
+	requireField(t, document, "tombstone_operation_id")
 
 	location := metastorev1.File_scrap_metastore_v1_metastore_proto.Messages().ByName("Location")
 	requireField(t, location, "block_id")
@@ -48,6 +50,18 @@ func TestUploadIntentRecordSchemaShape(t *testing.T) {
 	requireField(t, intent, "envelope_object_key")
 	requireField(t, intent, "state")
 	requireField(t, intent, "updated_at")
+}
+
+func TestRepairStateRecordSchemaShape(t *testing.T) {
+	repair := metastorev1.File_scrap_metastore_v1_metastore_proto.Messages().ByName("RepairStateRecord")
+	requireField(t, repair, "schema_version")
+	requireField(t, repair, "tenant_id")
+	requireField(t, repair, "transaction_id")
+	requireField(t, repair, "document_name")
+	requireField(t, repair, "physical_ref")
+	requireField(t, repair, "incident_id")
+	requireField(t, repair, "quarantined")
+	requireField(t, repair, "updated_at")
 }
 
 func TestPublishedMetadataBoundaryExcludesInternalState(t *testing.T) {
