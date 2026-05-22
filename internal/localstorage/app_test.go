@@ -1127,9 +1127,9 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 		t.Fatalf("get recovery readiness: %v", err)
 	}
 	if readiness.GetReady() || readiness.GetLatestRestorableCheckpointAt().AsTime() != app.now() ||
-		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_RESTORE_IMPLEMENTATION_MISSING") ||
+		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_DRILL_IMPLEMENTATION_MISSING") ||
 		hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_METADATA_EXPORT_MISSING") {
-		t.Fatalf("readiness = %#v, want checkpoint timestamp but fail-closed restore warning", readiness)
+		t.Fatalf("readiness = %#v, want checkpoint timestamp but fail-closed drill warning", readiness)
 	}
 }
 
@@ -1189,11 +1189,94 @@ func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *tes
 	}
 }
 
+func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T) {
+	ctx := context.Background()
+	source := openTestApplication(t)
+	source.now = fixedClock(time.Unix(700, 0).UTC())
+	source.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("metadata restore bytes"))
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	source.SetBackendStore(backendStore)
+	doc := testDocumentIdentity()
+	if _, err := source.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("metadata restore bytes")})); err != nil {
+		t.Fatalf("write source document: %v", err)
+	}
+	if _, err := source.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	publication, err := source.PublishMetadataSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("publish metadata snapshot: %v", err)
+	}
+
+	restoredApp := openTestApplication(t)
+	restoredApp.now = fixedClock(time.Unix(701, 0).UTC())
+	restoredApp.SetBackendStore(backendStore)
+	store := openTestOperationStore(t)
+	operation := queuedOperation("metadata-restore-op-1", "metadata-restore", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := restoredApp.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one successful metadata restore", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["documents"] != "1" ||
+		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
+		t.Fatalf("finished operation = %#v, want imported document and upload intent", finished)
+	}
+
+	restored, err := restoredApp.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head restored document: %v", err)
+	}
+	if restored.Availability != metastore.AvailabilityCold ||
+		restored.RestoreState != metastore.RestoreStateCold ||
+		restored.UploadState != metastore.UploadStateUploaded {
+		t.Fatalf("restored document state = %#v, want cold uploaded metadata", restored)
+	}
+	intent, err := restoredApp.metadata.GetUploadIntent(restored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get restored upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStateUploaded || intent.BackendObjectKey == "" {
+		t.Fatalf("restored intent = %#v, want uploaded backend object", intent)
+	}
+	err = restoredApp.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
+	requireCode(t, err, codes.Unavailable)
+	detail := requireRestorePendingDetail(t, err)
+	if detail.GetRestoreState() != "cold" {
+		t.Fatalf("restore detail = %#v, want cold restore state", detail)
+	}
+}
+
 func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
 	store := openTestOperationStore(t)
-	operation := queuedOperation("metadata-restore-op-1", "metadata-restore", []*adminv1.Target{
+	operation := queuedOperation("dr-drill-op-1", "dr-drill", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Snapshot{
 				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: "snapshot-1"},

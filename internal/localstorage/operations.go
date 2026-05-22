@@ -53,9 +53,11 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runRepairOperation(ctx, store, operation)
 		case "drain":
 			succeeded, err = a.runDrainOperation(ctx, store, operation)
+		case "metadata-restore":
+			succeeded, err = a.runMetadataRestoreOperation(ctx, store, operation)
 		case "copy-verify":
 			succeeded, err = a.runCopyVerifyOperation(ctx, store, operation)
-		case "metadata-restore", "dr-drill":
+		case "dr-drill":
 			succeeded, err = a.runDisasterRecoveryOperation(ctx, store, operation)
 		default:
 			result.Skipped++
@@ -254,6 +256,55 @@ func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operati
 			"generation":       fmt.Sprintf("%d", checkpoint.Pointer.GetGeneration()),
 			"manifest_id":      checkpoint.Manifest.GetManifestId(),
 			"verified_objects": fmt.Sprintf("%d", checkpoint.VerifiedObjects),
+		},
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running metadata-restore operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	restore, err := a.RestorePublishedMetadataCheckpoint(ctx, !operation.GetDryRun())
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "metadata-restore operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_DR_METADATA_RESTORE_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	message := "metadata-restore operation succeeded"
+	if operation.GetDryRun() {
+		message = "metadata-restore dry-run succeeded"
+	}
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(restore.Documents + restore.UploadIntents),
+		WorkUnitsCompleted: uint64(restore.Documents + restore.UploadIntents),
+		Message:            message,
+		Counters: map[string]string{
+			"documents":      fmt.Sprintf("%d", restore.Documents),
+			"snapshots":      fmt.Sprintf("%d", restore.Snapshots),
+			"tombstones":     fmt.Sprintf("%d", restore.Tombstones),
+			"upload_intents": fmt.Sprintf("%d", restore.UploadIntents),
+			"verified":       fmt.Sprintf("%d", restore.Verified),
 		},
 	}
 	if err := store.Put(finished); err != nil {

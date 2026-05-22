@@ -32,8 +32,8 @@ func (a *Application) GetRecoveryReadiness(ctx context.Context) (*adminv1.Recove
 	case err == nil:
 		readiness.LatestRestorableCheckpointAt = checkpoint.Pointer.GetPublishedAt()
 		warnings = append(warnings, &adminv1.OperationWarning{
-			Code:    "SCRAP_DR_RESTORE_IMPLEMENTATION_MISSING",
-			Message: "published metadata checkpoint exists, but local metadata restore and copy verification are not implemented",
+			Code:    "SCRAP_DR_DRILL_IMPLEMENTATION_MISSING",
+			Message: "published metadata checkpoint exists, but local DR drill execution is not implemented",
 		})
 	case errors.Is(err, published.ErrCurrentPointerNotFound):
 		warnings = append(warnings, &adminv1.OperationWarning{
