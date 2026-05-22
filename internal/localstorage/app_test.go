@@ -421,6 +421,12 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	if result.Upload.Scanned != 1 || result.Upload.Uploaded != 1 || result.Upload.Failed != 0 || result.Upload.Deferred != 0 {
 		t.Fatalf("upload result = %#v, want one uploaded sealed block", result.Upload)
 	}
+	if !result.MetadataPublished || result.MetadataPublication == nil {
+		t.Fatalf("metadata publication = %#v, want upload-triggered checkpoint", result.MetadataPublication)
+	}
+	if _, err := published.UnmarshalCurrentPointer(readBackendObject(t, ctx, backendStore, result.MetadataPublication.PointerKey)); err != nil {
+		t.Fatalf("read published current pointer: %v", err)
+	}
 	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
 	if err != nil {
 		t.Fatalf("get upload intent: %v", err)

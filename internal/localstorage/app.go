@@ -21,6 +21,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,9 +44,11 @@ const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
 const backendReadChunkSize = 1024 * 1024
 
 type BackendUploadOnceResult struct {
-	SealedBlockID string
-	Sealed        bool
-	Upload        backendupload.RunResult
+	SealedBlockID       string
+	Sealed              bool
+	Upload              backendupload.RunResult
+	MetadataPublished   bool
+	MetadataPublication *published.SnapshotPublication
 }
 
 func Open(dir string) (*Application, error) {
@@ -134,7 +137,35 @@ func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.St
 	result.SealedBlockID = sealedBlockID
 	result.Sealed = sealed
 	result.Upload, err = a.BackendUploadProcessor(store).RunOnce(ctx)
+	if err != nil {
+		return result, err
+	}
+	if a.shouldPublishMetadataCheckpoint(ctx, store, result.Upload) {
+		mutable, ok := store.(backend.MutableStore)
+		if !ok {
+			return result, fmt.Errorf("localstorage: backend store does not support mutable metadata pointers")
+		}
+		publication, err := a.publishMetadataSnapshot(ctx, mutable)
+		if err != nil {
+			return result, err
+		}
+		result.MetadataPublished = true
+		result.MetadataPublication = &publication
+	}
 	return result, err
+}
+
+func (a *Application) shouldPublishMetadataCheckpoint(ctx context.Context, store backend.Store, upload backendupload.RunResult) bool {
+	if upload.Uploaded > 0 {
+		return true
+	}
+	if upload.Scanned == 0 {
+		return false
+	}
+	if _, err := published.VerifyCurrentCheckpoint(ctx, store, localPublishedCellID); errors.Is(err, published.ErrCurrentPointerNotFound) {
+		return true
+	}
+	return false
 }
 
 func (a *Application) SealCurrentBlockIfDue(ctx context.Context) (string, bool, error) {

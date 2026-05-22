@@ -65,6 +65,9 @@ func main() {
 					if result.Sealed {
 						log.Printf("backend upload sealed block %s", result.SealedBlockID)
 					}
+					if result.MetadataPublished && result.MetadataPublication != nil {
+						log.Printf("published metadata checkpoint %s", result.MetadataPublication.Manifest.GetManifestId())
+					}
 					return result.Upload, err
 				},
 				Interval: cfg.BackendUploadInterval,

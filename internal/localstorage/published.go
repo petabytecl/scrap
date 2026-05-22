@@ -26,6 +26,10 @@ func (a *Application) PublishMetadataSnapshot(ctx context.Context) (published.Sn
 	if !ok {
 		return published.SnapshotPublication{}, fmt.Errorf("localstorage: backend store does not support mutable metadata pointers")
 	}
+	return a.publishMetadataSnapshot(ctx, store)
+}
+
+func (a *Application) publishMetadataSnapshot(ctx context.Context, store backend.MutableStore) (published.SnapshotPublication, error) {
 	now := a.now()
 	highWatermark := a.authority.AppliedIndex()
 	generation := highWatermark
