@@ -1,0 +1,93 @@
+package metastore
+
+import (
+	"time"
+
+	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/identity"
+)
+
+type DocumentClass uint16
+type PriorityClass uint16
+type Availability uint16
+type LifecycleState uint16
+type TransactionStateKind uint16
+
+const (
+	DocumentClassPermanent DocumentClass = 1
+	DocumentClassEphemeral DocumentClass = 2
+)
+
+const (
+	PriorityClassCriticalIngest PriorityClass = 1
+	PriorityClassNormal         PriorityClass = 2
+	PriorityClassBulk           PriorityClass = 3
+)
+
+const (
+	AvailabilityHot Availability = 1
+)
+
+const (
+	LifecycleStateActive               LifecycleState = 1
+	LifecycleStateTransactionCompleted LifecycleState = 2
+)
+
+const (
+	TransactionStateOpen      TransactionStateKind = 1
+	TransactionStateCompleted TransactionStateKind = 2
+	TransactionStateTimedOut  TransactionStateKind = 3
+)
+
+type Document struct {
+	Identity                    identity.Document
+	DocumentClass               DocumentClass
+	PriorityClass               PriorityClass
+	ContentType                 string
+	HasContentType              bool
+	Length                      uint64
+	LogicalSHA256               [32]byte
+	StoredSHA256                [32]byte
+	DocumentIdentityFingerprint [16]byte
+	CreatedByService            string
+	WorkflowStage               string
+	HasWorkflowStage            bool
+	CreatedAt                   time.Time
+	FinalizedAt                 time.Time
+	Availability                Availability
+	LifecycleState              LifecycleState
+	Tags                        map[string]string
+	Location                    blockstore.Record
+	ClientIdempotencyKey        string
+	HasClientIdempotencyKey     bool
+}
+
+type Transaction struct {
+	Identity               identity.Transaction
+	State                  TransactionStateKind
+	DocumentCount          uint32
+	PermanentDocumentCount uint32
+	EphemeralDocumentCount uint32
+	CreatedAt              time.Time
+	CompletedAt            *time.Time
+	TimeoutAt              *time.Time
+	Tags                   map[string]string
+}
+
+type DocumentFilter struct {
+	DocumentNameExact     string
+	HasDocumentNameExact  bool
+	DocumentNamePrefix    string
+	HasDocumentNamePrefix bool
+	DocumentClass         DocumentClass
+	HasDocumentClass      bool
+	ContentType           string
+	HasContentType        bool
+	WorkflowStage         string
+	HasWorkflowStage      bool
+	CreatedByService      string
+	HasCreatedByService   bool
+	CreatedAfter          *time.Time
+	CreatedBefore         *time.Time
+	Tags                  map[string]string
+}

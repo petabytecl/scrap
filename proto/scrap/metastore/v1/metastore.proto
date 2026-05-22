@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package scrap.metastore.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1;metastorev1";
+
+message DocumentRecord {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  string document_name = 3;
+  uint32 document_class = 4;
+  uint32 priority_class = 5;
+  optional string content_type = 6;
+  uint64 length = 7;
+  bytes logical_sha256 = 8;
+  bytes stored_sha256 = 9;
+  bytes document_identity_fingerprint = 10;
+  string created_by_service = 11;
+  optional string workflow_stage = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp finalized_at = 14;
+  uint32 availability = 15;
+  uint32 lifecycle_state = 16;
+  map<string, string> tags = 17;
+  Location location = 18;
+  optional string client_idempotency_key = 19;
+}
+
+message Location {
+  string block_id = 1;
+  uint64 stored_offset = 2;
+  uint64 stored_length = 3;
+  repeated FrameRecord frames = 4;
+}
+
+message FrameRecord {
+  uint64 frame_offset = 1;
+  uint64 segment_offset = 2;
+  uint64 segment_length = 3;
+  bytes sha256 = 4;
+}
+
+message TransactionRecord {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  uint32 state = 3;
+  uint32 document_count = 4;
+  uint32 permanent_document_count = 5;
+  uint32 ephemeral_document_count = 6;
+  google.protobuf.Timestamp created_at = 7;
+  optional google.protobuf.Timestamp completed_at = 8;
+  optional google.protobuf.Timestamp timeout_at = 9;
+  map<string, string> tags = 10;
+}
