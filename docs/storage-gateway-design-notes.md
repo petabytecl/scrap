@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: exact protobuf field schemas, concrete provider profiles, Go build/release operations, and deployment-specific numeric budgets.
+After reading it, they should be able to continue the design review from the current frontier: deployment topology, per-deployment numeric capacity budgets, DR drill numbers, and operational runbooks.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -844,6 +844,477 @@ Core storage packages should use explicit internal Go structs for identities, ph
 Internal errors should be typed or sentinel errors with retryability and failure class preserved. Map them to gRPC status codes only at transport boundaries. Storage, repair, and shard logic should not depend on gRPC status types.
 
 `internal/node` owns process lifecycle and the shard registry. Each `internal/shard` instance owns one Raft group and its state. Worker pools are node-level resources with per-shard admission and fairness controls for IO, backend, crypto, repair, restore, and upload work. The hot metadata index is shard-owned and derived from committed metadata, not a global node cache.
+
+## Protobuf API Schema Direction
+
+Public and admin APIs use protobuf over gRPC. Public and admin schemas are split by audience:
+
+```text
+scrap.v1: public service-fleet API and shared logical types
+scrap.admin.v1: operator/admin workflow services
+```
+
+Public protobuf sources live under `proto/scrap/v1`. Admin protobuf sources live under `proto/scrap/admin/v1`. Generated Go code is committed under:
+
+```text
+internal/gen/scrap/v1          package scrapv1
+internal/gen/scrap/admin/v1    package adminv1
+```
+
+Buf is the schema tool. Use strict `FILE` breaking-change checks by default, reserve removed field numbers and names, and evolve schemas additively. Do not rely on proto3 implicit zero values when unset differs from zero or empty. Use `optional` deliberately for scalar presence, such as `expected_length`, `range.length`, and optional timestamps or hints.
+
+Recommended proto file layout:
+
+```text
+identity.proto
+document.proto
+transaction.proto
+errors.proto
+admin.proto
+operations.proto
+```
+
+Use sparse field numbering. Keep common fields in low numbers, reserve gaps, and group future extension areas by hundreds when messages are expected to grow. Avoid `google.protobuf.Any` in public API contracts unless a later ADR justifies it. Standard imports allowed in v1 include `google.protobuf.Timestamp`, `google.protobuf.Duration`, and standard Google RPC status detail types.
+
+Client-visible errors use canonical gRPC status codes plus typed protobuf error details. Standard validation failures use field-violation details with S.C.R.A.P. reason codes. Storage-specific error detail messages:
+
+```text
+RestorePendingDetail
+CryptoUnavailableDetail
+IntegrityFailureDetail
+DuplicateWriteDetail
+UnsafeCapacityDetail
+RetryHint
+```
+
+Retry hints should appear in typed status details and may also be echoed through gRPC metadata for generic clients.
+
+Status-code mapping:
+
+```text
+missing document: NOT_FOUND
+prepared/unfinalized document for ordinary readers: NOT_FOUND
+cold archived bytes / restore pending: UNAVAILABLE + RestorePendingDetail
+OpenBao unavailable and DEK not cached: UNAVAILABLE + CryptoUnavailableDetail
+all known byte sources corrupt: DATA_LOSS + IntegrityFailureDetail
+active duplicate write: ABORTED + DuplicateWriteDetail
+finalized identity with different bytes/metadata: ALREADY_EXISTS
+expected_length or expected_sha256 mismatch: FAILED_PRECONDITION
+invalid identity, tags, ranges, or stream ordering: INVALID_ARGUMENT
+unauthorized capability: PERMISSION_DENIED
+```
+
+Request/correlation IDs are accepted through gRPC metadata, logged/traced, and echoed where useful in responses or operations. Security identity is server-derived from mTLS/workload identity. Request fields such as `created_by_service` are caller metadata, not the security principal.
+
+### Public API Catalog
+
+`DocumentService` v1 RPCs:
+
+```text
+WriteDocument(stream WriteDocumentRequest) returns WriteDocumentResult
+HeadDocument(HeadDocumentRequest) returns HeadDocumentResponse
+ReadDocument(ReadDocumentRequest) returns stream ReadDocumentResponse
+FindDocuments(FindDocumentsRequest) returns FindDocumentsResponse
+```
+
+`TransactionService` v1 RPCs:
+
+```text
+CompleteTransaction(CompleteTransactionRequest) returns TransactionState
+GetTransaction(GetTransactionRequest) returns TransactionState
+```
+
+`WriteDocument` uses ordered stream messages:
+
+```text
+WriteDocumentRequest
+  oneof message:
+    init WriteDocumentInit
+    chunk WriteDocumentChunk
+
+WriteDocumentInit
+  identity DocumentIdentity
+  document_class DocumentClass
+  priority_class PriorityClass
+  content_type optional string
+  expected_length optional uint64
+  expected_sha256 optional bytes
+  client_idempotency_key optional string
+  created_by_service string
+  workflow_stage optional string
+  tags map<string,string>
+
+WriteDocumentChunk
+  data bytes
+```
+
+The first write-stream message must be `init`; later messages must be `chunk`. The server rejects wrong ordering with `INVALID_ARGUMENT`. `client_idempotency_key` is optional in the schema but required by validation for `CRITICAL_INGEST`.
+
+`WriteDocumentResult`:
+
+```text
+metadata DocumentMetadata
+desired_replica_count uint32
+achieved_replica_count uint32
+repair_required bool
+idempotent_replay bool
+```
+
+`ReadDocument` uses ordered response messages:
+
+```text
+ReadDocumentRequest
+  identity DocumentIdentity
+  range optional ReadRange
+  chunk_size_hint optional uint32
+
+ReadDocumentResponse
+  oneof message:
+    metadata ReadDocumentMetadata
+    chunk ReadDocumentChunk
+
+ReadDocumentMetadata
+  metadata DocumentMetadata
+  selected_range ReadRange
+  source StorageSource
+
+ReadDocumentChunk
+  data bytes
+```
+
+`ReadRange` is `offset + optional length`. An absent range means full document. An absent length means from offset to EOF. `chunk_size_hint` is clamped by the server to the documented 64 KiB to 4 MiB range; default is 1 MiB.
+
+Core shared public messages:
+
+```text
+DocumentIdentity
+  tenant_id string
+  transaction_id string
+  document_name string
+
+TransactionIdentity
+  tenant_id string
+  transaction_id string
+
+ReadRange
+  offset uint64
+  length optional uint64
+
+TimeRange
+  start_time optional google.protobuf.Timestamp
+  end_time optional google.protobuf.Timestamp
+```
+
+`document_name` stays a string for caller ergonomics, with documented validation: valid UTF-8, relative virtual path, no empty segments, no duplicate slashes, no `.` or `..` traversal segments, and no leading slash.
+
+Public `DocumentMetadata` exposes logical status but not physical storage refs:
+
+```text
+identity DocumentIdentity
+document_class DocumentClass
+priority_class PriorityClass
+content_type optional string
+length uint64
+logical_sha256 bytes
+document_identity_fingerprint bytes
+created_by_service string
+workflow_stage optional string
+created_at google.protobuf.Timestamp
+finalized_at google.protobuf.Timestamp
+availability DocumentAvailability
+lifecycle_state DocumentLifecycleState
+tags map<string,string>
+```
+
+Raw hashes and fingerprints use `bytes` on the wire. Display encoding is lowercase hex for logs and CLIs. Physical block, shard, member, and replica refs are admin-only.
+
+Public enums:
+
+```text
+DocumentClass:
+  DOCUMENT_CLASS_UNSPECIFIED
+  DOCUMENT_CLASS_PERMANENT
+  DOCUMENT_CLASS_EPHEMERAL
+
+PriorityClass:
+  PRIORITY_CLASS_UNSPECIFIED
+  PRIORITY_CLASS_CRITICAL_INGEST
+  PRIORITY_CLASS_NORMAL
+  PRIORITY_CLASS_BULK
+
+DocumentAvailability:
+  DOCUMENT_AVAILABILITY_UNSPECIFIED
+  DOCUMENT_AVAILABILITY_HOT
+  DOCUMENT_AVAILABILITY_COLD
+  DOCUMENT_AVAILABILITY_RESTORE_PENDING
+  DOCUMENT_AVAILABILITY_CRYPTO_UNAVAILABLE
+  DOCUMENT_AVAILABILITY_DEGRADED_REPAIR
+
+DocumentLifecycleState:
+  DOCUMENT_LIFECYCLE_STATE_UNSPECIFIED
+  DOCUMENT_LIFECYCLE_STATE_ACTIVE
+  DOCUMENT_LIFECYCLE_STATE_TRANSACTION_COMPLETED
+  DOCUMENT_LIFECYCLE_STATE_TOMBSTONED
+  DOCUMENT_LIFECYCLE_STATE_PENDING_RECLAMATION
+
+StorageSource:
+  STORAGE_SOURCE_UNSPECIFIED
+  STORAGE_SOURCE_LOCAL
+  STORAGE_SOURCE_PEER
+  STORAGE_SOURCE_BACKEND
+  STORAGE_SOURCE_RESTORED_BACKEND
+
+TransactionStateKind:
+  TRANSACTION_STATE_KIND_UNSPECIFIED
+  TRANSACTION_STATE_KIND_OPEN
+  TRANSACTION_STATE_KIND_COMPLETED
+  TRANSACTION_STATE_KIND_TIMED_OUT
+```
+
+Every enum has an `UNSPECIFIED` zero value, and request validation rejects unspecified values for fields where the caller must choose.
+
+`FindDocuments` remains transaction-scoped and unpaginated in v1 because normal transactions contain only a small number of documents:
+
+```text
+FindDocumentsRequest
+  transaction TransactionIdentity
+  filter optional DocumentFilter
+
+DocumentFilter
+  document_name_exact optional string
+  document_name_prefix optional string
+  document_class optional DocumentClass
+  content_type optional string
+  workflow_stage optional string
+  created_by_service optional string
+  created_at optional TimeRange
+  tags map<string,string>  // match all supplied tags
+
+FindDocumentsResponse
+  documents repeated DocumentMetadata
+```
+
+`CompleteTransaction` is a lifecycle/reporting marker. It does not control document visibility; finalized documents are visible immediately after each successful write.
+
+```text
+CompleteTransactionRequest
+  transaction TransactionIdentity
+  completed_by_service optional string
+  tags map<string,string>
+
+GetTransactionRequest
+  transaction TransactionIdentity
+
+TransactionState
+  transaction TransactionIdentity
+  state TransactionStateKind
+  document_count uint32
+  permanent_document_count uint32
+  ephemeral_document_count uint32
+  created_at google.protobuf.Timestamp
+  completed_at optional google.protobuf.Timestamp
+  timeout_at optional google.protobuf.Timestamp
+  tags map<string,string>
+```
+
+Initial public validation limits:
+
+```text
+tenant_id: <= 256 bytes
+transaction_id: <= 512 bytes
+document_name: <= 1024 bytes
+tags: <= 64 entries
+tag key: <= 128 bytes
+tag value: <= 1024 bytes
+total metadata: <= 16 KiB
+content_type: optional printable string; not a security boundary
+zero-length documents: allowed
+```
+
+### Admin API Catalog
+
+Admin APIs live in `scrap.admin.v1`. Explicit restore/prewarm remains admin/control-plane only. Ordinary application reads auto-queue restore for cold data according to scheduler limits but do not expose explicit restore/prewarm RPCs.
+
+Admin target messages use typed protobufs, not free-form strings:
+
+```text
+Target
+  oneof target:
+    document DocumentTarget
+    transaction TransactionTarget
+    block BlockTarget
+    shard ShardTarget
+    storage_member StorageMemberTarget
+    snapshot SnapshotTarget
+
+DocumentTarget: tenant_id, transaction_id, document_name
+TransactionTarget: tenant_id, transaction_id
+BlockTarget: shard_id, block_id
+ShardTarget: shard_id
+StorageMemberTarget: storage_member_id
+SnapshotTarget: shard_id optional, snapshot_id/checkpoint_id
+```
+
+`Operation` is the shared durable admin job model:
+
+```text
+Operation
+  operation_id string   // UUIDv7
+  operation_type string
+  state OperationState
+  requested_by_identity string
+  requested_at google.protobuf.Timestamp
+  started_at optional google.protobuf.Timestamp
+  finished_at optional google.protobuf.Timestamp
+  dry_run bool
+  targets repeated Target
+  progress OperationProgress
+  warnings repeated OperationWarning
+  last_error optional OperationError
+  metadata map<string,string>
+
+OperationState:
+  OPERATION_STATE_UNSPECIFIED
+  OPERATION_STATE_PLANNED
+  OPERATION_STATE_QUEUED
+  OPERATION_STATE_RUNNING
+  OPERATION_STATE_SUCCEEDED
+  OPERATION_STATE_FAILED
+  OPERATION_STATE_CANCELED
+  OPERATION_STATE_EXPIRED
+```
+
+`WatchOperation` streams an initial full snapshot followed by sequenced progress/state deltas. `CancelOperation` is cooperative only; operations stop at safe checkpoints and return `CANCELED` or the already-terminal state.
+
+Admin service surface:
+
+```text
+InspectService:
+  GetClusterSummary
+  GetShard
+  GetDocument
+  GetBlock
+  GetMember
+  GetCapacityRunway
+
+OperationService:
+  GetOperation
+  WatchOperation
+  ListOperations
+  CancelOperation
+
+RestoreService:
+  PlanRestore
+  StartRestore
+  PlanPrewarm
+  StartPrewarm
+
+RepairService:
+  GetRepairQueue
+  PlanRepair
+  StartRepair
+
+MemberService:
+  CordonMember
+  UncordonMember
+  GetEvictionSafety
+  PlanDrain
+  StartDrain
+
+LifecycleService:
+  PlanTombstone
+  StartTombstone
+
+DisasterRecoveryService:
+  GetRecoveryReadiness
+  PlanRecovery
+  StartMetadataRestore
+  StartCopyVerify
+  StartDRDrill
+```
+
+Dangerous or costly workflows use Plan/Start. Plan RPCs return an `operation_plan_id`, `plan_hash`, `expires_at`, affected targets, estimated impact, and warnings. Start RPCs require the recent plan token/hash. Direct raw membership edits are not exposed; member and replica changes happen through typed workflows.
+
+Capacity overrides and key-rotation/rewrap state are inspect-only in the initial admin schema. Add dedicated `CapacityService` or `KeyService` only when implementation pressure proves a typed mutating API is needed.
+
+## Go Build And Release Policy
+
+Use `Makefile` as the primary developer and CI command entrypoint. Expected targets include:
+
+```text
+make test
+make test-race
+make lint
+make proto
+make proto-check
+make build
+make image
+make perf-smoke
+```
+
+Initial CI assumes GitHub Actions for PR and release workflows. Dedicated self-hosted runners are required for authoritative performance, fsync-heavy, crash/recovery, and storage-node tests. GitHub-hosted runners are acceptable for normal compile, lint, proto, unit, and lightweight simulator checks.
+
+Every PR should run:
+
+```text
+go test
+race tests for core packages
+go vet / staticcheck-equivalent lint
+buf lint
+buf breaking
+generated-code cleanliness check
+unit invariant tests
+deterministic simulator smoke tests
+```
+
+Nightly CI should run:
+
+```text
+crash/recovery suites
+fault-injection suites
+long model-based tests
+broader race and goroutine-leak tests
+backend adapter smoke tests
+OpenBao Transit smoke tests
+```
+
+Production release gates require:
+
+```text
+PR gates green
+nightly correctness suite green
+dedicated performance profile pass
+vulnerability gate pass or documented exception
+SBOM generated
+artifact/image signatures
+build provenance attestation
+immutable image tag and digest
+```
+
+Go dependencies and build/codegen tools are pinned. Updates happen through scheduled PRs or explicit security PRs. Dependency update PRs must run the normal gates, and storage/runtime dependency updates must include at least a benchmark or perf-smoke comparison when relevant.
+
+Production images use pinned multi-stage container builds. The runtime image is minimal/distroless-style and nonroot. It should contain only the S.C.R.A.P. binary and required runtime assets, not a package manager or shell. A matching debug image or documented ephemeral debug workflow should be published separately; production images stay minimal.
+
+Release artifacts should include SBOMs, signatures, and provenance attestations. Vulnerability scanning is severity-gated with documented, time-bound exceptions for non-reachable or base-image noise. Critical/high reachable issues block release.
+
+Runtime configuration uses typed config files plus environment overrides for deployment/runtime settings such as `GOMEMLIMIT`, `GOGC`, log level, listener addresses, and profile selection. Bad hot reloads keep the last valid config and alert.
+
+Go toolchain upgrades are benchmark-gated. Upgrade Go through deliberate PRs, rerun correctness and perf gates, and compare GC, heap, and latency profiles before promoting a release.
+
+Release versions use SemVer tags. Binaries and images also carry build metadata:
+
+```text
+git SHA
+Go version
+schema version
+active block/index/envelope format versions
+build time
+dirty tree flag
+```
+
+Images are published with immutable version and git-SHA tags, and production should deploy by digest. Do not mutate release tags. `latest` may exist for development only and must not be used by production manifests.
+
+Production rollout strategy is canary, then shard-safe rollout. Do not rely on plain Kubernetes rolling update semantics alone. Rollout must respect shard quorum, storage-member readiness, PDBs, byte-serving eligibility, and consensus-owned format feature gates.
 
 ## Read Path
 
@@ -1702,6 +2173,125 @@ hash source: block identity
 not based on tenant_id, transaction_id, document_name, or wall-clock time
 ```
 
+Provider profiles are explicit deployment configuration. They are not inferred from provider type alone.
+
+Backend profile shape:
+
+```text
+profile_id
+backend_type: s3 | gcs | azure_blob | filesystem | other
+physical_hash_fanout
+key_layout_version
+
+request_budgets:
+  per_backend_put_per_sec
+  per_backend_get_per_sec
+  per_backend_head_per_sec
+  per_backend_delete_per_sec
+  per_prefix_put_per_sec?
+  per_prefix_get_per_sec?
+  per_prefix_head_per_sec?
+
+byte_budgets:
+  upload_mib_per_sec
+  restore_mib_per_sec
+  scrub_mib_per_sec
+  dr_copy_mib_per_sec
+
+lane_budgets:
+  repair/reconciliation
+  permanent-block-upload
+  restore/prewarm
+  rewrap-envelope-sync
+  disaster-recovery-secondary
+  routine-scrub
+
+retry_policy:
+  normalized retry classes
+  exponential backoff base/max
+  jitter
+  token feedback behavior
+  per-lane circuit breaker thresholds
+
+ramp_policy:
+  initial_fraction
+  healthy_window
+  max_increase_per_window
+  throttle_backoff_window
+
+lifecycle_hints:
+  provider-neutral storage intent
+  provider class name
+  estimated restore delay/cost hints
+```
+
+Production profiles require explicit upload and restore MiB/sec budgets. Do not start production with unbounded backend byte budgets. Request-count defaults may exist for the S3-like profile only; GCS, Azure Blob, filesystem, and future providers require measured deployment-specific request budgets before production acceptance.
+
+The first concrete default is an S3-like profile:
+
+```text
+physical_hash_fanout: 256
+per_prefix_put_budget: about 1,750 PUT-class requests/sec
+per_prefix_get_head_budget: about 2,750 GET/HEAD-class requests/sec
+ramp: controlled increase after healthy windows
+throttle response: reduce effective token rate and back off with jitter
+byte budgets: required per deployment
+```
+
+These S3-like request budgets are deliberately conservative, roughly half of the common public S3 per-prefix performance guidance. They are starting points, not entitlement claims. Production deployments must measure real account, region, bucket, network, object-size, and retry behavior.
+
+GCS and Azure Blob profiles use the same schema but should not receive fake universal numeric defaults. Provider-specific guidance belongs in the adapter/profile documentation:
+
+```text
+GCS: account for bucket-level initial request capacity, gradual ramp-up, and object-key index hotspotting.
+Azure Blob: account for storage-account limits, partition behavior, 503/500 throttling signals, and exponential backoff.
+```
+
+Filesystem backend also uses a profile. It is not unlimited just because it is local. Filesystem profiles must declare byte budgets, fsync behavior assumptions, capacity guard bands, and backpressure behavior for dev, test, and on-prem deployments.
+
+Backend adapters normalize provider errors before they reach the scheduler:
+
+```text
+THROTTLED
+TRANSIENT
+AUTH
+NOT_FOUND
+CONFLICT
+CORRUPT
+PERMANENT
+```
+
+Scheduler retries use capped exponential backoff with jitter, coordinated with token-bucket feedback. Provider SDK retries may still be used locally by an adapter, but they must not hide retry storms or bypass S.C.R.A.P. lane/backlog accounting.
+
+Circuit breakers are per backend and lane, not one global backend switch. A restore/prewarm outage should not automatically stop permanent uploads or repair if those lanes remain healthy. Auth failures, sustained throttling, and persistent provider errors should trip lane-specific circuits, emit alerts, and preserve local ACK safety through backlog/runway gates.
+
+Backend adapters may use multipart or resumable upload internally. Core metadata still treats `.blk`, `.idx`, and `.env` as whole logical backend objects. Provider-specific upload parts must not leak into shard consensus metadata.
+
+Backend upload verification is `put` then verify. After upload, the adapter must verify required object length/checksum/metadata through provider-appropriate `head` or equivalent calls before S.C.R.A.P. marks the backend ref committed. The backend commit unit is the whole required object set:
+
+```text
+unencrypted block: .blk + .idx
+encrypted block: .blk + .idx + .env
+```
+
+Do not expose a committed backend ref that points to a partial object set.
+
+S.C.R.A.P. owns lifecycle hints, not full backend retention policy. The profile can express a provider-neutral storage intent plus exact provider class name:
+
+```text
+HOT
+WARM
+COLD
+ARCHIVE
+provider_class_name
+estimated_restore_delay
+estimated_restore_cost_hint
+```
+
+Actual retention, tiering, and legal-hold policies remain backend/infrastructure concerns unless a future requirement expands S.C.R.A.P. into an active lifecycle-policy engine. Restore planning should show profile estimates plus observed backend restore state; it must not promise exact provider restore timing.
+
+Profile validation is fail-closed. Startup rejects missing, invalid, or unsafe backend profiles. Bad hot reload keeps the last valid profile and alerts. If configured backend capacity is lower than expected ingest, startup may continue only if local durability window sizing and runway alerts remain safe; write admission must still throttle or reject before durability is threatened.
+
 Example physical layout:
 
 ```text
@@ -2318,23 +2908,22 @@ Normal hot reads and ordinary writes do not require full audit logging by defaul
 
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
-- What concrete provider profiles and numeric token-bucket budgets should be used per deployment?
 - What are the expected peak ingress rates for capacity sizing against the 24h durability window?
+- What concrete per-deployment backend byte budgets, lane budgets, ramp thresholds, and circuit-breaker thresholds should be configured?
 - What concrete numeric repair runway thresholds should each deployment use beyond the defaults?
 - What exact scrub rate limits and backend byte-read budgets should be configured per deployment?
-- What exact protobuf package, service, field, error, and streaming schemas should implement the public and admin APIs?
-- What exact Go build, release, container, CI, dependency, SBOM, and upgrade policy should be used?
+- What concrete Kubernetes deployment topology, StatefulSet/PV layout, readiness gates, and operational runbooks should be used?
 - What concrete DR drill cadence and sampled-read size should each deployment use?
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, backend capacity model, replica placement model, DR scope, admin API shape, and internal authorization model are concrete enough to move to API schemas, build/release policy, and deployment profiles.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, public/admin API schema direction, build/release policy, backend provider-profile model, replica placement model, DR scope, admin API shape, and internal authorization model are concrete enough to move to deployment topology and numeric capacity budgets.
 
 Resume by choosing between:
 
-1. exact protobuf schema for public/admin APIs;
-2. concrete provider profiles and per-deployment numeric budgets;
-3. Go build, release, CI, dependency, and upgrade policy;
-4. deployment topology and operational runbooks.
+1. Kubernetes deployment topology, StatefulSets, local PVs, readiness gates, and operational runbooks;
+2. concrete per-deployment ingress, backend byte-budget, lane-budget, ramp, and circuit-breaker numbers;
+3. concrete DR drill cadence, sampled-read size, and recovery evidence reports;
+4. concrete repair/scrub numeric thresholds and backend byte-read budgets.
 
-The recommended next topic is the exact protobuf schema for public and admin APIs. The Go implementation substrate, correctness harness, and package architecture are now concrete enough that the next decision should define the wire contracts the gateway and generated clients will share.
+The recommended next topic is deployment topology. The architecture now defines the storage semantics, Go substrate, API schema direction, build/release policy, and backend profile model, so the next decision should map those contracts onto Kubernetes storage members, local persistent volumes, readiness gates, rollout/drain behavior, and operator runbooks.
