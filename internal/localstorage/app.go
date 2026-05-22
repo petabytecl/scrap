@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -242,14 +243,17 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 
 func (a *Application) readDocumentFromBackend(ctx context.Context, document metastore.Document, selectedRange api.ReadRange, sender api.ReadDocumentSender, localErr error) error {
 	if a.backendStore == nil {
-		return mapError(localErr)
+		return readIntegrityError(document, []string{"local"}, localErr)
 	}
 	intent, err := a.metadata.GetUploadIntent(document.Location.BlockID)
 	if err != nil || intent.State != metastore.UploadStateUploaded {
-		return mapError(localErr)
+		return readIntegrityError(document, []string{"local"}, localErr)
 	}
 	data, err := a.readVerifiedBackendRange(ctx, document, intent, selectedRange)
 	if err != nil {
+		if isIntegrityFailure(err) {
+			return readIntegrityError(document, []string{"local", "backend"}, err)
+		}
 		return mapError(err)
 	}
 	if err := sender.SendMetadata(api.ReadDocumentMetadata{
@@ -495,9 +499,49 @@ func mapError(err error) error {
 		return status.Error(codes.DataLoss, "backend document bytes failed checksum verification")
 	case errors.Is(err, backend.ErrNotFound):
 		return status.Error(codes.DataLoss, "backend document bytes are missing")
+	case errors.Is(err, os.ErrNotExist):
+		return status.Error(codes.DataLoss, "stored document bytes are missing")
 	default:
 		return err
 	}
+}
+
+func readIntegrityError(document metastore.Document, attemptedSources []string, cause error) error {
+	if !isIntegrityFailure(cause) {
+		return mapError(cause)
+	}
+	st := status.New(codes.DataLoss, "document bytes failed integrity verification")
+	withDetails, err := st.WithDetails(&scrapv1.IntegrityFailureDetail{
+		Identity: &scrapv1.DocumentIdentity{
+			TenantId:      document.Identity.TenantID,
+			TransactionId: document.Identity.TransactionID,
+			DocumentName:  document.Identity.DocumentName,
+		},
+		AttemptedSources: append([]string(nil), attemptedSources...),
+		EvidenceId:       integrityEvidenceID(document),
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+func isIntegrityFailure(err error) bool {
+	return errors.Is(err, blockstore.ErrChecksumMismatch) ||
+		errors.Is(err, backend.ErrChecksumMismatch) ||
+		errors.Is(err, backend.ErrNotFound) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func integrityEvidenceID(document metastore.Document) string {
+	return stableCommandID(
+		"integrity-evidence",
+		document.Location.BlockID,
+		document.Identity.TenantID,
+		document.Identity.TransactionID,
+		document.Identity.DocumentName,
+	)
 }
 
 func documentToAPI(document metastore.Document) api.DocumentMetadata {

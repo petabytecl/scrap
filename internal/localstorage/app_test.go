@@ -504,6 +504,13 @@ func TestCorruptReadFailsBeforeSendingMetadata(t *testing.T) {
 	sender := &recordingReadSender{}
 	err = app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
 	requireCode(t, err, codes.DataLoss)
+	detail := requireIntegrityDetail(t, err)
+	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
+		len(detail.GetAttemptedSources()) != 1 ||
+		detail.GetAttemptedSources()[0] != "local" ||
+		detail.GetEvidenceId() == "" {
+		t.Fatalf("integrity detail = %#v, want local source and evidence", detail)
+	}
 	if sender.sentMetadata {
 		t.Fatal("metadata was sent before corruption was detected")
 	}
@@ -643,4 +650,19 @@ func requireCode(t *testing.T, err error, code codes.Code) {
 	if got := status.Code(err); got != code {
 		t.Fatalf("code = %s, want %s; err = %v", got, code, err)
 	}
+}
+
+func requireIntegrityDetail(t *testing.T, err error) *scrapv1.IntegrityFailureDetail {
+	t.Helper()
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("error is not a status error: %v", err)
+	}
+	for _, detail := range st.Details() {
+		if integrity, ok := detail.(*scrapv1.IntegrityFailureDetail); ok {
+			return integrity
+		}
+	}
+	t.Fatalf("status details = %#v, want IntegrityFailureDetail", st.Details())
+	return nil
 }
