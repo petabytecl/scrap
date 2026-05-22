@@ -100,8 +100,8 @@ preserve the information needed to answer:
 
 - did the operation definitely not happen, definitely happen, or become
   unknown to the caller?
-- is retry safe, unsafe, or safe only with the same idempotency key or operation
-  ID?
+- is retrying safe, unsafe, or safe only with the same idempotency key or
+  operation ID?
 - is the failure transient, throttled, capacity-related, validation-related,
   unauthorized, corrupt, crypto-unavailable, stale, conflict, or permanent?
 - does the failure require repair, quarantine, operator action, or release-gate
@@ -176,8 +176,9 @@ Write idempotency:
 
 Background job idempotency:
 
-- upload, restore, prewarm, repair, scrub, rewrap, publish, and DR rebuild work
-  records a durable operation or job identity before side effects are trusted;
+- upload, restore, prewarm, repair, scrub, rewrap, publish, and DR rebuild
+  workflows record a durable operation or job identity before side effects are
+  trusted;
 - duplicate execution verifies existing side effects instead of blindly
   repeating unsafe mutation;
 - side effects are committed only after verification of the complete required
