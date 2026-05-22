@@ -4,7 +4,7 @@
 
 This note is for an internal engineer resuming the storage gateway architecture discussion.
 
-After reading it, they should be able to continue the design review from the current frontier: implementation language/runtime choices, concrete provider profiles, exact protobuf field schemas, and deployment-specific numeric budgets.
+After reading it, they should be able to continue the design review from the current frontier: exact protobuf field schemas, concrete provider profiles, Go build/release operations, and deployment-specific numeric budgets.
 
 Design status: exploratory. The settled points below are the current working direction, not a final ADR.
 
@@ -621,7 +621,35 @@ replica membership
 
 The consensus log carries deterministic metadata commands only. It must not carry document bytes, full `.idx` payloads, or large block data.
 
-Applied shard state is stored in a local RocksDB-like LSM using typed binary keyspaces and versioned Protobuf values. Exact library selection is deferred until implementation language/runtime selection.
+Applied shard state is stored in a local RocksDB-like LSM using typed binary keyspaces and versioned Protobuf values.
+
+The primary implementation language is Go. The storage gateway core should remain a single-language Go service. Java, .NET, and other consumers should use generated gRPC clients rather than pushing those languages into the gateway implementation. A Rust helper may be considered later only for a measured hot path, and should default to a process boundary rather than FFI.
+
+Default Go substrate choices:
+
+```text
+Raft: go.etcd.io/raft/v3
+metadata KV: Pebble
+API: grpc-go plus protobuf
+backend clients: native provider SDK adapters behind a small internal backend interface
+crypto: OpenBao Go API client for Transit wrapping plus Go standard crypto for local payload encryption
+observability: OpenTelemetry, Prometheus exposition where needed, and log/slog
+Go version: latest stable patch pinned at implementation time
+```
+
+These are default implementation candidates, not a license to skip validation. The Go decision is accepted if a representative spike proves the mixed hot path under the storage system's latency, memory, and GC budgets. The spike should exercise streaming writes and reads, block append and index write, metadata KV update, checksum work, fsync rhythm, bounded memory, and simulated commit pressure. It does not need real Raft in the first pass; real Raft integration should be validated separately after the runtime and byte path are proven.
+
+Go runtime guardrails:
+
+```text
+GC CPU <= 5% under target load
+p99 GC pause <= 10ms
+stable heap under GOMEMLIMIT
+no full-document heap buffering
+no unbounded per-transaction or hot-index growth
+```
+
+If the first Go spike fails, perform one Go tuning pass focused on allocation shape, buffer reuse, cache layout, and benchmark realism. If tuned Go still misses hard budgets, run the same representative spike in Rust before reconsidering the implementation language.
 
 Recommended keyspaces:
 
@@ -657,6 +685,165 @@ Shard snapshots contain metadata, job state, envelope state, restore state, and 
 Background work uses a Raft-backed transactional outbox. Upload, repair, restore, and rewrap jobs are at-least-once operations with idempotent external effects. The shard leader owns scheduling and fencing. Capable replicas may execute leased jobs and report completion through consensus.
 
 If a shard cannot reach consensus quorum, it must reject writes and strong metadata reads. The system targets continued availability within the configured fault budget, not split-brain operation after quorum loss.
+
+## Go Runtime Design Defaults
+
+The byte path should use strict streaming slabs. Document payloads must not be accumulated on the heap, stored inside protobuf messages, or passed through `io.ReadAll`-style full-body buffering. Small documents should be fast because metadata and local block ranges are hot, not because the runtime silently buffers complete objects.
+
+The core concurrency model should be shard actors plus bounded workers. Shard-owned loops sequence Raft application, metadata mutation, open-block ownership, and commit visibility. Blocking file IO, backend upload, scrub, restore, and crypto work run in bounded pools and report completion through the shard state machine or durable operation model.
+
+Local file IO should use explicit Go standard-library primitives with reviewable durability boundaries. Fsync and fdatasync decisions must be visible in the code and covered by crash-recovery tests. Async IO libraries, mmap-heavy designs, or FFI storage shortcuts are not v1 defaults; they require profiling evidence and an ADR-level trade-off.
+
+The hot metadata index should be a bounded typed cache derived from durable shard state. Cache entries should favor compact structs, byte-array fingerprints, integer IDs, and explicit size accounting. Full metadata blobs can remain in Pebble unless they are deliberately admitted to the hot cache. Unbounded maps and pointer-rich nested structures are not acceptable defaults.
+
+## Go Correctness Harness
+
+Correctness validation is a hard gate for production write-path work. The harness should be layered and adversarial:
+
+```text
+unit invariants
+model-based lifecycle tests
+deterministic shard simulators
+crash/recovery tests
+in-process Raft integration tests
+fault-injection tests
+allocation and GC gates
+race and goroutine-leak tests
+representative performance spikes
+```
+
+The correctness oracle must assert the full storage contract:
+
+```text
+no ACKed document is lost
+no corrupt bytes are returned
+unfinalized/prepared bytes are never visible
+idempotent retries preserve the documented semantics
+cleanup never deletes committed or possibly committed bytes
+metadata visibility and byte-serving eligibility remain consistent after recovery
+```
+
+Crash tests should cover every durability boundary in the write path: prepared byte append, local fsync, `.openlog` record fsync, peer prepare, consensus commit, post-commit bookkeeping, block seal, `.idx` creation, backend upload intent, and cleanup. Each crash/restart assertion must prove that ACKed documents are readable or repairable from verified sources, and that non-ACKed prepared data does not become visible by accident.
+
+The deterministic simulator starts with the shard write lifecycle. It should model writes, prepare/finalize states, commit visibility, duplicate attempts, recovery replay, and repair eligibility. Model-based tests are required: generated operation sequences compare implementation behavior against a small authoritative model. Go's built-in fuzzing should be used for parsers and binary formats, and `pgregory.net/rapid` is the default candidate for stateful/model tests with shrinking.
+
+Fault injection should be built through injected interfaces rather than only external chaos. File IO, clocks, backend clients, OpenBao Transit, and Raft transport need deterministic fault hooks. V1 tests must inject storage write/read/fsync failures, torn or corrupt records, node crashes, dropped/reordered Raft messages, backend throttling/errors, and OpenBao unavailability.
+
+Disk durability tests should use real Linux filesystem directories plus a faulting IO wrapper. V1 storage-member support assumes Linux local persistent volumes with ext4/XFS-like semantics; generic network filesystems are not part of the safety claim. File creation, rename, link, and delete operations that affect durable state require parent directory fsync where needed.
+
+Raft integration tests use an in-process multi-node harnessed transport around `go.etcd.io/raft/v3`. Hard-gated scenarios include leader changes, partitions, dropped/reordered messages, snapshots, joint consensus membership changes, ReadIndex, replay after restart, and byte-serving eligibility after snapshot install. Initial strong metadata reads use ReadIndex only; lease reads remain deferred until timing and fencing assumptions are explicitly validated.
+
+Backend and OpenBao tests use deterministic fakes for correctness and separate smoke tests for real native SDK/OpenBao compatibility. The fake backend must support range reads, missing objects, corrupted objects, throttling, retryable errors, restore-pending behavior, and upload verification. The fake Transit service must support wrap, unwrap, rewrap, key-version behavior, and outage/error modes.
+
+The first Go spike is representative but disposable. It should include real `grpc-go` streaming, real file IO, real Pebble, real checksums, a minimal real subset of the block/openlog/index concepts, a fake commit barrier instead of real Raft, and fake backend/OpenBao adapters. The spike code should not become production code by default; preserve benchmark reports, failure cases, and distilled tests as the reusable output.
+
+The initial synthetic workload is ETL-biased and trace-replay-ready:
+
+```text
+2-7 documents per transaction
+70%: 16-128KiB
+25%: 128KiB-4MiB
+4.9%: 4-32MiB
+0.1%: 128MiB max
+concurrent writes
+immediate post-finalize reads
+metadata HeadDocument reads
+background seal/upload simulation
+```
+
+Authoritative performance gates require a dedicated perf profile, such as stable local NVMe or Kubernetes storage-node hardware with pinned Go version, `GOMEMLIMIT`, `GOGC`, container memory limit, filesystem, disk class, and kernel/runtime notes. Developer laptops may run the harness, but they are not pass/fail authority.
+
+Initial hot-read gates:
+
+```text
+metadata / HeadDocument p95 <= 8ms
+small document first byte p95 <= 8ms
+small document full read p95 <= 25ms
+p99 <= 3x the matching p95 target, except tests marked burst-only
+```
+
+Write ACK latency is reported in the first spike, not hard-gated until quorum, hardware, and deployment profiles are fixed. Write correctness, bounded memory, allocation shape, GC guardrails, and read-tail isolation under writer pressure are hard gates.
+
+Every spike report should include read/write p50, p95, p99, first-byte latency, throughput, GC CPU, GC pause distribution, heap profile, allocation rate, fsync latency, open-block behavior, error counts, and invariant results. Randomized tests must persist failing seeds, workload shape, runtime config, and enough reproduction metadata to replay the failure.
+
+CI should be tiered:
+
+```text
+PR: unit tests, deterministic simulators, core race tests, core leak tests
+nightly: crash/recovery, broader race tests, fault injection, model-based long runs
+dedicated/manual: performance gates, backend/OpenBao smoke tests, large corpus runs
+```
+
+Observability is part of the harness. Tests should assert key metrics for ACKs, read source, repair, fsync latency, Raft lag, backend throttling, GC/runtime behavior, restore-pending paths, and integrity failures. High-cardinality document identifiers belong in logs/traces, not metric labels.
+
+## Go Project Layout
+
+Use one root Go module:
+
+```text
+github.com/petabytecl/scrap
+```
+
+The repository should use a minimal `golang-standards/project-layout`-inspired structure, not a full scaffold. Create directories only when they contain real code or configuration:
+
+```text
+cmd/scrapd
+cmd/scrapctl
+cmd/scrap-spike
+internal/
+internal/gen/scrap/v1
+proto/scrap/v1
+configs/
+deployments/
+build/
+scripts/
+test/
+```
+
+Do not create `/pkg` in v1. Implementation code remains private under `internal/`. Public service contracts are protobuf sources under `proto/scrap/v1`. Generated Go code is committed under `internal/gen/scrap/v1` for reproducible server builds. A public Go client package can be introduced later only after the API contract is stable and there is a real external import need.
+
+Use Buf as the default protobuf tool for linting, breaking-change checks, and code generation. Tool versions should be pinned in repo-managed configuration; CI must not rely on `@latest` or runner-global protobuf tools.
+
+Initial internal package map:
+
+```text
+internal/node       process lifecycle, wiring, shard registry, listeners, shutdown
+internal/shard      one Raft group, write lifecycle, visibility, hot index ownership
+internal/blockstore local .blk/.idx/.openlog files, frame IO, checksums, recovery
+internal/metastore  Pebble keyspaces, snapshots, applied metadata state
+internal/raftstore  persistent Raft log/storage glue and snapshot plumbing
+internal/backend    provider-neutral backend interface helpers
+internal/backend/s3
+internal/backend/gcs
+internal/backend/azure
+internal/backend/fs
+internal/cryptoenv  envelope handling, AAD, DEK cache, OpenBao integration boundary
+internal/api        public gRPC transport handlers and error mapping
+internal/admin      admin operation service and durable operation orchestration
+internal/authz      workload capability policy and authorization decisions
+internal/config     typed config loading, validation, and hot reload
+internal/identity   tenant/transaction/document identity, UUIDv7, fingerprints, key encoding
+internal/observe    metrics, tracing, logging helpers, cardinality policy
+```
+
+Package dependency rules:
+
+```text
+cmd/* stays tiny and calls internal/node or generated clients
+internal/node is the composition root
+internal/shard orchestrates lifecycle and imports lower-level stores/adapters
+low-level packages do not import internal/shard or internal/api
+gRPC handlers stay thin: validate, authorize, stream, map errors, call shard/admin services
+scrapctl imports generated clients only and does not import server internals
+```
+
+Use explicit constructors and small consumer-owned interfaces. Avoid global registries, service locators, and DI frameworks until the dependency graph proves that they remove more complexity than they add.
+
+Core storage packages should use explicit internal Go structs for identities, physical refs, lifecycle state, and invariants. Do not pass protobuf-generated request/response types through the storage core by default. Convert between protobuf and internal structs at API, admin, snapshot, and metadata serialization boundaries.
+
+Internal errors should be typed or sentinel errors with retryability and failure class preserved. Map them to gRPC status codes only at transport boundaries. Storage, repair, and shard logic should not depend on gRPC status types.
+
+`internal/node` owns process lifecycle and the shard registry. Each `internal/shard` instance owns one Raft group and its state. Worker pools are node-level resources with per-shard admission and fairness controls for IO, backend, crypto, repair, restore, and upload work. The hot metadata index is shard-owned and derived from committed metadata, not a global node cache.
 
 ## Read Path
 
@@ -2131,23 +2318,23 @@ Normal hot reads and ordinary writes do not require full audit logging by defaul
 
 These are the known gray areas to resolve before turning this into an ADR or implementation plan.
 
-- Which concrete Raft and LSM implementations should be used once the implementation language/runtime is chosen?
 - What concrete provider profiles and numeric token-bucket budgets should be used per deployment?
 - What are the expected peak ingress rates for capacity sizing against the 24h durability window?
 - What concrete numeric repair runway thresholds should each deployment use beyond the defaults?
 - What exact scrub rate limits and backend byte-read budgets should be configured per deployment?
-- What exact protobuf package, service, and field schemas should implement the admin API?
+- What exact protobuf package, service, field, error, and streaming schemas should implement the public and admin APIs?
+- What exact Go build, release, container, CI, dependency, SBOM, and upgrade policy should be used?
 - What concrete DR drill cadence and sampled-read size should each deployment use?
 
 ## Next Discussion Frontier
 
-The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, consensus/store substrate, backend capacity model, replica placement model, DR scope, admin API shape, and internal authorization model are concrete enough to move to implementation choices and deployment profiles.
+The write path, block format, OpenBao envelope policy, cold-read semantics, bit-rot handling, repair/scrub policy, Go consensus/store substrate, correctness harness, package architecture, backend capacity model, replica placement model, DR scope, admin API shape, and internal authorization model are concrete enough to move to API schemas, build/release policy, and deployment profiles.
 
 Resume by choosing between:
 
-1. concrete implementation language/runtime and library choices;
+1. exact protobuf schema for public/admin APIs;
 2. concrete provider profiles and per-deployment numeric budgets;
-3. exact protobuf schema for public/admin APIs;
+3. Go build, release, CI, dependency, and upgrade policy;
 4. deployment topology and operational runbooks.
 
-The recommended next topic is implementation language/runtime and library choices. The architecture now defines the major consistency, durability, storage, admin, and recovery contracts, so the next decision should choose the implementation substrate that can satisfy them.
+The recommended next topic is the exact protobuf schema for public and admin APIs. The Go implementation substrate, correctness harness, and package architecture are now concrete enough that the next decision should define the wire contracts the gateway and generated clients will share.
