@@ -10,6 +10,7 @@ import (
 	"github.com/petabytecl/scrap/internal/config"
 	"github.com/petabytecl/scrap/internal/localstorage"
 	"github.com/petabytecl/scrap/internal/node"
+	"github.com/petabytecl/scrap/internal/operations"
 )
 
 func main() {
@@ -31,8 +32,14 @@ func main() {
 			log.Fatalf("open local non-production storage: %v", err)
 		}
 		defer localApp.Close()
+		operationStore, err := operations.Open(cfg.LocalDataDir)
+		if err != nil {
+			log.Fatalf("open operation store: %v", err)
+		}
+		defer operationStore.Close()
 		apps.Documents = localApp
 		apps.Transactions = localApp
+		apps.Operations = operationStore
 		log.Printf("WARNING: local non-production storage enabled at %s; this does not satisfy the production write ACK contract", cfg.LocalDataDir)
 	}
 

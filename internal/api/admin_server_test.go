@@ -145,6 +145,121 @@ func TestAdminServerCancelOperationUpdatesDurableStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerPlanAndStartRestoreUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	restoreClient, _, _, operationClient, cleanup := newAdminWorkflowClients(t, store)
+	defer cleanup()
+
+	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
+		Targets: []*adminv1.Target{documentAdminTarget()},
+		Metadata: map[string]string{
+			"requested_by": "test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("plan restore: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetOperationPlanId() == "" || plan.GetPlanHash() == "" || plan.GetExpiresAt() == nil {
+		t.Fatalf("plan = %#v, want id/hash/expires_at", plan)
+	}
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "restore" || len(plan.GetTargets()) != 1 {
+		t.Fatalf("plan metadata/targets = %#v/%#v, want restore plan", plan.GetMetadata(), plan.GetTargets())
+	}
+	if _, err := store.GetPlan(plan.GetOperationPlanId()); err != nil {
+		t.Fatalf("get stored plan: %v", err)
+	}
+
+	startReq := &adminv1.StartRestoreRequest{
+		OperationId:     validUUIDv7(),
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+		Metadata: map[string]string{
+			"ticket": "INC-1",
+		},
+	}
+	startResp, err := restoreClient.StartRestore(context.Background(), startReq)
+	if err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+	operation := startResp.GetOperation()
+	if operation.GetOperationType() != "restore" ||
+		operation.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		operation.GetMetadata()[adminOperationPlanIDMetadata] != plan.GetOperationPlanId() ||
+		operation.GetMetadata()["ticket"] != "INC-1" ||
+		len(operation.GetTargets()) != 1 {
+		t.Fatalf("operation = %#v, want queued restore from plan", operation)
+	}
+
+	getResp, err := operationClient.GetOperation(context.Background(), &adminv1.GetOperationRequest{OperationId: validUUIDv7()})
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if getResp.GetOperation().GetOperationType() != "restore" {
+		t.Fatalf("stored operation = %#v, want restore", getResp.GetOperation())
+	}
+
+	retryResp, err := restoreClient.StartRestore(context.Background(), startReq)
+	if err != nil {
+		t.Fatalf("retry start restore: %v", err)
+	}
+	if retryResp.GetOperation().GetRequestedAt().AsTime() != operation.GetRequestedAt().AsTime() {
+		t.Fatal("idempotent retry did not return the existing operation")
+	}
+}
+
+func TestAdminServerStartRestoreRejectsMismatchedPlanHash(t *testing.T) {
+	store := openTestOperationStore(t)
+	restoreClient, _, _, _, cleanup := newAdminWorkflowClients(t, store)
+	defer cleanup()
+
+	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
+		Targets: []*adminv1.Target{documentAdminTarget()},
+	})
+	if err != nil {
+		t.Fatalf("plan restore: %v", err)
+	}
+	_, err = restoreClient.StartRestore(context.Background(), &adminv1.StartRestoreRequest{
+		OperationId:     validUUIDv7(),
+		OperationPlanId: planResp.GetPlan().GetOperationPlanId(),
+		PlanHash:        "wrong-hash",
+	})
+	if code := status.Code(err); code != codes.FailedPrecondition {
+		t.Fatalf("code = %s, want %s; err = %v", code, codes.FailedPrecondition, err)
+	}
+}
+
+func TestAdminServerPlanAndStartRepairUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	_, repairClient, _, _, cleanup := newAdminWorkflowClients(t, store)
+	defer cleanup()
+
+	planResp, err := repairClient.PlanRepair(context.Background(), &adminv1.PlanRepairRequest{
+		Targets: []*adminv1.Target{
+			{
+				Target: &adminv1.Target_Shard{
+					Shard: &adminv1.ShardTarget{ShardId: "shard-a"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("plan repair: %v", err)
+	}
+	startResp, err := repairClient.StartRepair(context.Background(), &adminv1.StartRepairRequest{
+		OperationId:     validUUIDv7(),
+		OperationPlanId: planResp.GetPlan().GetOperationPlanId(),
+		PlanHash:        planResp.GetPlan().GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start repair: %v", err)
+	}
+	if startResp.GetOperation().GetOperationType() != "repair" ||
+		startResp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED {
+		t.Fatalf("operation = %#v, want queued repair", startResp.GetOperation())
+	}
+}
+
 func newAdminTestClients(
 	t *testing.T,
 ) (adminv1.RestoreServiceClient, adminv1.MemberServiceClient, func()) {
@@ -205,6 +320,42 @@ func newAdminOperationClient(t *testing.T, store *operations.Store) (adminv1.Ope
 	return adminv1.NewOperationServiceClient(conn), cleanup
 }
 
+func newAdminWorkflowClients(
+	t *testing.T,
+	store *operations.Store,
+) (adminv1.RestoreServiceClient, adminv1.RepairServiceClient, adminv1.LifecycleServiceClient, adminv1.OperationServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithOperationStore(store)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewRestoreServiceClient(conn),
+		adminv1.NewRepairServiceClient(conn),
+		adminv1.NewLifecycleServiceClient(conn),
+		adminv1.NewOperationServiceClient(conn),
+		cleanup
+}
+
 func openTestOperationStore(t *testing.T) *operations.Store {
 	t.Helper()
 	store, err := operations.Open(t.TempDir())
@@ -226,6 +377,18 @@ func testOperation(operationID string, operationType string, state adminv1.Opera
 		State:               state,
 		RequestedByIdentity: "test-operator",
 		RequestedAt:         timestamppb.New(time.Unix(100, 0).UTC()),
+	}
+}
+
+func documentAdminTarget() *adminv1.Target {
+	return &adminv1.Target{
+		Target: &adminv1.Target_Document{
+			Document: &adminv1.DocumentTarget{
+				TenantId:      "tenant",
+				TransactionId: "txn",
+				DocumentName:  "invoice.xml",
+			},
+		},
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 var (
 	ErrNotFound = errors.New("operations: not found")
 	ErrInvalid  = errors.New("operations: invalid operation")
+	ErrConflict = errors.New("operations: conflict")
 )
 
 var protoMarshal = proto.MarshalOptions{Deterministic: true}
@@ -63,6 +64,29 @@ func (s *Store) Put(operation *adminv1.Operation) error {
 	return s.db.Set(key, value, pebble.Sync)
 }
 
+func (s *Store) Create(operation *adminv1.Operation) (*adminv1.Operation, error) {
+	if err := validateOperation(operation); err != nil {
+		return nil, err
+	}
+	value, err := protoMarshal.Marshal(operation)
+	if err != nil {
+		return nil, err
+	}
+	key := operationKey(operation.GetOperationId())
+	if existing, ok, err := s.get(key); err != nil {
+		return nil, err
+	} else if ok {
+		if bytes.Equal(existing, value) {
+			return unmarshalOperation(existing)
+		}
+		return nil, fmt.Errorf("%w: operation already exists with different metadata", ErrConflict)
+	}
+	if err := s.db.Set(key, value, pebble.Sync); err != nil {
+		return nil, err
+	}
+	return operation, nil
+}
+
 func (s *Store) Get(operationID string) (*adminv1.Operation, error) {
 	value, ok, err := s.get(operationKey(operationID))
 	if err != nil {
@@ -72,6 +96,37 @@ func (s *Store) Get(operationID string) (*adminv1.Operation, error) {
 		return nil, ErrNotFound
 	}
 	return unmarshalOperation(value)
+}
+
+func (s *Store) PutPlan(plan *adminv1.OperationPlan) error {
+	if err := validateOperationPlan(plan); err != nil {
+		return err
+	}
+	value, err := protoMarshal.Marshal(plan)
+	if err != nil {
+		return err
+	}
+	key := operationPlanKey(plan.GetOperationPlanId())
+	if existing, ok, err := s.get(key); err != nil {
+		return err
+	} else if ok {
+		if bytes.Equal(existing, value) {
+			return nil
+		}
+		return fmt.Errorf("%w: operation plan already exists with different metadata", ErrConflict)
+	}
+	return s.db.Set(key, value, pebble.Sync)
+}
+
+func (s *Store) GetPlan(operationPlanID string) (*adminv1.OperationPlan, error) {
+	value, ok, err := s.get(operationPlanKey(operationPlanID))
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return unmarshalOperationPlan(value)
 }
 
 func (s *Store) List(filter ListFilter) ([]*adminv1.Operation, error) {
@@ -141,6 +196,28 @@ func validateOperation(operation *adminv1.Operation) error {
 	return nil
 }
 
+func validateOperationPlan(plan *adminv1.OperationPlan) error {
+	if plan == nil {
+		return fmt.Errorf("%w: operation plan is required", ErrInvalid)
+	}
+	if plan.GetOperationPlanId() == "" {
+		return fmt.Errorf("%w: operation_plan_id is required", ErrInvalid)
+	}
+	if plan.GetPlanHash() == "" {
+		return fmt.Errorf("%w: plan_hash is required", ErrInvalid)
+	}
+	if plan.GetExpiresAt() == nil {
+		return fmt.Errorf("%w: expires_at is required", ErrInvalid)
+	}
+	if err := plan.GetExpiresAt().CheckValid(); err != nil {
+		return fmt.Errorf("%w: expires_at is invalid", ErrInvalid)
+	}
+	if len(plan.GetTargets()) == 0 {
+		return fmt.Errorf("%w: at least one target is required", ErrInvalid)
+	}
+	return nil
+}
+
 func isTerminal(state adminv1.OperationState) bool {
 	switch state {
 	case adminv1.OperationState_OPERATION_STATE_SUCCEEDED,
@@ -164,6 +241,17 @@ func unmarshalOperation(data []byte) (*adminv1.Operation, error) {
 	return &operation, nil
 }
 
+func unmarshalOperationPlan(data []byte) (*adminv1.OperationPlan, error) {
+	var plan adminv1.OperationPlan
+	if err := proto.Unmarshal(data, &plan); err != nil {
+		return nil, err
+	}
+	if err := validateOperationPlan(&plan); err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
 func (s *Store) get(key []byte) ([]byte, bool, error) {
 	value, closer, err := s.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -182,6 +270,14 @@ func operationPrefix() []byte {
 
 func operationKey(operationID string) []byte {
 	return append(operationPrefix(), []byte(operationID)...)
+}
+
+func operationPlanPrefix() []byte {
+	return []byte("operation_plan\x00")
+}
+
+func operationPlanKey(operationPlanID string) []byte {
+	return append(operationPlanPrefix(), []byte(operationPlanID)...)
 }
 
 func prefixUpperBound(prefix []byte) []byte {

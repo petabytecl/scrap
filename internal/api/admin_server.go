@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -11,12 +13,24 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type AdminServer struct {
 	operations *operations.Store
 	now        func() time.Time
 }
+
+const (
+	adminOperationPlanTTL        = 15 * time.Minute
+	adminOperationTypeMetadata   = "scrap.operation_type"
+	adminOperationPlanIDMetadata = "scrap.operation_plan_id"
+	adminPlanHashMetadata        = "scrap.plan_hash"
+	adminDryRunMetadata          = "scrap.dry_run"
+)
+
+var deterministicProtoMarshal = proto.MarshalOptions{Deterministic: true}
 
 type AdminOption func(*AdminServer)
 
@@ -182,31 +196,63 @@ func (s *AdminServer) CancelOperation(_ context.Context, req *adminv1.CancelOper
 }
 
 func (s *AdminServer) PlanRestore(_ context.Context, req *adminv1.PlanRestoreRequest) (*adminv1.PlanRestoreResponse, error) {
-	if _, err := ValidatePlanRestoreRequest(req); err != nil {
+	planReq, err := ValidatePlanRestoreRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("PlanRestore")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanRestore")
+	}
+	plan, err := s.createOperationPlan("restore", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanRestoreResponse{Plan: plan}, nil
 }
 
 func (s *AdminServer) StartRestore(_ context.Context, req *adminv1.StartRestoreRequest) (*adminv1.StartRestoreResponse, error) {
-	if _, err := ValidateStartRestoreRequest(req); err != nil {
+	startReq, err := ValidateStartRestoreRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartRestore")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartRestore")
+	}
+	operation, err := s.startPlannedOperation("restore", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartRestoreResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) PlanPrewarm(_ context.Context, req *adminv1.PlanPrewarmRequest) (*adminv1.PlanPrewarmResponse, error) {
-	if _, err := ValidatePlanPrewarmRequest(req); err != nil {
+	planReq, err := ValidatePlanPrewarmRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("PlanPrewarm")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanPrewarm")
+	}
+	plan, err := s.createOperationPlan("prewarm", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanPrewarmResponse{Plan: plan}, nil
 }
 
 func (s *AdminServer) StartPrewarm(_ context.Context, req *adminv1.StartPrewarmRequest) (*adminv1.StartPrewarmResponse, error) {
-	if _, err := ValidateStartPrewarmRequest(req); err != nil {
+	startReq, err := ValidateStartPrewarmRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartPrewarm")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartPrewarm")
+	}
+	operation, err := s.startPlannedOperation("prewarm", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartPrewarmResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) GetRepairQueue(_ context.Context, req *adminv1.GetRepairQueueRequest) (*adminv1.GetRepairQueueResponse, error) {
@@ -223,17 +269,33 @@ func (s *AdminServer) GetRepairQueue(_ context.Context, req *adminv1.GetRepairQu
 }
 
 func (s *AdminServer) PlanRepair(_ context.Context, req *adminv1.PlanRepairRequest) (*adminv1.PlanRepairResponse, error) {
-	if _, err := ValidatePlanRepairRequest(req); err != nil {
+	planReq, err := ValidatePlanRepairRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("PlanRepair")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanRepair")
+	}
+	plan, err := s.createOperationPlan("repair", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanRepairResponse{Plan: plan}, nil
 }
 
 func (s *AdminServer) StartRepair(_ context.Context, req *adminv1.StartRepairRequest) (*adminv1.StartRepairResponse, error) {
-	if _, err := ValidateStartRepairRequest(req); err != nil {
+	startReq, err := ValidateStartRepairRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartRepair")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartRepair")
+	}
+	operation, err := s.startPlannedOperation("repair", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartRepairResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) CordonMember(_ context.Context, req *adminv1.CordonMemberRequest) (*adminv1.CordonMemberResponse, error) {
@@ -258,31 +320,63 @@ func (s *AdminServer) GetEvictionSafety(_ context.Context, req *adminv1.GetEvict
 }
 
 func (s *AdminServer) PlanDrain(_ context.Context, req *adminv1.PlanDrainRequest) (*adminv1.PlanDrainResponse, error) {
-	if _, err := ValidatePlanDrainRequest(req); err != nil {
+	planReq, err := ValidatePlanDrainRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("PlanDrain")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanDrain")
+	}
+	plan, err := s.createOperationPlan("drain", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanDrainResponse{Plan: plan}, nil
 }
 
 func (s *AdminServer) StartDrain(_ context.Context, req *adminv1.StartDrainRequest) (*adminv1.StartDrainResponse, error) {
-	if _, err := ValidateStartDrainRequest(req); err != nil {
+	startReq, err := ValidateStartDrainRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartDrain")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartDrain")
+	}
+	operation, err := s.startPlannedOperation("drain", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartDrainResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) PlanTombstone(_ context.Context, req *adminv1.PlanTombstoneRequest) (*adminv1.PlanTombstoneResponse, error) {
-	if _, err := ValidatePlanTombstoneRequest(req); err != nil {
+	planReq, err := ValidatePlanTombstoneRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("PlanTombstone")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanTombstone")
+	}
+	plan, err := s.createOperationPlan("tombstone", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanTombstoneResponse{Plan: plan}, nil
 }
 
 func (s *AdminServer) StartTombstone(_ context.Context, req *adminv1.StartTombstoneRequest) (*adminv1.StartTombstoneResponse, error) {
-	if _, err := ValidateStartTombstoneRequest(req); err != nil {
+	startReq, err := ValidateStartTombstoneRequest(req)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unimplementedAdmin("StartTombstone")
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartTombstone")
+	}
+	operation, err := s.startPlannedOperation("tombstone", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartTombstoneResponse{Operation: operation}, nil
 }
 
 func (s *AdminServer) GetRecoveryReadiness(context.Context, *adminv1.GetRecoveryReadinessRequest) (*adminv1.GetRecoveryReadinessResponse, error) {
@@ -315,6 +409,186 @@ func (s *AdminServer) StartDRDrill(_ context.Context, req *adminv1.StartDRDrillR
 		return nil, err
 	}
 	return nil, unimplementedAdmin("StartDRDrill")
+}
+
+func (s *AdminServer) createOperationPlan(operationType string, req OperationPlanRequest) (*adminv1.OperationPlan, error) {
+	metadata := cloneTags(req.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata[adminOperationTypeMetadata] = operationType
+	if req.DryRun {
+		metadata[adminDryRunMetadata] = "true"
+	} else {
+		metadata[adminDryRunMetadata] = "false"
+	}
+	if req.PinUntil != nil {
+		metadata["scrap.pin_until"] = req.PinUntil.Format(time.RFC3339Nano)
+	}
+
+	planID, err := identity.NewUUIDv7()
+	if err != nil {
+		return nil, err
+	}
+	plan := &adminv1.OperationPlan{
+		OperationPlanId: planID,
+		ExpiresAt:       timestamppb.New(s.now().Add(adminOperationPlanTTL)),
+		Targets:         adminTargetsToProto(req.Targets),
+		EstimatedImpact: estimateOperationImpact(req.Targets),
+		Metadata:        metadata,
+	}
+	plan.PlanHash, err = hashPlan(plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.operations.PutPlan(plan); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func (s *AdminServer) startPlannedOperation(operationType string, req OperationStartRequest) (*adminv1.Operation, error) {
+	plan, err := s.operations.GetPlan(req.OperationPlanID)
+	if errors.Is(err, operations.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "operation plan not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if plan.GetPlanHash() != req.PlanHash {
+		return nil, status.Error(codes.FailedPrecondition, "plan hash does not match operation plan")
+	}
+	if plan.GetMetadata()[adminOperationTypeMetadata] != operationType {
+		return nil, status.Error(codes.FailedPrecondition, "operation plan type does not match start request")
+	}
+	if plan.GetExpiresAt().AsTime().Before(s.now()) {
+		return nil, status.Error(codes.FailedPrecondition, "operation plan has expired")
+	}
+	if existing, err := s.operations.Get(req.OperationID); err == nil {
+		if isSameStartedOperation(existing, operationType, req) {
+			return existing, nil
+		}
+		return nil, status.Error(codes.AlreadyExists, "operation id already exists with different metadata")
+	} else if !errors.Is(err, operations.ErrNotFound) {
+		return nil, err
+	}
+
+	metadata := cloneTags(plan.GetMetadata())
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	for key, value := range req.Metadata {
+		metadata[key] = value
+	}
+	metadata[adminOperationPlanIDMetadata] = req.OperationPlanID
+	metadata[adminPlanHashMetadata] = req.PlanHash
+
+	operation := &adminv1.Operation{
+		OperationId:         req.OperationID,
+		OperationType:       operationType,
+		State:               adminv1.OperationState_OPERATION_STATE_QUEUED,
+		RequestedByIdentity: "pre-production-admin-api",
+		RequestedAt:         timestamppb.New(s.now()),
+		DryRun:              plan.GetMetadata()[adminDryRunMetadata] == "true",
+		Targets:             cloneTargets(plan.GetTargets()),
+		Progress:            &adminv1.OperationProgress{Message: "queued"},
+		Metadata:            metadata,
+	}
+	created, err := s.operations.Create(operation)
+	if errors.Is(err, operations.ErrConflict) {
+		return nil, status.Error(codes.AlreadyExists, "operation id already exists with different metadata")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+func isSameStartedOperation(operation *adminv1.Operation, operationType string, req OperationStartRequest) bool {
+	return operation.GetOperationType() == operationType &&
+		operation.GetMetadata()[adminOperationPlanIDMetadata] == req.OperationPlanID &&
+		operation.GetMetadata()[adminPlanHashMetadata] == req.PlanHash
+}
+
+func adminTargetsToProto(targets []AdminTarget) []*adminv1.Target {
+	out := make([]*adminv1.Target, 0, len(targets))
+	for _, target := range targets {
+		switch target.Kind {
+		case AdminTargetDocument:
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_Document{Document: &adminv1.DocumentTarget{
+				TenantId:      target.Document.TenantID,
+				TransactionId: target.Document.TransactionID,
+				DocumentName:  target.Document.DocumentName,
+			}}})
+		case AdminTargetTransaction:
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_Transaction{Transaction: &adminv1.TransactionTarget{
+				TenantId:      target.Transaction.TenantID,
+				TransactionId: target.Transaction.TransactionID,
+			}}})
+		case AdminTargetBlock:
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_Block{Block: &adminv1.BlockTarget{
+				ShardId: target.Block.ShardID,
+				BlockId: target.Block.BlockID,
+			}}})
+		case AdminTargetShard:
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_Shard{Shard: &adminv1.ShardTarget{ShardId: target.ShardID}}})
+		case AdminTargetStorageMember:
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: target.StorageMember}}})
+		case AdminTargetSnapshot:
+			snapshot := &adminv1.SnapshotTarget{SnapshotId: target.Snapshot.SnapshotID}
+			if target.Snapshot.ShardID != "" {
+				shardID := target.Snapshot.ShardID
+				snapshot.ShardId = &shardID
+			}
+			if target.Snapshot.CheckpointID != "" {
+				checkpointID := target.Snapshot.CheckpointID
+				snapshot.CheckpointId = &checkpointID
+			}
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: snapshot}})
+		}
+	}
+	return out
+}
+
+func estimateOperationImpact(targets []AdminTarget) *adminv1.OperationImpact {
+	impact := &adminv1.OperationImpact{}
+	shards := make(map[string]bool)
+	for _, target := range targets {
+		switch target.Kind {
+		case AdminTargetDocument:
+			impact.AffectedDocumentCount++
+		case AdminTargetTransaction:
+			impact.AffectedShardCount++
+		case AdminTargetBlock:
+			shards[target.Block.ShardID] = true
+		case AdminTargetShard:
+			shards[target.ShardID] = true
+		}
+	}
+	impact.AffectedShardCount += uint32(len(shards))
+	return impact
+}
+
+func hashPlan(plan *adminv1.OperationPlan) (string, error) {
+	clone := proto.Clone(plan).(*adminv1.OperationPlan)
+	clone.PlanHash = ""
+	data, err := deterministicProtoMarshal.Marshal(clone)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func cloneTargets(targets []*adminv1.Target) []*adminv1.Target {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]*adminv1.Target, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, proto.Clone(target).(*adminv1.Target))
+	}
+	return out
 }
 
 func validateRequiredRequestText[T any](req *T, field string, get func(*T) string) error {

@@ -11,6 +11,7 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/localstorage"
+	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -62,17 +63,24 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 }
 
 func TestServerServesLocalStorageApplications(t *testing.T) {
-	app, err := localstorage.Open(t.TempDir())
+	dir := t.TempDir()
+	app, err := localstorage.Open(dir)
 	if err != nil {
 		t.Fatalf("open local storage: %v", err)
 	}
 	defer app.Close()
+	operationStore, err := operations.Open(dir)
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	defer operationStore.Close()
 
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
 	server := newServer(publicListener, adminListener, Applications{
 		Documents:    app,
 		Transactions: app,
+		Operations:   operationStore,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -173,7 +181,31 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		t.Fatalf("transaction = %#v, want one document", transactionResp.GetTransaction())
 	}
 
+	adminConn := dialTestServer(t, adminListener)
+	defer adminConn.Close()
+	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
+	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
+		Targets: []*adminv1.Target{
+			{
+				Target: &adminv1.Target_Document{
+					Document: &adminv1.DocumentTarget{
+						TenantId:      "tenant",
+						TransactionId: "txn",
+						DocumentName:  "invoice.xml",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanRestore: %v", err)
+	}
+	if _, err := operationStore.GetPlan(planResp.GetPlan().GetOperationPlanId()); err != nil {
+		t.Fatalf("get stored operation plan: %v", err)
+	}
+
 	_ = publicConn.Close()
+	_ = adminConn.Close()
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Serve returned error: %v", err)

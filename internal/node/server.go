@@ -9,12 +9,14 @@ import (
 
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/config"
+	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 )
 
 type Applications struct {
 	Documents    api.DocumentApplication
 	Transactions api.TransactionApplication
+	Operations   *operations.Store
 }
 
 type Server struct {
@@ -46,7 +48,7 @@ func newServer(publicListener net.Listener, adminListener net.Listener, apps App
 	publicGRPC := grpc.NewServer()
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions))
 	adminGRPC := grpc.NewServer()
-	api.RegisterAdminServer(adminGRPC, api.NewAdminServer())
+	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(api.WithOperationStore(apps.Operations)))
 	return &Server{
 		publicListener: publicListener,
 		adminListener:  adminListener,
