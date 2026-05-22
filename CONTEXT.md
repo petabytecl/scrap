@@ -38,4 +38,4 @@ V1 disaster recovery targets primary-backend recovery, not always-on secondary r
 
 The admin API uses typed workflow RPCs and a shared durable operation model. The CLI is an operator client over that API, not a separate control path.
 
-The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md). The pre-production implementation plan is captured in [Storage Gateway Implementation Roadmap](docs/storage-gateway-implementation-roadmap.md).
+The core design discussion is captured in [Storage Gateway Design Notes](docs/storage-gateway-design-notes.md). The pre-production implementation plan is captured in [Storage Gateway Implementation Roadmap](docs/storage-gateway-implementation-roadmap.md). The tracked v1 PRD and issue tree start at GitHub issue `#2`.

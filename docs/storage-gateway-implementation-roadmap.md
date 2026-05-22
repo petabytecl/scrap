@@ -1,12 +1,29 @@
 # Storage Gateway Implementation Roadmap
 
-Status: planning
+Status: planning gate tracked
 
 Last updated: 2026-05-22
 
 This roadmap turns the accepted storage-gateway architecture into
 implementation slices. It is the control document before more production code
 is added.
+
+The tracked v1 PRD is GitHub issue `#2`. Its child Feature issues are:
+
+- `#8` Production architecture and engineering standards;
+- `#9` Storage format and metadata boundary;
+- `#10` Single-member local durability;
+- `#11` Raft metadata shard;
+- `#12` Peer byte replication and placement;
+- `#13` Backend upload, restore, and envelope workflow;
+- `#14` Control plane and operator workflows;
+- `#15` Production readiness gate.
+
+The next technical gate before storage-format implementation is:
+
+1. `#16` Document package architecture and dependency rules;
+2. `#17` Document durability-sensitive coding guidelines;
+3. `#18` Audit library and substrate ADR coverage.
 
 ## Purpose
 
@@ -78,7 +95,10 @@ Acceptance criteria:
 - design notes no longer direct the next step to implementation by default;
 - spike status is completed evidence with reusable conclusions and gaps;
 - all new ADRs are accepted or explicitly deferred;
-- no untracked production code remains undecided.
+- no untracked production code remains undecided;
+- GitHub issue `#2` and child issues `#8` through `#48` track the v1 PRD,
+  feature slices, production architecture gates, implementation tasks, and
+  production-readiness evidence.
 
 Risk gate:
 

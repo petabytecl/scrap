@@ -3495,11 +3495,12 @@ The completed spike evidence is captured in [Write Path Implementation Spike](sp
 
 Resume from the planning roadmap:
 
-1. complete the planning gate and ADR review in [Storage Gateway Implementation Roadmap](storage-gateway-implementation-roadmap.md);
-2. turn the roadmap into initial GitHub issues or PRD slices when implementation scheduling is needed;
-3. refine concrete production profile examples after real deployment numbers exist;
-4. draft operational runbooks from the accepted topology and admin API model.
+1. use the tracked v1 PRD and issue tree starting at GitHub issue `#2`;
+2. complete the production architecture gates `#16`, `#17`, and `#18`;
+3. start storage-format implementation at `#3` only after those gates are complete;
+4. refine concrete production profile examples after real deployment numbers exist;
+5. draft operational runbooks from the accepted topology and admin API model.
 
-The recommended next topic is the roadmap planning gate. Production implementation should resume only after the roadmap, accepted ADRs, and risk gates identify the first safe slice.
+The recommended next topic is the production architecture gate. Production implementation should resume only after the package architecture, durability-sensitive coding guidelines, and library/substrate ADR coverage are complete.
 
 The previous estimate for deployment topology was 45 to 90 minutes. That was directionally reasonable for a single authoritative Kubernetes deployment, but incomplete once the cell/read-only import layer became a core v1 requirement. The discovered federated-cache scope adds roughly 60 to 120 minutes of design work for import formats, source ownership config, lag SLOs, cache sizing, conflict handling, and read-only crypto grants.
