@@ -6,6 +6,7 @@ This repository follows **The Pragmatic Programmer** in the sense of Andrew Hunt
 work pragmatically, take responsibility for quality, automate what is repetitive, and keep code and process adaptable.
 
 All code generation, edits, and reviews must optimize for:
+
 - clear ownership and responsibility
 - avoiding duplicated knowledge
 - orthogonality
@@ -23,6 +24,7 @@ This file is a binding engineering policy: `MUST` is binding, `SHOULD` is a stro
 Be pragmatic, not dogmatic.
 
 When uncertain, choose the option that:
+
 1. reduces knowledge duplication
 2. keeps concerns independent
 3. shortens feedback loops
@@ -36,21 +38,25 @@ Do not follow style or process rituals that do not improve outcomes.
 ## Core Pragmatic Principles
 
 ### Own the Result
+
 1. Take responsibility for the quality and changeability of the code you touch.
 2. Do not blame tooling, framework defaults, or “existing style” for avoidable bad design.
 3. Surface trade-offs, risks, and uncertainty explicitly.
 
 ### Think Beyond the Local Edit
+
 1. Every change affects future maintainability.
 2. Small quick fixes that multiply future cost are usually a bad bargain.
 3. Leave the area better than you found it.
 
 ### Favor Adaptability
+
 1. Build systems that are easy to observe, test, and change.
 2. Prefer flexible boundaries over brittle cleverness.
 3. Avoid premature commitment when requirements are still moving.
 
 ### Named Pragmatic Habits
+
 1. Treat quality as a requirement to negotiate with users and sponsors, not as an abstract pursuit of perfection.
 2. Stop polishing when the software is good enough for its real users and risks.
 3. Keep a knowledge portfolio: invest in learning, diversify skills, and revisit stale assumptions.
@@ -72,6 +78,7 @@ DRY means **do not duplicate knowledge**, not merely do not duplicate text.
 5. Avoid duplicated process steps that can be automated.
 
 Anti-patterns (MUST NOT):
+
 - the same rule encoded in UI, API, service, and DB trigger with no ownership
 - copy/paste with minor edits for “just this one case”
 - duplicated manual deployment or testing steps
@@ -87,6 +94,7 @@ Anti-patterns (MUST NOT):
 4. Separate policy from mechanism, data from presentation, orchestration from computation.
 
 Anti-patterns (MUST NOT):
+
 - one change requiring edits in many unrelated places
 - one module knowing too much about internal details of others
 - shared utility modules creating sideways coupling everywhere
@@ -101,6 +109,7 @@ Anti-patterns (MUST NOT):
 4. Refine from working feedback instead of predicting everything up front.
 
 Anti-patterns (MUST NOT):
+
 - building many layers before anything runs end to end
 - treating prototypes as production without hardening
 - waiting for perfect certainty before integrating
@@ -137,6 +146,7 @@ Anti-patterns (MUST NOT):
 4. Keep local automation aligned with the project's shared build, test, and release automation.
 
 Anti-patterns (MUST NOT):
+
 - “works on my machine” build steps
 - manual release rituals with many hidden prerequisites
 - documentation that describes what a script should do instead of having the script
@@ -161,6 +171,7 @@ Anti-patterns (MUST NOT):
 4. Keep contracts close to the abstraction they protect.
 
 Anti-patterns (MUST NOT):
+
 - relying on comments for critical preconditions
 - hiding invariant assumptions in scattered callers
 - returning nonsense values for impossible states
@@ -221,6 +232,7 @@ Anti-patterns (MUST NOT):
 4. Improve the toolchain when repeated friction appears.
 
 ### Basic Tool Rules
+
 - Use source control for every meaningful project, including small or solo work.
 - Prefer inspectable plain text for long-lived scripts, configs, data, and generated sources when practical.
 - Use shell tools for exploration, automation, and repeatable transformations where they fit.
@@ -268,6 +280,7 @@ Anti-patterns (MUST NOT):
 ## Review Rules
 
 When reviewing code, actively look for:
+
 - duplicated knowledge, not just duplicated lines
 - hidden couplings
 - missing automation opportunities
@@ -283,22 +296,27 @@ When reviewing code, actively look for:
 ## Forbidden Patterns
 
 ### Cargo-Cult Process
+
 - rituals followed with no benefit
 - documentation and checklists replacing automation
 
 ### Knowledge Duplication
+
 - same rule in many places
 - copied logic because “layers need it too”
 
 ### Non-Orthogonal Design
+
 - modules with overlapping responsibilities
 - changes leaking across boundaries by default
 
 ### Manual Everything
+
 - repeated human steps for build, test, release, setup, or validation
 - hidden local environment assumptions
 
 ### Prototype Fossilization
+
 - experimental code promoted to production without redesign or hardening
 
 ---
@@ -306,6 +324,7 @@ When reviewing code, actively look for:
 ## Code Generation Rules
 
 When generating code, default to:
+
 1. one clear source of truth for each rule
 2. orthogonal responsibilities
 3. fast local feedback
@@ -315,6 +334,7 @@ When generating code, default to:
 7. incremental end-to-end slices when building new capabilities
 
 Avoid by default:
+
 - copy/paste rule duplication
 - tangled modules
 - fragile manual workflows
@@ -334,6 +354,7 @@ Avoid by default:
 ## Review Checklist
 
 Before finalizing any change, verify:
+
 - Did we reduce duplicated knowledge?
 - Are responsibilities more orthogonal after the change?
 - Did we improve or preserve fast feedback?
@@ -350,6 +371,7 @@ If any answer is no, revise before shipping.
 ## Final Instruction
 
 When uncertain, choose the option that:
+
 1. removes duplicated knowledge
 2. keeps concerns orthogonal
 3. shortens feedback loops

@@ -6,6 +6,7 @@ This repository follows **Designing Data-Intensive Applications** in the sense o
 design systems around explicit trade-offs in reliability, scalability, maintainability, consistency, and data flow.
 
 All code generation, edits, and reviews must optimize for:
+
 - explicit data and consistency semantics
 - idempotent and replay-safe processing
 - clear ownership of truth
@@ -23,6 +24,7 @@ Data systems are defined by trade-offs.
 When uncertain, make those trade-offs explicit instead of hiding them behind vague abstractions.
 
 Always ask:
+
 1. what is the source of truth?
 2. what are the consistency expectations?
 3. what happens on retries, duplicates, reordering, and partial failure?
@@ -41,6 +43,7 @@ Do not design distributed behavior as if everything were local, ordered, and exa
 4. Design for restart, replay, and partial failure recovery.
 
 Anti-patterns (MUST NOT):
+
 - side effects that cannot be retried safely
 - no distinction between accepted, persisted, and applied
 - assuming one successful response means all downstream effects succeeded
@@ -66,7 +69,9 @@ Anti-patterns (MUST NOT):
 4. Distinguish primary data from indexes, caches, projections, and search copies.
 
 ### Source of Truth
+
 For every important piece of data, identify:
+
 - primary owner
 - derived copies
 - replication path
@@ -74,6 +79,7 @@ For every important piece of data, identify:
 - consistency expectation
 
 Anti-patterns (MUST NOT):
+
 - many writable copies with no ownership
 - cache quietly becoming the real source of truth
 - denormalized copies with no repair strategy
@@ -112,13 +118,16 @@ Anti-patterns (MUST NOT):
 5. Use eventual consistency intentionally, not accidentally.
 
 ### Write Semantics
+
 Document or encode:
+
 - when a write is durable
 - when it is visible
 - whether readers may see stale data
 - how conflicts are detected or resolved
 
 Anti-patterns (MUST NOT):
+
 - “eventual consistency” used as a slogan instead of a contract
 - stale-read bugs blamed on infrastructure with no product decision behind them
 - no conflict model for concurrent updates
@@ -133,6 +142,7 @@ Anti-patterns (MUST NOT):
 4. Never assume exactly-once delivery unless the system boundary truly provides it and the design proves it.
 
 Anti-patterns (MUST NOT):
+
 - duplicate billing/order/send on retry
 - handlers with non-repeatable side effects and no guard
 - event processors depending on “it probably won't happen twice”
@@ -151,6 +161,7 @@ Anti-patterns (MUST NOT):
 4. Keep ordering-sensitive logic close to the key or stream that defines the order.
 
 Anti-patterns (MUST NOT):
+
 - implicit reliance on total ordering
 - out-of-order events corrupting state because no versioning or sequence policy exists
 - parallel consumers updating the same key with no ordering plan
@@ -166,12 +177,14 @@ Anti-patterns (MUST NOT):
 5. Derived projections must be rebuildable where feasible.
 
 ### Event Design
+
 - use stable identifiers
 - include enough metadata for correlation and replay
 - version payloads carefully
 - keep semantics explicit
 
 Anti-patterns (MUST NOT):
+
 - event payloads tied to one serializer or internal object layout
 - projections that cannot be rebuilt
 - assuming consumers keep up forever
@@ -187,6 +200,7 @@ Anti-patterns (MUST NOT):
 5. Distinguish internal refactors from contract changes.
 
 Anti-patterns (MUST NOT):
+
 - breaking payloads or DB semantics without migration strategy
 - reusing fields with new meaning
 - silently changing enum or status semantics across services
@@ -212,6 +226,7 @@ Anti-patterns (MUST NOT):
 4. Design cross-partition operations carefully.
 
 Anti-patterns (MUST NOT):
+
 - partitioning that makes every common query cross-node
 - no plan for skew or hotspots
 - requiring cross-partition transactions for ordinary operations
@@ -237,11 +252,13 @@ Anti-patterns (MUST NOT):
 4. Make atomicity scope explicit.
 
 ### Isolation and Invariants
+
 - Know whether read committed, snapshot isolation, serial execution, two-phase locking, or serializable snapshot isolation is required for the invariant.
 - Protect against lost updates, write skew, and phantoms where application correctness depends on them.
 - Do not accept weaker isolation for correctness-critical invariants without a deliberate design that preserves the invariant another way.
 
 Anti-patterns (MUST NOT):
+
 - multi-system two-phase coordination by default
 - side effects emitted outside transactional boundaries with no repair path
 - pretending asynchronous side effects are atomic because they “usually happen”
@@ -256,6 +273,7 @@ Anti-patterns (MUST NOT):
 4. Keep derivation pipelines observable.
 
 Anti-patterns (MUST NOT):
+
 - no way to rebuild projections
 - no lag visibility
 - mixing primary writes directly into derived stores with no ownership model
@@ -299,6 +317,7 @@ Anti-patterns (MUST NOT):
 ## Review Rules
 
 When reviewing code, actively look for:
+
 - hidden assumptions about ordering
 - hidden assumptions about exactly-once delivery
 - lack of idempotency
@@ -315,18 +334,22 @@ When reviewing code, actively look for:
 ## Forbidden Patterns
 
 ### Exactly-Once Wishful Thinking
+
 - assuming a broker or queue magically prevents all duplicates
 - writing non-idempotent handlers without safeguards
 
 ### Hidden Consistency Contract
+
 - readers and writers disagreeing on freshness requirements
 - stale or conflicting behavior treated as incidental instead of product design
 
 ### Uncoordinated Multi-Writes
+
 - writing to several authorities in one operation with no atomicity or repair strategy
 - side effects sent before durable state with no recovery path
 
 ### Schema Drift by Accident
+
 - changing payload meaning without versioning
 - reusing fields for new concepts
 - no rollout compatibility strategy
@@ -336,6 +359,7 @@ When reviewing code, actively look for:
 ## Code Generation Rules
 
 When generating code, default to:
+
 1. explicit identifiers and ownership
 2. explicit idempotency where retries or duplicates can happen
 3. explicit versioning or conflict strategy where ordering matters
@@ -345,6 +369,7 @@ When generating code, default to:
 7. observability for lag, retries, and failures
 
 Avoid by default:
+
 - assuming strict global order
 - exactly-once promises with no proof
 - writing the same fact into several places as if they were one transaction
@@ -366,6 +391,7 @@ Avoid by default:
 ## Review Checklist
 
 Before finalizing any change, verify:
+
 - Is the source of truth explicit?
 - Are consistency expectations explicit?
 - Is the code safe under retry or duplicate delivery?
@@ -384,6 +410,7 @@ If any answer is no, revise before shipping.
 ## Final Instruction
 
 When uncertain, prefer the design that:
+
 1. makes data ownership explicit
 2. makes consistency semantics explicit
 3. survives retries, duplicates, and replay

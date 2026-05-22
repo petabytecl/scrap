@@ -6,6 +6,7 @@ This repository follows **A Philosophy of Software Design** in the sense of John
 fight complexity directly by designing modules with deep value, clean interfaces, strong information hiding, and low cognitive load.
 
 All code generation, edits, and reviews must optimize for:
+
 - lower complexity
 - deeper modules
 - simpler interfaces
@@ -23,6 +24,7 @@ This file is a binding engineering policy: `MUST` is binding, `SHOULD` is a stro
 Complexity is anything that makes software hard to understand or hard to change.
 
 When uncertain, prefer the design that:
+
 1. reduces the number of things a reader must know at once
 2. hides more details behind a stable interface
 3. eliminates exceptions and awkward cases
@@ -36,7 +38,9 @@ Do not optimize for shorter files, fewer lines, or clever compactness if complex
 ## Core Complexity Rules
 
 ### Symptoms of Complexity
+
 Treat these as architectural warnings:
+
 - change amplification
 - cognitive load
 - unknown unknowns
@@ -45,7 +49,9 @@ Treat these as architectural warnings:
 - temporal coupling that readers must reconstruct mentally
 
 ### Default Response
+
 When a feature feels awkward, first ask:
+
 - is the interface too wide?
 - is the behavior scattered?
 - are details leaking that should be hidden?
@@ -57,21 +63,26 @@ When a feature feels awkward, first ask:
 ## Module Depth Rules
 
 ### Prefer Deep Modules
+
 A deep module offers a simple interface but hides substantial complexity behind it.
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Design modules to hide meaningful internal complexity.
 2. Prefer a small interface with strong semantics over a large surface with minor helpers.
 3. Make each module carry its own weight.
 4. A module that only forwards work is usually too shallow.
 
 ### Avoid Shallow Modules
+
 Shallow modules are bad when:
+
 - the interface exposes almost as much complexity as the implementation
 - layers exist mostly to redirect calls
 - small wrappers multiply concepts without reducing reader burden
 
 Anti-patterns (MUST NOT):
+
 - pass-through service classes
 - thin wrappers around libraries with no simplification
 - helper modules that only rename obvious operations
@@ -87,6 +98,7 @@ Anti-patterns (MUST NOT):
 5. Encapsulate messy edge conditions and normalization logic.
 
 Anti-patterns (MUST NOT):
+
 - exposing internal representation or state through module interfaces
 - leaking storage, protocol, framework, or file-format details through module interfaces
 - callers coordinating object internals across multiple modules
@@ -102,12 +114,14 @@ Anti-patterns (MUST NOT):
 5. Use names and method shapes that reveal the abstraction, not the mechanism.
 
 Good interface signs (SHOULD):
+
 - few methods
 - strong semantic guarantees
 - limited required context
 - callers do not need to understand internals
 
 Bad interface signs (warning; usually MUST NOT):
+
 - many configuration flags
 - call-order traps
 - multiple setup methods required before use
@@ -118,13 +132,16 @@ Bad interface signs (warning; usually MUST NOT):
 ## Strategic Programming over Tactical Programming
 
 ### Strategic Programming
+
 1. Spend time reducing future complexity, not only making the current change pass.
 2. Reshape abstractions when recurring friction appears.
 3. Invest in interfaces and decomposition that make future changes local.
 4. Leave behind clearer structure after every substantial edit.
 
 ### Tactical Programming
+
 Avoid:
+
 - patching local symptoms while increasing global complexity
 - copy/paste to meet a deadline
 - exposing one more internal detail instead of designing a better boundary
@@ -150,6 +167,7 @@ Avoid:
 5. Keep the normal path obvious and the exceptional path isolated.
 
 Anti-patterns (MUST NOT):
+
 - APIs that require every caller to repeat defensive ceremony
 - “special case” branches scattered across many call sites
 - exposing half-valid objects and asking callers to tiptoe around them
@@ -172,6 +190,7 @@ This is the opposite of pushing complexity outward through flags, setup steps, a
 Comments must reduce complexity, not narrate obvious code.
 
 Use comments for:
+
 - interface contracts
 - non-obvious invariants
 - hidden design decisions
@@ -179,6 +198,7 @@ Use comments for:
 - tricky implementation facts callers do not need to know
 
 Do not use comments to compensate for:
+
 - bad naming
 - poor decomposition
 - confusing control flow
@@ -195,6 +215,7 @@ Do not use comments to compensate for:
 5. Keep local details local.
 
 Anti-patterns (MUST NOT):
+
 - chains of tiny functions where readers must jump constantly to understand one idea
 - variables introduced only to satisfy style rather than clarity
 - exposing intermediate states that should stay internal
@@ -209,6 +230,7 @@ Anti-patterns (MUST NOT):
 4. Keep call ordering simple and explicit where it matters.
 
 Anti-patterns (MUST NOT):
+
 - `prepare/process/finalize` everywhere without domain concepts
 - APIs that require secret temporal knowledge
 - partial objects whose meaning depends on which phase has already run
@@ -220,6 +242,7 @@ Anti-patterns (MUST NOT):
 Use special-general decomposition when a small number of exceptions are cluttering the main logic.
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Keep the general case simple.
 2. Isolate the unusual or rare behavior.
 3. Do not pollute the main abstraction with every edge case.
@@ -237,6 +260,7 @@ This is preferable to accreting conditionals into the core path forever.
 5. Prefer one coherent deeper module over several tiny modules that require callers to coordinate details.
 
 Anti-patterns (MUST NOT):
+
 - splitting code by execution phase when the stable concept is not temporal
 - separating normal and special cases so far apart that their shared invariant is hidden
 - adding helper layers that distribute one design decision across many files
@@ -252,6 +276,7 @@ Anti-patterns (MUST NOT):
 5. Revise the abstraction when the comment needed to explain it becomes complicated.
 
 Anti-patterns (MUST NOT):
+
 - accepting the first design because it is locally convenient
 - using comments to justify a confusing interface instead of changing the interface
 - documenting implementation mechanics that callers should not need to know
@@ -281,6 +306,7 @@ Anti-patterns (MUST NOT):
 ## Review Rules
 
 When reviewing code, actively look for:
+
 - shallow modules
 - pass-through layers
 - interfaces that expose implementation detail
@@ -297,18 +323,22 @@ When reviewing code, actively look for:
 ## Forbidden Patterns
 
 ### Shallow Decomposition
+
 - splitting code into many tiny units that do not reduce understanding cost
 - wrappers and facades that add names but not simplification
 
 ### Interface Leakage
+
 - APIs that expose storage, transport, or caching mechanics to ordinary callers
 - method sequences that require callers to know internal workflow
 
 ### Tactical Complexity Debt
+
 - adding one more flag, callback, or conditional instead of improving the abstraction
 - fixing the local symptom while making the design harder overall
 
 ### Complexity Spread
+
 - repeating the same special handling in many places
 - making all callers responsible for one module's awkwardness
 
@@ -317,6 +347,7 @@ When reviewing code, actively look for:
 ## Code Generation Rules
 
 When generating code, default to:
+
 1. identify the concept that deserves a module boundary
 2. design the narrowest strong interface around that concept
 3. hide volatile or complicated details inside
@@ -325,6 +356,7 @@ When generating code, default to:
 6. reduce the number of facts a reader must juggle at once
 
 Avoid by default:
+
 - pass-through layers
 - needless tiny abstractions
 - exposing internal data formats
@@ -345,6 +377,7 @@ Avoid by default:
 ## Review Checklist
 
 Before finalizing any change, verify:
+
 - Did this change reduce or increase cognitive load?
 - Is the module deeper or shallower after the edit?
 - Did we hide more complexity behind a stable interface?
@@ -361,6 +394,7 @@ If any answer is no, revise before shipping.
 ## Final Instruction
 
 When uncertain, prefer the design that:
+
 1. creates a deeper module
 2. hides more complexity
 3. reduces special cases

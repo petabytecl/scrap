@@ -4,6 +4,7 @@
 
 This repository must follow **Clean Architecture**.
 When writing, modifying, or reviewing code, prefer decisions that preserve:
+
 - independent business rules
 - inward-pointing dependencies
 - framework independence
@@ -65,16 +66,19 @@ Treat this file as a binding implementation policy: `MUST` is binding, `SHOULD` 
 
 10. **Outer Layers May Depend on Inner Layers, Never the Reverse**
     - Controllers may depend on use cases.
-   - Gateways may implement interfaces defined by the use case or domain layer.
-    - Presenters may implement output boundaries owned by inner layers.
-    - Never invert this relationship accidentally.
+
+- Gateways may implement interfaces defined by the use case or domain layer.
+- Presenters may implement output boundaries owned by inner layers.
+- Never invert this relationship accidentally.
 
 ---
 
 ## Required Layer Responsibilities
 
 ### Domain Layer
+
 Contains:
+
 - entities
 - enterprise business rules
 - domain invariants
@@ -83,12 +87,14 @@ Contains:
 These may be implemented with plain objects, functions, modules, or other structures. Clean Architecture requires independent business rules; it does not require a specific domain modeling style.
 
 Must:
+
 - be framework free
 - be persistence ignorant
 - be delivery mechanism agnostic
 - avoid annotations and infrastructure imports where possible
 
 Must not:
+
 - import web libraries
 - import database access types
 - import external service clients
@@ -96,7 +102,9 @@ Must not:
 - read configuration directly
 
 ### Application Layer
+
 Contains:
+
 - use cases
 - input models
 - output models
@@ -104,18 +112,22 @@ Contains:
 - orchestration logic
 
 Must:
+
 - depend on domain abstractions and models
 - define interfaces for required external behavior
 - coordinate workflows explicitly
 
 Must not:
+
 - contain controller logic
 - contain database access details
 - return framework response types
 - format UI strings unless explicitly part of a presenter boundary
 
 ### Interface Adapters Layer
+
 Contains:
+
 - controllers
 - presenters
 - view models
@@ -123,16 +135,20 @@ Contains:
 - mappers between external and internal models
 
 Must:
+
 - translate between external formats and internal models
 - depend inward on application and domain code
 - isolate framework and vendor details
 
 Must not:
+
 - move business policy out of the use case or domain layer
 - bypass use cases to call gateways directly unless explicitly justified by architecture
 
 ### Infrastructure Layer
+
 Contains:
+
 - framework bootstrap
 - object graph and component wiring
 - database access details
@@ -142,11 +158,13 @@ Contains:
 - network clients
 
 Must:
+
 - remain replaceable
 - implement interfaces owned by inner layers
 - stay at the outermost edge
 
 Must not:
+
 - define business rules
 - dictate domain shapes
 - leak vendor types inward
@@ -158,7 +176,9 @@ Must not:
 When generating code, always apply the following.
 
 ### 1. Define the Use Case First
+
 For every non-trivial feature:
+
 - identify the use case
 - define the input
 - define the output
@@ -166,6 +186,7 @@ For every non-trivial feature:
 - keep orchestration in one place
 
 Prefer this order:
+
 1. domain rule or entity behavior
 2. use case
 3. boundary interfaces
@@ -175,12 +196,15 @@ Prefer this order:
 7. framework wiring
 
 ### 2. Use Plain Models at Boundaries
+
 - Use request and response models owned by the application layer.
 - Do not pass database-bound entities, web requests, or framework-bound data structures into core logic.
 - Do not return framework objects from use cases.
 
 ### 3. Create Ports for Volatile Dependencies
+
 Introduce interfaces for:
+
 - gateways
 - mailers
 - payment providers
@@ -193,16 +217,19 @@ Introduce interfaces for:
 Do not call volatile details directly from core use cases.
 
 ### 4. Keep Wiring in the Main Component
+
 - Object construction belongs in the composition root.
 - Do not instantiate infrastructure dependencies inside use cases or entities.
 - Use explicit construction, factories, or composition in the outer layer.
 
 ### 5. Prefer Stable Dependencies
+
 - Inner layers own the abstractions they need.
 - Outer layers implement those abstractions.
 - Avoid shared "common" packages that create sideways coupling.
 
 ### 6. Keep Boundaries Visible
+
 - When in doubt, introduce a boundary sooner.
 - Partial boundaries are acceptable if they preserve future extraction options.
 - Use interfaces, request models, and output models to avoid coupling to details.
@@ -212,7 +239,9 @@ Do not call volatile details directly from core use cases.
 ## Architecture Heuristics
 
 ### Dependency Direction
+
 Always verify:
+
 - Does this import point inward?
 - Is a high-level policy depending on a low-level detail?
 - Is a framework or vendor type leaking into a core layer?
@@ -221,7 +250,9 @@ Always verify:
 If yes, refactor.
 
 ### Policy vs Detail
+
 When placing code, ask:
+
 - Is this business policy?
 - Is this orchestration?
 - Is this translation?
@@ -230,7 +261,9 @@ When placing code, ask:
 Put the code in the highest-level place that matches its responsibility.
 
 ### Stable Core, Replaceable Edge
+
 Prefer designs where you can replace:
+
 - web framework
 - persistence technology
 - message broker
@@ -238,15 +271,18 @@ Prefer designs where you can replace:
 - cloud vendor
 - serializer
 - UI
-without rewriting business rules.
+  without rewriting business rules.
 
 ### Feature First Structure
+
 Prefer:
+
 - feature/use-case names
 - business-capability/use-case names
 - names that reveal the application's use cases
 
 Over:
+
 - generic controller, service, or gateway buckets
 - generic technical buckets
 
@@ -317,19 +353,24 @@ Technical subfolders are acceptable only when they do not obscure use-case owner
 ## Testing Rules
 
 ### Core Tests First
+
 Prioritize tests for:
+
 - entities
 - use cases
 - boundary contracts
 
 These tests must:
+
 - run without the real framework
 - run without the real database
 - run without the network
 - run fast and deterministically
 
 ### Adapter Tests
+
 Test adapters separately for:
+
 - mapping correctness
 - gateway behavior
 - controller translation
@@ -339,6 +380,7 @@ Test adapters separately for:
 Do not use slow integration tests as a substitute for testing business rules.
 
 ### Test Through Supported Boundaries
+
 - Avoid reaching private internals when a public use case boundary exists.
 - Prefer testing use cases with fakes or mocks for ports.
 - Use integration tests only where architectural seams meet real details.
@@ -350,36 +392,43 @@ Do not use slow integration tests as a substitute for testing business rules.
 Do not generate or keep code that does any of the following unless explicitly required and justified.
 
 ### Framework Leakage
+
 - domain entities annotated with database or web framework metadata when avoidable
 - use cases depending on `Request`, `Response`, controller base classes, framework sessions, or middleware objects
 - application layer importing serializer or database base classes
 
 ### Database Leakage
+
 - use cases returning table rows or database-bound entities
 - domain rules embedded in gateway implementations or database access
 - domain objects designed primarily around persistence convenience
 
 ### Controller-Centric Logic
+
 - controllers containing branching business rules
 - controllers performing validation that belongs to business policy
 - controllers calling gateways directly instead of use cases
 
 ### God Services
+
 - large `*Service` classes that create, fetch, validate, persist, publish, and present everything
 - services that own unrelated use cases
 - application services that become dumping grounds
 
 ### Layer Bypass
+
 - controllers bypassing use cases to call gateways
 - presenters reading directly from databases
 - infrastructure code importing inward and also being imported by domain code
 
 ### Direction Violations
+
 - gateway interfaces defined in infrastructure and consumed by core policy
 - entities importing adapters
 - use cases depending on concrete implementations
 
 ### Utility Dumping Grounds
+
 - generic utility, shared, base, or core folders used as architecture escape hatches
 - generic abstractions with no clear ownership
 - convenience modules that hide bad dependency direction
@@ -419,6 +468,7 @@ When modifying existing code:
 ## Output Expectations
 
 When asked to implement a feature, default to producing:
+
 - a domain model or entity if business invariants exist
 - a focused use case
 - input and output models if needed
@@ -427,11 +477,13 @@ When asked to implement a feature, default to producing:
 - composition root wiring outside the use case
 
 When asked to modify existing code:
+
 - keep or improve dependency direction
 - avoid adding framework dependencies to inner layers
 - call out architectural debt explicitly if it cannot be fixed safely now
 
 When asked to review code:
+
 - identify boundary violations
 - identify dependency rule violations
 - identify framework leakage
@@ -466,18 +518,21 @@ If any answer is no, revise the design before shipping.
 ## Preferred Default Shapes
 
 ### Preferred feature shape
+
 - domain
 - application
 - adapters
 - infrastructure
 
 Or, if feature-oriented:
+
 - feature/domain
 - feature/application
 - feature/adapters
 - feature/infrastructure
 
 ### Preferred use case shape
+
 - request model
 - use case
 - output boundary or response model
@@ -485,6 +540,7 @@ Or, if feature-oriented:
 - adapter implementations outside
 
 ### Preferred dependency pattern
+
 - inner layer defines interface
 - outer layer implements interface
 - composition root wires them together
@@ -494,6 +550,7 @@ Or, if feature-oriented:
 ## When Tradeoffs Are Necessary
 
 If constraints force a compromise:
+
 - keep the compromise at the outermost layer possible
 - document the boundary violation clearly in code comments or review notes
 - avoid normalizing the compromise into the core architecture
@@ -506,6 +563,7 @@ Choose the design that minimizes long-term coupling, not the one that is only sh
 ## Final Instruction
 
 When uncertain, choose the option that:
+
 1. keeps business rules independent
 2. points dependencies inward
 3. isolates details behind boundaries

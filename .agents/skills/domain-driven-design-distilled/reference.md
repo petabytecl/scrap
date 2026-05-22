@@ -6,6 +6,7 @@ This repository follows **Domain-Driven Design Distilled**:
 use the smallest effective set of DDD practices to model the business meaning clearly and deliver results quickly.
 
 All code generation, edits, and reviews must optimize for:
+
 - clear business language
 - explicit bounded contexts
 - focus on core domain complexity
@@ -23,6 +24,7 @@ Use DDD where it clarifies complex business software.
 Do not turn DDD into ritual.
 
 When uncertain:
+
 1. identify the business capability or subdomain
 2. decide whether it is core, supporting, or generic
 3. define the bounded context
@@ -30,6 +32,7 @@ When uncertain:
 5. apply only the tactical patterns that actually earn their cost
 
 Reject both extremes:
+
 - no modeling when the domain is complex
 - full-blown DDD ceremony when the problem is simple
 
@@ -48,29 +51,35 @@ Reject both extremes:
 ## Strategic Rules
 
 ### Start with Subdomains
+
 Classify major areas as:
+
 - core domain
 - supporting subdomain
 - generic subdomain
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Invest the most design effort in the core domain.
 2. Keep supporting and generic subdomains simpler unless complexity proves otherwise.
 3. Do not waste the best modeling effort on commodity concerns.
 
 ### Define Bounded Contexts Early
+
 1. Every meaningful model lives inside a bounded context.
 2. A bounded context owns its language, rules, and model semantics.
 3. The same term may mean different things in different contexts.
 4. Code structure must reflect context boundaries.
 
 ### Use Context Mapping
+
 1. Make context relationships explicit.
 2. Translate where meanings differ.
 3. Own integration contracts deliberately.
 4. Protect the local model from foreign language.
 
 Anti-patterns (MUST NOT):
+
 - one model reused across billing, identity, catalog, fulfillment, and support
 - shared domain classes with subtly different meanings
 - context boundaries documented but ignored in code
@@ -92,6 +101,7 @@ Choose context relationships deliberately:
 - TREAT Big Ball of Mud as a context to contain and translate around, not as a model to spread.
 
 Anti-patterns (MUST NOT):
+
 - claiming independent modeling while conforming silently
 - using Shared Kernel without governance
 - calling integration an anticorruption layer when no translation exists
@@ -118,6 +128,7 @@ Anti-patterns (MUST NOT):
 5. Prefer domain names over technical placeholders.
 
 Avoid:
+
 - technical placeholders that conceal a business concept
 - names imported from another bounded context without translation
 - generic helper or utility names that end up carrying domain decisions
@@ -127,34 +138,42 @@ Avoid:
 ## Tactical Pattern Rules
 
 ### Entities
+
 Use entities when identity and lifecycle matter.
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Entities must have explicit identity.
 2. Entities must protect meaningful state transitions.
 3. Do not expose unrestricted state changes by default.
 
 ### Value Objects
+
 Use value objects aggressively when a primitive hides meaning.
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Value objects are immutable by default.
 2. They validate themselves.
 3. They make code read in domain language.
 
 ### Aggregates
+
 Use aggregates only where invariants require a consistency boundary.
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Keep aggregates small.
 2. Protect invariants through the aggregate root.
 3. Reference other aggregates by identity.
 4. Avoid loading large object graphs.
 
 ### Domain Events
+
 Use domain events for meaningful facts.
 
 Rules (MUST unless marked SHOULD or MUST NOT):
+
 1. Name events in the past tense.
 2. Use events when they clarify collaboration or integration.
 3. Do not publish trivial noise for every field change.
@@ -168,6 +187,7 @@ Rules (MUST unless marked SHOULD or MUST NOT):
 5. One transaction should usually change one aggregate.
 
 Anti-patterns (MUST NOT):
+
 - aggregate designed around a screen
 - one request loading and mutating a whole graph
 - aggregate roots exposing mutable children directly
@@ -182,6 +202,7 @@ Anti-patterns (MUST NOT):
 4. They should stay thin enough that the model still carries meaning.
 
 Anti-patterns (MUST NOT):
+
 - all business decisions in application services
 - controllers duplicating application orchestration
 - application services shaped only by transport
@@ -196,6 +217,7 @@ Anti-patterns (MUST NOT):
 4. Translate transport and integration data at the boundary.
 
 Anti-patterns (MUST NOT):
+
 - persistence-first modeling
 - reusing transport objects as domain objects
 - domain methods depending on framework types
@@ -210,6 +232,7 @@ Anti-patterns (MUST NOT):
 4. Where a concept is fuzzy, do not hide the ambiguity behind technical abstractions.
 
 Anti-patterns (MUST NOT):
+
 - generic code that could belong to any business
 - unexplained status codes and flags with domain meaning
 - enums and booleans where a richer concept is needed
@@ -224,6 +247,7 @@ Anti-patterns (MUST NOT):
 4. Prefer incremental improvement over massive design overhauls.
 
 Anti-patterns (MUST NOT):
+
 - dismissing DDD because not every module needs it
 - over-modeling a generic subsystem
 - introducing aggregates and events before knowing why
@@ -245,6 +269,7 @@ Anti-patterns (MUST NOT):
 ## Code Generation Rules
 
 When generating code, use this default order:
+
 1. identify the subdomain
 2. identify the bounded context
 3. write names in the local ubiquitous language
@@ -254,6 +279,7 @@ When generating code, use this default order:
 7. keep context translation explicit
 
 Default avoidance:
+
 - giant shared domain packages
 - service-centric fake DDD
 - technical names replacing domain language
@@ -264,6 +290,7 @@ Default avoidance:
 ## Review Rules
 
 When reviewing code, actively look for:
+
 - missing subdomain classification
 - missing bounded context ownership
 - context bleeding
@@ -291,6 +318,7 @@ When reviewing code, actively look for:
 ## Review Checklist
 
 Before finalizing any change, verify:
+
 - Is the subdomain/core importance understood?
 - Is the bounded context explicit?
 - Is the ubiquitous language visible in the code?
@@ -308,6 +336,7 @@ If any answer is no, revise before shipping.
 ## Final Instruction
 
 When uncertain, choose the option that:
+
 1. sharpens the business language
 2. clarifies the bounded context
 3. models real complexity honestly

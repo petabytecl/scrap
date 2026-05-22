@@ -6,6 +6,7 @@ This repository follows **Code Complete** in the sense of Steve McConnell:
 apply disciplined software construction practices that reduce defects, improve readability, and produce robust code under real-world constraints.
 
 All code generation, edits, and reviews must optimize for:
+
 - low-defect construction
 - readable and intention-revealing code
 - controlled complexity
@@ -22,6 +23,7 @@ This file is a binding engineering policy: `MUST` is binding, `SHOULD` is a stro
 Construction quality is not accidental.
 
 When uncertain, choose the option that:
+
 1. lowers defect probability
 2. makes the code easier to inspect and reason about
 3. reduces control-flow complexity
@@ -72,6 +74,7 @@ Do not optimize for cleverness, minimal keystrokes, or fashionable idioms at the
 7. Prefer guard clauses and straightforward structure over deeply nested logic.
 
 Anti-patterns (MUST NOT):
+
 - routines that do several unrelated things
 - routines whose names describe implementation detail instead of purpose
 - many hidden side effects
@@ -89,6 +92,7 @@ Anti-patterns (MUST NOT):
 6. Use stronger data types when primitives hide meaning.
 
 Anti-patterns (MUST NOT):
+
 - reused loop/index/temp variables beyond their purpose
 - long-lived mutable locals carrying many meanings
 - values whose units or semantics are unclear
@@ -117,6 +121,7 @@ Anti-patterns (MUST NOT):
 6. Avoid surprising exits unless they clarify the routine.
 
 Anti-patterns (MUST NOT):
+
 - deeply nested conditionals
 - complicated loop exits with hidden state changes
 - control flow dependent on side effects in expressions
@@ -145,6 +150,7 @@ Anti-patterns (MUST NOT):
 5. Do not silently continue from corrupted or impossible state.
 
 Anti-patterns (MUST NOT):
+
 - assuming all callers are correct
 - burying invalid state until it causes distant failures
 - swallowing exceptions without context
@@ -179,6 +185,7 @@ Anti-patterns (MUST NOT):
 5. Reduce coupling through clear contracts and limited knowledge of internals.
 
 Anti-patterns (MUST NOT):
+
 - god classes
 - modules with mixed persistence, formatting, business logic, and integration concerns
 - public surfaces that expose internal bookkeeping
@@ -257,6 +264,7 @@ Anti-patterns (MUST NOT):
 ## Review Rules
 
 When reviewing code, actively look for:
+
 - unclear names
 - weak routine boundaries
 - long parameter lists
@@ -273,23 +281,28 @@ When reviewing code, actively look for:
 ## Forbidden Patterns
 
 ### Cleverness over Clarity
+
 - dense tricks that are hard to inspect
 - compressed expressions that save lines but increase interpretation cost
 
 ### Routine Bloat
+
 - one routine doing several phases and concerns
 - long signatures with many unrelated parameters
 
 ### Defensive Vacuum
+
 - no validation at trust boundaries
 - no checks around critical assumptions
 - silent fallback from impossible state
 
 ### Comment-as-Crutch
+
 - obvious comments over bad code
 - stale comments that mislead
 
 ### Consistency Neglect
+
 - arbitrary naming and formatting changes
 - module-specific mini dialects inside one codebase
 
@@ -298,6 +311,7 @@ When reviewing code, actively look for:
 ## Code Generation Rules
 
 When generating code, default to:
+
 1. clear names
 2. focused routines
 3. explicit data meaning
@@ -307,6 +321,7 @@ When generating code, default to:
 7. consistent style
 
 Avoid by default:
+
 - dense clever code
 - broad god objects
 - fragile hidden assumptions
@@ -327,6 +342,7 @@ Avoid by default:
 ## Review Checklist
 
 Before finalizing any change, verify:
+
 - Are names clear and intention-revealing?
 - Are routines focused and reasonably small?
 - Is control flow straightforward?
@@ -345,6 +361,7 @@ If any answer is no, revise before shipping.
 ## Final Instruction
 
 When uncertain, choose the option that:
+
 1. lowers defect risk
 2. improves readability
 3. simplifies control flow
