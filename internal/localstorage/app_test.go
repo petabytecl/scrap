@@ -1355,7 +1355,8 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetCounters()["documents"] != "1" ||
-		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
+		finished.GetProgress().GetCounters()["upload_intents"] != "1" ||
+		finished.GetProgress().GetCounters()["blocks_restored"] != "0" {
 		t.Fatalf("finished operation = %#v, want dry-run checkpoint verification", finished)
 	}
 }
@@ -1410,7 +1411,8 @@ func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetCounters()["documents"] != "1" ||
-		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
+		finished.GetProgress().GetCounters()["upload_intents"] != "1" ||
+		finished.GetProgress().GetCounters()["blocks_restored"] != "1" {
 		t.Fatalf("finished operation = %#v, want scratch drill restore counters", finished)
 	}
 }

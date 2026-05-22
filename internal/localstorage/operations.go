@@ -300,11 +300,12 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 		WorkUnitsCompleted: uint64(restore.Documents + restore.UploadIntents),
 		Message:            message,
 		Counters: map[string]string{
-			"documents":      fmt.Sprintf("%d", restore.Documents),
-			"snapshots":      fmt.Sprintf("%d", restore.Snapshots),
-			"tombstones":     fmt.Sprintf("%d", restore.Tombstones),
-			"upload_intents": fmt.Sprintf("%d", restore.UploadIntents),
-			"verified":       fmt.Sprintf("%d", restore.Verified),
+			"blocks_restored": fmt.Sprintf("%d", restore.BlocksRestored),
+			"documents":       fmt.Sprintf("%d", restore.Documents),
+			"snapshots":       fmt.Sprintf("%d", restore.Snapshots),
+			"tombstones":      fmt.Sprintf("%d", restore.Tombstones),
+			"upload_intents":  fmt.Sprintf("%d", restore.UploadIntents),
+			"verified":        fmt.Sprintf("%d", restore.Verified),
 		},
 	}
 	if err := store.Put(finished); err != nil {
@@ -349,11 +350,12 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 		WorkUnitsCompleted: uint64(drill.Documents + drill.UploadIntents),
 		Message:            message,
 		Counters: map[string]string{
-			"documents":      fmt.Sprintf("%d", drill.Documents),
-			"snapshots":      fmt.Sprintf("%d", drill.Snapshots),
-			"tombstones":     fmt.Sprintf("%d", drill.Tombstones),
-			"upload_intents": fmt.Sprintf("%d", drill.UploadIntents),
-			"verified":       fmt.Sprintf("%d", drill.Verified),
+			"blocks_restored": fmt.Sprintf("%d", drill.BlocksRestored),
+			"documents":       fmt.Sprintf("%d", drill.Documents),
+			"snapshots":       fmt.Sprintf("%d", drill.Snapshots),
+			"tombstones":      fmt.Sprintf("%d", drill.Tombstones),
+			"upload_intents":  fmt.Sprintf("%d", drill.UploadIntents),
+			"verified":        fmt.Sprintf("%d", drill.Verified),
 		},
 	}
 	if err := store.Put(finished); err != nil {

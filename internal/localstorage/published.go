@@ -57,11 +57,12 @@ func publishedSnapshotID(generation uint64, publishedAt time.Time) string {
 }
 
 type MetadataRestoreResult struct {
-	Snapshots     int
-	Documents     int
-	UploadIntents int
-	Tombstones    int
-	Verified      int
+	Snapshots      int
+	Documents      int
+	UploadIntents  int
+	Tombstones     int
+	Verified       int
+	BlocksRestored int
 }
 
 func (a *Application) RestorePublishedMetadataCheckpoint(ctx context.Context, apply bool) (MetadataRestoreResult, error) {
@@ -122,7 +123,37 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	if len(documents) != result.Documents {
 		return result, fmt.Errorf("localstorage: DR drill restored %d documents, expected %d", len(documents), result.Documents)
 	}
+	restoredBlocks, err := drillApp.restoreImportedBlocks(ctx, documents, a.now())
+	if err != nil {
+		return result, err
+	}
+	result.BlocksRestored = restoredBlocks
 	return result, nil
+}
+
+func (a *Application) restoreImportedBlocks(ctx context.Context, documents []metastore.Document, now time.Time) (int, error) {
+	blockIDs := make(map[string]bool)
+	for _, document := range documents {
+		blockIDs[document.Location.BlockID] = true
+	}
+	for blockID := range blockIDs {
+		if err := a.restoreBlockFromBackend(ctx, blockID); err != nil {
+			return 0, err
+		}
+	}
+	for _, document := range documents {
+		if err := a.authority.UpdateDocumentRestoreState(
+			ctx,
+			document.Identity,
+			metastore.RestoreStateHot,
+			"drill restored local bytes",
+			stableCommandID("dr-drill-restore", document.Identity.TenantID, document.Identity.TransactionID, document.Identity.DocumentName),
+			now,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return len(blockIDs), nil
 }
 
 func (a *Application) applyPublishedSnapshotContents(ctx context.Context, manifestID string, contents published.SnapshotContents, now time.Time) error {
