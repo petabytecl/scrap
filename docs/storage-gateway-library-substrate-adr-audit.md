@@ -24,7 +24,7 @@ hard to reverse, surprising without context, and based on a real trade-off.
 | OpenBao envelope boundary | Use OpenBao Transit envelope encryption and OpenBao Go client boundary for deployment-scoped KEKs. | ADR 0005, ADR 0004 | Covered; no new ADR unless changing KMS provider, exporting key material, or moving crypto into another service. |
 | Backend SDK boundaries | Backend portability is behind provider-neutral adapters; native backend SDKs are implementation details behind that boundary. | ADR 0001, ADR 0004, ADR 0008 | Covered at boundary level. Add provider-specific ADRs only for hard-to-reverse SDK or backend semantics. |
 | Model-test libraries | No concrete model-test library is selected yet. Correctness tiers require deterministic simulator/model checks. | Roadmap and issue `#19` | Deferred to correctness harness work. Add an ADR only when a model-testing library materially shapes tests or architecture. |
-| DI/lifecycle framework | Default is explicit constructors and small consumer-owned interfaces. DI/lifecycle frameworks such as `uber/fx` or a Gaz-style container are not adopted. | Package architecture guide | Deferred. Any adoption needs an ADR because it changes composition, lifecycle, testing, and dependency visibility. |
+| DI/lifecycle framework | Default is explicit constructors and small consumer-owned interfaces. DI/lifecycle frameworks such as `go.uber.org/fx` or a Gaz-style container are not adopted. | Package architecture guide | Deferred. Any adoption needs an ADR because it changes composition, lifecycle, testing, and dependency visibility. |
 | Error aggregation helpers | Typed errors and retryability classes are required. `multierr`-style helpers may aggregate cleanup/shutdown errors without replacing the primary typed failure. | Durability coding guidelines | No ADR needed unless an error framework becomes part of package APIs or transport mapping. |
 | Test assertion libraries | `testify/require`-style assertions and limited `suite` use are test-only readability choices. | Durability coding guidelines | No ADR needed unless a test framework becomes mandatory for production harness architecture. |
 | Observability libraries | OpenTelemetry, Prometheus exposition where needed, and `log/slog` remain implementation candidates. | Design notes and issue `#20` | Deferred to observability standards. Add ADR only if a vendor or framework choice becomes hard to reverse. |
@@ -37,9 +37,9 @@ hard to reverse, surprising without context, and based on a real trade-off.
 
 ### DI And Lifecycle Frameworks
 
-Do not adopt `uber/fx`, Gaz-style DI, service locators, or global registries by
-default. The current default is explicit constructors, narrow interfaces, and
-composition in `cmd/scrapd` / `internal/node`.
+Do not adopt `go.uber.org/fx`, Gaz-style DI, service locators, or global
+registries by default. The current default is explicit constructors, narrow
+interfaces, and composition in `cmd/scrapd` / `internal/node`.
 
 Revisit this only if manual wiring becomes a demonstrable source of lifecycle
 bugs or review burden. A future ADR must define allowed packages, lifecycle
