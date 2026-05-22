@@ -47,7 +47,7 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 	if len(documents) == 0 {
 		return nil, fmt.Errorf("backendupload: no documents found for block %q", intent.BlockID)
 	}
-	index, err := buildBlockIndex(intent.BlockID, s.ShardID, blockObject, documents)
+	index, err := buildBlockIndex(intent.BlockID, s.ShardID, blockObject, intent.EnvelopeObjectKey, documents)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func buildBlockIndex(blockID string, shardID string, blockObject backend.Object, documents []metastore.Document) (*storagev1.BlockIndex, error) {
+func buildBlockIndex(blockID string, shardID string, blockObject backend.Object, envelopeObjectKey string, documents []metastore.Document) (*storagev1.BlockIndex, error) {
 	sort.Slice(documents, func(i int, j int) bool {
 		left := documents[i]
 		right := documents[j]
@@ -76,13 +76,14 @@ func buildBlockIndex(blockID string, shardID string, blockObject backend.Object,
 
 	createdAt := documents[0].CreatedAt
 	index := &storagev1.BlockIndex{
-		SchemaVersion: storageformat.CurrentSchemaVersion,
-		BlockId:       blockID,
-		ShardId:       shardID,
-		FormatVersion: 1,
-		BlockLength:   blockObject.Length,
-		BlockSha256:   append([]byte(nil), blockObject.SHA256[:]...),
-		CreatedAt:     timestamppb.New(createdAt),
+		SchemaVersion:     storageformat.CurrentSchemaVersion,
+		BlockId:           blockID,
+		ShardId:           shardID,
+		FormatVersion:     1,
+		BlockLength:       blockObject.Length,
+		BlockSha256:       append([]byte(nil), blockObject.SHA256[:]...),
+		EnvelopeObjectKey: optionalString(envelopeObjectKey, envelopeObjectKey != ""),
+		CreatedAt:         timestamppb.New(createdAt),
 	}
 	for _, document := range documents {
 		if !document.CreatedAt.IsZero() && document.CreatedAt.Before(createdAt) {

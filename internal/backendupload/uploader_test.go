@@ -3,6 +3,7 @@ package backendupload
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/storageformat"
 )
 
 func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
@@ -95,6 +97,49 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestUploadBlockStoresEnvelopeWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	store := openTestBackendStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block with envelope")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
+	intent := testUploadIntent(record.BlockID)
+	intent.EnvelopeObjectKey = "objects/" + record.BlockID + ".env"
+
+	result, err := Uploader{
+		Backend:  store,
+		Source:   LocalBlockSource{Blocks: blocks},
+		Index:    staticBlockIndexSource{body: []byte("index bytes")},
+		Envelope: LocalBlockEnvelopeSource{CellID: "cell-a"},
+	}.UploadBlock(ctx, intent)
+	if err != nil {
+		t.Fatalf("upload block: %v", err)
+	}
+	if result.Envelope == nil || result.Envelope.Key != intent.EnvelopeObjectKey {
+		t.Fatalf("envelope result = %#v, want key %q", result.Envelope, intent.EnvelopeObjectKey)
+	}
+
+	var got bytes.Buffer
+	if err := store.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &got); err != nil {
+		t.Fatalf("read uploaded envelope: %v", err)
+	}
+	envelope, err := storageformat.UnmarshalEnvelopeRecord(got.Bytes())
+	if err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if envelope.GetBlockId() != record.BlockID ||
+		envelope.GetKeyId() != localNoopEnvelopeKeyID ||
+		envelope.GetAeadAlgorithm() != "none" ||
+		len(envelope.GetEnvelopeSha256()) != sha256.Size {
+		t.Fatalf("envelope = %#v, want local noop envelope for block", envelope)
+	}
+}
+
 func TestUploadBlockRequiresIndexSourceWhenIndexObjectKeyIsSet(t *testing.T) {
 	ctx := context.Background()
 	blocks := openTestBlockStore(t)
@@ -112,6 +157,29 @@ func TestUploadBlockRequiresIndexSourceWhenIndexObjectKeyIsSet(t *testing.T) {
 	}.UploadBlock(ctx, testUploadIntent(record.BlockID))
 	if err == nil {
 		t.Fatal("expected missing index source error")
+	}
+}
+
+func TestUploadBlockRequiresEnvelopeSourceWhenEnvelopeObjectKeyIsSet(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block with envelope")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
+	intent := testUploadIntent(record.BlockID)
+	intent.EnvelopeObjectKey = "objects/" + record.BlockID + ".env"
+
+	_, err = Uploader{
+		Backend: openTestBackendStore(t),
+		Source:  LocalBlockSource{Blocks: blocks},
+		Index:   staticBlockIndexSource{body: []byte("index bytes")},
+	}.UploadBlock(ctx, intent)
+	if err == nil {
+		t.Fatal("expected missing envelope source error")
 	}
 }
 

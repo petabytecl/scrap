@@ -111,8 +111,9 @@ func (a *Application) Close() error {
 func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.Processor {
 	return backendupload.Processor{
 		Uploader: backendupload.Uploader{
-			Backend: store,
-			Source:  backendupload.LocalBlockSource{Blocks: a.blocks},
+			Backend:  store,
+			Source:   backendupload.LocalBlockSource{Blocks: a.blocks},
+			Envelope: backendupload.LocalBlockEnvelopeSource{CellID: localPublishedCellID},
 			Index: backendupload.LocalBlockIndexSource{
 				Documents: a.metadata,
 				ShardID:   "local",
@@ -879,10 +880,11 @@ func completeTransactionCommandID(transaction identity.Transaction, completedAt 
 func uploadIntentForDocument(document metastore.Document) metastore.UploadIntent {
 	blockID := document.Location.BlockID
 	return metastore.UploadIntent{
-		BlockID:          blockID,
-		BackendObjectKey: "blocks/" + blockID + ".blk",
-		IndexObjectKey:   "blocks/" + blockID + ".idx",
-		State:            metastore.UploadStatePending,
+		BlockID:           blockID,
+		BackendObjectKey:  "blocks/" + blockID + ".blk",
+		IndexObjectKey:    "blocks/" + blockID + ".idx",
+		EnvelopeObjectKey: "blocks/" + blockID + ".env",
+		State:             metastore.UploadStatePending,
 	}
 }
 

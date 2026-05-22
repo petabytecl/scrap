@@ -16,6 +16,7 @@ import (
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -76,8 +77,10 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 		t.Fatalf("get upload intent: %v", err)
 	}
 	if intent.State != metastore.UploadStatePending ||
-		intent.BackendObjectKey != "blocks/"+storedDocument.Location.BlockID+".blk" {
-		t.Fatalf("upload intent = %#v, want pending block upload", intent)
+		intent.BackendObjectKey != "blocks/"+storedDocument.Location.BlockID+".blk" ||
+		intent.IndexObjectKey != "blocks/"+storedDocument.Location.BlockID+".idx" ||
+		intent.EnvelopeObjectKey != "blocks/"+storedDocument.Location.BlockID+".env" {
+		t.Fatalf("upload intent = %#v, want pending block/index/envelope upload", intent)
 	}
 
 	head, err := app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
@@ -368,6 +371,9 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	if _, err := backendStore.HeadObject(ctx, intent.IndexObjectKey); err != nil {
 		t.Fatalf("head backend index object: %v", err)
 	}
+	if _, err := backendStore.HeadObject(ctx, intent.EnvelopeObjectKey); err != nil {
+		t.Fatalf("head backend envelope object: %v", err)
+	}
 	if err := app.Close(); err != nil {
 		t.Fatalf("close app: %v", err)
 	}
@@ -436,6 +442,9 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	}
 	if _, err := backendStore.HeadObject(ctx, intent.IndexObjectKey); err != nil {
 		t.Fatalf("head backend index object: %v", err)
+	}
+	if _, err := backendStore.HeadObject(ctx, intent.EnvelopeObjectKey); err != nil {
+		t.Fatalf("head backend envelope object: %v", err)
 	}
 }
 
@@ -1111,6 +1120,14 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
+	stored, err := app.metadata.HeadDocument(testDocumentIdentity())
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
 
 	publication, err := app.PublishMetadataSnapshot(ctx)
 	if err != nil {
@@ -1126,6 +1143,12 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	if pointer.GetManifestId() != publication.Manifest.GetManifestId() ||
 		pointer.GetPublishedAt().AsTime() != app.now() {
 		t.Fatalf("pointer = %#v, want published manifest and timestamp", pointer)
+	}
+	required := publication.Manifest.GetRequiredObjects()
+	if !hasRequiredObject(required, intent.BackendObjectKey) ||
+		!hasRequiredObject(required, intent.IndexObjectKey) ||
+		!hasRequiredObject(required, intent.EnvelopeObjectKey) {
+		t.Fatalf("required objects = %#v, want block/index/envelope refs", required)
 	}
 
 	readiness, err := app.GetRecoveryReadiness(ctx)
@@ -1276,8 +1299,11 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 	if err != nil {
 		t.Fatalf("get restored upload intent: %v", err)
 	}
-	if intent.State != metastore.UploadStateUploaded || intent.BackendObjectKey == "" {
-		t.Fatalf("restored intent = %#v, want uploaded backend object", intent)
+	if intent.State != metastore.UploadStateUploaded ||
+		intent.BackendObjectKey == "" ||
+		intent.IndexObjectKey == "" ||
+		intent.EnvelopeObjectKey == "" {
+		t.Fatalf("restored intent = %#v, want uploaded backend/index/envelope objects", intent)
 	}
 	transaction, err := restoredApp.metadata.GetTransaction(identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID})
 	if err != nil {
@@ -1692,6 +1718,15 @@ func readBackendObject(t *testing.T, ctx context.Context, store backend.Store, k
 func hasWarningCode(warnings []*adminv1.OperationWarning, code string) bool {
 	for _, warning := range warnings {
 		if warning.GetCode() == code {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRequiredObject(objects []*publishedv1.ObjectRef, key string) bool {
+	for _, object := range objects {
+		if object.GetObjectKey() == key {
 			return true
 		}
 	}

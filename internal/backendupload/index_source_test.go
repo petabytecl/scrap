@@ -49,11 +49,13 @@ func TestUploadBlockStoresReadableIndexFromMetastore(t *testing.T) {
 		t.Fatalf("put document metadata: %v", err)
 	}
 	intent := testUploadIntent(record.BlockID)
+	intent.EnvelopeObjectKey = "objects/" + record.BlockID + ".env"
 
 	result, err := Uploader{
-		Backend: backendStore,
-		Source:  LocalBlockSource{Blocks: blocks},
-		Index:   LocalBlockIndexSource{Documents: metadataStore, ShardID: "local"},
+		Backend:  backendStore,
+		Source:   LocalBlockSource{Blocks: blocks},
+		Envelope: LocalBlockEnvelopeSource{CellID: "local"},
+		Index:    LocalBlockIndexSource{Documents: metadataStore, ShardID: "local"},
 	}.UploadBlock(ctx, intent)
 	if err != nil {
 		t.Fatalf("upload block: %v", err)
@@ -74,6 +76,7 @@ func TestUploadBlockStoresReadableIndexFromMetastore(t *testing.T) {
 		index.GetShardId() != "local" ||
 		index.GetBlockLength() != result.Block.Length ||
 		!bytes.Equal(index.GetBlockSha256(), result.Block.SHA256[:]) ||
+		index.GetEnvelopeObjectKey() != intent.EnvelopeObjectKey ||
 		len(index.GetDocuments()) != 1 ||
 		len(index.GetFrames()) != len(record.Frames) ||
 		len(index.GetIndexSha256()) != 32 {

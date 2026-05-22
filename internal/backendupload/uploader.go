@@ -41,14 +41,16 @@ func (s LocalBlockSource) OpenBlock(ctx context.Context, blockID string) (io.Rea
 }
 
 type Uploader struct {
-	Backend backend.Store
-	Source  BlockSource
-	Index   BlockIndexSource
+	Backend  backend.Store
+	Source   BlockSource
+	Index    BlockIndexSource
+	Envelope BlockEnvelopeSource
 }
 
 type UploadResult struct {
-	Block backend.Object
-	Index *backend.Object
+	Block    backend.Object
+	Index    *backend.Object
+	Envelope *backend.Object
 }
 
 func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent) (UploadResult, error) {
@@ -64,6 +66,9 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 	if intent.BackendObjectKey == "" {
 		return UploadResult{}, fmt.Errorf("backendupload: upload intent backend object key is required")
 	}
+	if intent.EnvelopeObjectKey != "" && u.Envelope == nil {
+		return UploadResult{}, fmt.Errorf("backendupload: block envelope source is not configured")
+	}
 	reader, err := u.Source.OpenBlock(ctx, intent.BlockID)
 	if err != nil {
 		return UploadResult{}, err
@@ -74,6 +79,18 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		return UploadResult{}, err
 	}
 	result := UploadResult{Block: blockObject}
+	if intent.EnvelopeObjectKey != "" {
+		envelopeReader, err := u.Envelope.OpenBlockEnvelope(ctx, intent, blockObject)
+		if err != nil {
+			return result, err
+		}
+		defer envelopeReader.Close()
+		envelopeObject, err := u.Backend.PutObject(ctx, intent.EnvelopeObjectKey, envelopeReader)
+		if err != nil {
+			return result, err
+		}
+		result.Envelope = &envelopeObject
+	}
 	if intent.IndexObjectKey == "" {
 		return result, nil
 	}
