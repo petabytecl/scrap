@@ -2,17 +2,16 @@ package blockstore
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
+
+	"github.com/petabytecl/scrap/internal/identity"
 )
 
 const (
@@ -60,7 +59,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 
-	blockID, err := newUUIDv7()
+	blockID, err := identity.NewUUIDv7()
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +304,7 @@ func (s *Store) writeHeader() error {
 	binary.BigEndian.PutUint16(header[8:10], formatMajor)
 	binary.BigEndian.PutUint16(header[10:12], formatMinor)
 	binary.BigEndian.PutUint32(header[12:16], HeaderLength)
-	blockBytes, err := parseUUIDBytes(s.blockID)
+	blockBytes, err := identity.UUIDBytes(s.blockID)
 	if err != nil {
 		return err
 	}
@@ -316,67 +315,6 @@ func (s *Store) writeHeader() error {
 	}
 	_, err = s.blockFile.Seek(HeaderLength, io.SeekStart)
 	return err
-}
-
-func newUUIDv7() (string, error) {
-	var b [16]byte
-	now := uint64(time.Now().UnixMilli())
-	b[0] = byte(now >> 40)
-	b[1] = byte(now >> 32)
-	b[2] = byte(now >> 24)
-	b[3] = byte(now >> 16)
-	b[4] = byte(now >> 8)
-	b[5] = byte(now)
-	if _, err := rand.Read(b[6:]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0f) | 0x70
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
-func parseUUIDBytes(value string) ([16]byte, error) {
-	var out [16]byte
-	var compact [32]byte
-	var n int
-	for i := 0; i < len(value); i++ {
-		if value[i] == '-' {
-			continue
-		}
-		if n >= len(compact) {
-			return out, fmt.Errorf("uuid has too many hex bytes: %q", value)
-		}
-		compact[n] = value[i]
-		n++
-	}
-	if n != len(compact) {
-		return out, fmt.Errorf("uuid has %d hex bytes, want 32", n)
-	}
-	for i := 0; i < len(out); i++ {
-		hi, ok := hexValue(compact[i*2])
-		if !ok {
-			return out, fmt.Errorf("uuid contains non-hex byte: %q", value)
-		}
-		lo, ok := hexValue(compact[i*2+1])
-		if !ok {
-			return out, fmt.Errorf("uuid contains non-hex byte: %q", value)
-		}
-		out[i] = hi<<4 | lo
-	}
-	return out, nil
-}
-
-func hexValue(b byte) (byte, bool) {
-	switch {
-	case '0' <= b && b <= '9':
-		return b - '0', true
-	case 'a' <= b && b <= 'f':
-		return b - 'a' + 10, true
-	case 'A' <= b && b <= 'F':
-		return b - 'A' + 10, true
-	default:
-		return 0, false
-	}
 }
 
 func syncDir(path string) error {

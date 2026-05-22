@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
@@ -418,34 +417,7 @@ func validateUUIDv7(field string, value string, problems *violations) {
 }
 
 func isUUIDv7(value string) bool {
-	if len(value) != 36 {
-		return false
-	}
-	for i, r := range value {
-		switch i {
-		case 8, 13, 18, 23:
-			if r != '-' {
-				return false
-			}
-		case 14:
-			if r != '7' {
-				return false
-			}
-		case 19:
-			if !strings.ContainsRune("89abAB", r) {
-				return false
-			}
-		default:
-			if !isHex(r) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isHex(r rune) bool {
-	return ('0' <= r && r <= '9') || ('a' <= r && r <= 'f') || ('A' <= r && r <= 'F')
+	return identity.IsUUIDv7(value)
 }
 
 func validateOptionalAdminTime(field string, value *timestamppb.Timestamp, problems *violations) *time.Time {
