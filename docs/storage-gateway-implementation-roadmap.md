@@ -31,7 +31,8 @@ The next technical gate before storage-format implementation is:
    [Storage Gateway Package Architecture](storage-gateway-package-architecture.md);
 2. `#17` Document durability-sensitive coding guidelines, captured in
    [Storage Gateway Durability-Sensitive Coding Guidelines](storage-gateway-durability-coding-guidelines.md);
-3. `#18` Audit library and substrate ADR coverage.
+3. `#18` Audit library and substrate ADR coverage, captured in
+   [Storage Gateway Library And Substrate ADR Audit](storage-gateway-library-substrate-adr-audit.md).
 
 ## Purpose
 
