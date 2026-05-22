@@ -26,6 +26,12 @@ message DocumentRecord {
   map<string, string> tags = 17;
   Location location = 18;
   optional string client_idempotency_key = 19;
+  uint32 schema_version = 20;
+  string shard_id = 21;
+  uint64 committed_index = 22;
+  EnvelopeRef envelope_ref = 23;
+  RestoreState restore_state = 24;
+  UploadState upload_state = 25;
 }
 
 message Location {
@@ -33,6 +39,11 @@ message Location {
   uint64 stored_offset = 2;
   uint64 stored_length = 3;
   repeated FrameRecord frames = 4;
+  repeated ReplicaRef replicas = 5;
+  optional string backend_object_key = 6;
+  optional string index_object_key = 7;
+  optional string envelope_object_key = 8;
+  uint32 format_version = 9;
 }
 
 message FrameRecord {
@@ -40,6 +51,37 @@ message FrameRecord {
   uint64 segment_offset = 2;
   uint64 segment_length = 3;
   bytes sha256 = 4;
+}
+
+message ReplicaRef {
+  string member_id = 1;
+  string block_id = 2;
+  uint64 stored_offset = 3;
+  uint64 stored_length = 4;
+  bytes stored_sha256 = 5;
+}
+
+message EnvelopeRef {
+  string envelope_id = 1;
+  string key_id = 2;
+  uint32 key_version = 3;
+  bytes envelope_sha256 = 4;
+}
+
+enum RestoreState {
+  RESTORE_STATE_UNSPECIFIED = 0;
+  RESTORE_STATE_HOT = 1;
+  RESTORE_STATE_COLD = 2;
+  RESTORE_STATE_RESTORE_PENDING = 3;
+  RESTORE_STATE_CRYPTO_UNAVAILABLE = 4;
+}
+
+enum UploadState {
+  UPLOAD_STATE_UNSPECIFIED = 0;
+  UPLOAD_STATE_NOT_REQUIRED = 1;
+  UPLOAD_STATE_PENDING = 2;
+  UPLOAD_STATE_UPLOADED = 3;
+  UPLOAD_STATE_FAILED = 4;
 }
 
 message TransactionRecord {
@@ -53,4 +95,7 @@ message TransactionRecord {
   optional google.protobuf.Timestamp completed_at = 8;
   optional google.protobuf.Timestamp timeout_at = 9;
   map<string, string> tags = 10;
+  uint32 schema_version = 20;
+  string shard_id = 21;
+  uint64 committed_index = 22;
 }

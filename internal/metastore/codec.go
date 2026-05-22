@@ -1,6 +1,7 @@
 package metastore
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/blockstore"
@@ -12,32 +13,78 @@ import (
 
 var protoMarshal = proto.MarshalOptions{Deterministic: true}
 
+const CurrentSchemaVersion uint32 = 1
+
 func marshalDocument(document Document) ([]byte, error) {
-	return protoMarshal.Marshal(documentToProto(document))
+	return marshalDocumentRecord(documentToProto(document))
 }
 
 func unmarshalDocument(data []byte) (Document, error) {
-	var record metastorev1.DocumentRecord
-	if err := proto.Unmarshal(data, &record); err != nil {
+	record, err := unmarshalDocumentRecord(data)
+	if err != nil {
 		return Document{}, err
 	}
-	return documentFromProto(&record), nil
+	return documentFromProto(record), nil
+}
+
+func marshalDocumentRecord(record *metastorev1.DocumentRecord) ([]byte, error) {
+	if err := validateSchemaVersion("document", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return protoMarshal.Marshal(record)
+}
+
+func unmarshalDocumentRecord(data []byte) (*metastorev1.DocumentRecord, error) {
+	var record metastorev1.DocumentRecord
+	if err := proto.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	if err := validateSchemaVersion("document", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func marshalTransaction(transaction Transaction) ([]byte, error) {
-	return protoMarshal.Marshal(transactionToProto(transaction))
+	return marshalTransactionRecord(transactionToProto(transaction))
 }
 
 func unmarshalTransaction(data []byte) (Transaction, error) {
-	var record metastorev1.TransactionRecord
-	if err := proto.Unmarshal(data, &record); err != nil {
+	record, err := unmarshalTransactionRecord(data)
+	if err != nil {
 		return Transaction{}, err
 	}
-	return transactionFromProto(&record), nil
+	return transactionFromProto(record), nil
+}
+
+func marshalTransactionRecord(record *metastorev1.TransactionRecord) ([]byte, error) {
+	if err := validateSchemaVersion("transaction", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return protoMarshal.Marshal(record)
+}
+
+func unmarshalTransactionRecord(data []byte) (*metastorev1.TransactionRecord, error) {
+	var record metastorev1.TransactionRecord
+	if err := proto.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	if err := validateSchemaVersion("transaction", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func validateSchemaVersion(recordKind string, version uint32) error {
+	if version != CurrentSchemaVersion {
+		return fmt.Errorf("%w: %s record version %d", ErrUnsupportedSchemaVersion, recordKind, version)
+	}
+	return nil
 }
 
 func documentToProto(document Document) *metastorev1.DocumentRecord {
 	return &metastorev1.DocumentRecord{
+		SchemaVersion:               CurrentSchemaVersion,
 		TenantId:                    document.Identity.TenantID,
 		TransactionId:               document.Identity.TransactionID,
 		DocumentName:                document.Identity.DocumentName,
@@ -97,6 +144,7 @@ func documentFromProto(record *metastorev1.DocumentRecord) Document {
 
 func transactionToProto(transaction Transaction) *metastorev1.TransactionRecord {
 	return &metastorev1.TransactionRecord{
+		SchemaVersion:          CurrentSchemaVersion,
 		TenantId:               transaction.Identity.TenantID,
 		TransactionId:          transaction.Identity.TransactionID,
 		State:                  uint32(transaction.State),

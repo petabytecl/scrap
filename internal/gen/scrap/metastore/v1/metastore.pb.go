@@ -22,6 +22,116 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type RestoreState int32
+
+const (
+	RestoreState_RESTORE_STATE_UNSPECIFIED        RestoreState = 0
+	RestoreState_RESTORE_STATE_HOT                RestoreState = 1
+	RestoreState_RESTORE_STATE_COLD               RestoreState = 2
+	RestoreState_RESTORE_STATE_RESTORE_PENDING    RestoreState = 3
+	RestoreState_RESTORE_STATE_CRYPTO_UNAVAILABLE RestoreState = 4
+)
+
+// Enum value maps for RestoreState.
+var (
+	RestoreState_name = map[int32]string{
+		0: "RESTORE_STATE_UNSPECIFIED",
+		1: "RESTORE_STATE_HOT",
+		2: "RESTORE_STATE_COLD",
+		3: "RESTORE_STATE_RESTORE_PENDING",
+		4: "RESTORE_STATE_CRYPTO_UNAVAILABLE",
+	}
+	RestoreState_value = map[string]int32{
+		"RESTORE_STATE_UNSPECIFIED":        0,
+		"RESTORE_STATE_HOT":                1,
+		"RESTORE_STATE_COLD":               2,
+		"RESTORE_STATE_RESTORE_PENDING":    3,
+		"RESTORE_STATE_CRYPTO_UNAVAILABLE": 4,
+	}
+)
+
+func (x RestoreState) Enum() *RestoreState {
+	p := new(RestoreState)
+	*p = x
+	return p
+}
+
+func (x RestoreState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RestoreState) Descriptor() protoreflect.EnumDescriptor {
+	return file_scrap_metastore_v1_metastore_proto_enumTypes[0].Descriptor()
+}
+
+func (RestoreState) Type() protoreflect.EnumType {
+	return &file_scrap_metastore_v1_metastore_proto_enumTypes[0]
+}
+
+func (x RestoreState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RestoreState.Descriptor instead.
+func (RestoreState) EnumDescriptor() ([]byte, []int) {
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{0}
+}
+
+type UploadState int32
+
+const (
+	UploadState_UPLOAD_STATE_UNSPECIFIED  UploadState = 0
+	UploadState_UPLOAD_STATE_NOT_REQUIRED UploadState = 1
+	UploadState_UPLOAD_STATE_PENDING      UploadState = 2
+	UploadState_UPLOAD_STATE_UPLOADED     UploadState = 3
+	UploadState_UPLOAD_STATE_FAILED       UploadState = 4
+)
+
+// Enum value maps for UploadState.
+var (
+	UploadState_name = map[int32]string{
+		0: "UPLOAD_STATE_UNSPECIFIED",
+		1: "UPLOAD_STATE_NOT_REQUIRED",
+		2: "UPLOAD_STATE_PENDING",
+		3: "UPLOAD_STATE_UPLOADED",
+		4: "UPLOAD_STATE_FAILED",
+	}
+	UploadState_value = map[string]int32{
+		"UPLOAD_STATE_UNSPECIFIED":  0,
+		"UPLOAD_STATE_NOT_REQUIRED": 1,
+		"UPLOAD_STATE_PENDING":      2,
+		"UPLOAD_STATE_UPLOADED":     3,
+		"UPLOAD_STATE_FAILED":       4,
+	}
+)
+
+func (x UploadState) Enum() *UploadState {
+	p := new(UploadState)
+	*p = x
+	return p
+}
+
+func (x UploadState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (UploadState) Descriptor() protoreflect.EnumDescriptor {
+	return file_scrap_metastore_v1_metastore_proto_enumTypes[1].Descriptor()
+}
+
+func (UploadState) Type() protoreflect.EnumType {
+	return &file_scrap_metastore_v1_metastore_proto_enumTypes[1]
+}
+
+func (x UploadState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use UploadState.Descriptor instead.
+func (UploadState) EnumDescriptor() ([]byte, []int) {
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{1}
+}
+
 type DocumentRecord struct {
 	state                       protoimpl.MessageState `protogen:"open.v1"`
 	TenantId                    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -43,6 +153,12 @@ type DocumentRecord struct {
 	Tags                        map[string]string      `protobuf:"bytes,17,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Location                    *Location              `protobuf:"bytes,18,opt,name=location,proto3" json:"location,omitempty"`
 	ClientIdempotencyKey        *string                `protobuf:"bytes,19,opt,name=client_idempotency_key,json=clientIdempotencyKey,proto3,oneof" json:"client_idempotency_key,omitempty"`
+	SchemaVersion               uint32                 `protobuf:"varint,20,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ShardId                     string                 `protobuf:"bytes,21,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	CommittedIndex              uint64                 `protobuf:"varint,22,opt,name=committed_index,json=committedIndex,proto3" json:"committed_index,omitempty"`
+	EnvelopeRef                 *EnvelopeRef           `protobuf:"bytes,23,opt,name=envelope_ref,json=envelopeRef,proto3" json:"envelope_ref,omitempty"`
+	RestoreState                RestoreState           `protobuf:"varint,24,opt,name=restore_state,json=restoreState,proto3,enum=scrap.metastore.v1.RestoreState" json:"restore_state,omitempty"`
+	UploadState                 UploadState            `protobuf:"varint,25,opt,name=upload_state,json=uploadState,proto3,enum=scrap.metastore.v1.UploadState" json:"upload_state,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -210,14 +326,61 @@ func (x *DocumentRecord) GetClientIdempotencyKey() string {
 	return ""
 }
 
+func (x *DocumentRecord) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *DocumentRecord) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+func (x *DocumentRecord) GetCommittedIndex() uint64 {
+	if x != nil {
+		return x.CommittedIndex
+	}
+	return 0
+}
+
+func (x *DocumentRecord) GetEnvelopeRef() *EnvelopeRef {
+	if x != nil {
+		return x.EnvelopeRef
+	}
+	return nil
+}
+
+func (x *DocumentRecord) GetRestoreState() RestoreState {
+	if x != nil {
+		return x.RestoreState
+	}
+	return RestoreState_RESTORE_STATE_UNSPECIFIED
+}
+
+func (x *DocumentRecord) GetUploadState() UploadState {
+	if x != nil {
+		return x.UploadState
+	}
+	return UploadState_UPLOAD_STATE_UNSPECIFIED
+}
+
 type Location struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BlockId       string                 `protobuf:"bytes,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
-	StoredOffset  uint64                 `protobuf:"varint,2,opt,name=stored_offset,json=storedOffset,proto3" json:"stored_offset,omitempty"`
-	StoredLength  uint64                 `protobuf:"varint,3,opt,name=stored_length,json=storedLength,proto3" json:"stored_length,omitempty"`
-	Frames        []*FrameRecord         `protobuf:"bytes,4,rep,name=frames,proto3" json:"frames,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	BlockId           string                 `protobuf:"bytes,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	StoredOffset      uint64                 `protobuf:"varint,2,opt,name=stored_offset,json=storedOffset,proto3" json:"stored_offset,omitempty"`
+	StoredLength      uint64                 `protobuf:"varint,3,opt,name=stored_length,json=storedLength,proto3" json:"stored_length,omitempty"`
+	Frames            []*FrameRecord         `protobuf:"bytes,4,rep,name=frames,proto3" json:"frames,omitempty"`
+	Replicas          []*ReplicaRef          `protobuf:"bytes,5,rep,name=replicas,proto3" json:"replicas,omitempty"`
+	BackendObjectKey  *string                `protobuf:"bytes,6,opt,name=backend_object_key,json=backendObjectKey,proto3,oneof" json:"backend_object_key,omitempty"`
+	IndexObjectKey    *string                `protobuf:"bytes,7,opt,name=index_object_key,json=indexObjectKey,proto3,oneof" json:"index_object_key,omitempty"`
+	EnvelopeObjectKey *string                `protobuf:"bytes,8,opt,name=envelope_object_key,json=envelopeObjectKey,proto3,oneof" json:"envelope_object_key,omitempty"`
+	FormatVersion     uint32                 `protobuf:"varint,9,opt,name=format_version,json=formatVersion,proto3" json:"format_version,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Location) Reset() {
@@ -276,6 +439,41 @@ func (x *Location) GetFrames() []*FrameRecord {
 		return x.Frames
 	}
 	return nil
+}
+
+func (x *Location) GetReplicas() []*ReplicaRef {
+	if x != nil {
+		return x.Replicas
+	}
+	return nil
+}
+
+func (x *Location) GetBackendObjectKey() string {
+	if x != nil && x.BackendObjectKey != nil {
+		return *x.BackendObjectKey
+	}
+	return ""
+}
+
+func (x *Location) GetIndexObjectKey() string {
+	if x != nil && x.IndexObjectKey != nil {
+		return *x.IndexObjectKey
+	}
+	return ""
+}
+
+func (x *Location) GetEnvelopeObjectKey() string {
+	if x != nil && x.EnvelopeObjectKey != nil {
+		return *x.EnvelopeObjectKey
+	}
+	return ""
+}
+
+func (x *Location) GetFormatVersion() uint32 {
+	if x != nil {
+		return x.FormatVersion
+	}
+	return 0
 }
 
 type FrameRecord struct {
@@ -346,6 +544,150 @@ func (x *FrameRecord) GetSha256() []byte {
 	return nil
 }
 
+type ReplicaRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MemberId      string                 `protobuf:"bytes,1,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
+	BlockId       string                 `protobuf:"bytes,2,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	StoredOffset  uint64                 `protobuf:"varint,3,opt,name=stored_offset,json=storedOffset,proto3" json:"stored_offset,omitempty"`
+	StoredLength  uint64                 `protobuf:"varint,4,opt,name=stored_length,json=storedLength,proto3" json:"stored_length,omitempty"`
+	StoredSha256  []byte                 `protobuf:"bytes,5,opt,name=stored_sha256,json=storedSha256,proto3" json:"stored_sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicaRef) Reset() {
+	*x = ReplicaRef{}
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicaRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicaRef) ProtoMessage() {}
+
+func (x *ReplicaRef) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicaRef.ProtoReflect.Descriptor instead.
+func (*ReplicaRef) Descriptor() ([]byte, []int) {
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ReplicaRef) GetMemberId() string {
+	if x != nil {
+		return x.MemberId
+	}
+	return ""
+}
+
+func (x *ReplicaRef) GetBlockId() string {
+	if x != nil {
+		return x.BlockId
+	}
+	return ""
+}
+
+func (x *ReplicaRef) GetStoredOffset() uint64 {
+	if x != nil {
+		return x.StoredOffset
+	}
+	return 0
+}
+
+func (x *ReplicaRef) GetStoredLength() uint64 {
+	if x != nil {
+		return x.StoredLength
+	}
+	return 0
+}
+
+func (x *ReplicaRef) GetStoredSha256() []byte {
+	if x != nil {
+		return x.StoredSha256
+	}
+	return nil
+}
+
+type EnvelopeRef struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	EnvelopeId     string                 `protobuf:"bytes,1,opt,name=envelope_id,json=envelopeId,proto3" json:"envelope_id,omitempty"`
+	KeyId          string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	KeyVersion     uint32                 `protobuf:"varint,3,opt,name=key_version,json=keyVersion,proto3" json:"key_version,omitempty"`
+	EnvelopeSha256 []byte                 `protobuf:"bytes,4,opt,name=envelope_sha256,json=envelopeSha256,proto3" json:"envelope_sha256,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *EnvelopeRef) Reset() {
+	*x = EnvelopeRef{}
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnvelopeRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnvelopeRef) ProtoMessage() {}
+
+func (x *EnvelopeRef) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnvelopeRef.ProtoReflect.Descriptor instead.
+func (*EnvelopeRef) Descriptor() ([]byte, []int) {
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *EnvelopeRef) GetEnvelopeId() string {
+	if x != nil {
+		return x.EnvelopeId
+	}
+	return ""
+}
+
+func (x *EnvelopeRef) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *EnvelopeRef) GetKeyVersion() uint32 {
+	if x != nil {
+		return x.KeyVersion
+	}
+	return 0
+}
+
+func (x *EnvelopeRef) GetEnvelopeSha256() []byte {
+	if x != nil {
+		return x.EnvelopeSha256
+	}
+	return nil
+}
+
 type TransactionRecord struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	TenantId               string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -358,13 +700,16 @@ type TransactionRecord struct {
 	CompletedAt            *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=completed_at,json=completedAt,proto3,oneof" json:"completed_at,omitempty"`
 	TimeoutAt              *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=timeout_at,json=timeoutAt,proto3,oneof" json:"timeout_at,omitempty"`
 	Tags                   map[string]string      `protobuf:"bytes,10,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	SchemaVersion          uint32                 `protobuf:"varint,20,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ShardId                string                 `protobuf:"bytes,21,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	CommittedIndex         uint64                 `protobuf:"varint,22,opt,name=committed_index,json=committedIndex,proto3" json:"committed_index,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TransactionRecord) Reset() {
 	*x = TransactionRecord{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[3]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -376,7 +721,7 @@ func (x *TransactionRecord) String() string {
 func (*TransactionRecord) ProtoMessage() {}
 
 func (x *TransactionRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[3]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -389,7 +734,7 @@ func (x *TransactionRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransactionRecord.ProtoReflect.Descriptor instead.
 func (*TransactionRecord) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{3}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *TransactionRecord) GetTenantId() string {
@@ -462,11 +807,33 @@ func (x *TransactionRecord) GetTags() map[string]string {
 	return nil
 }
 
+func (x *TransactionRecord) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *TransactionRecord) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+func (x *TransactionRecord) GetCommittedIndex() uint64 {
+	if x != nil {
+		return x.CommittedIndex
+	}
+	return 0
+}
+
 var File_scrap_metastore_v1_metastore_proto protoreflect.FileDescriptor
 
 const file_scrap_metastore_v1_metastore_proto_rawDesc = "" +
 	"\n" +
-	"\"scrap/metastore/v1/metastore.proto\x12\x12scrap.metastore.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe7\a\n" +
+	"\"scrap/metastore/v1/metastore.proto\x12\x12scrap.metastore.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa1\n" +
+	"\n" +
 	"\x0eDocumentRecord\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0etransaction_id\x18\x02 \x01(\tR\rtransactionId\x12#\n" +
@@ -488,23 +855,51 @@ const file_scrap_metastore_v1_metastore_proto_rawDesc = "" +
 	"\x0flifecycle_state\x18\x10 \x01(\rR\x0elifecycleState\x12@\n" +
 	"\x04tags\x18\x11 \x03(\v2,.scrap.metastore.v1.DocumentRecord.TagsEntryR\x04tags\x128\n" +
 	"\blocation\x18\x12 \x01(\v2\x1c.scrap.metastore.v1.LocationR\blocation\x129\n" +
-	"\x16client_idempotency_key\x18\x13 \x01(\tH\x02R\x14clientIdempotencyKey\x88\x01\x01\x1a7\n" +
+	"\x16client_idempotency_key\x18\x13 \x01(\tH\x02R\x14clientIdempotencyKey\x88\x01\x01\x12%\n" +
+	"\x0eschema_version\x18\x14 \x01(\rR\rschemaVersion\x12\x19\n" +
+	"\bshard_id\x18\x15 \x01(\tR\ashardId\x12'\n" +
+	"\x0fcommitted_index\x18\x16 \x01(\x04R\x0ecommittedIndex\x12B\n" +
+	"\fenvelope_ref\x18\x17 \x01(\v2\x1f.scrap.metastore.v1.EnvelopeRefR\venvelopeRef\x12E\n" +
+	"\rrestore_state\x18\x18 \x01(\x0e2 .scrap.metastore.v1.RestoreStateR\frestoreState\x12B\n" +
+	"\fupload_state\x18\x19 \x01(\x0e2\x1f.scrap.metastore.v1.UploadStateR\vuploadState\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x0f\n" +
 	"\r_content_typeB\x11\n" +
 	"\x0f_workflow_stageB\x19\n" +
-	"\x17_client_idempotency_key\"\xa8\x01\n" +
+	"\x17_client_idempotency_key\"\xe6\x03\n" +
 	"\bLocation\x12\x19\n" +
 	"\bblock_id\x18\x01 \x01(\tR\ablockId\x12#\n" +
 	"\rstored_offset\x18\x02 \x01(\x04R\fstoredOffset\x12#\n" +
 	"\rstored_length\x18\x03 \x01(\x04R\fstoredLength\x127\n" +
-	"\x06frames\x18\x04 \x03(\v2\x1f.scrap.metastore.v1.FrameRecordR\x06frames\"\x96\x01\n" +
+	"\x06frames\x18\x04 \x03(\v2\x1f.scrap.metastore.v1.FrameRecordR\x06frames\x12:\n" +
+	"\breplicas\x18\x05 \x03(\v2\x1e.scrap.metastore.v1.ReplicaRefR\breplicas\x121\n" +
+	"\x12backend_object_key\x18\x06 \x01(\tH\x00R\x10backendObjectKey\x88\x01\x01\x12-\n" +
+	"\x10index_object_key\x18\a \x01(\tH\x01R\x0eindexObjectKey\x88\x01\x01\x123\n" +
+	"\x13envelope_object_key\x18\b \x01(\tH\x02R\x11envelopeObjectKey\x88\x01\x01\x12%\n" +
+	"\x0eformat_version\x18\t \x01(\rR\rformatVersionB\x15\n" +
+	"\x13_backend_object_keyB\x13\n" +
+	"\x11_index_object_keyB\x16\n" +
+	"\x14_envelope_object_key\"\x96\x01\n" +
 	"\vFrameRecord\x12!\n" +
 	"\fframe_offset\x18\x01 \x01(\x04R\vframeOffset\x12%\n" +
 	"\x0esegment_offset\x18\x02 \x01(\x04R\rsegmentOffset\x12%\n" +
 	"\x0esegment_length\x18\x03 \x01(\x04R\rsegmentLength\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\fR\x06sha256\"\xe5\x04\n" +
+	"\x06sha256\x18\x04 \x01(\fR\x06sha256\"\xb3\x01\n" +
+	"\n" +
+	"ReplicaRef\x12\x1b\n" +
+	"\tmember_id\x18\x01 \x01(\tR\bmemberId\x12\x19\n" +
+	"\bblock_id\x18\x02 \x01(\tR\ablockId\x12#\n" +
+	"\rstored_offset\x18\x03 \x01(\x04R\fstoredOffset\x12#\n" +
+	"\rstored_length\x18\x04 \x01(\x04R\fstoredLength\x12#\n" +
+	"\rstored_sha256\x18\x05 \x01(\fR\fstoredSha256\"\x8f\x01\n" +
+	"\vEnvelopeRef\x12\x1f\n" +
+	"\venvelope_id\x18\x01 \x01(\tR\n" +
+	"envelopeId\x12\x15\n" +
+	"\x06key_id\x18\x02 \x01(\tR\x05keyId\x12\x1f\n" +
+	"\vkey_version\x18\x03 \x01(\rR\n" +
+	"keyVersion\x12'\n" +
+	"\x0fenvelope_sha256\x18\x04 \x01(\fR\x0eenvelopeSha256\"\xd0\x05\n" +
 	"\x11TransactionRecord\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0etransaction_id\x18\x02 \x01(\tR\rtransactionId\x12\x14\n" +
@@ -518,12 +913,27 @@ const file_scrap_metastore_v1_metastore_proto_rawDesc = "" +
 	"\n" +
 	"timeout_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampH\x01R\ttimeoutAt\x88\x01\x01\x12C\n" +
 	"\x04tags\x18\n" +
-	" \x03(\v2/.scrap.metastore.v1.TransactionRecord.TagsEntryR\x04tags\x1a7\n" +
+	" \x03(\v2/.scrap.metastore.v1.TransactionRecord.TagsEntryR\x04tags\x12%\n" +
+	"\x0eschema_version\x18\x14 \x01(\rR\rschemaVersion\x12\x19\n" +
+	"\bshard_id\x18\x15 \x01(\tR\ashardId\x12'\n" +
+	"\x0fcommitted_index\x18\x16 \x01(\x04R\x0ecommittedIndex\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x0f\n" +
 	"\r_completed_atB\r\n" +
-	"\v_timeout_atBIZGgithub.com/petabytecl/scrap/internal/gen/scrap/metastore/v1;metastorev1b\x06proto3"
+	"\v_timeout_at*\xa5\x01\n" +
+	"\fRestoreState\x12\x1d\n" +
+	"\x19RESTORE_STATE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11RESTORE_STATE_HOT\x10\x01\x12\x16\n" +
+	"\x12RESTORE_STATE_COLD\x10\x02\x12!\n" +
+	"\x1dRESTORE_STATE_RESTORE_PENDING\x10\x03\x12$\n" +
+	" RESTORE_STATE_CRYPTO_UNAVAILABLE\x10\x04*\x98\x01\n" +
+	"\vUploadState\x12\x1c\n" +
+	"\x18UPLOAD_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19UPLOAD_STATE_NOT_REQUIRED\x10\x01\x12\x18\n" +
+	"\x14UPLOAD_STATE_PENDING\x10\x02\x12\x19\n" +
+	"\x15UPLOAD_STATE_UPLOADED\x10\x03\x12\x17\n" +
+	"\x13UPLOAD_STATE_FAILED\x10\x04BIZGgithub.com/petabytecl/scrap/internal/gen/scrap/metastore/v1;metastorev1b\x06proto3"
 
 var (
 	file_scrap_metastore_v1_metastore_proto_rawDescOnce sync.Once
@@ -537,31 +947,40 @@ func file_scrap_metastore_v1_metastore_proto_rawDescGZIP() []byte {
 	return file_scrap_metastore_v1_metastore_proto_rawDescData
 }
 
-var file_scrap_metastore_v1_metastore_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_scrap_metastore_v1_metastore_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_scrap_metastore_v1_metastore_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_scrap_metastore_v1_metastore_proto_goTypes = []any{
-	(*DocumentRecord)(nil),        // 0: scrap.metastore.v1.DocumentRecord
-	(*Location)(nil),              // 1: scrap.metastore.v1.Location
-	(*FrameRecord)(nil),           // 2: scrap.metastore.v1.FrameRecord
-	(*TransactionRecord)(nil),     // 3: scrap.metastore.v1.TransactionRecord
-	nil,                           // 4: scrap.metastore.v1.DocumentRecord.TagsEntry
-	nil,                           // 5: scrap.metastore.v1.TransactionRecord.TagsEntry
-	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
+	(RestoreState)(0),             // 0: scrap.metastore.v1.RestoreState
+	(UploadState)(0),              // 1: scrap.metastore.v1.UploadState
+	(*DocumentRecord)(nil),        // 2: scrap.metastore.v1.DocumentRecord
+	(*Location)(nil),              // 3: scrap.metastore.v1.Location
+	(*FrameRecord)(nil),           // 4: scrap.metastore.v1.FrameRecord
+	(*ReplicaRef)(nil),            // 5: scrap.metastore.v1.ReplicaRef
+	(*EnvelopeRef)(nil),           // 6: scrap.metastore.v1.EnvelopeRef
+	(*TransactionRecord)(nil),     // 7: scrap.metastore.v1.TransactionRecord
+	nil,                           // 8: scrap.metastore.v1.DocumentRecord.TagsEntry
+	nil,                           // 9: scrap.metastore.v1.TransactionRecord.TagsEntry
+	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
 }
 var file_scrap_metastore_v1_metastore_proto_depIdxs = []int32{
-	6, // 0: scrap.metastore.v1.DocumentRecord.created_at:type_name -> google.protobuf.Timestamp
-	6, // 1: scrap.metastore.v1.DocumentRecord.finalized_at:type_name -> google.protobuf.Timestamp
-	4, // 2: scrap.metastore.v1.DocumentRecord.tags:type_name -> scrap.metastore.v1.DocumentRecord.TagsEntry
-	1, // 3: scrap.metastore.v1.DocumentRecord.location:type_name -> scrap.metastore.v1.Location
-	2, // 4: scrap.metastore.v1.Location.frames:type_name -> scrap.metastore.v1.FrameRecord
-	6, // 5: scrap.metastore.v1.TransactionRecord.created_at:type_name -> google.protobuf.Timestamp
-	6, // 6: scrap.metastore.v1.TransactionRecord.completed_at:type_name -> google.protobuf.Timestamp
-	6, // 7: scrap.metastore.v1.TransactionRecord.timeout_at:type_name -> google.protobuf.Timestamp
-	5, // 8: scrap.metastore.v1.TransactionRecord.tags:type_name -> scrap.metastore.v1.TransactionRecord.TagsEntry
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	10, // 0: scrap.metastore.v1.DocumentRecord.created_at:type_name -> google.protobuf.Timestamp
+	10, // 1: scrap.metastore.v1.DocumentRecord.finalized_at:type_name -> google.protobuf.Timestamp
+	8,  // 2: scrap.metastore.v1.DocumentRecord.tags:type_name -> scrap.metastore.v1.DocumentRecord.TagsEntry
+	3,  // 3: scrap.metastore.v1.DocumentRecord.location:type_name -> scrap.metastore.v1.Location
+	6,  // 4: scrap.metastore.v1.DocumentRecord.envelope_ref:type_name -> scrap.metastore.v1.EnvelopeRef
+	0,  // 5: scrap.metastore.v1.DocumentRecord.restore_state:type_name -> scrap.metastore.v1.RestoreState
+	1,  // 6: scrap.metastore.v1.DocumentRecord.upload_state:type_name -> scrap.metastore.v1.UploadState
+	4,  // 7: scrap.metastore.v1.Location.frames:type_name -> scrap.metastore.v1.FrameRecord
+	5,  // 8: scrap.metastore.v1.Location.replicas:type_name -> scrap.metastore.v1.ReplicaRef
+	10, // 9: scrap.metastore.v1.TransactionRecord.created_at:type_name -> google.protobuf.Timestamp
+	10, // 10: scrap.metastore.v1.TransactionRecord.completed_at:type_name -> google.protobuf.Timestamp
+	10, // 11: scrap.metastore.v1.TransactionRecord.timeout_at:type_name -> google.protobuf.Timestamp
+	9,  // 12: scrap.metastore.v1.TransactionRecord.tags:type_name -> scrap.metastore.v1.TransactionRecord.TagsEntry
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_scrap_metastore_v1_metastore_proto_init() }
@@ -570,19 +989,21 @@ func file_scrap_metastore_v1_metastore_proto_init() {
 		return
 	}
 	file_scrap_metastore_v1_metastore_proto_msgTypes[0].OneofWrappers = []any{}
-	file_scrap_metastore_v1_metastore_proto_msgTypes[3].OneofWrappers = []any{}
+	file_scrap_metastore_v1_metastore_proto_msgTypes[1].OneofWrappers = []any{}
+	file_scrap_metastore_v1_metastore_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_metastore_v1_metastore_proto_rawDesc), len(file_scrap_metastore_v1_metastore_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   6,
+			NumEnums:      2,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_scrap_metastore_v1_metastore_proto_goTypes,
 		DependencyIndexes: file_scrap_metastore_v1_metastore_proto_depIdxs,
+		EnumInfos:         file_scrap_metastore_v1_metastore_proto_enumTypes,
 		MessageInfos:      file_scrap_metastore_v1_metastore_proto_msgTypes,
 	}.Build()
 	File_scrap_metastore_v1_metastore_proto = out.File

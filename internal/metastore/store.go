@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("metastore: not found")
-	ErrConflict = errors.New("metastore: conflict")
+	ErrNotFound                 = errors.New("metastore: not found")
+	ErrConflict                 = errors.New("metastore: conflict")
+	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
 )
 
 type Store struct {
