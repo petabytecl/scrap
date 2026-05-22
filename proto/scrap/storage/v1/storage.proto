@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package scrap.storage.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1;storagev1";
+
+message BlockHeader {
+  uint32 schema_version = 1;
+  string block_id = 2;
+  string shard_id = 3;
+  uint32 format_major = 4;
+  uint32 format_minor = 5;
+  uint32 header_length = 6;
+  uint32 frame_size = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message BlockIndex {
+  uint32 schema_version = 1;
+  string block_id = 2;
+  string shard_id = 3;
+  uint32 format_version = 4;
+  uint64 block_length = 5;
+  bytes block_sha256 = 6;
+  repeated IndexDocumentRecord documents = 7;
+  repeated FrameChecksumRecord frames = 8;
+  optional string envelope_object_key = 9;
+  bytes index_sha256 = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message IndexDocumentRecord {
+  uint64 document_key_id = 1;
+  uint64 transaction_key_id = 2;
+  bytes document_name_fingerprint = 3;
+  bytes document_identity_fingerprint = 4;
+  uint64 stored_offset = 5;
+  uint64 stored_length = 6;
+  uint64 logical_length = 7;
+  bytes logical_sha256 = 8;
+  bytes stored_sha256 = 9;
+  uint32 content_type_id = 10;
+  uint32 document_class = 11;
+  uint32 priority_class = 12;
+  uint64 created_at_ms = 13;
+  bytes metadata_blob = 14;
+  uint32 flags = 15;
+  bytes transaction_fingerprint = 16;
+  uint32 first_frame_index = 17;
+  uint32 last_frame_index = 18;
+}
+
+message DocumentMetadataBlob {
+  string tenant_id = 1;
+  string transaction_id = 2;
+  string document_name = 3;
+  optional string content_type = 4;
+  optional string workflow_stage = 5;
+  map<string, string> tags = 6;
+  optional string client_idempotency_key = 7;
+  string created_by_service = 8;
+}
+
+message FrameChecksumRecord {
+  uint32 frame_index = 1;
+  uint64 plaintext_offset = 2;
+  uint64 plaintext_length = 3;
+  uint64 stored_offset = 4;
+  uint64 stored_length = 5;
+  bytes plaintext_sha256 = 6;
+  bytes stored_sha256 = 7;
+  EncryptionMode encryption_mode = 8;
+  bytes auth_tag = 9;
+}
+
+enum EncryptionMode {
+  ENCRYPTION_MODE_UNSPECIFIED = 0;
+  ENCRYPTION_MODE_NONE = 1;
+  ENCRYPTION_MODE_AES_256_GCM = 2;
+  ENCRYPTION_MODE_XCHACHA20_POLY1305 = 3;
+}
+
+message EnvelopeRecord {
+  uint32 schema_version = 1;
+  string envelope_id = 2;
+  string block_id = 3;
+  string key_id = 4;
+  uint32 key_version = 5;
+  bytes wrapped_dek = 6;
+  string dek_algorithm = 7;
+  string aead_algorithm = 8;
+  bytes aad_context = 9;
+  bytes envelope_sha256 = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
