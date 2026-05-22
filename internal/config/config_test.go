@@ -95,6 +95,13 @@ func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testin
 			PublicListenAddress:   DefaultPublicListenAddress,
 			AdminListenAddress:    DefaultAdminListenAddress,
 			BackendUploadInterval: 0,
+			OperationRunInterval:  DefaultOperationRunInterval,
+		},
+		"non-positive operation interval": {
+			PublicListenAddress:   DefaultPublicListenAddress,
+			AdminListenAddress:    DefaultAdminListenAddress,
+			BackendUploadInterval: DefaultBackendUploadInterval,
+			OperationRunInterval:  0,
 		},
 	}
 

@@ -14,11 +14,14 @@ import (
 	"github.com/petabytecl/scrap/internal/api"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/blockstore"
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
@@ -640,6 +643,109 @@ func TestDuplicateWriteWithoutMatchingIdempotencyKeyIsConflict(t *testing.T) {
 	requireCode(t, err, codes.AlreadyExists)
 }
 
+func TestRunQueuedOperationsOnceAppliesDocumentTombstone(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("delete me")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	operation := queuedTombstoneOperation("tombstone-op-1", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Document{
+				Document: &adminv1.DocumentTarget{
+					TenantId:      doc.TenantID,
+					TransactionId: doc.TransactionID,
+					DocumentName:  doc.DocumentName,
+				},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one success", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetFinishedAt() == nil ||
+		finished.GetProgress().GetWorkUnitsCompleted() != 1 {
+		t.Fatalf("finished operation = %#v, want succeeded", finished)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head document: %v", err)
+	}
+	if stored.LifecycleState != metastore.LifecycleStateTombstoned ||
+		stored.TombstoneOperationID != operation.GetOperationId() {
+		t.Fatalf("stored document = %#v, want tombstoned by operation", stored)
+	}
+}
+
+func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	first := testDocumentIdentity()
+	second := identity.Document{TenantID: first.TenantID, TransactionID: first.TransactionID, DocumentName: "summary.pdf"}
+	for _, doc := range []identity.Document{first, second} {
+		if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+			Identity:         doc,
+			DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+			PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+			CreatedByService: "billing-etl",
+		}, newChunkReader([][]byte{[]byte(doc.DocumentName)})); err != nil {
+			t.Fatalf("write document %s: %v", doc.DocumentName, err)
+		}
+	}
+	operation := queuedTombstoneOperation("tombstone-op-2", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Transaction{
+				Transaction: &adminv1.TransactionTarget{
+					TenantId:      first.TenantID,
+					TransactionId: first.TransactionID,
+				},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one success", result)
+	}
+	for _, doc := range []identity.Document{first, second} {
+		stored, err := app.metadata.HeadDocument(doc)
+		if err != nil {
+			t.Fatalf("head document %s: %v", doc.DocumentName, err)
+		}
+		if stored.LifecycleState != metastore.LifecycleStateTombstoned ||
+			stored.TombstoneOperationID != operation.GetOperationId() {
+			t.Fatalf("stored document %s = %#v, want tombstoned by operation", doc.DocumentName, stored)
+		}
+	}
+}
+
 func openTestApplication(t *testing.T) *Application {
 	t.Helper()
 	app, err := Open(t.TempDir())
@@ -652,6 +758,32 @@ func openTestApplication(t *testing.T) *Application {
 		}
 	})
 	return app
+}
+
+func openTestOperationStore(t *testing.T) *operations.Store {
+	t.Helper()
+	store, err := operations.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close operation store: %v", err)
+		}
+	})
+	return store
+}
+
+func queuedTombstoneOperation(operationID string, targets []*adminv1.Target) *adminv1.Operation {
+	return &adminv1.Operation{
+		OperationId:         operationID,
+		OperationType:       "tombstone",
+		State:               adminv1.OperationState_OPERATION_STATE_QUEUED,
+		RequestedByIdentity: "test",
+		RequestedAt:         timestamppb.New(time.Unix(300, 0).UTC()),
+		Targets:             targets,
+		Progress:            &adminv1.OperationProgress{Message: "queued"},
+	}
 }
 
 func testDocumentIdentity() identity.Document {

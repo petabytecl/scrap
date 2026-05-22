@@ -12,6 +12,7 @@ const (
 	DefaultPublicListenAddress   = "127.0.0.1:18080"
 	DefaultAdminListenAddress    = "127.0.0.1:18081"
 	DefaultBackendUploadInterval = 30 * time.Second
+	DefaultOperationRunInterval  = 5 * time.Second
 )
 
 type Config struct {
@@ -22,6 +23,7 @@ type Config struct {
 	EnableLocalFilesystemBackend    bool
 	LocalBackendDataDir             string
 	BackendUploadInterval           time.Duration
+	OperationRunInterval            time.Duration
 }
 
 func Default() Config {
@@ -29,6 +31,7 @@ func Default() Config {
 		PublicListenAddress:   DefaultPublicListenAddress,
 		AdminListenAddress:    DefaultAdminListenAddress,
 		BackendUploadInterval: DefaultBackendUploadInterval,
+		OperationRunInterval:  DefaultOperationRunInterval,
 	}
 }
 
@@ -51,6 +54,9 @@ func (c Config) Validate() error {
 	}
 	if c.BackendUploadInterval <= 0 {
 		return errors.New("backend_upload_interval must be positive")
+	}
+	if c.OperationRunInterval <= 0 {
+		return errors.New("operation_run_interval must be positive")
 	}
 	if c.EnableLocalFilesystemBackend {
 		if !c.EnableLocalNonProductionStorage {

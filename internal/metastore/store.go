@@ -193,7 +193,11 @@ func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 	if existingValue, ok, err := s.get(key); err != nil {
 		return err
 	} else if ok {
-		if bytes.Equal(existingValue, value) {
+		existing, err := unmarshalUploadIntent(existingValue)
+		if err != nil {
+			return err
+		}
+		if sameUploadIntentDestination(existing, intent) {
 			return nil
 		}
 		return fmt.Errorf("%w: upload intent already exists with different metadata", ErrConflict)
@@ -516,6 +520,13 @@ func validateUploadIntentState(state UploadState) error {
 	default:
 		return fmt.Errorf("metastore: unsupported upload intent state %d", state)
 	}
+}
+
+func sameUploadIntentDestination(left UploadIntent, right UploadIntent) bool {
+	return left.BlockID == right.BlockID &&
+		left.BackendObjectKey == right.BackendObjectKey &&
+		left.IndexObjectKey == right.IndexObjectKey &&
+		left.EnvelopeObjectKey == right.EnvelopeObjectKey
 }
 
 func availabilityFromRestoreState(state RestoreState) (Availability, error) {

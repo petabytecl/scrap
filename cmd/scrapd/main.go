@@ -6,6 +6,7 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
+	"time"
 
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/backendupload"
@@ -24,6 +25,7 @@ func main() {
 	flag.BoolVar(&cfg.EnableLocalFilesystemBackend, "enable-local-filesystem-backend", cfg.EnableLocalFilesystemBackend, "enable local filesystem backend upload for non-production storage")
 	flag.StringVar(&cfg.LocalBackendDataDir, "local-backend-data-dir", cfg.LocalBackendDataDir, "local filesystem backend data directory for explicitly enabled non-production backend upload")
 	flag.DurationVar(&cfg.BackendUploadInterval, "backend-upload-interval", cfg.BackendUploadInterval, "interval for non-production backend upload scans")
+	flag.DurationVar(&cfg.OperationRunInterval, "operation-run-interval", cfg.OperationRunInterval, "interval for non-production queued operation scans")
 	flag.Parse()
 
 	if err := cfg.Validate(); err != nil {
@@ -79,6 +81,9 @@ func main() {
 
 	log.Printf("public grpc listening on %s", server.PublicAddress())
 	log.Printf("admin grpc listening on %s", server.AdminAddress())
+	if cfg.EnableLocalNonProductionStorage {
+		go runOperationLoop(ctx, apps, cfg.OperationRunInterval)
+	}
 	if uploadRunner != nil {
 		go func() {
 			if err := uploadRunner.Run(ctx); err != nil {
@@ -89,6 +94,47 @@ func main() {
 	if err := server.Serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+func runOperationLoop(ctx context.Context, apps node.Applications, interval time.Duration) {
+	if apps.Operations == nil {
+		return
+	}
+	localApp, ok := apps.Documents.(*localstorage.Application)
+	if !ok || localApp == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		result, err := localApp.RunQueuedOperationsOnce(ctx, apps.Operations)
+		if err != nil && ctx.Err() != nil {
+			return
+		}
+		logOperationRunReport(result, err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func logOperationRunReport(result localstorage.OperationRunResult, err error) {
+	if err != nil {
+		log.Printf("operation scan failed: %v", err)
+		return
+	}
+	if result.Scanned == 0 {
+		return
+	}
+	log.Printf(
+		"operation scan: scanned=%d skipped=%d succeeded=%d failed=%d",
+		result.Scanned,
+		result.Skipped,
+		result.Succeeded,
+		result.Failed,
+	)
 }
 
 func logBackendUploadReport(result backendupload.RunResult, err error) {

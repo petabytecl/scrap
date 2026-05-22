@@ -195,8 +195,17 @@ func TestRecordUploadIntentIsIdempotentAndConflictsOnDifferentKeys(t *testing.T)
 	if err := store.RecordUploadIntent(intent); err != nil {
 		t.Fatalf("record upload intent: %v", err)
 	}
-	if err := store.RecordUploadIntent(intent); err != nil {
-		t.Fatalf("idempotent upload intent: %v", err)
+	replayed := intent
+	replayed.UpdatedAt = replayed.UpdatedAt.Add(time.Minute)
+	if err := store.RecordUploadIntent(replayed); err != nil {
+		t.Fatalf("idempotent upload intent replay: %v", err)
+	}
+	got, err := store.GetUploadIntent(intent.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if !got.UpdatedAt.Equal(intent.UpdatedAt) {
+		t.Fatalf("updated_at = %v, want original %v", got.UpdatedAt, intent.UpdatedAt)
 	}
 	conflict := intent
 	conflict.BackendObjectKey = "other-object"
