@@ -573,6 +573,87 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("repair me from backend")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{}); err != nil {
+		t.Fatalf("read with backend fallback: %v", err)
+	}
+	operation := queuedOperation("repair-op-1", "repair", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Document{
+				Document: &adminv1.DocumentTarget{
+					TenantId:      doc.TenantID,
+					TransactionId: doc.TransactionID,
+					DocumentName:  doc.DocumentName,
+				},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one repair success", result)
+	}
+	queue, err := app.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue = %#v, want resolved repair", queue)
+	}
+	sender := &recordingReadSender{}
+	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read repaired document: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
+		t.Fatalf("read source = %s, want repaired local", sender.metadata.Source)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("repaired bytes = %q, want %q", got, data)
+	}
+}
+
 func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)

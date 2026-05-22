@@ -263,7 +263,7 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 		return mapError(err)
 	}
 	if isIntegrityFailure(localErr) {
-		if err := a.recordRepairState(ctx, document); err != nil {
+		if err := a.recordDocumentRepairState(ctx, document, integrityEvidenceID(document), true, a.now()); err != nil {
 			return err
 		}
 	}
@@ -623,16 +623,18 @@ func integrityEvidenceID(document metastore.Document) string {
 	)
 }
 
-func (a *Application) recordRepairState(ctx context.Context, document metastore.Document) error {
-	incidentID := integrityEvidenceID(document)
-	now := a.now()
+func (a *Application) recordDocumentRepairState(ctx context.Context, document metastore.Document, incidentID string, quarantined bool, now time.Time) error {
 	return a.authority.RecordRepairState(ctx, metastore.RepairState{
 		Identity:    document.Identity,
-		PhysicalRef: fmt.Sprintf("local/%s/%d/%d", document.Location.BlockID, document.Location.StoredOffset, document.Location.StoredLength),
+		PhysicalRef: repairPhysicalRef(document),
 		IncidentID:  incidentID,
-		Quarantined: true,
+		Quarantined: quarantined,
 		UpdatedAt:   now,
-	}, stableCommandID("record-repair-state", incidentID), now)
+	}, stableCommandID("record-repair-state", incidentID, fmt.Sprintf("%t", quarantined)), now)
+}
+
+func repairPhysicalRef(document metastore.Document) string {
+	return fmt.Sprintf("local/%s/%d/%d", document.Location.BlockID, document.Location.StoredOffset, document.Location.StoredLength)
 }
 
 func documentToAPI(document metastore.Document) api.DocumentMetadata {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -44,6 +45,8 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runTombstoneOperation(ctx, store, operation)
 		case "restore", "prewarm":
 			succeeded, err = a.runRestoreOperation(ctx, store, operation)
+		case "repair":
+			succeeded, err = a.runRepairOperation(ctx, store, operation)
 		default:
 			result.Skipped++
 			continue
@@ -96,6 +99,167 @@ func (a *Application) runTombstoneOperation(ctx context.Context, store *operatio
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *Application) runRepairOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running repair operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	workUnits, err := a.applyRepairOperation(ctx, running, now)
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "repair operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_REPAIR_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(workUnits),
+		WorkUnitsCompleted: uint64(workUnits),
+		Message:            "repair operation succeeded",
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) applyRepairOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {
+	if operation.GetDryRun() {
+		return len(operation.GetTargets()), nil
+	}
+	repairs, err := a.repairTargets(operation)
+	if err != nil {
+		return 0, err
+	}
+	blockIDs := make(map[string]bool)
+	for _, repair := range repairs {
+		document, err := a.metadata.HeadDocument(repair.Identity)
+		if err != nil {
+			return 0, err
+		}
+		blockIDs[document.Location.BlockID] = true
+	}
+	for blockID := range blockIDs {
+		if err := a.replaceBlockFromBackend(ctx, blockID); err != nil {
+			return 0, err
+		}
+	}
+	for _, repair := range repairs {
+		document, err := a.metadata.HeadDocument(repair.Identity)
+		if err != nil {
+			return 0, err
+		}
+		if err := a.recordDocumentRepairState(ctx, document, repair.IncidentID, false, now); err != nil {
+			return 0, err
+		}
+	}
+	return len(repairs), nil
+}
+
+func (a *Application) repairTargets(operation *adminv1.Operation) ([]metastore.RepairState, error) {
+	states, err := a.metadata.ListRepairStates()
+	if err != nil {
+		return nil, err
+	}
+	var repairs []metastore.RepairState
+	seen := make(map[string]bool)
+	add := func(state metastore.RepairState) {
+		if !state.Quarantined {
+			return
+		}
+		key := state.Identity.TenantID + "\x00" + state.Identity.TransactionID + "\x00" + state.Identity.DocumentName + "\x00" + state.IncidentID
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		repairs = append(repairs, state)
+	}
+	for _, target := range operation.GetTargets() {
+		switch typed := target.GetTarget().(type) {
+		case *adminv1.Target_Document:
+			doc := adminDocumentIdentity(typed.Document)
+			for _, state := range states {
+				if state.Identity == doc {
+					add(state)
+				}
+			}
+		case *adminv1.Target_Block:
+			if typed.Block.GetShardId() != "local" {
+				return nil, metastore.ErrNotFound
+			}
+			for _, state := range states {
+				if !state.Quarantined {
+					continue
+				}
+				document, err := a.metadata.HeadDocument(state.Identity)
+				if err != nil {
+					return nil, err
+				}
+				if document.Location.BlockID == typed.Block.GetBlockId() {
+					add(state)
+				}
+			}
+		case *adminv1.Target_Shard:
+			if typed.Shard.GetShardId() != "local" {
+				return nil, metastore.ErrNotFound
+			}
+			for _, state := range states {
+				add(state)
+			}
+		case *adminv1.Target_StorageMember:
+			if typed.StorageMember.GetStorageMemberId() != "local" {
+				return nil, metastore.ErrNotFound
+			}
+			for _, state := range states {
+				add(state)
+			}
+		default:
+			return nil, fmt.Errorf("localstorage: unsupported repair target %T", target.GetTarget())
+		}
+	}
+	if len(repairs) == 0 {
+		return nil, metastore.ErrNotFound
+	}
+	return repairs, nil
+}
+
+func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID string) error {
+	if a.backendStore == nil {
+		return fmt.Errorf("localstorage: backend store is not configured")
+	}
+	intent, err := a.metadata.GetUploadIntent(blockID)
+	if err != nil {
+		return err
+	}
+	if intent.State != metastore.UploadStateUploaded {
+		return fmt.Errorf("localstorage: block %s is not uploaded", blockID)
+	}
+	if _, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey); err != nil {
+		return err
+	}
+	if err := os.Remove(a.blocks.BlockPath(blockID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(a.blocks.SealPath(blockID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return a.restoreBlockFromBackend(ctx, blockID)
 }
 
 func (a *Application) runRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {

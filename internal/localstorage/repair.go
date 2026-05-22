@@ -21,6 +21,9 @@ func (a *Application) GetRepairQueue(ctx context.Context, shardID string) ([]*ad
 	}
 	items := make([]*adminv1.RepairQueueItem, 0, len(states))
 	for _, state := range states {
+		if !state.Quarantined {
+			continue
+		}
 		items = append(items, repairQueueItem(state))
 	}
 	return items, nil
