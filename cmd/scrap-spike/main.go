@@ -19,6 +19,7 @@ func main() {
 	flag.Int64Var(&cfg.Seed, "seed", 1, "synthetic workload seed")
 	flag.BoolVar(&cfg.ReadBack, "read-back", true, "read every committed document and verify its checksum")
 	flag.BoolVar(&cfg.UseRaftBarrier, "raft-barrier", false, "gate visible metadata behind an in-process single-node Raft commit barrier")
+	flag.BoolVar(&cfg.UseDurableRaftBarrier, "raft-durable-barrier", false, "gate visible metadata behind an fsynced single-node Raft commit barrier")
 	flag.BoolVar(&cfg.UseRaftClusterBarrier, "raft-cluster-barrier", false, "gate visible metadata behind an in-process three-node Raft commit barrier")
 	flag.Parse()
 

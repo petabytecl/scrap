@@ -21,7 +21,8 @@ The spike should include:
 - real Pebble metadata commits;
 - SHA-256 checksums for written and read bytes;
 - a minimal `.blk` and `.openlog` shape;
-- fake, single-node Raft, and three-node in-process Raft commit barriers;
+- fake, single-node Raft, durable single-node Raft, and three-node in-process
+  Raft commit barriers;
 - a synthetic ETL workload with 2 to 7 documents per transaction;
 - immediate `HeadDocument` and `ReadDocument` checks after finalize;
 - a concise latency and runtime report.
@@ -35,7 +36,7 @@ durability boundaries, memory shape, and read-after-finalize behavior.
 The spike does not decide or implement:
 
 - the production protobuf schema;
-- production Raft log persistence, restart, membership, snapshots, or ReadIndex;
+- production Raft log persistence, membership, snapshots, or ReadIndex;
 - peer byte replication;
 - OpenBao integration;
 - backend upload;
@@ -87,6 +88,7 @@ Useful variants:
 go run ./cmd/scrap-spike -transactions 500 -concurrency 16
 go run ./cmd/scrap-spike -dir /tmp/scrap-spike -transactions 1000
 make spike-write-path-raft
+make spike-write-path-raft-durable
 make spike-write-path-raft-cluster
 ```
 
@@ -115,15 +117,15 @@ bytes_written: 320022481
 bytes_read: 320022481
 invariant_errors: 0
 
-write_ack: n=112 p50=7.13405ms p95=53.911162ms p99=239.181412ms
-head_document: n=112 p50=189.533µs p95=701.592µs p99=978.664µs
-read_first_byte: n=112 p50=831.498µs p95=5.70274ms p99=14.858788ms
-read_full: n=112 p50=864.059µs p95=13.975753ms p99=46.485733ms
+write_ack: n=112 p50=6.536024ms p95=66.167901ms p99=244.91516ms
+head_document: n=112 p50=228.064µs p95=852.351µs p99=1.153359ms
+read_first_byte: n=112 p50=847.78µs p95=7.428147ms p99=14.196865ms
+read_full: n=112 p50=884.634µs p95=20.262093ms p99=58.064268ms
 
-heap_alloc: 14717536
-total_alloc: 3948168656
-gc_cycles: 245
-gc_pause_total_ns: 39595021
+heap_alloc: 4245768
+total_alloc: 3944113904
+gc_cycles: 235
+gc_pause_total_ns: 41742752
 goroutines: 39
 ```
 
@@ -289,15 +291,15 @@ bytes_written: 320022481
 bytes_read: 320022481
 invariant_errors: 0
 
-write_ack: n=112 p50=6.989369ms p95=54.949683ms p99=237.995249ms
-head_document: n=112 p50=209.914µs p95=725.381µs p99=1.103282ms
-read_first_byte: n=112 p50=955.127µs p95=6.718251ms p99=15.190404ms
-read_full: n=112 p50=1.00124ms p95=14.817152ms p99=50.556805ms
+write_ack: n=112 p50=7.073075ms p95=64.744472ms p99=264.173843ms
+head_document: n=112 p50=215.137µs p95=631.897µs p99=862.845µs
+read_first_byte: n=112 p50=939.565µs p95=7.424631ms p99=16.065204ms
+read_full: n=112 p50=972.409µs p95=15.948132ms p99=51.902272ms
 
-heap_alloc: 18027552
-total_alloc: 3945480944
-gc_cycles: 241
-gc_pause_total_ns: 41992800
+heap_alloc: 35784360
+total_alloc: 3955276728
+gc_cycles: 243
+gc_pause_total_ns: 45649849
 goroutines: 41
 ```
 
@@ -307,6 +309,82 @@ Interpretation:
 - The default workload still has zero invariant errors with Raft gating enabled.
 - This is not quorum evidence yet; it proves only the local Ready/Advance
   integration and the store ordering around the metadata visibility barrier.
+
+### Durable single-node Raft replay
+
+The spike now has a prototype durable single-node Raft log. It writes Raft
+`HardState`, entries, and snapshots to a JSONL file with per-record CRC32C and
+fsyncs the file before applying committed document records.
+
+Current tested behavior:
+
+- a committed document record is replayed after closing and reopening the Raft
+  barrier;
+- the reopened barrier can continue accepting new writes without reusing command
+  IDs;
+- if Pebble metadata is deleted, the visible metadata projection can be rebuilt
+  from the replayed Raft document records and the existing block bytes remain
+  readable;
+- a corrupted durable log record is rejected on restart instead of silently
+  rebuilding from suspect consensus metadata.
+
+This sharpens the source-of-truth boundary: Raft metadata is the intended
+authority for document visibility and physical refs; Pebble is a derived local
+projection that must be rebuildable.
+
+Limitations:
+
+- the durable log format is prototype JSONL with per-record CRC, not a
+  production WAL;
+- torn-write salvage, compaction, snapshots, and multi-node restart are still
+  not modeled;
+- the durable replay slice is single-node only, so it does not replace the
+  three-node quorum harness.
+
+### Run 4: durable single-node Raft barrier
+
+Date: 2026-05-22
+
+Command:
+
+```bash
+make spike-write-path-raft-durable
+```
+
+Result:
+
+```text
+transactions: 25
+documents_planned: 112
+documents_completed: 112
+concurrency: 4
+chunk_size: 1048576
+raft_barrier: true
+raft_barrier_mode: single-node-durable
+raft_leader: 1
+raft_applied_commands: 112
+bytes_written: 320022481
+bytes_read: 320022481
+invariant_errors: 0
+
+write_ack: n=112 p50=7.46095ms p95=59.284165ms p99=257.463001ms
+head_document: n=112 p50=206.803µs p95=752.481µs p99=912.763µs
+read_first_byte: n=112 p50=959.17µs p95=6.364686ms p99=17.091983ms
+read_full: n=112 p50=975.63µs p95=16.017114ms p99=50.920083ms
+
+heap_alloc: 21254424
+total_alloc: 3946560440
+gc_cycles: 231
+gc_pause_total_ns: 46286286
+goroutines: 41
+```
+
+Interpretation:
+
+- The default workload completed cleanly while each Raft Ready batch was written
+  to the prototype durable log and fsynced.
+- The restart/rebuild behavior is covered by tests rather than this one-shot
+  runner.
 
 ### Three-node Raft cluster harness
 
@@ -320,7 +398,11 @@ testing the behaviors that matter to the metadata visibility contract:
 - with one leader/follower link dropped, the document can still commit through
   the remaining quorum and the dropped follower catches up after the link heals;
 - after isolating the old leader and campaigning a new one, writes continue
-  through the new leader and remain immediately readable after ACK.
+  through the new leader and remain immediately readable after ACK;
+- Raft ReadIndex succeeds with a healthy quorum, fails closed while the leader
+  is isolated from both followers, and succeeds again after quorum is restored;
+- in three-node cluster mode, `HeadDocument` and `ReadDocument` pass the
+  ReadIndex freshness barrier before serving metadata.
 
 This is stronger evidence for the commit ordering rule:
 
@@ -342,10 +424,12 @@ Limitations that still matter:
 - node restart from persisted Raft state is not modeled;
 - message loss is deterministic drop/isolate behavior, not real transport;
 - cluster membership and snapshots are not modeled;
+- ReadIndex is wired only for the three-node cluster spike mode; follower read
+  routing and redirect behavior are not modeled yet;
 - each document waits for quorum-applied metadata before ACK, which is stricter
   than the minimum Raft commit point and acceptable for this prototype evidence.
 
-### Run 4: three-node Raft cluster barrier
+### Run 5: three-node Raft cluster barrier
 
 Date: 2026-05-22
 
@@ -371,15 +455,15 @@ bytes_written: 320022481
 bytes_read: 320022481
 invariant_errors: 0
 
-write_ack: n=112 p50=6.408025ms p95=57.441061ms p99=237.804679ms
-head_document: n=112 p50=237.282µs p95=756.497µs p99=977.719µs
-read_first_byte: n=112 p50=841.312µs p95=6.410452ms p99=13.77898ms
-read_full: n=112 p50=864.558µs p95=17.746044ms p99=49.049889ms
+write_ack: n=112 p50=6.907994ms p95=53.428583ms p99=238.905015ms
+head_document: n=112 p50=196.989µs p95=565.552µs p99=821.031µs
+read_first_byte: n=112 p50=766.366µs p95=6.233301ms p99=13.92309ms
+read_full: n=112 p50=798.648µs p95=17.561067ms p99=50.02302ms
 
-heap_alloc: 15760944
-total_alloc: 3943131072
-gc_cycles: 243
-gc_pause_total_ns: 39824259
+heap_alloc: 19958448
+total_alloc: 3948474384
+gc_cycles: 245
+gc_pause_total_ns: 37525859
 goroutines: 40
 ```
 

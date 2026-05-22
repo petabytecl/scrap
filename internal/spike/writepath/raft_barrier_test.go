@@ -1,6 +1,10 @@
 package writepath
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +70,138 @@ func TestStoreClosedRaftCommitBarrierLeavesDocumentInvisibleAfterReopen(t *testi
 
 	reopened := openStoreAt(t, dir)
 	assertNotFound(t, reopened, "tenant-a", "tx-016", "raft-closed.xml")
+}
+
+func TestDurableRaftCommitBarrierReplaysCommittedRecordsAndContinuesWrites(t *testing.T) {
+	dir := t.TempDir()
+	raftDir := filepath.Join(dir, "raft")
+	storeDir := filepath.Join(dir, "store")
+
+	barrier, err := NewDurableRaftCommitBarrier(raftDir)
+	if err != nil {
+		t.Fatalf("new durable raft barrier: %v", err)
+	}
+	store := openStoreAtWithOptions(t, storeDir, StoreOptions{
+		MetadataCommitBarrier: barrier,
+	})
+
+	firstData := []byte("durable raft replay record")
+	first := writeTestDocument(t, store, "tx-017", "durable-first.xml", firstData)
+	closeTestStore(t, store)
+	if err := barrier.Close(); err != nil {
+		t.Fatalf("close durable raft barrier: %v", err)
+	}
+
+	replayed, err := NewDurableRaftCommitBarrier(raftDir)
+	if err != nil {
+		t.Fatalf("reopen durable raft barrier: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := replayed.Close(); err != nil {
+			t.Fatalf("close replayed durable raft barrier: %v", err)
+		}
+	})
+
+	committed, ok := replayed.CommittedDocument("tenant-a", "tx-017", "durable-first.xml")
+	if !ok {
+		t.Fatal("replayed barrier did not restore committed document")
+	}
+	assertCommittedRecordMatchesWrite(t, committed, first, firstData)
+
+	reopenedStore := openStoreAtWithOptions(t, storeDir, StoreOptions{
+		MetadataCommitBarrier: replayed,
+	})
+	secondData := []byte("write after durable raft replay")
+	second := writeTestDocument(t, reopenedStore, "tx-017", "durable-second.xml", secondData)
+	assertReadDocument(t, reopenedStore, "tenant-a", "tx-017", "durable-second.xml", secondData)
+
+	committed, ok = replayed.CommittedDocument("tenant-a", "tx-017", "durable-second.xml")
+	if !ok {
+		t.Fatal("replayed barrier did not commit second document")
+	}
+	assertCommittedRecordMatchesWrite(t, committed, second, secondData)
+	if got := replayed.AppliedCount(); got != 2 {
+		t.Fatalf("durable raft applied count = %d, want 2", got)
+	}
+}
+
+func TestStoreProjectionCanRebuildFromDurableRaftLogAfterPebbleLoss(t *testing.T) {
+	dir := t.TempDir()
+	raftDir := filepath.Join(dir, "raft")
+	storeDir := filepath.Join(dir, "store")
+
+	barrier, err := NewDurableRaftCommitBarrier(raftDir)
+	if err != nil {
+		t.Fatalf("new durable raft barrier: %v", err)
+	}
+	store := openStoreAtWithOptions(t, storeDir, StoreOptions{
+		MetadataCommitBarrier: barrier,
+	})
+
+	data := []byte("rebuild visible projection from raft")
+	writeTestDocument(t, store, "tx-018", "projection-rebuild.xml", data)
+	closeTestStore(t, store)
+	if err := barrier.Close(); err != nil {
+		t.Fatalf("close durable raft barrier: %v", err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(storeDir, "metadata")); err != nil {
+		t.Fatalf("remove pebble metadata projection: %v", err)
+	}
+
+	replayed, err := NewDurableRaftCommitBarrier(raftDir)
+	if err != nil {
+		t.Fatalf("reopen durable raft barrier: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := replayed.Close(); err != nil {
+			t.Fatalf("close replayed durable raft barrier: %v", err)
+		}
+	})
+
+	rebuildingStore := openStoreAtWithOptions(t, storeDir, StoreOptions{
+		MetadataCommitBarrier: replayed,
+	})
+	if err := rebuildingStore.RebuildMetadataProjection(replayed.CommittedDocuments()); err != nil {
+		t.Fatalf("rebuild metadata projection: %v", err)
+	}
+	assertReadDocument(t, rebuildingStore, "tenant-a", "tx-018", "projection-rebuild.xml", data)
+}
+
+func TestDurableRaftCommitBarrierRejectsCorruptLogRecord(t *testing.T) {
+	dir := t.TempDir()
+	raftDir := filepath.Join(dir, "raft")
+	storeDir := filepath.Join(dir, "store")
+
+	barrier, err := NewDurableRaftCommitBarrier(raftDir)
+	if err != nil {
+		t.Fatalf("new durable raft barrier: %v", err)
+	}
+	store := openStoreAtWithOptions(t, storeDir, StoreOptions{
+		MetadataCommitBarrier: barrier,
+	})
+	writeTestDocument(t, store, "tx-019", "corrupt-raft-log.xml", []byte("log checksum detects corruption"))
+	closeTestStore(t, store)
+	if err := barrier.Close(); err != nil {
+		t.Fatalf("close durable raft barrier: %v", err)
+	}
+
+	path := filepath.Join(raftDir, raftDiskLogFile)
+	logBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read raft log: %v", err)
+	}
+	corrupted := bytes.Replace(logBytes, []byte(`"crc32c":"`), []byte(`"crc32c":"00000000`), 1)
+	if bytes.Equal(corrupted, logBytes) {
+		t.Fatal("test did not corrupt raft log checksum")
+	}
+	if err := os.WriteFile(path, corrupted, 0o600); err != nil {
+		t.Fatalf("write corrupted raft log: %v", err)
+	}
+
+	if _, err := NewDurableRaftCommitBarrier(raftDir); err == nil {
+		t.Fatal("opened durable raft barrier with corrupted log record")
+	}
 }
 
 func TestStoreRaftClusterBarrierKeepsDocumentInvisibleUntilQuorum(t *testing.T) {
@@ -225,6 +361,42 @@ func TestStoreRaftClusterBarrierCommitsAfterLeaderChange(t *testing.T) {
 	}
 	if err := barrier.WaitForAppliedOn(oldLeader, 1); err != nil {
 		t.Fatalf("old leader did not catch up after heal: %v", err)
+	}
+}
+
+func TestRaftClusterReadIndexRequiresCurrentQuorum(t *testing.T) {
+	barrier, err := NewRaftClusterCommitBarrier()
+	if err != nil {
+		t.Fatalf("new raft cluster barrier: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := barrier.Close(); err != nil {
+			t.Fatalf("close raft cluster barrier: %v", err)
+		}
+	})
+
+	if err := barrier.ReadFresh(context.Background()); err != nil {
+		t.Fatalf("read index with healthy quorum: %v", err)
+	}
+
+	leader := barrier.LeaderID()
+	for _, follower := range clusterFollowers(leader) {
+		if err := barrier.IsolateNode(follower); err != nil {
+			t.Fatalf("isolate follower %d: %v", follower, err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	if err := barrier.ReadFresh(ctx); err == nil {
+		t.Fatal("read index succeeded without quorum")
+	}
+
+	if err := barrier.HealNode(clusterFollowers(leader)[0]); err != nil {
+		t.Fatalf("heal one follower: %v", err)
+	}
+	if err := barrier.ReadFresh(context.Background()); err != nil {
+		t.Fatalf("read index after quorum restored: %v", err)
 	}
 }
 

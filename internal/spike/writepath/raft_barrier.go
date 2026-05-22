@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -16,14 +17,17 @@ const raftCommitTimeout = 5 * time.Second
 
 type RaftCommitBarrier struct {
 	node    raft.Node
-	storage *raft.MemoryStorage
+	storage raftMutableStorage
+	diskLog *raftDiskLog
 
-	mu      sync.Mutex
-	nextID  uint64
-	applied int
-	closed  bool
-	waiters map[uint64]chan error
-	records map[string]DocumentRecord
+	mu         sync.Mutex
+	nextID     uint64
+	applied    int
+	closed     bool
+	stopped    bool
+	waiters    map[uint64]chan error
+	appliedIDs map[uint64]struct{}
+	records    map[string]DocumentRecord
 
 	stop chan struct{}
 	done chan struct{}
@@ -35,7 +39,27 @@ type raftCommitCommand struct {
 }
 
 func NewRaftCommitBarrier() (*RaftCommitBarrier, error) {
-	storage := raft.NewMemoryStorage()
+	return newRaftCommitBarrier(nil)
+}
+
+func NewDurableRaftCommitBarrier(dir string) (*RaftCommitBarrier, error) {
+	diskLog, err := openRaftDiskLog(dir)
+	if err != nil {
+		return nil, err
+	}
+	barrier, err := newRaftCommitBarrier(diskLog)
+	if err != nil {
+		_ = diskLog.Close()
+		return nil, err
+	}
+	return barrier, nil
+}
+
+func newRaftCommitBarrier(diskLog *raftDiskLog) (*RaftCommitBarrier, error) {
+	storage := raftMutableStorage(newRaftStorageWithConfState(1))
+	if diskLog != nil {
+		storage = diskLog.storage
+	}
 	cfg := &raft.Config{
 		ID:                        1,
 		ElectionTick:              10,
@@ -46,14 +70,31 @@ func NewRaftCommitBarrier() (*RaftCommitBarrier, error) {
 		MaxUncommittedEntriesSize: 64 * 1024 * 1024,
 		Logger:                    raftNopLogger{},
 	}
-	node := raft.StartNode(cfg, []raft.Peer{{ID: 1}})
+	var node raft.Node
+	if diskLog != nil && diskLog.hasEntries {
+		node = raft.RestartNode(cfg)
+	} else {
+		node = raft.StartNode(cfg, []raft.Peer{{ID: 1}})
+	}
 	barrier := &RaftCommitBarrier{
-		node:    node,
-		storage: storage,
-		waiters: make(map[uint64]chan error),
-		records: make(map[string]DocumentRecord),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		node:       node,
+		storage:    storage,
+		diskLog:    diskLog,
+		waiters:    make(map[uint64]chan error),
+		appliedIDs: make(map[uint64]struct{}),
+		records:    make(map[string]DocumentRecord),
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
+	}
+	if diskLog != nil {
+		barrier.nextID = diskLog.nextID
+		barrier.applied = diskLog.applied
+		for id := range diskLog.appliedIDs {
+			barrier.appliedIDs[id] = struct{}{}
+		}
+		for key, record := range diskLog.records {
+			barrier.records[key] = record
+		}
 	}
 	go barrier.run()
 
@@ -120,13 +161,31 @@ func (b *RaftCommitBarrier) CommittedDocument(tenantID, transactionID, documentN
 	return record, ok
 }
 
+func (b *RaftCommitBarrier) CommittedDocuments() []DocumentRecord {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	keys := make([]string, 0, len(b.records))
+	for key := range b.records {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	records := make([]DocumentRecord, 0, len(keys))
+	for _, key := range keys {
+		records = append(records, b.records[key])
+	}
+	return records
+}
+
 func (b *RaftCommitBarrier) Close() error {
 	b.mu.Lock()
-	if b.closed {
+	if b.stopped {
 		b.mu.Unlock()
 		return nil
 	}
 	b.closed = true
+	b.stopped = true
 	for id, waiter := range b.waiters {
 		waiter <- errors.New("raft commit barrier is closed")
 		close(waiter)
@@ -137,6 +196,9 @@ func (b *RaftCommitBarrier) Close() error {
 	close(b.stop)
 	b.node.Stop()
 	<-b.done
+	if b.diskLog != nil {
+		return b.diskLog.Close()
+	}
 	return nil
 }
 
@@ -150,7 +212,9 @@ func (b *RaftCommitBarrier) run() {
 		case <-ticker.C:
 			b.node.Tick()
 		case ready := <-b.node.Ready():
-			b.processReady(ready)
+			if err := b.processReady(ready); err != nil {
+				b.fail(err)
+			}
 			b.node.Advance()
 		case <-b.stop:
 			return
@@ -158,14 +222,25 @@ func (b *RaftCommitBarrier) run() {
 	}
 }
 
-func (b *RaftCommitBarrier) processReady(ready raft.Ready) {
+func (b *RaftCommitBarrier) processReady(ready raft.Ready) error {
 	if !raft.IsEmptySnap(ready.Snapshot) {
-		_ = b.storage.ApplySnapshot(ready.Snapshot)
+		if err := b.storage.ApplySnapshot(ready.Snapshot); err != nil {
+			return err
+		}
 	}
 	if !raft.IsEmptyHardState(ready.HardState) {
-		_ = b.storage.SetHardState(ready.HardState)
+		if err := b.storage.SetHardState(ready.HardState); err != nil {
+			return err
+		}
 	}
-	_ = b.storage.Append(ready.Entries)
+	if err := b.storage.Append(ready.Entries); err != nil {
+		return err
+	}
+	if b.diskLog != nil {
+		if err := b.diskLog.SaveReady(ready); err != nil {
+			return err
+		}
+	}
 
 	for _, entry := range ready.CommittedEntries {
 		switch entry.Type {
@@ -177,7 +252,8 @@ func (b *RaftCommitBarrier) processReady(ready raft.Ready) {
 			if err := json.Unmarshal(entry.Data, &command); err != nil {
 				continue
 			}
-			b.complete(command, nil)
+			b.apply(command)
+			b.complete(command.ID, nil)
 		case pb.EntryConfChange:
 			var change pb.ConfChange
 			if err := change.Unmarshal(entry.Data); err == nil {
@@ -185,6 +261,7 @@ func (b *RaftCommitBarrier) processReady(ready raft.Ready) {
 			}
 		}
 	}
+	return nil
 }
 
 func (b *RaftCommitBarrier) waitForLeader(ctx context.Context) error {
@@ -202,26 +279,53 @@ func (b *RaftCommitBarrier) waitForLeader(ctx context.Context) error {
 	}
 }
 
-func (b *RaftCommitBarrier) complete(command raftCommitCommand, err error) {
+func (b *RaftCommitBarrier) apply(command raftCommitCommand) {
+	if command.ID == 0 {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	waiter, ok := b.waiters[command.ID]
+	if _, ok := b.appliedIDs[command.ID]; ok {
+		return
+	}
+	b.appliedIDs[command.ID] = struct{}{}
+	b.applied++
+	if command.ID > b.nextID {
+		b.nextID = command.ID
+	}
+	b.records[committedDocumentRecordKey(command.Record)] = command.Record
+}
+
+func (b *RaftCommitBarrier) complete(id uint64, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	waiter, ok := b.waiters[id]
 	if !ok {
 		return
 	}
-	b.applied++
-	if err == nil {
-		b.records[committedDocumentRecordKey(command.Record)] = command.Record
-	}
 	waiter <- err
 	close(waiter)
-	delete(b.waiters, command.ID)
+	delete(b.waiters, id)
 }
 
 func (b *RaftCommitBarrier) removeWaiter(id uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.waiters, id)
+}
+
+func (b *RaftCommitBarrier) fail(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	b.closed = true
+	for id, waiter := range b.waiters {
+		waiter <- err
+		close(waiter)
+		delete(b.waiters, id)
+	}
 }
 
 type raftNopLogger struct{}

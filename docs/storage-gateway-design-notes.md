@@ -1100,7 +1100,7 @@ Raft integration tests use an in-process multi-node harnessed transport around `
 
 Backend and OpenBao tests use deterministic fakes for correctness and separate smoke tests for real native SDK/OpenBao compatibility. The fake backend must support range reads, missing objects, corrupted objects, throttling, retryable errors, restore-pending behavior, and upload verification. The fake Transit service must support wrap, unwrap, rewrap, key-version behavior, and outage/error modes.
 
-The first Go spike is representative but disposable. It should include real `grpc-go` streaming, real file IO, real Pebble, real checksums, a minimal real subset of the block/openlog/index concepts, fake and in-process Raft commit barriers, and fake backend/OpenBao adapters. The spike code should not become production code by default; preserve benchmark reports, failure cases, and distilled tests as the reusable output.
+The first Go spike is representative but disposable. It should include real `grpc-go` streaming, real file IO, real Pebble, real checksums, a minimal real subset of the block/openlog/index concepts, fake, durable single-node, and in-process Raft commit barriers, and fake backend/OpenBao adapters. The spike code should not become production code by default; preserve benchmark reports, failure cases, and distilled tests as the reusable output.
 
 The initial synthetic workload is ETL-biased and trace-replay-ready:
 

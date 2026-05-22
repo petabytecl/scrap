@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -28,6 +29,15 @@ type raftClusterCommitRequest struct {
 
 type raftClusterCancelRequest struct {
 	id uint64
+}
+
+type raftClusterReadCancelRequest struct {
+	id uint64
+}
+
+type raftClusterReadIndexRequest struct {
+	accepted chan uint64
+	result   chan error
 }
 
 type raftClusterControlRequest struct {
@@ -107,6 +117,52 @@ func (b *RaftClusterCommitBarrier) CommitDocument(ctx context.Context, record Do
 			b.tryCancel(id)
 		}
 		return commitCtx.Err()
+	}
+}
+
+func (b *RaftClusterCommitBarrier) ReadFresh(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	readCtx, cancel := context.WithTimeout(ctx, raftCommitTimeout)
+	defer cancel()
+
+	accepted := make(chan uint64, 1)
+	result := make(chan error, 1)
+	request := raftClusterReadIndexRequest{
+		accepted: accepted,
+		result:   result,
+	}
+
+	select {
+	case b.requests <- request:
+	case <-b.done:
+		return errRaftClusterClosed
+	case <-readCtx.Done():
+		return readCtx.Err()
+	}
+
+	var id uint64
+	select {
+	case id = <-accepted:
+	case err := <-result:
+		return err
+	case <-b.done:
+		return errRaftClusterClosed
+	case <-readCtx.Done():
+		return readCtx.Err()
+	}
+
+	select {
+	case err := <-result:
+		return err
+	case <-b.done:
+		return errRaftClusterClosed
+	case <-readCtx.Done():
+		if id != 0 {
+			b.tryCancelRead(id)
+		}
+		return readCtx.Err()
 	}
 }
 
@@ -298,6 +354,14 @@ func (b *RaftClusterCommitBarrier) tryCancel(id uint64) {
 	}
 }
 
+func (b *RaftClusterCommitBarrier) tryCancelRead(id uint64) {
+	select {
+	case b.requests <- raftClusterReadCancelRequest{id: id}:
+	case <-b.done:
+	default:
+	}
+}
+
 func (b *RaftClusterCommitBarrier) run(cluster *raftCluster) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -315,6 +379,10 @@ func (b *RaftClusterCommitBarrier) run(cluster *raftCluster) {
 				cluster.handleCommit(request)
 			case raftClusterCancelRequest:
 				cluster.cancel(request.id)
+			case raftClusterReadIndexRequest:
+				cluster.handleReadIndex(request)
+			case raftClusterReadCancelRequest:
+				cluster.cancelRead(request.id)
 			case raftClusterControlRequest:
 				request.result <- request.run(cluster)
 			case raftClusterQueryRequest:
@@ -332,17 +400,19 @@ func (b *RaftClusterCommitBarrier) run(cluster *raftCluster) {
 }
 
 type raftCluster struct {
-	ids       []uint64
-	nodes     map[uint64]*raftClusterNode
-	isolated  map[uint64]bool
-	drops     map[raftMessagePair]bool
-	nextID    uint64
-	waiters   map[uint64]chan error
-	appliedBy map[uint64]map[uint64]struct{}
-	appliedOn map[uint64]int
-	committed map[uint64]struct{}
-	records   map[string]DocumentRecord
-	err       error
+	ids         []uint64
+	nodes       map[uint64]*raftClusterNode
+	isolated    map[uint64]bool
+	drops       map[raftMessagePair]bool
+	nextID      uint64
+	nextReadID  uint64
+	waiters     map[uint64]chan error
+	readWaiters map[uint64]chan error
+	appliedBy   map[uint64]map[uint64]struct{}
+	appliedOn   map[uint64]int
+	committed   map[uint64]struct{}
+	records     map[string]DocumentRecord
+	err         error
 }
 
 type raftClusterNode struct {
@@ -368,15 +438,16 @@ func newRaftCluster(ids []uint64) (*raftCluster, error) {
 	}
 
 	cluster := &raftCluster{
-		ids:       append([]uint64(nil), ids...),
-		nodes:     make(map[uint64]*raftClusterNode),
-		isolated:  make(map[uint64]bool),
-		drops:     make(map[raftMessagePair]bool),
-		waiters:   make(map[uint64]chan error),
-		appliedBy: make(map[uint64]map[uint64]struct{}),
-		appliedOn: make(map[uint64]int),
-		committed: make(map[uint64]struct{}),
-		records:   make(map[string]DocumentRecord),
+		ids:         append([]uint64(nil), ids...),
+		nodes:       make(map[uint64]*raftClusterNode),
+		isolated:    make(map[uint64]bool),
+		drops:       make(map[raftMessagePair]bool),
+		waiters:     make(map[uint64]chan error),
+		readWaiters: make(map[uint64]chan error),
+		appliedBy:   make(map[uint64]map[uint64]struct{}),
+		appliedOn:   make(map[uint64]int),
+		committed:   make(map[uint64]struct{}),
+		records:     make(map[string]DocumentRecord),
 	}
 
 	for _, id := range ids {
@@ -448,6 +519,26 @@ func (c *raftCluster) handleCommit(request raftClusterCommitRequest) {
 	if err := c.nodes[leaderID].raw.Propose(command); err != nil {
 		c.complete(id, err)
 	}
+}
+
+func (c *raftCluster) handleReadIndex(request raftClusterReadIndexRequest) {
+	if c.err != nil {
+		request.accepted <- 0
+		request.result <- c.err
+		return
+	}
+
+	c.nextReadID++
+	id := c.nextReadID
+	request.accepted <- id
+	c.readWaiters[id] = request.result
+
+	leaderID := c.leaderID()
+	if leaderID == 0 {
+		c.completeRead(id, errors.New("raft cluster has no current leader"))
+		return
+	}
+	c.nodes[leaderID].raw.ReadIndex([]byte(strconv.FormatUint(id, 10)))
 }
 
 func (c *raftCluster) pumpUntilIdle() error {
@@ -527,6 +618,13 @@ func (c *raftCluster) processReady(node *raftClusterNode, ready raft.Ready) ([]p
 			}
 			node.raw.ApplyConfChange(change)
 		}
+	}
+	for _, readState := range ready.ReadStates {
+		id, err := strconv.ParseUint(string(readState.RequestCtx), 10, 64)
+		if err != nil {
+			continue
+		}
+		c.completeRead(id, nil)
 	}
 
 	return ready.Messages, nil
@@ -647,6 +745,20 @@ func (c *raftCluster) cancel(id uint64) {
 	delete(c.waiters, id)
 }
 
+func (c *raftCluster) cancelRead(id uint64) {
+	delete(c.readWaiters, id)
+}
+
+func (c *raftCluster) completeRead(id uint64, err error) {
+	waiter, ok := c.readWaiters[id]
+	if !ok {
+		return
+	}
+	waiter <- err
+	close(waiter)
+	delete(c.readWaiters, id)
+}
+
 func (c *raftCluster) fail(err error) {
 	if err == nil || c.err != nil {
 		return
@@ -660,5 +772,10 @@ func (c *raftCluster) closeWithError(err error) {
 		waiter <- err
 		close(waiter)
 		delete(c.waiters, id)
+	}
+	for id, waiter := range c.readWaiters {
+		waiter <- err
+		close(waiter)
+		delete(c.readWaiters, id)
 	}
 }

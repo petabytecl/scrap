@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -28,6 +29,7 @@ type RunnerConfig struct {
 	Seed                  int64
 	ReadBack              bool
 	UseRaftBarrier        bool
+	UseDurableRaftBarrier bool
 	UseRaftClusterBarrier bool
 }
 
@@ -61,8 +63,18 @@ type raftBarrierReport struct {
 
 func Run(ctx context.Context, cfg RunnerConfig, out io.Writer) error {
 	cfg = normalizeConfig(cfg)
-	if cfg.UseRaftBarrier && cfg.UseRaftClusterBarrier {
-		return errors.New("choose either single-node raft barrier or cluster raft barrier")
+	raftModes := 0
+	if cfg.UseRaftBarrier {
+		raftModes++
+	}
+	if cfg.UseDurableRaftBarrier {
+		raftModes++
+	}
+	if cfg.UseRaftClusterBarrier {
+		raftModes++
+	}
+	if raftModes > 1 {
+		return errors.New("choose only one raft barrier mode")
 	}
 
 	dir := cfg.Dir
@@ -86,6 +98,15 @@ func Run(ctx context.Context, cfg RunnerConfig, out io.Writer) error {
 		defer raftBarrier.Close()
 		storeOptions.MetadataCommitBarrier = raftBarrier
 	}
+	if cfg.UseDurableRaftBarrier {
+		var err error
+		raftBarrier, err = NewDurableRaftCommitBarrier(filepath.Join(dir, "raft"))
+		if err != nil {
+			return err
+		}
+		defer raftBarrier.Close()
+		storeOptions.MetadataCommitBarrier = raftBarrier
+	}
 	if cfg.UseRaftClusterBarrier {
 		var err error
 		raftClusterBarrier, err = NewRaftClusterCommitBarrier()
@@ -94,6 +115,7 @@ func Run(ctx context.Context, cfg RunnerConfig, out io.Writer) error {
 		}
 		defer raftClusterBarrier.Close()
 		storeOptions.MetadataCommitBarrier = raftClusterBarrier
+		storeOptions.MetadataReadBarrier = raftClusterBarrier
 	}
 
 	store, err := OpenStoreWithOptions(dir, storeOptions)
@@ -140,7 +162,11 @@ func Run(ctx context.Context, cfg RunnerConfig, out io.Writer) error {
 	raftReport := raftBarrierReport{}
 	if raftBarrier != nil {
 		raftReport.enabled = true
-		raftReport.mode = "single-node"
+		if cfg.UseDurableRaftBarrier {
+			raftReport.mode = "single-node-durable"
+		} else {
+			raftReport.mode = "single-node"
+		}
 		raftReport.applied = raftBarrier.AppliedCount()
 		raftReport.leader = 1
 	}

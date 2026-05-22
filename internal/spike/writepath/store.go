@@ -41,6 +41,7 @@ type Store struct {
 	peers       []PeerPreparer
 	required    int
 	barrier     MetadataCommitBarrier
+	readBarrier MetadataReadBarrier
 }
 
 type StoreOptions struct {
@@ -48,6 +49,7 @@ type StoreOptions struct {
 	RequiredPeerPrepares  int
 	PeerPreparers         []PeerPreparer
 	MetadataCommitBarrier MetadataCommitBarrier
+	MetadataReadBarrier   MetadataReadBarrier
 }
 
 type StoreFaults struct {
@@ -64,9 +66,19 @@ type MetadataCommitBarrier interface {
 	CommitDocument(context.Context, DocumentRecord) error
 }
 
+type MetadataReadBarrier interface {
+	ReadFresh(context.Context) error
+}
+
 type immediateMetadataCommitBarrier struct{}
 
 func (immediateMetadataCommitBarrier) CommitDocument(context.Context, DocumentRecord) error {
+	return nil
+}
+
+type immediateMetadataReadBarrier struct{}
+
+func (immediateMetadataReadBarrier) ReadFresh(context.Context) error {
 	return nil
 }
 
@@ -121,6 +133,10 @@ func OpenStoreWithOptions(dir string, options StoreOptions) (*Store, error) {
 	if barrier == nil {
 		barrier = immediateMetadataCommitBarrier{}
 	}
+	readBarrier := options.MetadataReadBarrier
+	if readBarrier == nil {
+		readBarrier = immediateMetadataReadBarrier{}
+	}
 
 	return &Store{
 		dir:         dir,
@@ -135,6 +151,7 @@ func OpenStoreWithOptions(dir string, options StoreOptions) (*Store, error) {
 		peers:       options.PeerPreparers,
 		required:    options.RequiredPeerPrepares,
 		barrier:     barrier,
+		readBarrier: readBarrier,
 	}, nil
 }
 
@@ -294,6 +311,9 @@ func (s *Store) HeadDocument(req *HeadDocumentRequest) (*HeadDocumentResponse, e
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "head request is required")
 	}
+	if err := s.readBarrier.ReadFresh(context.Background()); err != nil {
+		return nil, err
+	}
 	doc, ok, err := s.getDocument(documentKey(req.TenantID, req.TransactionID, req.DocumentName))
 	if err != nil {
 		return nil, err
@@ -304,9 +324,28 @@ func (s *Store) HeadDocument(req *HeadDocumentRequest) (*HeadDocumentResponse, e
 	return &HeadDocumentResponse{Document: doc}, nil
 }
 
+func (s *Store) RebuildMetadataProjection(records []DocumentRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, record := range records {
+		if record.TenantID == "" || record.TransactionID == "" || record.DocumentName == "" {
+			return status.Error(codes.InvalidArgument, "cannot rebuild metadata projection from incomplete document record")
+		}
+		key := documentKey(record.TenantID, record.TransactionID, record.DocumentName)
+		if err := s.putDocument(key, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) ReadDocument(req *ReadDocumentRequest, send func(*ReadDocumentResponse) error) error {
 	if req == nil {
 		return status.Error(codes.InvalidArgument, "read request is required")
+	}
+	if err := s.readBarrier.ReadFresh(context.Background()); err != nil {
+		return err
 	}
 	doc, ok, err := s.getDocument(documentKey(req.TenantID, req.TransactionID, req.DocumentName))
 	if err != nil {

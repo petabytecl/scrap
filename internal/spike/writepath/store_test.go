@@ -2,6 +2,7 @@ package writepath
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -369,6 +370,47 @@ func TestStorePeerPrepareFailureLeavesDocumentInvisibleAfterReopen(t *testing.T)
 	assertNotFound(t, reopened, "tenant-a", "tx-014", "peer-prepare-failed.xml")
 }
 
+func TestStoreHeadDocumentFailsWhenReadBarrierFails(t *testing.T) {
+	readErr := errors.New("read index failed")
+	store := openStoreAtWithOptions(t, t.TempDir(), StoreOptions{
+		MetadataReadBarrier: failingReadBarrier{err: readErr},
+	})
+	writeTestDocument(t, store, "tx-015", "read-barrier-head.xml", []byte("visible only after read barrier"))
+
+	_, err := store.HeadDocument(&HeadDocumentRequest{
+		TenantID:      "tenant-a",
+		TransactionID: "tx-015",
+		DocumentName:  "read-barrier-head.xml",
+	})
+	if !errors.Is(err, readErr) {
+		t.Fatalf("head error = %v, want %v", err, readErr)
+	}
+}
+
+func TestStoreReadDocumentFailsWithoutMetadataWhenReadBarrierFails(t *testing.T) {
+	readErr := errors.New("read index failed")
+	store := openStoreAtWithOptions(t, t.TempDir(), StoreOptions{
+		MetadataReadBarrier: failingReadBarrier{err: readErr},
+	})
+	writeTestDocument(t, store, "tx-016", "read-barrier-read.xml", []byte("do not serve stale metadata"))
+
+	responses := 0
+	err := store.ReadDocument(&ReadDocumentRequest{
+		TenantID:      "tenant-a",
+		TransactionID: "tx-016",
+		DocumentName:  "read-barrier-read.xml",
+	}, func(*ReadDocumentResponse) error {
+		responses++
+		return nil
+	})
+	if !errors.Is(err, readErr) {
+		t.Fatalf("read error = %v, want %v", err, readErr)
+	}
+	if responses != 0 {
+		t.Fatalf("read sent %d responses before read barrier failure", responses)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 
@@ -539,4 +581,12 @@ func (p *recordingPeerPreparer) PrepareDocument(record DocumentRecord, reader io
 	}
 	p.logicalSHA256 = hex.EncodeToString(hasher.Sum(nil))
 	return p.err
+}
+
+type failingReadBarrier struct {
+	err error
+}
+
+func (b failingReadBarrier) ReadFresh(context.Context) error {
+	return b.err
 }
