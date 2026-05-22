@@ -160,6 +160,94 @@ func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 	return sealedBlockID, nil
 }
 
+func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expectedLength uint64, expectedSHA256 [32]byte, reader io.Reader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if blockID == "" {
+		return errors.New("blockstore: block id is required")
+	}
+	if reader == nil {
+		return errors.New("blockstore: sealed block reader is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.verifyWholeFile(ctx, s.BlockPath(blockID), expectedLength, expectedSHA256); err == nil {
+		if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		return syncDir(s.blocksDir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	temp, err := os.CreateTemp(s.blocksDir, "restore-*.blk.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	written, sum, err := copyAndHash(ctx, temp, reader)
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if written != expectedLength || sum != expectedSHA256 {
+		return ErrChecksumMismatch
+	}
+	if err := syncFile(tempPath); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, s.BlockPath(blockID)); err != nil {
+		return err
+	}
+	if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	if err := syncDir(s.blocksDir); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *Store) EnsureSealedBlock(ctx context.Context, blockID string, expectedLength uint64, expectedSHA256 [32]byte) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.verifyWholeFile(ctx, s.BlockPath(blockID), expectedLength, expectedSHA256); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := os.Stat(s.SealPath(blockID)); err == nil {
+		return true, nil
+	} else if errors.Is(err, os.ErrNotExist) {
+		if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+			return false, err
+		}
+		if err := syncDir(s.blocksDir); err != nil {
+			return false, err
+		}
+		return true, nil
+	} else {
+		return false, err
+	}
+}
+
 func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -299,6 +387,53 @@ func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64)
 	return verifyFrameRange(file, record, offset, length)
 }
 
+func (s *Store) verifyWholeFile(ctx context.Context, path string, expectedLength uint64, expectedSHA256 [32]byte) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	written, sum, err := copyAndHash(ctx, io.Discard, file)
+	if err != nil {
+		return err
+	}
+	if written != expectedLength || sum != expectedSHA256 {
+		return ErrChecksumMismatch
+	}
+	return nil
+}
+
+func copyAndHash(ctx context.Context, writer io.Writer, reader io.Reader) (uint64, [32]byte, error) {
+	hasher := sha256.New()
+	multi := io.MultiWriter(writer, hasher)
+	buf := make([]byte, defaultReadBuffer)
+	var written uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, [32]byte{}, err
+		}
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			copied, err := multi.Write(buf[:n])
+			if err != nil {
+				return 0, [32]byte{}, err
+			}
+			if copied != n {
+				return 0, [32]byte{}, io.ErrShortWrite
+			}
+			written += uint64(n)
+		}
+		if errors.Is(readErr, io.EOF) {
+			var sum [32]byte
+			copy(sum[:], hasher.Sum(nil))
+			return written, sum, nil
+		}
+		if readErr != nil {
+			return 0, [32]byte{}, readErr
+		}
+	}
+}
+
 func normalizeRange(record Record, offset uint64, length *uint64) (uint64, error) {
 	if offset > record.StoredLength {
 		return 0, ErrInvalidRange
@@ -420,6 +555,14 @@ func writeSealMarker(path string) error {
 	}
 	if _, err := file.Write([]byte("sealed\n")); err != nil {
 		return errors.Join(err, file.Close())
+	}
+	return errors.Join(file.Sync(), file.Close())
+}
+
+func syncFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
 	}
 	return errors.Join(file.Sync(), file.Close())
 }

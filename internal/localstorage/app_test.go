@@ -477,6 +477,91 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("restore me from backend")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "restore-cold-1", time.Unix(200, 0).UTC()); err != nil {
+		t.Fatalf("mark cold: %v", err)
+	}
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove local block: %v", err)
+	}
+	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove local seal: %v", err)
+	}
+	operation := queuedOperation("restore-op-1", "restore", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Document{
+				Document: &adminv1.DocumentTarget{
+					TenantId:      doc.TenantID,
+					TransactionId: doc.TransactionID,
+					DocumentName:  doc.DocumentName,
+				},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one restore success", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetWorkUnitsCompleted() != 1 {
+		t.Fatalf("finished operation = %#v, want succeeded restore", finished)
+	}
+	restored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head restored document: %v", err)
+	}
+	if restored.RestoreState != metastore.RestoreStateHot || restored.Availability != metastore.AvailabilityHot {
+		t.Fatalf("restore state = %d/%d, want hot", restored.RestoreState, restored.Availability)
+	}
+	sender := &recordingReadSender{}
+	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read restored document: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
+		t.Fatalf("read source = %s, want restored local", sender.metadata.Source)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("restored bytes = %q, want %q", got, data)
+	}
+}
+
 func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -874,9 +959,13 @@ func openTestOperationStore(t *testing.T) *operations.Store {
 }
 
 func queuedTombstoneOperation(operationID string, targets []*adminv1.Target) *adminv1.Operation {
+	return queuedOperation(operationID, "tombstone", targets)
+}
+
+func queuedOperation(operationID string, operationType string, targets []*adminv1.Target) *adminv1.Operation {
 	return &adminv1.Operation{
 		OperationId:         operationID,
-		OperationType:       "tombstone",
+		OperationType:       operationType,
 		State:               adminv1.OperationState_OPERATION_STATE_QUEUED,
 		RequestedByIdentity: "test",
 		RequestedAt:         timestamppb.New(time.Unix(300, 0).UTC()),

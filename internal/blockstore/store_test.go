@@ -3,6 +3,7 @@ package blockstore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
@@ -144,6 +145,49 @@ func TestSealCurrentRejectsEmptyBlock(t *testing.T) {
 	_, err := store.SealCurrent(context.Background())
 	if !errors.Is(err, ErrEmptyBlock) {
 		t.Fatalf("seal error = %v, want %v", err, ErrEmptyBlock)
+	}
+}
+
+func TestInstallSealedBlockRestoresVerifiedBlockFile(t *testing.T) {
+	ctx := context.Background()
+	source := openTestStore(t)
+	record, err := source.Append(ctx, bytes.NewReader([]byte("restored block bytes")))
+	if err != nil {
+		t.Fatalf("append source: %v", err)
+	}
+	if _, err := source.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal source: %v", err)
+	}
+	data, err := os.ReadFile(source.BlockPath(record.BlockID))
+	if err != nil {
+		t.Fatalf("read source block: %v", err)
+	}
+	sum := sha256.Sum256(data)
+
+	target := openTestStore(t)
+	if err := target.InstallSealedBlock(ctx, record.BlockID, uint64(len(data)), sum, bytes.NewReader(data)); err != nil {
+		t.Fatalf("install sealed block: %v", err)
+	}
+	sealed, err := target.IsSealed(record.BlockID)
+	if err != nil {
+		t.Fatalf("is sealed: %v", err)
+	}
+	if !sealed {
+		t.Fatalf("installed block %q is not sealed", record.BlockID)
+	}
+	installed, err := target.EnsureSealedBlock(ctx, record.BlockID, uint64(len(data)), sum)
+	if err != nil {
+		t.Fatalf("ensure sealed block: %v", err)
+	}
+	if !installed {
+		t.Fatalf("ensure sealed block returned false for installed block")
+	}
+	got, err := os.ReadFile(target.BlockPath(record.BlockID))
+	if err != nil {
+		t.Fatalf("read restored block: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("restored block bytes differ from source")
 	}
 }
 
