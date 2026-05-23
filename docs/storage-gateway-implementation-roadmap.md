@@ -41,7 +41,7 @@ Observability and audit signal policy for issue `#20` is captured in
 [Storage Gateway Observability And Audit Signal Standards](storage-gateway-observability-audit-standards.md).
 
 Release image, artifact, security-gate, dependency-update, Go-upgrade, and
-rollout policy for issue `#21` is captured in
+rollout policy for issue `#21` are captured in
 [Storage Gateway Release Image And Rollout Policy](storage-gateway-release-image-rollout-policy.md).
 
 ## Purpose
