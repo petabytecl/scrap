@@ -166,7 +166,6 @@ func Definitions() []GateDefinition {
 			Tiers:          []Tier{TierRelease},
 			ManualArtifact: "operator-runbook-approval",
 			ArtifactOwner:  "operations owner",
-			BlockingIssues: []int{47},
 			Description:    "Runbooks for corruption, restore, drain, lost disk, lost member, backend outage, OpenBao outage, and DR rebuild.",
 		},
 		{
