@@ -1,0 +1,40 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Build and test outputs
+/bin/
+/build/
+/dist/
+/tmp/
+coverage.out
+*.coverprofile
+*.prof
+*.pprof
+*.test
+
+# Local command binaries
+/scrap-crash-fault-evidence
+/scrap-release-gate
+/scrap-spike
+/scrapctl
+/scrapd
+
+# Local evidence artifacts
+crash-fault-evidence.json
+release-evidence.json
+
+# Logs
+*.log
