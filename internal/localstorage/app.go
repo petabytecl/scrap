@@ -507,7 +507,11 @@ func (a *Application) replayExisting(ctx context.Context, init api.WriteDocument
 		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
 	}
 	intent := uploadIntentForDocument(existing)
-	if err := a.authority.RecordUploadIntent(ctx, intent, recordUploadIntentCommandID(intent), a.now()); err != nil {
+	if _, err := a.metadata.GetUploadIntent(intent.BlockID); errors.Is(err, metastore.ErrNotFound) {
+		if err := a.authority.RecordUploadIntent(ctx, intent, recordUploadIntentCommandID(intent), a.now()); err != nil {
+			return api.WriteDocumentResult{}, mapError(err)
+		}
+	} else if err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
 	return api.WriteDocumentResult{

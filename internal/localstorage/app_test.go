@@ -1131,6 +1131,7 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first write: %v", err)
 	}
+	appliedIndex := app.authority.AppliedIndex()
 	second, err := app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
 	if err != nil {
 		t.Fatalf("replay write: %v", err)
@@ -1140,6 +1141,9 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	}
 	if !bytes.Equal(second.Metadata.LogicalSHA256, first.Metadata.LogicalSHA256) {
 		t.Fatal("replay metadata did not match original write")
+	}
+	if app.authority.AppliedIndex() != appliedIndex {
+		t.Fatalf("applied index = %d, want replay not to append after %d", app.authority.AppliedIndex(), appliedIndex)
 	}
 
 	transaction, err := app.GetTransaction(context.Background(), api.GetTransactionRequest{

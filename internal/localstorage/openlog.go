@@ -105,7 +105,7 @@ func (l *prepareLog) Recover() ([]metastore.Document, error) {
 		if length > maxPrepareLogPayloadLen {
 			return documents, truncatePrepareLogTail(file, recordOffset)
 		}
-		payload := make([]byte, length)
+		payload := make([]byte, int(length))
 		if _, err := io.ReadFull(file, payload); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return documents, truncatePrepareLogTail(file, recordOffset)
