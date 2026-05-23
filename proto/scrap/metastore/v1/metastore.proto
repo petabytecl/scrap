@@ -143,6 +143,14 @@ message RepairStateRecord {
   uint64 committed_index = 22;
 }
 
+message CommandReceiptRecord {
+  string command_id = 1;
+  bytes command_sha256 = 2;
+  uint32 schema_version = 20;
+  string shard_id = 21;
+  uint64 committed_index = 22;
+}
+
 enum MembershipRole {
   MEMBERSHIP_ROLE_UNSPECIFIED = 0;
   MEMBERSHIP_ROLE_VOTER = 1;
@@ -168,6 +176,7 @@ message ShardSnapshot {
   repeated UploadIntentRecord upload_intents = 12;
   repeated RepairStateRecord repair_states = 13;
   MembershipState membership = 14;
+  repeated CommandReceiptRecord command_receipts = 15;
 }
 
 message ShardCommand {

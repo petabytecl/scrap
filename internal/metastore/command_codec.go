@@ -115,5 +115,10 @@ func validateShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return invalidRecord("shard snapshot", "repair state %d: %v", i, err)
 		}
 	}
+	for i, receipt := range snapshot.GetCommandReceipts() {
+		if _, err := marshalCommandReceiptRecord(receipt); err != nil {
+			return invalidRecord("shard snapshot", "command receipt %d: %v", i, err)
+		}
+	}
 	return nil
 }

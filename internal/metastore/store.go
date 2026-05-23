@@ -152,6 +152,7 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 		transactionPrefix(),
 		uploadIntentPrefix(),
 		repairStatesPrefix(),
+		commandReceiptPrefix(),
 	} {
 		if err := batch.DeleteRange(prefix, prefixUpperBound(prefix), nil); err != nil {
 			return err
@@ -200,6 +201,16 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 		if err := batch.Set(repairStateKey(state.Identity, state.IncidentID), value, nil); err != nil {
+			return err
+		}
+	}
+	for _, record := range snapshot.GetCommandReceipts() {
+		receipt := commandReceiptFromProto(record)
+		value, err := marshalCommandReceipt(receipt)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(commandReceiptKey(receipt.CommandID), value, nil); err != nil {
 			return err
 		}
 	}
@@ -426,6 +437,62 @@ func (s *Store) ListRepairStates() ([]RepairState, error) {
 		return nil, err
 	}
 	return states, nil
+}
+
+func (s *Store) RecordCommandReceipt(receipt CommandReceipt) error {
+	value, err := marshalCommandReceipt(receipt)
+	if err != nil {
+		return err
+	}
+	if existingValue, ok, err := s.get(commandReceiptKey(receipt.CommandID)); err != nil {
+		return err
+	} else if ok {
+		existing, err := unmarshalCommandReceipt(existingValue)
+		if err != nil {
+			return err
+		}
+		if existing.CommandSHA256 == receipt.CommandSHA256 {
+			return nil
+		}
+		return fmt.Errorf("%w: command id already applied with different payload", ErrConflict)
+	}
+	return s.db.Set(commandReceiptKey(receipt.CommandID), value, pebble.Sync)
+}
+
+func (s *Store) GetCommandReceipt(commandID string) (CommandReceipt, error) {
+	value, ok, err := s.get(commandReceiptKey(commandID))
+	if err != nil {
+		return CommandReceipt{}, err
+	}
+	if !ok {
+		return CommandReceipt{}, ErrNotFound
+	}
+	return unmarshalCommandReceipt(value)
+}
+
+func (s *Store) ListCommandReceipts() ([]CommandReceipt, error) {
+	prefix := commandReceiptPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var receipts []CommandReceipt
+	for valid := iter.First(); valid; valid = iter.Next() {
+		receipt, err := unmarshalCommandReceipt(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		receipts = append(receipts, receipt)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return receipts, nil
 }
 
 func (s *Store) GetUploadIntent(blockID string) (UploadIntent, error) {
@@ -660,6 +727,14 @@ func repairStatePrefix(doc identity.Document) []byte {
 
 func repairStateKey(doc identity.Document, incidentID string) []byte {
 	return append(repairStatePrefix(doc), []byte(incidentID)...)
+}
+
+func commandReceiptPrefix() []byte {
+	return []byte("command_receipt\x00")
+}
+
+func commandReceiptKey(commandID string) []byte {
+	return append(commandReceiptPrefix(), []byte(commandID)...)
 }
 
 func validateUploadIntentState(state UploadState) error {

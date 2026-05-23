@@ -40,6 +40,10 @@ func RepairStateRecord(state RepairState) *metastorev1.RepairStateRecord {
 	return repairStateToProto(state)
 }
 
+func CommandReceiptRecord(receipt CommandReceipt) *metastorev1.CommandReceiptRecord {
+	return commandReceiptToProto(receipt)
+}
+
 func unmarshalDocument(data []byte) (Document, error) {
 	record, err := unmarshalDocumentRecord(data)
 	if err != nil {
@@ -142,6 +146,18 @@ func unmarshalRepairState(data []byte) (RepairState, error) {
 	return repairStateFromProto(record), nil
 }
 
+func marshalCommandReceipt(receipt CommandReceipt) ([]byte, error) {
+	return marshalCommandReceiptRecord(commandReceiptToProto(receipt))
+}
+
+func unmarshalCommandReceipt(data []byte) (CommandReceipt, error) {
+	record, err := unmarshalCommandReceiptRecord(data)
+	if err != nil {
+		return CommandReceipt{}, err
+	}
+	return commandReceiptFromProto(record), nil
+}
+
 func marshalRepairStateRecord(record *metastorev1.RepairStateRecord) ([]byte, error) {
 	if err := validateSchemaVersion("repair state", record.GetSchemaVersion()); err != nil {
 		return nil, err
@@ -158,6 +174,40 @@ func unmarshalRepairStateRecord(data []byte) (*metastorev1.RepairStateRecord, er
 		return nil, err
 	}
 	return &record, nil
+}
+
+func marshalCommandReceiptRecord(record *metastorev1.CommandReceiptRecord) ([]byte, error) {
+	if err := validateCommandReceiptRecord(record); err != nil {
+		return nil, err
+	}
+	return protoMarshal.Marshal(record)
+}
+
+func unmarshalCommandReceiptRecord(data []byte) (*metastorev1.CommandReceiptRecord, error) {
+	var record metastorev1.CommandReceiptRecord
+	if err := proto.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	if err := validateCommandReceiptRecord(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func validateCommandReceiptRecord(record *metastorev1.CommandReceiptRecord) error {
+	if record == nil {
+		return invalidRecord("command receipt", "record is required")
+	}
+	if err := validateSchemaVersion("command receipt", record.GetSchemaVersion()); err != nil {
+		return err
+	}
+	if record.GetCommandId() == "" {
+		return invalidRecord("command receipt", "command_id is required")
+	}
+	if len(record.GetCommandSha256()) != 32 {
+		return invalidRecord("command receipt", "command_sha256 must be 32 bytes")
+	}
+	return nil
 }
 
 func validateSchemaVersion(recordKind string, version uint32) error {
@@ -499,6 +549,22 @@ func repairStateFromProto(record *metastorev1.RepairStateRecord) RepairState {
 		state.UpdatedAt = record.GetUpdatedAt().AsTime()
 	}
 	return state
+}
+
+func commandReceiptToProto(receipt CommandReceipt) *metastorev1.CommandReceiptRecord {
+	return &metastorev1.CommandReceiptRecord{
+		SchemaVersion: CurrentSchemaVersion,
+		CommandId:     receipt.CommandID,
+		CommandSha256: receipt.CommandSHA256[:],
+	}
+}
+
+func commandReceiptFromProto(record *metastorev1.CommandReceiptRecord) CommandReceipt {
+	receipt := CommandReceipt{
+		CommandID: record.GetCommandId(),
+	}
+	copy(receipt.CommandSHA256[:], record.GetCommandSha256())
+	return receipt
 }
 
 func locationToProto(location blockstore.Record) *metastorev1.Location {

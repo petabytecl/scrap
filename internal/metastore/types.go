@@ -120,6 +120,11 @@ type RepairState struct {
 	UpdatedAt   time.Time
 }
 
+type CommandReceipt struct {
+	CommandID     string
+	CommandSHA256 [32]byte
+}
+
 type DocumentFilter struct {
 	DocumentNameExact     string
 	HasDocumentNameExact  bool

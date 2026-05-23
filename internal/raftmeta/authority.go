@@ -407,16 +407,24 @@ func (a *Authority) buildSnapshotLocked(lastIndex uint64) (*metastorev1.ShardSna
 		}
 		return left.IncidentID < right.IncidentID
 	})
+	commandReceipts, err := a.store.ListCommandReceipts()
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(commandReceipts, func(i, j int) bool {
+		return commandReceipts[i].CommandID < commandReceipts[j].CommandID
+	})
 
 	snapshot := &metastorev1.ShardSnapshot{
-		SchemaVersion: metastore.CurrentSchemaVersion,
-		ShardId:       a.shardID,
-		LastIndex:     lastIndex,
-		Documents:     make([]*metastorev1.DocumentRecord, 0, len(documents)),
-		Transactions:  make([]*metastorev1.TransactionRecord, 0, len(transactions)),
-		UploadIntents: make([]*metastorev1.UploadIntentRecord, 0, len(uploadIntents)),
-		RepairStates:  make([]*metastorev1.RepairStateRecord, 0, len(repairStates)),
-		Membership:    membershipToProto(a.members),
+		SchemaVersion:   metastore.CurrentSchemaVersion,
+		ShardId:         a.shardID,
+		LastIndex:       lastIndex,
+		Documents:       make([]*metastorev1.DocumentRecord, 0, len(documents)),
+		Transactions:    make([]*metastorev1.TransactionRecord, 0, len(transactions)),
+		UploadIntents:   make([]*metastorev1.UploadIntentRecord, 0, len(uploadIntents)),
+		RepairStates:    make([]*metastorev1.RepairStateRecord, 0, len(repairStates)),
+		CommandReceipts: make([]*metastorev1.CommandReceiptRecord, 0, len(commandReceipts)),
+		Membership:      membershipToProto(a.members),
 	}
 	for _, document := range documents {
 		record := metastore.DocumentRecord(document)
@@ -441,6 +449,12 @@ func (a *Authority) buildSnapshotLocked(lastIndex uint64) (*metastorev1.ShardSna
 		record.ShardId = a.shardID
 		record.CommittedIndex = lastIndex
 		snapshot.RepairStates = append(snapshot.RepairStates, record)
+	}
+	for _, receipt := range commandReceipts {
+		record := metastore.CommandReceiptRecord(receipt)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.CommandReceipts = append(snapshot.CommandReceipts, record)
 	}
 	return snapshot, nil
 }

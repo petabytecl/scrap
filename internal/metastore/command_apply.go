@@ -1,36 +1,70 @@
 package metastore
 
 import (
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"time"
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
-	if _, err := MarshalShardCommand(command); err != nil {
+	receipt, err := commandReceipt(command)
+	if err != nil {
+		return err
+	}
+	existing, err := s.GetCommandReceipt(receipt.CommandID)
+	if err == nil {
+		if existing.CommandSHA256 == receipt.CommandSHA256 {
+			return nil
+		}
+		return fmt.Errorf("%w: command id already applied with different payload", ErrConflict)
+	}
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	switch typed := command.GetCommand().(type) {
 	case *metastorev1.ShardCommand_CommitDocument:
-		return s.applyCommitDocument(typed.CommitDocument)
+		err = s.applyCommitDocument(typed.CommitDocument)
 	case *metastorev1.ShardCommand_CompleteTransaction:
-		return s.applyCompleteTransaction(typed.CompleteTransaction)
+		err = s.applyCompleteTransaction(typed.CompleteTransaction)
 	case *metastorev1.ShardCommand_RecordUploadIntent:
-		return s.applyRecordUploadIntent(typed.RecordUploadIntent, command.GetProposedAt())
+		err = s.applyRecordUploadIntent(typed.RecordUploadIntent, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateUploadIntentState:
-		return s.applyUpdateUploadIntentState(typed.UpdateUploadIntentState, command.GetProposedAt())
+		err = s.applyUpdateUploadIntentState(typed.UpdateUploadIntentState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateRestoreState:
-		return s.applyUpdateRestoreState(typed.UpdateRestoreState)
+		err = s.applyUpdateRestoreState(typed.UpdateRestoreState)
 	case *metastorev1.ShardCommand_RecordRepairState:
-		return s.applyRecordRepairState(typed.RecordRepairState, command.GetProposedAt())
+		err = s.applyRecordRepairState(typed.RecordRepairState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_TombstoneDocument:
-		return s.applyTombstoneDocument(typed.TombstoneDocument)
+		err = s.applyTombstoneDocument(typed.TombstoneDocument)
 	default:
 		return fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
 	}
+	if err != nil {
+		return err
+	}
+	return s.RecordCommandReceipt(receipt)
+}
+
+func commandReceipt(command *metastorev1.ShardCommand) (CommandReceipt, error) {
+	if _, err := MarshalShardCommand(command); err != nil {
+		return CommandReceipt{}, err
+	}
+	stable := proto.Clone(command).(*metastorev1.ShardCommand)
+	stable.ProposedAt = nil
+	data, err := protoMarshal.Marshal(stable)
+	if err != nil {
+		return CommandReceipt{}, err
+	}
+	return CommandReceipt{
+		CommandID:     command.GetCommandId(),
+		CommandSHA256: sha256.Sum256(data),
+	}, nil
 }
 
 func (s *Store) applyCommitDocument(command *metastorev1.CommitDocumentCommand) error {

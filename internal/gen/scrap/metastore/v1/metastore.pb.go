@@ -1140,6 +1140,82 @@ func (x *RepairStateRecord) GetCommittedIndex() uint64 {
 	return 0
 }
 
+type CommandReceiptRecord struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	CommandId      string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	CommandSha256  []byte                 `protobuf:"bytes,2,opt,name=command_sha256,json=commandSha256,proto3" json:"command_sha256,omitempty"`
+	SchemaVersion  uint32                 `protobuf:"varint,20,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ShardId        string                 `protobuf:"bytes,21,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	CommittedIndex uint64                 `protobuf:"varint,22,opt,name=committed_index,json=committedIndex,proto3" json:"committed_index,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CommandReceiptRecord) Reset() {
+	*x = CommandReceiptRecord{}
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandReceiptRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandReceiptRecord) ProtoMessage() {}
+
+func (x *CommandReceiptRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandReceiptRecord.ProtoReflect.Descriptor instead.
+func (*CommandReceiptRecord) Descriptor() ([]byte, []int) {
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CommandReceiptRecord) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *CommandReceiptRecord) GetCommandSha256() []byte {
+	if x != nil {
+		return x.CommandSha256
+	}
+	return nil
+}
+
+func (x *CommandReceiptRecord) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *CommandReceiptRecord) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+func (x *CommandReceiptRecord) GetCommittedIndex() uint64 {
+	if x != nil {
+		return x.CommittedIndex
+	}
+	return 0
+}
+
 type MembershipMember struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RaftId        uint64                 `protobuf:"varint,1,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
@@ -1151,7 +1227,7 @@ type MembershipMember struct {
 
 func (x *MembershipMember) Reset() {
 	*x = MembershipMember{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1163,7 +1239,7 @@ func (x *MembershipMember) String() string {
 func (*MembershipMember) ProtoMessage() {}
 
 func (x *MembershipMember) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[8]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1176,7 +1252,7 @@ func (x *MembershipMember) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MembershipMember.ProtoReflect.Descriptor instead.
 func (*MembershipMember) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{8}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *MembershipMember) GetRaftId() uint64 {
@@ -1209,7 +1285,7 @@ type MembershipState struct {
 
 func (x *MembershipState) Reset() {
 	*x = MembershipState{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1221,7 +1297,7 @@ func (x *MembershipState) String() string {
 func (*MembershipState) ProtoMessage() {}
 
 func (x *MembershipState) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[9]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1234,7 +1310,7 @@ func (x *MembershipState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MembershipState.ProtoReflect.Descriptor instead.
 func (*MembershipState) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{9}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *MembershipState) GetMembers() []*MembershipMember {
@@ -1245,22 +1321,23 @@ func (x *MembershipState) GetMembers() []*MembershipMember {
 }
 
 type ShardSnapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	ShardId       string                 `protobuf:"bytes,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	LastIndex     uint64                 `protobuf:"varint,3,opt,name=last_index,json=lastIndex,proto3" json:"last_index,omitempty"`
-	Documents     []*DocumentRecord      `protobuf:"bytes,10,rep,name=documents,proto3" json:"documents,omitempty"`
-	Transactions  []*TransactionRecord   `protobuf:"bytes,11,rep,name=transactions,proto3" json:"transactions,omitempty"`
-	UploadIntents []*UploadIntentRecord  `protobuf:"bytes,12,rep,name=upload_intents,json=uploadIntents,proto3" json:"upload_intents,omitempty"`
-	RepairStates  []*RepairStateRecord   `protobuf:"bytes,13,rep,name=repair_states,json=repairStates,proto3" json:"repair_states,omitempty"`
-	Membership    *MembershipState       `protobuf:"bytes,14,opt,name=membership,proto3" json:"membership,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState  `protogen:"open.v1"`
+	SchemaVersion   uint32                  `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ShardId         string                  `protobuf:"bytes,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	LastIndex       uint64                  `protobuf:"varint,3,opt,name=last_index,json=lastIndex,proto3" json:"last_index,omitempty"`
+	Documents       []*DocumentRecord       `protobuf:"bytes,10,rep,name=documents,proto3" json:"documents,omitempty"`
+	Transactions    []*TransactionRecord    `protobuf:"bytes,11,rep,name=transactions,proto3" json:"transactions,omitempty"`
+	UploadIntents   []*UploadIntentRecord   `protobuf:"bytes,12,rep,name=upload_intents,json=uploadIntents,proto3" json:"upload_intents,omitempty"`
+	RepairStates    []*RepairStateRecord    `protobuf:"bytes,13,rep,name=repair_states,json=repairStates,proto3" json:"repair_states,omitempty"`
+	Membership      *MembershipState        `protobuf:"bytes,14,opt,name=membership,proto3" json:"membership,omitempty"`
+	CommandReceipts []*CommandReceiptRecord `protobuf:"bytes,15,rep,name=command_receipts,json=commandReceipts,proto3" json:"command_receipts,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ShardSnapshot) Reset() {
 	*x = ShardSnapshot{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1272,7 +1349,7 @@ func (x *ShardSnapshot) String() string {
 func (*ShardSnapshot) ProtoMessage() {}
 
 func (x *ShardSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[10]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1285,7 +1362,7 @@ func (x *ShardSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardSnapshot.ProtoReflect.Descriptor instead.
 func (*ShardSnapshot) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{10}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ShardSnapshot) GetSchemaVersion() uint32 {
@@ -1344,6 +1421,13 @@ func (x *ShardSnapshot) GetMembership() *MembershipState {
 	return nil
 }
 
+func (x *ShardSnapshot) GetCommandReceipts() []*CommandReceiptRecord {
+	if x != nil {
+		return x.CommandReceipts
+	}
+	return nil
+}
+
 type ShardCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -1366,7 +1450,7 @@ type ShardCommand struct {
 
 func (x *ShardCommand) Reset() {
 	*x = ShardCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1378,7 +1462,7 @@ func (x *ShardCommand) String() string {
 func (*ShardCommand) ProtoMessage() {}
 
 func (x *ShardCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[11]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1475,7 @@ func (x *ShardCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardCommand.ProtoReflect.Descriptor instead.
 func (*ShardCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{11}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ShardCommand) GetSchemaVersion() uint32 {
@@ -1547,7 +1631,7 @@ type CommitDocumentCommand struct {
 
 func (x *CommitDocumentCommand) Reset() {
 	*x = CommitDocumentCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1559,7 +1643,7 @@ func (x *CommitDocumentCommand) String() string {
 func (*CommitDocumentCommand) ProtoMessage() {}
 
 func (x *CommitDocumentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[12]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1572,7 +1656,7 @@ func (x *CommitDocumentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitDocumentCommand.ProtoReflect.Descriptor instead.
 func (*CommitDocumentCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{12}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CommitDocumentCommand) GetDocument() *DocumentRecord {
@@ -1594,7 +1678,7 @@ type CompleteTransactionCommand struct {
 
 func (x *CompleteTransactionCommand) Reset() {
 	*x = CompleteTransactionCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[13]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1606,7 +1690,7 @@ func (x *CompleteTransactionCommand) String() string {
 func (*CompleteTransactionCommand) ProtoMessage() {}
 
 func (x *CompleteTransactionCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[13]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1619,7 +1703,7 @@ func (x *CompleteTransactionCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteTransactionCommand.ProtoReflect.Descriptor instead.
 func (*CompleteTransactionCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{13}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CompleteTransactionCommand) GetTenantId() string {
@@ -1662,7 +1746,7 @@ type RecordUploadIntentCommand struct {
 
 func (x *RecordUploadIntentCommand) Reset() {
 	*x = RecordUploadIntentCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[14]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1674,7 +1758,7 @@ func (x *RecordUploadIntentCommand) String() string {
 func (*RecordUploadIntentCommand) ProtoMessage() {}
 
 func (x *RecordUploadIntentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[14]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1687,7 +1771,7 @@ func (x *RecordUploadIntentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordUploadIntentCommand.ProtoReflect.Descriptor instead.
 func (*RecordUploadIntentCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{14}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RecordUploadIntentCommand) GetBlockId() string {
@@ -1729,7 +1813,7 @@ type UpdateUploadIntentStateCommand struct {
 
 func (x *UpdateUploadIntentStateCommand) Reset() {
 	*x = UpdateUploadIntentStateCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[15]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1741,7 +1825,7 @@ func (x *UpdateUploadIntentStateCommand) String() string {
 func (*UpdateUploadIntentStateCommand) ProtoMessage() {}
 
 func (x *UpdateUploadIntentStateCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[15]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1754,7 +1838,7 @@ func (x *UpdateUploadIntentStateCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUploadIntentStateCommand.ProtoReflect.Descriptor instead.
 func (*UpdateUploadIntentStateCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{15}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdateUploadIntentStateCommand) GetBlockId() string {
@@ -1791,7 +1875,7 @@ type UpdateRestoreStateCommand struct {
 
 func (x *UpdateRestoreStateCommand) Reset() {
 	*x = UpdateRestoreStateCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[16]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1803,7 +1887,7 @@ func (x *UpdateRestoreStateCommand) String() string {
 func (*UpdateRestoreStateCommand) ProtoMessage() {}
 
 func (x *UpdateRestoreStateCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[16]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1816,7 +1900,7 @@ func (x *UpdateRestoreStateCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRestoreStateCommand.ProtoReflect.Descriptor instead.
 func (*UpdateRestoreStateCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{16}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UpdateRestoreStateCommand) GetTenantId() string {
@@ -1868,7 +1952,7 @@ type RecordRepairStateCommand struct {
 
 func (x *RecordRepairStateCommand) Reset() {
 	*x = RecordRepairStateCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[17]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1880,7 +1964,7 @@ func (x *RecordRepairStateCommand) String() string {
 func (*RecordRepairStateCommand) ProtoMessage() {}
 
 func (x *RecordRepairStateCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[17]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1893,7 +1977,7 @@ func (x *RecordRepairStateCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordRepairStateCommand.ProtoReflect.Descriptor instead.
 func (*RecordRepairStateCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{17}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RecordRepairStateCommand) GetTenantId() string {
@@ -1951,7 +2035,7 @@ type TombstoneDocumentCommand struct {
 
 func (x *TombstoneDocumentCommand) Reset() {
 	*x = TombstoneDocumentCommand{}
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[18]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1963,7 +2047,7 @@ func (x *TombstoneDocumentCommand) String() string {
 func (*TombstoneDocumentCommand) ProtoMessage() {}
 
 func (x *TombstoneDocumentCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[18]
+	mi := &file_scrap_metastore_v1_metastore_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1976,7 +2060,7 @@ func (x *TombstoneDocumentCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TombstoneDocumentCommand.ProtoReflect.Descriptor instead.
 func (*TombstoneDocumentCommand) Descriptor() ([]byte, []int) {
-	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{18}
+	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TombstoneDocumentCommand) GetTenantId() string {
@@ -2137,13 +2221,20 @@ const file_scrap_metastore_v1_metastore_proto_rawDesc = "" +
 	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12%\n" +
 	"\x0eschema_version\x18\x14 \x01(\rR\rschemaVersion\x12\x19\n" +
 	"\bshard_id\x18\x15 \x01(\tR\ashardId\x12'\n" +
+	"\x0fcommitted_index\x18\x16 \x01(\x04R\x0ecommittedIndex\"\xc7\x01\n" +
+	"\x14CommandReceiptRecord\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12%\n" +
+	"\x0ecommand_sha256\x18\x02 \x01(\fR\rcommandSha256\x12%\n" +
+	"\x0eschema_version\x18\x14 \x01(\rR\rschemaVersion\x12\x19\n" +
+	"\bshard_id\x18\x15 \x01(\tR\ashardId\x12'\n" +
 	"\x0fcommitted_index\x18\x16 \x01(\x04R\x0ecommittedIndex\"\x80\x01\n" +
 	"\x10MembershipMember\x12\x17\n" +
 	"\araft_id\x18\x01 \x01(\x04R\x06raftId\x12\x1b\n" +
 	"\tmember_id\x18\x02 \x01(\tR\bmemberId\x126\n" +
 	"\x04role\x18\x03 \x01(\x0e2\".scrap.metastore.v1.MembershipRoleR\x04role\"Q\n" +
 	"\x0fMembershipState\x12>\n" +
-	"\amembers\x18\x01 \x03(\v2$.scrap.metastore.v1.MembershipMemberR\amembers\"\xdd\x03\n" +
+	"\amembers\x18\x01 \x03(\v2$.scrap.metastore.v1.MembershipMemberR\amembers\"\xb2\x04\n" +
 	"\rShardSnapshot\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\tR\ashardId\x12\x1d\n" +
@@ -2156,7 +2247,8 @@ const file_scrap_metastore_v1_metastore_proto_rawDesc = "" +
 	"\rrepair_states\x18\r \x03(\v2%.scrap.metastore.v1.RepairStateRecordR\frepairStates\x12C\n" +
 	"\n" +
 	"membership\x18\x0e \x01(\v2#.scrap.metastore.v1.MembershipStateR\n" +
-	"membership\"\xea\x06\n" +
+	"membership\x12S\n" +
+	"\x10command_receipts\x18\x0f \x03(\v2(.scrap.metastore.v1.CommandReceiptRecordR\x0fcommandReceipts\"\xea\x06\n" +
 	"\fShardCommand\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\tR\ashardId\x12\x1d\n" +
@@ -2245,7 +2337,7 @@ func file_scrap_metastore_v1_metastore_proto_rawDescGZIP() []byte {
 }
 
 var file_scrap_metastore_v1_metastore_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_scrap_metastore_v1_metastore_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_scrap_metastore_v1_metastore_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_scrap_metastore_v1_metastore_proto_goTypes = []any{
 	(RestoreState)(0),                      // 0: scrap.metastore.v1.RestoreState
 	(UploadState)(0),                       // 1: scrap.metastore.v1.UploadState
@@ -2258,66 +2350,68 @@ var file_scrap_metastore_v1_metastore_proto_goTypes = []any{
 	(*TransactionRecord)(nil),              // 8: scrap.metastore.v1.TransactionRecord
 	(*UploadIntentRecord)(nil),             // 9: scrap.metastore.v1.UploadIntentRecord
 	(*RepairStateRecord)(nil),              // 10: scrap.metastore.v1.RepairStateRecord
-	(*MembershipMember)(nil),               // 11: scrap.metastore.v1.MembershipMember
-	(*MembershipState)(nil),                // 12: scrap.metastore.v1.MembershipState
-	(*ShardSnapshot)(nil),                  // 13: scrap.metastore.v1.ShardSnapshot
-	(*ShardCommand)(nil),                   // 14: scrap.metastore.v1.ShardCommand
-	(*CommitDocumentCommand)(nil),          // 15: scrap.metastore.v1.CommitDocumentCommand
-	(*CompleteTransactionCommand)(nil),     // 16: scrap.metastore.v1.CompleteTransactionCommand
-	(*RecordUploadIntentCommand)(nil),      // 17: scrap.metastore.v1.RecordUploadIntentCommand
-	(*UpdateUploadIntentStateCommand)(nil), // 18: scrap.metastore.v1.UpdateUploadIntentStateCommand
-	(*UpdateRestoreStateCommand)(nil),      // 19: scrap.metastore.v1.UpdateRestoreStateCommand
-	(*RecordRepairStateCommand)(nil),       // 20: scrap.metastore.v1.RecordRepairStateCommand
-	(*TombstoneDocumentCommand)(nil),       // 21: scrap.metastore.v1.TombstoneDocumentCommand
-	nil,                                    // 22: scrap.metastore.v1.DocumentRecord.TagsEntry
-	nil,                                    // 23: scrap.metastore.v1.TransactionRecord.TagsEntry
-	nil,                                    // 24: scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
-	(*timestamppb.Timestamp)(nil),          // 25: google.protobuf.Timestamp
+	(*CommandReceiptRecord)(nil),           // 11: scrap.metastore.v1.CommandReceiptRecord
+	(*MembershipMember)(nil),               // 12: scrap.metastore.v1.MembershipMember
+	(*MembershipState)(nil),                // 13: scrap.metastore.v1.MembershipState
+	(*ShardSnapshot)(nil),                  // 14: scrap.metastore.v1.ShardSnapshot
+	(*ShardCommand)(nil),                   // 15: scrap.metastore.v1.ShardCommand
+	(*CommitDocumentCommand)(nil),          // 16: scrap.metastore.v1.CommitDocumentCommand
+	(*CompleteTransactionCommand)(nil),     // 17: scrap.metastore.v1.CompleteTransactionCommand
+	(*RecordUploadIntentCommand)(nil),      // 18: scrap.metastore.v1.RecordUploadIntentCommand
+	(*UpdateUploadIntentStateCommand)(nil), // 19: scrap.metastore.v1.UpdateUploadIntentStateCommand
+	(*UpdateRestoreStateCommand)(nil),      // 20: scrap.metastore.v1.UpdateRestoreStateCommand
+	(*RecordRepairStateCommand)(nil),       // 21: scrap.metastore.v1.RecordRepairStateCommand
+	(*TombstoneDocumentCommand)(nil),       // 22: scrap.metastore.v1.TombstoneDocumentCommand
+	nil,                                    // 23: scrap.metastore.v1.DocumentRecord.TagsEntry
+	nil,                                    // 24: scrap.metastore.v1.TransactionRecord.TagsEntry
+	nil,                                    // 25: scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
+	(*timestamppb.Timestamp)(nil),          // 26: google.protobuf.Timestamp
 }
 var file_scrap_metastore_v1_metastore_proto_depIdxs = []int32{
-	25, // 0: scrap.metastore.v1.DocumentRecord.created_at:type_name -> google.protobuf.Timestamp
-	25, // 1: scrap.metastore.v1.DocumentRecord.finalized_at:type_name -> google.protobuf.Timestamp
-	22, // 2: scrap.metastore.v1.DocumentRecord.tags:type_name -> scrap.metastore.v1.DocumentRecord.TagsEntry
+	26, // 0: scrap.metastore.v1.DocumentRecord.created_at:type_name -> google.protobuf.Timestamp
+	26, // 1: scrap.metastore.v1.DocumentRecord.finalized_at:type_name -> google.protobuf.Timestamp
+	23, // 2: scrap.metastore.v1.DocumentRecord.tags:type_name -> scrap.metastore.v1.DocumentRecord.TagsEntry
 	4,  // 3: scrap.metastore.v1.DocumentRecord.location:type_name -> scrap.metastore.v1.Location
 	7,  // 4: scrap.metastore.v1.DocumentRecord.envelope_ref:type_name -> scrap.metastore.v1.EnvelopeRef
 	0,  // 5: scrap.metastore.v1.DocumentRecord.restore_state:type_name -> scrap.metastore.v1.RestoreState
 	1,  // 6: scrap.metastore.v1.DocumentRecord.upload_state:type_name -> scrap.metastore.v1.UploadState
-	25, // 7: scrap.metastore.v1.DocumentRecord.tombstoned_at:type_name -> google.protobuf.Timestamp
+	26, // 7: scrap.metastore.v1.DocumentRecord.tombstoned_at:type_name -> google.protobuf.Timestamp
 	5,  // 8: scrap.metastore.v1.Location.frames:type_name -> scrap.metastore.v1.FrameRecord
 	6,  // 9: scrap.metastore.v1.Location.replicas:type_name -> scrap.metastore.v1.ReplicaRef
-	25, // 10: scrap.metastore.v1.TransactionRecord.created_at:type_name -> google.protobuf.Timestamp
-	25, // 11: scrap.metastore.v1.TransactionRecord.completed_at:type_name -> google.protobuf.Timestamp
-	25, // 12: scrap.metastore.v1.TransactionRecord.timeout_at:type_name -> google.protobuf.Timestamp
-	23, // 13: scrap.metastore.v1.TransactionRecord.tags:type_name -> scrap.metastore.v1.TransactionRecord.TagsEntry
+	26, // 10: scrap.metastore.v1.TransactionRecord.created_at:type_name -> google.protobuf.Timestamp
+	26, // 11: scrap.metastore.v1.TransactionRecord.completed_at:type_name -> google.protobuf.Timestamp
+	26, // 12: scrap.metastore.v1.TransactionRecord.timeout_at:type_name -> google.protobuf.Timestamp
+	24, // 13: scrap.metastore.v1.TransactionRecord.tags:type_name -> scrap.metastore.v1.TransactionRecord.TagsEntry
 	1,  // 14: scrap.metastore.v1.UploadIntentRecord.state:type_name -> scrap.metastore.v1.UploadState
-	25, // 15: scrap.metastore.v1.UploadIntentRecord.updated_at:type_name -> google.protobuf.Timestamp
-	25, // 16: scrap.metastore.v1.RepairStateRecord.updated_at:type_name -> google.protobuf.Timestamp
+	26, // 15: scrap.metastore.v1.UploadIntentRecord.updated_at:type_name -> google.protobuf.Timestamp
+	26, // 16: scrap.metastore.v1.RepairStateRecord.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 17: scrap.metastore.v1.MembershipMember.role:type_name -> scrap.metastore.v1.MembershipRole
-	11, // 18: scrap.metastore.v1.MembershipState.members:type_name -> scrap.metastore.v1.MembershipMember
+	12, // 18: scrap.metastore.v1.MembershipState.members:type_name -> scrap.metastore.v1.MembershipMember
 	3,  // 19: scrap.metastore.v1.ShardSnapshot.documents:type_name -> scrap.metastore.v1.DocumentRecord
 	8,  // 20: scrap.metastore.v1.ShardSnapshot.transactions:type_name -> scrap.metastore.v1.TransactionRecord
 	9,  // 21: scrap.metastore.v1.ShardSnapshot.upload_intents:type_name -> scrap.metastore.v1.UploadIntentRecord
 	10, // 22: scrap.metastore.v1.ShardSnapshot.repair_states:type_name -> scrap.metastore.v1.RepairStateRecord
-	12, // 23: scrap.metastore.v1.ShardSnapshot.membership:type_name -> scrap.metastore.v1.MembershipState
-	25, // 24: scrap.metastore.v1.ShardCommand.proposed_at:type_name -> google.protobuf.Timestamp
-	15, // 25: scrap.metastore.v1.ShardCommand.commit_document:type_name -> scrap.metastore.v1.CommitDocumentCommand
-	16, // 26: scrap.metastore.v1.ShardCommand.complete_transaction:type_name -> scrap.metastore.v1.CompleteTransactionCommand
-	17, // 27: scrap.metastore.v1.ShardCommand.record_upload_intent:type_name -> scrap.metastore.v1.RecordUploadIntentCommand
-	19, // 28: scrap.metastore.v1.ShardCommand.update_restore_state:type_name -> scrap.metastore.v1.UpdateRestoreStateCommand
-	20, // 29: scrap.metastore.v1.ShardCommand.record_repair_state:type_name -> scrap.metastore.v1.RecordRepairStateCommand
-	21, // 30: scrap.metastore.v1.ShardCommand.tombstone_document:type_name -> scrap.metastore.v1.TombstoneDocumentCommand
-	18, // 31: scrap.metastore.v1.ShardCommand.update_upload_intent_state:type_name -> scrap.metastore.v1.UpdateUploadIntentStateCommand
-	3,  // 32: scrap.metastore.v1.CommitDocumentCommand.document:type_name -> scrap.metastore.v1.DocumentRecord
-	25, // 33: scrap.metastore.v1.CompleteTransactionCommand.completed_at:type_name -> google.protobuf.Timestamp
-	24, // 34: scrap.metastore.v1.CompleteTransactionCommand.tags:type_name -> scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
-	1,  // 35: scrap.metastore.v1.UpdateUploadIntentStateCommand.state:type_name -> scrap.metastore.v1.UploadState
-	0,  // 36: scrap.metastore.v1.UpdateRestoreStateCommand.restore_state:type_name -> scrap.metastore.v1.RestoreState
-	25, // 37: scrap.metastore.v1.TombstoneDocumentCommand.tombstoned_at:type_name -> google.protobuf.Timestamp
-	38, // [38:38] is the sub-list for method output_type
-	38, // [38:38] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	13, // 23: scrap.metastore.v1.ShardSnapshot.membership:type_name -> scrap.metastore.v1.MembershipState
+	11, // 24: scrap.metastore.v1.ShardSnapshot.command_receipts:type_name -> scrap.metastore.v1.CommandReceiptRecord
+	26, // 25: scrap.metastore.v1.ShardCommand.proposed_at:type_name -> google.protobuf.Timestamp
+	16, // 26: scrap.metastore.v1.ShardCommand.commit_document:type_name -> scrap.metastore.v1.CommitDocumentCommand
+	17, // 27: scrap.metastore.v1.ShardCommand.complete_transaction:type_name -> scrap.metastore.v1.CompleteTransactionCommand
+	18, // 28: scrap.metastore.v1.ShardCommand.record_upload_intent:type_name -> scrap.metastore.v1.RecordUploadIntentCommand
+	20, // 29: scrap.metastore.v1.ShardCommand.update_restore_state:type_name -> scrap.metastore.v1.UpdateRestoreStateCommand
+	21, // 30: scrap.metastore.v1.ShardCommand.record_repair_state:type_name -> scrap.metastore.v1.RecordRepairStateCommand
+	22, // 31: scrap.metastore.v1.ShardCommand.tombstone_document:type_name -> scrap.metastore.v1.TombstoneDocumentCommand
+	19, // 32: scrap.metastore.v1.ShardCommand.update_upload_intent_state:type_name -> scrap.metastore.v1.UpdateUploadIntentStateCommand
+	3,  // 33: scrap.metastore.v1.CommitDocumentCommand.document:type_name -> scrap.metastore.v1.DocumentRecord
+	26, // 34: scrap.metastore.v1.CompleteTransactionCommand.completed_at:type_name -> google.protobuf.Timestamp
+	25, // 35: scrap.metastore.v1.CompleteTransactionCommand.tags:type_name -> scrap.metastore.v1.CompleteTransactionCommand.TagsEntry
+	1,  // 36: scrap.metastore.v1.UpdateUploadIntentStateCommand.state:type_name -> scrap.metastore.v1.UploadState
+	0,  // 37: scrap.metastore.v1.UpdateRestoreStateCommand.restore_state:type_name -> scrap.metastore.v1.RestoreState
+	26, // 38: scrap.metastore.v1.TombstoneDocumentCommand.tombstoned_at:type_name -> google.protobuf.Timestamp
+	39, // [39:39] is the sub-list for method output_type
+	39, // [39:39] is the sub-list for method input_type
+	39, // [39:39] is the sub-list for extension type_name
+	39, // [39:39] is the sub-list for extension extendee
+	0,  // [0:39] is the sub-list for field type_name
 }
 
 func init() { file_scrap_metastore_v1_metastore_proto_init() }
@@ -2329,7 +2423,7 @@ func file_scrap_metastore_v1_metastore_proto_init() {
 	file_scrap_metastore_v1_metastore_proto_msgTypes[1].OneofWrappers = []any{}
 	file_scrap_metastore_v1_metastore_proto_msgTypes[5].OneofWrappers = []any{}
 	file_scrap_metastore_v1_metastore_proto_msgTypes[6].OneofWrappers = []any{}
-	file_scrap_metastore_v1_metastore_proto_msgTypes[11].OneofWrappers = []any{
+	file_scrap_metastore_v1_metastore_proto_msgTypes[12].OneofWrappers = []any{
 		(*ShardCommand_CommitDocument)(nil),
 		(*ShardCommand_CompleteTransaction)(nil),
 		(*ShardCommand_RecordUploadIntent)(nil),
@@ -2338,15 +2432,15 @@ func file_scrap_metastore_v1_metastore_proto_init() {
 		(*ShardCommand_TombstoneDocument)(nil),
 		(*ShardCommand_UpdateUploadIntentState)(nil),
 	}
-	file_scrap_metastore_v1_metastore_proto_msgTypes[15].OneofWrappers = []any{}
 	file_scrap_metastore_v1_metastore_proto_msgTypes[16].OneofWrappers = []any{}
+	file_scrap_metastore_v1_metastore_proto_msgTypes[17].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_metastore_v1_metastore_proto_rawDesc), len(file_scrap_metastore_v1_metastore_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   22,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

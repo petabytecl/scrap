@@ -279,6 +279,50 @@ func TestShardCommandSchemaShape(t *testing.T) {
 	}
 }
 
+func TestCommandReceiptRecordSchemaShape(t *testing.T) {
+	receipt := metastorev1.File_scrap_metastore_v1_metastore_proto.Messages().ByName("CommandReceiptRecord")
+	requireField(t, receipt, "schema_version")
+	requireField(t, receipt, "command_id")
+	requireField(t, receipt, "command_sha256")
+}
+
+func TestShardCommandRoundTripsAllCommandTypes(t *testing.T) {
+	for _, test := range sampleShardCommands() {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := MarshalShardCommand(test.command)
+			if err != nil {
+				t.Fatalf("marshal command: %v", err)
+			}
+			decoded, err := UnmarshalShardCommand(data)
+			if err != nil {
+				t.Fatalf("unmarshal command: %v", err)
+			}
+			if !proto.Equal(test.command, decoded) {
+				t.Fatalf("decoded command differs\n got: %v\nwant: %v", decoded, test.command)
+			}
+		})
+	}
+}
+
+func TestShardCommandMarshalIsDeterministic(t *testing.T) {
+	first := sampleCompleteTransactionCommand()
+	first.GetCompleteTransaction().Tags = map[string]string{"workflow": "billing", "closed_by": "test"}
+	second := sampleCompleteTransactionCommand()
+	second.GetCompleteTransaction().Tags = map[string]string{"closed_by": "test", "workflow": "billing"}
+
+	firstData, err := MarshalShardCommand(first)
+	if err != nil {
+		t.Fatalf("marshal first command: %v", err)
+	}
+	secondData, err := MarshalShardCommand(second)
+	if err != nil {
+		t.Fatalf("marshal second command: %v", err)
+	}
+	if !bytes.Equal(firstData, secondData) {
+		t.Fatal("deterministic command marshal produced different bytes for equivalent maps")
+	}
+}
+
 func TestShardCommandRejectsUnsupportedSchemaVersion(t *testing.T) {
 	command := sampleShardCommand()
 	command.SchemaVersion = CurrentSchemaVersion + 1
@@ -290,6 +334,14 @@ func TestShardCommandRejectsUnsupportedSchemaVersion(t *testing.T) {
 	_, err = UnmarshalShardCommand(data)
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
 		t.Fatalf("error = %v, want %v", err, ErrUnsupportedSchemaVersion)
+	}
+}
+
+func TestShardCommandRejectsMixedVersionDocumentBody(t *testing.T) {
+	command := sampleShardCommand()
+	command.GetCommitDocument().Document.SchemaVersion = CurrentSchemaVersion + 1
+	if _, err := MarshalShardCommand(command); !errors.Is(err, ErrUnsupportedSchemaVersion) {
+		t.Fatalf("marshal error = %v, want %v", err, ErrUnsupportedSchemaVersion)
 	}
 }
 
@@ -363,6 +415,119 @@ func sampleShardCommand() *metastorev1.ShardCommand {
 			},
 		},
 	}
+}
+
+func sampleShardCommands() []struct {
+	name    string
+	command *metastorev1.ShardCommand
+} {
+	documentName := "invoice.xml"
+	lastError := "backend throttled"
+	return []struct {
+		name    string
+		command *metastorev1.ShardCommand
+	}{
+		{name: "commit document", command: sampleShardCommand()},
+		{name: "complete transaction", command: sampleCompleteTransactionCommand()},
+		{
+			name: "record upload intent",
+			command: withShardCommandBody(baseShardCommand("upload-1"), &metastorev1.ShardCommand_RecordUploadIntent{
+				RecordUploadIntent: &metastorev1.RecordUploadIntentCommand{
+					BlockId:           "block-1",
+					BackendObjectKey:  "objects/block-1.blk",
+					IndexObjectKey:    "objects/block-1.idx",
+					EnvelopeObjectKey: "objects/block-1.env",
+				},
+			}),
+		},
+		{
+			name: "update upload intent state",
+			command: withShardCommandBody(baseShardCommand("upload-state-1"), &metastorev1.ShardCommand_UpdateUploadIntentState{
+				UpdateUploadIntentState: &metastorev1.UpdateUploadIntentStateCommand{
+					BlockId:   "block-1",
+					State:     metastorev1.UploadState_UPLOAD_STATE_FAILED,
+					LastError: &lastError,
+				},
+			}),
+		},
+		{
+			name: "update restore state",
+			command: withShardCommandBody(baseShardCommand("restore-1"), &metastorev1.ShardCommand_UpdateRestoreState{
+				UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+					TenantId:      "tenant",
+					TransactionId: "txn",
+					DocumentName:  &documentName,
+					RestoreState:  metastorev1.RestoreState_RESTORE_STATE_RESTORE_PENDING,
+					Reason:        "restore requested",
+				},
+			}),
+		},
+		{
+			name: "record repair state",
+			command: withShardCommandBody(baseShardCommand("repair-1"), &metastorev1.ShardCommand_RecordRepairState{
+				RecordRepairState: &metastorev1.RecordRepairStateCommand{
+					TenantId:      "tenant",
+					TransactionId: "txn",
+					DocumentName:  "invoice.xml",
+					PhysicalRef:   "member-a/block-1/64",
+					IncidentId:    "incident-1",
+					Quarantined:   true,
+				},
+			}),
+		},
+		{
+			name: "tombstone document",
+			command: withShardCommandBody(baseShardCommand("tombstone-1"), &metastorev1.ShardCommand_TombstoneDocument{
+				TombstoneDocument: &metastorev1.TombstoneDocumentCommand{
+					TenantId:      "tenant",
+					TransactionId: "txn",
+					DocumentName:  "invoice.xml",
+					TombstonedAt:  timestamppb.New(time.Unix(200, 0).UTC()),
+					OperationId:   "operation-1",
+				},
+			}),
+		},
+	}
+}
+
+func sampleCompleteTransactionCommand() *metastorev1.ShardCommand {
+	return withShardCommandBody(baseShardCommand("complete-1"), &metastorev1.ShardCommand_CompleteTransaction{
+		CompleteTransaction: &metastorev1.CompleteTransactionCommand{
+			TenantId:      "tenant",
+			TransactionId: "txn",
+			CompletedAt:   timestamppb.New(time.Unix(200, 0).UTC()),
+			Tags:          map[string]string{"closed_by": "test"},
+		},
+	})
+}
+
+func baseShardCommand(commandID string) *metastorev1.ShardCommand {
+	return &metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     commandID,
+		ProposedAt:    timestamppb.New(time.Unix(100, 0).UTC()),
+	}
+}
+
+func withShardCommandBody(command *metastorev1.ShardCommand, body any) *metastorev1.ShardCommand {
+	switch typed := body.(type) {
+	case *metastorev1.ShardCommand_CompleteTransaction:
+		command.Command = typed
+	case *metastorev1.ShardCommand_RecordUploadIntent:
+		command.Command = typed
+	case *metastorev1.ShardCommand_UpdateUploadIntentState:
+		command.Command = typed
+	case *metastorev1.ShardCommand_UpdateRestoreState:
+		command.Command = typed
+	case *metastorev1.ShardCommand_RecordRepairState:
+		command.Command = typed
+	case *metastorev1.ShardCommand_TombstoneDocument:
+		command.Command = typed
+	default:
+		panic("unsupported shard command body")
+	}
+	return command
 }
 
 func requireField(t *testing.T, message protoreflect.MessageDescriptor, fieldName protoreflect.Name) {

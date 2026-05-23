@@ -198,7 +198,7 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create snapshot: %v", err)
 	}
-	if info.LastIndex != 5 || info.Documents != 1 || info.Transactions != 1 || info.UploadJobs != 1 || info.Repairs != 1 || info.Members != 2 {
+	if info.LastIndex != 5 || info.Documents != 1 || info.Transactions != 1 || info.UploadJobs != 1 || info.Repairs != 1 || info.Members != 2 || info.Commands != 5 {
 		t.Fatalf("snapshot info = %#v, want metadata/job/repair/membership state through index 5", info)
 	}
 	snapshot, err := readSnapshotFile(raftDir)
@@ -213,6 +213,9 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 	}
 	if len(snapshot.GetMembership().GetMembers()) != 2 {
 		t.Fatalf("snapshot membership = %#v, want two members", snapshot.GetMembership())
+	}
+	if len(snapshot.GetCommandReceipts()) != 5 {
+		t.Fatalf("snapshot command receipts = %d, want 5", len(snapshot.GetCommandReceipts()))
 	}
 	rawSnapshot, err := os.ReadFile(snapshotPath(raftDir))
 	if err != nil {
