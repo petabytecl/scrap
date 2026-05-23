@@ -14,10 +14,12 @@ const (
 	DefaultBackendUploadInterval = 30 * time.Second
 	DefaultOperationRunInterval  = 5 * time.Second
 	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
+	DefaultProductionProfileID   = "scrap-prod-v1"
 )
 
 const (
 	ProductionWriteACKReadinessGate       = "SCRAP_PRODUCTION_WRITE_ACK_READINESS"
+	ReadinessGateReleaseProfile           = "SCRAP_RELEASE_PROFILE"
 	ReadinessGateMetadataCompatibility    = "SCRAP_METADATA_COMPATIBILITY_BOUNDARY_V1"
 	ReadinessGateRaftMetadataDurability   = "SCRAP_RAFT_METADATA_DURABILITY"
 	ReadinessGatePeerByteDurability       = "SCRAP_PEER_BYTE_DURABILITY"
@@ -26,6 +28,8 @@ const (
 	ReadinessGateCapacityAdmission        = "SCRAP_CAPACITY_ADMISSION"
 	ReadinessGateOperatorReadiness        = "SCRAP_OPERATOR_READINESS"
 	ReadinessGateProductionImplementation = "SCRAP_PRODUCTION_WRITE_ACK_IMPLEMENTATION"
+	ReadinessGateReleaseOwnerSignoff      = "SCRAP_RELEASE_OWNER_SIGNOFF"
+	ReadinessGateDownstreamDeployment     = "SCRAP_DOWNSTREAM_DEPLOYMENT_APPROVAL"
 )
 
 var ErrProductionWriteACKReadinessGate = errors.New("production write ACK readiness gate blocked")
@@ -46,13 +50,42 @@ type Config struct {
 }
 
 type ProductionReadinessEvidence struct {
-	MetadataCompatibilityBoundary bool
-	RaftMetadataDurability        bool
-	PeerByteDurability            bool
-	BackendRestoreWorkflow        bool
-	OpenBaoEnvelopeWorkflow       bool
-	CapacityAdmission             bool
-	OperatorReadiness             bool
+	TargetReleaseProfileID string
+
+	MetadataCompatibilityBoundary  bool
+	MetadataCompatibilityArtifact  string
+	RaftMetadataDurability         bool
+	RaftMetadataDurabilityArtifact string
+	PeerByteDurability             bool
+	PeerByteDurabilityArtifact     string
+	BackendRestoreWorkflow         bool
+	BackendRestoreArtifact         string
+	OpenBaoEnvelopeWorkflow        bool
+	OpenBaoEnvelopeArtifact        string
+	CapacityAdmission              bool
+	CapacityAdmissionArtifact      string
+	OperatorReadiness              bool
+	OperatorReadinessArtifact      string
+
+	ProductionWriteACKImplementation bool
+	ProductionImplementationArtifact string
+	ReleaseOwnerSignoff              bool
+	ReleaseOwnerSignoffArtifact      string
+	DownstreamDeploymentApproval     bool
+	DownstreamDeploymentArtifact     string
+	DownstreamDeploymentDeferral     string
+}
+
+type ProductionReadinessMissing struct {
+	ReadinessGate                string
+	ReleaseArtifact              string
+	BlockingIssues               []int
+	Reason                       string
+	DownstreamDeploymentDeferral string
+}
+
+type ProductionWriteACKGateError struct {
+	Missing []ProductionReadinessMissing
 }
 
 func Default() Config {
@@ -112,49 +145,170 @@ func (c Config) validateProductionWriteACKGate() error {
 		return nil
 	}
 	if c.EnableLocalNonProductionStorage {
-		return fmt.Errorf(
-			"%w: %s cannot run with local non-production storage enabled",
-			ErrProductionWriteACKReadinessGate,
-			ProductionWriteACKReadinessGate,
-		)
+		return &ProductionWriteACKGateError{Missing: []ProductionReadinessMissing{{
+			ReadinessGate: ProductionWriteACKReadinessGate,
+			Reason:        "production write ACK mode cannot run with local non-production storage enabled",
+		}}}
 	}
 	missing := c.ProductionReadinessEvidence.missingGates()
 	if len(missing) > 0 {
-		return fmt.Errorf(
-			"%w: %s missing readiness evidence for %s",
-			ErrProductionWriteACKReadinessGate,
-			ProductionWriteACKReadinessGate,
-			strings.Join(missing, ", "),
-		)
+		return &ProductionWriteACKGateError{Missing: missing}
 	}
-	return fmt.Errorf(
-		"%w: %s missing readiness evidence for %s; production write ACK mode is not implemented yet",
+	return nil
+}
+
+func (e ProductionReadinessEvidence) missingGates() []ProductionReadinessMissing {
+	gates := []productionReadinessRequirement{
+		{
+			ReadinessGate:    ReadinessGateMetadataCompatibility,
+			ReleaseArtifact:  "metadata-compatibility-release-evidence",
+			BlockingIssues:   []int{85},
+			Ready:            e.MetadataCompatibilityBoundary,
+			ProvidedArtifact: e.MetadataCompatibilityArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateRaftMetadataDurability,
+			ReleaseArtifact:  "raft-metadata-durability-release-evidence",
+			BlockingIssues:   []int{85},
+			Ready:            e.RaftMetadataDurability,
+			ProvidedArtifact: e.RaftMetadataDurabilityArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGatePeerByteDurability,
+			ReleaseArtifact:  "peer-byte-durability-release-evidence",
+			BlockingIssues:   []int{85},
+			Ready:            e.PeerByteDurability,
+			ProvidedArtifact: e.PeerByteDurabilityArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateBackendRestoreWorkflow,
+			ReleaseArtifact:  "backend-restore-workflow-release-evidence",
+			BlockingIssues:   []int{88},
+			Ready:            e.BackendRestoreWorkflow,
+			ProvidedArtifact: e.BackendRestoreArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateOpenBaoEnvelopeWorkflow,
+			ReleaseArtifact:  "openbao-envelope-release-evidence",
+			BlockingIssues:   []int{86},
+			Ready:            e.OpenBaoEnvelopeWorkflow,
+			ProvidedArtifact: e.OpenBaoEnvelopeArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateCapacityAdmission,
+			ReleaseArtifact:  "capacity-admission-release-evidence",
+			BlockingIssues:   []int{48, 87},
+			Ready:            e.CapacityAdmission,
+			ProvidedArtifact: e.CapacityAdmissionArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateOperatorReadiness,
+			ReleaseArtifact:  "operator-readiness-release-evidence",
+			BlockingIssues:   []int{88},
+			Ready:            e.OperatorReadiness,
+			ProvidedArtifact: e.OperatorReadinessArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateProductionImplementation,
+			ReleaseArtifact:  "production-write-ack-implementation-evidence",
+			Ready:            e.ProductionWriteACKImplementation,
+			ProvidedArtifact: e.ProductionImplementationArtifact,
+		},
+		{
+			ReadinessGate:    ReadinessGateReleaseOwnerSignoff,
+			ReleaseArtifact:  "release-owner-signoff",
+			BlockingIssues:   []int{48, 86, 88},
+			Ready:            e.ReleaseOwnerSignoff,
+			ProvidedArtifact: e.ReleaseOwnerSignoffArtifact,
+		},
+		{
+			ReadinessGate:                ReadinessGateDownstreamDeployment,
+			ReleaseArtifact:              "downstream-deployment-approval",
+			Ready:                        e.DownstreamDeploymentApproval,
+			ProvidedArtifact:             e.DownstreamDeploymentArtifact,
+			DownstreamDeploymentDeferral: e.DownstreamDeploymentDeferral,
+		},
+	}
+	missing := make([]ProductionReadinessMissing, 0, len(gates)+1)
+	profileID := strings.TrimSpace(e.TargetReleaseProfileID)
+	if profileID == "" {
+		missing = append(missing, ProductionReadinessMissing{
+			ReadinessGate:   ReadinessGateReleaseProfile,
+			ReleaseArtifact: "target-release-profile",
+			BlockingIssues:  []int{48},
+			Reason:          "target release profile is required",
+		})
+	} else if profileID != DefaultProductionProfileID {
+		missing = append(missing, ProductionReadinessMissing{
+			ReadinessGate:   ReadinessGateReleaseProfile,
+			ReleaseArtifact: "target-release-profile",
+			BlockingIssues:  []int{48},
+			Reason:          fmt.Sprintf("unsupported target release profile %q; expected %q", profileID, DefaultProductionProfileID),
+		})
+	}
+	for _, gate := range gates {
+		if gate.Ready && strings.TrimSpace(gate.ProvidedArtifact) != "" {
+			continue
+		}
+		reason := "readiness evidence is not satisfied"
+		if gate.Ready {
+			reason = "release artifact is required"
+		}
+		missing = append(missing, ProductionReadinessMissing{
+			ReadinessGate:                gate.ReadinessGate,
+			ReleaseArtifact:              gate.ReleaseArtifact,
+			BlockingIssues:               append([]int(nil), gate.BlockingIssues...),
+			Reason:                       reason,
+			DownstreamDeploymentDeferral: gate.DownstreamDeploymentDeferral,
+		})
+	}
+	return missing
+}
+
+func (e *ProductionWriteACKGateError) Error() string {
+	if e == nil {
+		return ErrProductionWriteACKReadinessGate.Error()
+	}
+	parts := make([]string, 0, len(e.Missing))
+	for _, missing := range e.Missing {
+		detail := missing.ReadinessGate
+		if missing.ReleaseArtifact != "" {
+			detail += " artifact=" + missing.ReleaseArtifact
+		}
+		if len(missing.BlockingIssues) > 0 {
+			blockers := make([]string, 0, len(missing.BlockingIssues))
+			for _, issue := range missing.BlockingIssues {
+				blockers = append(blockers, fmt.Sprintf("#%d", issue))
+			}
+			detail += " blocking_issues=" + strings.Join(blockers, ",")
+		}
+		if missing.DownstreamDeploymentDeferral != "" {
+			detail += " downstream_deployment_deferral=" + missing.DownstreamDeploymentDeferral
+		}
+		if missing.Reason != "" {
+			detail += " reason=" + missing.Reason
+		}
+		parts = append(parts, detail)
+	}
+	return fmt.Sprintf(
+		"%s: %s missing readiness evidence: %s",
 		ErrProductionWriteACKReadinessGate,
 		ProductionWriteACKReadinessGate,
-		ReadinessGateProductionImplementation,
+		strings.Join(parts, "; "),
 	)
 }
 
-func (e ProductionReadinessEvidence) missingGates() []string {
-	gates := []struct {
-		name  string
-		ready bool
-	}{
-		{name: ReadinessGateMetadataCompatibility, ready: e.MetadataCompatibilityBoundary},
-		{name: ReadinessGateRaftMetadataDurability, ready: e.RaftMetadataDurability},
-		{name: ReadinessGatePeerByteDurability, ready: e.PeerByteDurability},
-		{name: ReadinessGateBackendRestoreWorkflow, ready: e.BackendRestoreWorkflow},
-		{name: ReadinessGateOpenBaoEnvelopeWorkflow, ready: e.OpenBaoEnvelopeWorkflow},
-		{name: ReadinessGateCapacityAdmission, ready: e.CapacityAdmission},
-		{name: ReadinessGateOperatorReadiness, ready: e.OperatorReadiness},
-	}
-	missing := make([]string, 0, len(gates))
-	for _, gate := range gates {
-		if !gate.ready {
-			missing = append(missing, gate.name)
-		}
-	}
-	return missing
+func (e *ProductionWriteACKGateError) Is(target error) bool {
+	return target == ErrProductionWriteACKReadinessGate
+}
+
+type productionReadinessRequirement struct {
+	ReadinessGate                string
+	ReleaseArtifact              string
+	BlockingIssues               []int
+	Ready                        bool
+	ProvidedArtifact             string
+	DownstreamDeploymentDeferral string
 }
 
 func validateListenAddress(field, value string) error {

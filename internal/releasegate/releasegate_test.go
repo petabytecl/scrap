@@ -53,6 +53,8 @@ func TestEvaluateReportsMissingReadinessEvidence(t *testing.T) {
 		"soak-capacity":                       config.ReadinessGateCapacityAdmission,
 		"dashboard-alerts":                    config.ReadinessGateOperatorReadiness,
 		"production-write-ack-implementation": config.ReadinessGateProductionImplementation,
+		"release-owner-signoff":               config.ReadinessGateReleaseOwnerSignoff,
+		"downstream-deployment-approval":      config.ReadinessGateDownstreamDeployment,
 	}
 	for gateID, readinessGate := range want {
 		missing, ok := missingGate(report, gateID)
@@ -92,6 +94,23 @@ func TestClosedImplementationIssuesAreNotReportedAsGateBlockers(t *testing.T) {
 		if len(def.BlockingIssues) != 0 {
 			t.Fatalf("definition %s blockers = %#v, want no closed implementation blockers", gateID, def.BlockingIssues)
 		}
+	}
+}
+
+func TestDownstreamDeploymentApprovalReportsDeferral(t *testing.T) {
+	report := Evaluate(TierRelease, Manifest{})
+	missing, ok := missingGate(report, "downstream-deployment-approval")
+	if !ok {
+		t.Fatal("release report did not include missing downstream deployment approval")
+	}
+	if missing.ReadinessGate != config.ReadinessGateDownstreamDeployment {
+		t.Fatalf("readiness gate = %q, want %q", missing.ReadinessGate, config.ReadinessGateDownstreamDeployment)
+	}
+	if missing.ManualArtifact != "downstream-deployment-approval" || missing.ArtifactOwner == "" {
+		t.Fatalf("downstream missing gate = %#v, want manual artifact and owner", missing)
+	}
+	if !strings.Contains(missing.DownstreamDeploymentDeferral, "repo-owned release evidence") {
+		t.Fatalf("downstream deferral = %q, want repo-owned release boundary", missing.DownstreamDeploymentDeferral)
 	}
 }
 

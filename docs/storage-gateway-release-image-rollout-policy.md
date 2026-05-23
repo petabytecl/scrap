@@ -54,8 +54,10 @@ Required targets before production write ACK eligibility:
 evidence manifest against the gate catalog in `internal/releasegate`. Each gate
 must either point to an automated command or name a manual release artifact and
 artifact owner. The report includes the production write ACK readiness gate name
-and blocking issues for missing evidence where the gate maps to
-`SCRAP_PRODUCTION_WRITE_ACK_READINESS`.
+and blocking issues for missing evidence where available. It also reports the
+downstream deployment deferral separately: repo-owned release evidence does not
+approve live production capacity, retention, provider-account, OpenBao HA, or
+GitOps application state.
 
 Generated-code checks are release-blocking. A release candidate must prove that
 committed generated code matches the checked-in schemas and that the Buf

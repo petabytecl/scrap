@@ -142,8 +142,24 @@ func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T)
 	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
 		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
 	}
+	gateErr := requireProductionGateError(t, err)
+	openbaoMissing, ok := missingReadiness(gateErr.Missing, ReadinessGateOpenBaoEnvelopeWorkflow)
+	if !ok {
+		t.Fatalf("missing gates = %#v, want %s", gateErr.Missing, ReadinessGateOpenBaoEnvelopeWorkflow)
+	}
+	if openbaoMissing.ReleaseArtifact != "openbao-envelope-release-evidence" || !intSliceContains(openbaoMissing.BlockingIssues, 86) {
+		t.Fatalf("openbao missing gate = %#v, want artifact and #86 blocker", openbaoMissing)
+	}
+	downstreamMissing, ok := missingReadiness(gateErr.Missing, ReadinessGateDownstreamDeployment)
+	if !ok {
+		t.Fatalf("missing gates = %#v, want %s", gateErr.Missing, ReadinessGateDownstreamDeployment)
+	}
+	if downstreamMissing.ReleaseArtifact != "downstream-deployment-approval" {
+		t.Fatalf("downstream missing gate = %#v, want release artifact", downstreamMissing)
+	}
 	for _, gate := range []string{
 		ProductionWriteACKReadinessGate,
+		ReadinessGateReleaseProfile,
 		ReadinessGateMetadataCompatibility,
 		ReadinessGateRaftMetadataDurability,
 		ReadinessGatePeerByteDurability,
@@ -151,9 +167,26 @@ func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T)
 		ReadinessGateOpenBaoEnvelopeWorkflow,
 		ReadinessGateCapacityAdmission,
 		ReadinessGateOperatorReadiness,
+		ReadinessGateProductionImplementation,
+		ReadinessGateReleaseOwnerSignoff,
+		ReadinessGateDownstreamDeployment,
 	} {
 		if !strings.Contains(err.Error(), gate) {
 			t.Fatalf("error %q does not name missing gate %s", err, gate)
+		}
+	}
+	for _, detail := range []string{
+		"target-release-profile",
+		"metadata-compatibility-release-evidence",
+		"openbao-envelope-release-evidence",
+		"production-write-ack-implementation-evidence",
+		"release-owner-signoff",
+		"downstream-deployment-approval",
+		"#86",
+		"#88",
+	} {
+		if !strings.Contains(err.Error(), detail) {
+			t.Fatalf("error %q does not name missing detail %s", err, detail)
 		}
 	}
 }
@@ -162,6 +195,8 @@ func TestProductionWriteACKGateDoesNotBypassLaterReadinessGates(t *testing.T) {
 	cfg := Default()
 	cfg.EnableProductionWriteACK = true
 	cfg.ProductionReadinessEvidence.MetadataCompatibilityBoundary = true
+	cfg.ProductionReadinessEvidence.MetadataCompatibilityArtifact = "artifact://metadata"
+	cfg.ProductionReadinessEvidence.TargetReleaseProfileID = DefaultProductionProfileID
 
 	err := cfg.Validate()
 	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
@@ -177,6 +212,9 @@ func TestProductionWriteACKGateDoesNotBypassLaterReadinessGates(t *testing.T) {
 		ReadinessGateOpenBaoEnvelopeWorkflow,
 		ReadinessGateCapacityAdmission,
 		ReadinessGateOperatorReadiness,
+		ReadinessGateProductionImplementation,
+		ReadinessGateReleaseOwnerSignoff,
+		ReadinessGateDownstreamDeployment,
 	} {
 		if !strings.Contains(err.Error(), gate) {
 			t.Fatalf("error %q does not keep later readiness gate %s closed", err, gate)
@@ -199,24 +237,120 @@ func TestProductionWriteACKGateRejectsLocalNonProductionMode(t *testing.T) {
 	}
 }
 
-func TestProductionWriteACKGateRemainsClosedUntilProductionImplementationExists(t *testing.T) {
+func TestProductionWriteACKGateRequiresArtifactsNotOnlyBooleans(t *testing.T) {
 	cfg := Default()
 	cfg.EnableProductionWriteACK = true
 	cfg.ProductionReadinessEvidence = ProductionReadinessEvidence{
-		MetadataCompatibilityBoundary: true,
-		RaftMetadataDurability:        true,
-		PeerByteDurability:            true,
-		BackendRestoreWorkflow:        true,
-		OpenBaoEnvelopeWorkflow:       true,
-		CapacityAdmission:             true,
-		OperatorReadiness:             true,
+		TargetReleaseProfileID:           DefaultProductionProfileID,
+		MetadataCompatibilityBoundary:    true,
+		RaftMetadataDurability:           true,
+		PeerByteDurability:               true,
+		BackendRestoreWorkflow:           true,
+		OpenBaoEnvelopeWorkflow:          true,
+		CapacityAdmission:                true,
+		OperatorReadiness:                true,
+		ProductionWriteACKImplementation: true,
+		ReleaseOwnerSignoff:              true,
+		DownstreamDeploymentApproval:     true,
 	}
 
 	err := cfg.Validate()
 	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
 		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
 	}
-	if !strings.Contains(err.Error(), ReadinessGateProductionImplementation) {
-		t.Fatalf("error %q does not identify missing production implementation gate", err)
+	for _, artifact := range []string{
+		"metadata-compatibility-release-evidence",
+		"production-write-ack-implementation-evidence",
+		"release-owner-signoff",
+		"downstream-deployment-approval",
+	} {
+		if !strings.Contains(err.Error(), artifact) {
+			t.Fatalf("error %q does not identify missing artifact %s", err, artifact)
+		}
 	}
+}
+
+func TestProductionWriteACKGateRejectsLocalRehearsalWithoutDownstreamApproval(t *testing.T) {
+	cfg := productionWriteACKReadyConfig()
+	cfg.ProductionReadinessEvidence.DownstreamDeploymentApproval = false
+	cfg.ProductionReadinessEvidence.DownstreamDeploymentArtifact = ""
+	cfg.ProductionReadinessEvidence.DownstreamDeploymentDeferral = "local release-artifact rehearsal only"
+
+	err := cfg.Validate()
+	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
+		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
+	}
+	for _, want := range []string{
+		ReadinessGateDownstreamDeployment,
+		"downstream-deployment-approval",
+		"local release-artifact rehearsal only",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not report downstream deployment gap %s", err, want)
+		}
+	}
+}
+
+func TestProductionWriteACKGateAcceptsFullySatisfiedProfile(t *testing.T) {
+	cfg := productionWriteACKReadyConfig()
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("fully satisfied production write ACK config did not validate: %v", err)
+	}
+}
+
+func productionWriteACKReadyConfig() Config {
+	cfg := Default()
+	cfg.EnableProductionWriteACK = true
+	cfg.ProductionReadinessEvidence = ProductionReadinessEvidence{
+		TargetReleaseProfileID:           DefaultProductionProfileID,
+		MetadataCompatibilityBoundary:    true,
+		MetadataCompatibilityArtifact:    "artifact://metadata-compatibility",
+		RaftMetadataDurability:           true,
+		RaftMetadataDurabilityArtifact:   "artifact://raft-metadata",
+		PeerByteDurability:               true,
+		PeerByteDurabilityArtifact:       "artifact://peer-byte-durability",
+		BackendRestoreWorkflow:           true,
+		BackendRestoreArtifact:           "artifact://backend-restore",
+		OpenBaoEnvelopeWorkflow:          true,
+		OpenBaoEnvelopeArtifact:          "artifact://openbao-envelope",
+		CapacityAdmission:                true,
+		CapacityAdmissionArtifact:        "artifact://capacity-admission",
+		OperatorReadiness:                true,
+		OperatorReadinessArtifact:        "artifact://operator-readiness",
+		ProductionWriteACKImplementation: true,
+		ProductionImplementationArtifact: "artifact://production-write-ack-implementation",
+		ReleaseOwnerSignoff:              true,
+		ReleaseOwnerSignoffArtifact:      "artifact://release-owner-signoff",
+		DownstreamDeploymentApproval:     true,
+		DownstreamDeploymentArtifact:     "artifact://downstream-deployment-approval",
+	}
+	return cfg
+}
+
+func requireProductionGateError(t *testing.T, err error) *ProductionWriteACKGateError {
+	t.Helper()
+	var gateErr *ProductionWriteACKGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("error = %#v, want ProductionWriteACKGateError", err)
+	}
+	return gateErr
+}
+
+func missingReadiness(missing []ProductionReadinessMissing, gate string) (ProductionReadinessMissing, bool) {
+	for _, candidate := range missing {
+		if candidate.ReadinessGate == gate {
+			return candidate, true
+		}
+	}
+	return ProductionReadinessMissing{}, false
+}
+
+func intSliceContains(values []int, want int) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
