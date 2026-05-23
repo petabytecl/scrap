@@ -248,7 +248,7 @@ func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.St
 	if err != nil {
 		return result, err
 	}
-	if a.shouldPublishMetadataCheckpoint(result.Upload) {
+	if a.shouldPublishMetadataCheckpoint(ctx, store, result.Upload) {
 		mutable, ok := store.(backend.MutableStore)
 		if !ok {
 			return result, errors.New("localstorage: backend store does not support mutable metadata pointers")
@@ -263,8 +263,17 @@ func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.St
 	return result, err
 }
 
-func (a *Application) shouldPublishMetadataCheckpoint(upload backendupload.RunResult) bool {
-	return upload.Uploaded > 0
+func (a *Application) shouldPublishMetadataCheckpoint(ctx context.Context, store backend.Store, upload backendupload.RunResult) bool {
+	if upload.Uploaded > 0 {
+		return true
+	}
+	if upload.Scanned == 0 || upload.Deferred > 0 || upload.Failed > 0 {
+		return false
+	}
+	if _, err := published.VerifyCurrentCheckpoint(ctx, store, localPublishedCellID); errors.Is(err, published.ErrCurrentPointerNotFound) {
+		return true
+	}
+	return false
 }
 
 func (a *Application) SealPendingUploadBlocks(ctx context.Context) ([]string, error) {
