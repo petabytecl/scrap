@@ -24,6 +24,22 @@ Set these values before running any command:
 - `MEMBER_ID`: target storage member when a member is involved.
 - `OPERATION_ID`: approved UUIDv7 operation ID from the change, incident, or
   drill record.
+- `METADATA_RESTORE_OPERATION_ID`, `COPY_VERIFY_OPERATION_ID`, and
+  `DR_DRILL_OPERATION_ID`: separate approved UUIDv7 operation IDs for DR drill
+  phases.
+- `CHANGE_ID`: change-management record for planned work.
+- `INCIDENT_ID`: incident or support record for break/fix work.
+- `DRILL_ID`: disaster-recovery drill record.
+- `RELEASE_SHA`: release commit SHA or image provenance SHA.
+- `PLAN_ID` and `PLAN_HASH`: values copied from the latest non-dry-run
+  `scrapctl plan ...` output.
+- `TENANT_ID`, `TRANSACTION_ID`, and `DOCUMENT_NAME`: document target values.
+- `SHARD_ID`, `BLOCK_ID`, and `SNAPSHOT_ID`: shard, block, or recovery artifact
+  target values from metadata, operation state, logs, or audit evidence.
+- `EXPIRES_AT` and `PIN_UNTIL`: RFC3339 timestamps.
+- `REASON`: bounded operator reason text recorded in operation metadata.
+- `DESTINATION_KEY_ID`: approved OpenBao Transit destination key ID for rewrap
+  or key-rotation work.
 
 Use real values in the commands below. Do not use high-cardinality document,
 block, operation, or backend-object identifiers as metric labels; use them only
@@ -49,9 +65,15 @@ scrapctl --admin-addr "$ADMIN_ADDR" watch --operation-id "$OPERATION_ID"
 scrapctl --admin-addr "$ADMIN_ADDR" status --operation-id "$OPERATION_ID"
 ```
 
-Expected operation states are `PLANNED`, `QUEUED`, `RUNNING`, `SUCCEEDED`,
-`FAILED`, `CANCELED`, or `EXPIRED`. A plan expires after the admin operation
-plan TTL; re-plan instead of starting an expired plan.
+The non-dry-run `plan` response prints `operation_plan_id` and `plan_hash`.
+Copy those values to `PLAN_ID` and `PLAN_HASH` before running `start`.
+
+Expected operation states in `scrapctl` output use protobuf enum names:
+`OPERATION_STATE_PLANNED`, `OPERATION_STATE_QUEUED`,
+`OPERATION_STATE_RUNNING`, `OPERATION_STATE_SUCCEEDED`,
+`OPERATION_STATE_FAILED`, `OPERATION_STATE_CANCELED`, or
+`OPERATION_STATE_EXPIRED`. A plan expires after the admin operation plan TTL;
+re-plan instead of starting an expired plan.
 
 Abort behavior:
 
@@ -138,7 +160,7 @@ scrapctl --admin-addr "$ADMIN_ADDR" member uncordon --member-id "$MEMBER_ID" --o
 
 Expected status:
 
-- new member is `ONLINE`;
+- new member is `MEMBER_STATE_ONLINE`;
 - placement dashboard shows healthy distinct storage-node placement;
 - peer catch-up lag drains before the member becomes byte-serving eligible;
 - `member_uncordoned` audit evidence exists for production serving changes.
@@ -182,7 +204,7 @@ Expected status:
 - member is cordoned before the drain plan starts;
 - eviction safety returns safe or gives explicit warnings accepted by the
   change owner;
-- drain operation reaches `SUCCEEDED`;
+- drain operation reaches `OPERATION_STATE_SUCCEEDED`;
 - Raft quorum, backend lag, repair lag, and disk runway remain healthy.
 
 Rollback or abort:
@@ -447,7 +469,7 @@ scrapctl --admin-addr "$ADMIN_ADDR" start prewarm --plan-id "$PLAN_ID" --plan-ha
 
 Expected status:
 
-- restore or prewarm operation reaches `SUCCEEDED`;
+- restore or prewarm operation reaches `OPERATION_STATE_SUCCEEDED`;
 - restore-pending response rate returns to baseline;
 - backend verification and OpenBao signals remain healthy;
 - restored bytes are checksum-verified before serving.
