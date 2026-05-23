@@ -22,7 +22,10 @@ const (
 type Store struct {
 	root       string
 	objectsDir string
+	profile    backend.CapacityProfile
 }
+
+var _ backend.MutableAdapter = (*Store)(nil)
 
 type metadata struct {
 	Key       string `json:"key"`
@@ -31,6 +34,16 @@ type metadata struct {
 }
 
 func Open(root string) (*Store, error) {
+	return OpenWithCapacityProfile(root, backend.NonProductionFilesystemProfile("local-filesystem-non-production", 1<<40))
+}
+
+func OpenWithCapacityProfile(root string, profile backend.CapacityProfile) (*Store, error) {
+	if profile.Provider != backend.ProviderFilesystem {
+		return nil, fmt.Errorf("backend fs: capacity profile provider %q is not filesystem", profile.Provider)
+	}
+	if err := profile.Validate(); err != nil {
+		return nil, err
+	}
 	objectsDir := filepath.Join(root, "objects")
 	if err := os.MkdirAll(objectsDir, 0o700); err != nil {
 		return nil, err
@@ -38,7 +51,15 @@ func Open(root string) (*Store, error) {
 	if err := syncDir(objectsDir); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, objectsDir: objectsDir}, nil
+	return &Store{root: root, objectsDir: objectsDir, profile: profile.Clone()}, nil
+}
+
+func (s *Store) Provider() backend.Provider {
+	return backend.ProviderFilesystem
+}
+
+func (s *Store) CapacityProfile() backend.CapacityProfile {
+	return s.profile.Clone()
 }
 
 func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -151,6 +152,34 @@ func TestObjectSurvivesReopen(t *testing.T) {
 	}
 	if got.String() != "persisted" {
 		t.Fatalf("reopened bytes = %q, want persisted", got.String())
+	}
+}
+
+func TestStoreExposesExplicitFilesystemCapacityProfile(t *testing.T) {
+	profile := backend.NonProductionFilesystemProfile("test-fs", 4*1024*1024*1024)
+	store, err := OpenWithCapacityProfile(t.TempDir(), profile)
+	if err != nil {
+		t.Fatalf("open store with profile: %v", err)
+	}
+	if store.Provider() != backend.ProviderFilesystem {
+		t.Fatalf("provider = %s, want filesystem", store.Provider())
+	}
+	got := store.CapacityProfile()
+	if got.ID != "test-fs" || got.Mode != backend.ProfileModeNonProduction || got.Provider != backend.ProviderFilesystem {
+		t.Fatalf("capacity profile = %#v, want explicit non-production filesystem profile", got)
+	}
+	got.LaneBudgets = nil
+	if len(store.CapacityProfile().LaneBudgets) == 0 {
+		t.Fatal("capacity profile was not defensively copied")
+	}
+}
+
+func TestStoreRejectsNonFilesystemCapacityProfile(t *testing.T) {
+	profile := backend.NonProductionFilesystemProfile("test-s3", 4*1024*1024*1024)
+	profile.Provider = backend.ProviderS3Like
+	_, err := OpenWithCapacityProfile(t.TempDir(), profile)
+	if err == nil || !errors.Is(err, backend.ErrPermanent) && !strings.Contains(err.Error(), "not filesystem") {
+		t.Fatalf("open error = %v, want provider rejection", err)
 	}
 }
 
