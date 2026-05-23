@@ -109,6 +109,33 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 	return result, nil
 }
 
+func (a *Application) RecoverInterruptedOperations(ctx context.Context, store *operations.Store) (operations.RecoveryResult, error) {
+	var result operations.RecoveryResult
+	if store == nil {
+		return result, fmt.Errorf("localstorage: operation store is not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	return store.RecoverInterrupted(a.now(), supportedOperationTypes())
+}
+
+func supportedOperationTypes() map[string]bool {
+	return map[string]bool{
+		"tombstone":         true,
+		"restore":           true,
+		"prewarm":           true,
+		"rewrap":            true,
+		"repair":            true,
+		"scrub":             true,
+		"drain":             true,
+		"capacity-override": true,
+		"metadata-restore":  true,
+		"copy-verify":       true,
+		"dr-drill":          true,
+	}
+}
+
 func isOperationQueued(store *operations.Store, operationID string) (bool, error) {
 	current, err := store.Get(operationID)
 	if err != nil {
@@ -117,12 +144,19 @@ func isOperationQueued(store *operations.Store, operationID string) (bool, error
 	return current.GetState() == adminv1.OperationState_OPERATION_STATE_QUEUED, nil
 }
 
-func (a *Application) runTombstoneOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
+func (a *Application) beginOperationAttempt(operation *adminv1.Operation, message string) (*adminv1.Operation, time.Time) {
 	now := a.now()
+	running := cloneOperation(operation)
 	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
 	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running tombstone operation"}
+	running.FinishedAt = nil
+	running.LastError = nil
+	running.Progress = &adminv1.OperationProgress{Message: message}
+	return running, now
+}
+
+func (a *Application) runTombstoneOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running, now := a.beginOperationAttempt(operation, "running tombstone operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -162,11 +196,7 @@ type scrubSummary struct {
 }
 
 func (a *Application) runScrubOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running scrub operation"}
+	running, now := a.beginOperationAttempt(operation, "running scrub operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -209,11 +239,7 @@ func (a *Application) runScrubOperation(ctx context.Context, store *operations.S
 }
 
 func (a *Application) runRewrapOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running rewrap operation"}
+	running, _ := a.beginOperationAttempt(operation, "running rewrap operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -352,11 +378,7 @@ func rewrapAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
 }
 
 func (a *Application) runRepairOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running repair operation"}
+	running, now := a.beginOperationAttempt(operation, "running repair operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -390,11 +412,7 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 }
 
 func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running " + operation.GetOperationType() + " operation"}
+	running, _ := a.beginOperationAttempt(operation, "running "+operation.GetOperationType()+" operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -459,11 +477,7 @@ func (a *Application) runCapacityOverrideOperation(ctx context.Context, store *o
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running capacity-override operation"}
+	running, _ := a.beginOperationAttempt(operation, "running capacity-override operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -512,11 +526,7 @@ func (a *Application) runCapacityOverrideOperation(ctx context.Context, store *o
 }
 
 func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running copy-verify operation"}
+	running, _ := a.beginOperationAttempt(operation, "running copy-verify operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -555,11 +565,7 @@ func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operati
 }
 
 func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running metadata-restore operation"}
+	running, _ := a.beginOperationAttempt(operation, "running metadata-restore operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -598,11 +604,7 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 }
 
 func (a *Application) runDRDrillOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running dr-drill operation"}
+	running, _ := a.beginOperationAttempt(operation, "running dr-drill operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -686,11 +688,7 @@ func restoreEvidenceCounters(restore MetadataRestoreResult) map[string]string {
 }
 
 func (a *Application) runDrainOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running drain operation"}
+	running, _ := a.beginOperationAttempt(operation, "running drain operation")
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
@@ -1093,11 +1091,7 @@ type restoreSummary struct {
 }
 
 func (a *Application) runRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running := cloneOperation(operation)
-	now := a.now()
-	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
-	running.StartedAt = timestamppb.New(now)
-	running.Progress = &adminv1.OperationProgress{Message: "running " + operation.GetOperationType() + " operation"}
+	running, now := a.beginOperationAttempt(operation, "running "+operation.GetOperationType()+" operation")
 	running.Metadata = restoreOperationMetadata(running)
 	if err := store.Put(running); err != nil {
 		return false, err

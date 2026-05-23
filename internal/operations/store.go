@@ -30,6 +30,15 @@ type ListFilter struct {
 	OperationType string
 }
 
+type RecoveryResult struct {
+	Scanned           int
+	Queued            int
+	Requeued          int
+	FailedUnsupported int
+	Terminal          int
+	Ignored           int
+}
+
 func Open(dir string) (*Store, error) {
 	db, err := pebble.Open(filepath.Join(dir, "operations"), &pebble.Options{})
 	if err != nil {
@@ -180,6 +189,57 @@ func (s *Store) Cancel(operationID string, finishedAt time.Time) (*adminv1.Opera
 	return operation, nil
 }
 
+func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool) (RecoveryResult, error) {
+	var result RecoveryResult
+	all, err := s.List(ListFilter{})
+	if err != nil {
+		return result, err
+	}
+	for _, operation := range all {
+		result.Scanned++
+		switch operation.GetState() {
+		case adminv1.OperationState_OPERATION_STATE_QUEUED:
+			result.Queued++
+		case adminv1.OperationState_OPERATION_STATE_RUNNING:
+			recovered := cloneOperation(operation)
+			if supportedTypes[recovered.GetOperationType()] {
+				recovered.State = adminv1.OperationState_OPERATION_STATE_QUEUED
+				recovered.FinishedAt = nil
+				appendRecoveryWarning(recovered, &adminv1.OperationWarning{
+					Code:    "SCRAP_OPERATION_RESTART_REQUEUED",
+					Message: "operation was running during process restart and was requeued for idempotent retry",
+				})
+				if err := s.Put(recovered); err != nil {
+					return result, err
+				}
+				result.Requeued++
+				continue
+			}
+			recovered.State = adminv1.OperationState_OPERATION_STATE_FAILED
+			recovered.FinishedAt = timestamppb.New(now)
+			appendRecoveryWarning(recovered, &adminv1.OperationWarning{
+				Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
+				Message: "operation was running during process restart but this binary cannot resume its type",
+			})
+			recovered.LastError = &adminv1.OperationError{
+				Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
+				Message: fmt.Sprintf("operation type %q cannot be resumed after restart", recovered.GetOperationType()),
+			}
+			if err := s.Put(recovered); err != nil {
+				return result, err
+			}
+			result.FailedUnsupported++
+		default:
+			if isTerminal(operation.GetState()) {
+				result.Terminal++
+				continue
+			}
+			result.Ignored++
+		}
+	}
+	return result, nil
+}
+
 func (s *Store) AppendAuditEvent(event *adminv1.AuditEvent) error {
 	if err := validateAuditEvent(event); err != nil {
 		return err
@@ -295,6 +355,22 @@ func isTerminal(state adminv1.OperationState) bool {
 	default:
 		return false
 	}
+}
+
+func cloneOperation(operation *adminv1.Operation) *adminv1.Operation {
+	if operation == nil {
+		return nil
+	}
+	return proto.Clone(operation).(*adminv1.Operation)
+}
+
+func appendRecoveryWarning(operation *adminv1.Operation, warning *adminv1.OperationWarning) {
+	for _, existing := range operation.GetWarnings() {
+		if existing.GetCode() == warning.GetCode() {
+			return
+		}
+	}
+	operation.Warnings = append(operation.Warnings, warning)
 }
 
 func unmarshalOperation(data []byte) (*adminv1.Operation, error) {

@@ -188,6 +188,161 @@ func TestStoreCancelLeavesTerminalOperationUnchanged(t *testing.T) {
 	}
 }
 
+func TestStoreRecoverInterruptedKeepsQueuedRetryEvidenceAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	operation := sampleOperation("op-1", "repair", adminv1.OperationState_OPERATION_STATE_QUEUED)
+	operation.Progress = &adminv1.OperationProgress{
+		Message: "queued retry",
+		Counters: map[string]string{
+			"retry_attempt": "2",
+		},
+	}
+	operation.Warnings = []*adminv1.OperationWarning{
+		{Code: "SCRAP_RETRY_WAITING", Message: "retry queued after transient failure"},
+	}
+	operation.LastError = &adminv1.OperationError{Code: "SCRAP_REPAIR_TRANSIENT", Message: "peer unavailable"}
+	operation.Metadata["audit_correlation_id"] = "audit-1"
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	result, err := reopened.RecoverInterrupted(time.Unix(200, 0).UTC(), map[string]bool{"repair": true})
+	if err != nil {
+		t.Fatalf("recover interrupted: %v", err)
+	}
+	if result.Scanned != 1 || result.Queued != 1 || result.Requeued != 0 || result.FailedUnsupported != 0 {
+		t.Fatalf("recovery result = %#v, want queued operation left unchanged", result)
+	}
+	got, err := reopened.Get("op-1")
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if !proto.Equal(got, operation) {
+		t.Fatalf("operation = %#v, want unchanged %#v", got, operation)
+	}
+}
+
+func TestStoreRecoverInterruptedRequeuesRunningSupportedOperation(t *testing.T) {
+	store := openTestStore(t)
+	startedAt := time.Unix(150, 0).UTC()
+	operation := sampleOperation("op-1", "repair", adminv1.OperationState_OPERATION_STATE_RUNNING)
+	operation.StartedAt = timestamppb.New(startedAt)
+	operation.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     3,
+		WorkUnitsCompleted: 1,
+		Message:            "retrying peer repair",
+		Counters: map[string]string{
+			"retry_attempt": "2",
+			"blocks_seen":   "7",
+		},
+	}
+	operation.Warnings = []*adminv1.OperationWarning{
+		{Code: "SCRAP_REPAIR_SOURCE_SLOW", Message: "peer repair source was slow"},
+	}
+	operation.LastError = &adminv1.OperationError{Code: "SCRAP_REPAIR_RETRYABLE", Message: "transient peer read failure"}
+	operation.Metadata["audit_correlation_id"] = "audit-1"
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := store.RecoverInterrupted(time.Unix(200, 0).UTC(), map[string]bool{"repair": true})
+	if err != nil {
+		t.Fatalf("recover interrupted: %v", err)
+	}
+	if result.Scanned != 1 || result.Requeued != 1 || result.FailedUnsupported != 0 {
+		t.Fatalf("recovery result = %#v, want one requeued operation", result)
+	}
+	got, err := store.Get("op-1")
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if got.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		!got.GetStartedAt().AsTime().Equal(startedAt) ||
+		got.GetFinishedAt() != nil ||
+		got.GetProgress().GetMessage() != "retrying peer repair" ||
+		got.GetProgress().GetCounters()["retry_attempt"] != "2" ||
+		got.GetProgress().GetCounters()["blocks_seen"] != "7" ||
+		got.GetLastError().GetCode() != "SCRAP_REPAIR_RETRYABLE" ||
+		got.GetMetadata()["audit_correlation_id"] != "audit-1" ||
+		!hasOperationWarningCode(got.GetWarnings(), "SCRAP_REPAIR_SOURCE_SLOW") ||
+		!hasOperationWarningCode(got.GetWarnings(), "SCRAP_OPERATION_RESTART_REQUEUED") {
+		t.Fatalf("recovered operation = %#v, want queued retry with existing evidence preserved", got)
+	}
+}
+
+func TestStoreRecoverInterruptedFailsUnsupportedRunningOperation(t *testing.T) {
+	store := openTestStore(t)
+	operation := sampleOperation("op-1", "legacy-maintenance", adminv1.OperationState_OPERATION_STATE_RUNNING)
+	operation.StartedAt = timestamppb.New(time.Unix(150, 0).UTC())
+	operation.Progress = &adminv1.OperationProgress{Message: "legacy operation running"}
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	finishedAt := time.Unix(200, 0).UTC()
+	result, err := store.RecoverInterrupted(finishedAt, map[string]bool{"repair": true})
+	if err != nil {
+		t.Fatalf("recover interrupted: %v", err)
+	}
+	if result.Scanned != 1 || result.Requeued != 0 || result.FailedUnsupported != 1 {
+		t.Fatalf("recovery result = %#v, want unsupported running operation failed", result)
+	}
+	got, err := store.Get("op-1")
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if got.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		!got.GetFinishedAt().AsTime().Equal(finishedAt) ||
+		got.GetLastError().GetCode() != "SCRAP_OPERATION_RECOVERY_UNSUPPORTED" ||
+		!hasOperationWarningCode(got.GetWarnings(), "SCRAP_OPERATION_RECOVERY_UNSUPPORTED") {
+		t.Fatalf("recovered operation = %#v, want typed unsupported terminal failure", got)
+	}
+}
+
+func TestStoreRecoverInterruptedLeavesTerminalStatesUnchanged(t *testing.T) {
+	store := openTestStore(t)
+	operations := []*adminv1.Operation{
+		sampleOperation("op-succeeded", "repair", adminv1.OperationState_OPERATION_STATE_SUCCEEDED),
+		sampleOperation("op-failed", "repair", adminv1.OperationState_OPERATION_STATE_FAILED),
+		sampleOperation("op-canceled", "repair", adminv1.OperationState_OPERATION_STATE_CANCELED),
+	}
+	for _, operation := range operations {
+		operation.FinishedAt = timestamppb.New(time.Unix(200, 0).UTC())
+		if err := store.Put(operation); err != nil {
+			t.Fatalf("put operation %s: %v", operation.GetOperationId(), err)
+		}
+	}
+
+	result, err := store.RecoverInterrupted(time.Unix(300, 0).UTC(), map[string]bool{"repair": true})
+	if err != nil {
+		t.Fatalf("recover interrupted: %v", err)
+	}
+	if result.Scanned != 3 || result.Terminal != 3 || result.Requeued != 0 || result.FailedUnsupported != 0 {
+		t.Fatalf("recovery result = %#v, want terminal operations left unchanged", result)
+	}
+	for _, operation := range operations {
+		got, err := store.Get(operation.GetOperationId())
+		if err != nil {
+			t.Fatalf("get operation %s: %v", operation.GetOperationId(), err)
+		}
+		if !proto.Equal(got, operation) {
+			t.Fatalf("operation %s = %#v, want unchanged %#v", operation.GetOperationId(), got, operation)
+		}
+	}
+}
+
 func TestStoreAppendAuditEventPersistsAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)
@@ -334,4 +489,13 @@ func samplePlan(operationPlanID string, planHash string) *adminv1.OperationPlan 
 			},
 		},
 	}
+}
+
+func hasOperationWarningCode(warnings []*adminv1.OperationWarning, code string) bool {
+	for _, warning := range warnings {
+		if warning.GetCode() == code {
+			return true
+		}
+	}
+	return false
 }

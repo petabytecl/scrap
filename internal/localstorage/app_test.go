@@ -3268,10 +3268,98 @@ func TestRunQueuedOperationsOnceCapacityOverrideRecordsBoundedEvidence(t *testin
 		t.Fatalf("get operation: %v", err)
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetLastError() != nil ||
 		finished.GetProgress().GetCounters()["capacity_profile_id"] != "production-a" ||
 		finished.GetProgress().GetCounters()["reason"] != "incident INC-42" ||
 		!hasWarningCode(finished.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY") {
 		t.Fatalf("finished operation = %#v, want recorded bounded capacity override evidence", finished)
+	}
+}
+
+func TestRecoverInterruptedOperationsRequeuesRunningCapacityOverrideAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(500, 0).UTC())
+	storeDir := t.TempDir()
+	store, err := operations.Open(storeDir)
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	operation := queuedOperation("capacity-override-restart-op-1", "capacity-override", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_CapacityProfile{
+				CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: "production-a"},
+			},
+		},
+	})
+	operation.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	operation.StartedAt = timestamppb.New(time.Unix(400, 0).UTC())
+	operation.DryRun = true
+	operation.Metadata = map[string]string{
+		"scrap.capacity_profile_id":          "production-a",
+		"scrap.capacity_override_expires_at": "2026-05-23T13:00:00Z",
+		"scrap.capacity_override_reason":     "incident INC-42",
+		"audit_correlation_id":               "audit-1",
+	}
+	operation.Progress = &adminv1.OperationProgress{
+		Message: "retrying capacity override evidence",
+		Counters: map[string]string{
+			"retry_attempt": "2",
+		},
+	}
+	operation.Warnings = []*adminv1.OperationWarning{
+		{Code: "SCRAP_CAPACITY_OVERRIDE_RETRY", Message: "previous attempt was interrupted"},
+	}
+	operation.LastError = &adminv1.OperationError{Code: "SCRAP_CAPACITY_OVERRIDE_RETRYABLE", Message: "process stopped"}
+	if err := store.Put(operation); err != nil {
+		_ = store.Close()
+		t.Fatalf("put operation: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close operation store: %v", err)
+	}
+
+	reopenedStore, err := operations.Open(storeDir)
+	if err != nil {
+		t.Fatalf("reopen operation store: %v", err)
+	}
+	defer reopenedStore.Close()
+	recovery, err := app.RecoverInterruptedOperations(ctx, reopenedStore)
+	if err != nil {
+		t.Fatalf("recover interrupted operations: %v", err)
+	}
+	if recovery.Scanned != 1 || recovery.Requeued != 1 || recovery.FailedUnsupported != 0 {
+		t.Fatalf("recovery result = %#v, want one requeued running operation", recovery)
+	}
+	recovered, err := reopenedStore.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get recovered operation: %v", err)
+	}
+	if recovered.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		recovered.GetProgress().GetCounters()["retry_attempt"] != "2" ||
+		recovered.GetLastError().GetCode() != "SCRAP_CAPACITY_OVERRIDE_RETRYABLE" ||
+		recovered.GetMetadata()["audit_correlation_id"] != "audit-1" ||
+		!hasWarningCode(recovered.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RETRY") ||
+		!hasWarningCode(recovered.GetWarnings(), "SCRAP_OPERATION_RESTART_REQUEUED") {
+		t.Fatalf("recovered operation = %#v, want queued retry with restart evidence preserved", recovered)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, reopenedStore)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want recovered capacity override to succeed", result)
+	}
+	finished, err := reopenedStore.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get finished operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["capacity_profile_id"] != "production-a" ||
+		finished.GetProgress().GetCounters()["reason"] != "incident INC-42" ||
+		!hasWarningCode(finished.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY") {
+		t.Fatalf("finished operation = %#v, want recovered capacity override evidence recorded", finished)
 	}
 }
 
