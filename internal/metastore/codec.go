@@ -28,6 +28,18 @@ func DocumentRecord(document Document) *metastorev1.DocumentRecord {
 	return documentToProto(normalizeDocumentDefaults(document))
 }
 
+func TransactionRecord(transaction Transaction) *metastorev1.TransactionRecord {
+	return transactionToProto(transaction)
+}
+
+func UploadIntentRecord(intent UploadIntent) *metastorev1.UploadIntentRecord {
+	return uploadIntentToProto(intent)
+}
+
+func RepairStateRecord(state RepairState) *metastorev1.RepairStateRecord {
+	return repairStateToProto(state)
+}
+
 func unmarshalDocument(data []byte) (Document, error) {
 	record, err := unmarshalDocumentRecord(data)
 	if err != nil {

@@ -115,6 +115,64 @@ func (l *Log) LastIndex() uint64 {
 	return l.nextIndex - 1
 }
 
+func (l *Log) EnsureNextIndex(nextIndex uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.nextIndex < nextIndex {
+		l.nextIndex = nextIndex
+	}
+}
+
+func (l *Log) Compact(throughIndex uint64) error {
+	if throughIndex == 0 {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return errors.New("raftmeta: log is closed")
+	}
+	entries, err := readEntries(l.path)
+	if err != nil {
+		return err
+	}
+	tail := entries[:0]
+	for _, entry := range entries {
+		if entry.Index > throughIndex {
+			tail = append(tail, entry)
+		}
+	}
+	dir := filepath.Dir(l.path)
+	tempPath := l.path + ".compact"
+	if err := writeEntries(tempPath, tail); err != nil {
+		return err
+	}
+	if err := l.file.Close(); err != nil {
+		return err
+	}
+	l.file = nil
+	if err := os.Rename(tempPath, l.path); err != nil {
+		if file, openErr := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600); openErr == nil {
+			l.file = file
+		}
+		return err
+	}
+	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	l.file = file
+	if err := syncDir(dir); err != nil {
+		return err
+	}
+	if len(tail) > 0 {
+		l.nextIndex = tail[len(tail)-1].Index + 1
+	} else if l.nextIndex <= throughIndex {
+		l.nextIndex = throughIndex + 1
+	}
+	return nil
+}
+
 func readEntries(path string) ([]Entry, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -126,7 +184,7 @@ func readEntries(path string) ([]Entry, error) {
 	defer file.Close()
 
 	var entries []Entry
-	expectedIndex := uint64(1)
+	expectedIndex := uint64(0)
 	for {
 		var header [commandLogHeaderLen]byte
 		if _, err := io.ReadFull(file, header[:]); err != nil {
@@ -136,6 +194,12 @@ func readEntries(path string) ([]Entry, error) {
 			return nil, err
 		}
 		index := binary.BigEndian.Uint64(header[0:8])
+		if index == 0 {
+			return nil, errors.New("raftmeta: command index 0 is invalid")
+		}
+		if expectedIndex == 0 {
+			expectedIndex = index
+		}
 		if index != expectedIndex {
 			return nil, fmt.Errorf("raftmeta: command index %d after %d", index, expectedIndex-1)
 		}
@@ -162,6 +226,30 @@ func readEntries(path string) ([]Entry, error) {
 		entries = append(entries, Entry{Index: index, Command: command})
 		expectedIndex++
 	}
+}
+
+func writeEntries(path string, entries []Entry) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		payload, err := metastore.MarshalShardCommand(entry.Command)
+		if err != nil {
+			_ = file.Close()
+			return err
+		}
+		frame := encodeFrame(entry.Index, payload)
+		if _, err := file.Write(frame); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func encodeFrame(index uint64, payload []byte) []byte {
