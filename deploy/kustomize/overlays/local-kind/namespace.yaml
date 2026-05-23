@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scrap-local
+  labels:
+    cl.petabyte.scrap/release-profile: scrap-prod-v1
+    cl.petabyte.scrap/environment: local-kind

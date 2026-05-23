@@ -13,17 +13,19 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/petabytecl/scrap/internal/authz"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
 
 func TestRunRejectsMissingPlanTargetsBeforeDial(t *testing.T) {
 	calledDial := false
 	err := Run(context.Background(), Config{
-		Dial: func(context.Context, string) (*grpc.ClientConn, error) {
+		Dial: func(context.Context, string, ...grpc.DialOption) (*grpc.ClientConn, error) {
 			calledDial = true
 			return nil, errors.New("dial should not happen")
 		},
@@ -40,7 +42,7 @@ func TestRunRejectsMissingPlanTargetsBeforeDial(t *testing.T) {
 func TestRunRejectsOversizedPageSizeBeforeDial(t *testing.T) {
 	calledDial := false
 	err := Run(context.Background(), Config{
-		Dial: func(context.Context, string) (*grpc.ClientConn, error) {
+		Dial: func(context.Context, string, ...grpc.DialOption) (*grpc.ClientConn, error) {
 			calledDial = true
 			return nil, errors.New("dial should not happen")
 		},
@@ -180,6 +182,25 @@ func TestFailureFromGRPCBadRequestExposesViolations(t *testing.T) {
 	}
 }
 
+func TestRunAttachesWorkloadIdentityMetadata(t *testing.T) {
+	inspect := &fakeInspectServer{}
+	dial := newBufconnDialer(t, func(server *grpc.Server) {
+		adminv1.RegisterInspectServiceServer(server, inspect)
+	})
+
+	err := Run(context.Background(), Config{Dial: dial}, []string{
+		"--admin-addr", "bufnet",
+		"--workload-identity", "local-operator",
+		"inspect", "summary",
+	}, bytes.NewBuffer(nil))
+	if err != nil {
+		t.Fatalf("run inspect summary: %v", err)
+	}
+	if inspect.workloadIdentity != "local-operator" {
+		t.Fatalf("workload identity = %q, want local-operator", inspect.workloadIdentity)
+	}
+}
+
 type fakeRestoreServer struct {
 	adminv1.UnimplementedRestoreServiceServer
 	planRestoreReq *adminv1.PlanRestoreRequest
@@ -263,6 +284,20 @@ func (s *fakeOperationServer) WatchOperation(req *adminv1.WatchOperationRequest,
 	return nil
 }
 
+type fakeInspectServer struct {
+	adminv1.UnimplementedInspectServiceServer
+	workloadIdentity string
+}
+
+func (s *fakeInspectServer) GetClusterSummary(ctx context.Context, _ *adminv1.GetClusterSummaryRequest) (*adminv1.GetClusterSummaryResponse, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get(authz.WorkloadIdentityMetadataKey)
+	if len(values) == 1 {
+		s.workloadIdentity = values[0]
+	}
+	return &adminv1.GetClusterSummaryResponse{Summary: &adminv1.ClusterSummary{}}, nil
+}
+
 func newBufconnDialer(t *testing.T, register func(*grpc.Server)) Dialer {
 	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
@@ -275,12 +310,15 @@ func newBufconnDialer(t *testing.T, register func(*grpc.Server)) Dialer {
 		server.Stop()
 		_ = listener.Close()
 	})
-	return func(context.Context, string) (*grpc.ClientConn, error) {
-		return grpc.NewClient("passthrough:///bufnet",
+	return func(_ context.Context, _ string, options ...grpc.DialOption) (*grpc.ClientConn, error) {
+		options = append([]grpc.DialOption{
 			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 				return listener.DialContext(ctx)
 			}),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		}, options...)
+		return grpc.NewClient("passthrough:///bufnet",
+			options...,
 		)
 	}
 }

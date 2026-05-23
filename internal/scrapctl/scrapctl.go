@@ -15,11 +15,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/petabytecl/scrap/internal/authz"
 	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
@@ -32,7 +34,7 @@ var jsonFormat = protojson.MarshalOptions{
 	UseProtoNames: true,
 }
 
-type Dialer func(context.Context, string) (*grpc.ClientConn, error)
+type Dialer func(context.Context, string, ...grpc.DialOption) (*grpc.ClientConn, error)
 
 type Config struct {
 	Dial Dialer
@@ -74,6 +76,7 @@ func Run(ctx context.Context, cfg Config, args []string, stdout io.Writer) error
 	global := newFlagSet("scrapctl")
 	adminAddr := global.String("admin-addr", defaultAdminAddress, "admin gRPC address")
 	timeout := global.Duration("timeout", 30*time.Second, "RPC timeout")
+	workloadIdentity := global.String("workload-identity", "", "workload identity metadata to attach to admin RPCs")
 	if err := global.Parse(args); err != nil {
 		return usageError(err.Error())
 	}
@@ -94,7 +97,7 @@ func Run(ctx context.Context, cfg Config, args []string, stdout io.Writer) error
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 
-	conn, err := dial(ctx, *adminAddr)
+	conn, err := dial(ctx, *adminAddr, workloadIdentityDialOptions(*workloadIdentity)...)
 	if err != nil {
 		return err
 	}
@@ -103,8 +106,51 @@ func Run(ctx context.Context, cfg Config, args []string, stdout io.Writer) error
 	return call(ctx, newClients(conn), stdout)
 }
 
-func defaultDial(_ context.Context, address string) (*grpc.ClientConn, error) {
-	return grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func defaultDial(_ context.Context, address string, options ...grpc.DialOption) (*grpc.ClientConn, error) {
+	options = append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, options...)
+	return grpc.NewClient(address, options...)
+}
+
+func workloadIdentityDialOptions(workloadIdentity string) []grpc.DialOption {
+	workloadIdentity = strings.TrimSpace(workloadIdentity)
+	if workloadIdentity == "" {
+		return nil
+	}
+	return []grpc.DialOption{
+		grpc.WithUnaryInterceptor(workloadUnaryClientInterceptor(workloadIdentity)),
+		grpc.WithStreamInterceptor(workloadStreamClientInterceptor(workloadIdentity)),
+	}
+}
+
+func workloadUnaryClientInterceptor(workloadIdentity string) grpc.UnaryClientInterceptor {
+	return func(
+		ctx context.Context,
+		method string,
+		req any,
+		reply any,
+		cc *grpc.ClientConn,
+		invoker grpc.UnaryInvoker,
+		opts ...grpc.CallOption,
+	) error {
+		return invoker(workloadContext(ctx, workloadIdentity), method, req, reply, cc, opts...)
+	}
+}
+
+func workloadStreamClientInterceptor(workloadIdentity string) grpc.StreamClientInterceptor {
+	return func(
+		ctx context.Context,
+		desc *grpc.StreamDesc,
+		cc *grpc.ClientConn,
+		method string,
+		streamer grpc.Streamer,
+		opts ...grpc.CallOption,
+	) (grpc.ClientStream, error) {
+		return streamer(workloadContext(ctx, workloadIdentity), desc, cc, method, opts...)
+	}
+}
+
+func workloadContext(ctx context.Context, workloadIdentity string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, authz.WorkloadIdentityMetadataKey, workloadIdentity)
 }
 
 func newClients(conn grpc.ClientConnInterface) clients {

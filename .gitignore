@@ -34,6 +34,7 @@ coverage.out
 
 # Local evidence artifacts
 crash-fault-evidence.json
+local-kind-evidence.json
 release-evidence.json
 
 # Logs

@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: localstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: localstack
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: localstack
+    spec:
+      containers:
+        - name: localstack
+          image: localstack/localstack:4.8.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SERVICES
+              value: s3
+            - name: DEBUG
+              value: "0"
+          ports:
+            - name: edge
+              containerPort: 4566
+          readinessProbe:
+            httpGet:
+              path: /_localstack/health
+              port: edge
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: localstack
+spec:
+  selector:
+    app.kubernetes.io/component: localstack
+  ports:
+    - name: edge
+      port: 4566
+      targetPort: edge
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: localstack-s3-bootstrap
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: localstack/localstack:4.8.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: test
+            - name: AWS_SECRET_ACCESS_KEY
+              value: test
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: LOCALSTACK_HOST
+              value: localstack
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until awslocal s3 ls >/dev/null 2>&1; do
+                sleep 1
+              done
+              awslocal s3 mb s3://scrap-local || true
