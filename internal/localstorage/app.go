@@ -14,6 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/backendupload"
@@ -29,9 +33,6 @@ import (
 	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Application struct {
@@ -60,8 +61,10 @@ type Application struct {
 	writeFaults              writeFaultHooks
 }
 
-const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
-const backendReadChunkSize = 1024 * 1024
+const (
+	DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
+	backendReadChunkSize           = 1024 * 1024
+)
 
 type BackendUploadOnceResult struct {
 	SealedBlockID       string
@@ -669,7 +672,7 @@ func restoreOnReadIsQueuedOrRunning(operation *adminv1.Operation) bool {
 	}
 }
 
-func requeueRestoreOnReadOperation(existing *adminv1.Operation, desired *adminv1.Operation, now time.Time) *adminv1.Operation {
+func requeueRestoreOnReadOperation(existing, desired *adminv1.Operation, now time.Time) *adminv1.Operation {
 	operation := cloneOperation(existing)
 	operation.State = adminv1.OperationState_OPERATION_STATE_QUEUED
 	operation.StartedAt = nil
@@ -809,7 +812,7 @@ func (a *Application) verifyBackendEnvelope(ctx context.Context, intent metastor
 	return cryptoenv.ValidateEnvelopeRecordForRestore(ctx, a.envelopeTransit, envelope)
 }
 
-func verificationWindow(record blockstore.Record, offset uint64, length uint64) (uint64, uint64, error) {
+func verificationWindow(record blockstore.Record, offset, length uint64) (uint64, uint64, error) {
 	if offset+length < offset || offset+length > record.StoredLength {
 		return 0, 0, blockstore.ErrInvalidRange
 	}
@@ -839,7 +842,7 @@ func verificationWindow(record blockstore.Record, offset uint64, length uint64) 
 	return verifyStart, verifyEnd, nil
 }
 
-func verifyFetchedBackendWindow(record blockstore.Record, offset uint64, length uint64, verifyStart uint64, data []byte) error {
+func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verifyStart uint64, data []byte) error {
 	if len(record.Frames) == 0 {
 		if uint64(len(data)) != record.StoredLength {
 			return io.ErrUnexpectedEOF
@@ -1150,7 +1153,7 @@ func (a *Application) recordPeerRepairState(ctx context.Context, document metast
 	return a.recordRepairState(ctx, document.Identity, peerRepairPhysicalRef(replica), peerIntegrityEvidenceID(document, replica), quarantined, now)
 }
 
-func (a *Application) recordRepairState(ctx context.Context, doc identity.Document, physicalRef string, incidentID string, quarantined bool, now time.Time) error {
+func (a *Application) recordRepairState(ctx context.Context, doc identity.Document, physicalRef, incidentID string, quarantined bool, now time.Time) error {
 	return a.authority.RecordRepairState(ctx, metastore.RepairState{
 		Identity:    doc,
 		PhysicalRef: physicalRef,

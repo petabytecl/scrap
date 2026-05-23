@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestValidateAdminTargetDocumentNormalizesIdentity(t *testing.T) {

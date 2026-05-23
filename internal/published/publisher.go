@@ -250,7 +250,7 @@ func publishedObjectRefs(ctx context.Context, store backend.Store, documents []m
 			refs = append(refs, envelopeRef)
 		}
 	}
-	sort.Slice(refs, func(i int, j int) bool {
+	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].GetObjectKey() != refs[j].GetObjectKey() {
 			return refs[i].GetObjectKey() < refs[j].GetObjectKey()
 		}

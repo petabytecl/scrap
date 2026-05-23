@@ -1,5 +1,6 @@
 .PHONY: proto
 .PHONY: proto-check
+.PHONY: fmt
 .PHONY: fmt-check
 .PHONY: lint
 .PHONY: vuln
@@ -35,6 +36,9 @@ proto-check:
 	fi
 	$(BUF) generate
 	git diff --exit-code -- internal/gen
+
+fmt:
+	$(GOLANGCI_LINT) fmt
 
 fmt-check:
 	@test -z "$$(gofmt -l .)"

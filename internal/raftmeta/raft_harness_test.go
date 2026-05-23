@@ -211,7 +211,7 @@ func (h *raftFaultHarness) readIndex() error {
 	return errors.New("raft harness read index was not confirmed")
 }
 
-func (h *raftFaultHarness) enterJointReplacement(t *testing.T, remove uint64, add uint64) {
+func (h *raftFaultHarness) enterJointReplacement(t *testing.T, remove, add uint64) {
 	t.Helper()
 	change := pb.ConfChangeV2{
 		Transition: pb.ConfChangeTransitionJointExplicit,
@@ -246,7 +246,7 @@ func (h *raftFaultHarness) proposeConfChange(t *testing.T, change pb.ConfChangeV
 	})
 }
 
-func (h *raftFaultHarness) installSnapshot(t *testing.T, sourceID uint64, targetID uint64) {
+func (h *raftFaultHarness) installSnapshot(t *testing.T, sourceID, targetID uint64) {
 	t.Helper()
 	source := h.nodes[sourceID]
 	target := h.nodes[targetID]
@@ -312,17 +312,17 @@ func (h *raftFaultHarness) heal(id uint64) {
 	}
 }
 
-func (h *raftFaultHarness) dropBetween(a uint64, b uint64) {
+func (h *raftFaultHarness) dropBetween(a, b uint64) {
 	h.drops[raftHarnessPair{from: a, to: b}] = true
 	h.drops[raftHarnessPair{from: b, to: a}] = true
 }
 
-func (h *raftFaultHarness) allowBetween(a uint64, b uint64) {
+func (h *raftFaultHarness) allowBetween(a, b uint64) {
 	delete(h.drops, raftHarnessPair{from: a, to: b})
 	delete(h.drops, raftHarnessPair{from: b, to: a})
 }
 
-func (h *raftFaultHarness) delayBetween(a uint64, b uint64) {
+func (h *raftFaultHarness) delayBetween(a, b uint64) {
 	h.delays[raftHarnessPair{from: a, to: b}] = true
 	h.delays[raftHarnessPair{from: b, to: a}] = true
 }
@@ -588,15 +588,15 @@ func containsUint64(values []uint64, value uint64) bool {
 
 type raftNopLogger struct{}
 
-func (raftNopLogger) Debug(...interface{})              {}
-func (raftNopLogger) Debugf(string, ...interface{})     {}
-func (raftNopLogger) Error(...interface{})              {}
-func (raftNopLogger) Errorf(string, ...interface{})     {}
-func (raftNopLogger) Info(...interface{})               {}
-func (raftNopLogger) Infof(string, ...interface{})      {}
-func (raftNopLogger) Warning(...interface{})            {}
-func (raftNopLogger) Warningf(string, ...interface{})   {}
-func (raftNopLogger) Fatal(v ...interface{})            { panic(fmt.Sprint(v...)) }
-func (raftNopLogger) Fatalf(f string, v ...interface{}) { panic(fmt.Sprintf(f, v...)) }
-func (raftNopLogger) Panic(v ...interface{})            { panic(fmt.Sprint(v...)) }
-func (raftNopLogger) Panicf(f string, v ...interface{}) { panic(fmt.Sprintf(f, v...)) }
+func (raftNopLogger) Debug(...any)              {}
+func (raftNopLogger) Debugf(string, ...any)     {}
+func (raftNopLogger) Error(...any)              {}
+func (raftNopLogger) Errorf(string, ...any)     {}
+func (raftNopLogger) Info(...any)               {}
+func (raftNopLogger) Infof(string, ...any)      {}
+func (raftNopLogger) Warning(...any)            {}
+func (raftNopLogger) Warningf(string, ...any)   {}
+func (raftNopLogger) Fatal(v ...any)            { panic(fmt.Sprint(v...)) }
+func (raftNopLogger) Fatalf(f string, v ...any) { panic(fmt.Sprintf(f, v...)) }
+func (raftNopLogger) Panic(v ...any)            { panic(fmt.Sprint(v...)) }
+func (raftNopLogger) Panicf(f string, v ...any) { panic(fmt.Sprintf(f, v...)) }

@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {

@@ -429,14 +429,14 @@ type controlledFreshness struct {
 	writeChecks []FreshnessCheck
 }
 
-func newControlledFreshness(leader bool, quorum bool) *controlledFreshness {
+func newControlledFreshness(leader, quorum bool) *controlledFreshness {
 	return &controlledFreshness{
 		leader: leader,
 		quorum: quorum,
 	}
 }
 
-func (c *controlledFreshness) set(leader bool, quorum bool) {
+func (c *controlledFreshness) set(leader, quorum bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.leader = leader

@@ -1,8 +1,9 @@
 package metastore
 
 import (
-	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"google.golang.org/protobuf/proto"
+
+	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 )
 
 func MarshalShardCommand(command *metastorev1.ShardCommand) ([]byte, error) {

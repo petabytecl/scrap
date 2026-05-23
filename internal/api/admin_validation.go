@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -386,7 +387,7 @@ func validateTargetPlanRequest(
 	return out, nil
 }
 
-func validateStartRequest(operationID string, operationPlanID string, planHash string, metadata map[string]string) (OperationStartRequest, error) {
+func validateStartRequest(operationID, operationPlanID, planHash string, metadata map[string]string) (OperationStartRequest, error) {
 	var problems violations
 	validateUUIDv7("operation_id", operationID, &problems)
 	validateRequiredText("operation_plan_id", operationPlanID, &problems)
@@ -522,7 +523,7 @@ func validateCapacityProfileTarget(field string, target *adminv1.CapacityProfile
 	return target.CapacityProfileId
 }
 
-func validateUUIDv7(field string, value string, problems *violations) {
+func validateUUIDv7(field, value string, problems *violations) {
 	if value == "" {
 		problems.add(field, identity.ReasonRequired, field+" is required")
 		return

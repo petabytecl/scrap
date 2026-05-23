@@ -7,13 +7,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/petabytecl/scrap/internal/api"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safepath"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const localMemberStateFile = "local-member-state.json"
@@ -105,7 +106,7 @@ func (a *Application) requireCapacityAdmission(ctx context.Context, expectedLeng
 	})
 }
 
-func unsafeCapacityError(requiredBytes uint64, availableBytes uint64, warnings []string) error {
+func unsafeCapacityError(requiredBytes, availableBytes uint64, warnings []string) error {
 	st := status.New(codes.ResourceExhausted, "local capacity profile cannot admit write")
 	withDetails, err := st.WithDetails(&scrapv1.UnsafeCapacityDetail{
 		CapacityProfileId: localCapacityProfileID,
@@ -119,7 +120,7 @@ func unsafeCapacityError(requiredBytes uint64, availableBytes uint64, warnings [
 	return withDetails.Err()
 }
 
-func saturatingAddUint64(left uint64, right uint64) uint64 {
+func saturatingAddUint64(left, right uint64) uint64 {
 	if right > ^uint64(0)-left {
 		return ^uint64(0)
 	}
@@ -215,7 +216,7 @@ func syncLocalDir(path string) error {
 	return errors.Join(dir.Sync(), dir.Close())
 }
 
-func removeLocalPath(root string, path string) error {
+func removeLocalPath(root, path string) error {
 	path, err := safepath.UnderDir(root, path)
 	if err != nil {
 		return err

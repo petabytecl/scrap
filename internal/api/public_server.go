@@ -10,16 +10,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/petabytecl/scrap/internal/authz"
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
-	"github.com/petabytecl/scrap/internal/identity"
-	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/petabytecl/scrap/internal/authz"
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
+	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
 )
 
 const reasonInvalidStreamOrder = "SCRAP_INVALID_STREAM_ORDER"
@@ -484,7 +485,7 @@ func optionalProtoTime(value *time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(*value)
 }
 
-func invalidArgument(field string, reason string, description string) error {
+func invalidArgument(field, reason, description string) error {
 	var problems violations
 	problems.add(field, reason, description)
 	return problems.err()

@@ -10,13 +10,14 @@ import (
 	"sort"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/backend"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var deterministicMarshal = proto.MarshalOptions{Deterministic: true}
@@ -59,8 +60,8 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func buildBlockIndex(blockID string, shardID string, blockObject backend.Object, envelopeObjectKey string, documents []metastore.Document) (*storagev1.BlockIndex, error) {
-	sort.Slice(documents, func(i int, j int) bool {
+func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelopeObjectKey string, documents []metastore.Document) (*storagev1.BlockIndex, error) {
+	sort.Slice(documents, func(i, j int) bool {
 		left := documents[i]
 		right := documents[j]
 		if left.Location.StoredOffset != right.Location.StoredOffset {

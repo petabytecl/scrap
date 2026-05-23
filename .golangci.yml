@@ -8,6 +8,32 @@ run:
 issues:
   max-same-issues: 20
 
+formatters:
+  enable:
+    - goimports
+    - gci
+    - gofumpt
+    - gofmt
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/petabytecl/scrap
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/petabytecl/scrap)
+    gofumpt:
+      module-path: github.com/petabytecl/scrap
+      extra-rules: true
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: any
+        - pattern: "a[b:len(a)]"
+          replacement: "a[b:]"
+
 linters:
   default: none
   enable:

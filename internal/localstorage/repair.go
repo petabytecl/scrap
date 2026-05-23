@@ -3,9 +3,10 @@ package localstorage
 import (
 	"context"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (a *Application) GetRepairQueue(ctx context.Context, shardID string) ([]*adminv1.RepairQueueItem, error) {

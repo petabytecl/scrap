@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestReadSnapshotContentsImportsDocumentsAndUploadIntents(t *testing.T) {

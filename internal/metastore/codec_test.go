@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
-	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
-	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
+	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 )
 
 func TestAuthoritativeDocumentRecordSchemaShape(t *testing.T) {

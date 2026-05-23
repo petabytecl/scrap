@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func UnderDir(root string, path string) (string, error) {
+func UnderDir(root, path string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("storage root is required")
 	}

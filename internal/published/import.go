@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"io"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/petabytecl/scrap/internal/blockstore"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -246,7 +247,7 @@ func applyTailHeader(contents *TailContents, record *publishedv1.TailRecord, opt
 	return nil
 }
 
-func validateSourceOwnership(recordKind string, sourceNamespace string, shardID string, options ImportOptions) error {
+func validateSourceOwnership(recordKind, sourceNamespace, shardID string, options ImportOptions) error {
 	if sourceNamespace == "" {
 		return invalidArtifact("%s source namespace is required", recordKind)
 	}

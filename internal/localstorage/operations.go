@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
@@ -21,8 +24,6 @@ import (
 	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type OperationRunResult struct {
@@ -343,7 +344,7 @@ func (a *Application) applyRewrapOperation(ctx context.Context, operation *admin
 	return rewrapped, skipped, nil
 }
 
-func (a *Application) rewrapBlockEnvelope(ctx context.Context, store backend.MutableStore, blockID string, destinationKeyID string, rewrappedAt time.Time) (bool, error) {
+func (a *Application) rewrapBlockEnvelope(ctx context.Context, store backend.MutableStore, blockID, destinationKeyID string, rewrappedAt time.Time) (bool, error) {
 	intent, err := a.metadata.GetUploadIntent(blockID)
 	if err != nil {
 		return false, err

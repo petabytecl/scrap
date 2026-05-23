@@ -8,15 +8,16 @@ import (
 	"strings"
 	"time"
 
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
-	"github.com/petabytecl/scrap/internal/identity"
-	"github.com/petabytecl/scrap/internal/operations"
-	"github.com/petabytecl/scrap/internal/safeconv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/safeconv"
 )
 
 type AdminServer struct {
@@ -832,7 +833,7 @@ func (s *AdminServer) startPlannedOperation(operationType string, req OperationS
 	return s.startPlannedOperationFromPlan(operationType, operationType, req)
 }
 
-func (s *AdminServer) startPlannedOperationFromPlan(planType string, operationType string, req OperationStartRequest) (*adminv1.Operation, error) {
+func (s *AdminServer) startPlannedOperationFromPlan(planType, operationType string, req OperationStartRequest) (*adminv1.Operation, error) {
 	plan, err := s.operations.GetPlan(req.OperationPlanID)
 	if errors.Is(err, operations.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "operation plan not found")
@@ -927,7 +928,7 @@ func (s *AdminServer) auditOperationCanceled(operation *adminv1.Operation) error
 	})
 }
 
-func (s *AdminServer) auditMemberMutation(eventType string, operationType string, req MemberMutationRequest) error {
+func (s *AdminServer) auditMemberMutation(eventType, operationType string, req MemberMutationRequest) error {
 	if s.operations == nil {
 		return nil
 	}
@@ -953,7 +954,7 @@ func (s *AdminServer) auditMemberMutation(eventType string, operationType string
 	})
 }
 
-func auditEventID(eventType string, operationID string) string {
+func auditEventID(eventType, operationID string) string {
 	return eventType + ":" + operationID
 }
 

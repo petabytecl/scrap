@@ -6,9 +6,10 @@ import (
 	"sort"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type LocationObjects struct {
@@ -39,7 +40,7 @@ func WriteMetadataSnapshotRecords(writer io.Writer, options SnapshotOptions, doc
 		return fmt.Errorf("published metadata: shard id is required")
 	}
 	ordered := append([]metastore.Document(nil), documents...)
-	sort.Slice(ordered, func(i int, j int) bool {
+	sort.Slice(ordered, func(i, j int) bool {
 		left := ordered[i].Identity
 		right := ordered[j].Identity
 		if left.TenantID != right.TenantID {
@@ -57,7 +58,7 @@ func WriteMetadataSnapshotRecords(writer io.Writer, options SnapshotOptions, doc
 		}
 	}
 	orderedTransactions := append([]metastore.Transaction(nil), transactions...)
-	sort.Slice(orderedTransactions, func(i int, j int) bool {
+	sort.Slice(orderedTransactions, func(i, j int) bool {
 		left := orderedTransactions[i].Identity
 		right := orderedTransactions[j].Identity
 		if left.TenantID != right.TenantID {

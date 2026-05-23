@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestLogAppendReplayAndContinueAfterReopen(t *testing.T) {
@@ -103,7 +104,7 @@ func TestLogRejectsCorruptRecord(t *testing.T) {
 	}
 }
 
-func sampleCommand(commandID string, documentName string) *metastorev1.ShardCommand {
+func sampleCommand(commandID, documentName string) *metastorev1.ShardCommand {
 	return &metastorev1.ShardCommand{
 		SchemaVersion: metastore.CurrentSchemaVersion,
 		ShardId:       "tenant-txn",

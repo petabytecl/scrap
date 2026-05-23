@@ -7,14 +7,17 @@ import (
 	"hash/crc32"
 	"io"
 
+	"google.golang.org/protobuf/proto"
+
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/safeconv"
-	"google.golang.org/protobuf/proto"
 )
 
-const CurrentSchemaVersion uint32 = 1
-const CurrentLocationFormatVersion uint32 = 1
-const maxArtifactRecordPayload = 64 * 1024 * 1024
+const (
+	CurrentSchemaVersion         uint32 = 1
+	CurrentLocationFormatVersion uint32 = 1
+	maxArtifactRecordPayload            = 64 * 1024 * 1024
+)
 
 var (
 	ErrUnsupportedSchemaVersion  = errors.New("published metadata: unsupported schema version")
@@ -23,8 +26,10 @@ var (
 	errArtifactRecordPayloadZero = errors.New("published metadata: artifact record payload is empty")
 )
 
-var marshalOptions = proto.MarshalOptions{Deterministic: true}
-var crcTable = crc32.MakeTable(crc32.Castagnoli)
+var (
+	marshalOptions = proto.MarshalOptions{Deterministic: true}
+	crcTable       = crc32.MakeTable(crc32.Castagnoli)
+)
 
 func MarshalCurrentPointer(pointer *publishedv1.CurrentPointer) ([]byte, error) {
 	if err := validateSchemaVersion("current pointer", pointer.GetSchemaVersion()); err != nil {

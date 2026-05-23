@@ -14,11 +14,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/petabytecl/scrap/internal/closeutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/petabytecl/scrap/internal/closeutil"
 )
 
 const (
@@ -344,7 +345,7 @@ func compilePolicy(policy Policy, knownCapabilities map[Capability]struct{}) (co
 	return out, nil
 }
 
-func validateIdentifier(label string, value string) error {
+func validateIdentifier(label, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%w: %s is required", ErrInvalidPolicy, label)
 	}
@@ -396,7 +397,7 @@ func cloneCapabilityMap(in map[string]Capability) map[string]Capability {
 
 func SortedCapabilities(capabilities []Capability) []Capability {
 	out := append([]Capability(nil), capabilities...)
-	sort.Slice(out, func(i int, j int) bool {
+	sort.Slice(out, func(i, j int) bool {
 		return out[i] < out[j]
 	})
 	return out

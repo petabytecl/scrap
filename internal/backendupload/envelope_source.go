@@ -7,12 +7,13 @@ import (
 	"io"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -68,7 +69,7 @@ func (s TransitBlockEnvelopeSource) OpenBlockEnvelope(ctx context.Context, inten
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func buildLocalEnvelopeRecord(intent metastore.UploadIntent, blockObject backend.Object, cellID string, keyID string) (*storagev1.EnvelopeRecord, error) {
+func buildLocalEnvelopeRecord(intent metastore.UploadIntent, blockObject backend.Object, cellID, keyID string) (*storagev1.EnvelopeRecord, error) {
 	if intent.BlockID == "" {
 		return nil, fmt.Errorf("backendupload: upload intent block id is required")
 	}
@@ -105,6 +106,6 @@ func buildLocalEnvelopeRecord(intent metastore.UploadIntent, blockObject backend
 	return record, nil
 }
 
-func localEnvelopeAAD(cellID string, blockID string, blockObject backend.Object) []byte {
+func localEnvelopeAAD(cellID, blockID string, blockObject backend.Object) []byte {
 	return cryptoenv.EnvelopeAAD(cellID, blockID, blockObject)
 }

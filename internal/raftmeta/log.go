@@ -286,7 +286,7 @@ func encodeFrame(index uint64, payload []byte) ([]byte, error) {
 	return frame, nil
 }
 
-func checksumFrame(header []byte, payload []byte) uint32 {
+func checksumFrame(header, payload []byte) uint32 {
 	crc := crc32.New(commandLogCRCTable)
 	_, _ = crc.Write(header)
 	_, _ = crc.Write(payload)

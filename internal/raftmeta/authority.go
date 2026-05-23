@@ -9,10 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Authority struct {
@@ -33,11 +34,11 @@ type AuthorityOptions struct {
 	FreshnessChecker FreshnessChecker
 }
 
-func OpenAuthority(dir string, shardID string, store *metastore.Store) (*Authority, error) {
+func OpenAuthority(dir, shardID string, store *metastore.Store) (*Authority, error) {
 	return OpenAuthorityWithOptions(dir, shardID, store, AuthorityOptions{})
 }
 
-func OpenAuthorityWithOptions(dir string, shardID string, store *metastore.Store, options AuthorityOptions) (*Authority, error) {
+func OpenAuthorityWithOptions(dir, shardID string, store *metastore.Store, options AuthorityOptions) (*Authority, error) {
 	if shardID == "" {
 		return nil, errors.New("raftmeta: shard id is required")
 	}
@@ -227,7 +228,7 @@ func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.Upl
 	return a.appendAndApplyLocked(command)
 }
 
-func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError string, commandID string, proposedAt time.Time) error {
+func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -254,7 +255,7 @@ func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string,
 	return a.appendAndApplyLocked(command)
 }
 
-func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity.Document, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
+func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity.Document, state metastore.RestoreState, reason, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -282,7 +283,7 @@ func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity
 	return a.appendAndApplyLocked(command)
 }
 
-func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transaction identity.Transaction, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
+func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transaction identity.Transaction, state metastore.RestoreState, reason, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -336,7 +337,7 @@ func (a *Authority) RecordRepairState(ctx context.Context, state metastore.Repai
 	return a.appendAndApplyLocked(command)
 }
 
-func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID string, commandID string) error {
+func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID, commandID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

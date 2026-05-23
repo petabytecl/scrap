@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 )
 
 const metadataLayoutVersion = "v1"
@@ -33,7 +34,7 @@ func CurrentPointerObjectKey(cellID string) (string, error) {
 	return fmt.Sprintf("cells/%s/metadata/%s/current.pointer", cellID, metadataLayoutVersion), nil
 }
 
-func ManifestObjectKey(cellID string, manifestID string) (string, error) {
+func ManifestObjectKey(cellID, manifestID string) (string, error) {
 	if cellID == "" {
 		return "", fmt.Errorf("published metadata: cell id is required")
 	}
@@ -43,7 +44,7 @@ func ManifestObjectKey(cellID string, manifestID string) (string, error) {
 	return fmt.Sprintf("cells/%s/metadata/%s/manifests/%s.manifest", cellID, metadataLayoutVersion, manifestID), nil
 }
 
-func SnapshotObjectKey(cellID string, shardID string, snapshotID string) (string, error) {
+func SnapshotObjectKey(cellID, shardID, snapshotID string) (string, error) {
 	if cellID == "" {
 		return "", fmt.Errorf("published metadata: cell id is required")
 	}
@@ -56,7 +57,7 @@ func SnapshotObjectKey(cellID string, shardID string, snapshotID string) (string
 	return fmt.Sprintf("cells/%s/metadata/%s/snapshots/shard=%s/%s.snap", cellID, metadataLayoutVersion, shardID, snapshotID), nil
 }
 
-func TailObjectKey(cellID string, shardID string, firstIndex uint64, lastIndex uint64) (string, error) {
+func TailObjectKey(cellID, shardID string, firstIndex, lastIndex uint64) (string, error) {
 	if cellID == "" {
 		return "", fmt.Errorf("published metadata: cell id is required")
 	}

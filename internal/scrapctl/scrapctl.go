@@ -58,7 +58,7 @@ func (e usageError) Error() string {
 	return string(e)
 }
 
-func Main(args []string, stdout io.Writer, stderr io.Writer) int {
+func Main(args []string, stdout, stderr io.Writer) int {
 	if err := Run(context.Background(), Config{}, args, stdout); err != nil {
 		writeFailure(stderr, err)
 		var usage usageError
@@ -970,7 +970,7 @@ func (f targetFlag) String() string {
 	return fmt.Sprintf("%d target(s)", len(f))
 }
 
-func parseTarget(kind string, spec string) (*adminv1.Target, error) {
+func parseTarget(kind, spec string) (*adminv1.Target, error) {
 	switch strings.ReplaceAll(strings.ToLower(kind), "-", "_") {
 	case "document", "doc":
 		parts := strings.SplitN(spec, "/", 3)

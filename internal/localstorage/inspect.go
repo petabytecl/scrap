@@ -11,13 +11,14 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const localCapacityProfileID = "local-non-production"

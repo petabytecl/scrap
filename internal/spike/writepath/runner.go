@@ -402,7 +402,7 @@ func writeAndRead(ctx context.Context, client StorageClient, plan docPlan, cfg R
 	return nil
 }
 
-func fillPattern(dst []byte, seed int64, offset int64) {
+func fillPattern(dst []byte, seed, offset int64) {
 	state := uint64(seed) + uint64(offset)*0x9e3779b97f4a7c15
 	for i := range dst {
 		state ^= state << 13

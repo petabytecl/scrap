@@ -10,15 +10,16 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/authz"
 	"github.com/petabytecl/scrap/internal/config"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/operations"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Applications struct {
@@ -68,7 +69,7 @@ func Listen(cfg config.Config, apps Applications) (*Server, error) {
 	return newServer(publicListener, adminListener, apps, authorization, cfg.AuthorizationPolicyPath), nil
 }
 
-func newServer(publicListener net.Listener, adminListener net.Listener, apps Applications, authorization *authz.Manager, policyPath string) *Server {
+func newServer(publicListener, adminListener net.Listener, apps Applications, authorization *authz.Manager, policyPath string) *Server {
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
 	publicGRPC := grpc.NewServer(
 		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),

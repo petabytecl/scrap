@@ -6,16 +6,19 @@ import (
 	"errors"
 	"fmt"
 
-	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 )
 
 const CurrentSchemaVersion uint32 = 1
 
-var ErrUnsupportedSchemaVersion = errors.New("storage format: unsupported schema version")
-var ErrInvalidRecord = errors.New("storage format: invalid record")
+var (
+	ErrUnsupportedSchemaVersion = errors.New("storage format: unsupported schema version")
+	ErrInvalidRecord            = errors.New("storage format: invalid record")
+)
 
 var marshalOptions = proto.MarshalOptions{Deterministic: true}
 
@@ -457,7 +460,7 @@ func validateBackendObjectRef(recordKind string, ref *storagev1.BackendObjectRef
 	return nil
 }
 
-func validateTimestamp(recordKind string, field string, value *timestamppb.Timestamp) error {
+func validateTimestamp(recordKind, field string, value *timestamppb.Timestamp) error {
 	if value == nil {
 		return invalidRecord(recordKind, "%s is required", field)
 	}
@@ -512,6 +515,6 @@ func clearUnknownFields(message proto.Message) {
 	})
 }
 
-func invalidRecord(recordKind string, format string, args ...any) error {
+func invalidRecord(recordKind, format string, args ...any) error {
 	return fmt.Errorf("%w: %s %s", ErrInvalidRecord, recordKind, fmt.Sprintf(format, args...))
 }

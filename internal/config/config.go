@@ -151,7 +151,7 @@ func (e ProductionReadinessEvidence) missingGates() []string {
 	return missing
 }
 
-func validateListenAddress(field string, value string) error {
+func validateListenAddress(field, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s is required", field)
 	}

@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestPutHeadFindDocument(t *testing.T) {

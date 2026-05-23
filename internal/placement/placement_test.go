@@ -251,7 +251,7 @@ func testMembers(count int) []Member {
 	return members
 }
 
-func testMember(memberID string, node string, zone string) Member {
+func testMember(memberID, node, zone string) Member {
 	return Member{
 		MemberID:       memberID,
 		KubernetesNode: node,

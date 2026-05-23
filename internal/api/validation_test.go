@@ -5,12 +5,13 @@ import (
 	"testing"
 	"time"
 
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
-	"github.com/petabytecl/scrap/internal/identity"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
+	"github.com/petabytecl/scrap/internal/identity"
 )
 
 func TestValidateWriteDocumentInitAcceptsValidRequest(t *testing.T) {
@@ -178,7 +179,7 @@ func requireBadRequest(t *testing.T, err error) []*errdetails.BadRequest_FieldVi
 	return nil
 }
 
-func requireViolation(t *testing.T, violations []*errdetails.BadRequest_FieldViolation, field string, reason string) {
+func requireViolation(t *testing.T, violations []*errdetails.BadRequest_FieldViolation, field, reason string) {
 	t.Helper()
 	for _, violation := range violations {
 		if violation.Field == field && violation.Reason == reason {

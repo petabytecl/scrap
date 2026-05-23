@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 )
 
 func TestManifestRejectsUnsupportedSchemaVersion(t *testing.T) {

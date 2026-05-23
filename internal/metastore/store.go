@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+
 	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -704,7 +705,7 @@ func (s *Store) replaceDocument(batch *pebble.Batch, document Document) error {
 	return nil
 }
 
-func (s *Store) getTransaction(tenantID string, transactionID string) (Transaction, bool, error) {
+func (s *Store) getTransaction(tenantID, transactionID string) (Transaction, bool, error) {
 	transaction := identity.Transaction{TenantID: tenantID, TransactionID: transactionID}
 	value, ok, err := s.get(transactionKey(transaction))
 	if err != nil || !ok {
@@ -839,7 +840,7 @@ func validateUploadIntentState(state UploadState) error {
 	}
 }
 
-func sameUploadIntentDestination(left UploadIntent, right UploadIntent) bool {
+func sameUploadIntentDestination(left, right UploadIntent) bool {
 	return left.BlockID == right.BlockID &&
 		left.BackendObjectKey == right.BackendObjectKey &&
 		left.IndexObjectKey == right.IndexObjectKey &&

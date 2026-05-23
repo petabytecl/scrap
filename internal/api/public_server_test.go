@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
+
 	"github.com/petabytecl/scrap/internal/authz"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestPublicServerWriteDocumentStreamsValidatedChunks(t *testing.T) {
