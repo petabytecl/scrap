@@ -143,6 +143,11 @@ func runOperationLoop(ctx context.Context, apps node.Applications, interval time
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	recovery, err := localApp.RecoverInterruptedOperations(ctx, apps.Operations)
+	logOperationRecoveryReport(recovery, err)
+	if err != nil {
+		return
+	}
 	for {
 		result, err := localApp.RunQueuedOperationsOnce(ctx, apps.Operations)
 		if err != nil && ctx.Err() != nil {
@@ -155,6 +160,25 @@ func runOperationLoop(ctx context.Context, apps node.Applications, interval time
 		case <-ticker.C:
 		}
 	}
+}
+
+func logOperationRecoveryReport(result operations.RecoveryResult, err error) {
+	if err != nil {
+		log.Printf("operation recovery failed: %v", err)
+		return
+	}
+	if result.Requeued == 0 && result.FailedUnsupported == 0 {
+		return
+	}
+	log.Printf(
+		"operation recovery: scanned=%d queued=%d requeued=%d failed_unsupported=%d terminal=%d ignored=%d",
+		result.Scanned,
+		result.Queued,
+		result.Requeued,
+		result.FailedUnsupported,
+		result.Terminal,
+		result.Ignored,
+	)
 }
 
 func logOperationRunReport(result localstorage.OperationRunResult, err error) {
