@@ -186,6 +186,9 @@ func (a *Application) runTombstoneOperation(ctx context.Context, store *operatio
 	if err := store.Put(finished); err != nil {
 		return false, err
 	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -233,6 +236,9 @@ func (a *Application) runScrubOperation(ctx context.Context, store *operations.S
 		},
 	}
 	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -373,7 +379,7 @@ func rewrapAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
 		ActorIdentity: operation.GetRequestedByIdentity(),
 		OccurredAt:    occurredAt,
 		Targets:       cloneOperationTargets(operation.GetTargets()),
-		Metadata:      cloneTags(operation.GetMetadata()),
+		Metadata:      sanitizeOperationAuditMetadata(operation.GetMetadata()),
 	}
 }
 
@@ -406,6 +412,9 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 		Message:            "repair operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -470,6 +479,9 @@ func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *o
 	if err := store.Put(finished); err != nil {
 		return false, err
 	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -522,6 +534,9 @@ func (a *Application) runCapacityOverrideOperation(ctx context.Context, store *o
 	if err := store.Put(finished); err != nil {
 		return false, err
 	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -559,6 +574,9 @@ func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operati
 		Counters:           checkpointEvidenceCounters(checkpoint),
 	}
 	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -600,6 +618,9 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 	if err := store.Put(finished); err != nil {
 		return false, err
 	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -637,6 +658,9 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 		Counters:           restoreEvidenceCounters(drill),
 	}
 	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -721,6 +745,9 @@ func (a *Application) runDrainOperation(ctx context.Context, store *operations.S
 		Message:            "drain operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1345,8 +1372,46 @@ func restoreCompletedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEven
 		ActorIdentity: operation.GetRequestedByIdentity(),
 		OccurredAt:    operation.GetFinishedAt(),
 		Targets:       cloneOperationTargets(operation.GetTargets()),
-		Metadata:      cloneTags(operation.GetMetadata()),
+		Metadata:      sanitizeOperationAuditMetadata(operation.GetMetadata()),
 	}
+}
+
+func operationCompletedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
+	eventType := strings.ReplaceAll(operation.GetOperationType(), "-", "_") + "_completed"
+	return &adminv1.AuditEvent{
+		EventId:       stableCommandID("audit-"+eventType, operation.GetOperationId()),
+		EventType:     eventType,
+		OperationId:   operation.GetOperationId(),
+		OperationType: operation.GetOperationType(),
+		ActorIdentity: operation.GetRequestedByIdentity(),
+		OccurredAt:    operation.GetFinishedAt(),
+		Targets:       cloneOperationTargets(operation.GetTargets()),
+		Metadata:      sanitizeOperationAuditMetadata(operation.GetMetadata()),
+	}
+}
+
+func sanitizeOperationAuditMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		if operationAuditMetadataKeyIsSensitive(key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func operationAuditMetadataKeyIsSensitive(key string) bool {
+	normalized := strings.ToLower(key)
+	for _, marker := range []string{"secret", "token", "password", "credential"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func operationErrorPrefix(operationType string) string {

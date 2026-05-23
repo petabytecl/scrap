@@ -2,14 +2,22 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/authz"
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -40,6 +48,8 @@ type ReadDocumentSender interface {
 type PublicServer struct {
 	documents    DocumentApplication
 	transactions TransactionApplication
+	operations   *operations.Store
+	now          func() time.Time
 }
 
 type WriteDocumentResult struct {
@@ -91,10 +101,23 @@ type TransactionState struct {
 	Tags                   map[string]string
 }
 
-func NewPublicServer(documents DocumentApplication, transactions TransactionApplication) *PublicServer {
-	return &PublicServer{
+type PublicOption func(*PublicServer)
+
+func NewPublicServer(documents DocumentApplication, transactions TransactionApplication, options ...PublicOption) *PublicServer {
+	server := &PublicServer{
 		documents:    documents,
 		transactions: transactions,
+		now:          func() time.Time { return time.Now().UTC() },
+	}
+	for _, option := range options {
+		option(server)
+	}
+	return server
+}
+
+func WithPublicAuditStore(store *operations.Store) PublicOption {
+	return func(server *PublicServer) {
+		server.operations = store
 	}
 }
 
@@ -126,6 +149,9 @@ func (s *PublicServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1.W
 
 	result, err := s.documents.WriteDocument(stream.Context(), init, &writeChunkReader{stream: stream})
 	if err != nil {
+		return err
+	}
+	if err := s.auditSuccessfulWrite(stream.Context(), init, result); err != nil {
 		return err
 	}
 	return stream.SendAndClose(result.toProto())
@@ -246,6 +272,137 @@ func (s readDocumentSender) SendChunk(data []byte) error {
 			Chunk: &scrapv1.ReadDocumentChunk{Data: cloneBytes(data)},
 		},
 	})
+}
+
+func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocumentInit, result WriteDocumentResult) error {
+	if s.operations == nil || !isAuditedWrite(init) {
+		return nil
+	}
+	eventType := "document_write_critical"
+	if init.PriorityClass != scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST {
+		eventType = "document_write_ephemeral"
+	}
+	actor := workloadIdentityFromContext(ctx)
+	if actor == "" {
+		actor = init.CreatedByService
+	}
+	if actor == "" {
+		actor = "unknown-workload"
+	}
+	requestID, correlationID, traceID := publicRequestMetadata(ctx)
+	operationID := publicDocumentOperationID(init.Identity, eventType)
+	occurredAt := s.now()
+	metadata := map[string]string{
+		"decision":               "succeeded",
+		"request_id":             requestID,
+		"correlation_id":         correlationID,
+		"document_class":         init.DocumentClass.String(),
+		"priority_class":         init.PriorityClass.String(),
+		"created_by_service":     init.CreatedByService,
+		"idempotent_replay":      fmt.Sprintf("%t", result.IdempotentReplay),
+		"desired_replica_count":  fmt.Sprintf("%d", result.DesiredReplicaCount),
+		"achieved_replica_count": fmt.Sprintf("%d", result.AchievedReplicaCount),
+		"length":                 fmt.Sprintf("%d", result.Metadata.Length),
+	}
+	if traceID != "" {
+		metadata["trace_id"] = traceID
+	}
+	if init.WorkflowStage != "" {
+		metadata["workflow_stage"] = init.WorkflowStage
+	}
+	return s.operations.AppendAuditEvent(&adminv1.AuditEvent{
+		EventId:       publicAuditEventID(eventType, operationID, requestID, correlationID, fmt.Sprintf("%d", occurredAt.UnixNano())),
+		EventType:     eventType,
+		OperationId:   operationID,
+		OperationType: "document-write",
+		ActorIdentity: actor,
+		OccurredAt:    timestamppb.New(occurredAt),
+		Targets:       []*adminv1.Target{documentAuditTarget(init.Identity)},
+		Metadata:      compactAuditMetadata(metadata),
+	})
+}
+
+func isAuditedWrite(init WriteDocumentInit) bool {
+	return init.PriorityClass == scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST ||
+		init.DocumentClass == scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
+}
+
+func workloadIdentityFromContext(ctx context.Context) string {
+	workload, ok := authz.WorkloadIdentityFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return workload
+}
+
+func publicRequestMetadata(ctx context.Context) (string, string, string) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", "", ""
+	}
+	requestID := firstPublicMetadataValue(md, "x-request-id")
+	correlationID := firstPublicMetadataValue(md, "x-correlation-id")
+	if correlationID == "" {
+		correlationID = requestID
+	}
+	return requestID, correlationID, firstPublicMetadataValue(md, "traceparent")
+}
+
+func firstPublicMetadataValue(md metadata.MD, key string) string {
+	values := md.Get(key)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func publicDocumentOperationID(doc identity.Document, eventType string) string {
+	return "document-write:" + hashAuditParts(eventType, doc.TenantID, doc.TransactionID, doc.DocumentName)
+}
+
+func publicAuditEventID(parts ...string) string {
+	return "audit:" + hashAuditParts(parts...)
+}
+
+func hashAuditParts(parts ...string) string {
+	hasher := sha256.New()
+	for _, part := range parts {
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(part))
+	}
+	return hex.EncodeToString(hasher.Sum(nil)[:16])
+}
+
+func documentAuditTarget(doc identity.Document) *adminv1.Target {
+	return &adminv1.Target{
+		Target: &adminv1.Target_Document{
+			Document: &adminv1.DocumentTarget{
+				TenantId:      doc.TenantID,
+				TransactionId: doc.TransactionID,
+				DocumentName:  doc.DocumentName,
+			},
+		},
+	}
+}
+
+func compactAuditMetadata(metadata map[string]string) map[string]string {
+	out := make(map[string]string)
+	for key, value := range metadata {
+		if value != "" && !publicAuditMetadataKeyIsSensitive(key) {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func publicAuditMetadataKeyIsSensitive(key string) bool {
+	normalized := strings.ToLower(key)
+	for _, marker := range []string{"secret", "token", "password", "credential"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r WriteDocumentResult) toProto() *scrapv1.WriteDocumentResponse {

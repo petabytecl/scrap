@@ -435,6 +435,77 @@ func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
 	}
 }
 
+func TestServerAuditsDeniedRequests(t *testing.T) {
+	policyPath := writeAuthorizationPolicy(t, `{
+  "version": "policy-v1",
+  "workloads": {
+    "operator": { "capabilities": ["admin.inspect.cluster_summary"] }
+  }
+}`)
+	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
+	if err != nil {
+		t.Fatalf("load authorization policy: %v", err)
+	}
+	store, err := operations.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	defer store.Close()
+
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{Operations: store}, manager, policyPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialTestServer(t, publicListener)
+	defer publicConn.Close()
+	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
+	headReq := &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
+		TenantId:      "tenant",
+		TransactionId: "txn",
+		DocumentName:  "invoice.xml",
+	}}
+	deniedCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+		authz.WorkloadIdentityMetadataKey, "operator",
+		"x-request-id", "req-denied",
+		"x-correlation-id", "corr-denied",
+	))
+	_, err = publicClient.HeadDocument(deniedCtx, headReq)
+	requireCode(t, err, codes.PermissionDenied)
+
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("audit events = %#v, want one denied request event", events)
+	}
+	event := events[0]
+	if event.GetEventType() != "authorization_denied" ||
+		event.GetActorIdentity() != "operator" ||
+		event.GetOperationType() != scrapv1.DocumentService_HeadDocument_FullMethodName ||
+		event.GetOperationId() != "corr-denied" ||
+		event.GetMetadata()["capability"] != "public.document.head" ||
+		event.GetMetadata()["reason"] != authz.ReasonCapabilityDenied ||
+		event.GetMetadata()["correlation_id"] != "corr-denied" ||
+		event.GetMetadata()["request_id"] != "req-denied" {
+		t.Fatalf("denied audit event = %#v, want actor/capability/operation/reason/correlation evidence", event)
+	}
+
+	_ = publicConn.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+}
+
 func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *testing.T) {
 	policyPath := writeAuthorizationPolicy(t, `{
   "version": "policy-v1",
@@ -487,6 +558,36 @@ func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *tes
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Serve returned error: %v", err)
+	}
+}
+
+func TestAuthorizationPolicyReloadReturnsReloadAndAuditErrors(t *testing.T) {
+	policyPath := writeAuthorizationPolicy(t, `{
+  "version": "policy-v1",
+  "workloads": {
+    "billing-etl": { "capabilities": ["public.document.head"] }
+  }
+}`)
+	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
+	if err != nil {
+		t.Fatalf("load authorization policy: %v", err)
+	}
+	if err := os.WriteFile(policyPath, []byte(`{"version":"policy-v2","workloads":{"billing-etl":{"capabilities":["public"]}}}`), 0o600); err != nil {
+		t.Fatalf("write invalid policy: %v", err)
+	}
+	auditErr := errors.New("audit append failed")
+	server := &Server{
+		authorization: manager,
+		policyPath:    policyPath,
+		auditEvents:   failingAuditEventAppender{err: auditErr},
+	}
+
+	err = server.ReloadAuthorizationPolicy()
+	if !errors.Is(err, authz.ErrInvalidPolicy) {
+		t.Fatalf("reload error = %v, want invalid policy", err)
+	}
+	if !errors.Is(err, auditErr) {
+		t.Fatalf("reload error = %v, want joined audit error", err)
 	}
 }
 
@@ -578,4 +679,12 @@ func requireCode(t *testing.T, err error, code codes.Code) {
 	if st.Code() != code {
 		t.Fatalf("code = %s, want %s", st.Code(), code)
 	}
+}
+
+type failingAuditEventAppender struct {
+	err error
+}
+
+func (s failingAuditEventAppender) AppendAuditEvent(*adminv1.AuditEvent) error {
+	return s.err
 }
