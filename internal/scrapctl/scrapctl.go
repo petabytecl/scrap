@@ -7,7 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/authz"
+	"github.com/petabytecl/scrap/internal/capacitysample"
 	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
@@ -183,8 +187,71 @@ func buildAction(args []string) (action, error) {
 		return buildOperationsAction(args[1:])
 	case "member":
 		return buildMemberAction(args[1:])
+	case "capacity":
+		return buildCapacityAction(args[1:])
 	default:
 		return nil, usageError(fmt.Sprintf("unknown command %q", args[0]))
+	}
+}
+
+func buildCapacityAction(args []string) (action, error) {
+	if len(args) == 0 {
+		return nil, usageError("capacity command is required")
+	}
+	switch args[0] {
+	case "sample":
+		fs := newFlagSet("capacity sample")
+		profileID := fs.String("profile-id", "", "capacity profile id")
+		environmentID := fs.String("environment-id", capacitysample.DefaultEnvironmentID, "local environment id")
+		samples := fs.Int("samples", capacitysample.DefaultSampleCount, "bounded sample count")
+		duration := fs.Duration("duration", capacitysample.DefaultDuration, "bounded sample duration")
+		localDiskPath := fs.String("local-disk-path", capacitysample.DefaultLocalDiskPath, "path used for local disk observation")
+		backendURL := fs.String("backend-url", capacitysample.DefaultBackendURL, "non-production backend object URL prefix")
+		backendAccessKey := fs.String("backend-access-key-id", envDefault("AWS_ACCESS_KEY_ID", capacitysample.DefaultBackendAccessKey), "backend SigV4 access key id; never emitted in the report")
+		backendSecretKey := fs.String("backend-secret-access-key", envDefault("AWS_SECRET_ACCESS_KEY", capacitysample.DefaultBackendSecretKey), "backend SigV4 secret access key; never emitted in the report")
+		backendRegion := fs.String("backend-region", envDefault("AWS_DEFAULT_REGION", capacitysample.DefaultBackendRegion), "backend SigV4 region")
+		openbaoAddr := fs.String("openbao-addr", capacitysample.DefaultOpenBaoAddress, "OpenBao HTTP address")
+		openbaoToken := fs.String("openbao-token", envDefault("BAO_TOKEN", capacitysample.DefaultOpenBaoToken), "OpenBao token; never emitted in the report")
+		openbaoKeyPath := fs.String("openbao-transit-key-path", capacitysample.DefaultOpenBaoKeyPath, "OpenBao Transit key path")
+		releaseSHA := fs.String("release-sha", envDefault("SCRAP_RELEASE_SHA", detectGitCommit()), "release SHA recorded in evidence")
+		dirtyTree := fs.String("dirty-tree", envDefault("SCRAP_DIRTY_TREE", detectDirtyTree()), "dirty tree state recorded in evidence")
+		documentSizes := uint64ListFlag{}
+		fs.Var(&documentSizes, "document-size", "document size in bytes; may be repeated")
+		if err := parseExact(fs, args[1:]); err != nil {
+			return nil, err
+		}
+		opts, err := capacitysample.ValidateOptions(capacitysample.Options{
+			ReleaseSHA:             *releaseSHA,
+			DirtyTree:              *dirtyTree,
+			ProfileID:              *profileID,
+			EnvironmentID:          *environmentID,
+			SampleCount:            *samples,
+			DocumentSizesBytes:     documentSizes.values,
+			Duration:               *duration,
+			LocalDiskPath:          *localDiskPath,
+			BackendURL:             *backendURL,
+			BackendAccessKeyID:     *backendAccessKey,
+			BackendSecretAccessKey: *backendSecretKey,
+			BackendRegion:          *backendRegion,
+			BackendService:         capacitysample.DefaultBackendService,
+			OpenBaoAddress:         *openbaoAddr,
+			OpenBaoToken:           *openbaoToken,
+			OpenBaoTransitKeyPath:  *openbaoKeyPath,
+		})
+		if err != nil {
+			return nil, usageError(err.Error())
+		}
+		return func(ctx context.Context, c clients, out io.Writer) error {
+			report, err := capacitysample.Run(ctx, opts, c.inspect)
+			if err != nil {
+				return err
+			}
+			encoder := json.NewEncoder(out)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(report)
+		}, nil
+	default:
+		return nil, usageError(fmt.Sprintf("unknown capacity command %q", args[0]))
 	}
 }
 
@@ -1108,6 +1175,30 @@ func (f metadataFlag) mapValue() map[string]string {
 	return out
 }
 
+type uint64ListFlag struct {
+	values []uint64
+}
+
+func (f *uint64ListFlag) Set(value string) error {
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return fmt.Errorf("value must be an unsigned integer: %w", err)
+	}
+	f.values = append(f.values, parsed)
+	return nil
+}
+
+func (f uint64ListFlag) String() string {
+	if len(f.values) == 0 {
+		return ""
+	}
+	values := make([]string, 0, len(f.values))
+	for _, value := range f.values {
+		values = append(values, strconv.FormatUint(value, 10))
+	}
+	return strings.Join(values, ",")
+}
+
 type stateFlag []adminv1.OperationState
 
 func (f *stateFlag) Set(value string) error {
@@ -1174,6 +1265,37 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func envDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func detectGitCommit() string {
+	// #nosec G204 -- command and arguments are fixed; no user input is executed.
+	out, err := exec.CommandContext(context.Background(), "git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func detectDirtyTree() string {
+	if detectGitCommit() == "unknown" {
+		return "unknown"
+	}
+	if runGit("diff", "--quiet") == nil && runGit("diff", "--cached", "--quiet") == nil {
+		return "clean"
+	}
+	return "dirty"
+}
+
+func runGit(args ...string) error {
+	// #nosec G204 -- command and arguments are fixed by callers in this package.
+	return exec.CommandContext(context.Background(), "git", args...).Run()
 }
 
 type pageSizeValue struct {

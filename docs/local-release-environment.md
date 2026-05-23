@@ -36,6 +36,7 @@ make local-kind-load
 make local-kind-deploy
 make local-kind-smoke
 make local-kind-evidence
+make capacity-sample
 make local-kind-delete
 ```
 
@@ -66,6 +67,39 @@ report records:
 
 Do not store secrets, OpenBao tokens, backend credentials, document bytes,
 plaintext DEKs, wrapped DEKs, or customer payloads in local evidence reports.
+
+## Advisory Capacity Sampling
+
+`make capacity-sample` runs `scrapctl capacity sample` against the local
+rehearsal targets and writes `capacity-sample-advisory.json` by default. The
+command samples the admin runway RPC, the configured non-production backend URL,
+the configured OpenBao Transit key, and the local disk path. It records bounded
+workload shape, request latency samples, error classes, redacted request IDs,
+and proposed capacity-profile values for human review.
+
+Backend requests are signed with local S3-compatible SigV4 credentials. The
+default LocalStack credentials are `test` / `test` in `us-east-1`; override
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or `CAPACITY_SAMPLE_BACKEND_REGION`
+when rehearsing a different local target.
+
+The report is advisory only:
+
+- it does not write production configuration;
+- it does not update signoff documents;
+- it does not satisfy production write ACK readiness gates;
+- it does not approve live production capacity, OpenBao HA, key custody, audit
+  retention, or downstream deployment rollout.
+
+The default local targets assume port-forwarded or locally reachable services:
+
+```sh
+make capacity-sample \
+  CAPACITY_SAMPLE_BACKEND_URL=http://127.0.0.1:4566/scrap-local \
+  CAPACITY_SAMPLE_OPENBAO_ADDR=http://127.0.0.1:8200 \
+  AWS_ACCESS_KEY_ID=test \
+  AWS_SECRET_ACCESS_KEY=test \
+  BAO_TOKEN=local-root
+```
 
 ## GitOps Boundary
 
