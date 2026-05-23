@@ -101,6 +101,23 @@ func TestRunBuildsPassingReportAndReleaseEvidence(t *testing.T) {
 	}
 }
 
+func TestRunRequiresArtifactURIForReleaseEvidence(t *testing.T) {
+	report, err := Run(context.Background(), Options{
+		GeneratedAt: time.Unix(100, 0).UTC(),
+		CommitSHA:   "abc123",
+		Runner:      &recordingRunner{},
+	})
+	if err != nil {
+		t.Fatalf("run evidence: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("report = %#v, want ready", report)
+	}
+	if len(report.ReleaseGateEvidence) != 0 {
+		t.Fatalf("release evidence = %#v, want none without artifact URI", report.ReleaseGateEvidence)
+	}
+}
+
 func TestRunMarksFailuresAndSuppressesReleaseEvidence(t *testing.T) {
 	report, err := Run(context.Background(), Options{
 		GeneratedAt: time.Unix(100, 0).UTC(),
@@ -126,6 +143,21 @@ func TestRunMarksFailuresAndSuppressesReleaseEvidence(t *testing.T) {
 	}
 	if !foundRedaction {
 		t.Fatal("expected redacted failed command output")
+	}
+}
+
+func TestLimitedOutputBoundsCapture(t *testing.T) {
+	output := newLimitedOutput(5)
+	written, err := output.Write([]byte("123456789"))
+	if err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if written != 9 {
+		t.Fatalf("written = %d, want caller byte count", written)
+	}
+	got := output.String()
+	if !strings.Contains(got, "12345") || !strings.Contains(got, "[truncated]") || strings.Contains(got, "6789") {
+		t.Fatalf("limited output = %q, want bounded truncated output", got)
 	}
 }
 

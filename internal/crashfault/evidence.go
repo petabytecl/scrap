@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/config"
@@ -57,9 +58,10 @@ type GoTestCommand struct {
 }
 
 type CommandInvocation struct {
-	Name    string
-	Args    []string
-	WorkDir string
+	Name             string
+	Args             []string
+	WorkDir          string
+	OutputLimitBytes int
 }
 
 type CommandOutput struct {
@@ -79,14 +81,12 @@ func (ExecRunner) Run(ctx context.Context, invocation CommandInvocation) Command
 	// #nosec G204 -- invocation comes from the repo-owned crash/fault scenario catalog, not remote input.
 	cmd := exec.CommandContext(ctx, invocation.Name, invocation.Args...)
 	cmd.Dir = invocation.WorkDir
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	outputBuffer := newLimitedOutput(invocation.OutputLimitBytes)
+	cmd.Stdout = outputBuffer
+	cmd.Stderr = outputBuffer
 	err := cmd.Run()
 	output := CommandOutput{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
+		Stdout: outputBuffer.String(),
 	}
 	if err == nil {
 		return output
@@ -100,6 +100,47 @@ func (ExecRunner) Run(ctx context.Context, invocation CommandInvocation) Command
 	}
 	output.Error = err.Error()
 	return output
+}
+
+type limitedOutput struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newLimitedOutput(limit int) *limitedOutput {
+	if limit <= 0 {
+		limit = defaultOutputLimit
+	}
+	return &limitedOutput{limit: limit}
+}
+
+func (o *limitedOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	remaining := o.limit - o.buf.Len()
+	if remaining > 0 {
+		if len(p) <= remaining {
+			_, _ = o.buf.Write(p)
+		} else {
+			_, _ = o.buf.Write(p[:remaining])
+			o.truncated = true
+		}
+	} else {
+		o.truncated = true
+	}
+	return len(p), nil
+}
+
+func (o *limitedOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := o.buf.String()
+	if o.truncated {
+		out += "\n[truncated]"
+	}
+	return out
 }
 
 type Report struct {
@@ -315,7 +356,7 @@ func Catalog() []Scenario {
 
 func Run(ctx context.Context, options Options) (Report, error) {
 	options = options.withDefaults()
-	runStart := time.Now().UTC()
+	runStart := time.Now()
 	commitSHA, dirtyTree := options.CommitSHA, options.DirtyTree
 	if commitSHA == "" {
 		var err error
@@ -363,7 +404,7 @@ func Run(ctx context.Context, options Options) (Report, error) {
 		report.Ready = false
 	}
 	report.DurationMillis = millisSince(runStart)
-	if report.Ready {
+	if report.Ready && options.ArtifactURI != "" {
 		report.ReleaseGateEvidence = releaseEvidence(options.ArtifactURI)
 	}
 	return report, nil
@@ -388,9 +429,6 @@ func (o Options) withDefaults() Options {
 	if o.Seed == "" {
 		o.Seed = firstNonEmpty(os.Getenv("SCRAP_EVIDENCE_SEED"), "deterministic")
 	}
-	if o.ArtifactURI == "" {
-		o.ArtifactURI = "crash-fault-evidence-report"
-	}
 	if o.GeneratedAt.IsZero() {
 		o.GeneratedAt = time.Now().UTC()
 	}
@@ -404,7 +442,7 @@ func (o Options) withDefaults() Options {
 }
 
 func runScenario(ctx context.Context, options Options, scenario Scenario) ScenarioResult {
-	start := time.Now().UTC()
+	start := time.Now()
 	result := ScenarioResult{
 		ID:              scenario.ID,
 		Name:            scenario.Name,
@@ -416,12 +454,13 @@ func runScenario(ctx context.Context, options Options, scenario Scenario) Scenar
 		Commands:        make([]CommandResult, 0, len(scenario.Commands)),
 	}
 	for _, testCommand := range scenario.Commands {
-		commandStart := time.Now().UTC()
+		commandStart := time.Now()
 		args := goTestArgs(options, testCommand)
 		output := options.Runner.Run(ctx, CommandInvocation{
-			Name:    options.GoCommand,
-			Args:    args,
-			WorkDir: options.WorkDir,
+			Name:             options.GoCommand,
+			Args:             args,
+			WorkDir:          options.WorkDir,
+			OutputLimitBytes: options.OutputLimitBytes,
 		})
 		status := "passed"
 		if output.ExitCode != 0 {
