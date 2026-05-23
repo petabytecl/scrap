@@ -117,6 +117,26 @@ func TestReadSnapshotContentsRejectsWrongSourceOwnership(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotContentsRejectsEmptyConstrainedImport(t *testing.T) {
+	_, err := ReadSnapshotContentsForImport(bytes.NewReader(nil), ImportOptions{
+		SourceNamespace:      "source-a",
+		ShardID:              "shard-a",
+		HighWatermark:        42,
+		RequireHighWatermark: true,
+	})
+	if !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidArtifact)
+	}
+
+	contents, err := ReadSnapshotContents(bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("read unconstrained empty snapshot: %v", err)
+	}
+	if len(contents.Documents) != 0 || len(contents.Transactions) != 0 || len(contents.UploadIntents) != 0 || contents.Tombstones != 0 {
+		t.Fatalf("contents = %#v, want empty unconstrained snapshot", contents)
+	}
+}
+
 func TestReadSnapshotContentsRejectsMalformedPublishedDocument(t *testing.T) {
 	var snapshot bytes.Buffer
 	document := publishedDocument(publishedTestDocument("block-1", []byte("imported bytes")), LocationObjects{
@@ -151,7 +171,7 @@ func TestReadSnapshotContentsRejectsUnsupportedLocationFormatVersion(t *testing.
 	document := publishedDocument(publishedTestDocument("block-1", []byte("imported bytes")), LocationObjects{
 		BackendObjectKey: "objects/block-1.blk",
 	})
-	document.Locations[0].FormatVersion = CurrentSchemaVersion + 1
+	document.Locations[0].FormatVersion = CurrentLocationFormatVersion + 1
 	if err := WriteSnapshotRecord(&snapshot, &publishedv1.SnapshotRecord{
 		SchemaVersion:   CurrentSchemaVersion,
 		SourceNamespace: "source-a",
@@ -269,5 +289,30 @@ func TestReadTailContentsRejectsWrongSourceOwnership(t *testing.T) {
 	})
 	if !errors.Is(err, ErrSourceMismatch) {
 		t.Fatalf("error = %v, want %v", err, ErrSourceMismatch)
+	}
+}
+
+func TestReadTailContentsRejectsEmptyConstrainedImport(t *testing.T) {
+	_, err := ReadTailContentsForImport(bytes.NewReader(nil), ImportOptions{
+		SourceNamespace: "source-a",
+		ShardID:         "shard-a",
+		FirstLogIndex:   43,
+		LastLogIndex:    44,
+		RequireLogRange: true,
+	})
+	if !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidArtifact)
+	}
+
+	contents, err := ReadTailContents(bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("read unconstrained empty tail: %v", err)
+	}
+	if len(contents.FinalizedDocuments) != 0 ||
+		len(contents.Transactions) != 0 ||
+		len(contents.UploadIntents) != 0 ||
+		len(contents.ObjectStates) != 0 ||
+		contents.Tombstones != 0 {
+		t.Fatalf("contents = %#v, want empty unconstrained tail", contents)
 	}
 }

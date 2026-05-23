@@ -12,6 +12,7 @@ import (
 )
 
 const CurrentSchemaVersion uint32 = 1
+const CurrentLocationFormatVersion uint32 = 1
 const maxArtifactRecordPayload = 64 * 1024 * 1024
 
 var (

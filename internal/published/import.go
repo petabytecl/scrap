@@ -61,6 +61,9 @@ func ReadSnapshotContentsForImport(reader io.Reader, options ImportOptions) (Sna
 	for {
 		record, err := ReadSnapshotRecord(reader)
 		if errors.Is(err, io.EOF) {
+			if !seen && hasSnapshotConstraints(options) {
+				return contents, invalidArtifact("snapshot artifact is empty")
+			}
 			return contents, nil
 		}
 		if err != nil {
@@ -105,6 +108,9 @@ func ReadTailContentsForImport(reader io.Reader, options ImportOptions) (TailCon
 	for {
 		record, err := ReadTailRecord(reader)
 		if errors.Is(err, io.EOF) {
+			if !seen && hasTailConstraints(options) {
+				return contents, invalidArtifact("tail artifact is empty")
+			}
 			if seen {
 				if (options.RequireLogRange || options.FirstLogIndex != 0) && contents.FirstLogIndex != options.FirstLogIndex {
 					return contents, invalidArtifact("tail first log index %d does not match expected %d", contents.FirstLogIndex, options.FirstLogIndex)
@@ -151,6 +157,21 @@ func ReadTailContentsForImport(reader io.Reader, options ImportOptions) (TailCon
 			return contents, invalidArtifact("unsupported tail mutation %T", record.GetMutation())
 		}
 	}
+}
+
+func hasSnapshotConstraints(options ImportOptions) bool {
+	return options.SourceNamespace != "" ||
+		options.ShardID != "" ||
+		options.HighWatermark != 0 ||
+		options.RequireHighWatermark
+}
+
+func hasTailConstraints(options ImportOptions) bool {
+	return options.SourceNamespace != "" ||
+		options.ShardID != "" ||
+		options.FirstLogIndex != 0 ||
+		options.LastLogIndex != 0 ||
+		options.RequireLogRange
 }
 
 func applySnapshotHeader(contents *SnapshotContents, record *publishedv1.SnapshotRecord, options ImportOptions, first bool) error {
@@ -440,7 +461,7 @@ func validatePublishedLocation(location *publishedv1.PublishedLocation, document
 	if location == nil {
 		return invalidArtifact("document %q location is required", documentName)
 	}
-	if location.GetFormatVersion() != CurrentSchemaVersion {
+	if location.GetFormatVersion() != CurrentLocationFormatVersion {
 		return fmt.Errorf("%w: location version %d", ErrUnsupportedFormatVersion, location.GetFormatVersion())
 	}
 	if location.GetBlockId() == "" {

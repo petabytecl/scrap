@@ -126,7 +126,7 @@ func publishedLocation(document metastore.Document, objects LocationObjects) *pu
 		BackendObjectKey:  objects.BackendObjectKey,
 		IndexObjectKey:    objects.IndexObjectKey,
 		EnvelopeObjectKey: objects.EnvelopeObjectKey,
-		FormatVersion:     1,
+		FormatVersion:     CurrentLocationFormatVersion,
 		Frames:            make([]*publishedv1.PublishedFrame, 0, len(document.Location.Frames)),
 	}
 	for _, frame := range document.Location.Frames {
