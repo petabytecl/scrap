@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,5 +123,92 @@ func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testin
 	cfg.BackendUploadInterval = 10 * time.Millisecond
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("local filesystem backend config did not validate: %v", err)
+	}
+}
+
+func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T) {
+	cfg := Default()
+	cfg.EnableProductionWriteACK = true
+
+	err := cfg.Validate()
+	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
+		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
+	}
+	for _, gate := range []string{
+		ProductionWriteACKReadinessGate,
+		ReadinessGateMetadataCompatibility,
+		ReadinessGateRaftMetadataDurability,
+		ReadinessGatePeerByteDurability,
+		ReadinessGateBackendRestoreWorkflow,
+		ReadinessGateOpenBaoEnvelopeWorkflow,
+		ReadinessGateCapacityAdmission,
+		ReadinessGateOperatorReadiness,
+	} {
+		if !strings.Contains(err.Error(), gate) {
+			t.Fatalf("error %q does not name missing gate %s", err, gate)
+		}
+	}
+}
+
+func TestProductionWriteACKGateDoesNotBypassLaterReadinessGates(t *testing.T) {
+	cfg := Default()
+	cfg.EnableProductionWriteACK = true
+	cfg.ProductionReadinessEvidence.MetadataCompatibilityBoundary = true
+
+	err := cfg.Validate()
+	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
+		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
+	}
+	if strings.Contains(err.Error(), ReadinessGateMetadataCompatibility) {
+		t.Fatalf("error %q still lists satisfied metadata compatibility gate", err)
+	}
+	for _, gate := range []string{
+		ReadinessGateRaftMetadataDurability,
+		ReadinessGatePeerByteDurability,
+		ReadinessGateBackendRestoreWorkflow,
+		ReadinessGateOpenBaoEnvelopeWorkflow,
+		ReadinessGateCapacityAdmission,
+		ReadinessGateOperatorReadiness,
+	} {
+		if !strings.Contains(err.Error(), gate) {
+			t.Fatalf("error %q does not keep later readiness gate %s closed", err, gate)
+		}
+	}
+}
+
+func TestProductionWriteACKGateRejectsLocalNonProductionMode(t *testing.T) {
+	cfg := Default()
+	cfg.EnableProductionWriteACK = true
+	cfg.EnableLocalNonProductionStorage = true
+	cfg.LocalDataDir = t.TempDir()
+
+	err := cfg.Validate()
+	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
+		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
+	}
+	if !strings.Contains(err.Error(), "local non-production storage") {
+		t.Fatalf("error %q does not identify non-production mode conflict", err)
+	}
+}
+
+func TestProductionWriteACKGateRemainsClosedUntilProductionImplementationExists(t *testing.T) {
+	cfg := Default()
+	cfg.EnableProductionWriteACK = true
+	cfg.ProductionReadinessEvidence = ProductionReadinessEvidence{
+		MetadataCompatibilityBoundary: true,
+		RaftMetadataDurability:        true,
+		PeerByteDurability:            true,
+		BackendRestoreWorkflow:        true,
+		OpenBaoEnvelopeWorkflow:       true,
+		CapacityAdmission:             true,
+		OperatorReadiness:             true,
+	}
+
+	err := cfg.Validate()
+	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
+		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
+	}
+	if !strings.Contains(err.Error(), ReadinessGateProductionImplementation) {
+		t.Fatalf("error %q does not identify missing production implementation gate", err)
 	}
 }

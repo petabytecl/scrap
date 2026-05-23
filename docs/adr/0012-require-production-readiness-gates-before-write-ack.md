@@ -43,6 +43,13 @@ The minimum gates are:
 Non-production single-member or development modes may exist, but they must be
 named as non-production and must not silently claim the production ACK contract.
 
+The executable production write ACK gate is `SCRAP_PRODUCTION_WRITE_ACK_READINESS`.
+It must fail closed until the metadata compatibility boundary
+`SCRAP_METADATA_COMPATIBILITY_BOUNDARY_V1` and later Raft, peer durability,
+backend restore, OpenBao envelope, capacity admission, operator-readiness, and
+implementation gates all have explicit release evidence. Passing the metadata
+compatibility boundary alone is not enough to enable production write ACK mode.
+
 ## Consequences
 
 - The project can keep building vertical slices without accidentally promoting
