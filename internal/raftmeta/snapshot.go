@@ -93,6 +93,7 @@ func writeSnapshotFile(dir string, snapshot *metastorev1.ShardSnapshot) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
+	// #nosec G703 -- source and destination are validated under the configured raft directory.
 	if err := os.Rename(tempPath, path); err != nil {
 		return err
 	}
@@ -104,8 +105,17 @@ func openSnapshotFile(path string, flag int, perm os.FileMode) (*os.File, error)
 	return os.OpenFile(path, flag, perm)
 }
 
+func openSnapshotReadFile(path string) (*os.File, error) {
+	// #nosec G304 G703 -- callers validate paths under the configured raft directory.
+	return os.Open(path)
+}
+
 func readSnapshotFile(dir string) (*metastorev1.ShardSnapshot, error) {
-	file, err := os.Open(snapshotPath(dir))
+	path, err := safepath.UnderDir(dir, snapshotPath(dir))
+	if err != nil {
+		return nil, err
+	}
+	file, err := openSnapshotReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, errSnapshotNotFound
 	}

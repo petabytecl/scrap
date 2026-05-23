@@ -91,6 +91,9 @@ func marshalTransactionRecord(record *metastorev1.TransactionRecord) ([]byte, er
 	if err := validateSchemaVersion("transaction", record.GetSchemaVersion()); err != nil {
 		return nil, err
 	}
+	if err := validateTransactionState(record.GetState()); err != nil {
+		return nil, err
+	}
 	return protoMarshal.Marshal(record)
 }
 
@@ -100,6 +103,9 @@ func unmarshalTransactionRecord(data []byte) (*metastorev1.TransactionRecord, er
 		return nil, err
 	}
 	if err := validateSchemaVersion("transaction", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	if err := validateTransactionState(record.GetState()); err != nil {
 		return nil, err
 	}
 	return &record, nil
@@ -236,6 +242,13 @@ func validateInt32EnumUint16(recordKind string, field string, value int32) error
 		return invalidRecord(recordKind, "%s is out of range: %v", field, err)
 	}
 	return nil
+}
+
+func validateTransactionState(value uint32) error {
+	if value == 0 {
+		return invalidRecord("transaction", "state is required")
+	}
+	return validateUint32EnumUint16("transaction", "state", value)
 }
 
 func validateDocumentRecord(record *metastorev1.DocumentRecord) error {

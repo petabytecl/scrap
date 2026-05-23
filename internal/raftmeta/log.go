@@ -151,7 +151,10 @@ func (l *Log) Compact(throughIndex uint64) error {
 		}
 	}
 	dir := filepath.Dir(l.path)
-	tempPath := l.path + ".compact"
+	tempPath, err := safepath.UnderDir(dir, l.path+".compact")
+	if err != nil {
+		return err
+	}
 	if err := writeEntries(tempPath, tail); err != nil {
 		return err
 	}
@@ -159,13 +162,14 @@ func (l *Log) Compact(throughIndex uint64) error {
 		return err
 	}
 	l.file = nil
+	// #nosec G703 -- source and destination are validated under the configured raft directory.
 	if err := os.Rename(tempPath, l.path); err != nil {
-		if file, openErr := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600); openErr == nil {
+		if file, openErr := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600); openErr == nil {
 			l.file = file
 		}
 		return err
 	}
-	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
