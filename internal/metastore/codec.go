@@ -573,6 +573,7 @@ func locationToProto(location blockstore.Record) *metastorev1.Location {
 		StoredOffset: location.StoredOffset,
 		StoredLength: location.StoredLength,
 		Frames:       make([]*metastorev1.FrameRecord, 0, len(location.Frames)),
+		Replicas:     make([]*metastorev1.ReplicaRef, 0, len(location.Replicas)),
 	}
 	for _, frame := range location.Frames {
 		out.Frames = append(out.Frames, &metastorev1.FrameRecord{
@@ -580,6 +581,15 @@ func locationToProto(location blockstore.Record) *metastorev1.Location {
 			SegmentOffset: frame.SegmentOffset,
 			SegmentLength: frame.SegmentLength,
 			Sha256:        append([]byte(nil), frame.SHA256[:]...),
+		})
+	}
+	for _, replica := range location.Replicas {
+		out.Replicas = append(out.Replicas, &metastorev1.ReplicaRef{
+			MemberId:     replica.MemberID,
+			BlockId:      replica.BlockID,
+			StoredOffset: replica.StoredOffset,
+			StoredLength: replica.StoredLength,
+			StoredSha256: append([]byte(nil), replica.StoredSHA256[:]...),
 		})
 	}
 	return out
@@ -594,6 +604,7 @@ func locationFromProto(location *metastorev1.Location) blockstore.Record {
 		StoredOffset:  location.GetStoredOffset(),
 		StoredLength:  location.GetStoredLength(),
 		Frames:        make([]blockstore.FrameRecord, 0, len(location.GetFrames())),
+		Replicas:      make([]blockstore.ReplicaRef, 0, len(location.GetReplicas())),
 		LogicalSHA256: [32]byte{},
 	}
 	for _, frame := range location.GetFrames() {
@@ -604,6 +615,16 @@ func locationFromProto(location *metastorev1.Location) blockstore.Record {
 		}
 		copy(outFrame.SHA256[:], frame.GetSha256())
 		out.Frames = append(out.Frames, outFrame)
+	}
+	for _, replica := range location.GetReplicas() {
+		outReplica := blockstore.ReplicaRef{
+			MemberID:     replica.GetMemberId(),
+			BlockID:      replica.GetBlockId(),
+			StoredOffset: replica.GetStoredOffset(),
+			StoredLength: replica.GetStoredLength(),
+		}
+		copy(outReplica.StoredSHA256[:], replica.GetStoredSha256())
+		out.Replicas = append(out.Replicas, outReplica)
 	}
 	return out
 }

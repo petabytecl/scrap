@@ -24,6 +24,7 @@ import (
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
+	"github.com/petabytecl/scrap/internal/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -160,6 +161,80 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 	}
 	if transaction.CompletedAt == nil || !transaction.CompletedAt.Equal(completedAt) {
 		t.Fatalf("completed_at = %v, want %v", transaction.CompletedAt, completedAt)
+	}
+}
+
+func TestWriteDocumentPreparesPeersBeforeMetadataVisibility(t *testing.T) {
+	app := openTestApplication(t)
+	data := []byte("peer prepared bytes")
+	doc := testDocumentIdentity()
+	doc.DocumentName = "peer-prepare.xml"
+	peer1 := newRecordingPreparePeer("member-1")
+	peer2 := newRecordingPreparePeer("member-2")
+	peer1.beforeReceipt = func(request replication.PrepareRequest) {
+		if _, err := app.metadata.HeadDocument(request.Document.Identity); !errors.Is(err, metastore.ErrNotFound) {
+			t.Fatalf("document visible during peer prepare: %v", err)
+		}
+	}
+	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 3, QuorumReplicaCount: 3}
+	app.peerPrepareTargets = []replication.Target{
+		{MemberID: "member-1", Preparer: peer1},
+		{MemberID: "member-2", Preparer: peer2},
+	}
+
+	result, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	if err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if result.DesiredReplicaCount != 3 || result.AchievedReplicaCount != 3 {
+		t.Fatalf("replica counts = %d/%d, want 3/3", result.DesiredReplicaCount, result.AchievedReplicaCount)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if len(stored.Location.Replicas) != 2 {
+		t.Fatalf("replicas = %#v, want two peer prepare receipts", stored.Location.Replicas)
+	}
+	if peer1.prepareCount != 1 || peer2.prepareCount != 1 {
+		t.Fatalf("peer prepare counts = %d/%d, want 1/1", peer1.prepareCount, peer2.prepareCount)
+	}
+	if !bytes.Equal(peer1.preparedBytes, data) || !bytes.Equal(peer2.preparedBytes, data) {
+		t.Fatalf("prepared bytes = %q/%q, want %q", peer1.preparedBytes, peer2.preparedBytes, data)
+	}
+}
+
+func TestWriteDocumentPeerPrepareFailureLeavesDocumentInvisible(t *testing.T) {
+	app := openTestApplication(t)
+	data := []byte("partial peer prepare")
+	doc := testDocumentIdentity()
+	doc.DocumentName = "peer-prepare-failure.xml"
+	peer1 := newRecordingPreparePeer("member-1")
+	peer2 := newRecordingPreparePeer("member-2")
+	peer2.errAfterRead = errors.New("partial transfer")
+	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 3, QuorumReplicaCount: 3}
+	app.peerPrepareTargets = []replication.Target{
+		{MemberID: "member-1", Preparer: peer1},
+		{MemberID: "member-2", Preparer: peer2},
+	}
+
+	_, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	requireCode(t, err, codes.Unavailable)
+	if _, err := app.metadata.HeadDocument(doc); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("head document after failed peer prepare = %v, want %v", err, metastore.ErrNotFound)
+	}
+	if peer1.prepareCount != 1 || peer2.prepareCount != 1 {
+		t.Fatalf("peer prepare counts = %d/%d, want 1/1", peer1.prepareCount, peer2.prepareCount)
 	}
 }
 
@@ -2353,6 +2428,37 @@ func (r *chunkReaderStub) Recv() ([]byte, error) {
 	chunk := r.chunks[r.index]
 	r.index++
 	return chunk, nil
+}
+
+type recordingPreparePeer struct {
+	memberID      string
+	prepareCount  int
+	preparedBytes []byte
+	errAfterRead  error
+	beforeReceipt func(replication.PrepareRequest)
+}
+
+func newRecordingPreparePeer(memberID string) *recordingPreparePeer {
+	return &recordingPreparePeer{memberID: memberID}
+}
+
+func (p *recordingPreparePeer) PrepareDocument(ctx context.Context, request replication.PrepareRequest) (replication.Receipt, error) {
+	p.prepareCount++
+	var buf bytes.Buffer
+	if err := request.WriteBytes(ctx, &buf); err != nil {
+		return replication.Receipt{}, err
+	}
+	p.preparedBytes = append(p.preparedBytes[:0], buf.Bytes()...)
+	if err := replication.ValidatePreparedBytes(request.Document, p.preparedBytes); err != nil {
+		return replication.Receipt{}, err
+	}
+	if p.errAfterRead != nil {
+		return replication.Receipt{}, p.errAfterRead
+	}
+	if p.beforeReceipt != nil {
+		p.beforeReceipt(request)
+	}
+	return replication.ReceiptFromPreparedDocument(p.memberID, request.Document), nil
 }
 
 type recordingReadSender struct {
