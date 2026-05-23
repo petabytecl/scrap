@@ -32,6 +32,7 @@ var ErrProductionWriteACKReadinessGate = errors.New("production write ACK readin
 type Config struct {
 	PublicListenAddress             string
 	AdminListenAddress              string
+	AuthorizationPolicyPath         string
 	LocalDataDir                    string
 	EnableLocalNonProductionStorage bool
 	EnableLocalFilesystemBackend    bool

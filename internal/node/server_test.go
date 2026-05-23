@@ -7,9 +7,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/petabytecl/scrap/internal/authz"
 	"github.com/petabytecl/scrap/internal/config"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
@@ -18,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -25,7 +28,7 @@ import (
 func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
-	server := newServer(publicListener, adminListener, Applications{})
+	server := newServer(publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer server.Close()
@@ -35,7 +38,7 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 		done <- server.Serve(ctx)
 	}()
 
-	publicConn := dialTestServer(t, publicListener)
+	publicConn := dialAuthorizedTestServer(t, publicListener)
 	defer publicConn.Close()
 	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
 	_, err := publicClient.HeadDocument(context.Background(), &scrapv1.HeadDocumentRequest{
@@ -47,7 +50,7 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	})
 	requireCode(t, err, codes.Unimplemented)
 
-	adminConn := dialTestServer(t, adminListener)
+	adminConn := dialAuthorizedTestServer(t, adminListener)
 	defer adminConn.Close()
 	adminClient := adminv1.NewRestoreServiceClient(adminConn)
 	_, err = adminClient.StartRestore(context.Background(), &adminv1.StartRestoreRequest{
@@ -88,7 +91,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		Member:       app,
 		DR:           app,
 		Operations:   operationStore,
-	})
+	}, testAuthorizationManager(t), "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer server.Close()
@@ -98,7 +101,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		done <- server.Serve(ctx)
 	}()
 
-	publicConn := dialTestServer(t, publicListener)
+	publicConn := dialAuthorizedTestServer(t, publicListener)
 	defer publicConn.Close()
 	documents := scrapv1.NewDocumentServiceClient(publicConn)
 	transactions := scrapv1.NewTransactionServiceClient(publicConn)
@@ -188,7 +191,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 		t.Fatalf("transaction = %#v, want one document", transactionResp.GetTransaction())
 	}
 
-	adminConn := dialTestServer(t, adminListener)
+	adminConn := dialAuthorizedTestServer(t, adminListener)
 	defer adminConn.Close()
 	inspectClient := adminv1.NewInspectServiceClient(adminConn)
 	inspectResp, err := inspectClient.GetDocument(context.Background(), &adminv1.GetDocumentRequest{
@@ -362,15 +365,155 @@ func TestListenRejectsProductionWriteACKWithoutReadinessGate(t *testing.T) {
 	}
 }
 
+func TestListenFailsClosedWithoutAuthorizationPolicy(t *testing.T) {
+	cfg := config.Default()
+	cfg.PublicListenAddress = "127.0.0.1:0"
+	cfg.AdminListenAddress = "127.0.0.1:1"
+
+	server, err := Listen(cfg, Applications{})
+	if server != nil {
+		server.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "authorization policy path is required") {
+		t.Fatalf("Listen error = %v, want missing authorization policy", err)
+	}
+}
+
+func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
+	policyPath := writeAuthorizationPolicy(t, `{
+  "version": "policy-v1",
+  "workloads": {
+    "billing-etl": { "capabilities": ["public.document.head"] },
+    "operator": { "capabilities": ["admin.inspect.cluster_summary"] }
+  }
+}`)
+	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
+	if err != nil {
+		t.Fatalf("load authorization policy: %v", err)
+	}
+
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{}, manager, policyPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialTestServer(t, publicListener)
+	defer publicConn.Close()
+	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
+	headReq := &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
+		TenantId:      "tenant",
+		TransactionId: "txn",
+		DocumentName:  "invoice.xml",
+	}}
+	_, err = publicClient.HeadDocument(context.Background(), headReq)
+	requireCode(t, err, codes.Unauthenticated)
+	_, err = publicClient.HeadDocument(workloadContext("operator"), headReq)
+	requireCode(t, err, codes.PermissionDenied)
+	_, err = publicClient.HeadDocument(workloadContext("billing-etl"), headReq)
+	requireCode(t, err, codes.Unimplemented)
+
+	adminConn := dialTestServer(t, adminListener)
+	defer adminConn.Close()
+	adminClient := adminv1.NewInspectServiceClient(adminConn)
+	_, err = adminClient.GetClusterSummary(workloadContext("billing-etl"), &adminv1.GetClusterSummaryRequest{})
+	requireCode(t, err, codes.PermissionDenied)
+	_, err = adminClient.GetClusterSummary(workloadContext("operator"), &adminv1.GetClusterSummaryRequest{})
+	requireCode(t, err, codes.Unimplemented)
+
+	_ = publicConn.Close()
+	_ = adminConn.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+}
+
+func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *testing.T) {
+	policyPath := writeAuthorizationPolicy(t, `{
+  "version": "policy-v1",
+  "workloads": {
+    "billing-etl": { "capabilities": ["public.document.head"] }
+  }
+}`)
+	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
+	if err != nil {
+		t.Fatalf("load authorization policy: %v", err)
+	}
+
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{}, manager, policyPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialTestServer(t, publicListener)
+	defer publicConn.Close()
+	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
+	headReq := &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
+		TenantId:      "tenant",
+		TransactionId: "txn",
+		DocumentName:  "invoice.xml",
+	}}
+	_, err = publicClient.HeadDocument(workloadContext("billing-etl"), headReq)
+	requireCode(t, err, codes.Unimplemented)
+
+	if err := os.WriteFile(policyPath, []byte(`{"version":"policy-v2","workloads":{"billing-etl":{"capabilities":["public"]}}}`), 0o600); err != nil {
+		t.Fatalf("write invalid policy: %v", err)
+	}
+	if err := server.ReloadAuthorizationPolicy(); err == nil {
+		t.Fatal("reload invalid policy succeeded")
+	}
+	alerts := manager.ReloadAlerts()
+	if len(alerts) != 1 || alerts[0].Code != authz.ReasonPolicyReloadRejected {
+		t.Fatalf("alerts = %#v, want rejected reload alert", alerts)
+	}
+	_, err = publicClient.HeadDocument(workloadContext("billing-etl"), headReq)
+	requireCode(t, err, codes.Unimplemented)
+
+	_ = publicConn.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+}
+
 func dialTestServer(t *testing.T, listener *bufconn.Listener) *grpc.ClientConn {
+	return dialTestServerWithWorkload(t, listener, "")
+}
+
+func dialAuthorizedTestServer(t *testing.T, listener *bufconn.Listener) *grpc.ClientConn {
+	return dialTestServerWithWorkload(t, listener, "test-workload")
+}
+
+func dialTestServerWithWorkload(t *testing.T, listener *bufconn.Listener, workload string) *grpc.ClientConn {
 	t.Helper()
 	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
 		return listener.DialContext(ctx)
 	}
-	conn, err := grpc.NewClient(
-		"passthrough:///bufnet",
+	options := []grpc.DialOption{
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	}
+	if workload != "" {
+		options = append(options, grpc.WithUnaryInterceptor(workloadUnaryClientInterceptor(workload)))
+		options = append(options, grpc.WithStreamInterceptor(workloadStreamClientInterceptor(workload)))
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		options...,
 	)
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
@@ -378,8 +521,52 @@ func dialTestServer(t *testing.T, listener *bufconn.Listener) *grpc.ClientConn {
 	return conn
 }
 
+func workloadUnaryClientInterceptor(workload string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req any, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		return invoker(workloadContextWithBase(ctx, workload), method, req, reply, cc, opts...)
+	}
+}
+
+func workloadStreamClientInterceptor(workload string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		return streamer(workloadContextWithBase(ctx, workload), desc, cc, method, opts...)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
+}
+
+func workloadContext(workload string) context.Context {
+	return metadata.NewOutgoingContext(context.Background(), metadata.Pairs(authz.WorkloadIdentityMetadataKey, workload))
+}
+
+func workloadContextWithBase(ctx context.Context, workload string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, authz.WorkloadIdentityMetadataKey, workload)
+}
+
+func writeAuthorizationPolicy(t *testing.T, body string) string {
+	t.Helper()
+	path := t.TempDir() + "/authz-policy.json"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write authorization policy: %v", err)
+	}
+	return path
+}
+
+func testAuthorizationManager(t *testing.T) *authz.Manager {
+	t.Helper()
+	capabilities := authorizationCapabilities()
+	manager, err := authz.NewManager(authz.Policy{
+		Version: "test-policy",
+		Workloads: map[string]authz.WorkloadPolicy{
+			"test-workload": {Capabilities: capabilities},
+		},
+	}, capabilities)
+	if err != nil {
+		t.Fatalf("new test authorization manager: %v", err)
+	}
+	return manager
 }
 
 func requireCode(t *testing.T, err error, code codes.Code) {
