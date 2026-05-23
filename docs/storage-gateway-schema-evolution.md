@@ -87,8 +87,17 @@ That change requires:
 
 The current pre-production tests enforce the base compatibility contract:
 
+- `make test-compat` reads initial v1 fixtures from
+  `internal/compat/testdata/v1` for authoritative metadata, published
+  metadata, block index, frame checksum, backend object refs, and envelope
+  records;
 - authoritative metadata rejects unsupported required schema versions;
 - published metadata rejects unsupported required schema versions;
 - storage-format records reject unsupported required schema versions;
 - protobuf unknown fields survive decode/encode round trips for forward
   compatible additive fields.
+
+Additive protobuf fields belong in the compatibility harness as unknown-field
+round trips first. Required semantic changes need an explicit schema or format
+version bump, a fail-closed test for old readers, and a feature gate before any
+writer emits the new required shape.
