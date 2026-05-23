@@ -144,10 +144,10 @@ func runOperationLoop(ctx context.Context, apps node.Applications, interval time
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	recovery, err := localApp.RecoverInterruptedOperations(ctx, apps.Operations)
-	if err != nil && ctx.Err() != nil {
+	logOperationRecoveryReport(recovery, err)
+	if err != nil {
 		return
 	}
-	logOperationRecoveryReport(recovery, err)
 	for {
 		result, err := localApp.RunQueuedOperationsOnce(ctx, apps.Operations)
 		if err != nil && ctx.Err() != nil {

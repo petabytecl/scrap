@@ -195,13 +195,26 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 	if err != nil {
 		return result, err
 	}
+	var updates []*adminv1.Operation
 	for _, operation := range all {
 		result.Scanned++
 		switch operation.GetState() {
 		case adminv1.OperationState_OPERATION_STATE_QUEUED:
 			result.Queued++
 		case adminv1.OperationState_OPERATION_STATE_RUNNING:
-			recovered := cloneOperation(operation)
+			latest, err := s.Get(operation.GetOperationId())
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					result.Ignored++
+					continue
+				}
+				return result, err
+			}
+			if latest.GetState() != adminv1.OperationState_OPERATION_STATE_RUNNING || !proto.Equal(latest, operation) {
+				result.Ignored++
+				continue
+			}
+			recovered := cloneOperation(latest)
 			if supportedTypes[recovered.GetOperationType()] {
 				recovered.State = adminv1.OperationState_OPERATION_STATE_QUEUED
 				recovered.FinishedAt = nil
@@ -209,9 +222,7 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 					Code:    "SCRAP_OPERATION_RESTART_REQUEUED",
 					Message: "operation was running during process restart and was requeued for idempotent retry",
 				})
-				if err := s.Put(recovered); err != nil {
-					return result, err
-				}
+				updates = append(updates, recovered)
 				result.Requeued++
 				continue
 			}
@@ -225,9 +236,7 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 				Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
 				Message: fmt.Sprintf("operation type %q cannot be resumed after restart", recovered.GetOperationType()),
 			}
-			if err := s.Put(recovered); err != nil {
-				return result, err
-			}
+			updates = append(updates, recovered)
 			result.FailedUnsupported++
 		default:
 			if isTerminal(operation.GetState()) {
@@ -236,6 +245,9 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 			}
 			result.Ignored++
 		}
+	}
+	if err := s.putBatch(updates); err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -416,6 +428,27 @@ func (s *Store) get(key []byte) ([]byte, bool, error) {
 	}
 	defer closer.Close()
 	return append([]byte(nil), value...), true, nil
+}
+
+func (s *Store) putBatch(operations []*adminv1.Operation) error {
+	if len(operations) == 0 {
+		return nil
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, operation := range operations {
+		if err := validateOperation(operation); err != nil {
+			return err
+		}
+		value, err := protoMarshal.Marshal(operation)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(operationKey(operation.GetOperationId()), value, nil); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 func operationPrefix() []byte {
