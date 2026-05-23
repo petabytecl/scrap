@@ -68,6 +68,28 @@ func TestRunFailsWhenKubernetesClientHasKeyAdminCapability(t *testing.T) {
 	}
 }
 
+func TestAuditStatusDoesNotMatchNonFileAuditPathSubstring(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/v1/sys/audit" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(t, w, map[string]any{"profile/": map[string]string{"type": "socket"}})
+	}))
+	t.Cleanup(server.Close)
+
+	report := Report{}
+	status := auditStatus(context.Background(), openBaoClient{
+		baseURL: server.URL,
+		token:   "root-token",
+		http:    server.Client(),
+	}, DefaultAuditDevice, &report)
+	if status != "missing:"+DefaultAuditDevice {
+		t.Fatalf("audit status = %q, want missing file device", status)
+	}
+}
+
 func newFakeOpenBao(t *testing.T, broadKeyAdmin bool) *httptest.Server {
 	t.Helper()
 	version := uint32(1)

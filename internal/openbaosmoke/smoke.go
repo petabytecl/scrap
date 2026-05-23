@@ -276,8 +276,12 @@ func auditStatus(ctx context.Context, client openBaoClient, auditDevice string, 
 		report.fail("read audit devices: " + err.Error())
 		return "unknown"
 	}
+	expectedType := auditDevice
+	if value, _, ok := strings.Cut(auditDevice, ":"); ok {
+		expectedType = value
+	}
 	for path, device := range out {
-		if device.Type == "file" || strings.Contains(auditDevice, path) || strings.Contains(path, "file") {
+		if expectedType == "file" && device.Type == "file" && path == "file/" {
 			return "enabled:" + auditDevice
 		}
 	}
