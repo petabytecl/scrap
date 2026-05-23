@@ -314,7 +314,8 @@ Alert rules must include:
 - a bounded `reason` or `error_class`;
 - a target-profile threshold reference;
 - an owner or rotation;
-- a runbook link once #47 lands;
+- a runbook link to
+  [Storage Gateway Operator Runbooks](storage-gateway-operator-runbooks.md);
 - a suppression policy for planned maintenance and release drills;
 - the semantic signals used to evaluate the alert.
 
@@ -349,4 +350,5 @@ reviewers should verify:
 - dashboard links use logs, traces, audit events, or operation records for
   high-cardinality drilldown;
 - alert thresholds reference the approved target deployment profile;
-- runbook links are filled in after #47.
+- alert runbook links point to
+  [Storage Gateway Operator Runbooks](storage-gateway-operator-runbooks.md).

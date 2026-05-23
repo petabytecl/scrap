@@ -47,6 +47,9 @@ Observability and audit signal policy for issue `#20` is captured in
 Production dashboard and alert contracts for issue `#46` are captured in
 [Storage Gateway Dashboard And Alert Contract](storage-gateway-dashboard-alert-contract.md).
 
+Production operator runbooks for issue `#47` are captured in
+[Storage Gateway Operator Runbooks](storage-gateway-operator-runbooks.md).
+
 Release image, artifact, security-gate, dependency-update, Go-upgrade, and
 rollout policy for issue `#21` are captured in
 [Storage Gateway Release Image And Rollout Policy](storage-gateway-release-image-rollout-policy.md).

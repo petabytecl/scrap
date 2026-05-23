@@ -219,6 +219,8 @@ Rollout preconditions:
   lag, restore lag, corruption incidents, Raft health, and OpenBao health are
   live for the target deployment and satisfy the
   [Storage Gateway Dashboard And Alert Contract](storage-gateway-dashboard-alert-contract.md);
+- operator runbooks satisfy
+  [Storage Gateway Operator Runbooks](storage-gateway-operator-runbooks.md);
 - rollback or roll-forward path is documented for the release candidate.
 
 Shard-safe rollout requirements:
@@ -250,4 +252,4 @@ Rollback policy:
 
 #21 defines policy. #53 implements the first hardened lint and vulnerability
 gate baseline. #45 automates production release-gate aggregation after #21,
-#44, #48, and #53 provide the evidence contracts it needs.
+#44, #46, #47, #48, and #53 provide the evidence contracts it needs.
