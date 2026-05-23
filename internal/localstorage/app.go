@@ -67,6 +67,12 @@ func Open(dir string) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, metadataStatErr := os.Stat(filepath.Join(dir, "metadata"))
+	if metadataStatErr != nil && !errors.Is(metadataStatErr, os.ErrNotExist) {
+		_ = blocks.Close()
+		return nil, metadataStatErr
+	}
+	reconcileRebuiltRefs := errors.Is(metadataStatErr, os.ErrNotExist)
 	metadata, err := metastore.Open(dir)
 	if err != nil {
 		_ = blocks.Close()
@@ -110,9 +116,11 @@ func Open(dir string) (*Application, error) {
 		sealBlockAtBytes: DefaultSealBlockAtBytes,
 		now:              func() time.Time { return time.Now().UTC() },
 	}
-	if err := app.reconcileRebuiltLocalRefs(context.Background()); err != nil {
-		_ = app.Close()
-		return nil, err
+	if reconcileRebuiltRefs {
+		if err := app.reconcileRebuiltLocalRefs(context.Background()); err != nil {
+			_ = app.Close()
+			return nil, err
+		}
 	}
 	return app, nil
 }

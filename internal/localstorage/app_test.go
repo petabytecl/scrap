@@ -655,6 +655,40 @@ func TestMetadataProjectionRebuildQueuesRepairForCorruptLocalRef(t *testing.T) {
 	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
 }
 
+func TestOpenDoesNotScanLocalRefsWhenProjectionExists(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("corrupt without projection rebuild")
+	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	queue, err := reopened.GetRepairQueue(context.Background(), "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue = %#v, want no startup scan without projection rebuild", queue)
+	}
+}
+
 func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
