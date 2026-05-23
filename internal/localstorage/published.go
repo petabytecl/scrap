@@ -159,7 +159,7 @@ func (a *Application) restoreImportedBlocks(ctx context.Context, documents []met
 		blockIDs[document.Location.BlockID] = true
 	}
 	for blockID := range blockIDs {
-		if err := a.restoreBlockFromBackend(ctx, blockID); err != nil {
+		if _, err := a.restoreBlockFromBackend(ctx, blockID); err != nil {
 			return 0, err
 		}
 	}

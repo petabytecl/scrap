@@ -53,6 +53,7 @@ func main() {
 			log.Fatalf("open operation store: %v", err)
 		}
 		defer operationStore.Close()
+		localApp.SetOperationStore(operationStore)
 		apps.Documents = localApp
 		apps.Transactions = localApp
 		apps.Inspect = localApp
@@ -144,9 +145,10 @@ func logOperationRunReport(result localstorage.OperationRunResult, err error) {
 		return
 	}
 	log.Printf(
-		"operation scan: scanned=%d skipped=%d succeeded=%d failed=%d",
+		"operation scan: scanned=%d skipped=%d pending=%d succeeded=%d failed=%d",
 		result.Scanned,
 		result.Skipped,
+		result.Pending,
 		result.Succeeded,
 		result.Failed,
 	)

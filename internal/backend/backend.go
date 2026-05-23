@@ -14,6 +14,7 @@ var (
 	ErrConflict         = errors.New("backend: object already exists with different content")
 	ErrChecksumMismatch = errors.New("backend: checksum mismatch")
 	ErrInvalidRange     = errors.New("backend: invalid range")
+	ErrRestorePending   = errors.New("backend: archive restore pending")
 	ErrPermanent        = errors.New("backend: permanent failure")
 )
 
