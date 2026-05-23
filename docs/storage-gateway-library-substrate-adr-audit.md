@@ -27,7 +27,7 @@ hard to reverse, surprising without context, and based on a real trade-off.
 | DI/lifecycle framework | Default is explicit constructors and small consumer-owned interfaces. DI/lifecycle frameworks such as `go.uber.org/fx` or a Gaz-style container are not adopted. | Package architecture guide | Deferred. Any adoption needs an ADR because it changes composition, lifecycle, testing, and dependency visibility. |
 | Error aggregation helpers | Typed errors and retryability classes are required. `multierr`-style helpers may aggregate cleanup/shutdown errors without replacing the primary typed failure. | Durability coding guidelines | No ADR needed unless an error framework becomes part of package APIs or transport mapping. |
 | Test assertion libraries | `testify/require`-style assertions and limited `suite` use are test-only readability choices. | Durability coding guidelines | No ADR needed unless a test framework becomes mandatory for production harness architecture. |
-| Observability libraries | OpenTelemetry, Prometheus exposition where needed, and `log/slog` remain implementation candidates. | Design notes and issue `#20` | Deferred to observability standards. Add ADR only if a vendor or framework choice becomes hard to reverse. |
+| Observability libraries | OpenTelemetry, Prometheus exposition where needed, and `log/slog` remain implementation candidates. | Observability standards | Covered at signal-contract level. Add ADR only if a vendor or framework choice becomes hard to reverse. |
 
 ## New ADR Added By This Audit
 
