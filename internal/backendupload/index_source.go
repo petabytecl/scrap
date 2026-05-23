@@ -108,12 +108,11 @@ func buildBlockIndex(blockID string, shardID string, blockObject backend.Object,
 			})
 		}
 	}
-	data, err := storageformat.MarshalBlockIndex(index)
+	digest, err := storageformat.BlockIndexSHA256(index)
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(data)
-	index.IndexSha256 = append([]byte(nil), sum[:]...)
+	index.IndexSha256 = digest
 	return index, nil
 }
 

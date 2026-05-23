@@ -3,7 +3,6 @@ package backendupload
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"time"
@@ -73,12 +72,11 @@ func buildLocalEnvelopeRecord(intent metastore.UploadIntent, blockObject backend
 		AadContext:    localEnvelopeAAD(cellID, intent.BlockID, blockObject),
 		CreatedAt:     timestamppb.New(createdAt),
 	}
-	data, err := storageformat.MarshalEnvelopeRecord(record)
+	digest, err := storageformat.EnvelopeRecordSHA256(record)
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(data)
-	record.EnvelopeSha256 = append([]byte(nil), sum[:]...)
+	record.EnvelopeSha256 = digest
 	return record, nil
 }
 

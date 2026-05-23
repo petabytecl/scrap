@@ -31,6 +31,40 @@ message BlockIndex {
   google.protobuf.Timestamp created_at = 11;
 }
 
+message BackendObjectSet {
+  uint32 schema_version = 1;
+  string block_id = 2;
+  BackendObjectRef block_object = 3;
+  BackendObjectRef index_object = 4;
+  optional BackendObjectRef envelope_object = 5;
+  optional EnvelopeReference envelope_ref = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message BackendObjectRef {
+  BackendObjectKind kind = 1;
+  string backend_id = 2;
+  string object_key = 3;
+  uint64 length = 4;
+  bytes sha256 = 5;
+  optional string generation = 6;
+}
+
+enum BackendObjectKind {
+  BACKEND_OBJECT_KIND_UNSPECIFIED = 0;
+  BACKEND_OBJECT_KIND_BLOCK = 1;
+  BACKEND_OBJECT_KIND_INDEX = 2;
+  BACKEND_OBJECT_KIND_ENVELOPE = 3;
+}
+
+message EnvelopeReference {
+  string envelope_id = 1;
+  string key_id = 2;
+  uint32 key_version = 3;
+  bytes envelope_sha256 = 4;
+  BackendObjectRef envelope_object = 5;
+}
+
 message IndexDocumentRecord {
   uint64 document_key_id = 1;
   uint64 transaction_key_id = 2;
