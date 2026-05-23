@@ -274,6 +274,240 @@ func TestCommittedWriteSurvivesReopen(t *testing.T) {
 	}
 }
 
+func TestCrashAfterBlockSyncLeavesDocumentInvisible(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("synced but unprepared bytes")
+	init := writeInitForCrashBoundary(doc, data, "crash-after-block-sync")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	app.writeFaults.afterBlockSync = func(record blockstore.Record) error {
+		if record.StoredLength != uint64(len(data)) {
+			t.Fatalf("stored length = %d, want %d", record.StoredLength, len(data))
+		}
+		return errSimulatedLocalCrash
+	}
+
+	_, err = app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
+	if !errors.Is(err, errSimulatedLocalCrash) {
+		t.Fatalf("write error = %v, want simulated crash", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close crashed app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	_, err = reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	requireCode(t, err, codes.NotFound)
+	prepared, err := reopened.prepare.Recover()
+	if err != nil {
+		t.Fatalf("recover prepare log: %v", err)
+	}
+	if len(prepared) != 0 {
+		t.Fatalf("prepared documents = %#v, want none after block-only crash", prepared)
+	}
+}
+
+func TestCrashAfterPrepareSyncLeavesDocumentInvisible(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("prepared but uncommitted bytes")
+	init := writeInitForCrashBoundary(doc, data, "crash-after-prepare-sync")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	app.writeFaults.afterPrepareSync = func(document metastore.Document) error {
+		if document.Identity != doc {
+			t.Fatalf("prepared document = %#v, want %v", document.Identity, doc)
+		}
+		return errSimulatedLocalCrash
+	}
+
+	_, err = app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
+	if !errors.Is(err, errSimulatedLocalCrash) {
+		t.Fatalf("write error = %v, want simulated crash", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close crashed app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	_, err = reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	requireCode(t, err, codes.NotFound)
+	prepared, err := reopened.prepare.Recover()
+	if err != nil {
+		t.Fatalf("recover prepare log: %v", err)
+	}
+	if len(prepared) != 1 || prepared[0].Identity != doc {
+		t.Fatalf("prepared documents = %#v, want prepared document invisible", prepared)
+	}
+	readLength := prepared[0].Length
+	if err := reopened.blocks.VerifyRange(prepared[0].Location, 0, &readLength); err != nil {
+		t.Fatalf("verify prepared local bytes: %v", err)
+	}
+}
+
+func TestCrashAfterMetadataApplyKeepsCommittedDocumentRetryable(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("metadata committed before ack")
+	init := writeInitForCrashBoundary(doc, data, "crash-after-metadata-apply")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	app.writeFaults.afterMetadataApply = func(document metastore.Document) error {
+		if document.Identity != doc {
+			t.Fatalf("committed document = %#v, want %v", document.Identity, doc)
+		}
+		return errSimulatedLocalCrash
+	}
+
+	_, err = app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
+	if !errors.Is(err, errSimulatedLocalCrash) {
+		t.Fatalf("write error = %v, want simulated crash", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close crashed app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	if err != nil {
+		t.Fatalf("head committed document after reopen: %v", err)
+	}
+	if head.Length != uint64(len(data)) {
+		t.Fatalf("head length = %d, want %d", head.Length, len(data))
+	}
+	stored, err := reopened.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head committed document from metadata: %v", err)
+	}
+	if _, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("upload intent before replay error = %v, want not found", err)
+	}
+	replayed, err := reopened.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
+	if err != nil {
+		t.Fatalf("idempotent replay after metadata crash: %v", err)
+	}
+	if !replayed.IdempotentReplay {
+		t.Fatal("retry after metadata crash was not an idempotent replay")
+	}
+	if _, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID); err != nil {
+		t.Fatalf("upload intent after idempotent replay: %v", err)
+	}
+}
+
+func TestCrashBeforeACKKeepsCommittedDocumentRetryable(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("fully committed before ack")
+	init := writeInitForCrashBoundary(doc, data, "crash-before-ack")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	app.writeFaults.beforeACK = func(document metastore.Document) error {
+		if document.Identity != doc {
+			t.Fatalf("acked document = %#v, want %v", document.Identity, doc)
+		}
+		return errSimulatedLocalCrash
+	}
+
+	_, err = app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
+	if !errors.Is(err, errSimulatedLocalCrash) {
+		t.Fatalf("write error = %v, want simulated crash", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close crashed app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	if err != nil {
+		t.Fatalf("head committed document after reopen: %v", err)
+	}
+	stored, err := reopened.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head committed document from metadata: %v", err)
+	}
+	if _, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID); err != nil {
+		t.Fatalf("get upload intent after ack-boundary crash: %v", err)
+	}
+	replayed, err := reopened.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
+	if err != nil {
+		t.Fatalf("idempotent replay after ack-boundary crash: %v", err)
+	}
+	if !replayed.IdempotentReplay || replayed.Metadata.Identity != head.Identity {
+		t.Fatalf("replay = %#v, want idempotent committed document", replayed)
+	}
+}
+
+func TestPrepareLogRecoveryTruncatesCrashCutTail(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("valid prepared record")
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	if _, err := app.WriteDocument(context.Background(), writeInitForCrashBoundary(doc, data, "valid-prepare"), newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	appendPrepareLogTail(t, dir, []byte{0, 0, 0, 128, 'p', 'a', 'r'})
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app with crash-cut prepare log: %v", err)
+	}
+	defer reopened.Close()
+	prepared, err := reopened.prepare.Recover()
+	if err != nil {
+		t.Fatalf("recover truncated prepare log: %v", err)
+	}
+	if len(prepared) != 1 || prepared[0].Identity != doc {
+		t.Fatalf("prepared documents = %#v, want valid committed document only", prepared)
+	}
+	payload, err := metastore.MarshalDocument(stored)
+	if err != nil {
+		t.Fatalf("marshal stored document: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, prepareLogName))
+	if err != nil {
+		t.Fatalf("stat prepare log: %v", err)
+	}
+	wantSize := int64(prepareLogHeaderLen + len(payload) + prepareLogCRCLen)
+	if info.Size() != wantSize {
+		t.Fatalf("prepare log size = %d, want truncated size %d", info.Size(), wantSize)
+	}
+}
+
 func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	dir := t.TempDir()
 	doc := testDocumentIdentity()
@@ -897,6 +1131,7 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first write: %v", err)
 	}
+	appliedIndex := app.authority.AppliedIndex()
 	second, err := app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
 	if err != nil {
 		t.Fatalf("replay write: %v", err)
@@ -906,6 +1141,9 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	}
 	if !bytes.Equal(second.Metadata.LogicalSHA256, first.Metadata.LogicalSHA256) {
 		t.Fatal("replay metadata did not match original write")
+	}
+	if app.authority.AppliedIndex() != appliedIndex {
+		t.Fatalf("applied index = %d, want replay not to append after %d", app.authority.AppliedIndex(), appliedIndex)
 	}
 
 	transaction, err := app.GetTransaction(context.Background(), api.GetTransactionRequest{
@@ -1735,6 +1973,41 @@ func queuedOperation(operationID string, operationType string, targets []*adminv
 		RequestedAt:         timestamppb.New(time.Unix(300, 0).UTC()),
 		Targets:             targets,
 		Progress:            &adminv1.OperationProgress{Message: "queued"},
+	}
+}
+
+var errSimulatedLocalCrash = errors.New("simulated local crash")
+
+func writeInitForCrashBoundary(doc identity.Document, data []byte, idempotencyKey string) api.WriteDocumentInit {
+	length := uint64(len(data))
+	sum := sha256.Sum256(data)
+	return api.WriteDocumentInit{
+		Identity:             doc,
+		DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		ExpectedLength:       &length,
+		ExpectedSHA256:       sum[:],
+		ClientIdempotencyKey: idempotencyKey,
+		CreatedByService:     "billing-etl",
+	}
+}
+
+func appendPrepareLogTail(t *testing.T, dir string, data []byte) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, prepareLogName), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open prepare log for tail append: %v", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		t.Fatalf("append prepare log tail: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatalf("sync prepare log tail: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close prepare log tail: %v", err)
 	}
 }
 

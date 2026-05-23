@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	prepareLogName      = "local.openlog"
-	prepareLogHeaderLen = 4
-	prepareLogCRCLen    = 4
+	prepareLogName          = "local.openlog"
+	prepareLogHeaderLen     = 4
+	prepareLogCRCLen        = 4
+	maxPrepareLogPayloadLen = 64 * 1024 * 1024
 )
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
@@ -30,9 +31,20 @@ func openPrepareLog(dir string) (*prepareLog, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, prepareLogName)
+	_, statErr := os.Stat(path)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, statErr
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	if errors.Is(statErr, os.ErrNotExist) {
+		if err := syncLocalDir(dir); err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return nil, err
+		}
 	}
 	return &prepareLog{path: path, file: file}, nil
 }
@@ -51,7 +63,7 @@ func (l *prepareLog) Append(document metastore.Document) error {
 	if err != nil {
 		return err
 	}
-	if uint64(len(payload)) > uint64(^uint32(0)) {
+	if len(payload) > maxPrepareLogPayloadLen {
 		return fmt.Errorf("localstorage: prepare record too large: %d", len(payload))
 	}
 	frame := make([]byte, prepareLogHeaderLen+len(payload)+prepareLogCRCLen)
@@ -66,7 +78,7 @@ func (l *prepareLog) Append(document metastore.Document) error {
 }
 
 func (l *prepareLog) Recover() ([]metastore.Document, error) {
-	file, err := os.Open(l.path)
+	file, err := os.OpenFile(l.path, os.O_RDWR, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -76,31 +88,60 @@ func (l *prepareLog) Recover() ([]metastore.Document, error) {
 	defer file.Close()
 
 	var documents []metastore.Document
+	var validOffset int64
 	for {
+		recordOffset := validOffset
 		var header [prepareLogHeaderLen]byte
 		if _, err := io.ReadFull(file, header[:]); err != nil {
 			if errors.Is(err, io.EOF) {
 				return documents, nil
 			}
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return documents, truncatePrepareLogTail(file, recordOffset)
+			}
 			return nil, err
 		}
 		length := binary.BigEndian.Uint32(header[:])
-		payload := make([]byte, length)
+		if length > maxPrepareLogPayloadLen {
+			return documents, truncatePrepareLogTail(file, recordOffset)
+		}
+		payload := make([]byte, int(length))
 		if _, err := io.ReadFull(file, payload); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return documents, truncatePrepareLogTail(file, recordOffset)
+			}
 			return nil, err
 		}
 		var checksum [prepareLogCRCLen]byte
 		if _, err := io.ReadFull(file, checksum[:]); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return documents, truncatePrepareLogTail(file, recordOffset)
+			}
 			return nil, err
 		}
 		want := binary.BigEndian.Uint32(checksum[:])
 		if got := crc32.Checksum(payload, crcTable); got != want {
-			return nil, fmt.Errorf("localstorage: prepare log checksum mismatch")
+			return documents, truncatePrepareLogTail(file, recordOffset)
 		}
 		document, err := metastore.UnmarshalDocument(payload)
 		if err != nil {
 			return nil, err
 		}
 		documents = append(documents, document)
+		validOffset += int64(prepareLogHeaderLen + len(payload) + prepareLogCRCLen)
 	}
+}
+
+func truncatePrepareLogTail(file *os.File, validOffset int64) error {
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == validOffset {
+		return nil
+	}
+	if err := file.Truncate(validOffset); err != nil {
+		return err
+	}
+	return file.Sync()
 }
