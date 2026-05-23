@@ -64,6 +64,9 @@ func TestRunEmitsLocalRehearsalEvidence(t *testing.T) {
 	if report.Workload.DocumentSizeDistribution.TotalBytes != 384 {
 		t.Fatalf("document distribution = %#v, want total 384", report.Workload.DocumentSizeDistribution)
 	}
+	if report.Workload.ActiveAdminReads || !report.Workload.ActiveAdminObservations {
+		t.Fatalf("workload admin flags = %#v, want observations without admin document reads", report.Workload)
+	}
 	if got := len(report.Results.LocalWriteAdmission.Samples); got != 2 {
 		t.Fatalf("write samples = %d, want 2", got)
 	}
@@ -133,6 +136,69 @@ func TestRunFailsWhenAdvisoryThresholdsAreExceeded(t *testing.T) {
 	}
 	if !strings.Contains(report.RequiredFailureResolution, "blocking issue") {
 		t.Fatalf("failure resolution = %q, want linked issue or exception policy", report.RequiredFailureResolution)
+	}
+}
+
+func TestRunFailsOnReadDigestMismatch(t *testing.T) {
+	report, err := Run(context.Background(), Options{
+		ReleaseSHA:               "abc123",
+		DirtyTree:                "clean",
+		ProfileID:                "scrap-prod-v1",
+		CapacitySampleReportPath: writeCapacityReport(t, sampleCapacityReport()),
+		SampleCount:              1,
+		DocumentSizesBytes:       []uint64{64},
+		Duration:                 time.Second,
+		Now: func() time.Time {
+			return time.Unix(1700000000, 0).UTC()
+		},
+	}, Clients{
+		Documents:  &fakeDocuments{values: map[string][]byte{}, corruptReads: true},
+		Inspect:    fakeInspect{runway: sampleRunway()},
+		Operations: fakeOperations{},
+		Repair:     fakeRepair{},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed", report.Status)
+	}
+	if !hasViolation(report.ThresholdViolations, "SCRAP_LOCAL_READ_BACK_FAILED") {
+		t.Fatalf("violations = %#v, want read-back failure", report.ThresholdViolations)
+	}
+}
+
+func TestRestoreLagUsesRestoreOperationsOnly(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	backlog := observeOperationBacklog(context.Background(), fakeOperations{
+		operations: []*adminv1.Operation{
+			{
+				OperationId:   "older-capacity",
+				OperationType: "capacity-override",
+				State:         adminv1.OperationState_OPERATION_STATE_RUNNING,
+				RequestedAt:   timestamppb.New(now.Add(-10 * time.Hour)),
+			},
+			{
+				OperationId:   "newer-restore",
+				OperationType: "restore",
+				State:         adminv1.OperationState_OPERATION_STATE_RUNNING,
+				RequestedAt:   timestamppb.New(now.Add(-2 * time.Hour)),
+			},
+		},
+	}, now)
+
+	restore := restoreLag(backlog)
+	if restore.OldestLagMillis != durationMillis(2*time.Hour) {
+		t.Fatalf("restore lag = %d, want only restore lag", restore.OldestLagMillis)
+	}
+}
+
+func TestClassifyErrorTreatsContextTimeoutsAsTransient(t *testing.T) {
+	if got := classifyError(context.DeadlineExceeded); got != "transient" {
+		t.Fatalf("classify deadline = %q, want transient", got)
+	}
+	if got := classifyError(context.Canceled); got != "transient" {
+		t.Fatalf("classify canceled = %q, want transient", got)
 	}
 }
 
@@ -297,7 +363,8 @@ func (f fakeOperations) ListOperations(context.Context, *adminv1.ListOperationsR
 }
 
 type fakeDocuments struct {
-	values map[string][]byte
+	values       map[string][]byte
+	corruptReads bool
 }
 
 func newFakeDocuments() *fakeDocuments {
@@ -323,6 +390,10 @@ func (f *fakeDocuments) ReadDocument(ctx context.Context, req *scrapv1.ReadDocum
 	if !ok {
 		return nil, status.Error(codes.NotFound, "document not found")
 	}
+	readBody := append([]byte(nil), body...)
+	if f.corruptReads && len(readBody) > 0 {
+		readBody[0] ^= 0xff
+	}
 	return &fakeReadStream{
 		ctx: ctx,
 		responses: []*scrapv1.ReadDocumentResponse{
@@ -333,7 +404,7 @@ func (f *fakeDocuments) ReadDocument(ctx context.Context, req *scrapv1.ReadDocum
 				}},
 			},
 			{
-				Message: &scrapv1.ReadDocumentResponse_Chunk{Chunk: &scrapv1.ReadDocumentChunk{Data: append([]byte(nil), body...)}},
+				Message: &scrapv1.ReadDocumentResponse_Chunk{Chunk: &scrapv1.ReadDocumentChunk{Data: readBody}},
 			},
 		},
 	}, nil
@@ -442,6 +513,15 @@ func documentKey(identity *scrapv1.DocumentIdentity) string {
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasViolation(violations []ThresholdViolation, code string) bool {
+	for _, violation := range violations {
+		if violation.Code == code {
 			return true
 		}
 	}

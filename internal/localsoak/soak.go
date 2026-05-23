@@ -1,6 +1,7 @@
 package localsoak
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sort"
 	"strings"
@@ -138,6 +140,7 @@ type WorkloadShape struct {
 	NonProductionOnly        bool                     `json:"non_production_only"`
 	ActivePublicWrites       bool                     `json:"active_public_writes"`
 	ActiveAdminReads         bool                     `json:"active_admin_reads"`
+	ActiveAdminObservations  bool                     `json:"active_admin_observations"`
 }
 
 type DocumentSizeDistribution struct {
@@ -208,12 +211,13 @@ type WriteSample struct {
 }
 
 type ReadSample struct {
-	Document      DocumentIdentity `json:"document"`
-	Bytes         uint64           `json:"bytes"`
-	LatencyMillis int64            `json:"latency_millis"`
-	Source        string           `json:"source,omitempty"`
-	ErrorClass    string           `json:"error_class,omitempty"`
-	Error         string           `json:"error,omitempty"`
+	Document            DocumentIdentity `json:"document"`
+	Bytes               uint64           `json:"bytes"`
+	LatencyMillis       int64            `json:"latency_millis"`
+	Source              string           `json:"source,omitempty"`
+	LogicalSHA256Digest string           `json:"logical_sha256_digest,omitempty"`
+	ErrorClass          string           `json:"error_class,omitempty"`
+	Error               string           `json:"error,omitempty"`
 }
 
 type DiskRunwayObservation struct {
@@ -244,12 +248,13 @@ type OperationLagObservation struct {
 }
 
 type OperationBacklogObservation struct {
-	OperationCount  int            `json:"operation_count"`
-	ByState         map[string]int `json:"by_state"`
-	ByType          map[string]int `json:"by_type"`
-	OldestLagMillis int64          `json:"oldest_lag_millis"`
-	ErrorClass      string         `json:"error_class,omitempty"`
-	Error           string         `json:"error,omitempty"`
+	OperationCount         int            `json:"operation_count"`
+	ByState                map[string]int `json:"by_state"`
+	ByType                 map[string]int `json:"by_type"`
+	OldestLagMillis        int64          `json:"oldest_lag_millis"`
+	restoreOldestLagMillis int64
+	ErrorClass             string `json:"error_class,omitempty"`
+	Error                  string `json:"error,omitempty"`
 }
 
 type OpenBaoObservation struct {
@@ -477,7 +482,8 @@ func capacityWorkload(opts Options) WorkloadShape {
 		Bounded:                  true,
 		NonProductionOnly:        true,
 		ActivePublicWrites:       true,
-		ActiveAdminReads:         true,
+		ActiveAdminReads:         false,
+		ActiveAdminObservations:  true,
 	}
 }
 
@@ -622,12 +628,14 @@ func readOneDocument(ctx context.Context, client DocumentClient, doc DocumentIde
 	if head.GetMetadata().GetLength() != expectedBytes {
 		return failedReadSample(doc, started, fmt.Errorf("head length = %d, want %d", head.GetMetadata().GetLength(), expectedBytes))
 	}
+	expectedDigest := head.GetMetadata().GetLogicalSha256()
 	stream, err := client.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{Identity: identity})
 	if err != nil {
 		return failedReadSample(doc, started, err)
 	}
 	var source string
 	var bytesRead uint64
+	hasher := sha256.New()
 	for {
 		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -644,16 +652,23 @@ func readOneDocument(ctx context.Context, client DocumentClient, doc DocumentIde
 		if chunk == nil {
 			return failedReadSample(doc, started, errors.New("read stream returned response without metadata or chunk"))
 		}
-		bytesRead += uint64(len(chunk.GetData()))
+		data := chunk.GetData()
+		bytesRead += uint64(len(data))
+		_, _ = hasher.Write(data)
 	}
 	if bytesRead != expectedBytes {
 		return failedReadSample(doc, started, fmt.Errorf("read bytes = %d, want %d", bytesRead, expectedBytes))
 	}
+	actualDigest := hasher.Sum(nil)
+	if len(expectedDigest) > 0 && !bytes.Equal(actualDigest, expectedDigest) {
+		return failedReadSample(doc, started, errors.New("read content sha256 does not match document metadata"))
+	}
 	return ReadSample{
-		Document:      doc,
-		Bytes:         bytesRead,
-		LatencyMillis: durationMillis(time.Since(started)),
-		Source:        source,
+		Document:            doc,
+		Bytes:               bytesRead,
+		LatencyMillis:       durationMillis(time.Since(started)),
+		Source:              source,
+		LogicalSHA256Digest: hexDigest(actualDigest),
 	}
 }
 
@@ -741,6 +756,9 @@ func observeOperationBacklog(ctx context.Context, client OperationClient, now ti
 		if lag > observation.OldestLagMillis {
 			observation.OldestLagMillis = lag
 		}
+		if isRestoreOperation(operationType) && lag > observation.restoreOldestLagMillis {
+			observation.restoreOldestLagMillis = lag
+		}
 	}
 	return observation
 }
@@ -759,7 +777,7 @@ func restoreLag(backlog OperationBacklogObservation) OperationLagObservation {
 		observation.OperationCount += backlog.ByType[operationType]
 	}
 	if observation.OperationCount > 0 {
-		observation.OldestLagMillis = backlog.OldestLagMillis
+		observation.OldestLagMillis = backlog.restoreOldestLagMillis
 	}
 	return observation
 }
@@ -999,6 +1017,13 @@ func failedReadSample(doc DocumentIdentity, started time.Time, err error) ReadSa
 }
 
 func classifyError(err error) backend.ErrorClass {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return backend.ErrorClassTransient
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return backend.ErrorClassTransient
+	}
 	if status.Code(err) != codes.Unknown {
 		return classifyGRPCError(err)
 	}
