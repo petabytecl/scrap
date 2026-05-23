@@ -96,7 +96,7 @@ linters:
         # Field alignment is useful during memory-layout work, but too noisy as
         # a repository-wide correctness gate.
         - fieldalignment
-        # The current codebase has many intentional short scoped err/ok checks.
+        # The current codebase has many intentional short-scoped err/ok checks.
         # Enable shadow later as a dedicated cleanup pass.
         - shadow
     nolintlint:
