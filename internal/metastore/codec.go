@@ -16,10 +16,11 @@ var protoMarshal = proto.MarshalOptions{Deterministic: true}
 const CurrentSchemaVersion uint32 = 1
 
 func marshalDocument(document Document) ([]byte, error) {
-	return marshalDocumentRecord(documentToProto(normalizeDocumentDefaults(document)))
+	return marshalDocumentRecord(documentToProto(document))
 }
 
 func MarshalDocument(document Document) ([]byte, error) {
+	document = normalizeDocumentDefaults(document)
 	return marshalDocument(document)
 }
 
@@ -282,6 +283,9 @@ func validateTimestamp(recordKind string, field string, value *timestamppb.Times
 	}
 	if err := value.CheckValid(); err != nil {
 		return fmt.Errorf("%w: %s %s is invalid: %w", ErrInvalidRecord, recordKind, field, err)
+	}
+	if value.AsTime().IsZero() {
+		return invalidRecord(recordKind, "%s must be non-zero", field)
 	}
 	return nil
 }

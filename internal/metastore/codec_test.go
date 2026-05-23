@@ -154,6 +154,12 @@ func TestAuthoritativeDocumentRecordRejectsMissingRequiredFields(t *testing.T) {
 			},
 		},
 		{
+			name: "zero created timestamp",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.CreatedAt = timestamppb.New(time.Time{})
+			},
+		},
+		{
 			name: "frame checksum",
 			mutate: func(record *metastorev1.DocumentRecord) {
 				record.Location.Frames[0].Sha256 = nil
@@ -296,6 +302,23 @@ func TestShardCommandRequiresCommandBody(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected missing command body error")
+	}
+}
+
+func TestShardCommandRejectsZeroProposedAt(t *testing.T) {
+	command := sampleShardCommand()
+	command.ProposedAt = timestamppb.New(time.Time{})
+
+	if _, err := MarshalShardCommand(command); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("marshal error = %v, want %v", err, ErrInvalidRecord)
+	}
+
+	data, err := proto.Marshal(command)
+	if err != nil {
+		t.Fatalf("raw proto marshal: %v", err)
+	}
+	if _, err := UnmarshalShardCommand(data); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
 	}
 }
 
