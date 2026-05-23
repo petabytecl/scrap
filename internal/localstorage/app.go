@@ -37,6 +37,11 @@ type Application struct {
 	prepare                  *prepareLog
 	memberMu                 sync.Mutex
 	memberState              localMemberState
+	byteServingMu            sync.Mutex
+	byteServingReady         bool
+	byteServingErr           error
+	byteServingCancel        context.CancelFunc
+	byteServingDone          chan struct{}
 	sealBlockAtBytes         uint64
 	minUsableBytesAfterWrite uint64
 	peerPrepareTargets       []replication.Target
@@ -66,6 +71,10 @@ type writeFaultHooks struct {
 }
 
 func Open(dir string) (*Application, error) {
+	return OpenWithContext(context.Background(), dir)
+}
+
+func OpenWithContext(ctx context.Context, dir string) (*Application, error) {
 	blocks, err := blockstore.Open(dir)
 	if err != nil {
 		return nil, err
@@ -75,7 +84,6 @@ func Open(dir string) (*Application, error) {
 		_ = blocks.Close()
 		return nil, metadataStatErr
 	}
-	reconcileRebuiltRefs := errors.Is(metadataStatErr, os.ErrNotExist)
 	metadata, err := metastore.Open(dir)
 	if err != nil {
 		_ = blocks.Close()
@@ -116,21 +124,21 @@ func Open(dir string) (*Application, error) {
 		authority:        authority,
 		prepare:          prepare,
 		memberState:      memberState,
+		byteServingDone:  make(chan struct{}),
 		sealBlockAtBytes: DefaultSealBlockAtBytes,
 		now:              func() time.Time { return time.Now().UTC() },
 	}
-	if reconcileRebuiltRefs {
-		if err := app.reconcileRebuiltLocalRefs(context.Background()); err != nil {
-			_ = app.Close()
-			return nil, err
-		}
-	}
+	app.startByteServingVerifier(ctx)
 	return app, nil
 }
 
 func (a *Application) Close() error {
 	if a == nil {
 		return nil
+	}
+	if a.byteServingCancel != nil {
+		a.byteServingCancel()
+		<-a.byteServingDone
 	}
 	return errors.Join(a.prepare.Close(), a.authority.Close(), a.metadata.Close(), a.blocks.Close())
 }
@@ -210,7 +218,48 @@ func (a *Application) SealCurrentBlockIfDue(ctx context.Context) (string, bool, 
 	return blockID, true, nil
 }
 
-func (a *Application) reconcileRebuiltLocalRefs(ctx context.Context) error {
+func (a *Application) startByteServingVerifier(ctx context.Context) {
+	verifierCtx, cancel := context.WithCancel(ctx)
+	a.byteServingCancel = cancel
+	go a.runByteServingVerifier(verifierCtx)
+}
+
+func (a *Application) runByteServingVerifier(ctx context.Context) {
+	err := a.verifyLocalRefsAndQueueRepairs(ctx)
+	a.byteServingMu.Lock()
+	if err == nil {
+		a.byteServingReady = true
+	} else {
+		a.byteServingErr = err
+	}
+	a.byteServingMu.Unlock()
+	close(a.byteServingDone)
+}
+
+func (a *Application) waitByteServingReady(ctx context.Context) error {
+	select {
+	case <-a.byteServingDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	a.byteServingMu.Lock()
+	defer a.byteServingMu.Unlock()
+	if a.byteServingReady {
+		return nil
+	}
+	if a.byteServingErr != nil {
+		return a.byteServingErr
+	}
+	return errors.New("localstorage: byte-serving readiness did not complete")
+}
+
+// verifyLocalRefsAndQueueRepairs verifies committed hot local refs and records
+// quarantined repair work for missing or corrupt bytes before this member serves
+// local document bytes.
+func (a *Application) verifyLocalRefsAndQueueRepairs(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	documents, err := a.metadata.ListDocuments(metastore.DocumentFilter{})
 	if err != nil {
 		return err
@@ -373,6 +422,9 @@ func (a *Application) HeadDocument(ctx context.Context, req api.HeadDocumentRequ
 
 func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequest, sender api.ReadDocumentSender) error {
 	if err := a.authority.ReadFresh(ctx); err != nil {
+		return mapError(err)
+	}
+	if err := a.waitByteServingReady(ctx); err != nil {
 		return mapError(err)
 	}
 	document, err := a.metadata.HeadDocument(req.Identity)

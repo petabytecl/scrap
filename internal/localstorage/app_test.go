@@ -786,7 +786,7 @@ func TestMetadataProjectionRebuildQueuesRepairForCorruptLocalRef(t *testing.T) {
 	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
 }
 
-func TestOpenDoesNotScanLocalRefsWhenProjectionExists(t *testing.T) {
+func TestOpenVerifiesLocalRefsWhenProjectionExists(t *testing.T) {
 	dir := t.TempDir()
 	doc := testDocumentIdentity()
 	data := []byte("corrupt without projection rebuild")
@@ -811,12 +811,29 @@ func TestOpenDoesNotScanLocalRefsWhenProjectionExists(t *testing.T) {
 		t.Fatalf("reopen app: %v", err)
 	}
 	defer reopened.Close()
-	queue, err := reopened.GetRepairQueue(context.Background(), "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
+	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
+}
+
+func TestByteServingReadinessVerificationIsCancelable(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("cancel byte readiness")
+	app, _ := writeDocumentForProjectionRebuild(t, dir, doc, data)
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
 	}
-	if len(queue) != 0 {
-		t.Fatalf("repair queue = %#v, want no startup scan without projection rebuild", queue)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reopened, err := OpenWithContext(ctx, dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+
+	err = reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("read error = %v, want canceled readiness verification", err)
 	}
 }
 
