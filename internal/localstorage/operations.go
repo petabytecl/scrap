@@ -643,18 +643,22 @@ func (a *Application) applyRepairOperation(ctx context.Context, operation *admin
 	if err != nil {
 		return 0, err
 	}
+	restoredBlocks := make(map[string]bool)
 	for _, repair := range repairs {
 		document, err := a.metadata.HeadDocument(repair.Identity)
 		if err != nil {
 			return 0, err
 		}
-		repairedFromPeer, err := a.repairDocumentFromVerifiedPeer(ctx, document, now)
-		if err != nil {
-			return 0, err
-		}
-		if !repairedFromPeer {
-			if err := a.replaceBlockFromBackend(ctx, document.Location.BlockID); err != nil {
+		if !restoredBlocks[document.Location.BlockID] {
+			repairedFromPeer, err := a.repairDocumentFromVerifiedPeer(ctx, document, now)
+			if err != nil {
 				return 0, err
+			}
+			if !repairedFromPeer {
+				if err := a.replaceBlockFromBackend(ctx, document.Location.BlockID); err != nil {
+					return 0, err
+				}
+				restoredBlocks[document.Location.BlockID] = true
 			}
 		}
 		if err := a.recordDocumentRepairState(ctx, document, repair.IncidentID, false, now); err != nil {
@@ -736,6 +740,9 @@ func isLocalRepairState(state metastore.RepairState) bool {
 }
 
 func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, document metastore.Document, now time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if len(document.Location.Replicas) == 0 || len(a.peerRepairSources) == 0 {
 		return false, nil
 	}
@@ -761,6 +768,12 @@ func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, docume
 			err = replication.ValidatePreparedBytes(prepared, data.Bytes())
 		}
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return false, contextErr
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return false, err
+			}
 			if !isPeerIntegrityFailure(err) {
 				continue
 			}
@@ -773,6 +786,9 @@ func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, docume
 			return false, err
 		}
 		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	return false, nil
 }

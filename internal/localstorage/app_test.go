@@ -1398,6 +1398,123 @@ func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	first := testDocumentIdentity()
+	first.DocumentName = "first-backend-dedupe.xml"
+	second := testDocumentIdentity()
+	second.DocumentName = "second-backend-dedupe.xml"
+	firstData := []byte("first repair from backend")
+	secondData := []byte("second repair from backend")
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         first,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{firstData})); err != nil {
+		t.Fatalf("write first document: %v", err)
+	}
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         second,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{secondData})); err != nil {
+		t.Fatalf("write second document: %v", err)
+	}
+	firstStored, err := app.metadata.HeadDocument(first)
+	if err != nil {
+		t.Fatalf("head first document: %v", err)
+	}
+	secondStored, err := app.metadata.HeadDocument(second)
+	if err != nil {
+		t.Fatalf("head second document: %v", err)
+	}
+	if firstStored.Location.BlockID != secondStored.Location.BlockID {
+		t.Fatalf("documents landed in blocks %s/%s, want same block", firstStored.Location.BlockID, secondStored.Location.BlockID)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.sealBlockAtBytes = app.blocks.CurrentBlockLength()
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	countingBackend := &readCountingBackendStore{Store: backendStore}
+	app.SetBackendStore(countingBackend)
+	corruptStoredByte(t, app, firstStored.Location, 0)
+	for _, stored := range []metastore.Document{firstStored, secondStored} {
+		if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(300, 0).UTC()); err != nil {
+			t.Fatalf("record local repair state for %s: %v", stored.Identity.DocumentName, err)
+		}
+	}
+	operation := queuedOperation("backend-dedupe-repair-op", "repair", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Block{
+				Block: &adminv1.BlockTarget{
+					ShardId: "local",
+					BlockId: firstStored.Location.BlockID,
+				},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one repair success", result)
+	}
+	if countingBackend.readObjectRangeCount != 1 {
+		t.Fatalf("backend reads = %d, want one block restore", countingBackend.readObjectRangeCount)
+	}
+	queue, err := app.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue = %#v, want resolved repairs", queue)
+	}
+}
+
+func TestRepairDocumentFromVerifiedPeerPropagatesContextCancellation(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("cancelled peer repair")
+	doc := testDocumentIdentity()
+	doc.DocumentName = "cancel-peer-repair.xml"
+	peer := newRecordingPreparePeer("member-1")
+	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
+	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	app.SetPeerRepairSource("member-1", PeerRepairSourceFunc(func(context.Context, blockstore.ReplicaRef, io.Writer) error {
+		return context.Canceled
+	}))
+
+	repaired, err := app.repairDocumentFromVerifiedPeer(ctx, stored, time.Unix(310, 0).UTC())
+	if repaired || !errors.Is(err, context.Canceled) {
+		t.Fatalf("peer repair result = %t, %v, want context cancellation", repaired, err)
+	}
+}
+
 func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -2799,6 +2916,16 @@ func requireCode(t *testing.T, err error, code codes.Code) {
 	if got := status.Code(err); got != code {
 		t.Fatalf("code = %s, want %s; err = %v", got, code, err)
 	}
+}
+
+type readCountingBackendStore struct {
+	backend.Store
+	readObjectRangeCount int
+}
+
+func (s *readCountingBackendStore) ReadObjectRange(ctx context.Context, key string, selected backend.Range, writer io.Writer) error {
+	s.readObjectRangeCount++
+	return s.Store.ReadObjectRange(ctx, key, selected, writer)
 }
 
 func readBackendObject(t *testing.T, ctx context.Context, store backend.Store, key string) []byte {
