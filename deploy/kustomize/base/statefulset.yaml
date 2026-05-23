@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+spec:
+  serviceName: scrapd
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: scrapd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: scrapd
+    spec:
+      serviceAccountName: scrapd
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: scrapd
+          image: ghcr.io/petabytecl/scrap/scrapd:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --public-listen=0.0.0.0:18080
+            - --admin-listen=0.0.0.0:18081
+            - --authorization-policy=/etc/scrap/authz-policy.json
+            - --enable-local-non-production-storage
+            - --local-data-dir=/var/lib/scrap/local
+            - --enable-local-filesystem-backend
+            - --local-backend-data-dir=/var/lib/scrap/backend
+            - --backend-upload-interval=5s
+            - --operation-run-interval=5s
+          ports:
+            - name: public-grpc
+              containerPort: 18080
+            - name: admin-grpc
+              containerPort: 18081
+          readinessProbe:
+            tcpSocket:
+              port: admin-grpc
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: admin-grpc
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: authz-policy
+              mountPath: /etc/scrap
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/scrap
+      volumes:
+        - name: authz-policy
+          configMap:
+            name: scrapd-authz-policy
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 2Gi

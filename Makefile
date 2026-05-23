@@ -4,11 +4,16 @@
 .PHONY: proto proto-check
 .PHONY: fmt fmt-check lint vuln
 .PHONY: test test-compat test-race build check
+.PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
 .PHONY: release-check crash-fault-evidence
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
 
 GO ?= go
 BUF ?= buf
+DOCKER ?= docker
+KIND ?= kind
+KUBECTL ?= kubectl
+KUSTOMIZE ?= go run sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
 TEST_PACKAGES ?= ./...
 COMPAT_PACKAGES ?= ./internal/compat
 LINT_TIMEOUT ?= 5m
@@ -18,6 +23,18 @@ GOVULNCHECK_VERSION ?= v1.3.0
 PROTO_BREAKING_REF ?= main
 PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence
+RELEASE_SHA ?= $(shell git rev-parse HEAD)
+RELEASE_VERSION ?= dev
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+DIRTY_TREE ?= $(shell git diff --quiet && git diff --cached --quiet && echo clean || echo dirty)
+IMAGE_NAME ?= localhost/scrapd:local
+IMAGE_GOOS ?= linux
+IMAGE_GOARCH ?= $(shell $(GO) env GOARCH)
+IMAGE_PLATFORM ?= $(IMAGE_GOOS)/$(IMAGE_GOARCH)
+SCRAPD_IMAGE_BINARY ?= bin/scrapd-$(IMAGE_GOOS)-$(IMAGE_GOARCH)
+KIND_CLUSTER ?= scrap-local
+LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
+LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
 
 help: ## Show this help.
 	@awk 'BEGIN { FS = ":.*##"; printf "\n\033[1mUsage:\033[0m\n  make \033[36m<target>\033[0m\n" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  \033[36m%-34s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
@@ -64,6 +81,47 @@ build: ## Build all supported command binaries.
 	$(GO) build $(SCRAP_BINS)
 
 check: fmt-check proto-check test-compat lint test test-race build ## Run the full local verification gate.
+
+##@ Release Artifacts
+
+image: ## Build the local scrapd container image.
+	mkdir -p "$(dir $(SCRAPD_IMAGE_BINARY))"
+	CGO_ENABLED=0 GOOS=$(IMAGE_GOOS) GOARCH=$(IMAGE_GOARCH) $(GO) build -trimpath -ldflags "-s -w" -o "$(SCRAPD_IMAGE_BINARY)" ./cmd/scrapd
+	$(DOCKER) build \
+		--platform="$(IMAGE_PLATFORM)" \
+		--build-arg SCRAP_RELEASE_SHA="$(RELEASE_SHA)" \
+		--build-arg SCRAP_VERSION="$(RELEASE_VERSION)" \
+		--build-arg SCRAP_BUILD_TIME="$(BUILD_TIME)" \
+		--build-arg SCRAP_DIRTY_TREE="$(DIRTY_TREE)" \
+		--build-arg SCRAPD_IMAGE_BINARY="$(SCRAPD_IMAGE_BINARY)" \
+		-t "$(IMAGE_NAME)" .
+
+manifests-render: ## Render the local-kind GitOps manifests.
+	@$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)"
+
+manifests-check: ## Validate that the local-kind GitOps manifests render.
+	@tmp="$$(mktemp)"; \
+		trap 'rm -f "$$tmp"' EXIT; \
+		$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" > "$$tmp"; \
+		test -s "$$tmp"
+
+local-kind-create: ## Create the local kind cluster for release rehearsal.
+	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml
+
+local-kind-delete: ## Delete the local kind cluster.
+	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
+
+local-kind-load: image ## Load the scrapd image into the local kind cluster.
+	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(KIND_CLUSTER)"
+
+local-kind-deploy: manifests-check ## Apply the local-kind release rehearsal manifests.
+	$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" | $(KUBECTL) apply -f -
+
+local-kind-smoke: ## Run a local kind admin smoke check.
+	@./scripts/local-kind-smoke.sh
+
+local-kind-evidence: manifests-check ## Emit a local kind release rehearsal evidence report.
+	@./scripts/local-kind-evidence.sh > "$(LOCAL_KIND_EVIDENCE_REPORT)"
 
 ##@ Release Evidence
 
