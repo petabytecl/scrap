@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -583,6 +584,108 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read rebuilt document = %q, want %q", got, data)
+	}
+	queue, err := reopened.GetRepairQueue(context.Background(), "local")
+	if err != nil {
+		t.Fatalf("get repair queue after clean rebuild: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue after clean rebuild = %#v, want empty", queue)
+	}
+}
+
+func TestMetadataProjectionRebuildQueuesRepairForMissingLocalRef(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("missing after projection rebuild")
+	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove local block: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
+		t.Fatalf("remove metadata projection: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	if err != nil {
+		t.Fatalf("head rebuilt missing-ref document: %v", err)
+	}
+	if head.Length != uint64(len(data)) {
+		t.Fatalf("head length = %d, want %d", head.Length, len(data))
+	}
+	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
+}
+
+func TestMetadataProjectionRebuildQueuesRepairForCorruptLocalRef(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("corrupt after projection rebuild")
+	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
+		t.Fatalf("remove metadata projection: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
+}
+
+func TestOpenDoesNotScanLocalRefsWhenProjectionExists(t *testing.T) {
+	dir := t.TempDir()
+	doc := testDocumentIdentity()
+	data := []byte("corrupt without projection rebuild")
+	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
+	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	queue, err := reopened.GetRepairQueue(context.Background(), "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue = %#v, want no startup scan without projection rebuild", queue)
 	}
 }
 
@@ -2008,6 +2111,48 @@ func appendPrepareLogTail(t *testing.T, dir string, data []byte) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("close prepare log tail: %v", err)
+	}
+}
+
+func writeDocumentForProjectionRebuild(t *testing.T, dir string, doc identity.Document, data []byte) (*Application, metastore.Document) {
+	t.Helper()
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		_ = app.Close()
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		_ = app.Close()
+		t.Fatalf("head stored document: %v", err)
+	}
+	return app, stored
+}
+
+func assertUnreadableRepairRef(t *testing.T, app *Application, doc identity.Document, blockID string) {
+	t.Helper()
+	sender := &recordingReadSender{}
+	err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.DataLoss)
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d for unreadable repair ref", sender.sentMetadata, len(sender.chunks))
+	}
+	queue, err := app.GetRepairQueue(context.Background(), "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 1 ||
+		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
+		!strings.Contains(queue[0].GetReason(), blockID) {
+		t.Fatalf("repair queue = %#v, want repair for block %s", queue, blockID)
 	}
 }
 

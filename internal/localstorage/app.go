@@ -67,6 +67,12 @@ func Open(dir string) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, metadataStatErr := os.Stat(filepath.Join(dir, "metadata"))
+	if metadataStatErr != nil && !errors.Is(metadataStatErr, os.ErrNotExist) {
+		_ = blocks.Close()
+		return nil, metadataStatErr
+	}
+	reconcileRebuiltRefs := errors.Is(metadataStatErr, os.ErrNotExist)
 	metadata, err := metastore.Open(dir)
 	if err != nil {
 		_ = blocks.Close()
@@ -100,7 +106,7 @@ func Open(dir string) (*Application, error) {
 		_ = blocks.Close()
 		return nil, err
 	}
-	return &Application{
+	app := &Application{
 		dir:              dir,
 		blocks:           blocks,
 		metadata:         metadata,
@@ -109,7 +115,14 @@ func Open(dir string) (*Application, error) {
 		memberState:      memberState,
 		sealBlockAtBytes: DefaultSealBlockAtBytes,
 		now:              func() time.Time { return time.Now().UTC() },
-	}, nil
+	}
+	if reconcileRebuiltRefs {
+		if err := app.reconcileRebuiltLocalRefs(context.Background()); err != nil {
+			_ = app.Close()
+			return nil, err
+		}
+	}
+	return app, nil
 }
 
 func (a *Application) Close() error {
@@ -192,6 +205,37 @@ func (a *Application) SealCurrentBlockIfDue(ctx context.Context) (string, bool, 
 		return "", false, err
 	}
 	return blockID, true, nil
+}
+
+func (a *Application) reconcileRebuiltLocalRefs(ctx context.Context) error {
+	documents, err := a.metadata.ListDocuments(metastore.DocumentFilter{})
+	if err != nil {
+		return err
+	}
+	for _, document := range documents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if document.RestoreState != metastore.RestoreStateHot || document.Availability != metastore.AvailabilityHot {
+			continue
+		}
+		length := document.Length
+		if err := a.blocks.VerifyRange(document.Location, 0, &length); err == nil {
+			continue
+		} else if !isIntegrityFailure(err) {
+			return err
+		}
+		incidentID := integrityEvidenceID(document)
+		if state, err := a.metadata.GetRepairState(document.Identity, incidentID); err == nil && state.Quarantined {
+			continue
+		} else if err != nil && !errors.Is(err, metastore.ErrNotFound) {
+			return err
+		}
+		if err := a.recordDocumentRepairState(ctx, document, incidentID, true, a.now()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {
