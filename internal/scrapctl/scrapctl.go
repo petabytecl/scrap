@@ -117,8 +117,8 @@ func workloadIdentityDialOptions(workloadIdentity string) []grpc.DialOption {
 		return nil
 	}
 	return []grpc.DialOption{
-		grpc.WithUnaryInterceptor(workloadUnaryClientInterceptor(workloadIdentity)),
-		grpc.WithStreamInterceptor(workloadStreamClientInterceptor(workloadIdentity)),
+		grpc.WithChainUnaryInterceptor(workloadUnaryClientInterceptor(workloadIdentity)),
+		grpc.WithChainStreamInterceptor(workloadStreamClientInterceptor(workloadIdentity)),
 	}
 }
 

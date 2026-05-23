@@ -201,6 +201,42 @@ func TestRunAttachesWorkloadIdentityMetadata(t *testing.T) {
 	}
 }
 
+func TestRunComposesWorkloadIdentityWithExistingInterceptors(t *testing.T) {
+	inspect := &fakeInspectServer{}
+	baseDial := newBufconnDialer(t, func(server *grpc.Server) {
+		adminv1.RegisterInspectServiceServer(server, inspect)
+	})
+	dial := func(ctx context.Context, address string, options ...grpc.DialOption) (*grpc.ClientConn, error) {
+		extra := grpc.WithChainUnaryInterceptor(func(
+			ctx context.Context,
+			method string,
+			req any,
+			reply any,
+			cc *grpc.ClientConn,
+			invoker grpc.UnaryInvoker,
+			opts ...grpc.CallOption,
+		) error {
+			return invoker(metadata.AppendToOutgoingContext(ctx, "x-scrap-extra-test", "seen"), method, req, reply, cc, opts...)
+		})
+		return baseDial(ctx, address, append([]grpc.DialOption{extra}, options...)...)
+	}
+
+	err := Run(context.Background(), Config{Dial: dial}, []string{
+		"--admin-addr", "bufnet",
+		"--workload-identity", "local-operator",
+		"inspect", "summary",
+	}, bytes.NewBuffer(nil))
+	if err != nil {
+		t.Fatalf("run inspect summary: %v", err)
+	}
+	if inspect.workloadIdentity != "local-operator" {
+		t.Fatalf("workload identity = %q, want local-operator", inspect.workloadIdentity)
+	}
+	if inspect.extraMetadata != "seen" {
+		t.Fatalf("extra metadata = %q, want seen", inspect.extraMetadata)
+	}
+}
+
 type fakeRestoreServer struct {
 	adminv1.UnimplementedRestoreServiceServer
 	planRestoreReq *adminv1.PlanRestoreRequest
@@ -287,6 +323,7 @@ func (s *fakeOperationServer) WatchOperation(req *adminv1.WatchOperationRequest,
 type fakeInspectServer struct {
 	adminv1.UnimplementedInspectServiceServer
 	workloadIdentity string
+	extraMetadata    string
 }
 
 func (s *fakeInspectServer) GetClusterSummary(ctx context.Context, _ *adminv1.GetClusterSummaryRequest) (*adminv1.GetClusterSummaryResponse, error) {
@@ -294,6 +331,10 @@ func (s *fakeInspectServer) GetClusterSummary(ctx context.Context, _ *adminv1.Ge
 	values := md.Get(authz.WorkloadIdentityMetadataKey)
 	if len(values) == 1 {
 		s.workloadIdentity = values[0]
+	}
+	extraValues := md.Get("x-scrap-extra-test")
+	if len(extraValues) == 1 {
+		s.extraMetadata = extraValues[0]
 	}
 	return &adminv1.GetClusterSummaryResponse{Summary: &adminv1.ClusterSummary{}}, nil
 }

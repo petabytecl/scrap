@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-namespace="${LOCAL_KIND_NAMESPACE:-scrap-local}"
+namespace="scrap-local"
 admin_addr="${SCRAP_ADMIN_ADDR:-127.0.0.1:18081}"
 workload_identity="${SCRAP_WORKLOAD_IDENTITY:-local-operator}"
 

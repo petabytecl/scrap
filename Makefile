@@ -28,9 +28,11 @@ RELEASE_VERSION ?= dev
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY_TREE ?= $(shell git diff --quiet && git diff --cached --quiet && echo clean || echo dirty)
 IMAGE_NAME ?= localhost/scrapd:local
-SCRAPD_IMAGE_BINARY ?= bin/scrapd-linux-amd64
+IMAGE_GOOS ?= linux
+IMAGE_GOARCH ?= $(shell $(GO) env GOARCH)
+IMAGE_PLATFORM ?= $(IMAGE_GOOS)/$(IMAGE_GOARCH)
+SCRAPD_IMAGE_BINARY ?= bin/scrapd-$(IMAGE_GOOS)-$(IMAGE_GOARCH)
 KIND_CLUSTER ?= scrap-local
-LOCAL_KIND_NAMESPACE ?= scrap-local
 LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
 
@@ -83,12 +85,15 @@ check: fmt-check proto-check test-compat lint test test-race build ## Run the fu
 ##@ Release Artifacts
 
 image: ## Build the local scrapd container image.
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w" -o "$(SCRAPD_IMAGE_BINARY)" ./cmd/scrapd
+	mkdir -p "$(dir $(SCRAPD_IMAGE_BINARY))"
+	CGO_ENABLED=0 GOOS=$(IMAGE_GOOS) GOARCH=$(IMAGE_GOARCH) $(GO) build -trimpath -ldflags "-s -w" -o "$(SCRAPD_IMAGE_BINARY)" ./cmd/scrapd
 	$(DOCKER) build \
+		--platform="$(IMAGE_PLATFORM)" \
 		--build-arg SCRAP_RELEASE_SHA="$(RELEASE_SHA)" \
 		--build-arg SCRAP_VERSION="$(RELEASE_VERSION)" \
 		--build-arg SCRAP_BUILD_TIME="$(BUILD_TIME)" \
 		--build-arg SCRAP_DIRTY_TREE="$(DIRTY_TREE)" \
+		--build-arg SCRAPD_IMAGE_BINARY="$(SCRAPD_IMAGE_BINARY)" \
 		-t "$(IMAGE_NAME)" .
 
 manifests-render: ## Render the local-kind GitOps manifests.
@@ -96,9 +101,9 @@ manifests-render: ## Render the local-kind GitOps manifests.
 
 manifests-check: ## Validate that the local-kind GitOps manifests render.
 	@tmp="$$(mktemp)"; \
+		trap 'rm -f "$$tmp"' EXIT; \
 		$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" > "$$tmp"; \
-		test -s "$$tmp"; \
-		rm -f "$$tmp"
+		test -s "$$tmp"
 
 local-kind-create: ## Create the local kind cluster for release rehearsal.
 	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml

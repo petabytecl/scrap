@@ -4,6 +4,7 @@ ARG SCRAP_RELEASE_SHA=unknown
 ARG SCRAP_VERSION=dev
 ARG SCRAP_BUILD_TIME=unknown
 ARG SCRAP_DIRTY_TREE=unknown
+ARG SCRAPD_IMAGE_BINARY=bin/scrapd-linux-amd64
 
 LABEL org.opencontainers.image.title="scrapd"
 LABEL org.opencontainers.image.description="S.C.R.A.P. storage gateway node"
@@ -14,6 +15,6 @@ LABEL org.opencontainers.image.created="${SCRAP_BUILD_TIME}"
 LABEL cl.petabyte.scrap.dirty_tree="${SCRAP_DIRTY_TREE}"
 
 USER 65532:65532
-COPY --chown=65532:65532 bin/scrapd-linux-amd64 /scrapd
+COPY --chown=65532:65532 ${SCRAPD_IMAGE_BINARY} /scrapd
 
 ENTRYPOINT ["/scrapd"]

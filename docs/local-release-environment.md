@@ -46,6 +46,10 @@ different immutable tag or registry path:
 make image IMAGE_NAME=ghcr.io/petabytecl/scrap/scrapd:$(git rev-parse --short HEAD)
 ```
 
+`make image` builds for `IMAGE_GOOS` and `IMAGE_GOARCH`, defaulting to Linux and
+the local Go architecture, then passes the matching `IMAGE_PLATFORM` to Docker.
+Override all three together when building for a different kind node platform.
+
 ## Evidence Record
 
 `make local-kind-evidence` writes `local-kind-evidence.json` by default. The
@@ -56,7 +60,7 @@ report records:
 - local environment and kind cluster identity;
 - image name;
 - rendered manifest checksum;
-- LocalStack image, S3 bucket, and provider class;
+- LocalStack image, fixed local S3 bucket, and provider class;
 - OpenBao image, namespace, Transit key path, and audit-device status;
 - explicit limits stating the evidence is local release rehearsal only.
 

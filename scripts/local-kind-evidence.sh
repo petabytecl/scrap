@@ -4,9 +4,9 @@ set -eu
 profile_id="${PROFILE_ID:-scrap-prod-v1}"
 environment_id="${LOCAL_KIND_ENVIRONMENT_ID:-local-kind}"
 kind_cluster="${KIND_CLUSTER:-scrap-local}"
-namespace="${LOCAL_KIND_NAMESPACE:-scrap-local}"
+namespace="scrap-local"
 image_name="${IMAGE_NAME:-localhost/scrapd:local}"
-localstack_bucket="${LOCALSTACK_BUCKET:-scrap-local}"
+localstack_bucket="scrap-local"
 localstack_image="${LOCALSTACK_IMAGE:-localstack/localstack:4.8.1}"
 openbao_namespace="${OPENBAO_NAMESPACE:-root}"
 openbao_image="${OPENBAO_IMAGE:-openbao/openbao:2.3.2}"
@@ -19,10 +19,23 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 	dirty_tree="dirty"
 fi
 
+sha256_file() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{print $1}'
+		return
+	fi
+	if command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | awk '{print $1}'
+		return
+	fi
+	echo "sha256sum or shasum is required" >&2
+	exit 127
+}
+
 rendered_manifests="$(mktemp)"
 trap 'rm -f "$rendered_manifests"' EXIT
 ${KUSTOMIZE:-go run sigs.k8s.io/kustomize/kustomize/v5@v5.7.1} build "${LOCAL_KIND_OVERLAY:-deploy/kustomize/overlays/local-kind}" > "$rendered_manifests"
-manifest_sha256="$(sha256sum "$rendered_manifests" | awk '{print $1}')"
+manifest_sha256="$(sha256_file "$rendered_manifests")"
 
 cat <<EOF
 {
