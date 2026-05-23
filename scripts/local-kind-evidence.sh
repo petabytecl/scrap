@@ -9,7 +9,7 @@ image_name="${IMAGE_NAME:-localhost/scrapd:local}"
 localstack_bucket="scrap-local"
 localstack_image="${LOCALSTACK_IMAGE:-localstack/localstack:4.8.1}"
 openbao_namespace="${OPENBAO_NAMESPACE:-root}"
-openbao_image="${OPENBAO_IMAGE:-openbao/openbao:2.3.2}"
+openbao_image="${OPENBAO_IMAGE:-openbao/openbao:2.5.3}"
 openbao_transit_key_path="${OPENBAO_TRANSIT_KEY_PATH:-transit/keys/scrap-backend}"
 openbao_audit_device="${OPENBAO_AUDIT_DEVICE:-file:/tmp/openbao-audit.log}"
 
@@ -60,7 +60,7 @@ cat <<EOF
     "namespace": "$openbao_namespace",
     "transit_key_path": "$openbao_transit_key_path",
     "audit_device": "$openbao_audit_device",
-    "audit_device_status": "configured-by-local-bootstrap-job"
+    "audit_device_status": "configured-by-openbao-config"
   },
   "evidence_limits": [
     "local kind evidence is release-artifact rehearsal evidence only",

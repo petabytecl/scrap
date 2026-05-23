@@ -40,12 +40,12 @@ JWT for `openbao-transit-smoke` in the `scrap-local` namespace and runs
 through CLI flags. The generated report defaults to
 `openbao-transit-smoke-evidence.json`.
 
-The local-kind OpenBao bootstrap job enables the `kubernetes` auth method,
-creates the `scrap-transit-client` policy, and binds it to the
-`openbao-transit-smoke` service account. That policy can request data keys,
-unwrap, rewrap, and inspect its own capabilities; it does not grant broad
-Transit key-admin permissions such as create, update, delete, or sudo on
-`transit/keys/*`.
+The local-kind OpenBao deployment enables file audit from its server config. The
+bootstrap job enables the `kubernetes` auth method, creates the
+`scrap-transit-client` policy, and binds it to the `openbao-transit-smoke`
+service account. That policy can request data keys, unwrap, rewrap, and inspect
+its own capabilities; it does not grant broad Transit key-admin permissions such
+as create, update, delete, or sudo on `transit/keys/*`.
 
 The report records:
 

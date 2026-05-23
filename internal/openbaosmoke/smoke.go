@@ -135,19 +135,20 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		return Report{}, err
 	}
 	report := Report{
-		ReportKind:       ReportKind,
-		GeneratedAt:      now().UTC().Format(time.RFC3339),
-		ReleaseSHA:       opts.ReleaseSHA,
-		DirtyTree:        opts.DirtyTree,
-		ProfileID:        opts.ProfileID,
-		EnvironmentID:    opts.EnvironmentID,
-		Namespace:        opts.Namespace,
-		Deployment:       opts.Deployment,
-		KubernetesClient: opts.KubernetesClient,
-		TransitKeyPath:   opts.TransitKeyPath,
-		AuditDevice:      opts.AuditDevice,
-		OperationIDs:     []string{opts.OperationID},
-		Status:           "passed",
+		ReportKind:         ReportKind,
+		GeneratedAt:        now().UTC().Format(time.RFC3339),
+		ReleaseSHA:         opts.ReleaseSHA,
+		DirtyTree:          opts.DirtyTree,
+		ProfileID:          opts.ProfileID,
+		EnvironmentID:      opts.EnvironmentID,
+		Namespace:          opts.Namespace,
+		Deployment:         opts.Deployment,
+		KubernetesClient:   opts.KubernetesClient,
+		TransitKeyPath:     opts.TransitKeyPath,
+		AuditDevice:        opts.AuditDevice,
+		OperationIDs:       []string{opts.OperationID},
+		RedactedRequestIDs: []string{},
+		Status:             "passed",
 		EvidenceLimits: []string{
 			"local OpenBao smoke evidence is release-rehearsal evidence only",
 			"local OpenBao smoke does not approve live OpenBao HA, unseal, snapshot, key custody, or audit retention",
@@ -267,9 +268,7 @@ func validateOptions(opts Options) (Options, error) {
 }
 
 func auditStatus(ctx context.Context, client openBaoClient, auditDevice string, report *Report) string {
-	var out map[string]struct {
-		Type string `json:"type"`
-	}
+	var out map[string]json.RawMessage
 	reqID, err := client.do(ctx, http.MethodGet, "/v1/sys/audit", nil, &out)
 	report.addRequestID(reqID)
 	if err != nil {
@@ -280,12 +279,63 @@ func auditStatus(ctx context.Context, client openBaoClient, auditDevice string, 
 	if value, _, ok := strings.Cut(auditDevice, ":"); ok {
 		expectedType = value
 	}
-	for path, device := range out {
+	devices, err := auditDevices(out)
+	if err != nil {
+		report.fail("read audit devices: " + err.Error())
+		return "unknown"
+	}
+	for path, device := range devices {
 		if expectedType == "file" && device.Type == "file" && path == "file/" {
 			return "enabled:" + auditDevice
 		}
 	}
 	return "missing:" + auditDevice
+}
+
+type auditDeviceInfo struct {
+	Type string `json:"type"`
+}
+
+func auditDevices(raw map[string]json.RawMessage) (map[string]auditDeviceInfo, error) {
+	if len(raw) == 0 {
+		return map[string]auditDeviceInfo{}, nil
+	}
+	if wrapped, ok := raw["data"]; ok && !isJSONNull(wrapped) {
+		var devices map[string]auditDeviceInfo
+		if err := json.Unmarshal(wrapped, &devices); err != nil {
+			return nil, err
+		}
+		if devices != nil {
+			return devices, nil
+		}
+	}
+	devices := make(map[string]auditDeviceInfo)
+	for path, payload := range raw {
+		if isAuditMetadataField(path) {
+			continue
+		}
+		var device auditDeviceInfo
+		if err := json.Unmarshal(payload, &device); err != nil {
+			return nil, err
+		}
+		if device.Type != "" {
+			devices[path] = device
+		}
+	}
+	return devices, nil
+}
+
+func isAuditMetadataField(path string) bool {
+	switch path {
+	case "request_id", "lease_id", "renewable", "lease_duration", "wrap_info", "warnings", "auth":
+		return true
+	default:
+		return false
+	}
+}
+
+func isJSONNull(value json.RawMessage) bool {
+	return strings.TrimSpace(string(value)) == "null"
 }
 
 func (c openBaoClient) keyVersion(ctx context.Context, mount, keyName string) (uint32, error) {
@@ -444,11 +494,12 @@ func (c openBaoClient) do(ctx context.Context, method, apiPath string, payload, 
 		return "", classifyProbeError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	requestID := redactedRequestID(resp.Header)
+	requestID := ""
 	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if readErr != nil {
 		return requestID, readErr
 	}
+	requestID = redactedRequestID(resp.Header, responseBody)
 	if resp.StatusCode >= 400 {
 		return requestID, fmt.Errorf("openbao %s %s failed with HTTP %d", method, apiPath, resp.StatusCode)
 	}
@@ -522,13 +573,19 @@ func (r *Report) addRequestID(id string) {
 	r.RedactedRequestIDs = append(r.RedactedRequestIDs, id)
 }
 
-func redactedRequestID(header http.Header) string {
+func redactedRequestID(header http.Header, body []byte) string {
 	for _, key := range []string{"X-Vault-Request", "X-Bao-Request", "X-Request-Id"} {
 		value := strings.TrimSpace(header.Get(key))
 		if value == "" {
 			continue
 		}
 		return "sha256:" + sha256String([]byte(value))[:16]
+	}
+	var metadata struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(body, &metadata); err == nil && strings.TrimSpace(metadata.RequestID) != "" {
+		return "sha256:" + sha256String([]byte(metadata.RequestID))[:16]
 	}
 	return ""
 }
