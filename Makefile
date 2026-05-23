@@ -53,7 +53,7 @@ test-race:
 	$(GO) test -race ./...
 
 build:
-	$(GO) build ./cmd/scrapd ./cmd/scrap-spike
+	$(GO) build ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl
 
 check: fmt-check proto-check test-compat lint test test-race build
 
