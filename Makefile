@@ -4,6 +4,7 @@
 .PHONY: lint
 .PHONY: vuln
 .PHONY: test
+.PHONY: test-compat
 .PHONY: test-race
 .PHONY: build
 .PHONY: check
@@ -45,13 +46,16 @@ vuln:
 test:
 	$(GO) test ./...
 
+test-compat:
+	$(GO) test ./internal/compat ./internal/metastore ./internal/published ./internal/storageformat
+
 test-race:
 	$(GO) test -race ./...
 
 build:
 	$(GO) build ./cmd/scrapd ./cmd/scrap-spike
 
-check: fmt-check proto-check lint test test-race build
+check: fmt-check proto-check test-compat lint test test-race build
 
 spike-write-path:
 	$(GO) run ./cmd/scrap-spike
