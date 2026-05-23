@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ func main() {
 	cfg := config.Default()
 	flag.StringVar(&cfg.PublicListenAddress, "public-listen", cfg.PublicListenAddress, "public gRPC listen address")
 	flag.StringVar(&cfg.AdminListenAddress, "admin-listen", cfg.AdminListenAddress, "admin gRPC listen address")
+	flag.StringVar(&cfg.AuthorizationPolicyPath, "authorization-policy", cfg.AuthorizationPolicyPath, "authorization policy JSON path; required for public and admin APIs")
 	flag.StringVar(&cfg.LocalDataDir, "local-data-dir", cfg.LocalDataDir, "local data directory for explicitly enabled non-production storage")
 	flag.BoolVar(&cfg.EnableLocalNonProductionStorage, "enable-local-non-production-storage", cfg.EnableLocalNonProductionStorage, "enable single-member local storage; not a production durability mode")
 	flag.BoolVar(&cfg.EnableLocalFilesystemBackend, "enable-local-filesystem-backend", cfg.EnableLocalFilesystemBackend, "enable local filesystem backend upload for non-production storage")
@@ -97,6 +99,7 @@ func main() {
 
 	log.Printf("public grpc listening on %s", server.PublicAddress())
 	log.Printf("admin grpc listening on %s", server.AdminAddress())
+	go reloadAuthorizationPolicy(ctx, server)
 	if cfg.EnableLocalNonProductionStorage {
 		go runOperationLoop(ctx, apps, cfg.OperationRunInterval)
 	}
@@ -109,6 +112,24 @@ func main() {
 	}
 	if err := server.Serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
+	}
+}
+
+func reloadAuthorizationPolicy(ctx context.Context, server *node.Server) {
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, syscall.SIGHUP)
+	defer signal.Stop(signalCh)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-signalCh:
+			if err := server.ReloadAuthorizationPolicy(); err != nil {
+				log.Printf("authorization policy reload rejected: %v", err)
+				continue
+			}
+			log.Printf("authorization policy reloaded")
+		}
 	}
 }
 
