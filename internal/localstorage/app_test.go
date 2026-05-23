@@ -965,6 +965,92 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	}
 }
 
+func TestRunBackendUploadOnceDoesNotPublishDeferredOpenBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("deferred open block")
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+
+	result, err := app.RunBackendUploadOnce(ctx, backendStore)
+	if err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	if result.Sealed || result.Upload.Scanned != 1 || result.Upload.Deferred != 1 || result.Upload.Uploaded != 0 {
+		t.Fatalf("upload result = %#v, want one deferred open block", result)
+	}
+	if result.MetadataPublished || result.MetadataPublication != nil {
+		t.Fatalf("metadata publication = %#v, want no checkpoint until a block uploads", result.MetadataPublication)
+	}
+	if _, err := published.VerifyCurrentCheckpoint(ctx, backendStore, localPublishedCellID); !errors.Is(err, published.ErrCurrentPointerNotFound) {
+		t.Fatalf("current checkpoint error = %v, want missing pointer", err)
+	}
+}
+
+func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	data := []byte("recovered pending upload block")
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+
+	result, err := reopened.RunBackendUploadOnce(ctx, backendStore)
+	if err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	if result.Sealed || result.Upload.Uploaded != 1 || result.Upload.Deferred != 0 || !result.MetadataPublished {
+		t.Fatalf("backend upload result = %#v, want recovered block upload and checkpoint", result)
+	}
+	if !stringSliceContains(result.SealedBlockIDs, stored.Location.BlockID) {
+		t.Fatalf("sealed block ids = %#v, want recovered block %q", result.SealedBlockIDs, stored.Location.BlockID)
+	}
+	intent, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStateUploaded {
+		t.Fatalf("upload intent = %#v, want uploaded", intent)
+	}
+}
+
 func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -2964,6 +3050,7 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 
 func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 	ctx := context.Background()
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing-process-tmp"))
 	app := openTestApplication(t)
 	app.now = fixedClock(time.Unix(801, 0).UTC())
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("scratch drill bytes"))
@@ -3854,6 +3941,15 @@ func hasWarningCode(warnings []*adminv1.OperationWarning, code string) bool {
 func hasRequiredObject(objects []*publishedv1.ObjectRef, key string) bool {
 	for _, object := range objects {
 		if object.GetObjectKey() == key {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

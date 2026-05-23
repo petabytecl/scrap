@@ -114,6 +114,12 @@ func (s *Store) SealPath(blockID string) string {
 }
 
 func (s *Store) IsSealed(blockID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isSealedLocked(blockID)
+}
+
+func (s *Store) isSealedLocked(blockID string) (bool, error) {
 	sealPath, err := s.validatedSealPath(blockID)
 	if err != nil {
 		return false, err
@@ -133,6 +139,12 @@ func (s *Store) CurrentBlockLength() uint64 {
 	return s.blockOffset
 }
 
+func (s *Store) CurrentBlockID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blockID
+}
+
 func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -147,17 +159,10 @@ func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 		return "", ErrEmptyBlock
 	}
 	sealedBlockID := s.blockID
-	sealPath, err := s.validatedSealPath(sealedBlockID)
-	if err != nil {
-		return "", err
-	}
 	if err := s.blockFile.Sync(); err != nil {
 		return "", err
 	}
-	if err := writeSealMarker(sealPath); err != nil {
-		return "", err
-	}
-	if err := syncDir(s.blocksDir); err != nil {
+	if err := s.sealBlockFileLocked(sealedBlockID); err != nil {
 		return "", err
 	}
 	if err := s.blockFile.Close(); err != nil {
@@ -179,6 +184,59 @@ func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 	s.blockFile = blockFile
 	s.blockOffset = HeaderLength
 	return sealedBlockID, nil
+}
+
+func (s *Store) SealBlock(ctx context.Context, blockID string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if blockID == "" {
+		return false, errors.New("blockstore: block id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blockFile == nil {
+		return false, errors.New("blockstore: store is closed")
+	}
+	if blockID == s.blockID {
+		return false, errors.New("blockstore: current block must be sealed with SealCurrent")
+	}
+	sealed, err := s.isSealedLocked(blockID)
+	if err != nil {
+		return false, err
+	}
+	if sealed {
+		return false, nil
+	}
+	blockPath, err := s.validatedBlockPath(blockID)
+	if err != nil {
+		return false, err
+	}
+	stat, err := os.Stat(blockPath)
+	if err != nil {
+		return false, err
+	}
+	if stat.Size() <= HeaderLength {
+		return false, ErrEmptyBlock
+	}
+	if err := syncFile(blockPath); err != nil {
+		return false, err
+	}
+	if err := s.sealBlockFileLocked(blockID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) sealBlockFileLocked(blockID string) error {
+	sealPath, err := s.validatedSealPath(blockID)
+	if err != nil {
+		return err
+	}
+	if err := writeSealMarker(sealPath); err != nil {
+		return err
+	}
+	return syncDir(s.blocksDir)
 }
 
 func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expectedLength uint64, expectedSHA256 [32]byte, reader io.Reader) error {

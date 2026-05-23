@@ -33,6 +33,7 @@ spec:
             - --local-backend-data-dir=/var/lib/scrap/backend
             - --backend-upload-interval=5s
             - --operation-run-interval=5s
+            - --local-seal-block-at-bytes=4096
           ports:
             - name: public-grpc
               containerPort: 18080

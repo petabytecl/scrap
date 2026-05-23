@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -124,7 +125,11 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	if !execute {
 		return a.RestorePublishedMetadataCheckpoint(ctx, false)
 	}
-	drillDir, err := os.MkdirTemp("", "scrap-dr-drill-*")
+	drillBaseDir := filepath.Join(a.dir, "dr-drill")
+	if err := os.MkdirAll(drillBaseDir, 0o700); err != nil {
+		return MetadataRestoreResult{}, err
+	}
+	drillDir, err := os.MkdirTemp(drillBaseDir, "scratch-*")
 	if err != nil {
 		return MetadataRestoreResult{}, err
 	}

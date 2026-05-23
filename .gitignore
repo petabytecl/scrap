@@ -27,6 +27,7 @@ coverage.out
 
 # Local command binaries
 /scrap-crash-fault-evidence
+/scrap-local-dr-drill-evidence
 /scrap-local-soak-evidence
 /scrap-release-gate
 /scrap-spike
@@ -37,6 +38,7 @@ coverage.out
 crash-fault-evidence.json
 capacity-sample-advisory.json
 local-kind-evidence.json
+local-dr-drill-evidence.json
 local-soak-evidence.json
 openbao-transit-smoke-evidence.json
 release-evidence.json

@@ -69,6 +69,7 @@ const (
 
 type BackendUploadOnceResult struct {
 	SealedBlockID       string
+	SealedBlockIDs      []string
 	Sealed              bool
 	Upload              backendupload.RunResult
 	MetadataPublished   bool
@@ -205,6 +206,10 @@ func (a *Application) SetOperationStore(store *operations.Store) {
 	a.operationStore = store
 }
 
+func (a *Application) SetSealBlockAtBytes(bytes uint64) {
+	a.sealBlockAtBytes = bytes
+}
+
 func (a *Application) backendEnvelopeSource() backendupload.BlockEnvelopeSource {
 	if a.envelopeSource != nil {
 		return a.envelopeSource
@@ -231,11 +236,19 @@ func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.St
 	}
 	result.SealedBlockID = sealedBlockID
 	result.Sealed = sealed
+	if sealed {
+		result.SealedBlockIDs = append(result.SealedBlockIDs, sealedBlockID)
+	}
+	recovered, err := a.SealPendingUploadBlocks(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.SealedBlockIDs = append(result.SealedBlockIDs, recovered...)
 	result.Upload, err = a.BackendUploadProcessor(store).RunOnce(ctx)
 	if err != nil {
 		return result, err
 	}
-	if a.shouldPublishMetadataCheckpoint(ctx, store, result.Upload) {
+	if a.shouldPublishMetadataCheckpoint(result.Upload) {
 		mutable, ok := store.(backend.MutableStore)
 		if !ok {
 			return result, errors.New("localstorage: backend store does not support mutable metadata pointers")
@@ -250,17 +263,38 @@ func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.St
 	return result, err
 }
 
-func (a *Application) shouldPublishMetadataCheckpoint(ctx context.Context, store backend.Store, upload backendupload.RunResult) bool {
-	if upload.Uploaded > 0 {
-		return true
+func (a *Application) shouldPublishMetadataCheckpoint(upload backendupload.RunResult) bool {
+	return upload.Uploaded > 0
+}
+
+func (a *Application) SealPendingUploadBlocks(ctx context.Context) ([]string, error) {
+	intents, err := a.metadata.ListUploadIntents()
+	if err != nil {
+		return nil, err
 	}
-	if upload.Scanned == 0 {
-		return false
+	currentBlockID := a.blocks.CurrentBlockID()
+	var sealed []string
+	for _, intent := range intents {
+		if intent.BlockID == "" || intent.BlockID == currentBlockID || !isUploadPending(intent.State) {
+			continue
+		}
+		didSeal, err := a.blocks.SealBlock(ctx, intent.BlockID)
+		if errors.Is(err, blockstore.ErrEmptyBlock) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if didSeal {
+			sealed = append(sealed, intent.BlockID)
+		}
 	}
-	if _, err := published.VerifyCurrentCheckpoint(ctx, store, localPublishedCellID); errors.Is(err, published.ErrCurrentPointerNotFound) {
-		return true
-	}
-	return false
+	sort.Strings(sealed)
+	return sealed, nil
+}
+
+func isUploadPending(state metastore.UploadState) bool {
+	return state == metastore.UploadStatePending || state == metastore.UploadStateFailed
 }
 
 func (a *Application) SealCurrentBlockIfDue(ctx context.Context) (string, bool, error) {
