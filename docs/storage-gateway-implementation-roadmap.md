@@ -244,7 +244,8 @@ Deliverables:
 
 - backend adapter interface and explicit capacity profiles;
 - block, index, and envelope upload outbox;
-- OpenBao Transit envelope integration;
+- OpenBao Transit envelope integration, with real-service smoke coverage
+  tracked in [OpenBao Transit Smoke Coverage](openbao-transit-smoke-coverage.md);
 - restore-on-read and explicit prewarm workflows;
 - backend verification and DR rebuild tooling.
 
