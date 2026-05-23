@@ -5,7 +5,7 @@
 .PHONY: fmt fmt-check lint vuln
 .PHONY: test test-compat test-race build check
 .PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
-.PHONY: release-check crash-fault-evidence
+.PHONY: release-check crash-fault-evidence capacity-sample
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
 
 GO ?= go
@@ -35,6 +35,14 @@ SCRAPD_IMAGE_BINARY ?= bin/scrapd-$(IMAGE_GOOS)-$(IMAGE_GOARCH)
 KIND_CLUSTER ?= scrap-local
 LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
+PROFILE_ID ?= scrap-prod-v1
+SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
+SCRAP_WORKLOAD_IDENTITY ?= local-operator
+CAPACITY_SAMPLE_BACKEND_URL ?= http://127.0.0.1:4566/scrap-local
+CAPACITY_SAMPLE_BACKEND_REGION ?= us-east-1
+CAPACITY_SAMPLE_OPENBAO_ADDR ?= http://127.0.0.1:8200
+CAPACITY_SAMPLE_OPENBAO_KEY_PATH ?= transit/keys/scrap-backend
+CAPACITY_SAMPLE_REPORT ?= capacity-sample-advisory.json
 
 help: ## Show this help.
 	@awk 'BEGIN { FS = ":.*##"; printf "\n\033[1mUsage:\033[0m\n  make \033[36m<target>\033[0m\n" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  \033[36m%-34s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
@@ -131,6 +139,23 @@ release-check: ## Verify release evidence from RELEASE_EVIDENCE_MANIFEST.
 
 crash-fault-evidence: ## Emit crash/fault evidence JSON for dedicated runners.
 	$(GO) run ./cmd/scrap-crash-fault-evidence --out "$${SCRAP_CRASH_FAULT_EVIDENCE_REPORT:-crash-fault-evidence.json}"
+
+capacity-sample: ## Emit advisory local capacity sample evidence.
+	@AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
+	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
+	BAO_TOKEN="$${BAO_TOKEN:-local-root}" \
+	$(GO) run ./cmd/scrapctl \
+		--admin-addr "$(SCRAP_ADMIN_ADDR)" \
+		--workload-identity "$(SCRAP_WORKLOAD_IDENTITY)" \
+		capacity sample \
+		--profile-id "$(PROFILE_ID)" \
+		--backend-url "$(CAPACITY_SAMPLE_BACKEND_URL)" \
+		--backend-region "$(CAPACITY_SAMPLE_BACKEND_REGION)" \
+		--openbao-addr "$(CAPACITY_SAMPLE_OPENBAO_ADDR)" \
+		--openbao-transit-key-path "$(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)" \
+		--release-sha "$(RELEASE_SHA)" \
+		--dirty-tree "$(DIRTY_TREE)" \
+		> "$(CAPACITY_SAMPLE_REPORT)"
 
 ##@ Spikes
 

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -237,6 +240,96 @@ func TestRunComposesWorkloadIdentityWithExistingInterceptors(t *testing.T) {
 	}
 }
 
+func TestCapacitySampleRejectsUnboundedWorkloadBeforeDial(t *testing.T) {
+	calledDial := false
+	err := Run(context.Background(), Config{
+		Dial: func(context.Context, string, ...grpc.DialOption) (*grpc.ClientConn, error) {
+			calledDial = true
+			return nil, errors.New("dial should not happen")
+		},
+	}, []string{
+		"capacity", "sample",
+		"--profile-id", "scrap-prod-v1",
+		"--samples", "33",
+	}, bytes.NewBuffer(nil))
+	var usage usageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("error = %v, want usageError", err)
+	}
+	if !strings.Contains(err.Error(), "--samples") {
+		t.Fatalf("error = %v, want samples usage error", err)
+	}
+	if calledDial {
+		t.Fatal("dialer was called for invalid capacity sample")
+	}
+}
+
+func TestCapacitySampleWritesAdvisoryReport(t *testing.T) {
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Amz-Request-Id", "backend-request")
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") {
+			t.Errorf("missing SigV4 authorization header")
+		}
+		switch r.Method {
+		case http.MethodPut:
+			_, _ = io.Copy(io.Discard, r.Body)
+		case http.MethodGet:
+			_, _ = w.Write([]byte("sample"))
+		case http.MethodHead:
+		default:
+			t.Errorf("unexpected backend method %s", r.Method)
+		}
+	}))
+	t.Cleanup(backendServer.Close)
+	openbaoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Vault-Token") != "local-root" {
+			http.Error(w, "denied", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("X-Vault-Request", "openbao-request")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/datakey/plaintext/") {
+			_, _ = w.Write([]byte(`{"data":{"ciphertext":"vault:v1:wrapped"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	t.Cleanup(openbaoServer.Close)
+
+	inspect := &fakeInspectServer{}
+	dial := newBufconnDialer(t, func(server *grpc.Server) {
+		adminv1.RegisterInspectServiceServer(server, inspect)
+	})
+
+	var out bytes.Buffer
+	err := Run(context.Background(), Config{Dial: dial}, []string{
+		"--admin-addr", "bufnet",
+		"capacity", "sample",
+		"--profile-id", "scrap-prod-v1",
+		"--backend-url", backendServer.URL + "/scrap-local",
+		"--openbao-addr", openbaoServer.URL,
+		"--openbao-token", "local-root",
+		"--release-sha", "abc123",
+		"--dirty-tree", "clean",
+		"--local-disk-path", t.TempDir(),
+		"--samples", "1",
+		"--document-size", "64",
+		"--duration", "1s",
+	}, &out)
+	if err != nil {
+		t.Fatalf("run capacity sample: %v", err)
+	}
+	if inspect.capacityProfileID != "scrap-prod-v1" {
+		t.Fatalf("capacity profile id = %q, want scrap-prod-v1", inspect.capacityProfileID)
+	}
+	output := out.String()
+	for _, want := range []string{"capacity-sample-advisory", `"advisory_only": true`, `"proposed_capacity_profile"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output = %s, missing %s", output, want)
+		}
+	}
+}
+
 type fakeRestoreServer struct {
 	adminv1.UnimplementedRestoreServiceServer
 	planRestoreReq *adminv1.PlanRestoreRequest
@@ -322,8 +415,9 @@ func (s *fakeOperationServer) WatchOperation(req *adminv1.WatchOperationRequest,
 
 type fakeInspectServer struct {
 	adminv1.UnimplementedInspectServiceServer
-	workloadIdentity string
-	extraMetadata    string
+	workloadIdentity  string
+	extraMetadata     string
+	capacityProfileID string
 }
 
 func (s *fakeInspectServer) GetClusterSummary(ctx context.Context, _ *adminv1.GetClusterSummaryRequest) (*adminv1.GetClusterSummaryResponse, error) {
@@ -337,6 +431,16 @@ func (s *fakeInspectServer) GetClusterSummary(ctx context.Context, _ *adminv1.Ge
 		s.extraMetadata = extraValues[0]
 	}
 	return &adminv1.GetClusterSummaryResponse{Summary: &adminv1.ClusterSummary{}}, nil
+}
+
+func (s *fakeInspectServer) GetCapacityRunway(_ context.Context, req *adminv1.GetCapacityRunwayRequest) (*adminv1.GetCapacityRunwayResponse, error) {
+	s.capacityProfileID = req.GetCapacityProfileId()
+	return &adminv1.GetCapacityRunwayResponse{Runway: &adminv1.CapacityRunway{
+		CapacityProfileId:    req.GetCapacityProfileId(),
+		UsableBytesRemaining: 8 * 1024 * 1024 * 1024,
+		EstimatedBytesPerDay: 128 * 1024 * 1024,
+		RunwayDays:           30,
+	}}, nil
 }
 
 func newBufconnDialer(t *testing.T, register func(*grpc.Server)) Dialer {
