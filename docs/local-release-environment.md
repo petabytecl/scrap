@@ -36,6 +36,7 @@ make local-kind-load
 make local-kind-deploy
 make local-kind-smoke
 make local-kind-evidence
+make openbao-smoke-evidence
 make capacity-sample
 make local-kind-delete
 ```
@@ -67,6 +68,13 @@ report records:
 
 Do not store secrets, OpenBao tokens, backend credentials, document bytes,
 plaintext DEKs, wrapped DEKs, or customer payloads in local evidence reports.
+
+`make openbao-smoke-evidence` writes
+`openbao-transit-smoke-evidence.json` by default. It uses the local kind
+OpenBao deployment and a short-lived Kubernetes-authenticated smoke client to
+prove Transit data-key, unwrap, rewrap, audit, and crypto-unavailable evidence
+shape without granting broad key-admin permissions. The evidence boundary and
+fields are documented in [OpenBao Transit Smoke Coverage](openbao-transit-smoke-coverage.md).
 
 ## Advisory Capacity Sampling
 

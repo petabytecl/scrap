@@ -1,3 +1,28 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-transit-smoke
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scrap-local-openbao-auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: openbao
+    namespace: scrap-local
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,6 +37,7 @@ spec:
       labels:
         app.kubernetes.io/component: openbao
     spec:
+      serviceAccountName: openbao
       containers:
         - name: openbao
           image: openbao/openbao:2.3.2
@@ -55,6 +81,7 @@ metadata:
 spec:
   template:
     spec:
+      serviceAccountName: openbao
       restartPolicy: OnFailure
       containers:
         - name: bootstrap
@@ -75,3 +102,27 @@ spec:
               bao audit enable file file_path=/tmp/openbao-audit.log || true
               bao secrets enable -path=transit transit || true
               bao write -f transit/keys/scrap-backend || true
+              bao auth enable kubernetes || true
+              bao write auth/kubernetes/config \
+                token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                kubernetes_host="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}" \
+                kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bao policy write scrap-transit-client - <<'POLICY'
+              path "transit/datakey/plaintext/scrap-backend" {
+                capabilities = ["update"]
+              }
+              path "transit/decrypt/scrap-backend" {
+                capabilities = ["update"]
+              }
+              path "transit/rewrap/scrap-backend" {
+                capabilities = ["update"]
+              }
+              path "sys/capabilities-self" {
+                capabilities = ["update"]
+              }
+              POLICY
+              bao write auth/kubernetes/role/scrap-transit-smoke \
+                bound_service_account_names=openbao-transit-smoke \
+                bound_service_account_namespaces=scrap-local \
+                policies=scrap-transit-client \
+                ttl=10m
