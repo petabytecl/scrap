@@ -37,6 +37,9 @@ The next technical gate before storage-format implementation is:
 Production-readiness test policy for issue `#19` is captured in
 [Storage Gateway Correctness Harness And CI Tiers](storage-gateway-correctness-harness.md).
 
+Observability and audit signal policy for issue `#20` is captured in
+[Storage Gateway Observability And Audit Signal Standards](storage-gateway-observability-audit-standards.md).
+
 ## Purpose
 
 Build the S.C.R.A.P. storage gateway so billing ETL services can write and read
