@@ -20,11 +20,12 @@ func marshalDocument(document Document) ([]byte, error) {
 }
 
 func MarshalDocument(document Document) ([]byte, error) {
+	document = normalizeDocumentDefaults(document)
 	return marshalDocument(document)
 }
 
 func DocumentRecord(document Document) *metastorev1.DocumentRecord {
-	return documentToProto(document)
+	return documentToProto(normalizeDocumentDefaults(document))
 }
 
 func unmarshalDocument(data []byte) (Document, error) {
@@ -40,7 +41,7 @@ func UnmarshalDocument(data []byte) (Document, error) {
 }
 
 func marshalDocumentRecord(record *metastorev1.DocumentRecord) ([]byte, error) {
-	if err := validateSchemaVersion("document", record.GetSchemaVersion()); err != nil {
+	if err := validateDocumentRecord(record); err != nil {
 		return nil, err
 	}
 	return protoMarshal.Marshal(record)
@@ -51,7 +52,7 @@ func unmarshalDocumentRecord(data []byte) (*metastorev1.DocumentRecord, error) {
 	if err := proto.Unmarshal(data, &record); err != nil {
 		return nil, err
 	}
-	if err := validateSchemaVersion("document", record.GetSchemaVersion()); err != nil {
+	if err := validateDocumentRecord(&record); err != nil {
 		return nil, err
 	}
 	return &record, nil
@@ -152,6 +153,167 @@ func validateSchemaVersion(recordKind string, version uint32) error {
 		return fmt.Errorf("%w: %s record version %d", ErrUnsupportedSchemaVersion, recordKind, version)
 	}
 	return nil
+}
+
+func validateDocumentRecord(record *metastorev1.DocumentRecord) error {
+	if record == nil {
+		return invalidRecord("document", "record is required")
+	}
+	if err := validateSchemaVersion("document", record.GetSchemaVersion()); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "tenant_id", value: record.GetTenantId()},
+		{name: "transaction_id", value: record.GetTransactionId()},
+		{name: "document_name", value: record.GetDocumentName()},
+		{name: "created_by_service", value: record.GetCreatedByService()},
+	} {
+		if field.value == "" {
+			return invalidRecord("document", "%s is required", field.name)
+		}
+	}
+	for _, field := range []struct {
+		name string
+		data []byte
+		size int
+	}{
+		{name: "logical_sha256", data: record.GetLogicalSha256(), size: 32},
+		{name: "stored_sha256", data: record.GetStoredSha256(), size: 32},
+		{name: "document_identity_fingerprint", data: record.GetDocumentIdentityFingerprint(), size: 16},
+	} {
+		if len(field.data) != field.size {
+			return invalidRecord("document", "%s must be %d bytes", field.name, field.size)
+		}
+	}
+	if record.GetDocumentClass() == 0 {
+		return invalidRecord("document", "document_class is required")
+	}
+	if record.GetPriorityClass() == 0 {
+		return invalidRecord("document", "priority_class is required")
+	}
+	if record.GetAvailability() == 0 {
+		return invalidRecord("document", "availability is required")
+	}
+	if record.GetLifecycleState() == 0 {
+		return invalidRecord("document", "lifecycle_state is required")
+	}
+	if record.GetRestoreState() == metastorev1.RestoreState_RESTORE_STATE_UNSPECIFIED {
+		return invalidRecord("document", "restore_state is required")
+	}
+	if record.GetUploadState() == metastorev1.UploadState_UPLOAD_STATE_UNSPECIFIED {
+		return invalidRecord("document", "upload_state is required")
+	}
+	if err := validateTimestamp("document", "created_at", record.GetCreatedAt()); err != nil {
+		return err
+	}
+	if err := validateTimestamp("document", "finalized_at", record.GetFinalizedAt()); err != nil {
+		return err
+	}
+	if err := validateLocation(record.GetLocation()); err != nil {
+		return err
+	}
+	if err := validateEnvelopeRef(record.GetEnvelopeRef()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLocation(location *metastorev1.Location) error {
+	if location == nil {
+		return invalidRecord("document.location", "location is required")
+	}
+	if location.GetBlockId() == "" {
+		return invalidRecord("document.location", "block_id is required")
+	}
+	if location.GetStoredLength() > 0 && len(location.GetFrames()) == 0 {
+		return invalidRecord("document.location", "frames are required for stored bytes")
+	}
+	for i, frame := range location.GetFrames() {
+		if frame.GetSegmentLength() == 0 {
+			return invalidRecord("document.location", "frame %d segment_length is required", i)
+		}
+		if len(frame.GetSha256()) != 32 {
+			return invalidRecord("document.location", "frame %d sha256 must be 32 bytes", i)
+		}
+	}
+	for i, replica := range location.GetReplicas() {
+		if replica.GetMemberId() == "" {
+			return invalidRecord("document.location", "replica %d member_id is required", i)
+		}
+		if replica.GetBlockId() == "" {
+			return invalidRecord("document.location", "replica %d block_id is required", i)
+		}
+		if len(replica.GetStoredSha256()) != 32 {
+			return invalidRecord("document.location", "replica %d stored_sha256 must be 32 bytes", i)
+		}
+	}
+	return nil
+}
+
+func validateEnvelopeRef(ref *metastorev1.EnvelopeRef) error {
+	if ref == nil {
+		return nil
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "envelope_id", value: ref.GetEnvelopeId()},
+		{name: "key_id", value: ref.GetKeyId()},
+	} {
+		if field.value == "" {
+			return invalidRecord("document.envelope_ref", "%s is required", field.name)
+		}
+	}
+	if ref.GetKeyVersion() == 0 {
+		return invalidRecord("document.envelope_ref", "key_version is required")
+	}
+	if len(ref.GetEnvelopeSha256()) != 32 {
+		return invalidRecord("document.envelope_ref", "envelope_sha256 must be 32 bytes")
+	}
+	return nil
+}
+
+func validateTimestamp(recordKind string, field string, value *timestamppb.Timestamp) error {
+	if value == nil {
+		return invalidRecord(recordKind, "%s is required", field)
+	}
+	if err := value.CheckValid(); err != nil {
+		return fmt.Errorf("%w: %s %s is invalid: %w", ErrInvalidRecord, recordKind, field, err)
+	}
+	if value.AsTime().IsZero() {
+		return invalidRecord(recordKind, "%s must be non-zero", field)
+	}
+	return nil
+}
+
+func invalidRecord(recordKind string, format string, args ...any) error {
+	return fmt.Errorf("%w: %s %s", ErrInvalidRecord, recordKind, fmt.Sprintf(format, args...))
+}
+
+func normalizeDocumentDefaults(document Document) Document {
+	if document.CreatedAt.IsZero() {
+		document.CreatedAt = document.FinalizedAt
+	}
+	if document.FinalizedAt.IsZero() {
+		document.FinalizedAt = document.CreatedAt
+	}
+	if document.Availability == 0 {
+		document.Availability = AvailabilityHot
+	}
+	if document.LifecycleState == 0 {
+		document.LifecycleState = LifecycleStateActive
+	}
+	if document.RestoreState == 0 {
+		document.RestoreState = RestoreStateHot
+	}
+	if document.UploadState == 0 {
+		document.UploadState = UploadStatePending
+	}
+	return document
 }
 
 func documentToProto(document Document) *metastorev1.DocumentRecord {

@@ -132,6 +132,14 @@ func (UploadState) EnumDescriptor() ([]byte, []int) {
 	return file_scrap_metastore_v1_metastore_proto_rawDescGZIP(), []int{1}
 }
 
+// DocumentRecord is the private authoritative shard metadata record for one
+// committed immutable document. It is stored and replayed through shard
+// authority; it is not a public gRPC request or response message.
+//
+// Local Pebble tables, in-memory indexes, read caches, and imported catalogs
+// are rebuildable projections derived from authoritative records, published
+// metadata artifacts, or both. They must not become independent metadata
+// authorities.
 type DocumentRecord struct {
 	state                       protoimpl.MessageState `protogen:"open.v1"`
 	TenantId                    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -384,6 +392,8 @@ func (x *DocumentRecord) GetTombstoneOperationId() string {
 	return ""
 }
 
+// Location identifies the committed byte ranges and object refs needed to
+// verify and recover a document without embedding bytes in consensus metadata.
 type Location struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	BlockId           string                 `protobuf:"bytes,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
@@ -492,6 +502,7 @@ func (x *Location) GetFormatVersion() uint32 {
 	return 0
 }
 
+// FrameRecord keeps checksum evidence for a document range inside a block.
 type FrameRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	FrameOffset   uint64                 `protobuf:"varint,1,opt,name=frame_offset,json=frameOffset,proto3" json:"frame_offset,omitempty"`
@@ -560,6 +571,8 @@ func (x *FrameRecord) GetSha256() []byte {
 	return nil
 }
 
+// ReplicaRef records a prepared or committed local member copy that can be
+// verified before serving bytes or used as repair evidence.
 type ReplicaRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MemberId      string                 `protobuf:"bytes,1,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
@@ -636,6 +649,8 @@ func (x *ReplicaRef) GetStoredSha256() []byte {
 	return nil
 }
 
+// EnvelopeRef points to OpenBao Transit envelope material needed to decrypt
+// encrypted backend data without storing plaintext key material in metadata.
 type EnvelopeRef struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	EnvelopeId     string                 `protobuf:"bytes,1,opt,name=envelope_id,json=envelopeId,proto3" json:"envelope_id,omitempty"`

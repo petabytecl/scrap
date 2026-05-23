@@ -15,6 +15,7 @@ import (
 var (
 	ErrNotFound                 = errors.New("metastore: not found")
 	ErrConflict                 = errors.New("metastore: conflict")
+	ErrInvalidRecord            = errors.New("metastore: invalid record")
 	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
 )
 
@@ -40,25 +41,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) PutDocument(document Document) error {
-	if document.CreatedAt.IsZero() {
-		document.CreatedAt = document.FinalizedAt
-	}
-	if document.FinalizedAt.IsZero() {
-		document.FinalizedAt = document.CreatedAt
-	}
-	if document.Availability == 0 {
-		document.Availability = AvailabilityHot
-	}
-	if document.LifecycleState == 0 {
-		document.LifecycleState = LifecycleStateActive
-	}
-	if document.RestoreState == 0 {
-		document.RestoreState = RestoreStateHot
-	}
-	if document.UploadState == 0 {
-		document.UploadState = UploadStatePending
-	}
-
+	document = normalizeDocumentDefaults(document)
 	value, err := marshalDocument(document)
 	if err != nil {
 		return err

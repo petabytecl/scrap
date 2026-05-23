@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -86,6 +87,127 @@ func TestPublishedMetadataBoundaryExcludesInternalState(t *testing.T) {
 	requireField(t, manifest, "snapshots")
 	requireField(t, manifest, "tails")
 	requireField(t, manifest, "required_objects")
+}
+
+func TestAuthoritativeDocumentRecordRoundTripPreservesContractFields(t *testing.T) {
+	record := authoritativeDocumentRecordWithRefs()
+
+	data, err := marshalDocumentRecord(record)
+	if err != nil {
+		t.Fatalf("marshal record: %v", err)
+	}
+	decoded, err := unmarshalDocumentRecord(data)
+	if err != nil {
+		t.Fatalf("unmarshal record: %v", err)
+	}
+	if !proto.Equal(record, decoded) {
+		t.Fatalf("decoded record differs\n got: %v\nwant: %v", decoded, record)
+	}
+}
+
+func TestAuthoritativeDocumentRecordMarshalIsDeterministic(t *testing.T) {
+	first := authoritativeDocumentRecordWithRefs()
+	first.Tags = map[string]string{"workflow": "billing", "stage": "seal"}
+	second := authoritativeDocumentRecordWithRefs()
+	second.Tags = map[string]string{"stage": "seal", "workflow": "billing"}
+
+	firstData, err := marshalDocumentRecord(first)
+	if err != nil {
+		t.Fatalf("marshal first record: %v", err)
+	}
+	secondData, err := marshalDocumentRecord(second)
+	if err != nil {
+		t.Fatalf("marshal second record: %v", err)
+	}
+	if !bytes.Equal(firstData, secondData) {
+		t.Fatal("deterministic marshal produced different bytes for equivalent records")
+	}
+}
+
+func TestAuthoritativeDocumentRecordRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*metastorev1.DocumentRecord)
+	}{
+		{
+			name: "tenant",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.TenantId = ""
+			},
+		},
+		{
+			name: "logical checksum",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.LogicalSha256 = []byte{1, 2, 3}
+			},
+		},
+		{
+			name: "restore state",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.RestoreState = metastorev1.RestoreState_RESTORE_STATE_UNSPECIFIED
+			},
+		},
+		{
+			name: "location",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.Location = nil
+			},
+		},
+		{
+			name: "zero created timestamp",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.CreatedAt = timestamppb.New(time.Time{})
+			},
+		},
+		{
+			name: "frame checksum",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.Location.Frames[0].Sha256 = nil
+			},
+		},
+		{
+			name: "envelope checksum",
+			mutate: func(record *metastorev1.DocumentRecord) {
+				record.EnvelopeRef.EnvelopeSha256 = nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := authoritativeDocumentRecordWithRefs()
+			test.mutate(record)
+
+			if _, err := marshalDocumentRecord(record); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("marshal error = %v, want %v", err, ErrInvalidRecord)
+			}
+
+			data, err := proto.Marshal(record)
+			if err != nil {
+				t.Fatalf("raw proto marshal: %v", err)
+			}
+			if _, err := unmarshalDocumentRecord(data); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
+func TestAuthoritativeDocumentRecordReadsInitialV1Fixture(t *testing.T) {
+	data, err := hex.DecodeString("0a0674656e616e74120374786e1a0b696e766f6963652e786d6c20012802320f6170706c69636174696f6e2f786d6c382a422001020300000000000000000000000000000000000000000000000000000000004a2004050600000000000000000000000000000000000000000000000000000000005210000000000000000000000000000000005a0b62696c6c696e672d65746c62047365616c6a02080a7202080a78018001018a01130a08776f726b666c6f77120762696c6c696e679201540a2430313866366438362d376132322d376162632d386465662d3132333435363738396162631040182a222808401040182a22200708090000000000000000000000000000000000000000000000000000000000a00101c00101c80102")
+	if err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	document, err := UnmarshalDocument(data)
+	if err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	if document.Identity.TenantID != "tenant" ||
+		document.Identity.TransactionID != "txn" ||
+		document.Identity.DocumentName != "invoice.xml" ||
+		document.Location.BlockID != "018f6d86-7a22-7abc-8def-123456789abc" {
+		t.Fatalf("fixture document = %#v, want initial v1 invoice metadata", document)
+	}
 }
 
 func TestAuthoritativeDocumentRecordRejectsUnsupportedSchemaVersion(t *testing.T) {
@@ -183,6 +305,23 @@ func TestShardCommandRequiresCommandBody(t *testing.T) {
 	}
 }
 
+func TestShardCommandRejectsZeroProposedAt(t *testing.T) {
+	command := sampleShardCommand()
+	command.ProposedAt = timestamppb.New(time.Time{})
+
+	if _, err := MarshalShardCommand(command); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("marshal error = %v, want %v", err, ErrInvalidRecord)
+	}
+
+	data, err := proto.Marshal(command)
+	if err != nil {
+		t.Fatalf("raw proto marshal: %v", err)
+	}
+	if _, err := UnmarshalShardCommand(data); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
+	}
+}
+
 func TestShardCommandPreservesUnknownForwardFields(t *testing.T) {
 	data, err := MarshalShardCommand(sampleShardCommand())
 	if err != nil {
@@ -249,4 +388,28 @@ func requireNoField(t *testing.T, message protoreflect.MessageDescriptor, fieldN
 func appendUnknownVarint(data []byte, fieldNumber protowire.Number, value uint64) []byte {
 	data = protowire.AppendTag(data, fieldNumber, protowire.VarintType)
 	return protowire.AppendVarint(data, value)
+}
+
+func authoritativeDocumentRecordWithRefs() *metastorev1.DocumentRecord {
+	record := documentToProto(sampleDocument("invoice.xml", DocumentClassPermanent))
+	record.EnvelopeRef = &metastorev1.EnvelopeRef{
+		EnvelopeId:     "env-1",
+		KeyId:          "openbao/transit/scrap",
+		KeyVersion:     7,
+		EnvelopeSha256: bytes.Repeat([]byte{9}, 32),
+	}
+	record.Location.Replicas = []*metastorev1.ReplicaRef{
+		{
+			MemberId:     "member-a",
+			BlockId:      record.GetLocation().GetBlockId(),
+			StoredOffset: record.GetLocation().GetStoredOffset(),
+			StoredLength: record.GetLocation().GetStoredLength(),
+			StoredSha256: bytes.Repeat([]byte{4}, 32),
+		},
+	}
+	record.Location.BackendObjectKey = proto.String("objects/block-1.blk")
+	record.Location.IndexObjectKey = proto.String("objects/block-1.idx")
+	record.Location.EnvelopeObjectKey = proto.String("objects/block-1.env")
+	record.Location.FormatVersion = 1
+	return record
 }
