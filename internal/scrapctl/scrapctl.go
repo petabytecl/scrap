@@ -213,16 +213,16 @@ func buildCapacityAction(args []string) (action, error) {
 		openbaoAddr := fs.String("openbao-addr", capacitysample.DefaultOpenBaoAddress, "OpenBao HTTP address")
 		openbaoToken := fs.String("openbao-token", envDefault("BAO_TOKEN", capacitysample.DefaultOpenBaoToken), "OpenBao token; never emitted in the report")
 		openbaoKeyPath := fs.String("openbao-transit-key-path", capacitysample.DefaultOpenBaoKeyPath, "OpenBao Transit key path")
-		releaseSHA := fs.String("release-sha", envDefault("SCRAP_RELEASE_SHA", detectGitCommit()), "release SHA recorded in evidence")
-		dirtyTree := fs.String("dirty-tree", envDefault("SCRAP_DIRTY_TREE", detectDirtyTree()), "dirty tree state recorded in evidence")
+		releaseSHA := fs.String("release-sha", "", "release SHA recorded in evidence")
+		dirtyTree := fs.String("dirty-tree", "", "dirty tree state recorded in evidence")
 		documentSizes := uint64ListFlag{}
 		fs.Var(&documentSizes, "document-size", "document size in bytes; may be repeated")
 		if err := parseExact(fs, args[1:]); err != nil {
 			return nil, err
 		}
 		opts, err := capacitysample.ValidateOptions(capacitysample.Options{
-			ReleaseSHA:             *releaseSHA,
-			DirtyTree:              *dirtyTree,
+			ReleaseSHA:             releaseSHAValue(*releaseSHA),
+			DirtyTree:              dirtyTreeValue(*dirtyTree),
 			ProfileID:              *profileID,
 			EnvironmentID:          *environmentID,
 			SampleCount:            *samples,
@@ -1272,6 +1272,26 @@ func envDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func releaseSHAValue(flagValue string) string {
+	if value := strings.TrimSpace(flagValue); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("SCRAP_RELEASE_SHA")); value != "" {
+		return value
+	}
+	return detectGitCommit()
+}
+
+func dirtyTreeValue(flagValue string) string {
+	if value := strings.TrimSpace(flagValue); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("SCRAP_DIRTY_TREE")); value != "" {
+		return value
+	}
+	return detectDirtyTree()
 }
 
 func detectGitCommit() string {

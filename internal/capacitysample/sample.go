@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -394,16 +395,22 @@ func observeLocalDisk(path string) DiskObservation {
 		observation.Error = err.Error()
 		return observation
 	}
-	blockSize, err := safeconv.Int64ToUint64("statfs block size", stat.Bsize)
-	if err != nil {
-		observation.ErrorClass = string(backend.ErrorClassPermanent)
-		observation.Error = err.Error()
-		return observation
-	}
-	observation.TotalBytes = stat.Blocks * blockSize
-	observation.FreeBytes = stat.Bfree * blockSize
-	observation.AvailableBytes = stat.Bavail * blockSize
+	observation.TotalBytes = statfsBytes(stat.Blocks, stat.Bsize)
+	observation.FreeBytes = statfsBytes(stat.Bfree, stat.Bsize)
+	observation.AvailableBytes = statfsBytes(stat.Bavail, stat.Bsize)
 	return observation
+}
+
+func statfsBytes(blocks uint64, blockSize int64) uint64 {
+	if blockSize <= 0 {
+		return 0
+	}
+	// #nosec G115 -- blockSize is checked positive above.
+	size := uint64(blockSize)
+	if blocks > math.MaxUint64/size {
+		return math.MaxUint64
+	}
+	return blocks * size
 }
 
 func observeAdmin(ctx context.Context, client AdminClient, profileID string) AdminObservation {
@@ -441,7 +448,7 @@ func probeBackend(ctx context.Context, client *http.Client, opts Options) []Requ
 	samples := make([]RequestSample, 0, opts.SampleCount*3)
 	deadline, cancel := context.WithTimeout(ctx, opts.Duration)
 	defer cancel()
-	for i := range opts.SampleCount {
+	for i := 0; i < opts.SampleCount; i++ { //nolint:intrange // Keep counted loops for review tooling that has not caught up to Go integer ranges.
 		size := opts.DocumentSizesBytes[i%len(opts.DocumentSizesBytes)]
 		key := fmt.Sprintf("capacity-sample/%s/%d", sanitizePathPart(opts.ProfileID), i)
 		body := sampleBytes(size, byte(i+1))
@@ -475,7 +482,7 @@ func probeOpenBao(ctx context.Context, client *http.Client, opts Options) []Requ
 	samples := make([]RequestSample, 0, opts.SampleCount*3)
 	deadline, cancel := context.WithTimeout(ctx, opts.Duration)
 	defer cancel()
-	for i := range opts.SampleCount {
+	for i := 0; i < opts.SampleCount; i++ { //nolint:intrange // Keep counted loops for review tooling that has not caught up to Go integer ranges.
 		contextValue := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("scrap-capacity-sample:%s:%d", opts.ProfileID, i)))
 		wrapTarget := openBaoURL(opts.OpenBaoAddress, mount, "datakey/plaintext", keyName)
 		wrapResp := struct {
@@ -1007,7 +1014,12 @@ func backendObjectURL(baseURL, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	parsed.Path = path.Join(parsed.Path, key)
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if basePath == "" {
+		parsed.Path = "/" + strings.TrimLeft(key, "/")
+		return parsed.String(), nil
+	}
+	parsed.Path = basePath + "/" + strings.TrimLeft(key, "/")
 	return parsed.String(), nil
 }
 
@@ -1068,11 +1080,26 @@ func optionalString(value string) *string {
 
 func sanitizePathPart(value string) string {
 	value = strings.TrimSpace(value)
-	value = strings.ReplaceAll(value, "/", "-")
-	if value == "" {
+	var builder strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '-' || r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteByte('-')
+		}
+	}
+	cleaned := strings.Trim(builder.String(), "-")
+	if cleaned == "" {
 		return "profile"
 	}
-	return value
+	return cleaned
 }
 
 func defaultText(value, fallback string) string {

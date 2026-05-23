@@ -77,10 +77,10 @@ the configured OpenBao Transit key, and the local disk path. It records bounded
 workload shape, request latency samples, error classes, redacted request IDs,
 and proposed capacity-profile values for human review.
 
-Backend requests are signed with local S3-compatible SigV4 credentials. The
-default LocalStack credentials are `test` / `test` in `us-east-1`; override
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or `CAPACITY_SAMPLE_BACKEND_REGION`
-when rehearsing a different local target.
+Backend requests are signed with local S3-compatible SigV4 credentials sourced
+from the environment. The default LocalStack credentials are `test` / `test` in
+`us-east-1`; override `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or
+`CAPACITY_SAMPLE_BACKEND_REGION` when rehearsing a different local target.
 
 The report is advisory only:
 
@@ -93,12 +93,13 @@ The report is advisory only:
 The default local targets assume port-forwarded or locally reachable services:
 
 ```sh
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export BAO_TOKEN=local-root
+
 make capacity-sample \
   CAPACITY_SAMPLE_BACKEND_URL=http://127.0.0.1:4566/scrap-local \
-  CAPACITY_SAMPLE_OPENBAO_ADDR=http://127.0.0.1:8200 \
-  AWS_ACCESS_KEY_ID=test \
-  AWS_SECRET_ACCESS_KEY=test \
-  BAO_TOKEN=local-root
+  CAPACITY_SAMPLE_OPENBAO_ADDR=http://127.0.0.1:8200
 ```
 
 ## GitOps Boundary

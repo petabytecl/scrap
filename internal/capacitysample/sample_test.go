@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,6 +146,29 @@ func TestRunRecordsBackendErrorClassesWithoutWritingProductionState(t *testing.T
 		}
 	}
 	t.Fatalf("evidence limits = %#v, want advisory-only production write boundary", report.EvidenceLimits)
+}
+
+func TestBackendObjectURLKeepsCapacitySamplePrefix(t *testing.T) {
+	profile := sanitizePathPart("../prod/../../escape")
+	target, err := backendObjectURL("http://backend.local/scrap-local", "capacity-sample/"+profile+"/0")
+	if err != nil {
+		t.Fatalf("backend object URL: %v", err)
+	}
+	if strings.Contains(target, "..") ||
+		strings.Contains(profile, ".") ||
+		strings.Contains(profile, "/") ||
+		!strings.Contains(target, "/scrap-local/capacity-sample/") {
+		t.Fatalf("target URL = %s, want sanitized capacity-sample prefix", target)
+	}
+}
+
+func TestStatfsBytesSaturatesOnOverflow(t *testing.T) {
+	if got := statfsBytes(math.MaxUint64, 2); got != math.MaxUint64 {
+		t.Fatalf("statfs bytes = %d, want saturated max", got)
+	}
+	if got := statfsBytes(10, -1); got != 0 {
+		t.Fatalf("statfs bytes = %d, want 0 for invalid block size", got)
+	}
 }
 
 func validOptions(t *testing.T, backendServer, openbaoServer *httptest.Server) Options {

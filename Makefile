@@ -141,17 +141,17 @@ crash-fault-evidence: ## Emit crash/fault evidence JSON for dedicated runners.
 	$(GO) run ./cmd/scrap-crash-fault-evidence --out "$${SCRAP_CRASH_FAULT_EVIDENCE_REPORT:-crash-fault-evidence.json}"
 
 capacity-sample: ## Emit advisory local capacity sample evidence.
+	@AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
+	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
+	BAO_TOKEN="$${BAO_TOKEN:-local-root}" \
 	$(GO) run ./cmd/scrapctl \
 		--admin-addr "$(SCRAP_ADMIN_ADDR)" \
 		--workload-identity "$(SCRAP_WORKLOAD_IDENTITY)" \
 		capacity sample \
 		--profile-id "$(PROFILE_ID)" \
 		--backend-url "$(CAPACITY_SAMPLE_BACKEND_URL)" \
-		--backend-access-key-id "$${AWS_ACCESS_KEY_ID:-test}" \
-		--backend-secret-access-key "$${AWS_SECRET_ACCESS_KEY:-test}" \
 		--backend-region "$(CAPACITY_SAMPLE_BACKEND_REGION)" \
 		--openbao-addr "$(CAPACITY_SAMPLE_OPENBAO_ADDR)" \
-		--openbao-token "$${BAO_TOKEN:-local-root}" \
 		--openbao-transit-key-path "$(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)" \
 		--release-sha "$(RELEASE_SHA)" \
 		--dirty-tree "$(DIRTY_TREE)" \
