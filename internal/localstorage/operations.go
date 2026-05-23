@@ -12,12 +12,14 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/cryptoenv"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/replication"
+	"github.com/petabytecl/scrap/internal/storageformat"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -53,6 +55,8 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runTombstoneOperation(ctx, store, operation)
 		case "restore", "prewarm":
 			succeeded, err = a.runRestoreOperation(ctx, store, operation)
+		case "rewrap":
+			succeeded, err = a.runRewrapOperation(ctx, store, operation)
 		case "repair":
 			succeeded, err = a.runRepairOperation(ctx, store, operation)
 		case "scrub":
@@ -170,6 +174,149 @@ func (a *Application) runScrubOperation(ctx context.Context, store *operations.S
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *Application) runRewrapOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running rewrap operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	rewrapped, skipped, err := a.applyRewrapOperation(ctx, running)
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	if err != nil {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "rewrap operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_REWRAP_FAILED",
+			Message: err.Error(),
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(rewrapped + skipped),
+		WorkUnitsCompleted: uint64(rewrapped + skipped),
+		Message:            "rewrap operation succeeded",
+		Counters: map[string]string{
+			"envelopes_rewrapped": fmt.Sprintf("%d", rewrapped),
+			"envelopes_skipped":   fmt.Sprintf("%d", skipped),
+		},
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(rewrapAuditEvent(finished)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) applyRewrapOperation(ctx context.Context, operation *adminv1.Operation) (int, int, error) {
+	if operation.GetDryRun() {
+		return len(operation.GetTargets()), 0, nil
+	}
+	if a.backendStore == nil {
+		return 0, 0, fmt.Errorf("localstorage: backend store is not configured")
+	}
+	mutable, ok := a.backendStore.(backend.MutableStore)
+	if !ok {
+		return 0, 0, fmt.Errorf("localstorage: backend store does not support mutable envelope objects")
+	}
+	if a.envelopeTransit == nil {
+		return 0, 0, fmt.Errorf("%w: transit client is required for rewrap", cryptoenv.ErrUnavailable)
+	}
+	destinationKeyID := operation.GetMetadata()["scrap.destination_key_id"]
+	if destinationKeyID == "" {
+		destinationKeyID = operation.GetMetadata()["destination_key_id"]
+	}
+	if destinationKeyID == "" {
+		return 0, 0, fmt.Errorf("localstorage: rewrap destination key id is required")
+	}
+	blockIDs, _, err := a.restoreTargets(operation)
+	if err != nil {
+		return 0, 0, err
+	}
+	rewrapped := 0
+	skipped := 0
+	rewrappedAt := operation.GetRequestedAt().AsTime()
+	if rewrappedAt.IsZero() {
+		rewrappedAt = a.now()
+	}
+	for blockID := range blockIDs {
+		changed, err := a.rewrapBlockEnvelope(ctx, mutable, blockID, destinationKeyID, rewrappedAt)
+		if err != nil {
+			return rewrapped, skipped, err
+		}
+		if changed {
+			rewrapped++
+		} else {
+			skipped++
+		}
+	}
+	return rewrapped, skipped, nil
+}
+
+func (a *Application) rewrapBlockEnvelope(ctx context.Context, store backend.MutableStore, blockID string, destinationKeyID string, rewrappedAt time.Time) (bool, error) {
+	intent, err := a.metadata.GetUploadIntent(blockID)
+	if err != nil {
+		return false, err
+	}
+	if intent.EnvelopeObjectKey == "" {
+		return false, nil
+	}
+	var data bytes.Buffer
+	if err := store.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &data); err != nil {
+		return false, err
+	}
+	envelope, err := storageformat.UnmarshalEnvelopeRecord(data.Bytes())
+	if err != nil {
+		return false, fmt.Errorf("%w: backend envelope %s is invalid: %w", backend.ErrChecksumMismatch, intent.EnvelopeObjectKey, err)
+	}
+	if envelope.GetAeadAlgorithm() == "none" {
+		return false, nil
+	}
+	rewrapped, err := cryptoenv.RewrapEnvelopeRecord(ctx, a.envelopeTransit, envelope, destinationKeyID, rewrappedAt)
+	if err != nil {
+		return false, err
+	}
+	payload, err := storageformat.MarshalEnvelopeRecord(rewrapped)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(payload, data.Bytes()) {
+		return false, nil
+	}
+	if _, err := store.PutMutableObject(ctx, intent.EnvelopeObjectKey, bytes.NewReader(payload)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func rewrapAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
+	occurredAt := operation.GetRequestedAt()
+	if occurredAt == nil {
+		occurredAt = operation.GetFinishedAt()
+	}
+	return &adminv1.AuditEvent{
+		EventId:       stableCommandID("audit-rewrap-completed", operation.GetOperationId()),
+		EventType:     "rewrap_completed",
+		OperationId:   operation.GetOperationId(),
+		OperationType: operation.GetOperationType(),
+		ActorIdentity: operation.GetRequestedByIdentity(),
+		OccurredAt:    occurredAt,
+		Targets:       cloneOperationTargets(operation.GetTargets()),
+		Metadata:      cloneTags(operation.GetMetadata()),
+	}
 }
 
 func (a *Application) runRepairOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
@@ -994,6 +1141,8 @@ func operationErrorPrefix(operationType string) string {
 	switch operationType {
 	case "prewarm":
 		return "PREWARM"
+	case "rewrap":
+		return "REWRAP"
 	default:
 		return "RESTORE"
 	}
@@ -1067,6 +1216,17 @@ func cloneWarnings(warnings []*adminv1.OperationWarning) []*adminv1.OperationWar
 	out := make([]*adminv1.OperationWarning, 0, len(warnings))
 	for _, warning := range warnings {
 		out = append(out, proto.Clone(warning).(*adminv1.OperationWarning))
+	}
+	return out
+}
+
+func cloneOperationTargets(targets []*adminv1.Target) []*adminv1.Target {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]*adminv1.Target, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, proto.Clone(target).(*adminv1.Target))
 	}
 	return out
 }

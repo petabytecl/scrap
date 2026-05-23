@@ -18,12 +18,14 @@ import (
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/cryptoenv"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
+	"github.com/petabytecl/scrap/internal/storageformat"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -32,6 +34,8 @@ type Application struct {
 	dir                      string
 	blocks                   *blockstore.Store
 	backendStore             backend.Store
+	envelopeSource           backendupload.BlockEnvelopeSource
+	envelopeTransit          cryptoenv.Transit
 	metadata                 *metastore.Store
 	authority                *raftmeta.Authority
 	prepare                  *prepareLog
@@ -159,7 +163,7 @@ func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.
 		Uploader: backendupload.Uploader{
 			Backend:  store,
 			Source:   backendupload.LocalBlockSource{Blocks: a.blocks},
-			Envelope: backendupload.LocalBlockEnvelopeSource{CellID: localPublishedCellID},
+			Envelope: a.backendEnvelopeSource(),
 			Index: backendupload.LocalBlockIndexSource{
 				Documents: a.metadata,
 				ShardID:   "local",
@@ -171,8 +175,28 @@ func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.
 	}
 }
 
+func (a *Application) SetEnvelopeTransit(transit cryptoenv.Transit, keyID string) {
+	a.envelopeTransit = transit
+	a.envelopeSource = backendupload.TransitBlockEnvelopeSource{
+		Transit: transit,
+		CellID:  localPublishedCellID,
+		KeyID:   keyID,
+	}
+}
+
+func (a *Application) SetBlockEnvelopeSource(source backendupload.BlockEnvelopeSource) {
+	a.envelopeSource = source
+}
+
 func (a *Application) SetBackendStore(store backend.Store) {
 	a.backendStore = store
+}
+
+func (a *Application) backendEnvelopeSource() backendupload.BlockEnvelopeSource {
+	if a.envelopeSource != nil {
+		return a.envelopeSource
+	}
+	return backendupload.LocalBlockEnvelopeSource{CellID: localPublishedCellID}
 }
 
 func (a *Application) SetPeerRepairSource(memberID string, source PeerRepairSource) {
@@ -494,6 +518,9 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 	}
 	data, err := a.readVerifiedBackendRange(ctx, document, intent, selectedRange)
 	if err != nil {
+		if cryptoenv.IsUnavailable(err) {
+			return cryptoUnavailableError(document)
+		}
 		if isIntegrityFailure(err) {
 			return readIntegrityError(document, []string{"local", "backend"}, err)
 		}
@@ -532,6 +559,9 @@ func (a *Application) readVerifiedBackendRange(ctx context.Context, document met
 	if readLength == 0 {
 		return nil, nil
 	}
+	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
+		return nil, err
+	}
 	verifyStart, verifyEnd, err := verificationWindow(document.Location, selectedRange.Offset, readLength)
 	if err != nil {
 		return nil, err
@@ -555,6 +585,27 @@ func (a *Application) readVerifiedBackendRange(ctx context.Context, document met
 		return nil, io.ErrUnexpectedEOF
 	}
 	return append([]byte(nil), data[start:end]...), nil
+}
+
+func (a *Application) verifyBackendEnvelope(ctx context.Context, intent metastore.UploadIntent) error {
+	if intent.EnvelopeObjectKey == "" {
+		return nil
+	}
+	var data bytes.Buffer
+	if err := a.backendStore.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &data); err != nil {
+		return err
+	}
+	envelope, err := storageformat.UnmarshalEnvelopeRecord(data.Bytes())
+	if err != nil {
+		return fmt.Errorf("%w: backend envelope %s is invalid: %w", backend.ErrChecksumMismatch, intent.EnvelopeObjectKey, err)
+	}
+	if envelope.GetAeadAlgorithm() == "none" {
+		return nil
+	}
+	if a.envelopeTransit == nil {
+		return fmt.Errorf("%w: backend envelope %s requires key %s", cryptoenv.ErrUnavailable, intent.EnvelopeObjectKey, envelope.GetKeyId())
+	}
+	return cryptoenv.ValidateEnvelopeRecordForRestore(ctx, a.envelopeTransit, envelope)
 }
 
 func verificationWindow(record blockstore.Record, offset uint64, length uint64) (uint64, uint64, error) {

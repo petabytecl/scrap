@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/cryptoenv"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/storageformat"
@@ -28,6 +29,12 @@ type LocalBlockEnvelopeSource struct {
 	KeyID  string
 }
 
+type TransitBlockEnvelopeSource struct {
+	Transit cryptoenv.Transit
+	CellID  string
+	KeyID   string
+}
+
 func (s LocalBlockEnvelopeSource) OpenBlockEnvelope(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -37,6 +44,24 @@ func (s LocalBlockEnvelopeSource) OpenBlockEnvelope(ctx context.Context, intent 
 		return nil, err
 	}
 	data, err := storageformat.MarshalEnvelopeRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (s TransitBlockEnvelopeSource) OpenBlockEnvelope(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object) (io.ReadCloser, error) {
+	material, err := cryptoenv.CreateEnvelopeRecord(ctx, s.Transit, cryptoenv.EnvelopeRequest{
+		BlockID:     intent.BlockID,
+		CellID:      s.CellID,
+		BlockObject: blockObject,
+		KeyID:       s.KeyID,
+		CreatedAt:   intent.UpdatedAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	data, err := storageformat.MarshalEnvelopeRecord(material.Record)
 	if err != nil {
 		return nil, err
 	}
@@ -81,5 +106,5 @@ func buildLocalEnvelopeRecord(intent metastore.UploadIntent, blockObject backend
 }
 
 func localEnvelopeAAD(cellID string, blockID string, blockObject backend.Object) []byte {
-	return []byte(fmt.Sprintf("%s\x00%s\x00%s\x00%x", cellID, blockID, blockObject.Key, blockObject.SHA256))
+	return cryptoenv.EnvelopeAAD(cellID, blockID, blockObject)
 }

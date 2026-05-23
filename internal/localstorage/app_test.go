@@ -16,6 +16,7 @@ import (
 	"github.com/petabytecl/scrap/internal/backend"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/cryptoenv"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
@@ -25,6 +26,7 @@ import (
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
+	"github.com/petabytecl/scrap/internal/storageformat"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1019,6 +1021,189 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 		queue[0].GetReason() == "" ||
 		queue[0].GetDetectedAt().AsTime() != time.Unix(250, 0).UTC() {
 		t.Fatalf("repair queue = %#v, want quarantined local ref", queue)
+	}
+}
+
+func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(251, 0).UTC())
+	data := []byte("backend encrypted fallback bytes")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	corruptStoredByte(t, app, stored.Location, 0)
+	transit.SetUnavailable(true)
+
+	sender := &recordingReadSender{}
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.Unavailable)
+	detail := requireCryptoUnavailableDetail(t, err)
+	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
+		detail.GetKeyScope() != "backend" ||
+		!detail.GetRetryHint().GetRetryable() {
+		t.Fatalf("crypto detail = %#v, want crypto-unavailable backend detail", detail)
+	}
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d before crypto-unavailable error", sender.sentMetadata, len(sender.chunks))
+	}
+
+	transit.SetUnavailable(false)
+	transit.SetMissingKey("transit/backend", true)
+	sender = &recordingReadSender{}
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.Unavailable)
+	requireCryptoUnavailableDetail(t, err)
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d before missing-key error", sender.sentMetadata, len(sender.chunks))
+	}
+
+	transit.SetMissingKey("transit/backend", false)
+	sender = &recordingReadSender{}
+	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read document with key material restored: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_BACKEND {
+		t.Fatalf("read source = %s, want backend", sender.metadata.Source)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("read bytes = %q, want %q", got, data)
+	}
+}
+
+func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("rewrap backend bytes")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{
+		"transit/backend-v1": 1,
+		"transit/backend-v2": 2,
+	})
+	app.SetEnvelopeTransit(transit, "transit/backend-v1")
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	before, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
+	if err != nil {
+		t.Fatalf("unmarshal before envelope: %v", err)
+	}
+	operation := queuedOperation("rewrap-op-1", "rewrap", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Block{
+				Block: &adminv1.BlockTarget{ShardId: "local", BlockId: stored.Location.BlockID},
+			},
+		},
+	})
+	operation.Metadata = map[string]string{"scrap.destination_key_id": "transit/backend-v2"}
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one rewrap success", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["envelopes_rewrapped"] != "1" {
+		t.Fatalf("finished operation = %#v, want one rewrapped envelope", finished)
+	}
+	after, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
+	if err != nil {
+		t.Fatalf("unmarshal after envelope: %v", err)
+	}
+	if after.GetKeyId() != "transit/backend-v2" ||
+		after.GetKeyVersion() != 2 ||
+		bytes.Equal(after.GetWrappedDek(), before.GetWrappedDek()) {
+		t.Fatalf("after envelope = %#v, want rewrapped key material", after)
+	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 ||
+		events[0].GetEventType() != "rewrap_completed" ||
+		events[0].GetOperationType() != "rewrap" ||
+		events[0].GetActorIdentity() != "test" {
+		t.Fatalf("audit events = %#v, want rewrap completion event", events)
+	}
+
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put duplicate operation: %v", err)
+	}
+	result, err = app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run duplicate queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("duplicate operation result = %#v, want idempotent success", result)
+	}
+	duplicateFinished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get duplicate operation: %v", err)
+	}
+	if duplicateFinished.GetProgress().GetCounters()["envelopes_rewrapped"] != "0" ||
+		duplicateFinished.GetProgress().GetCounters()["envelopes_skipped"] != "1" {
+		t.Fatalf("duplicate finished operation = %#v, want skipped no-op rewrap", duplicateFinished)
+	}
+	duplicate, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
+	if err != nil {
+		t.Fatalf("unmarshal duplicate envelope: %v", err)
+	}
+	if !bytes.Equal(duplicate.GetWrappedDek(), after.GetWrappedDek()) ||
+		!bytes.Equal(duplicate.GetEnvelopeSha256(), after.GetEnvelopeSha256()) {
+		t.Fatalf("duplicate envelope = %#v, want unchanged %#v", duplicate, after)
 	}
 }
 
