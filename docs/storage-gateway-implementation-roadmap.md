@@ -2,7 +2,7 @@
 
 Status: planning gate tracked
 
-Last updated: 2026-05-22
+Last updated: 2026-05-23
 
 This roadmap turns the accepted storage-gateway architecture into
 implementation slices. It is the control document before more production code
@@ -24,6 +24,10 @@ are captured in
 [Production Capacity and Compliance Signoff Inputs](production-capacity-compliance-signoff.md).
 That record tracks GitHub issue `#48` and must be completed before the
 production readiness gate can be signed off.
+
+Production crash/recovery, corruption, replay, restore, repair, OpenBao, and
+write ACK gate evidence for issue `#44` is captured in
+[Production Crash Recovery And Corruption Evidence Matrix](production-crash-recovery-evidence-matrix.md).
 
 The next technical gate before storage-format implementation is:
 
