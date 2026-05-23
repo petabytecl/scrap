@@ -166,6 +166,34 @@ changes. Upgrade PRs must record:
 Do not promote a Go/toolchain upgrade into a production release until the
 benchmark and correctness evidence is reviewed.
 
+## Security Finding Triage
+
+Security lint and vulnerability findings are production-readiness inputs, not
+drive-by cleanup. The first hardened baseline is implemented by issue `#53`.
+
+Triage records for `golangci-lint`, `gosec`, `govulncheck`, CodeQL, dependency
+review, image scans, SBOM analysis, or provenance checks must include:
+
+- scanner name and version;
+- finding ID, package, file, dependency, image layer, or artifact reference;
+- owner and decision date;
+- severity and reachability assessment;
+- production impact, including whether the finding affects authentication,
+  authorization, encryption, audit, release tooling, remote input, or
+  acknowledged-write safety;
+- fix plan or exception justification;
+- expiry date for exceptions;
+- linked follow-up issue when the finding is not fixed in the current PR.
+
+Critical and high reachable findings block release. They also block normal PRs
+when the affected code or dependency is introduced by that PR. Medium findings
+require explicit owner review before release. Low findings may be batched unless
+they undermine a production-readiness claim.
+
+Suppressions must be local and explained. Blanket `nolint`, scanner-wide
+exclusions, or vulnerability ignore files are not acceptable unless they point
+to a triage record with owner and expiry.
+
 ## Rollout Policy
 
 Production rollout is canary, then shard-safe progressive rollout. Plain

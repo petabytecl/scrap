@@ -27,3 +27,15 @@ jobs:
           version: 1.66.0
 
       - run: make check
+
+  vulnerability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: make vuln

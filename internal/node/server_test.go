@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -163,7 +164,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	var got bytes.Buffer
 	for {
 		msg, err := read.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

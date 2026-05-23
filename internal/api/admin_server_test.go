@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -410,7 +411,7 @@ func TestAdminServerWatchOperationStreamsDurableSnapshot(t *testing.T) {
 		resp.GetDelta().GetProgress().GetWorkUnitsCompleted() != 3 {
 		t.Fatalf("watch response = %#v, want current operation snapshot", resp)
 	}
-	if _, err := stream.Recv(); err != io.EOF {
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("second recv error = %v, want EOF", err)
 	}
 }
@@ -430,7 +431,7 @@ func TestAdminServerWatchOperationHonorsAfterSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch operation: %v", err)
 	}
-	if _, err := stream.Recv(); err != io.EOF {
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("recv error = %v, want EOF after already-seen sequence", err)
 	}
 }

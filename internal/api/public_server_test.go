@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -126,7 +127,7 @@ func TestPublicServerReadDocumentStreamsMetadataThenBytes(t *testing.T) {
 	if got := string(second.GetChunk().GetData()); got != "abc" {
 		t.Fatalf("chunk = %q, want abc", got)
 	}
-	if _, err := stream.Recv(); err != io.EOF {
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("final recv error = %v, want EOF", err)
 	}
 }
@@ -190,7 +191,7 @@ func (f *fakeDocuments) WriteDocument(_ context.Context, init WriteDocumentInit,
 	var readChunks [][]byte
 	for {
 		chunk, err := chunks.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
