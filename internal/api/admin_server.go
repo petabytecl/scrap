@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
@@ -897,7 +898,7 @@ func (s *AdminServer) auditOperationStarted(operation *adminv1.Operation) error 
 		ActorIdentity: auditActorIdentity(operation.GetRequestedByIdentity()),
 		OccurredAt:    auditOperationRequestedAt(operation, s.now()),
 		Targets:       cloneTargets(operation.GetTargets()),
-		Metadata:      cloneTags(operation.GetMetadata()),
+		Metadata:      sanitizeAuditMetadata(operation.GetMetadata()),
 	})
 }
 
@@ -913,7 +914,7 @@ func (s *AdminServer) auditOperationCanceled(operation *adminv1.Operation) error
 		ActorIdentity: adminAuditActorIdentity,
 		OccurredAt:    auditOperationFinishedAt(operation, s.now()),
 		Targets:       cloneTargets(operation.GetTargets()),
-		Metadata:      cloneTags(operation.GetMetadata()),
+		Metadata:      sanitizeAuditMetadata(operation.GetMetadata()),
 	})
 }
 
@@ -939,7 +940,7 @@ func (s *AdminServer) auditMemberMutation(eventType string, operationType string
 				},
 			},
 		},
-		Metadata: metadata,
+		Metadata: sanitizeAuditMetadata(metadata),
 	})
 }
 
@@ -966,6 +967,30 @@ func auditOperationFinishedAt(operation *adminv1.Operation, fallback time.Time) 
 		return operation.GetFinishedAt()
 	}
 	return timestamppb.New(fallback)
+}
+
+func sanitizeAuditMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		if auditMetadataKeyIsSensitive(key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func auditMetadataKeyIsSensitive(key string) bool {
+	normalized := strings.ToLower(key)
+	for _, marker := range []string{"secret", "token", "password", "credential"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSameStartedOperation(operation *adminv1.Operation, operationType string, req OperationStartRequest) bool {

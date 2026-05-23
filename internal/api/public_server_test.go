@@ -9,10 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/authz"
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -147,6 +151,73 @@ func TestPublicServerCompleteTransactionValidatesAndMapsState(t *testing.T) {
 	}
 }
 
+func TestPublicServerAuditsCriticalAndEphemeralWritesOnly(t *testing.T) {
+	store := openPublicTestOperationStore(t)
+	documents := &fakeDocuments{}
+	client, _, cleanup := newPublicTestClientsWithAuditStore(t, documents, &fakeTransactions{}, store)
+	defer cleanup()
+
+	normal := validWriteInit()
+	normal.Identity.DocumentName = "normal.xml"
+	if _, err := writeDocumentForAudit(t, client, context.Background(), normal); err != nil {
+		t.Fatalf("normal write: %v", err)
+	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("audit events = %#v, want no ordinary write audit event", events)
+	}
+
+	critical := validWriteInit()
+	critical.Identity.DocumentName = "critical.xml"
+	critical.PriorityClass = scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST
+	critical.ClientIdempotencyKey = ptr("critical-write-1")
+	critical.Tags["plaintext_secret"] = "do-not-audit"
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+		authz.WorkloadIdentityMetadataKey, "billing-etl",
+		"x-request-id", "req-critical",
+		"x-correlation-id", "corr-critical",
+	))
+	if _, err := writeDocumentForAudit(t, client, ctx, critical); err != nil {
+		t.Fatalf("critical write: %v", err)
+	}
+
+	ephemeral := validWriteInit()
+	ephemeral.Identity.DocumentName = "ephemeral.xml"
+	ephemeral.DocumentClass = scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
+	if _, err := writeDocumentForAudit(t, client, context.Background(), ephemeral); err != nil {
+		t.Fatalf("ephemeral write: %v", err)
+	}
+
+	events, err = store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("audit events = %#v, want critical and ephemeral write events only", events)
+	}
+	byType := make(map[string]*adminv1.AuditEvent, len(events))
+	for _, event := range events {
+		byType[event.GetEventType()] = event
+	}
+	criticalEvent := byType["document_write_critical"]
+	if criticalEvent.GetActorIdentity() != "billing-etl" ||
+		criticalEvent.GetMetadata()["correlation_id"] != "corr-critical" ||
+		criticalEvent.GetMetadata()["priority_class"] != scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST.String() ||
+		criticalEvent.GetMetadata()["plaintext_secret"] != "" ||
+		len(criticalEvent.GetTargets()) != 1 ||
+		criticalEvent.GetTargets()[0].GetDocument().GetDocumentName() != "critical.xml" {
+		t.Fatalf("critical audit event = %#v, want sanitized critical write evidence", criticalEvent)
+	}
+	ephemeralEvent := byType["document_write_ephemeral"]
+	if ephemeralEvent.GetMetadata()["document_class"] != scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL.String() ||
+		ephemeralEvent.GetActorIdentity() != "billing-etl" {
+		t.Fatalf("ephemeral audit event = %#v, want ephemeral write evidence", ephemeralEvent)
+	}
+}
+
 func newPublicTestClients(
 	t *testing.T,
 	documents DocumentApplication,
@@ -178,6 +249,78 @@ func newPublicTestClients(
 		_ = listener.Close()
 	}
 	return scrapv1.NewDocumentServiceClient(conn), scrapv1.NewTransactionServiceClient(conn), cleanup
+}
+
+func newPublicTestClientsWithAuditStore(
+	t *testing.T,
+	documents DocumentApplication,
+	transactions TransactionApplication,
+	store *operations.Store,
+) (scrapv1.DocumentServiceClient, scrapv1.TransactionServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterPublicServer(server, NewPublicServer(documents, transactions, WithPublicAuditStore(store)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return scrapv1.NewDocumentServiceClient(conn), scrapv1.NewTransactionServiceClient(conn), cleanup
+}
+
+func openPublicTestOperationStore(t *testing.T) *operations.Store {
+	t.Helper()
+	store, err := operations.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close operation store: %v", err)
+		}
+	})
+	return store
+}
+
+func writeDocumentForAudit(
+	t *testing.T,
+	client scrapv1.DocumentServiceClient,
+	ctx context.Context,
+	init *scrapv1.WriteDocumentInit,
+) (*scrapv1.WriteDocumentResponse, error) {
+	t.Helper()
+	stream, err := client.WriteDocument(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := stream.Send(&scrapv1.WriteDocumentRequest{
+		Message: &scrapv1.WriteDocumentRequest_Init{Init: init},
+	}); err != nil {
+		return nil, err
+	}
+	if err := stream.Send(&scrapv1.WriteDocumentRequest{
+		Message: &scrapv1.WriteDocumentRequest_Chunk{Chunk: &scrapv1.WriteDocumentChunk{Data: []byte("abc")}},
+	}); err != nil {
+		return nil, err
+	}
+	return stream.CloseAndRecv()
 }
 
 type fakeDocuments struct {

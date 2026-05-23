@@ -3274,6 +3274,16 @@ func TestRunQueuedOperationsOnceCapacityOverrideRecordsBoundedEvidence(t *testin
 		!hasWarningCode(finished.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY") {
 		t.Fatalf("finished operation = %#v, want recorded bounded capacity override evidence", finished)
 	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 ||
+		events[0].GetEventType() != "capacity_override_completed" ||
+		events[0].GetOperationType() != "capacity-override" ||
+		events[0].GetMetadata()["scrap.capacity_override_reason"] != "incident INC-42" {
+		t.Fatalf("audit events = %#v, want capacity override completion evidence", events)
+	}
 }
 
 func TestRecoverInterruptedOperationsRequeuesRunningCapacityOverrideAfterRestart(t *testing.T) {

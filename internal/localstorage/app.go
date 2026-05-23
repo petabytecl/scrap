@@ -739,7 +739,7 @@ func restoreQueuedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
 		ActorIdentity: operation.GetRequestedByIdentity(),
 		OccurredAt:    operation.GetRequestedAt(),
 		Targets:       cloneOperationTargets(operation.GetTargets()),
-		Metadata:      cloneTags(operation.GetMetadata()),
+		Metadata:      sanitizeOperationAuditMetadata(operation.GetMetadata()),
 	}
 }
 

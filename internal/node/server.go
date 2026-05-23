@@ -2,10 +2,13 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/authz"
@@ -14,6 +17,8 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Applications struct {
@@ -33,6 +38,11 @@ type Server struct {
 	adminGRPC      *grpc.Server
 	authorization  *authz.Manager
 	policyPath     string
+	auditEvents    auditEventAppender
+}
+
+type auditEventAppender interface {
+	AppendAuditEvent(event *adminv1.AuditEvent) error
 }
 
 func Listen(cfg config.Config, apps Applications) (*Server, error) {
@@ -59,14 +69,15 @@ func Listen(cfg config.Config, apps Applications) (*Server, error) {
 }
 
 func newServer(publicListener net.Listener, adminListener net.Listener, apps Applications, authorization *authz.Manager, policyPath string) *Server {
+	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
 	publicGRPC := grpc.NewServer(
-		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities())),
-		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, publicMethodCapabilities())),
+		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
+		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
 	)
-	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions))
+	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions, api.WithPublicAuditStore(apps.Operations)))
 	adminGRPC := grpc.NewServer(
-		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities())),
-		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities())),
+		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities(), auditSink)),
+		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities(), auditSink)),
 	)
 	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(
 		api.WithInspectApplication(apps.Inspect),
@@ -82,7 +93,15 @@ func newServer(publicListener net.Listener, adminListener net.Listener, apps App
 		adminGRPC:      adminGRPC,
 		authorization:  authorization,
 		policyPath:     policyPath,
+		auditEvents:    auditEventAppenderFromStore(apps.Operations),
 	}
+}
+
+func auditEventAppenderFromStore(store *operations.Store) auditEventAppender {
+	if store == nil {
+		return nil
+	}
+	return store
 }
 
 func (s *Server) PublicAddress() string {
@@ -131,12 +150,137 @@ func (s *Server) ReloadAuthorizationPolicy() error {
 	if s.authorization == nil {
 		return fmt.Errorf("authorization policy is not configured")
 	}
-	return s.authorization.ReloadFile(s.policyPath)
+	err := s.authorization.ReloadFile(s.policyPath)
+	auditErr := s.auditAuthorizationPolicyReload(err)
+	return errors.Join(err, auditErr)
 }
 
 func (s *Server) Close() error {
 	s.Stop()
 	return errors.Join(s.publicListener.Close(), s.adminListener.Close())
+}
+
+type authorizationAuditSink struct {
+	store *operations.Store
+	now   func() time.Time
+}
+
+func (s authorizationAuditSink) RecordDeniedRequest(ctx context.Context, method string, decision authz.Decision) error {
+	if s.store == nil {
+		return nil
+	}
+	now := s.now()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	requestID, correlationID, traceID := requestMetadata(ctx)
+	actor := decision.WorkloadIdentity
+	if actor == "" {
+		actor = "unknown-workload"
+	}
+	operationID := correlationID
+	if operationID == "" {
+		operationID = requestID
+	}
+	if operationID == "" {
+		operationID = "authorization-denied"
+	}
+	metadata := auditMetadata(ctx)
+	metadata["decision"] = "denied"
+	metadata["rpc_method"] = method
+	metadata["capability"] = string(decision.Capability)
+	metadata["reason"] = decision.Reason
+	metadata["reason_description"] = decision.ReasonDescription
+	metadata["workload_identity"] = decision.WorkloadIdentity
+	metadata["policy_version"] = decision.PolicyVersion
+	metadata["policy_generation"] = fmt.Sprintf("%d", decision.PolicyGeneration)
+	if traceID != "" {
+		metadata["trace_id"] = traceID
+	}
+	return s.store.AppendAuditEvent(&adminv1.AuditEvent{
+		EventId:       auditEventID("authorization_denied", method, actor, decision.Reason, requestID, correlationID, fmt.Sprintf("%d", now.UnixNano())),
+		EventType:     "authorization_denied",
+		OperationId:   operationID,
+		OperationType: method,
+		ActorIdentity: actor,
+		OccurredAt:    timestamppb.New(now),
+		Metadata:      metadata,
+	})
+}
+
+func (s *Server) auditAuthorizationPolicyReload(reloadErr error) error {
+	if s.auditEvents == nil {
+		return nil
+	}
+	eventType := "authorization_policy_reloaded"
+	result := "succeeded"
+	reason := ""
+	if reloadErr != nil {
+		eventType = "authorization_policy_reload_rejected"
+		result = "denied"
+		reason = reloadErr.Error()
+	}
+	now := time.Now().UTC()
+	metadata := map[string]string{
+		"decision":          result,
+		"policy_path":       s.policyPath,
+		"policy_version":    s.authorization.PolicyVersion(),
+		"policy_generation": fmt.Sprintf("%d", s.authorization.Generation()),
+	}
+	if reason != "" {
+		metadata["reason"] = reason
+	}
+	return s.auditEvents.AppendAuditEvent(&adminv1.AuditEvent{
+		EventId:       auditEventID(eventType, s.policyPath, fmt.Sprintf("%d", now.UnixNano())),
+		EventType:     eventType,
+		OperationId:   "authorization-policy",
+		OperationType: "authorization-policy-reload",
+		ActorIdentity: "scrapd",
+		OccurredAt:    timestamppb.New(now),
+		Metadata:      metadata,
+	})
+}
+
+func auditMetadata(ctx context.Context) map[string]string {
+	requestID, correlationID, _ := requestMetadata(ctx)
+	metadata := make(map[string]string)
+	if requestID != "" {
+		metadata["request_id"] = requestID
+	}
+	if correlationID != "" {
+		metadata["correlation_id"] = correlationID
+	}
+	return metadata
+}
+
+func requestMetadata(ctx context.Context) (string, string, string) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", "", ""
+	}
+	requestID := firstMetadataValue(md, "x-request-id")
+	correlationID := firstMetadataValue(md, "x-correlation-id")
+	if correlationID == "" {
+		correlationID = requestID
+	}
+	return requestID, correlationID, firstMetadataValue(md, "traceparent")
+}
+
+func firstMetadataValue(md metadata.MD, key string) string {
+	values := md.Get(key)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func auditEventID(parts ...string) string {
+	hasher := sha256.New()
+	for _, part := range parts {
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(part))
+	}
+	return "audit:" + hex.EncodeToString(hasher.Sum(nil)[:16])
 }
 
 func publicMethodCapabilities() map[string]authz.Capability {

@@ -54,6 +54,10 @@ type Decision struct {
 	ReasonDescription string
 }
 
+type DeniedAuditSink interface {
+	RecordDeniedRequest(ctx context.Context, method string, decision Decision) error
+}
+
 type ReloadAlert struct {
 	Code             string
 	Message          string
@@ -208,20 +212,26 @@ func (m *Manager) ReloadAlerts() []ReloadAlert {
 	return append([]ReloadAlert(nil), m.alerts...)
 }
 
-func UnaryServerInterceptor(manager *Manager, capabilities map[string]Capability) grpc.UnaryServerInterceptor {
+func UnaryServerInterceptor(manager *Manager, capabilities map[string]Capability, auditSinks ...DeniedAuditSink) grpc.UnaryServerInterceptor {
 	capabilities = cloneCapabilityMap(capabilities)
+	auditSink := firstDeniedAuditSink(auditSinks)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if err := requireCapability(ctx, manager, capabilities, info.FullMethod); err != nil {
+		decision, err := requireCapability(ctx, manager, capabilities, info.FullMethod)
+		if err != nil {
+			recordDeniedRequest(ctx, auditSink, info.FullMethod, decision)
 			return nil, err
 		}
 		return handler(ctx, req)
 	}
 }
 
-func StreamServerInterceptor(manager *Manager, capabilities map[string]Capability) grpc.StreamServerInterceptor {
+func StreamServerInterceptor(manager *Manager, capabilities map[string]Capability, auditSinks ...DeniedAuditSink) grpc.StreamServerInterceptor {
 	capabilities = cloneCapabilityMap(capabilities)
+	auditSink := firstDeniedAuditSink(auditSinks)
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if err := requireCapability(stream.Context(), manager, capabilities, info.FullMethod); err != nil {
+		decision, err := requireCapability(stream.Context(), manager, capabilities, info.FullMethod)
+		if err != nil {
+			recordDeniedRequest(stream.Context(), auditSink, info.FullMethod, decision)
 			return err
 		}
 		return handler(srv, stream)
@@ -248,20 +258,38 @@ func WorkloadIdentityFromContext(ctx context.Context) (string, bool) {
 	return value, true
 }
 
-func requireCapability(ctx context.Context, manager *Manager, capabilities map[string]Capability, method string) error {
+func requireCapability(ctx context.Context, manager *Manager, capabilities map[string]Capability, method string) (Decision, error) {
 	capability, ok := capabilities[method]
 	if !ok {
-		return status.Error(codes.PermissionDenied, ReasonCapabilityUnmapped+": RPC method is not mapped to an authorization capability")
+		decision := Decision{
+			Reason:            ReasonCapabilityUnmapped,
+			ReasonDescription: "RPC method is not mapped to an authorization capability",
+		}
+		return decision, status.Error(codes.PermissionDenied, ReasonCapabilityUnmapped+": RPC method is not mapped to an authorization capability")
 	}
 	decision := manager.Authorize(ctx, capability)
 	if decision.Allowed {
-		return nil
+		return decision, nil
 	}
 	code := codes.PermissionDenied
 	if decision.Reason == ReasonMissingWorkloadIdentity || decision.Reason == ReasonPolicyRequired {
 		code = codes.Unauthenticated
 	}
-	return status.Error(code, fmt.Sprintf("%s: %s requires %s", decision.Reason, method, capability))
+	return decision, status.Error(code, fmt.Sprintf("%s: %s requires %s", decision.Reason, method, capability))
+}
+
+func firstDeniedAuditSink(auditSinks []DeniedAuditSink) DeniedAuditSink {
+	if len(auditSinks) == 0 {
+		return nil
+	}
+	return auditSinks[0]
+}
+
+func recordDeniedRequest(ctx context.Context, auditSink DeniedAuditSink, method string, decision Decision) {
+	if auditSink == nil {
+		return
+	}
+	_ = auditSink.RecordDeniedRequest(ctx, method, decision)
 }
 
 func (m *Manager) recordReloadAlert(err error) {

@@ -857,6 +857,91 @@ func TestAdminServerPlanAndStartCapacityOverrideUseDurableOperationStore(t *test
 	}
 }
 
+func TestAdminServerCriticalWorkflowStartsWriteSanitizedAuditEvents(t *testing.T) {
+	store := openTestOperationStore(t)
+	_, _, lifecycleClient, _, lifecycleCleanup := newAdminWorkflowClients(t, store)
+	defer lifecycleCleanup()
+	keyClient, keyCleanup := newAdminKeyClient(t, store)
+	defer keyCleanup()
+	capacityClient, capacityCleanup := newAdminCapacityClient(t, store)
+	defer capacityCleanup()
+
+	tombstonePlan, err := lifecycleClient.PlanTombstone(context.Background(), &adminv1.PlanTombstoneRequest{
+		Targets: []*adminv1.Target{documentAdminTarget()},
+		Metadata: map[string]string{
+			"ticket":           "INC-1",
+			"plaintext_secret": "do-not-audit",
+		},
+	})
+	if err != nil {
+		t.Fatalf("plan tombstone: %v", err)
+	}
+	if _, err := lifecycleClient.StartTombstone(context.Background(), &adminv1.StartTombstoneRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ad1",
+		OperationPlanId: tombstonePlan.GetPlan().GetOperationPlanId(),
+		PlanHash:        tombstonePlan.GetPlan().GetPlanHash(),
+	}); err != nil {
+		t.Fatalf("start tombstone: %v", err)
+	}
+
+	keyPlan, err := keyClient.PlanKeyRotation(context.Background(), &adminv1.PlanKeyRotationRequest{
+		Targets:          []*adminv1.Target{blockAdminTarget()},
+		DestinationKeyId: "transit/backend-v2",
+	})
+	if err != nil {
+		t.Fatalf("plan key rotation: %v", err)
+	}
+	if _, err := keyClient.StartKeyRotation(context.Background(), &adminv1.StartKeyRotationRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ad2",
+		OperationPlanId: keyPlan.GetPlan().GetOperationPlanId(),
+		PlanHash:        keyPlan.GetPlan().GetPlanHash(),
+	}); err != nil {
+		t.Fatalf("start key rotation: %v", err)
+	}
+
+	capacityPlan, err := capacityClient.PlanCapacityOverride(context.Background(), &adminv1.PlanCapacityOverrideRequest{
+		CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: "production-a"},
+		ExpiresAt:       timestamppb.New(time.Unix(1200, 0).UTC()),
+		Reason:          "incident INC-42",
+		DryRun:          true,
+	})
+	if err != nil {
+		t.Fatalf("plan capacity override: %v", err)
+	}
+	if _, err := capacityClient.StartCapacityOverride(context.Background(), &adminv1.StartCapacityOverrideRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ad3",
+		OperationPlanId: capacityPlan.GetPlan().GetOperationPlanId(),
+		PlanHash:        capacityPlan.GetPlan().GetPlanHash(),
+	}); err != nil {
+		t.Fatalf("start capacity override: %v", err)
+	}
+
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("audit events = %#v, want tombstone, key rotation, and capacity override starts", events)
+	}
+	byType := make(map[string]*adminv1.AuditEvent, len(events))
+	for _, event := range events {
+		if event.GetEventType() != adminAuditEventOperationStarted {
+			t.Fatalf("audit event = %#v, want operation_started", event)
+		}
+		byType[event.GetOperationType()] = event
+	}
+	if byType["tombstone"].GetMetadata()["ticket"] != "INC-1" ||
+		byType["tombstone"].GetMetadata()["plaintext_secret"] != "" {
+		t.Fatalf("tombstone audit event = %#v, want sanitized metadata", byType["tombstone"])
+	}
+	if byType["rewrap"].GetMetadata()[adminDestinationKeyIDMetadata] != "transit/backend-v2" {
+		t.Fatalf("rewrap audit event = %#v, want destination key evidence", byType["rewrap"])
+	}
+	if byType["capacity-override"].GetMetadata()[adminCapacityOverrideReasonMetadata] != "incident INC-42" {
+		t.Fatalf("capacity audit event = %#v, want capacity override evidence", byType["capacity-override"])
+	}
+}
+
 func TestAdminServerStartedOperationStatusSurvivesStoreReopen(t *testing.T) {
 	dir := t.TempDir()
 	store, err := operations.Open(dir)

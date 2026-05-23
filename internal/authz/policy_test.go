@@ -6,6 +6,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -44,6 +48,37 @@ func TestManagerRejectsMissingWorkloadIdentity(t *testing.T) {
 	decision := manager.Authorize(context.Background(), capHead)
 	if decision.Allowed || decision.Reason != ReasonMissingWorkloadIdentity {
 		t.Fatalf("decision = %#v, want missing workload identity denial", decision)
+	}
+}
+
+func TestUnaryInterceptorKeepsAuthorizationErrorWhenDeniedAuditFails(t *testing.T) {
+	manager := newTestManager(t, Policy{
+		Version: "policy-v1",
+		Workloads: map[string]WorkloadPolicy{
+			"billing-etl": {Capabilities: []Capability{capHead}},
+		},
+	})
+	auditSink := failingDeniedAuditSink{err: errors.New("audit store unavailable")}
+	interceptor := UnaryServerInterceptor(
+		manager,
+		map[string]Capability{"/scrap.DocumentService/WriteDocument": capWrite},
+		auditSink,
+	)
+
+	_, err := interceptor(
+		ContextWithWorkloadIdentity(context.Background(), "billing-etl"),
+		nil,
+		&grpc.UnaryServerInfo{FullMethod: "/scrap.DocumentService/WriteDocument"},
+		func(context.Context, any) (any, error) {
+			t.Fatal("handler ran for denied request")
+			return nil, errors.New("unreachable")
+		},
+	)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %s for error %v, want PermissionDenied", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), ReasonCapabilityDenied) {
+		t.Fatalf("error = %v, want original authorization reason", err)
 	}
 }
 
@@ -181,6 +216,14 @@ func newTestManager(t *testing.T, policy Policy) *Manager {
 		t.Fatalf("new manager: %v", err)
 	}
 	return manager
+}
+
+type failingDeniedAuditSink struct {
+	err error
+}
+
+func (s failingDeniedAuditSink) RecordDeniedRequest(context.Context, string, Decision) error {
+	return s.err
 }
 
 func writePolicy(t *testing.T, body string) string {
