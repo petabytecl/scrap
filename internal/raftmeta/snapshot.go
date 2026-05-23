@@ -28,6 +28,10 @@ type Member struct {
 	Role     metastorev1.MembershipRole
 }
 
+func (m Member) IsVoter() bool {
+	return m.Role == metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER
+}
+
 type SnapshotInfo struct {
 	LastIndex    uint64
 	Path         string
@@ -186,4 +190,16 @@ func normalizeMembers(members []Member) []Member {
 		return out[i].RaftID < out[j].RaftID
 	})
 	return out
+}
+
+func defaultLocalMemberID(members []Member) string {
+	for _, member := range members {
+		if member.IsVoter() {
+			return member.MemberID
+		}
+	}
+	if len(members) > 0 {
+		return members[0].MemberID
+	}
+	return "local"
 }

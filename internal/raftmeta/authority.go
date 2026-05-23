@@ -22,11 +22,15 @@ type Authority struct {
 	log           *Log
 	store         *metastore.Store
 	members       []Member
+	localMemberID string
+	freshness     FreshnessChecker
 	snapshotIndex uint64
 }
 
 type AuthorityOptions struct {
-	Members []Member
+	Members          []Member
+	LocalMemberID    string
+	FreshnessChecker FreshnessChecker
 }
 
 func OpenAuthority(dir string, shardID string, store *metastore.Store) (*Authority, error) {
@@ -45,11 +49,12 @@ func OpenAuthorityWithOptions(dir string, shardID string, store *metastore.Store
 		return nil, err
 	}
 	authority := &Authority{
-		dir:     dir,
-		shardID: shardID,
-		log:     log,
-		store:   store,
-		members: normalizeMembers(options.Members),
+		dir:       dir,
+		shardID:   shardID,
+		log:       log,
+		store:     store,
+		members:   normalizeMembers(options.Members),
+		freshness: options.FreshnessChecker,
 	}
 	if err := authority.installLatestSnapshot(); err != nil {
 		_ = log.Close()
@@ -58,6 +63,13 @@ func OpenAuthorityWithOptions(dir string, shardID string, store *metastore.Store
 	if err := authority.replay(); err != nil {
 		_ = log.Close()
 		return nil, err
+	}
+	authority.localMemberID = options.LocalMemberID
+	if authority.localMemberID == "" {
+		authority.localMemberID = defaultLocalMemberID(authority.members)
+	}
+	if authority.freshness == nil {
+		authority.freshness = singleVoterFreshnessChecker{}
 	}
 	return authority, nil
 }
@@ -74,6 +86,18 @@ func (a *Authority) AppliedIndex() uint64 {
 		return 0
 	}
 	return a.log.LastIndex()
+}
+
+func (a *Authority) EnsureWriteReady(ctx context.Context) error {
+	return a.requireWriteQuorum(ctx)
+}
+
+func (a *Authority) ReadFresh(ctx context.Context) error {
+	return a.requireReadIndex(ctx)
+}
+
+func (a *Authority) LeaseReadFresh(context.Context) error {
+	return ErrLeaseReadDisabled
 }
 
 func (a *Authority) CreateSnapshot(ctx context.Context) (SnapshotInfo, error) {
@@ -123,6 +147,9 @@ func (a *Authority) CommitDocument(ctx context.Context, document metastore.Docum
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
+		return err
+	}
 	command := &metastorev1.ShardCommand{
 		SchemaVersion: metastore.CurrentSchemaVersion,
 		ShardId:       a.shardID,
@@ -139,11 +166,14 @@ func (a *Authority) CommitDocument(ctx context.Context, document metastore.Docum
 	if err := a.ensureNoConflictingDocument(document); err != nil {
 		return err
 	}
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) CompleteTransaction(ctx context.Context, transaction identity.Transaction, completedAt time.Time, tags map[string]string, commandID string) (metastore.Transaction, error) {
 	if err := ctx.Err(); err != nil {
+		return metastore.Transaction{}, err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return metastore.Transaction{}, err
 	}
 	command := &metastorev1.ShardCommand{
@@ -165,7 +195,7 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 	if _, err := a.store.GetTransaction(transaction); err != nil {
 		return metastore.Transaction{}, err
 	}
-	if err := a.appendAndApply(command); err != nil {
+	if err := a.appendAndApplyLocked(command); err != nil {
 		return metastore.Transaction{}, err
 	}
 	return a.store.GetTransaction(transaction)
@@ -173,6 +203,9 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 
 func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.UploadIntent, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return err
 	}
 	command := &metastorev1.ShardCommand{
@@ -191,11 +224,14 @@ func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.Upl
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError string, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return err
 	}
 	command := &metastorev1.ShardCommand{
@@ -215,11 +251,14 @@ func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string,
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity.Document, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return err
 	}
 	documentName := doc.DocumentName
@@ -240,11 +279,14 @@ func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transaction identity.Transaction, state metastore.RestoreState, reason string, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return err
 	}
 	command := &metastorev1.ShardCommand{
@@ -263,11 +305,14 @@ func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transacti
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) RecordRepairState(ctx context.Context, state metastore.RepairState, commandID string, proposedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return err
 	}
 	command := &metastorev1.ShardCommand{
@@ -288,11 +333,14 @@ func (a *Authority) RecordRepairState(ctx context.Context, state metastore.Repai
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID string, commandID string) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireWriteQuorum(ctx); err != nil {
 		return err
 	}
 	command := &metastorev1.ShardCommand{
@@ -312,7 +360,7 @@ func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.appendAndApply(command)
+	return a.appendAndApplyLocked(command)
 }
 
 func (a *Authority) replay() error {
@@ -481,7 +529,7 @@ func (a *Authority) ensureNoConflictingDocument(document metastore.Document) err
 	return fmt.Errorf("%w: document already exists with different metadata", metastore.ErrConflict)
 }
 
-func (a *Authority) appendAndApply(command *metastorev1.ShardCommand) error {
+func (a *Authority) appendAndApplyLocked(command *metastorev1.ShardCommand) error {
 	entry, err := a.log.Append(command)
 	if err != nil {
 		return err
@@ -490,6 +538,37 @@ func (a *Authority) appendAndApply(command *metastorev1.ShardCommand) error {
 		return err
 	}
 	return nil
+}
+
+func (a *Authority) requireWriteQuorum(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	checker, check := a.freshnessSnapshot()
+	return checker.RequireWriteQuorum(ctx, check)
+}
+
+func (a *Authority) requireReadIndex(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	checker, check := a.freshnessSnapshot()
+	return checker.RequireReadIndex(ctx, check)
+}
+
+func (a *Authority) freshnessSnapshot() (FreshnessChecker, FreshnessCheck) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.freshness, a.freshnessCheckLocked()
+}
+
+func (a *Authority) freshnessCheckLocked() FreshnessCheck {
+	return FreshnessCheck{
+		ShardID:       a.shardID,
+		LocalMemberID: a.localMemberID,
+		AppliedIndex:  a.log.LastIndex(),
+		Members:       append([]Member(nil), a.members...),
+	}
 }
 
 func cloneTags(tags map[string]string) map[string]string {
