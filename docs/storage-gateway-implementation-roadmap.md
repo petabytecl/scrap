@@ -44,6 +44,9 @@ Production-readiness test policy for issue `#19` is captured in
 Observability and audit signal policy for issue `#20` is captured in
 [Storage Gateway Observability And Audit Signal Standards](storage-gateway-observability-audit-standards.md).
 
+Production dashboard and alert contracts for issue `#46` are captured in
+[Storage Gateway Dashboard And Alert Contract](storage-gateway-dashboard-alert-contract.md).
+
 Release image, artifact, security-gate, dependency-update, Go-upgrade, and
 rollout policy for issue `#21` are captured in
 [Storage Gateway Release Image And Rollout Policy](storage-gateway-release-image-rollout-policy.md).
