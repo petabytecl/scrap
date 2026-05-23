@@ -111,7 +111,7 @@ and environment-specific legal approvals remain explicit downstream inputs.
 | Does active secondary backend replication remain post-v1? | Yes. Primary-backend rebuild is the v1 DR scope. | Yes; active secondary backend replication is post-v1. | `@cotocisternas` | Planning session for #48 on 2026-05-23. | Approved |
 | Is the first target release allowed without cross-region or cross-cloud failover? | Yes, if product and operations accept measured DR evidence only. | Yes for repo-owned release artifacts. | `@cotocisternas` | Planning session for #48 on 2026-05-23. | Approved |
 | Are legal-hold and audit-retention requirements satisfied by planned policies? | Unknown until downstream retention inputs are filled. | Legal hold required; exact retention deferred. | `@cotocisternas` | Planning session for #48 on 2026-05-23. | Approved with downstream deferral |
-| Can production write ACK mode remain disabled until every target-profile gate is satisfied? | Yes. This is required by ADR 0012. | Yes | `@cotocisternas` | Planning session for #48 on 2026-05-23. | Approved |
+| Can production write ACK mode remain disabled until every target-profile gate, release-owner signoff, and downstream deployment approval artifact is satisfied? | Yes. This is required by ADR 0012. | Yes | `@cotocisternas` | Planning session for #48 on 2026-05-23 and #89 gate implementation. | Approved with downstream deferral |
 
 ## Signoff Matrix
 

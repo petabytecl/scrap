@@ -47,8 +47,11 @@ The executable production write ACK gate is `SCRAP_PRODUCTION_WRITE_ACK_READINES
 It must fail closed until the metadata compatibility boundary
 `SCRAP_METADATA_COMPATIBILITY_BOUNDARY_V1` and later Raft, peer durability,
 backend restore, OpenBao envelope, capacity admission, operator-readiness, and
-implementation gates all have explicit release evidence. Passing the metadata
-compatibility boundary alone is not enough to enable production write ACK mode.
+implementation gates all have explicit release evidence for the target release
+profile. The gate must also require release-owner signoff and a separate
+downstream deployment approval artifact before enabling production write ACK
+mode. Passing the metadata compatibility boundary or local release rehearsal
+alone is not enough to enable production write ACK mode.
 
 ## Consequences
 

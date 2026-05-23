@@ -29,15 +29,16 @@ const (
 )
 
 type GateDefinition struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	ReadinessGate  string   `json:"readiness_gate,omitempty"`
-	Tiers          []Tier   `json:"tiers"`
-	Commands       []string `json:"commands,omitempty"`
-	ManualArtifact string   `json:"manual_artifact,omitempty"`
-	ArtifactOwner  string   `json:"artifact_owner,omitempty"`
-	BlockingIssues []int    `json:"blocking_issues,omitempty"`
-	Description    string   `json:"description"`
+	ID                           string   `json:"id"`
+	Name                         string   `json:"name"`
+	ReadinessGate                string   `json:"readiness_gate,omitempty"`
+	Tiers                        []Tier   `json:"tiers"`
+	Commands                     []string `json:"commands,omitempty"`
+	ManualArtifact               string   `json:"manual_artifact,omitempty"`
+	ArtifactOwner                string   `json:"artifact_owner,omitempty"`
+	BlockingIssues               []int    `json:"blocking_issues,omitempty"`
+	DownstreamDeploymentDeferral string   `json:"downstream_deployment_deferral,omitempty"`
+	Description                  string   `json:"description"`
 }
 
 type Evidence struct {
@@ -53,14 +54,15 @@ type Manifest struct {
 }
 
 type MissingGate struct {
-	GateID         string   `json:"gate"`
-	Name           string   `json:"name"`
-	ReadinessGate  string   `json:"readiness_gate,omitempty"`
-	RequiredTier   Tier     `json:"required_tier"`
-	Commands       []string `json:"commands,omitempty"`
-	ManualArtifact string   `json:"manual_artifact,omitempty"`
-	ArtifactOwner  string   `json:"artifact_owner,omitempty"`
-	BlockingIssues []int    `json:"blocking_issues,omitempty"`
+	GateID                       string   `json:"gate"`
+	Name                         string   `json:"name"`
+	ReadinessGate                string   `json:"readiness_gate,omitempty"`
+	RequiredTier                 Tier     `json:"required_tier"`
+	Commands                     []string `json:"commands,omitempty"`
+	ManualArtifact               string   `json:"manual_artifact,omitempty"`
+	ArtifactOwner                string   `json:"artifact_owner,omitempty"`
+	BlockingIssues               []int    `json:"blocking_issues,omitempty"`
+	DownstreamDeploymentDeferral string   `json:"downstream_deployment_deferral,omitempty"`
 }
 
 type Report struct {
@@ -231,13 +233,32 @@ func Definitions() []GateDefinition {
 			Description:    "Builder, source, command, tool versions, dependency graph, and generated-code status.",
 		},
 		{
-			ID:             "production-write-ack-implementation",
-			Name:           "Final production write ACK implementation gate",
-			ReadinessGate:  config.ReadinessGateProductionImplementation,
+			ID:            "production-write-ack-implementation",
+			Name:          "Final production write ACK implementation gate",
+			ReadinessGate: config.ReadinessGateProductionImplementation,
+			Tiers:         []Tier{TierRelease},
+			Commands:      []string{"scrap-release-gate --tier release --manifest <release-evidence.json>"},
+			Description:   "Final fail-closed production ACK enablement after all target-profile evidence is accepted.",
+		},
+		{
+			ID:             "release-owner-signoff",
+			Name:           "Release owner target-profile signoff",
+			ReadinessGate:  config.ReadinessGateReleaseOwnerSignoff,
 			Tiers:          []Tier{TierRelease},
-			Commands:       []string{"scrap-release-gate --tier release --manifest <release-evidence.json>"},
-			BlockingIssues: []int{89},
-			Description:    "Final fail-closed production ACK enablement after all target-profile evidence is accepted.",
+			ManualArtifact: "release-owner-signoff",
+			ArtifactOwner:  "release owner",
+			BlockingIssues: []int{48, 86, 88},
+			Description:    "Release owner approval that the target-profile evidence bundle is accepted.",
+		},
+		{
+			ID:                           "downstream-deployment-approval",
+			Name:                         "Downstream live deployment approval",
+			ReadinessGate:                config.ReadinessGateDownstreamDeployment,
+			Tiers:                        []Tier{TierRelease},
+			ManualArtifact:               "downstream-deployment-approval",
+			ArtifactOwner:                "downstream deployment owner",
+			DownstreamDeploymentDeferral: "repo-owned release evidence does not approve live production capacity, retention, provider account, OpenBao HA, or GitOps application",
+			Description:                  "Deployment-specific approval for live production provider capacity, retention, OpenBao HA, and GitOps application state.",
 		},
 	}
 	return append([]GateDefinition(nil), defs...)
@@ -277,14 +298,15 @@ func Evaluate(tier Tier, manifest Manifest) Report {
 			continue
 		}
 		missing = append(missing, MissingGate{
-			GateID:         def.ID,
-			Name:           def.Name,
-			ReadinessGate:  def.ReadinessGate,
-			RequiredTier:   tier,
-			Commands:       append([]string(nil), def.Commands...),
-			ManualArtifact: def.ManualArtifact,
-			ArtifactOwner:  def.ArtifactOwner,
-			BlockingIssues: append([]int(nil), def.BlockingIssues...),
+			GateID:                       def.ID,
+			Name:                         def.Name,
+			ReadinessGate:                def.ReadinessGate,
+			RequiredTier:                 tier,
+			Commands:                     append([]string(nil), def.Commands...),
+			ManualArtifact:               def.ManualArtifact,
+			ArtifactOwner:                def.ArtifactOwner,
+			BlockingIssues:               append([]int(nil), def.BlockingIssues...),
+			DownstreamDeploymentDeferral: def.DownstreamDeploymentDeferral,
 		})
 	}
 	return Report{Tier: tier, Ready: len(missing) == 0, Missing: missing}

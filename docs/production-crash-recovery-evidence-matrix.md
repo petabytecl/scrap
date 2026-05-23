@@ -18,10 +18,13 @@ replay, scrub, repair, and disaster-recovery drill paths.
 Current status: blocked.
 
 `SCRAP_PRODUCTION_WRITE_ACK_READINESS` remains fail-closed in
-`internal/config`. Even if the individual evidence booleans are supplied, the
-gate still rejects production write ACK mode until
-`SCRAP_PRODUCTION_WRITE_ACK_IMPLEMENTATION` is satisfied. The final enablement
-work is tracked by #89.
+`internal/config`. Individual evidence booleans are not enough: the gate also
+requires the target release profile, linked release artifacts for every
+readiness gate, `SCRAP_PRODUCTION_WRITE_ACK_IMPLEMENTATION`,
+`SCRAP_RELEASE_OWNER_SIGNOFF`, and `SCRAP_DOWNSTREAM_DEPLOYMENT_APPROVAL`.
+Local release rehearsal evidence remains repo-owned evidence only; it does not
+stand in for live production capacity, retention, provider-account, OpenBao HA,
+or GitOps application approval.
 
 | Gate | Release-blocking claim | Current evidence | Remaining blockers | Status |
 | --- | --- | --- | --- | --- |
@@ -32,7 +35,9 @@ work is tracked by #89.
 | `SCRAP_OPENBAO_ENVELOPE_WORKFLOW` | Encrypted backend data can be restored only with expected envelope and OpenBao key material; outages fail as crypto-unavailable without secret leakage. | Fake Transit and envelope workflow tests plus `docs/openbao-transit-smoke-coverage.md`. | #86 | Blocked until real OpenBao smoke evidence is approved. |
 | `SCRAP_CAPACITY_ADMISSION` | Write admission, disk runway, backend budgets, restore/repair lanes, and OpenBao capacity fail closed for unsafe production profiles. | `internal/backend` capacity profile tests, config gate tests, `make capacity-sample`, and `make local-soak-evidence`. | #48, #87 | Blocked until target-profile inputs and local soak/capacity evidence are accepted. |
 | `SCRAP_OPERATOR_READINESS` | Operators can see, audit, stop, retry, and recover dangerous actions using admin API and `scrapctl` workflows. | Admin operation, audit, authorization, durable operation tests, `docs/storage-gateway-dashboard-alert-contract.md`, `docs/storage-gateway-operator-runbooks.md`, and `make local-dr-drill-evidence`. | #88 | Blocked until DR drill evidence is accepted. |
-| `SCRAP_PRODUCTION_WRITE_ACK_IMPLEMENTATION` | Production write ACK mode can be enabled only after all evidence and signoffs are accepted for the target profile. | Config currently fails closed by design. | #89 | Blocked until final enablement work lands. |
+| `SCRAP_PRODUCTION_WRITE_ACK_IMPLEMENTATION` | Production write ACK mode can be enabled only after all evidence and signoffs are accepted for the target profile. | Structured config gate, release-gate reporting, and config tests require linked implementation evidence. | Target-profile release artifact | Blocked until the implementation artifact is included in the release evidence bundle. |
+| `SCRAP_RELEASE_OWNER_SIGNOFF` | The release owner approves the target-profile evidence bundle or records an exception with owner and expiry. | `docs/production-capacity-compliance-signoff.md` and GitHub issue evidence comments. | #48, #86, #88 | Blocked until owner signoff is accepted for the current evidence bundle. |
+| `SCRAP_DOWNSTREAM_DEPLOYMENT_APPROVAL` | Live production deployment-specific capacity, retention, provider account, OpenBao HA, and GitOps application approval is supplied by the downstream deployment owner. | Not repo-owned; the gate reports this as a separate missing artifact when absent. | Downstream deployment owner | Blocked until downstream deployment evidence is supplied or an explicit exception is recorded. |
 
 ## Evidence Artifact Rules
 
