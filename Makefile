@@ -5,7 +5,7 @@
 .PHONY: fmt fmt-check lint vuln
 .PHONY: test test-compat test-race build check
 .PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
-.PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence
+.PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
 
 GO ?= go
@@ -22,7 +22,7 @@ GOLANGCI_LINT ?= $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lin
 GOVULNCHECK_VERSION ?= v1.3.0
 PROTO_BREAKING_REF ?= main
 PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
-SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence ./cmd/scrap-openbao-smoke
+SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence ./cmd/scrap-openbao-smoke ./cmd/scrap-local-soak-evidence
 RELEASE_SHA ?= $(shell git rev-parse HEAD)
 RELEASE_VERSION ?= dev
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -38,6 +38,8 @@ LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
 PROFILE_ID ?= scrap-prod-v1
 SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
 SCRAP_WORKLOAD_IDENTITY ?= local-operator
+SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
+SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
 CAPACITY_SAMPLE_BACKEND_URL ?= http://127.0.0.1:4566/scrap-local
 CAPACITY_SAMPLE_BACKEND_REGION ?= us-east-1
 CAPACITY_SAMPLE_OPENBAO_ADDR ?= http://127.0.0.1:8200
@@ -45,6 +47,9 @@ CAPACITY_SAMPLE_OPENBAO_KEY_PATH ?= transit/keys/scrap-backend
 CAPACITY_SAMPLE_REPORT ?= capacity-sample-advisory.json
 OPENBAO_SMOKE_REPORT ?= openbao-transit-smoke-evidence.json
 OPENBAO_SMOKE_OUTAGE_ADDR ?= http://127.0.0.1:1
+LOCAL_SOAK_REPORT ?= local-soak-evidence.json
+LOCAL_SOAK_RUNNER ?= local-kind
+LOCAL_SOAK_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 
 help: ## Show this help.
 	@awk 'BEGIN { FS = ":.*##"; printf "\n\033[1mUsage:\033[0m\n  make \033[36m<target>\033[0m\n" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  \033[36m%-34s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
@@ -173,6 +178,21 @@ openbao-smoke-evidence: ## Emit local OpenBao Transit smoke evidence.
 		--openbao-addr "$(CAPACITY_SAMPLE_OPENBAO_ADDR)" \
 		--outage-addr "$(OPENBAO_SMOKE_OUTAGE_ADDR)" \
 		--transit-key-path "$(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)"
+
+local-soak-evidence: ## Emit local release soak and capacity rehearsal evidence.
+	$(GO) run ./cmd/scrap-local-soak-evidence \
+		--out "$(LOCAL_SOAK_REPORT)" \
+		--release-sha "$(RELEASE_SHA)" \
+		--dirty-tree "$(DIRTY_TREE)" \
+		--profile-id "$(PROFILE_ID)" \
+		--environment-id "local-kind" \
+		--runner-id "$(LOCAL_SOAK_RUNNER)" \
+		--image-identity "$(LOCAL_SOAK_IMAGE_IDENTITY)" \
+		--public-addr "$(SCRAP_PUBLIC_ADDR)" \
+		--admin-addr "$(SCRAP_ADMIN_ADDR)" \
+		--public-workload-identity "$(SCRAP_PUBLIC_WORKLOAD_IDENTITY)" \
+		--admin-workload-identity "$(SCRAP_WORKLOAD_IDENTITY)" \
+		--capacity-sample-report "$(CAPACITY_SAMPLE_REPORT)"
 
 ##@ Spikes
 
