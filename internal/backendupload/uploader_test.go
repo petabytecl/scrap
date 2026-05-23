@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,74 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 		first.Index == nil ||
 		*second.Index != *first.Index {
 		t.Fatalf("second upload = %#v, want first %#v", second, first)
+	}
+}
+
+func TestUploadBlockVerifiesCompleteObjectSetBeforeSuccess(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	store := openTestBackendStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("verify object set")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
+	intent := testUploadIntent(record.BlockID)
+	backendStore := &flakyHeadBackendStore{
+		Store: store,
+		failures: map[string]int{
+			intent.IndexObjectKey: 1,
+		},
+	}
+
+	_, err = Uploader{
+		Backend: backendStore,
+		Source:  LocalBlockSource{Blocks: blocks},
+		Index:   staticBlockIndexSource{body: []byte("index bytes")},
+	}.UploadBlock(ctx, intent)
+	if !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("upload error = %v, want index verification not found", err)
+	}
+	if !strings.Contains(err.Error(), intent.IndexObjectKey) {
+		t.Fatalf("upload error = %q, want failing index key", err)
+	}
+	if _, err := store.HeadObject(ctx, intent.BackendObjectKey); err != nil {
+		t.Fatalf("head block object after partial upload: %v", err)
+	}
+	if _, err := store.HeadObject(ctx, intent.IndexObjectKey); err != nil {
+		t.Fatalf("head index object after partial upload: %v", err)
+	}
+}
+
+func TestUploadBlockReportsVerificationMismatchDetails(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	store := openTestBackendStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("mismatch object set")))
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	if _, err := blocks.SealCurrent(ctx); err != nil {
+		t.Fatalf("seal block: %v", err)
+	}
+	intent := testUploadIntent(record.BlockID)
+	backendStore := corruptHeadBackendStore{
+		Store: store,
+		key:   intent.IndexObjectKey,
+	}
+
+	_, err = Uploader{
+		Backend: backendStore,
+		Source:  LocalBlockSource{Blocks: blocks},
+		Index:   staticBlockIndexSource{body: []byte("index bytes")},
+	}.UploadBlock(ctx, intent)
+	if !errors.Is(err, backend.ErrChecksumMismatch) {
+		t.Fatalf("upload error = %v, want checksum mismatch", err)
+	}
+	if !strings.Contains(err.Error(), intent.IndexObjectKey) || !strings.Contains(err.Error(), "metadata length") {
+		t.Fatalf("upload error = %q, want key and mismatched attribute", err)
 	}
 }
 
@@ -276,4 +345,31 @@ func (s staticBlockIndexSource) OpenBlockIndex(context.Context, metastore.Upload
 		return nil, s.err
 	}
 	return io.NopCloser(bytes.NewReader(s.body)), nil
+}
+
+type flakyHeadBackendStore struct {
+	backend.Store
+	failures map[string]int
+}
+
+func (s *flakyHeadBackendStore) HeadObject(ctx context.Context, key string) (backend.Object, error) {
+	if s.failures[key] > 0 {
+		s.failures[key]--
+		return backend.Object{}, backend.ErrNotFound
+	}
+	return s.Store.HeadObject(ctx, key)
+}
+
+type corruptHeadBackendStore struct {
+	backend.Store
+	key string
+}
+
+func (s corruptHeadBackendStore) HeadObject(ctx context.Context, key string) (backend.Object, error) {
+	object, err := s.Store.HeadObject(ctx, key)
+	if err != nil || key != s.key {
+		return object, err
+	}
+	object.Length++
+	return object, nil
 }

@@ -92,7 +92,7 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		result.Envelope = &envelopeObject
 	}
 	if intent.IndexObjectKey == "" {
-		return result, nil
+		return result, u.verifyUpload(ctx, intent, result)
 	}
 	if u.Index == nil {
 		return result, fmt.Errorf("backendupload: block index source is not configured")
@@ -107,5 +107,51 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		return result, err
 	}
 	result.Index = &indexObject
-	return result, nil
+	return result, u.verifyUpload(ctx, intent, result)
+}
+
+func (u Uploader) verifyUpload(ctx context.Context, intent metastore.UploadIntent, result UploadResult) error {
+	if err := u.verifyObject(ctx, intent.BackendObjectKey, result.Block); err != nil {
+		return err
+	}
+	if intent.IndexObjectKey != "" {
+		if result.Index == nil {
+			return fmt.Errorf("backendupload: uploaded block index object is missing")
+		}
+		if err := u.verifyObject(ctx, intent.IndexObjectKey, *result.Index); err != nil {
+			return err
+		}
+	}
+	if intent.EnvelopeObjectKey != "" {
+		if result.Envelope == nil {
+			return fmt.Errorf("backendupload: uploaded block envelope object is missing")
+		}
+		if err := u.verifyObject(ctx, intent.EnvelopeObjectKey, *result.Envelope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u Uploader) verifyObject(ctx context.Context, key string, expected backend.Object) error {
+	if key == "" {
+		return fmt.Errorf("backendupload: backend object key is required for verification")
+	}
+	if expected.Key != key {
+		return fmt.Errorf("backendupload: verify object %q: upload result key %q does not match expected key: %w", key, expected.Key, backend.ErrChecksumMismatch)
+	}
+	actual, err := u.Backend.HeadObject(ctx, key)
+	if err != nil {
+		return fmt.Errorf("backendupload: verify object %q: head object: %w", key, err)
+	}
+	if actual.Key != expected.Key {
+		return fmt.Errorf("backendupload: verify object %q: metadata key %q does not match upload result key %q: %w", key, actual.Key, expected.Key, backend.ErrChecksumMismatch)
+	}
+	if actual.Length != expected.Length {
+		return fmt.Errorf("backendupload: verify object %q: metadata length %d does not match upload result length %d: %w", key, actual.Length, expected.Length, backend.ErrChecksumMismatch)
+	}
+	if actual.SHA256 != expected.SHA256 {
+		return fmt.Errorf("backendupload: verify object %q: metadata sha256 %x does not match upload result sha256 %x: %w", key, actual.SHA256, expected.SHA256, backend.ErrChecksumMismatch)
+	}
+	return nil
 }
