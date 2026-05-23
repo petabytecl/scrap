@@ -27,11 +27,25 @@ import (
 type OperationRunResult struct {
 	Scanned   int
 	Skipped   int
+	Pending   int
 	Succeeded int
 	Failed    int
 }
 
 var errDrainUnsafe = errors.New("storage member is not safe to drain")
+
+const (
+	operationLaneMetadata         = "scrap.operation_lane"
+	backendLaneMetadata           = "scrap.backend_lane"
+	restoreTriggerMetadata        = "scrap.restore_trigger"
+	restoreTriggerRead            = "read"
+	operationLaneInteractive      = "interactive-restore"
+	operationLanePlannedPrewarm   = "planned-prewarm"
+	operationLaneRestoreFallback  = "restore"
+	operationEventRestoreQueued   = "restore_queued"
+	operationEventRestoreComplete = "restore_completed"
+	operationEventPrewarmComplete = "prewarm_completed"
+)
 
 func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operations.Store) (OperationRunResult, error) {
 	var result OperationRunResult
@@ -79,10 +93,26 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 		if succeeded {
 			result.Succeeded++
 		} else {
+			queued, queueErr := isOperationQueued(store, operation.GetOperationId())
+			if queueErr != nil {
+				return result, queueErr
+			}
+			if queued {
+				result.Pending++
+				continue
+			}
 			result.Failed++
 		}
 	}
 	return result, nil
+}
+
+func isOperationQueued(store *operations.Store, operationID string) (bool, error) {
+	current, err := store.Get(operationID)
+	if err != nil {
+		return false, err
+	}
+	return current.GetState() == adminv1.OperationState_OPERATION_STATE_QUEUED, nil
 }
 
 func (a *Application) runTombstoneOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
@@ -975,7 +1005,15 @@ func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID strin
 	if err := os.Remove(a.blocks.SealPath(blockID)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return a.restoreBlockFromBackend(ctx, blockID)
+	_, err = a.restoreBlockFromBackend(ctx, blockID)
+	return err
+}
+
+type restoreSummary struct {
+	BlocksRestored  int
+	BlocksSkipped   int
+	BlocksPending   int
+	DocumentsMarked int
 }
 
 func (a *Application) runRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
@@ -984,11 +1022,22 @@ func (a *Application) runRestoreOperation(ctx context.Context, store *operations
 	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
 	running.StartedAt = timestamppb.New(now)
 	running.Progress = &adminv1.OperationProgress{Message: "running " + operation.GetOperationType() + " operation"}
+	running.Metadata = restoreOperationMetadata(running)
 	if err := store.Put(running); err != nil {
 		return false, err
 	}
 
-	workUnits, err := a.applyRestoreOperation(ctx, running, now)
+	summary, err := a.applyRestoreOperation(ctx, running, now)
+	if errors.Is(err, backend.ErrRestorePending) {
+		pending := cloneOperation(running)
+		pending.State = adminv1.OperationState_OPERATION_STATE_QUEUED
+		pending.Progress = restoreOperationProgress(pending, summary, operation.GetOperationType()+" operation pending backend restore")
+		pending.LastError = nil
+		if putErr := store.Put(pending); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
 	finished := cloneOperation(running)
 	finished.FinishedAt = timestamppb.New(a.now())
 	if err != nil {
@@ -1005,29 +1054,56 @@ func (a *Application) runRestoreOperation(ctx context.Context, store *operations
 	}
 
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
-	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(workUnits),
-		WorkUnitsCompleted: uint64(workUnits),
-		Message:            operation.GetOperationType() + " operation succeeded",
-	}
+	finished.Progress = restoreOperationProgress(finished, summary, operation.GetOperationType()+" operation succeeded")
 	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	if err := store.AppendAuditEvent(restoreCompletedAuditEvent(finished)); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (a *Application) applyRestoreOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {
+func (a *Application) applyRestoreOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (restoreSummary, error) {
+	var summary restoreSummary
 	if operation.GetDryRun() {
-		return len(operation.GetTargets()), nil
+		summary.BlocksSkipped = len(operation.GetTargets())
+		return summary, nil
 	}
 	blockIDs, documents, err := a.restoreTargets(operation)
 	if err != nil {
-		return 0, err
+		return summary, err
 	}
 	for blockID := range blockIDs {
-		if err := a.restoreBlockFromBackend(ctx, blockID); err != nil {
-			return 0, err
+		restored, err := a.restoreBlockFromBackend(ctx, blockID)
+		if errors.Is(err, backend.ErrRestorePending) {
+			summary.BlocksPending++
+			continue
 		}
+		if err != nil {
+			return summary, err
+		}
+		if restored {
+			summary.BlocksRestored++
+		} else {
+			summary.BlocksSkipped++
+		}
+	}
+	if summary.BlocksPending > 0 {
+		for _, doc := range documents {
+			if err := a.authority.UpdateDocumentRestoreState(
+				ctx,
+				doc,
+				metastore.RestoreStateRestorePending,
+				operation.GetOperationType()+" operation waiting on backend restore",
+				stableCommandID(operation.GetOperationType()+"-pending-operation", operation.GetOperationId(), doc.TenantID, doc.TransactionID, doc.DocumentName),
+				now,
+			); err != nil {
+				return summary, err
+			}
+			summary.DocumentsMarked++
+		}
+		return summary, backend.ErrRestorePending
 	}
 	for _, doc := range documents {
 		if err := a.authority.UpdateDocumentRestoreState(
@@ -1038,10 +1114,11 @@ func (a *Application) applyRestoreOperation(ctx context.Context, operation *admi
 			stableCommandID(operation.GetOperationType()+"-operation", operation.GetOperationId(), doc.TenantID, doc.TransactionID, doc.DocumentName),
 			now,
 		); err != nil {
-			return 0, err
+			return summary, err
 		}
+		summary.DocumentsMarked++
 	}
-	return len(blockIDs), nil
+	return summary, nil
 }
 
 func (a *Application) restoreTargets(operation *adminv1.Operation) (map[string]bool, []identity.Document, error) {
@@ -1099,27 +1176,27 @@ func (a *Application) restoreTargets(operation *adminv1.Operation) (map[string]b
 	return blockIDs, documents, nil
 }
 
-func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID string) error {
+func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID string) (bool, error) {
 	if a.backendStore == nil {
-		return fmt.Errorf("localstorage: backend store is not configured")
+		return false, fmt.Errorf("localstorage: backend store is not configured")
 	}
 	intent, err := a.metadata.GetUploadIntent(blockID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if intent.State != metastore.UploadStateUploaded {
-		return fmt.Errorf("localstorage: block %s is not uploaded", blockID)
+		return false, fmt.Errorf("localstorage: block %s is not uploaded", blockID)
 	}
 	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
 	if err != nil {
-		return err
+		return false, err
 	}
 	installed, err := a.blocks.EnsureSealedBlock(ctx, blockID, object.Length, object.SHA256)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if installed {
-		return nil
+		return false, nil
 	}
 	reader, writer := io.Pipe()
 	errc := make(chan error, 1)
@@ -1132,9 +1209,71 @@ func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID strin
 	_ = reader.Close()
 	readErr := <-errc
 	if installErr != nil {
-		return installErr
+		return false, installErr
 	}
-	return readErr
+	if readErr != nil {
+		return false, readErr
+	}
+	return true, nil
+}
+
+func restoreOperationMetadata(operation *adminv1.Operation) map[string]string {
+	metadata := cloneTags(operation.GetMetadata())
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if metadata[operationLaneMetadata] == "" {
+		metadata[operationLaneMetadata] = defaultRestoreOperationLane(operation.GetOperationType())
+	}
+	if metadata[backendLaneMetadata] == "" {
+		metadata[backendLaneMetadata] = string(backend.LaneRestore)
+	}
+	return metadata
+}
+
+func defaultRestoreOperationLane(operationType string) string {
+	switch operationType {
+	case "prewarm":
+		return operationLanePlannedPrewarm
+	case "restore":
+		return operationLaneInteractive
+	default:
+		return operationLaneRestoreFallback
+	}
+}
+
+func restoreOperationProgress(operation *adminv1.Operation, summary restoreSummary, message string) *adminv1.OperationProgress {
+	total := summary.BlocksRestored + summary.BlocksSkipped + summary.BlocksPending
+	return &adminv1.OperationProgress{
+		WorkUnitsTotal:     uint64(total),
+		WorkUnitsCompleted: uint64(summary.BlocksRestored + summary.BlocksSkipped),
+		Message:            message,
+		Counters: map[string]string{
+			"blocks_restored":  fmt.Sprintf("%d", summary.BlocksRestored),
+			"blocks_skipped":   fmt.Sprintf("%d", summary.BlocksSkipped),
+			"blocks_pending":   fmt.Sprintf("%d", summary.BlocksPending),
+			"documents_marked": fmt.Sprintf("%d", summary.DocumentsMarked),
+			"operation_lane":   operation.GetMetadata()[operationLaneMetadata],
+			"backend_lane":     operation.GetMetadata()[backendLaneMetadata],
+		},
+	}
+}
+
+func restoreCompletedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
+	eventType := operationEventRestoreComplete
+	if operation.GetOperationType() == "prewarm" {
+		eventType = operationEventPrewarmComplete
+	}
+	return &adminv1.AuditEvent{
+		EventId:       stableCommandID("audit-"+eventType, operation.GetOperationId()),
+		EventType:     eventType,
+		OperationId:   operation.GetOperationId(),
+		OperationType: operation.GetOperationType(),
+		ActorIdentity: operation.GetRequestedByIdentity(),
+		OccurredAt:    operation.GetFinishedAt(),
+		Targets:       cloneOperationTargets(operation.GetTargets()),
+		Metadata:      cloneTags(operation.GetMetadata()),
+	}
 }
 
 func operationErrorPrefix(operationType string) string {

@@ -1292,6 +1292,368 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 	}
 }
 
+func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("cold metadata is still visible")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "head-cold-1", time.Unix(210, 0).UTC()); err != nil {
+		t.Fatalf("mark cold: %v", err)
+	}
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove local block: %v", err)
+	}
+	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove local seal: %v", err)
+	}
+
+	metadata, err := app.HeadDocument(ctx, api.HeadDocumentRequest{Identity: doc})
+	if err != nil {
+		t.Fatalf("head cold document: %v", err)
+	}
+	if metadata.Availability != scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_COLD ||
+		metadata.Length != uint64(len(data)) ||
+		metadata.Identity != doc {
+		t.Fatalf("metadata = %#v, want cold metadata from metastore", metadata)
+	}
+}
+
+func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	app, err := OpenWithContext(ctx, dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	store, err := operations.Open(dir)
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	data := []byte("restore queued by read")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	app.SetOperationStore(store)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "read-cold-1", time.Unix(220, 0).UTC()); err != nil {
+		t.Fatalf("mark cold: %v", err)
+	}
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove local block: %v", err)
+	}
+	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove local seal: %v", err)
+	}
+
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
+	requireCode(t, err, codes.Unavailable)
+	detail := requireRestorePendingDetail(t, err)
+	if !detail.GetRestoreQueued() || detail.GetRestoreState() != "restore_pending" {
+		t.Fatalf("restore detail = %#v, want queued restore pending", detail)
+	}
+	operationID := restoreOnReadOperationID(stored)
+	queued, err := store.Get(operationID)
+	if err != nil {
+		t.Fatalf("get queued restore-on-read operation: %v", err)
+	}
+	if queued.GetOperationType() != "restore" ||
+		queued.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		queued.GetMetadata()[operationLaneMetadata] != operationLaneInteractive ||
+		queued.GetMetadata()[backendLaneMetadata] != string(backend.LaneRestore) {
+		t.Fatalf("queued operation = %#v, want restore-on-read lane metadata", queued)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close operation store: %v", err)
+	}
+
+	reopened, err := OpenWithContext(ctx, dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	reopened.SetBackendStore(backendStore)
+	reopenedStore, err := operations.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen operation store: %v", err)
+	}
+	defer reopenedStore.Close()
+	reopened.SetOperationStore(reopenedStore)
+	result, err := reopened.RunQueuedOperationsOnce(ctx, reopenedStore)
+	if err != nil {
+		t.Fatalf("run queued restore after restart: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Pending != 0 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want retry restore success after restart", result)
+	}
+	events, err := reopenedStore.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	eventTypes := make(map[string]bool, len(events))
+	for _, event := range events {
+		eventTypes[event.GetEventType()] = true
+	}
+	if len(events) != 2 ||
+		!eventTypes[operationEventRestoreQueued] ||
+		!eventTypes[operationEventRestoreComplete] {
+		t.Fatalf("audit events = %#v, want queued and completed restore events", events)
+	}
+	sender := &recordingReadSender{}
+	if err := reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read restored document: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
+		t.Fatalf("read source = %s, want restored local", sender.metadata.Source)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("restored bytes = %q, want %q", got, data)
+	}
+}
+
+func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	app.SetOperationStore(store)
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("terminal restore retry")})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "terminal-cold-1", time.Unix(225, 0).UTC()); err != nil {
+		t.Fatalf("mark cold: %v", err)
+	}
+	operationID := restoreOnReadOperationID(stored)
+	terminal := queuedOperation(operationID, "restore", []*adminv1.Target{documentTarget(doc)})
+	terminal.State = adminv1.OperationState_OPERATION_STATE_FAILED
+	terminal.FinishedAt = timestamppb.New(time.Unix(226, 0).UTC())
+	terminal.LastError = &adminv1.OperationError{Code: "SCRAP_RESTORE_FAILED", Message: "previous restore failed"}
+	if err := store.Put(terminal); err != nil {
+		t.Fatalf("put terminal operation: %v", err)
+	}
+
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
+	requireCode(t, err, codes.Unavailable)
+	detail := requireRestorePendingDetail(t, err)
+	if !detail.GetRestoreQueued() {
+		t.Fatalf("restore detail = %#v, want queued retry", detail)
+	}
+	requeued, err := store.Get(operationID)
+	if err != nil {
+		t.Fatalf("get requeued operation: %v", err)
+	}
+	if requeued.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		requeued.GetFinishedAt() != nil ||
+		requeued.GetLastError() != nil ||
+		requeued.GetProgress().GetMessage() != "requeued by cold read" {
+		t.Fatalf("requeued operation = %#v, want queued clean retry", requeued)
+	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 || events[0].GetEventType() != operationEventRestoreQueued {
+		t.Fatalf("audit events = %#v, want queued audit backfill", events)
+	}
+}
+
+func TestRunQueuedOperationsOnceKeepsArchiveRestorePendingAndRetries(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("archive restore pending")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "archive-cold-1", time.Unix(230, 0).UTC()); err != nil {
+		t.Fatalf("mark cold: %v", err)
+	}
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove local block: %v", err)
+	}
+	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove local seal: %v", err)
+	}
+	archive := &archivePendingBackend{Store: backendStore, pending: true}
+	app.SetBackendStore(archive)
+	operation := queuedOperation("archive-restore-op-1", "restore", []*adminv1.Target{documentTarget(doc)})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run archive-pending restore: %v", err)
+	}
+	if result.Scanned != 1 || result.Pending != 1 || result.Succeeded != 0 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want queued pending restore", result)
+	}
+	pending, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get pending operation: %v", err)
+	}
+	if pending.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		pending.GetProgress().GetCounters()["blocks_pending"] != "1" {
+		t.Fatalf("pending operation = %#v, want queued archive pending", pending)
+	}
+	cold, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head pending document: %v", err)
+	}
+	if cold.RestoreState != metastore.RestoreStateRestorePending ||
+		cold.Availability != metastore.AvailabilityRestorePending {
+		t.Fatalf("restore state = %d/%d, want restore pending", cold.RestoreState, cold.Availability)
+	}
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
+	requireCode(t, err, codes.Unavailable)
+	requireRestorePendingDetail(t, err)
+
+	archive.pending = false
+	result, err = app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("retry archive restore: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Pending != 0 || result.Failed != 0 {
+		t.Fatalf("retry result = %#v, want restore success", result)
+	}
+}
+
+func TestRunQueuedOperationsOncePrewarmsDocumentFromBackendAndAudits(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("prewarm me from backend")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "prewarm-cold-1", time.Unix(240, 0).UTC()); err != nil {
+		t.Fatalf("mark cold: %v", err)
+	}
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove local block: %v", err)
+	}
+	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove local seal: %v", err)
+	}
+	operation := queuedOperation("prewarm-op-1", "prewarm", []*adminv1.Target{documentTarget(doc)})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued prewarm: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one prewarm success", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetProgress().GetCounters()["blocks_restored"] != "1" ||
+		finished.GetProgress().GetCounters()["operation_lane"] != operationLanePlannedPrewarm ||
+		finished.GetProgress().GetCounters()["backend_lane"] != string(backend.LaneRestore) {
+		t.Fatalf("finished operation = %#v, want prewarm restore counters", finished)
+	}
+	events, err := store.ListAuditEvents()
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 ||
+		events[0].GetEventType() != operationEventPrewarmComplete ||
+		events[0].GetOperationType() != "prewarm" {
+		t.Fatalf("audit events = %#v, want prewarm completed event", events)
+	}
+}
+
 func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -2799,6 +3161,18 @@ func openTestOperationStore(t *testing.T) *operations.Store {
 		}
 	})
 	return store
+}
+
+type archivePendingBackend struct {
+	backend.Store
+	pending bool
+}
+
+func (s *archivePendingBackend) ReadObjectRange(ctx context.Context, key string, selected backend.Range, writer io.Writer) error {
+	if s.pending {
+		return backend.ErrRestorePending
+	}
+	return s.Store.ReadObjectRange(ctx, key, selected, writer)
 }
 
 func queuedTombstoneOperation(operationID string, targets []*adminv1.Target) *adminv1.Operation {

@@ -527,6 +527,59 @@ func TestAdminServerPlanAndStartRestoreUseDurableOperationStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerPlanAndStartPrewarmUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	restoreClient, _, _, operationClient, cleanup := newAdminWorkflowClients(t, store)
+	defer cleanup()
+
+	pinUntil := timestamppb.New(time.Unix(900, 0).UTC())
+	planResp, err := restoreClient.PlanPrewarm(context.Background(), &adminv1.PlanPrewarmRequest{
+		Targets:  []*adminv1.Target{documentAdminTarget()},
+		PinUntil: pinUntil,
+		Metadata: map[string]string{
+			"requested_by": "test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("plan prewarm: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "prewarm" ||
+		plan.GetMetadata()[adminOperationLaneMetadata] != "planned-prewarm" ||
+		plan.GetMetadata()[adminBackendLaneMetadata] != "restore" ||
+		plan.GetMetadata()["scrap.pin_until"] == "" {
+		t.Fatalf("plan metadata = %#v, want prewarm lane and pin metadata", plan.GetMetadata())
+	}
+
+	startReq := &adminv1.StartPrewarmRequest{
+		OperationId:     validUUIDv7(),
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+		Metadata: map[string]string{
+			"ticket": "INC-2",
+		},
+	}
+	startResp, err := restoreClient.StartPrewarm(context.Background(), startReq)
+	if err != nil {
+		t.Fatalf("start prewarm: %v", err)
+	}
+	operation := startResp.GetOperation()
+	if operation.GetOperationType() != "prewarm" ||
+		operation.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
+		operation.GetMetadata()[adminOperationLaneMetadata] != "planned-prewarm" ||
+		operation.GetMetadata()[adminBackendLaneMetadata] != "restore" ||
+		operation.GetMetadata()["ticket"] != "INC-2" {
+		t.Fatalf("operation = %#v, want queued prewarm from plan", operation)
+	}
+	getResp, err := operationClient.GetOperation(context.Background(), &adminv1.GetOperationRequest{OperationId: operation.GetOperationId()})
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if getResp.GetOperation().GetOperationType() != "prewarm" {
+		t.Fatalf("stored operation = %#v, want prewarm", getResp.GetOperation())
+	}
+}
+
 func TestAdminServerMemberLifecycleWritesAuditEvents(t *testing.T) {
 	store := openTestOperationStore(t)
 	expected := &adminv1.StorageMember{

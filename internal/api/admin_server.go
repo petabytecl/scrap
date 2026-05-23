@@ -56,6 +56,8 @@ const (
 	adminOperationPlanIDMetadata = "scrap.operation_plan_id"
 	adminPlanHashMetadata        = "scrap.plan_hash"
 	adminDryRunMetadata          = "scrap.dry_run"
+	adminOperationLaneMetadata   = "scrap.operation_lane"
+	adminBackendLaneMetadata     = "scrap.backend_lane"
 
 	adminAuditEventOperationStarted  = "operation_started"
 	adminAuditEventOperationCanceled = "operation_canceled"
@@ -684,6 +686,12 @@ func (s *AdminServer) createOperationPlan(operationType string, req OperationPla
 	if req.PinUntil != nil {
 		metadata["scrap.pin_until"] = req.PinUntil.Format(time.RFC3339Nano)
 	}
+	if metadata[adminOperationLaneMetadata] == "" {
+		metadata[adminOperationLaneMetadata] = defaultAdminOperationLane(operationType)
+	}
+	if metadata[adminBackendLaneMetadata] == "" && isBackendLaneOperation(operationType) {
+		metadata[adminBackendLaneMetadata] = defaultAdminBackendLane(operationType)
+	}
 
 	planID, err := identity.NewUUIDv7()
 	if err != nil {
@@ -704,6 +712,43 @@ func (s *AdminServer) createOperationPlan(operationType string, req OperationPla
 		return nil, err
 	}
 	return plan, nil
+}
+
+func defaultAdminOperationLane(operationType string) string {
+	switch operationType {
+	case "restore":
+		return "interactive-restore"
+	case "prewarm":
+		return "planned-prewarm"
+	case "metadata-restore", "copy-verify", "dr-drill":
+		return "bulk-audit"
+	default:
+		return operationType
+	}
+}
+
+func isBackendLaneOperation(operationType string) bool {
+	switch operationType {
+	case "restore", "prewarm", "repair", "rewrap", "scrub", "metadata-restore", "copy-verify", "dr-drill":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultAdminBackendLane(operationType string) string {
+	switch operationType {
+	case "repair":
+		return "repair"
+	case "rewrap":
+		return "rewrap"
+	case "scrub":
+		return "scrub"
+	case "metadata-restore", "copy-verify", "dr-drill":
+		return "dr_copy"
+	default:
+		return "restore"
+	}
 }
 
 func (s *AdminServer) startPlannedOperation(operationType string, req OperationStartRequest) (*adminv1.Operation, error) {

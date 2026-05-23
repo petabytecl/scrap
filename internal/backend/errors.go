@@ -83,7 +83,7 @@ func ClassifyError(err error) ErrorClass {
 	switch {
 	case errors.Is(err, ErrThrottled):
 		return ErrorClassThrottled
-	case errors.Is(err, ErrTransient), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, ErrTransient), errors.Is(err, ErrRestorePending), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return ErrorClassTransient
 	case errors.Is(err, ErrAuth), errors.Is(err, os.ErrPermission):
 		return ErrorClassAuth
