@@ -152,6 +152,23 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 		},
 	})
 	document := authorityTestDocument("invoice.xml", []byte{1})
+	privateBytes := []byte("actual document body must not enter metadata snapshot")
+	blocks, err := blockstore.Open(filepath.Join(dir, "blocks"))
+	if err != nil {
+		t.Fatalf("open blockstore: %v", err)
+	}
+	record, err := blocks.Append(context.Background(), bytes.NewReader(privateBytes))
+	if err != nil {
+		_ = blocks.Close()
+		t.Fatalf("append private bytes: %v", err)
+	}
+	if err := blocks.Close(); err != nil {
+		t.Fatalf("close blockstore: %v", err)
+	}
+	document.Length = uint64(len(privateBytes))
+	document.LogicalSHA256 = record.LogicalSHA256
+	document.StoredSHA256 = record.LogicalSHA256
+	document.Location = record
 	if err := authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()); err != nil {
 		t.Fatalf("commit document: %v", err)
 	}
@@ -197,7 +214,6 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 	if len(snapshot.GetMembership().GetMembers()) != 2 {
 		t.Fatalf("snapshot membership = %#v, want two members", snapshot.GetMembership())
 	}
-	privateBytes := []byte("actual document body must not enter metadata snapshot")
 	rawSnapshot, err := os.ReadFile(snapshotPath(raftDir))
 	if err != nil {
 		t.Fatalf("read raw snapshot: %v", err)
@@ -238,6 +254,37 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 	}
 	if _, err := rebuiltMetadata.HeadDocument(tailDocument.Identity); err != nil {
 		t.Fatalf("head tail document: %v", err)
+	}
+}
+
+func TestAuthorityRejectsCompactedLogWithoutSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	raftDir := filepath.Join(dir, "raftmeta")
+	log, err := OpenLog(raftDir)
+	if err != nil {
+		t.Fatalf("open log: %v", err)
+	}
+	if _, err := log.Append(sampleCommand("cmd-1", "invoice-1.xml")); err != nil {
+		t.Fatalf("append first: %v", err)
+	}
+	if _, err := log.Append(sampleCommand("cmd-2", "invoice-2.xml")); err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+	if err := log.Compact(1); err != nil {
+		t.Fatalf("compact log: %v", err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatalf("close log: %v", err)
+	}
+
+	metadata := openTestMetadata(t, dir)
+	defer func() {
+		if err := metadata.Close(); err != nil {
+			t.Fatalf("close metadata: %v", err)
+		}
+	}()
+	if _, err := OpenAuthority(raftDir, "tenant-txn", metadata); err == nil {
+		t.Fatal("opened compacted log without a snapshot covering the missing prefix")
 	}
 }
 

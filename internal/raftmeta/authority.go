@@ -320,13 +320,18 @@ func (a *Authority) replay() error {
 	if err != nil {
 		return err
 	}
+	expectedIndex := a.snapshotIndex + 1
 	for _, entry := range entries {
 		if entry.Index <= a.snapshotIndex {
 			continue
 		}
+		if entry.Index != expectedIndex {
+			return fmt.Errorf("raftmeta: command index %d after snapshot index %d; want %d", entry.Index, a.snapshotIndex, expectedIndex)
+		}
 		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
 			return fmt.Errorf("raftmeta: apply command at index %d: %w", entry.Index, err)
 		}
+		expectedIndex++
 	}
 	return nil
 }
