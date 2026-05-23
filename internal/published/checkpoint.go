@@ -15,11 +15,16 @@ import (
 var ErrCurrentPointerNotFound = errors.New("published metadata: current pointer not found")
 
 type CheckpointVerification struct {
-	PointerKey      string
-	ManifestKey     string
-	Pointer         *publishedv1.CurrentPointer
-	Manifest        *publishedv1.Manifest
-	VerifiedObjects int
+	PointerKey              string
+	ManifestKey             string
+	Pointer                 *publishedv1.CurrentPointer
+	Manifest                *publishedv1.Manifest
+	VerifiedObjects         int
+	VerifiedArtifacts       int
+	VerifiedRequiredObjects int
+	VerifiedBlockObjects    int
+	VerifiedIndexObjects    int
+	VerifiedEnvelopeObjects int
 }
 
 func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID string) (CheckpointVerification, error) {
@@ -67,6 +72,11 @@ func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID st
 	}
 
 	verified := 2
+	verifiedArtifacts := 0
+	verifiedRequiredObjects := 0
+	verifiedBlockObjects := 0
+	verifiedIndexObjects := 0
+	verifiedEnvelopeObjects := 0
 	for _, snapshot := range manifest.GetSnapshots() {
 		if snapshot.GetKind() != publishedv1.ArtifactKind_ARTIFACT_KIND_SNAPSHOT {
 			return verification, fmt.Errorf("published metadata: invalid snapshot artifact kind %s", snapshot.GetKind())
@@ -75,6 +85,7 @@ func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID st
 			return verification, err
 		}
 		verified++
+		verifiedArtifacts++
 	}
 	for _, tail := range manifest.GetTails() {
 		if tail.GetKind() != publishedv1.ArtifactKind_ARTIFACT_KIND_TAIL {
@@ -84,6 +95,7 @@ func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID st
 			return verification, err
 		}
 		verified++
+		verifiedArtifacts++
 	}
 	for _, object := range manifest.GetRequiredObjects() {
 		if object.GetKind() == publishedv1.ObjectKind_OBJECT_KIND_UNSPECIFIED {
@@ -93,13 +105,27 @@ func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID st
 			return verification, err
 		}
 		verified++
+		verifiedRequiredObjects++
+		switch object.GetKind() {
+		case publishedv1.ObjectKind_OBJECT_KIND_BLOCK:
+			verifiedBlockObjects++
+		case publishedv1.ObjectKind_OBJECT_KIND_INDEX:
+			verifiedIndexObjects++
+		case publishedv1.ObjectKind_OBJECT_KIND_ENVELOPE:
+			verifiedEnvelopeObjects++
+		}
 	}
 	return CheckpointVerification{
-		PointerKey:      pointerKey,
-		ManifestKey:     manifestKey,
-		Pointer:         pointer,
-		Manifest:        manifest,
-		VerifiedObjects: verified,
+		PointerKey:              pointerKey,
+		ManifestKey:             manifestKey,
+		Pointer:                 pointer,
+		Manifest:                manifest,
+		VerifiedObjects:         verified,
+		VerifiedArtifacts:       verifiedArtifacts,
+		VerifiedRequiredObjects: verifiedRequiredObjects,
+		VerifiedBlockObjects:    verifiedBlockObjects,
+		VerifiedIndexObjects:    verifiedIndexObjects,
+		VerifiedEnvelopeObjects: verifiedEnvelopeObjects,
 	}, nil
 }
 

@@ -16,6 +16,8 @@ const (
 	localPublishedCellID          = "local"
 	localPublishedSourceNamespace = "local"
 	localPublishedShardID         = "local"
+	recoveryEvidenceReportKind    = "measured_evidence"
+	recoveryNoFormalPromise       = "none"
 )
 
 func (a *Application) PublishMetadataSnapshot(ctx context.Context) (published.SnapshotPublication, error) {
@@ -61,22 +63,32 @@ func publishedSnapshotID(generation uint64, publishedAt time.Time) string {
 }
 
 type MetadataRestoreResult struct {
-	Snapshots      int
-	Documents      int
-	Transactions   int
-	UploadIntents  int
-	Tombstones     int
-	Verified       int
-	BlocksRestored int
+	ManifestID              string
+	Generation              uint64
+	PublishedAt             time.Time
+	Snapshots               int
+	Documents               int
+	Transactions            int
+	UploadIntents           int
+	Tombstones              int
+	Verified                int
+	VerifiedArtifacts       int
+	VerifiedRequiredObjects int
+	VerifiedBlockObjects    int
+	VerifiedIndexObjects    int
+	VerifiedEnvelopeObjects int
+	BlocksRestored          int
+	ReportKind              string
+	RTOPromise              string
+	RPOPromise              string
 }
 
 func (a *Application) RestorePublishedMetadataCheckpoint(ctx context.Context, apply bool) (MetadataRestoreResult, error) {
-	var result MetadataRestoreResult
 	checkpoint, err := a.verifyCurrentCheckpoint(ctx)
 	if err != nil {
-		return result, err
+		return MetadataRestoreResult{}, err
 	}
-	result.Verified = checkpoint.VerifiedObjects
+	result := metadataRestoreResultFromCheckpoint(checkpoint)
 	now := a.now()
 	for _, snapshot := range checkpoint.Manifest.GetSnapshots() {
 		var data bytes.Buffer
@@ -127,6 +139,7 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	}()
 	drillApp.now = a.now
 	drillApp.SetBackendStore(a.backendStore)
+	drillApp.envelopeTransit = a.envelopeTransit
 	result, err := drillApp.RestorePublishedMetadataCheckpoint(ctx, true)
 	if err != nil {
 		return result, err
@@ -151,6 +164,23 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	}
 	result.BlocksRestored = restoredBlocks
 	return result, nil
+}
+
+func metadataRestoreResultFromCheckpoint(checkpoint published.CheckpointVerification) MetadataRestoreResult {
+	return MetadataRestoreResult{
+		ManifestID:              checkpoint.Manifest.GetManifestId(),
+		Generation:              checkpoint.Manifest.GetGeneration(),
+		PublishedAt:             checkpoint.Manifest.GetPublishedAt().AsTime(),
+		Verified:                checkpoint.VerifiedObjects,
+		VerifiedArtifacts:       checkpoint.VerifiedArtifacts,
+		VerifiedRequiredObjects: checkpoint.VerifiedRequiredObjects,
+		VerifiedBlockObjects:    checkpoint.VerifiedBlockObjects,
+		VerifiedIndexObjects:    checkpoint.VerifiedIndexObjects,
+		VerifiedEnvelopeObjects: checkpoint.VerifiedEnvelopeObjects,
+		ReportKind:              recoveryEvidenceReportKind,
+		RTOPromise:              recoveryNoFormalPromise,
+		RPOPromise:              recoveryNoFormalPromise,
+	}
 }
 
 func (a *Application) restoreImportedBlocks(ctx context.Context, documents []metastore.Document, now time.Time) (int, error) {

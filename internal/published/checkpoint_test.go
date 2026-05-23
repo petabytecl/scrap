@@ -23,14 +23,19 @@ func TestVerifyCurrentCheckpointVerifiesManifestArtifactsAndRequiredObjects(t *t
 	if err != nil {
 		t.Fatalf("put index object: %v", err)
 	}
+	envelopeObject, err := store.PutObject(ctx, "objects/block-1.env", bytes.NewReader([]byte("envelope bytes")))
+	if err != nil {
+		t.Fatalf("put envelope object: %v", err)
+	}
 	metadata := staticSnapshotMetadata{
 		documents: []metastore.Document{publishedTestDocument("block-1", []byte("block bytes"))},
 		intents: []metastore.UploadIntent{
 			{
-				BlockID:          "block-1",
-				BackendObjectKey: blockObject.Key,
-				IndexObjectKey:   indexObject.Key,
-				State:            metastore.UploadStateUploaded,
+				BlockID:           "block-1",
+				BackendObjectKey:  blockObject.Key,
+				IndexObjectKey:    indexObject.Key,
+				EnvelopeObjectKey: envelopeObject.Key,
+				State:             metastore.UploadStateUploaded,
 			},
 		},
 	}
@@ -44,8 +49,13 @@ func TestVerifyCurrentCheckpointVerifiesManifestArtifactsAndRequiredObjects(t *t
 		verified.ManifestKey != publication.ManifestKey ||
 		verified.Pointer.GetManifestId() != "manifest-1" ||
 		verified.Manifest.GetGeneration() != 7 ||
-		verified.VerifiedObjects != 5 {
-		t.Fatalf("verified checkpoint = %#v, want pointer, manifest, snapshot, block, and index verified", verified)
+		verified.VerifiedObjects != 6 ||
+		verified.VerifiedArtifacts != 1 ||
+		verified.VerifiedRequiredObjects != 3 ||
+		verified.VerifiedBlockObjects != 1 ||
+		verified.VerifiedIndexObjects != 1 ||
+		verified.VerifiedEnvelopeObjects != 1 {
+		t.Fatalf("verified checkpoint = %#v, want pointer, manifest, snapshot, block, index, and envelope verified", verified)
 	}
 }
 
