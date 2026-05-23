@@ -142,6 +142,9 @@ func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T)
 	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
 		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
 	}
+	if strings.Contains(err.Error(), "%!") {
+		t.Fatalf("error contains fmt artifact: %q", err)
+	}
 	gateErr := requireProductionGateError(t, err)
 	openbaoMissing, ok := missingReadiness(gateErr.Missing, ReadinessGateOpenBaoEnvelopeWorkflow)
 	if !ok {

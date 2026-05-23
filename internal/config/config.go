@@ -291,7 +291,7 @@ func (e *ProductionWriteACKGateError) Error() string {
 		parts = append(parts, detail)
 	}
 	return fmt.Sprintf(
-		"%s: %s missing readiness evidence: %s",
+		"%v: %s missing readiness evidence: %s",
 		ErrProductionWriteACKReadinessGate,
 		ProductionWriteACKReadinessGate,
 		strings.Join(parts, "; "),
