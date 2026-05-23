@@ -1269,7 +1269,7 @@ func TestRangedReadVerifiesEveryTouchedFrameBeforeStreaming(t *testing.T) {
 	}
 }
 
-func TestMissingLocalBytesFailBeforeSendingMetadata(t *testing.T) {
+func TestMissingLocalBytesFailsBeforeSendingMetadata(t *testing.T) {
 	app := openTestApplication(t)
 	doc := testDocumentIdentity()
 	data := []byte("missing local read bytes")
@@ -2211,11 +2211,18 @@ func writeLocalReadVerificationDocument(t *testing.T, app *Application, doc iden
 
 func corruptStoredByte(t *testing.T, app *Application, record blockstore.Record, offset uint64) {
 	t.Helper()
-	file, err := os.OpenFile(app.blocks.BlockPath(record.BlockID), os.O_WRONLY, 0)
+	file, err := os.OpenFile(app.blocks.BlockPath(record.BlockID), os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("open block: %v", err)
 	}
-	if _, err := file.WriteAt([]byte{0xff}, int64(record.StoredOffset+offset)); err != nil {
+	storedOffset := int64(record.StoredOffset + offset)
+	buf := []byte{0}
+	if _, err := file.ReadAt(buf, storedOffset); err != nil {
+		_ = file.Close()
+		t.Fatalf("read block byte: %v", err)
+	}
+	buf[0] ^= 0xff
+	if _, err := file.WriteAt(buf, storedOffset); err != nil {
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
