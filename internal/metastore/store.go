@@ -42,6 +42,15 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) PutDocument(document Document) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := s.putDocument(batch, document); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+func (s *Store) putDocument(batch *pebble.Batch, document Document) error {
 	document = normalizeDocumentDefaults(document)
 	value, err := marshalDocument(document)
 	if err != nil {
@@ -83,8 +92,6 @@ func (s *Store) PutDocument(document Document) error {
 	if err != nil {
 		return err
 	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
 	if err := batch.Set(docKey, value, nil); err != nil {
 		return err
 	}
@@ -97,7 +104,7 @@ func (s *Store) PutDocument(document Document) error {
 	if err := batch.Set(transactionKey(transaction.Identity), transactionValue, nil); err != nil {
 		return err
 	}
-	return batch.Commit(pebble.Sync)
+	return nil
 }
 
 func (s *Store) HeadDocument(doc identity.Document) (Document, error) {
@@ -245,6 +252,19 @@ func (s *Store) FindDocuments(transaction identity.Transaction, filter DocumentF
 }
 
 func (s *Store) CompleteTransaction(transaction identity.Transaction, completedAt time.Time, tags map[string]string) (Transaction, error) {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	current, err := s.completeTransaction(batch, transaction, completedAt, tags)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return Transaction{}, err
+	}
+	return current, nil
+}
+
+func (s *Store) completeTransaction(batch *pebble.Batch, transaction identity.Transaction, completedAt time.Time, tags map[string]string) (Transaction, error) {
 	current, ok, err := s.getTransaction(transaction.TenantID, transaction.TransactionID)
 	if err != nil {
 		return Transaction{}, err
@@ -259,13 +279,22 @@ func (s *Store) CompleteTransaction(transaction identity.Transaction, completedA
 	if err != nil {
 		return Transaction{}, err
 	}
-	if err := s.db.Set(transactionKey(current.Identity), value, pebble.Sync); err != nil {
+	if err := batch.Set(transactionKey(current.Identity), value, nil); err != nil {
 		return Transaction{}, err
 	}
 	return current, nil
 }
 
 func (s *Store) RecordUploadIntent(intent UploadIntent) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := s.recordUploadIntent(batch, intent); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+func (s *Store) recordUploadIntent(batch *pebble.Batch, intent UploadIntent) error {
 	if intent.State == 0 {
 		intent.State = UploadStatePending
 	}
@@ -292,10 +321,23 @@ func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 		}
 		return fmt.Errorf("%w: upload intent already exists with different metadata", ErrConflict)
 	}
-	return s.db.Set(key, value, pebble.Sync)
+	return batch.Set(key, value, nil)
 }
 
 func (s *Store) UpdateUploadIntentState(blockID string, state UploadState, lastError string, updatedAt time.Time) (UploadIntent, error) {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	intent, err := s.updateUploadIntentState(batch, blockID, state, lastError, updatedAt)
+	if err != nil {
+		return UploadIntent{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return UploadIntent{}, err
+	}
+	return intent, nil
+}
+
+func (s *Store) updateUploadIntentState(batch *pebble.Batch, blockID string, state UploadState, lastError string, updatedAt time.Time) (UploadIntent, error) {
 	if err := validateUploadIntentState(state); err != nil {
 		return UploadIntent{}, err
 	}
@@ -314,13 +356,26 @@ func (s *Store) UpdateUploadIntentState(blockID string, state UploadState, lastE
 	if err != nil {
 		return UploadIntent{}, err
 	}
-	if err := s.db.Set(uploadIntentKey(intent.BlockID), value, pebble.Sync); err != nil {
+	if err := batch.Set(uploadIntentKey(intent.BlockID), value, nil); err != nil {
 		return UploadIntent{}, err
 	}
 	return intent, nil
 }
 
 func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreState) (Document, error) {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	document, err := s.updateDocumentRestoreState(batch, doc, state)
+	if err != nil {
+		return Document{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return Document{}, err
+	}
+	return document, nil
+}
+
+func (s *Store) updateDocumentRestoreState(batch *pebble.Batch, doc identity.Document, state RestoreState) (Document, error) {
 	availability, err := availabilityFromRestoreState(state)
 	if err != nil {
 		return Document{}, err
@@ -331,13 +386,26 @@ func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreS
 	}
 	document.RestoreState = state
 	document.Availability = availability
-	if err := s.replaceDocument(document); err != nil {
+	if err := s.replaceDocument(batch, document); err != nil {
 		return Document{}, err
 	}
 	return document, nil
 }
 
 func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, state RestoreState) ([]Document, error) {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	documents, err := s.updateTransactionRestoreState(batch, transaction, state)
+	if err != nil {
+		return nil, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return nil, err
+	}
+	return documents, nil
+}
+
+func (s *Store) updateTransactionRestoreState(batch *pebble.Batch, transaction identity.Transaction, state RestoreState) ([]Document, error) {
 	availability, err := availabilityFromRestoreState(state)
 	if err != nil {
 		return nil, err
@@ -349,8 +417,6 @@ func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, 
 	if len(documents) == 0 {
 		return nil, ErrNotFound
 	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
 	for i := range documents {
 		documents[i].RestoreState = state
 		documents[i].Availability = availability
@@ -365,13 +431,23 @@ func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, 
 			return nil, err
 		}
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return nil, err
-	}
 	return documents, nil
 }
 
 func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	document, err := s.tombstoneDocument(batch, doc, tombstonedAt, operationID)
+	if err != nil {
+		return Document{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return Document{}, err
+	}
+	return document, nil
+}
+
+func (s *Store) tombstoneDocument(batch *pebble.Batch, doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
 	if tombstonedAt.IsZero() {
 		return Document{}, fmt.Errorf("metastore: tombstone requires tombstoned_at")
 	}
@@ -386,13 +462,22 @@ func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time,
 	document.TombstonedAt = &tombstonedAt
 	document.TombstoneOperationID = operationID
 	document.HasTombstoneOperationID = operationID != ""
-	if err := s.replaceDocument(document); err != nil {
+	if err := s.replaceDocument(batch, document); err != nil {
 		return Document{}, err
 	}
 	return document, nil
 }
 
 func (s *Store) RecordRepairState(state RepairState) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := s.recordRepairState(batch, state); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+func (s *Store) recordRepairState(batch *pebble.Batch, state RepairState) error {
 	if state.UpdatedAt.IsZero() {
 		state.UpdatedAt = time.Now().UTC()
 	}
@@ -400,7 +485,7 @@ func (s *Store) RecordRepairState(state RepairState) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Set(repairStateKey(state.Identity, state.IncidentID), value, pebble.Sync)
+	return batch.Set(repairStateKey(state.Identity, state.IncidentID), value, nil)
 }
 
 func (s *Store) GetRepairState(doc identity.Document, incidentID string) (RepairState, error) {
@@ -440,6 +525,15 @@ func (s *Store) ListRepairStates() ([]RepairState, error) {
 }
 
 func (s *Store) RecordCommandReceipt(receipt CommandReceipt) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := s.recordCommandReceipt(batch, receipt); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+func (s *Store) recordCommandReceipt(batch *pebble.Batch, receipt CommandReceipt) error {
 	value, err := marshalCommandReceipt(receipt)
 	if err != nil {
 		return err
@@ -456,7 +550,7 @@ func (s *Store) RecordCommandReceipt(receipt CommandReceipt) error {
 		}
 		return fmt.Errorf("%w: command id already applied with different payload", ErrConflict)
 	}
-	return s.db.Set(commandReceiptKey(receipt.CommandID), value, pebble.Sync)
+	return batch.Set(commandReceiptKey(receipt.CommandID), value, nil)
 }
 
 func (s *Store) GetCommandReceipt(commandID string) (CommandReceipt, error) {
@@ -592,13 +686,11 @@ func (s *Store) ListTransactions() ([]Transaction, error) {
 	return transactions, nil
 }
 
-func (s *Store) replaceDocument(document Document) error {
+func (s *Store) replaceDocument(batch *pebble.Batch, document Document) error {
 	value, err := marshalDocument(document)
 	if err != nil {
 		return err
 	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
 	if err := batch.Set(documentKey(document.Identity), value, nil); err != nil {
 		return err
 	}
@@ -608,7 +700,7 @@ func (s *Store) replaceDocument(document Document) error {
 	if err := batch.Set(blockDocumentKey(document.Location.BlockID, document.Identity), value, nil); err != nil {
 		return err
 	}
-	return batch.Commit(pebble.Sync)
+	return nil
 }
 
 func (s *Store) getTransaction(tenantID string, transactionID string) (Transaction, bool, error) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"google.golang.org/protobuf/proto"
@@ -27,28 +28,33 @@ func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
 	switch typed := command.GetCommand().(type) {
 	case *metastorev1.ShardCommand_CommitDocument:
-		err = s.applyCommitDocument(typed.CommitDocument)
+		err = s.applyCommitDocument(batch, typed.CommitDocument)
 	case *metastorev1.ShardCommand_CompleteTransaction:
-		err = s.applyCompleteTransaction(typed.CompleteTransaction)
+		err = s.applyCompleteTransaction(batch, typed.CompleteTransaction)
 	case *metastorev1.ShardCommand_RecordUploadIntent:
-		err = s.applyRecordUploadIntent(typed.RecordUploadIntent, command.GetProposedAt())
+		err = s.applyRecordUploadIntent(batch, typed.RecordUploadIntent, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateUploadIntentState:
-		err = s.applyUpdateUploadIntentState(typed.UpdateUploadIntentState, command.GetProposedAt())
+		err = s.applyUpdateUploadIntentState(batch, typed.UpdateUploadIntentState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateRestoreState:
-		err = s.applyUpdateRestoreState(typed.UpdateRestoreState)
+		err = s.applyUpdateRestoreState(batch, typed.UpdateRestoreState)
 	case *metastorev1.ShardCommand_RecordRepairState:
-		err = s.applyRecordRepairState(typed.RecordRepairState, command.GetProposedAt())
+		err = s.applyRecordRepairState(batch, typed.RecordRepairState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_TombstoneDocument:
-		err = s.applyTombstoneDocument(typed.TombstoneDocument)
+		err = s.applyTombstoneDocument(batch, typed.TombstoneDocument)
 	default:
 		return fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
 	}
 	if err != nil {
 		return err
 	}
-	return s.RecordCommandReceipt(receipt)
+	if err := s.recordCommandReceipt(batch, receipt); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 func commandReceipt(command *metastorev1.ShardCommand) (CommandReceipt, error) {
@@ -67,17 +73,17 @@ func commandReceipt(command *metastorev1.ShardCommand) (CommandReceipt, error) {
 	}, nil
 }
 
-func (s *Store) applyCommitDocument(command *metastorev1.CommitDocumentCommand) error {
+func (s *Store) applyCommitDocument(batch *pebble.Batch, command *metastorev1.CommitDocumentCommand) error {
 	if command == nil || command.GetDocument() == nil {
 		return fmt.Errorf("metastore: commit document command requires document")
 	}
 	if err := validateSchemaVersion("document", command.GetDocument().GetSchemaVersion()); err != nil {
 		return err
 	}
-	return s.PutDocument(documentFromProto(command.GetDocument()))
+	return s.putDocument(batch, documentFromProto(command.GetDocument()))
 }
 
-func (s *Store) applyCompleteTransaction(command *metastorev1.CompleteTransactionCommand) error {
+func (s *Store) applyCompleteTransaction(batch *pebble.Batch, command *metastorev1.CompleteTransactionCommand) error {
 	if command == nil {
 		return fmt.Errorf("metastore: complete transaction command is required")
 	}
@@ -85,14 +91,14 @@ func (s *Store) applyCompleteTransaction(command *metastorev1.CompleteTransactio
 	if completedAt == nil {
 		return fmt.Errorf("metastore: complete transaction command requires completed_at")
 	}
-	_, err := s.CompleteTransaction(identity.Transaction{
+	_, err := s.completeTransaction(batch, identity.Transaction{
 		TenantID:      command.GetTenantId(),
 		TransactionID: command.GetTransactionId(),
 	}, completedAt.AsTime(), cloneTags(command.GetTags()))
 	return err
 }
 
-func (s *Store) applyRecordUploadIntent(command *metastorev1.RecordUploadIntentCommand, proposedAt *timestamppb.Timestamp) error {
+func (s *Store) applyRecordUploadIntent(batch *pebble.Batch, command *metastorev1.RecordUploadIntentCommand, proposedAt *timestamppb.Timestamp) error {
 	if command == nil {
 		return fmt.Errorf("metastore: record upload intent command is required")
 	}
@@ -100,7 +106,7 @@ func (s *Store) applyRecordUploadIntent(command *metastorev1.RecordUploadIntentC
 	if proposedAt != nil {
 		updatedAt = proposedAt.AsTime()
 	}
-	return s.RecordUploadIntent(UploadIntent{
+	return s.recordUploadIntent(batch, UploadIntent{
 		BlockID:           command.GetBlockId(),
 		BackendObjectKey:  command.GetBackendObjectKey(),
 		IndexObjectKey:    command.GetIndexObjectKey(),
@@ -110,7 +116,7 @@ func (s *Store) applyRecordUploadIntent(command *metastorev1.RecordUploadIntentC
 	})
 }
 
-func (s *Store) applyUpdateUploadIntentState(command *metastorev1.UpdateUploadIntentStateCommand, proposedAt *timestamppb.Timestamp) error {
+func (s *Store) applyUpdateUploadIntentState(batch *pebble.Batch, command *metastorev1.UpdateUploadIntentStateCommand, proposedAt *timestamppb.Timestamp) error {
 	if command == nil {
 		return fmt.Errorf("metastore: update upload intent state command is required")
 	}
@@ -118,7 +124,8 @@ func (s *Store) applyUpdateUploadIntentState(command *metastorev1.UpdateUploadIn
 	if proposedAt != nil {
 		updatedAt = proposedAt.AsTime()
 	}
-	_, err := s.UpdateUploadIntentState(
+	_, err := s.updateUploadIntentState(
+		batch,
 		command.GetBlockId(),
 		UploadState(command.GetState()),
 		command.GetLastError(),
@@ -127,7 +134,7 @@ func (s *Store) applyUpdateUploadIntentState(command *metastorev1.UpdateUploadIn
 	return err
 }
 
-func (s *Store) applyUpdateRestoreState(command *metastorev1.UpdateRestoreStateCommand) error {
+func (s *Store) applyUpdateRestoreState(batch *pebble.Batch, command *metastorev1.UpdateRestoreStateCommand) error {
 	if command == nil {
 		return fmt.Errorf("metastore: update restore state command is required")
 	}
@@ -136,21 +143,21 @@ func (s *Store) applyUpdateRestoreState(command *metastorev1.UpdateRestoreStateC
 		return err
 	}
 	if command.DocumentName != nil {
-		_, err := s.UpdateDocumentRestoreState(identity.Document{
+		_, err := s.updateDocumentRestoreState(batch, identity.Document{
 			TenantID:      command.GetTenantId(),
 			TransactionID: command.GetTransactionId(),
 			DocumentName:  command.GetDocumentName(),
 		}, state)
 		return err
 	}
-	_, err := s.UpdateTransactionRestoreState(identity.Transaction{
+	_, err := s.updateTransactionRestoreState(batch, identity.Transaction{
 		TenantID:      command.GetTenantId(),
 		TransactionID: command.GetTransactionId(),
 	}, state)
 	return err
 }
 
-func (s *Store) applyRecordRepairState(command *metastorev1.RecordRepairStateCommand, proposedAt *timestamppb.Timestamp) error {
+func (s *Store) applyRecordRepairState(batch *pebble.Batch, command *metastorev1.RecordRepairStateCommand, proposedAt *timestamppb.Timestamp) error {
 	if command == nil {
 		return fmt.Errorf("metastore: record repair state command is required")
 	}
@@ -158,7 +165,7 @@ func (s *Store) applyRecordRepairState(command *metastorev1.RecordRepairStateCom
 	if proposedAt != nil {
 		updatedAt = proposedAt.AsTime()
 	}
-	return s.RecordRepairState(RepairState{
+	return s.recordRepairState(batch, RepairState{
 		Identity: identity.Document{
 			TenantID:      command.GetTenantId(),
 			TransactionID: command.GetTransactionId(),
@@ -171,14 +178,14 @@ func (s *Store) applyRecordRepairState(command *metastorev1.RecordRepairStateCom
 	})
 }
 
-func (s *Store) applyTombstoneDocument(command *metastorev1.TombstoneDocumentCommand) error {
+func (s *Store) applyTombstoneDocument(batch *pebble.Batch, command *metastorev1.TombstoneDocumentCommand) error {
 	if command == nil {
 		return fmt.Errorf("metastore: tombstone document command is required")
 	}
 	if command.GetTombstonedAt() == nil {
 		return fmt.Errorf("metastore: tombstone document command requires tombstoned_at")
 	}
-	_, err := s.TombstoneDocument(identity.Document{
+	_, err := s.tombstoneDocument(batch, identity.Document{
 		TenantID:      command.GetTenantId(),
 		TransactionID: command.GetTransactionId(),
 		DocumentName:  command.GetDocumentName(),
