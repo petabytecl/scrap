@@ -67,6 +67,9 @@ enum ObjectKind {
   OBJECT_KIND_ENVELOPE = 3;
 }
 
+// SnapshotRecord is a read-only exported view of one source shard at a
+// high-watermark. Importers may build derived projections from it, but they do
+// not gain authority to mutate the source namespace.
 message SnapshotRecord {
   uint32 schema_version = 1;
   string source_namespace = 2;
@@ -79,6 +82,9 @@ message SnapshotRecord {
   }
 }
 
+// TailRecord is a read-only exported mutation fact from one source shard log.
+// Importers must preserve source ownership and treat the record as derived
+// metadata, not as a command to the source authority.
 message TailRecord {
   uint32 schema_version = 1;
   string source_namespace = 2;
@@ -92,6 +98,9 @@ message TailRecord {
   }
 }
 
+// PublishedDocument contains the document facts needed for bounded-staleness
+// reads and backend restore. It intentionally omits consensus implementation
+// state, repair internals, and shard-local authority state.
 message PublishedDocument {
   string tenant_id = 1;
   string transaction_id = 2;

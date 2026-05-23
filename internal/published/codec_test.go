@@ -91,6 +91,40 @@ func TestSnapshotAndTailRecordsValidateSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestSnapshotAndTailRecordsRejectUnsupportedSchemaVersion(t *testing.T) {
+	snapshotData, err := proto.Marshal(&publishedv1.SnapshotRecord{
+		SchemaVersion:   CurrentSchemaVersion + 1,
+		SourceNamespace: "billing-prod",
+		ShardId:         "tenant-txn",
+		HighWatermark:   10,
+		Record: &publishedv1.SnapshotRecord_Document{
+			Document: sampleDocument(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if _, err := UnmarshalSnapshotRecord(snapshotData); !errors.Is(err, ErrUnsupportedSchemaVersion) {
+		t.Fatalf("snapshot error = %v, want %v", err, ErrUnsupportedSchemaVersion)
+	}
+
+	tailData, err := proto.Marshal(&publishedv1.TailRecord{
+		SchemaVersion:   CurrentSchemaVersion + 1,
+		SourceNamespace: "billing-prod",
+		ShardId:         "tenant-txn",
+		LogIndex:        11,
+		Mutation: &publishedv1.TailRecord_FinalizedDocument{
+			FinalizedDocument: sampleDocument(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal tail: %v", err)
+	}
+	if _, err := UnmarshalTailRecord(tailData); !errors.Is(err, ErrUnsupportedSchemaVersion) {
+		t.Fatalf("tail error = %v, want %v", err, ErrUnsupportedSchemaVersion)
+	}
+}
+
 func TestSnapshotArtifactRecordsRoundTripAndEOF(t *testing.T) {
 	first := &publishedv1.SnapshotRecord{
 		SchemaVersion:   CurrentSchemaVersion,

@@ -83,7 +83,12 @@ func (a *Application) RestorePublishedMetadataCheckpoint(ctx context.Context, ap
 		if err := a.backendStore.ReadObjectRange(ctx, snapshot.GetObjectKey(), backend.Range{}, &data); err != nil {
 			return result, err
 		}
-		contents, err := published.ReadSnapshotContents(bytes.NewReader(data.Bytes()))
+		contents, err := published.ReadSnapshotContentsForImport(bytes.NewReader(data.Bytes()), published.ImportOptions{
+			SourceNamespace:      checkpoint.Manifest.GetSourceNamespace(),
+			ShardID:              snapshot.GetShardId(),
+			HighWatermark:        snapshot.GetLastIndex(),
+			RequireHighWatermark: true,
+		})
 		if err != nil {
 			return result, err
 		}
