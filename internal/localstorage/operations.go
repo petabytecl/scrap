@@ -488,11 +488,7 @@ func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operati
 		WorkUnitsTotal:     uint64(checkpoint.VerifiedObjects),
 		WorkUnitsCompleted: uint64(checkpoint.VerifiedObjects),
 		Message:            message,
-		Counters: map[string]string{
-			"generation":       fmt.Sprintf("%d", checkpoint.Pointer.GetGeneration()),
-			"manifest_id":      checkpoint.Manifest.GetManifestId(),
-			"verified_objects": fmt.Sprintf("%d", checkpoint.VerifiedObjects),
-		},
+		Counters:           checkpointEvidenceCounters(checkpoint),
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err
@@ -535,15 +531,7 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 		WorkUnitsTotal:     uint64(restore.Documents + restore.Transactions + restore.UploadIntents),
 		WorkUnitsCompleted: uint64(restore.Documents + restore.Transactions + restore.UploadIntents),
 		Message:            message,
-		Counters: map[string]string{
-			"blocks_restored": fmt.Sprintf("%d", restore.BlocksRestored),
-			"documents":       fmt.Sprintf("%d", restore.Documents),
-			"snapshots":       fmt.Sprintf("%d", restore.Snapshots),
-			"tombstones":      fmt.Sprintf("%d", restore.Tombstones),
-			"transactions":    fmt.Sprintf("%d", restore.Transactions),
-			"upload_intents":  fmt.Sprintf("%d", restore.UploadIntents),
-			"verified":        fmt.Sprintf("%d", restore.Verified),
-		},
+		Counters:           restoreEvidenceCounters(restore),
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err
@@ -586,15 +574,7 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 		WorkUnitsTotal:     uint64(drill.Documents + drill.Transactions + drill.UploadIntents),
 		WorkUnitsCompleted: uint64(drill.Documents + drill.Transactions + drill.UploadIntents),
 		Message:            message,
-		Counters: map[string]string{
-			"blocks_restored": fmt.Sprintf("%d", drill.BlocksRestored),
-			"documents":       fmt.Sprintf("%d", drill.Documents),
-			"snapshots":       fmt.Sprintf("%d", drill.Snapshots),
-			"tombstones":      fmt.Sprintf("%d", drill.Tombstones),
-			"transactions":    fmt.Sprintf("%d", drill.Transactions),
-			"upload_intents":  fmt.Sprintf("%d", drill.UploadIntents),
-			"verified":        fmt.Sprintf("%d", drill.Verified),
-		},
+		Counters:           restoreEvidenceCounters(drill),
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err
@@ -607,6 +587,44 @@ func (a *Application) verifyCurrentCheckpoint(ctx context.Context) (published.Ch
 		return published.CheckpointVerification{}, fmt.Errorf("localstorage: backend store is not configured")
 	}
 	return published.VerifyCurrentCheckpoint(ctx, a.backendStore, localPublishedCellID)
+}
+
+func checkpointEvidenceCounters(checkpoint published.CheckpointVerification) map[string]string {
+	return map[string]string{
+		"generation":                fmt.Sprintf("%d", checkpoint.Pointer.GetGeneration()),
+		"manifest_id":               checkpoint.Manifest.GetManifestId(),
+		"recovery_report_kind":      recoveryEvidenceReportKind,
+		"rpo_promise":               recoveryNoFormalPromise,
+		"rto_promise":               recoveryNoFormalPromise,
+		"verified_artifacts":        fmt.Sprintf("%d", checkpoint.VerifiedArtifacts),
+		"verified_block_objects":    fmt.Sprintf("%d", checkpoint.VerifiedBlockObjects),
+		"verified_envelope_objects": fmt.Sprintf("%d", checkpoint.VerifiedEnvelopeObjects),
+		"verified_index_objects":    fmt.Sprintf("%d", checkpoint.VerifiedIndexObjects),
+		"verified_objects":          fmt.Sprintf("%d", checkpoint.VerifiedObjects),
+		"verified_required_objects": fmt.Sprintf("%d", checkpoint.VerifiedRequiredObjects),
+	}
+}
+
+func restoreEvidenceCounters(restore MetadataRestoreResult) map[string]string {
+	return map[string]string{
+		"blocks_restored":           fmt.Sprintf("%d", restore.BlocksRestored),
+		"documents":                 fmt.Sprintf("%d", restore.Documents),
+		"generation":                fmt.Sprintf("%d", restore.Generation),
+		"manifest_id":               restore.ManifestID,
+		"recovery_report_kind":      restore.ReportKind,
+		"rpo_promise":               restore.RPOPromise,
+		"rto_promise":               restore.RTOPromise,
+		"snapshots":                 fmt.Sprintf("%d", restore.Snapshots),
+		"tombstones":                fmt.Sprintf("%d", restore.Tombstones),
+		"transactions":              fmt.Sprintf("%d", restore.Transactions),
+		"upload_intents":            fmt.Sprintf("%d", restore.UploadIntents),
+		"verified":                  fmt.Sprintf("%d", restore.Verified),
+		"verified_artifacts":        fmt.Sprintf("%d", restore.VerifiedArtifacts),
+		"verified_block_objects":    fmt.Sprintf("%d", restore.VerifiedBlockObjects),
+		"verified_envelope_objects": fmt.Sprintf("%d", restore.VerifiedEnvelopeObjects),
+		"verified_index_objects":    fmt.Sprintf("%d", restore.VerifiedIndexObjects),
+		"verified_required_objects": fmt.Sprintf("%d", restore.VerifiedRequiredObjects),
+	}
 }
 
 func (a *Application) runDrainOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
@@ -1186,6 +1204,9 @@ func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID strin
 	}
 	if intent.State != metastore.UploadStateUploaded {
 		return false, fmt.Errorf("localstorage: block %s is not uploaded", blockID)
+	}
+	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
+		return false, err
 	}
 	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
 	if err != nil {

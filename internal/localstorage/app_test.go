@@ -1990,6 +1990,10 @@ func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
 	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
+	intent, err := app.metadata.GetUploadIntent(firstStored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
 	countingBackend := &readCountingBackendStore{Store: backendStore}
 	app.SetBackendStore(countingBackend)
 	corruptStoredByte(t, app, firstStored.Location, 0)
@@ -2019,8 +2023,8 @@ func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want one repair success", result)
 	}
-	if countingBackend.readObjectRangeCount != 1 {
-		t.Fatalf("backend reads = %d, want one block restore", countingBackend.readObjectRangeCount)
+	if countingBackend.readObjectRangeCount(intent.BackendObjectKey) != 1 {
+		t.Fatalf("block backend reads = %d, want one block restore", countingBackend.readObjectRangeCount(intent.BackendObjectKey))
 	}
 	queue, err := app.GetRepairQueue(ctx, "local")
 	if err != nil {
@@ -2694,6 +2698,7 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	}
 	if !readiness.GetReady() || readiness.GetLatestRestorableCheckpointAt().AsTime() != app.now() ||
 		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_NON_PRODUCTION_MODE") ||
+		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_MEASURED_EVIDENCE_ONLY") ||
 		hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_METADATA_EXPORT_MISSING") {
 		t.Fatalf("readiness = %#v, want non-production-ready checkpoint timestamp", readiness)
 	}
@@ -2750,7 +2755,13 @@ func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *tes
 	}
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetCounters()["manifest_id"] != publication.Manifest.GetManifestId() ||
-		finished.GetProgress().GetCounters()["verified_objects"] == "" {
+		finished.GetProgress().GetCounters()["verified_objects"] == "" ||
+		finished.GetProgress().GetCounters()["verified_block_objects"] != "1" ||
+		finished.GetProgress().GetCounters()["verified_index_objects"] != "1" ||
+		finished.GetProgress().GetCounters()["verified_envelope_objects"] != "1" ||
+		finished.GetProgress().GetCounters()["recovery_report_kind"] != recoveryEvidenceReportKind ||
+		finished.GetProgress().GetCounters()["rto_promise"] != recoveryNoFormalPromise ||
+		finished.GetProgress().GetCounters()["rpo_promise"] != recoveryNoFormalPromise {
 		t.Fatalf("finished operation = %#v, want successful verified checkpoint", finished)
 	}
 }
@@ -2944,7 +2955,8 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetCounters()["documents"] != "1" ||
 		finished.GetProgress().GetCounters()["upload_intents"] != "1" ||
-		finished.GetProgress().GetCounters()["blocks_restored"] != "0" {
+		finished.GetProgress().GetCounters()["blocks_restored"] != "0" ||
+		finished.GetProgress().GetCounters()["recovery_report_kind"] != recoveryEvidenceReportKind {
 		t.Fatalf("finished operation = %#v, want dry-run checkpoint verification", finished)
 	}
 }
@@ -3000,8 +3012,145 @@ func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetCounters()["documents"] != "1" ||
 		finished.GetProgress().GetCounters()["upload_intents"] != "1" ||
-		finished.GetProgress().GetCounters()["blocks_restored"] != "1" {
+		finished.GetProgress().GetCounters()["blocks_restored"] != "1" ||
+		finished.GetProgress().GetCounters()["verified_block_objects"] != "1" ||
+		finished.GetProgress().GetCounters()["verified_index_objects"] != "1" ||
+		finished.GetProgress().GetCounters()["verified_envelope_objects"] != "1" ||
+		finished.GetProgress().GetCounters()["recovery_report_kind"] != recoveryEvidenceReportKind ||
+		finished.GetProgress().GetCounters()["rto_promise"] != recoveryNoFormalPromise ||
+		finished.GetProgress().GetCounters()["rpo_promise"] != recoveryNoFormalPromise {
 		t.Fatalf("finished operation = %#v, want scratch drill restore counters", finished)
+	}
+}
+
+func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactMissing(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(802, 0).UTC())
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	publication, _, intent := publishDRDrillTestDocument(t, ctx, app, backendStore, []byte("missing artifact drill bytes"))
+	app.SetBackendStore(&faultingBackendStore{
+		Store:       backendStore,
+		missingHead: map[string]bool{intent.EnvelopeObjectKey: true},
+	})
+
+	store := openTestOperationStore(t)
+	operation := queuedOperation("dr-drill-missing-artifact-1", "dr-drill", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		t.Fatalf("operation result = %#v, want one failed DR drill", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" ||
+		!strings.Contains(finished.GetLastError().GetMessage(), backend.ErrNotFound.Error()) {
+		t.Fatalf("finished operation = %#v, want missing required artifact failure", finished)
+	}
+}
+
+func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactCorrupt(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(803, 0).UTC())
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	publication, _, intent := publishDRDrillTestDocument(t, ctx, app, backendStore, []byte("corrupt artifact drill bytes"))
+	app.SetBackendStore(&faultingBackendStore{
+		Store:      backendStore,
+		readErrors: map[string]error{intent.IndexObjectKey: backend.ErrChecksumMismatch},
+	})
+
+	store := openTestOperationStore(t)
+	operation := queuedOperation("dr-drill-corrupt-artifact-1", "dr-drill", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		t.Fatalf("operation result = %#v, want one failed DR drill", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" ||
+		!strings.Contains(finished.GetLastError().GetMessage(), backend.ErrChecksumMismatch.Error()) {
+		t.Fatalf("finished operation = %#v, want corrupt required artifact failure", finished)
+	}
+}
+
+func TestRunQueuedOperationsOnceDRDrillFailsWhenKeyMaterialMissing(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(804, 0).UTC())
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	publication, _, _ := publishDRDrillTestDocument(t, ctx, app, backendStore, []byte("missing key material drill bytes"))
+	transit.SetMissingKey("transit/backend", true)
+
+	store := openTestOperationStore(t)
+	operation := queuedOperation("dr-drill-missing-key-1", "dr-drill", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_Snapshot{
+				Snapshot: &adminv1.SnapshotTarget{ShardId: ptr("local"), SnapshotId: publication.Manifest.GetManifestId()},
+			},
+		},
+	})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		t.Fatalf("operation result = %#v, want one failed DR drill", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" ||
+		!strings.Contains(finished.GetLastError().GetMessage(), cryptoenv.ErrKeyMaterialUnavailable.Error()) {
+		t.Fatalf("finished operation = %#v, want missing key material failure", finished)
 	}
 }
 
@@ -3171,6 +3320,26 @@ type archivePendingBackend struct {
 func (s *archivePendingBackend) ReadObjectRange(ctx context.Context, key string, selected backend.Range, writer io.Writer) error {
 	if s.pending {
 		return backend.ErrRestorePending
+	}
+	return s.Store.ReadObjectRange(ctx, key, selected, writer)
+}
+
+type faultingBackendStore struct {
+	backend.Store
+	missingHead map[string]bool
+	readErrors  map[string]error
+}
+
+func (s *faultingBackendStore) HeadObject(ctx context.Context, key string) (backend.Object, error) {
+	if s.missingHead[key] {
+		return backend.Object{}, backend.ErrNotFound
+	}
+	return s.Store.HeadObject(ctx, key)
+}
+
+func (s *faultingBackendStore) ReadObjectRange(ctx context.Context, key string, selected backend.Range, writer io.Writer) error {
+	if err := s.readErrors[key]; err != nil {
+		return err
 	}
 	return s.Store.ReadObjectRange(ctx, key, selected, writer)
 }
@@ -3479,12 +3648,50 @@ func requireCode(t *testing.T, err error, code codes.Code) {
 
 type readCountingBackendStore struct {
 	backend.Store
-	readObjectRangeCount int
+	readObjectRangeCounts map[string]int
 }
 
 func (s *readCountingBackendStore) ReadObjectRange(ctx context.Context, key string, selected backend.Range, writer io.Writer) error {
-	s.readObjectRangeCount++
+	if s.readObjectRangeCounts == nil {
+		s.readObjectRangeCounts = make(map[string]int)
+	}
+	s.readObjectRangeCounts[key]++
 	return s.Store.ReadObjectRange(ctx, key, selected, writer)
+}
+
+func (s *readCountingBackendStore) readObjectRangeCount(key string) int {
+	return s.readObjectRangeCounts[key]
+}
+
+func publishDRDrillTestDocument(t *testing.T, ctx context.Context, app *Application, backendStore backend.MutableStore, data []byte) (published.SnapshotPublication, metastore.Document, metastore.UploadIntent) {
+	t.Helper()
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	app.SetBackendStore(backendStore)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	publication, err := app.PublishMetadataSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("publish metadata snapshot: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	return publication, stored, intent
 }
 
 func readBackendObject(t *testing.T, ctx context.Context, store backend.Store, key string) []byte {

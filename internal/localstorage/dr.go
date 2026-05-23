@@ -12,7 +12,7 @@ func (a *Application) GetRecoveryReadiness(ctx context.Context) (*adminv1.Recove
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	warnings := make([]*adminv1.OperationWarning, 0, 2)
+	warnings := make([]*adminv1.OperationWarning, 0, 3)
 	readiness := &adminv1.RecoveryReadiness{Ready: false}
 	if a.backendStore == nil {
 		warnings = append(warnings, &adminv1.OperationWarning{
@@ -35,6 +35,10 @@ func (a *Application) GetRecoveryReadiness(ctx context.Context) (*adminv1.Recove
 		warnings = append(warnings, &adminv1.OperationWarning{
 			Code:    "SCRAP_DR_NON_PRODUCTION_MODE",
 			Message: "local non-production recovery artifacts are ready, but production readiness gates are separate",
+		})
+		warnings = append(warnings, &adminv1.OperationWarning{
+			Code:    "SCRAP_DR_MEASURED_EVIDENCE_ONLY",
+			Message: "recovery reports contain measured verification evidence and do not promise formal RTO or RPO",
 		})
 	case errors.Is(err, published.ErrCurrentPointerNotFound):
 		warnings = append(warnings, &adminv1.OperationWarning{
