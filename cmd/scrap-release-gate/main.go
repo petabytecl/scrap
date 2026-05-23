@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/releasegate"
 )
 
@@ -32,7 +33,7 @@ func run(args []string) int {
 			fmt.Fprintf(os.Stderr, "open manifest: %v\n", err)
 			return 2
 		}
-		defer file.Close()
+		defer closeutil.Ignore(file)
 		manifest, err = releasegate.ReadManifest(file)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "read manifest: %v\n", err)

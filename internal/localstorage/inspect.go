@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -160,7 +161,7 @@ func (a *Application) blockDigest(ctx context.Context, blockID string) (uint64, 
 	if err != nil {
 		return 0, nil, err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 	hasher := sha256.New()
 	written, err := io.Copy(hasher, file)
 	if err != nil {

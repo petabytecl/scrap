@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/safepath"
@@ -94,7 +95,7 @@ func (l *prepareLog) Recover() ([]metastore.Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 
 	var documents []metastore.Document
 	var validOffset int64

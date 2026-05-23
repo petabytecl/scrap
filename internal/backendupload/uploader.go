@@ -8,6 +8,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/metastore"
 )
 
@@ -73,7 +74,7 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 	if err != nil {
 		return UploadResult{}, err
 	}
-	defer reader.Close()
+	defer closeutil.Ignore(reader)
 	blockObject, err := u.Backend.PutObject(ctx, intent.BackendObjectKey, reader)
 	if err != nil {
 		return UploadResult{}, err
@@ -84,7 +85,7 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		if err != nil {
 			return result, err
 		}
-		defer envelopeReader.Close()
+		defer closeutil.Ignore(envelopeReader)
 		envelopeObject, err := u.Backend.PutObject(ctx, intent.EnvelopeObjectKey, envelopeReader)
 		if err != nil {
 			return result, err
@@ -101,7 +102,7 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 	if err != nil {
 		return result, err
 	}
-	defer indexReader.Close()
+	defer closeutil.Ignore(indexReader)
 	indexObject, err := u.Backend.PutObject(ctx, intent.IndexObjectKey, indexReader)
 	if err != nil {
 		return result, err

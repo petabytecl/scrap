@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
@@ -122,7 +123,7 @@ func readSnapshotFile(dir string) (*metastorev1.ShardSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 
 	var header [snapshotHeaderLen]byte
 	if _, err := io.ReadFull(file, header[:]); err != nil {

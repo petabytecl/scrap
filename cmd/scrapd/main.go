@@ -11,6 +11,7 @@ import (
 
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/backendupload"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/config"
 	"github.com/petabytecl/scrap/internal/localstorage"
 	"github.com/petabytecl/scrap/internal/node"
@@ -49,12 +50,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("open local non-production storage: %v", err)
 		}
-		defer localApp.Close()
+		defer closeutil.Log("local storage application", log.Printf, localApp)
 		operationStore, err := operations.Open(cfg.LocalDataDir)
 		if err != nil {
 			log.Fatalf("open operation store: %v", err)
 		}
-		defer operationStore.Close()
+		defer closeutil.Log("operation store", log.Printf, operationStore)
 		localApp.SetOperationStore(operationStore)
 		apps.Documents = localApp
 		apps.Transactions = localApp
@@ -92,7 +93,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("start listeners: %v", err)
 	}
-	defer server.Close()
+	defer closeutil.Log("server", log.Printf, server)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

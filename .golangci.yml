@@ -38,8 +38,3 @@ linters:
         linters:
           - errcheck
           - gosec
-      # Close errors on read-only files, iterators, and cleanup paths are tracked
-      # separately from durability-boundary sync errors by issue #57.
-      - linters:
-          - errcheck
-        text: "Error return value of `.*\\.Close` is not checked"

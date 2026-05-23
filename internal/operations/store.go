@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -160,7 +161,7 @@ func (s *Store) List(filter ListFilter) ([]*adminv1.Operation, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	stateFilter := make(map[adminv1.OperationState]bool, len(filter.States))
 	for _, state := range filter.States {
@@ -303,7 +304,7 @@ func (s *Store) ListAuditEvents() ([]*adminv1.AuditEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var events []*adminv1.AuditEvent
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -448,7 +449,7 @@ func (s *Store) get(key []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	defer closer.Close()
+	defer closeutil.Ignore(closer)
 	return append([]byte(nil), value...), true, nil
 }
 
@@ -481,7 +482,7 @@ func (s *Store) putBatch(operations []*adminv1.Operation) error {
 		return nil
 	}
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	for _, operation := range operations {
 		if err := validateOperation(operation); err != nil {
 			return err

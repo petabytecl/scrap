@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 )
@@ -43,7 +44,7 @@ func (s *Store) Close() error {
 
 func (s *Store) PutDocument(document Document) error {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	if err := s.putDocument(batch, document); err != nil {
 		return err
 	}
@@ -127,7 +128,7 @@ func (s *Store) ListDocuments(filter DocumentFilter) ([]Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var documents []Document
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -150,7 +151,7 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 		return err
 	}
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 
 	for _, prefix := range [][]byte{
 		documentPrefix(),
@@ -233,7 +234,7 @@ func (s *Store) FindDocuments(transaction identity.Transaction, filter DocumentF
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var documents []Document
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -253,7 +254,7 @@ func (s *Store) FindDocuments(transaction identity.Transaction, filter DocumentF
 
 func (s *Store) CompleteTransaction(transaction identity.Transaction, completedAt time.Time, tags map[string]string) (Transaction, error) {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	current, err := s.completeTransaction(batch, transaction, completedAt, tags)
 	if err != nil {
 		return Transaction{}, err
@@ -287,7 +288,7 @@ func (s *Store) completeTransaction(batch *pebble.Batch, transaction identity.Tr
 
 func (s *Store) RecordUploadIntent(intent UploadIntent) error {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	if err := s.recordUploadIntent(batch, intent); err != nil {
 		return err
 	}
@@ -326,7 +327,7 @@ func (s *Store) recordUploadIntent(batch *pebble.Batch, intent UploadIntent) err
 
 func (s *Store) UpdateUploadIntentState(blockID string, state UploadState, lastError string, updatedAt time.Time) (UploadIntent, error) {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	intent, err := s.updateUploadIntentState(batch, blockID, state, lastError, updatedAt)
 	if err != nil {
 		return UploadIntent{}, err
@@ -364,7 +365,7 @@ func (s *Store) updateUploadIntentState(batch *pebble.Batch, blockID string, sta
 
 func (s *Store) UpdateDocumentRestoreState(doc identity.Document, state RestoreState) (Document, error) {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	document, err := s.updateDocumentRestoreState(batch, doc, state)
 	if err != nil {
 		return Document{}, err
@@ -394,7 +395,7 @@ func (s *Store) updateDocumentRestoreState(batch *pebble.Batch, doc identity.Doc
 
 func (s *Store) UpdateTransactionRestoreState(transaction identity.Transaction, state RestoreState) ([]Document, error) {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	documents, err := s.updateTransactionRestoreState(batch, transaction, state)
 	if err != nil {
 		return nil, err
@@ -436,7 +437,7 @@ func (s *Store) updateTransactionRestoreState(batch *pebble.Batch, transaction i
 
 func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	document, err := s.tombstoneDocument(batch, doc, tombstonedAt, operationID)
 	if err != nil {
 		return Document{}, err
@@ -470,7 +471,7 @@ func (s *Store) tombstoneDocument(batch *pebble.Batch, doc identity.Document, to
 
 func (s *Store) RecordRepairState(state RepairState) error {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	if err := s.recordRepairState(batch, state); err != nil {
 		return err
 	}
@@ -508,7 +509,7 @@ func (s *Store) ListRepairStates() ([]RepairState, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var states []RepairState
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -526,7 +527,7 @@ func (s *Store) ListRepairStates() ([]RepairState, error) {
 
 func (s *Store) RecordCommandReceipt(receipt CommandReceipt) error {
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	if err := s.recordCommandReceipt(batch, receipt); err != nil {
 		return err
 	}
@@ -573,7 +574,7 @@ func (s *Store) ListCommandReceipts() ([]CommandReceipt, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var receipts []CommandReceipt
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -609,7 +610,7 @@ func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var intents []UploadIntent
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -634,7 +635,7 @@ func (s *Store) ListBlockDocuments(blockID string) ([]Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var documents []Document
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -670,7 +671,7 @@ func (s *Store) ListTransactions() ([]Transaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer closeutil.Ignore(iter)
 
 	var transactions []Transaction
 	for valid := iter.First(); valid; valid = iter.Next() {
@@ -721,7 +722,7 @@ func (s *Store) get(key []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	defer closer.Close()
+	defer closeutil.Ignore(closer)
 	return append([]byte(nil), value...), true, nil
 }
 

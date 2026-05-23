@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -98,7 +99,7 @@ func LoadFile(path string) (Policy, error) {
 	if err != nil {
 		return Policy{}, fmt.Errorf("open authorization policy: %w", err)
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
