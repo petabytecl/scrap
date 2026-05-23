@@ -47,7 +47,7 @@ test:
 	$(GO) test ./...
 
 test-compat:
-	$(GO) test ./internal/compat ./internal/metastore ./internal/published ./internal/storageformat
+	$(GO) test ./internal/compat
 
 test-race:
 	$(GO) test -race ./...

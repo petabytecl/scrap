@@ -22,8 +22,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const fixtureVersionDir = "testdata/v1"
-
 type fixture struct {
 	name string
 	path string
@@ -162,19 +160,27 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 	tests := []struct {
 		name      string
 		data      func(*testing.T) []byte
-		roundTrip func([]byte) ([]byte, error)
+		roundTrip func([]byte) (proto.Message, error)
 	}{
 		{
 			name: "published manifest",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleManifest())
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				record, err := published.UnmarshalManifest(data)
 				if err != nil {
 					return nil, err
 				}
-				return published.MarshalManifest(record)
+				roundTrip, err := published.MarshalManifest(record)
+				if err != nil {
+					return nil, err
+				}
+				var out publishedv1.Manifest
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 		{
@@ -182,12 +188,20 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleSnapshot())
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				record, err := published.UnmarshalSnapshotRecord(data)
 				if err != nil {
 					return nil, err
 				}
-				return published.MarshalSnapshotRecord(record)
+				roundTrip, err := published.MarshalSnapshotRecord(record)
+				if err != nil {
+					return nil, err
+				}
+				var out publishedv1.SnapshotRecord
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 		{
@@ -195,12 +209,20 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleTail())
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				record, err := published.UnmarshalTailRecord(data)
 				if err != nil {
 					return nil, err
 				}
-				return published.MarshalTailRecord(record)
+				roundTrip, err := published.MarshalTailRecord(record)
+				if err != nil {
+					return nil, err
+				}
+				var out publishedv1.TailRecord
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 		{
@@ -208,12 +230,20 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleBlockIndex(t))
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				record, err := storageformat.UnmarshalBlockIndex(data)
 				if err != nil {
 					return nil, err
 				}
-				return storageformat.MarshalBlockIndex(record)
+				roundTrip, err := storageformat.MarshalBlockIndex(record)
+				if err != nil {
+					return nil, err
+				}
+				var out storagev1.BlockIndex
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 		{
@@ -221,12 +251,20 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleBackendObjectSet())
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				record, err := storageformat.UnmarshalBackendObjectSet(data)
 				if err != nil {
 					return nil, err
 				}
-				return storageformat.MarshalBackendObjectSet(record)
+				roundTrip, err := storageformat.MarshalBackendObjectSet(record)
+				if err != nil {
+					return nil, err
+				}
+				var out storagev1.BackendObjectSet
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 		{
@@ -234,12 +272,20 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleEnvelopeRecord(t))
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				record, err := storageformat.UnmarshalEnvelopeRecord(data)
 				if err != nil {
 					return nil, err
 				}
-				return storageformat.MarshalEnvelopeRecord(record)
+				roundTrip, err := storageformat.MarshalEnvelopeRecord(record)
+				if err != nil {
+					return nil, err
+				}
+				var out storagev1.EnvelopeRecord
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 		{
@@ -247,12 +293,20 @@ func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, metastore.DocumentRecord(sampleMetastoreDocument()))
 			},
-			roundTrip: func(data []byte) ([]byte, error) {
+			roundTrip: func(data []byte) (proto.Message, error) {
 				var record metastorev1.DocumentRecord
 				if err := proto.Unmarshal(data, &record); err != nil {
 					return nil, err
 				}
-				return proto.Marshal(&record)
+				roundTrip, err := proto.Marshal(&record)
+				if err != nil {
+					return nil, err
+				}
+				var out metastorev1.DocumentRecord
+				if err := proto.Unmarshal(roundTrip, &out); err != nil {
+					return nil, err
+				}
+				return &out, nil
 			},
 		},
 	}
@@ -279,7 +333,11 @@ func TestSchemaEvolutionExampleIsExecutable(t *testing.T) {
 		t.Fatalf("unmarshal published location with additive field: %v", err)
 	}
 	locationRoundTrip := mustMarshal(t, &decodedLocation)
-	assertUnknownPreserved(t, locationRoundTrip, locationUnknown)
+	var reparsedLocation publishedv1.PublishedLocation
+	if err := proto.Unmarshal(locationRoundTrip, &reparsedLocation); err != nil {
+		t.Fatalf("reparse published location with additive field: %v", err)
+	}
+	assertUnknownPreserved(t, &reparsedLocation, locationUnknown)
 
 	additiveBlockIndex := append(mustMarshal(t, sampleBlockIndex(t)), appendUnknownVarint(nil, 1002, 9)...)
 	if _, err := storageformat.UnmarshalBlockIndex(additiveBlockIndex); err != nil {
@@ -297,7 +355,7 @@ func initialFixtures() []fixture {
 	return []fixture{
 		{
 			name: "authoritative document",
-			path: "authoritative_document.hex",
+			path: "testdata/v1/authoritative_document.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, metastore.DocumentRecord(sampleMetastoreDocument()))
 			},
@@ -308,7 +366,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "published manifest",
-			path: "published_manifest.hex",
+			path: "testdata/v1/published_manifest.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleManifest())
 			},
@@ -319,7 +377,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "published snapshot",
-			path: "published_snapshot.hex",
+			path: "testdata/v1/published_snapshot.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleSnapshot())
 			},
@@ -330,7 +388,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "published tail",
-			path: "published_tail.hex",
+			path: "testdata/v1/published_tail.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleTail())
 			},
@@ -341,7 +399,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "block index with frame checksum",
-			path: "block_index.hex",
+			path: "testdata/v1/block_index.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleBlockIndex(t))
 			},
@@ -352,7 +410,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "frame checksum",
-			path: "frame_checksum.hex",
+			path: "testdata/v1/frame_checksum.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleFrameChecksum())
 			},
@@ -363,7 +421,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "backend object set",
-			path: "backend_object_set.hex",
+			path: "testdata/v1/backend_object_set.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleBackendObjectSet())
 			},
@@ -374,7 +432,7 @@ func initialFixtures() []fixture {
 		},
 		{
 			name: "envelope",
-			path: "envelope_record.hex",
+			path: "testdata/v1/envelope_record.hex",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleEnvelopeRecord(t))
 			},
@@ -643,7 +701,7 @@ func objectRef(kind storagev1.BackendObjectKind, key string, length uint64, chec
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(fixtureVersionDir, name))
+	data, err := os.ReadFile(filepath.Clean(name))
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
@@ -656,10 +714,10 @@ func readFixture(t *testing.T, name string) []byte {
 
 func writeFixture(t *testing.T, name string, data []byte) {
 	t.Helper()
-	if err := os.MkdirAll(fixtureVersionDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 		t.Fatalf("create fixture dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(fixtureVersionDir, name), []byte(hex.EncodeToString(data)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Clean(name), []byte(hex.EncodeToString(data)+"\n"), 0o644); err != nil {
 		t.Fatalf("write fixture %s: %v", name, err)
 	}
 }
@@ -673,10 +731,10 @@ func mustMarshal(t *testing.T, message proto.Message) []byte {
 	return data
 }
 
-func assertUnknownPreserved(t *testing.T, data []byte, unknown []byte) {
+func assertUnknownPreserved(t *testing.T, message proto.Message, unknown []byte) {
 	t.Helper()
-	if !bytes.Contains(data, unknown) {
-		t.Fatalf("round-trip data lost unknown field %x in %x", unknown, data)
+	if got := message.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
+		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
 	}
 }
 
