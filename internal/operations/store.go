@@ -39,6 +39,19 @@ type RecoveryResult struct {
 	Ignored           int
 }
 
+type recoveryUpdateKind int
+
+const (
+	recoveryUpdateRequeued recoveryUpdateKind = iota + 1
+	recoveryUpdateFailedUnsupported
+)
+
+type recoveryUpdate struct {
+	expected  *adminv1.Operation
+	recovered *adminv1.Operation
+	kind      recoveryUpdateKind
+}
+
 func Open(dir string) (*Store, error) {
 	db, err := pebble.Open(filepath.Join(dir, "operations"), &pebble.Options{})
 	if err != nil {
@@ -195,26 +208,14 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 	if err != nil {
 		return result, err
 	}
-	var updates []*adminv1.Operation
+	var candidates []recoveryUpdate
 	for _, operation := range all {
 		result.Scanned++
 		switch operation.GetState() {
 		case adminv1.OperationState_OPERATION_STATE_QUEUED:
 			result.Queued++
 		case adminv1.OperationState_OPERATION_STATE_RUNNING:
-			latest, err := s.Get(operation.GetOperationId())
-			if err != nil {
-				if errors.Is(err, ErrNotFound) {
-					result.Ignored++
-					continue
-				}
-				return result, err
-			}
-			if latest.GetState() != adminv1.OperationState_OPERATION_STATE_RUNNING || !proto.Equal(latest, operation) {
-				result.Ignored++
-				continue
-			}
-			recovered := cloneOperation(latest)
+			recovered := cloneOperation(operation)
 			if supportedTypes[recovered.GetOperationType()] {
 				recovered.State = adminv1.OperationState_OPERATION_STATE_QUEUED
 				recovered.FinishedAt = nil
@@ -222,8 +223,11 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 					Code:    "SCRAP_OPERATION_RESTART_REQUEUED",
 					Message: "operation was running during process restart and was requeued for idempotent retry",
 				})
-				updates = append(updates, recovered)
-				result.Requeued++
+				candidates = append(candidates, recoveryUpdate{
+					expected:  operation,
+					recovered: recovered,
+					kind:      recoveryUpdateRequeued,
+				})
 				continue
 			}
 			recovered.State = adminv1.OperationState_OPERATION_STATE_FAILED
@@ -236,14 +240,32 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 				Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
 				Message: fmt.Sprintf("operation type %q cannot be resumed after restart", recovered.GetOperationType()),
 			}
-			updates = append(updates, recovered)
-			result.FailedUnsupported++
+			candidates = append(candidates, recoveryUpdate{
+				expected:  operation,
+				recovered: recovered,
+				kind:      recoveryUpdateFailedUnsupported,
+			})
 		default:
 			if isTerminal(operation.GetState()) {
 				result.Terminal++
 				continue
 			}
 			result.Ignored++
+		}
+	}
+	verified, skipped, err := s.verifyRecoveryUpdates(candidates)
+	if err != nil {
+		return result, err
+	}
+	result.Ignored += skipped
+	updates := make([]*adminv1.Operation, 0, len(verified))
+	for _, candidate := range verified {
+		updates = append(updates, candidate.recovered)
+		switch candidate.kind {
+		case recoveryUpdateRequeued:
+			result.Requeued++
+		case recoveryUpdateFailedUnsupported:
+			result.FailedUnsupported++
 		}
 	}
 	if err := s.putBatch(updates); err != nil {
@@ -428,6 +450,30 @@ func (s *Store) get(key []byte) ([]byte, bool, error) {
 	}
 	defer closer.Close()
 	return append([]byte(nil), value...), true, nil
+}
+
+func (s *Store) verifyRecoveryUpdates(candidates []recoveryUpdate) ([]recoveryUpdate, int, error) {
+	if len(candidates) == 0 {
+		return nil, 0, nil
+	}
+	verified := make([]recoveryUpdate, 0, len(candidates))
+	skipped := 0
+	for _, candidate := range candidates {
+		latest, err := s.Get(candidate.expected.GetOperationId())
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				skipped++
+				continue
+			}
+			return nil, skipped, err
+		}
+		if latest.GetState() != adminv1.OperationState_OPERATION_STATE_RUNNING || !proto.Equal(latest, candidate.expected) {
+			skipped++
+			continue
+		}
+		verified = append(verified, candidate)
+	}
+	return verified, skipped, nil
 }
 
 func (s *Store) putBatch(operations []*adminv1.Operation) error {
