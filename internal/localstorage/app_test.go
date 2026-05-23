@@ -965,6 +965,134 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	}
 }
 
+func TestRunBackendUploadOnceDoesNotPublishDeferredOpenBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("deferred open block")
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+
+	result, err := app.RunBackendUploadOnce(ctx, backendStore)
+	if err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	if result.Sealed || result.Upload.Scanned != 1 || result.Upload.Deferred != 1 || result.Upload.Uploaded != 0 {
+		t.Fatalf("upload result = %#v, want one deferred open block", result)
+	}
+	if result.MetadataPublished || result.MetadataPublication != nil {
+		t.Fatalf("metadata publication = %#v, want no checkpoint until a block uploads", result.MetadataPublication)
+	}
+	if _, err := published.VerifyCurrentCheckpoint(ctx, backendStore, localPublishedCellID); !errors.Is(err, published.ErrCurrentPointerNotFound) {
+		t.Fatalf("current checkpoint error = %v, want missing pointer", err)
+	}
+}
+
+func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	data := []byte("recovered pending upload block")
+	doc := testDocumentIdentity()
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+
+	result, err := reopened.RunBackendUploadOnce(ctx, backendStore)
+	if err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	if result.Sealed || result.Upload.Uploaded != 1 || result.Upload.Deferred != 0 || !result.MetadataPublished {
+		t.Fatalf("backend upload result = %#v, want recovered block upload and checkpoint", result)
+	}
+	if !stringSliceContains(result.SealedBlockIDs, stored.Location.BlockID) {
+		t.Fatalf("sealed block ids = %#v, want recovered block %q", result.SealedBlockIDs, stored.Location.BlockID)
+	}
+	intent, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID)
+	if err != nil {
+		t.Fatalf("get upload intent: %v", err)
+	}
+	if intent.State != metastore.UploadStateUploaded {
+		t.Fatalf("upload intent = %#v, want uploaded", intent)
+	}
+}
+
+func TestRunBackendUploadOnceRepublishesMissingCurrentPointerAfterUploadedIntentRestart(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("uploaded intent missing pointer")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backend store: %v", err)
+	}
+	first, err := app.RunBackendUploadOnce(ctx, backendStore)
+	if err != nil {
+		t.Fatalf("run initial backend upload once: %v", err)
+	}
+	if !first.MetadataPublished || first.MetadataPublication == nil {
+		t.Fatalf("initial metadata publication = %#v, want published", first.MetadataPublication)
+	}
+	missingPointer := &missingCurrentPointerBackend{
+		MutableStore:      backendStore,
+		missingPointerKey: first.MetadataPublication.PointerKey,
+	}
+
+	second, err := app.RunBackendUploadOnce(ctx, missingPointer)
+	if err != nil {
+		t.Fatalf("rerun backend upload once: %v", err)
+	}
+	if second.Upload.Uploaded != 0 || second.Upload.Deferred != 0 || !second.MetadataPublished {
+		t.Fatalf("rerun result = %#v, want pointer republished without uploading", second)
+	}
+	if _, err := published.VerifyCurrentCheckpoint(ctx, missingPointer, localPublishedCellID); err != nil {
+		t.Fatalf("verify republished current checkpoint: %v", err)
+	}
+}
+
 func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -2964,6 +3092,7 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 
 func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 	ctx := context.Background()
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing-process-tmp"))
 	app := openTestApplication(t)
 	app.now = fixedClock(time.Unix(801, 0).UTC())
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("scratch drill bytes"))
@@ -3483,6 +3612,32 @@ func (s *faultingBackendStore) ReadObjectRange(ctx context.Context, key string, 
 	return s.Store.ReadObjectRange(ctx, key, selected, writer)
 }
 
+type missingCurrentPointerBackend struct {
+	backend.MutableStore
+	missingPointerKey string
+}
+
+func (s *missingCurrentPointerBackend) HeadObject(ctx context.Context, key string) (backend.Object, error) {
+	if key == s.missingPointerKey {
+		return backend.Object{}, backend.ErrNotFound
+	}
+	return s.MutableStore.HeadObject(ctx, key)
+}
+
+func (s *missingCurrentPointerBackend) ReadObjectRange(ctx context.Context, key string, selected backend.Range, writer io.Writer) error {
+	if key == s.missingPointerKey {
+		return backend.ErrNotFound
+	}
+	return s.MutableStore.ReadObjectRange(ctx, key, selected, writer)
+}
+
+func (s *missingCurrentPointerBackend) PutMutableObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
+	if key == s.missingPointerKey {
+		s.missingPointerKey = ""
+	}
+	return s.MutableStore.PutMutableObject(ctx, key, reader)
+}
+
 func queuedTombstoneOperation(operationID string, targets []*adminv1.Target) *adminv1.Operation {
 	return queuedOperation(operationID, "tombstone", targets)
 }
@@ -3854,6 +4009,15 @@ func hasWarningCode(warnings []*adminv1.OperationWarning, code string) bool {
 func hasRequiredObject(objects []*publishedv1.ObjectRef, key string) bool {
 	for _, object := range objects {
 		if object.GetObjectKey() == key {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

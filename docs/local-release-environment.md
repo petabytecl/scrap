@@ -39,6 +39,7 @@ make local-kind-evidence
 make openbao-smoke-evidence
 make capacity-sample
 make local-soak-evidence
+make local-dr-drill-evidence
 make local-kind-delete
 ```
 
@@ -134,6 +135,48 @@ make local-soak-evidence \
   SCRAP_PUBLIC_ADDR=127.0.0.1:18080 \
   SCRAP_ADMIN_ADDR=127.0.0.1:18081 \
   CAPACITY_SAMPLE_REPORT=capacity-sample-advisory.json
+```
+
+## Local DR Drill Rehearsal
+
+`make local-dr-drill-evidence` runs the #88 release-artifact DR drill rehearsal
+and writes `local-dr-drill-evidence.json` by default. It first refreshes the
+LocalStack capacity sample and OpenBao Transit smoke reports, then writes a
+bounded fixture document through the local public API and drives the DR Rebuild
+Drill operator flow through the admin API.
+
+The local-kind `scrapd` manifest lowers the non-production block seal threshold
+so small rehearsal writes can seal, upload, and publish a restorable metadata
+checkpoint without writing a production-scale block. The drill records each
+runbook command, operator approval, config/profile, image identity, release SHA,
+dirty-tree status, operation IDs, terminal status, measured local recovery time,
+latest restorable checkpoint time, LocalStack backend probe evidence, published
+checkpoint artifact verification, and OpenBao crypto-unavailable outcomes.
+
+Local adaptation: the single local-kind source service cannot also be a separate
+fresh target cluster. The `dr-drill` operation owns the fresh scratch metadata
+store used to prove metadata import and backend byte restore. The
+`metadata-restore` step is run from the dry-run recovery plan so the source cell
+is not mutated while still verifying the published checkpoint.
+
+This evidence remains release-artifact rehearsal only:
+
+- it does not approve live production RTO or RPO;
+- it does not approve downstream deployment rollout;
+- it does not approve provider account, object-store bucket, or OpenBao HA
+  operations;
+- any failed or skipped step requires a linked blocking issue or an approved
+  owner+expiry release exception before signoff.
+
+The default command expects public/admin gRPC, LocalStack, and OpenBao to be
+reachable:
+
+```sh
+make local-dr-drill-evidence \
+  SCRAP_PUBLIC_ADDR=127.0.0.1:18080 \
+  SCRAP_ADMIN_ADDR=127.0.0.1:18081 \
+  CAPACITY_SAMPLE_BACKEND_URL=http://127.0.0.1:4566/scrap-local \
+  CAPACITY_SAMPLE_OPENBAO_ADDR=http://127.0.0.1:8200
 ```
 
 ## GitOps Boundary

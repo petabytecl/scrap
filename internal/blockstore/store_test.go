@@ -159,6 +159,46 @@ func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	}
 }
 
+func TestSealBlockMarksRecoveredNonCurrentBlockSealed(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	first, err := store.Append(ctx, bytes.NewReader([]byte("first block")))
+	if err != nil {
+		t.Fatalf("append first block: %v", err)
+	}
+	firstID := first.BlockID
+	if err := store.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	if reopened.CurrentBlockID() == firstID {
+		t.Fatalf("current block id = %s, want a new current block after reopen", firstID)
+	}
+
+	sealed, err := reopened.SealBlock(ctx, firstID)
+	if err != nil {
+		t.Fatalf("seal recovered block: %v", err)
+	}
+	if !sealed {
+		t.Fatal("seal recovered block returned false, want true")
+	}
+	isSealed, err := reopened.IsSealed(firstID)
+	if err != nil {
+		t.Fatalf("is sealed: %v", err)
+	}
+	if !isSealed {
+		t.Fatal("recovered block is not sealed")
+	}
+}
+
 func TestSealCurrentRejectsEmptyBlock(t *testing.T) {
 	store := openTestStore(t)
 	_, err := store.SealCurrent(context.Background())

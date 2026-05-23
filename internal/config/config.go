@@ -13,6 +13,7 @@ const (
 	DefaultAdminListenAddress    = "127.0.0.1:18081"
 	DefaultBackendUploadInterval = 30 * time.Second
 	DefaultOperationRunInterval  = 5 * time.Second
+	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
 )
 
 const (
@@ -39,6 +40,7 @@ type Config struct {
 	LocalBackendDataDir             string
 	BackendUploadInterval           time.Duration
 	OperationRunInterval            time.Duration
+	LocalSealBlockAtBytes           uint64
 	EnableProductionWriteACK        bool
 	ProductionReadinessEvidence     ProductionReadinessEvidence
 }
@@ -59,6 +61,7 @@ func Default() Config {
 		AdminListenAddress:    DefaultAdminListenAddress,
 		BackendUploadInterval: DefaultBackendUploadInterval,
 		OperationRunInterval:  DefaultOperationRunInterval,
+		LocalSealBlockAtBytes: DefaultLocalSealBlockAtBytes,
 	}
 }
 
@@ -87,6 +90,9 @@ func (c Config) Validate() error {
 	}
 	if c.OperationRunInterval <= 0 {
 		return errors.New("operation_run_interval must be positive")
+	}
+	if c.LocalSealBlockAtBytes == 0 {
+		return errors.New("local_seal_block_at_bytes must be positive")
 	}
 	if c.EnableLocalFilesystemBackend {
 		if !c.EnableLocalNonProductionStorage {

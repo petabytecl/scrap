@@ -104,6 +104,14 @@ func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testin
 			AdminListenAddress:    DefaultAdminListenAddress,
 			BackendUploadInterval: DefaultBackendUploadInterval,
 			OperationRunInterval:  0,
+			LocalSealBlockAtBytes: DefaultLocalSealBlockAtBytes,
+		},
+		"zero local seal block bytes": {
+			PublicListenAddress:   DefaultPublicListenAddress,
+			AdminListenAddress:    DefaultAdminListenAddress,
+			BackendUploadInterval: DefaultBackendUploadInterval,
+			OperationRunInterval:  DefaultOperationRunInterval,
+			LocalSealBlockAtBytes: 0,
 		},
 	}
 
