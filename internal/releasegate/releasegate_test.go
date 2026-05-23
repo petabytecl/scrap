@@ -68,6 +68,33 @@ func TestEvaluateReportsMissingReadinessEvidence(t *testing.T) {
 	}
 }
 
+func TestCrashFaultGatesPointToDedicatedEvidenceCommand(t *testing.T) {
+	for _, gateID := range []string{"crash-fault", "peer-byte-durability", "backend-restore"} {
+		def, ok := definition(gateID)
+		if !ok {
+			t.Fatalf("missing definition %s", gateID)
+		}
+		if !hasCommand(def, "make crash-fault-evidence") {
+			t.Fatalf("definition %s commands = %#v, want make crash-fault-evidence", gateID, def.Commands)
+		}
+		if gateID != "backend-restore" && len(def.BlockingIssues) != 0 {
+			t.Fatalf("definition %s blockers = %#v, want no #85 blocker after command exists", gateID, def.BlockingIssues)
+		}
+	}
+}
+
+func TestClosedImplementationIssuesAreNotReportedAsGateBlockers(t *testing.T) {
+	for _, gateID := range []string{"fuzz-property", "hardened-lint", "crash-fault", "peer-byte-durability"} {
+		def, ok := definition(gateID)
+		if !ok {
+			t.Fatalf("missing definition %s", gateID)
+		}
+		if len(def.BlockingIssues) != 0 {
+			t.Fatalf("definition %s blockers = %#v, want no closed implementation blockers", gateID, def.BlockingIssues)
+		}
+	}
+}
+
 func TestEvaluateAcceptsCompleteReleaseManifest(t *testing.T) {
 	manifest := Manifest{Evidence: make([]Evidence, 0, len(RequiredForTier(TierRelease)))}
 	for _, def := range RequiredForTier(TierRelease) {
@@ -136,4 +163,22 @@ func missingGate(report Report, gateID string) (MissingGate, bool) {
 		}
 	}
 	return MissingGate{}, false
+}
+
+func definition(gateID string) (GateDefinition, bool) {
+	for _, def := range Definitions() {
+		if def.ID == gateID {
+			return def, true
+		}
+	}
+	return GateDefinition{}, false
+}
+
+func hasCommand(def GateDefinition, command string) bool {
+	for _, candidate := range def.Commands {
+		if candidate == command {
+			return true
+		}
+	}
+	return false
 }

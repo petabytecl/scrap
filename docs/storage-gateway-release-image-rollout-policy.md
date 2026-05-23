@@ -41,6 +41,7 @@ Required targets before production write ACK eligibility:
 | `make test-leak` | Run goroutine/resource leak checks for long-lived workers and servers. | Nightly and release evidence. |
 | `make test-fuzz` | Run corpus-regression fuzz tests for parsers, codecs, request validation, and format boundaries. | Nightly and release evidence for affected packages. |
 | `make test-compat` | Run mixed-version and stored-fixture compatibility tests for protobuf, metadata, block, index, and envelope formats. | PR for schema/format changes; release evidence. |
+| `make crash-fault-evidence` | Run the dedicated crash/recovery and fault-injection evidence catalog and write a JSON release report. | Dedicated runner and release evidence for crash/fault, peer-byte, and backend-restore gates. |
 | `make perf-smoke` | Run stable lightweight performance smoke tests. | PR only when affected and cheap; dedicated evidence for production claims. |
 | `make image` | Build the production image from pinned inputs. | Release path. |
 | `make image-debug` | Build or document a debug image/workflow separate from production images. | Release path. |

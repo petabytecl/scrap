@@ -54,6 +54,26 @@ Artifacts must not include document bytes, plaintext secrets, plaintext data
 encryption keys, wrapped DEKs, OpenBao tokens, backend credentials, or raw
 customer payloads.
 
+## Dedicated Campaign Command
+
+`make crash-fault-evidence` runs `scrap-crash-fault-evidence`, which executes a
+repo-owned scenario catalog outside normal PR `make check`. The command emits a
+JSON `crash-fault-evidence-report` with commit SHA, dirty-tree marker, runner
+profile, filesystem profile, seed, config, duration, scenario IDs, failure
+schedules, sanitized command logs, and release-gate evidence entries for:
+
+- `crash-fault`;
+- `peer-byte-durability`;
+- `backend-restore`.
+
+The catalog covers acknowledged-write and visible-read crash boundaries, local
+prepare/openlog replay, Raft metadata restart/snapshot/stale-leader/ReadIndex
+faults, peer byte preparation and repair, backend upload/restore/prewarm/DR
+drill paths, durable operation recovery, and fake OpenBao Transit outage and
+missing-key paths. Target-profile release aggregation remains responsible for
+retaining the report artifact and deciding whether the runner profile is
+authoritative for production readiness.
+
 ## Release-Blocking Invariants
 
 | ID | Path | Invariant | Current automated evidence | Release evidence or issue | Gate status |
@@ -83,22 +103,22 @@ customer payloads.
 
 ## Blocking Issue Map
 
-Existing blockers:
+Open blockers:
 
-- #45 automates release-gate aggregation and missing-evidence reporting.
 - #48 captures human-owned capacity, compliance, product, operations, security,
   and release signoff inputs.
-- #56 removes or narrows the `gosec` baseline for path and integer conversion
-  findings.
-- #57 replaces broad unchecked `Close` lint exclusions with explicit handling.
-
-New blockers created from this matrix:
-
-- #85 implements the dedicated crash and fault evidence campaign.
 - #86 captures real OpenBao Transit smoke evidence.
 - #87 runs production soak and capacity evidence.
 - #88 executes fresh-cluster DR rebuild drill evidence.
 - #89 implements the final production write ACK enablement gate.
+
+Resolved tooling and evidence-command work:
+
+- #45 automated release-gate aggregation and missing-evidence reporting.
+- #56 removed or narrowed the `gosec` baseline for path and integer conversion
+  findings.
+- #57 replaced broad unchecked `Close` lint exclusions with explicit handling.
+- #85 implements the dedicated crash and fault evidence command.
 
 No production write ACK gate may be marked ready while any linked blocker for
 its row remains open, unless a release exception with owner, scope, mitigation,

@@ -9,6 +9,7 @@
 .PHONY: build
 .PHONY: check
 .PHONY: release-check
+.PHONY: crash-fault-evidence
 .PHONY: spike-write-path
 .PHONY: spike-write-path-raft
 .PHONY: spike-write-path-raft-durable
@@ -54,13 +55,16 @@ test-race:
 	$(GO) test -race ./...
 
 build:
-	$(GO) build ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate
+	$(GO) build ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence
 
 check: fmt-check proto-check test-compat lint test test-race build
 
 release-check:
 	@test -n "$(RELEASE_EVIDENCE_MANIFEST)" || (echo "RELEASE_EVIDENCE_MANIFEST is required" >&2; exit 2)
 	$(GO) run ./cmd/scrap-release-gate --tier release --manifest "$(RELEASE_EVIDENCE_MANIFEST)"
+
+crash-fault-evidence:
+	$(GO) run ./cmd/scrap-crash-fault-evidence --out "$${SCRAP_CRASH_FAULT_EVIDENCE_REPORT:-crash-fault-evidence.json}"
 
 spike-write-path:
 	$(GO) run ./cmd/scrap-spike
