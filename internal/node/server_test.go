@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
+	"github.com/petabytecl/scrap/internal/config"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/localstorage"
@@ -328,6 +330,35 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Serve returned error: %v", err)
+	}
+}
+
+func TestListenRejectsProductionWriteACKWithoutReadinessGate(t *testing.T) {
+	cfg := config.Default()
+	cfg.PublicListenAddress = "127.0.0.1:0"
+	cfg.AdminListenAddress = "127.0.0.1:1"
+	cfg.EnableProductionWriteACK = true
+
+	server, err := Listen(cfg, Applications{})
+	if server != nil {
+		server.Close()
+	}
+	if !errors.Is(err, config.ErrProductionWriteACKReadinessGate) {
+		t.Fatalf("Listen error = %v, want %v", err, config.ErrProductionWriteACKReadinessGate)
+	}
+	for _, gate := range []string{
+		config.ProductionWriteACKReadinessGate,
+		config.ReadinessGateMetadataCompatibility,
+		config.ReadinessGateRaftMetadataDurability,
+		config.ReadinessGatePeerByteDurability,
+		config.ReadinessGateBackendRestoreWorkflow,
+		config.ReadinessGateOpenBaoEnvelopeWorkflow,
+		config.ReadinessGateCapacityAdmission,
+		config.ReadinessGateOperatorReadiness,
+	} {
+		if !strings.Contains(err.Error(), gate) {
+			t.Fatalf("Listen error %q does not name missing gate %s", err, gate)
+		}
 	}
 }
 

@@ -15,6 +15,20 @@ const (
 	DefaultOperationRunInterval  = 5 * time.Second
 )
 
+const (
+	ProductionWriteACKReadinessGate       = "SCRAP_PRODUCTION_WRITE_ACK_READINESS"
+	ReadinessGateMetadataCompatibility    = "SCRAP_METADATA_COMPATIBILITY_BOUNDARY_V1"
+	ReadinessGateRaftMetadataDurability   = "SCRAP_RAFT_METADATA_DURABILITY"
+	ReadinessGatePeerByteDurability       = "SCRAP_PEER_BYTE_DURABILITY"
+	ReadinessGateBackendRestoreWorkflow   = "SCRAP_BACKEND_RESTORE_WORKFLOW"
+	ReadinessGateOpenBaoEnvelopeWorkflow  = "SCRAP_OPENBAO_ENVELOPE_WORKFLOW"
+	ReadinessGateCapacityAdmission        = "SCRAP_CAPACITY_ADMISSION"
+	ReadinessGateOperatorReadiness        = "SCRAP_OPERATOR_READINESS"
+	ReadinessGateProductionImplementation = "SCRAP_PRODUCTION_WRITE_ACK_IMPLEMENTATION"
+)
+
+var ErrProductionWriteACKReadinessGate = errors.New("production write ACK readiness gate blocked")
+
 type Config struct {
 	PublicListenAddress             string
 	AdminListenAddress              string
@@ -24,6 +38,18 @@ type Config struct {
 	LocalBackendDataDir             string
 	BackendUploadInterval           time.Duration
 	OperationRunInterval            time.Duration
+	EnableProductionWriteACK        bool
+	ProductionReadinessEvidence     ProductionReadinessEvidence
+}
+
+type ProductionReadinessEvidence struct {
+	MetadataCompatibilityBoundary bool
+	RaftMetadataDurability        bool
+	PeerByteDurability            bool
+	BackendRestoreWorkflow        bool
+	OpenBaoEnvelopeWorkflow       bool
+	CapacityAdmission             bool
+	OperatorReadiness             bool
 }
 
 func Default() Config {
@@ -44,6 +70,9 @@ func (c Config) Validate() error {
 	}
 	if c.PublicListenAddress == c.AdminListenAddress {
 		return errors.New("public and admin listen addresses must be distinct")
+	}
+	if err := c.validateProductionWriteACKGate(); err != nil {
+		return err
 	}
 	if c.EnableLocalNonProductionStorage {
 		if strings.TrimSpace(c.LocalDataDir) == "" {
@@ -69,6 +98,56 @@ func (c Config) Validate() error {
 		return errors.New("local_backend_data_dir requires local filesystem backend to be explicitly enabled")
 	}
 	return nil
+}
+
+func (c Config) validateProductionWriteACKGate() error {
+	if !c.EnableProductionWriteACK {
+		return nil
+	}
+	if c.EnableLocalNonProductionStorage {
+		return fmt.Errorf(
+			"%w: %s cannot run with local non-production storage enabled",
+			ErrProductionWriteACKReadinessGate,
+			ProductionWriteACKReadinessGate,
+		)
+	}
+	missing := c.ProductionReadinessEvidence.missingGates()
+	if len(missing) > 0 {
+		return fmt.Errorf(
+			"%w: %s missing readiness evidence for %s",
+			ErrProductionWriteACKReadinessGate,
+			ProductionWriteACKReadinessGate,
+			strings.Join(missing, ", "),
+		)
+	}
+	return fmt.Errorf(
+		"%w: %s missing readiness evidence for %s; production write ACK mode is not implemented yet",
+		ErrProductionWriteACKReadinessGate,
+		ProductionWriteACKReadinessGate,
+		ReadinessGateProductionImplementation,
+	)
+}
+
+func (e ProductionReadinessEvidence) missingGates() []string {
+	gates := []struct {
+		name  string
+		ready bool
+	}{
+		{name: ReadinessGateMetadataCompatibility, ready: e.MetadataCompatibilityBoundary},
+		{name: ReadinessGateRaftMetadataDurability, ready: e.RaftMetadataDurability},
+		{name: ReadinessGatePeerByteDurability, ready: e.PeerByteDurability},
+		{name: ReadinessGateBackendRestoreWorkflow, ready: e.BackendRestoreWorkflow},
+		{name: ReadinessGateOpenBaoEnvelopeWorkflow, ready: e.OpenBaoEnvelopeWorkflow},
+		{name: ReadinessGateCapacityAdmission, ready: e.CapacityAdmission},
+		{name: ReadinessGateOperatorReadiness, ready: e.OperatorReadiness},
+	}
+	missing := make([]string, 0, len(gates))
+	for _, gate := range gates {
+		if !gate.ready {
+			missing = append(missing, gate.name)
+		}
+	}
+	return missing
 }
 
 func validateListenAddress(field string, value string) error {
