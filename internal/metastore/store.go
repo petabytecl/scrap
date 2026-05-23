@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 )
 
@@ -135,6 +136,74 @@ func (s *Store) ListDocuments(filter DocumentFilter) ([]Document, error) {
 		return nil, err
 	}
 	return documents, nil
+}
+
+func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
+	if _, err := MarshalShardSnapshot(snapshot); err != nil {
+		return err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+
+	for _, prefix := range [][]byte{
+		documentPrefix(),
+		transactionDocumentsRootPrefix(),
+		blockDocumentsRootPrefix(),
+		transactionPrefix(),
+		uploadIntentPrefix(),
+		repairStatesPrefix(),
+	} {
+		if err := batch.DeleteRange(prefix, prefixUpperBound(prefix), nil); err != nil {
+			return err
+		}
+	}
+	for _, record := range snapshot.GetDocuments() {
+		document := documentFromProto(record)
+		value, err := marshalDocument(document)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(documentKey(document.Identity), value, nil); err != nil {
+			return err
+		}
+		if err := batch.Set(transactionDocumentKey(document.Identity), value, nil); err != nil {
+			return err
+		}
+		if err := batch.Set(blockDocumentKey(document.Location.BlockID, document.Identity), value, nil); err != nil {
+			return err
+		}
+	}
+	for _, record := range snapshot.GetTransactions() {
+		transaction := transactionFromProto(record)
+		value, err := marshalTransaction(transaction)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(transactionKey(transaction.Identity), value, nil); err != nil {
+			return err
+		}
+	}
+	for _, record := range snapshot.GetUploadIntents() {
+		intent := uploadIntentFromProto(record)
+		value, err := marshalUploadIntent(intent)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(uploadIntentKey(intent.BlockID), value, nil); err != nil {
+			return err
+		}
+	}
+	for _, record := range snapshot.GetRepairStates() {
+		state := repairStateFromProto(record)
+		value, err := marshalRepairState(state)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(repairStateKey(state.Identity, state.IncidentID), value, nil); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 func (s *Store) FindDocuments(transaction identity.Transaction, filter DocumentFilter) ([]Document, error) {
@@ -550,6 +619,10 @@ func transactionDocumentsPrefix(transaction identity.Transaction) []byte {
 	return []byte("document_by_transaction\x00" + transaction.TenantID + "\x00" + transaction.TransactionID + "\x00")
 }
 
+func transactionDocumentsRootPrefix() []byte {
+	return []byte("document_by_transaction\x00")
+}
+
 func transactionDocumentKey(doc identity.Document) []byte {
 	return append(transactionDocumentsPrefix(identity.Transaction{
 		TenantID:      doc.TenantID,
@@ -559,6 +632,10 @@ func transactionDocumentKey(doc identity.Document) []byte {
 
 func blockDocumentsPrefix(blockID string) []byte {
 	return []byte("document_by_block\x00" + blockID + "\x00")
+}
+
+func blockDocumentsRootPrefix() []byte {
+	return []byte("document_by_block\x00")
 }
 
 func blockDocumentKey(blockID string, doc identity.Document) []byte {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -15,13 +16,24 @@ import (
 )
 
 type Authority struct {
-	mu      sync.Mutex
-	shardID string
-	log     *Log
-	store   *metastore.Store
+	mu            sync.Mutex
+	dir           string
+	shardID       string
+	log           *Log
+	store         *metastore.Store
+	members       []Member
+	snapshotIndex uint64
+}
+
+type AuthorityOptions struct {
+	Members []Member
 }
 
 func OpenAuthority(dir string, shardID string, store *metastore.Store) (*Authority, error) {
+	return OpenAuthorityWithOptions(dir, shardID, store, AuthorityOptions{})
+}
+
+func OpenAuthorityWithOptions(dir string, shardID string, store *metastore.Store, options AuthorityOptions) (*Authority, error) {
 	if shardID == "" {
 		return nil, errors.New("raftmeta: shard id is required")
 	}
@@ -32,7 +44,17 @@ func OpenAuthority(dir string, shardID string, store *metastore.Store) (*Authori
 	if err != nil {
 		return nil, err
 	}
-	authority := &Authority{shardID: shardID, log: log, store: store}
+	authority := &Authority{
+		dir:     dir,
+		shardID: shardID,
+		log:     log,
+		store:   store,
+		members: normalizeMembers(options.Members),
+	}
+	if err := authority.installLatestSnapshot(); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	if err := authority.replay(); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -52,6 +74,49 @@ func (a *Authority) AppliedIndex() uint64 {
 		return 0
 	}
 	return a.log.LastIndex()
+}
+
+func (a *Authority) CreateSnapshot(ctx context.Context) (SnapshotInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return SnapshotInfo{}, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snapshot, err := a.buildSnapshotLocked(a.log.LastIndex())
+	if err != nil {
+		return SnapshotInfo{}, err
+	}
+	if err := writeSnapshotFile(a.dir, snapshot); err != nil {
+		return SnapshotInfo{}, err
+	}
+	a.snapshotIndex = snapshot.GetLastIndex()
+	return snapshotInfo(a.dir, snapshot), nil
+}
+
+func (a *Authority) CompactLog(ctx context.Context, throughIndex uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if throughIndex == 0 {
+		return nil
+	}
+	if a.snapshotIndex < throughIndex {
+		snapshot, err := readSnapshotFile(a.dir)
+		if errors.Is(err, errSnapshotNotFound) {
+			snapshot = nil
+		} else if err != nil {
+			return err
+		}
+		if snapshot != nil {
+			a.snapshotIndex = snapshot.GetLastIndex()
+		}
+	}
+	if a.snapshotIndex < throughIndex {
+		return fmt.Errorf("raftmeta: snapshot through index %d is required before compacting through index %d", a.snapshotIndex, throughIndex)
+	}
+	return a.log.Compact(throughIndex)
 }
 
 func (a *Authority) CommitDocument(ctx context.Context, document metastore.Document, commandID string, proposedAt time.Time) error {
@@ -256,11 +321,123 @@ func (a *Authority) replay() error {
 		return err
 	}
 	for _, entry := range entries {
+		if entry.Index <= a.snapshotIndex {
+			continue
+		}
 		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
 			return fmt.Errorf("raftmeta: apply command at index %d: %w", entry.Index, err)
 		}
 	}
 	return nil
+}
+
+func (a *Authority) installLatestSnapshot() error {
+	snapshot, err := readSnapshotFile(a.dir)
+	if errors.Is(err, errSnapshotNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if snapshot.GetShardId() != a.shardID {
+		return fmt.Errorf("raftmeta: snapshot shard %q does not match authority shard %q", snapshot.GetShardId(), a.shardID)
+	}
+	if err := a.store.ApplyShardSnapshot(snapshot); err != nil {
+		return err
+	}
+	a.snapshotIndex = snapshot.GetLastIndex()
+	a.log.EnsureNextIndex(a.snapshotIndex + 1)
+	a.members = normalizeMembers(membershipFromProto(snapshot.GetMembership()))
+	return nil
+}
+
+func (a *Authority) buildSnapshotLocked(lastIndex uint64) (*metastorev1.ShardSnapshot, error) {
+	documents, err := a.store.ListDocuments(metastore.DocumentFilter{})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(documents, func(i, j int) bool {
+		left := documents[i].Identity
+		right := documents[j].Identity
+		if left.TenantID != right.TenantID {
+			return left.TenantID < right.TenantID
+		}
+		if left.TransactionID != right.TransactionID {
+			return left.TransactionID < right.TransactionID
+		}
+		return left.DocumentName < right.DocumentName
+	})
+	transactions, err := a.store.ListTransactions()
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(transactions, func(i, j int) bool {
+		if transactions[i].Identity.TenantID != transactions[j].Identity.TenantID {
+			return transactions[i].Identity.TenantID < transactions[j].Identity.TenantID
+		}
+		return transactions[i].Identity.TransactionID < transactions[j].Identity.TransactionID
+	})
+	uploadIntents, err := a.store.ListUploadIntents()
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(uploadIntents, func(i, j int) bool {
+		return uploadIntents[i].BlockID < uploadIntents[j].BlockID
+	})
+	repairStates, err := a.store.ListRepairStates()
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(repairStates, func(i, j int) bool {
+		left := repairStates[i]
+		right := repairStates[j]
+		if left.Identity.TenantID != right.Identity.TenantID {
+			return left.Identity.TenantID < right.Identity.TenantID
+		}
+		if left.Identity.TransactionID != right.Identity.TransactionID {
+			return left.Identity.TransactionID < right.Identity.TransactionID
+		}
+		if left.Identity.DocumentName != right.Identity.DocumentName {
+			return left.Identity.DocumentName < right.Identity.DocumentName
+		}
+		return left.IncidentID < right.IncidentID
+	})
+
+	snapshot := &metastorev1.ShardSnapshot{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       a.shardID,
+		LastIndex:     lastIndex,
+		Documents:     make([]*metastorev1.DocumentRecord, 0, len(documents)),
+		Transactions:  make([]*metastorev1.TransactionRecord, 0, len(transactions)),
+		UploadIntents: make([]*metastorev1.UploadIntentRecord, 0, len(uploadIntents)),
+		RepairStates:  make([]*metastorev1.RepairStateRecord, 0, len(repairStates)),
+		Membership:    membershipToProto(a.members),
+	}
+	for _, document := range documents {
+		record := metastore.DocumentRecord(document)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.Documents = append(snapshot.Documents, record)
+	}
+	for _, transaction := range transactions {
+		record := metastore.TransactionRecord(transaction)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.Transactions = append(snapshot.Transactions, record)
+	}
+	for _, intent := range uploadIntents {
+		record := metastore.UploadIntentRecord(intent)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.UploadIntents = append(snapshot.UploadIntents, record)
+	}
+	for _, state := range repairStates {
+		record := metastore.RepairStateRecord(state)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.RepairStates = append(snapshot.RepairStates, record)
+	}
+	return snapshot, nil
 }
 
 func (a *Authority) ensureNoConflictingDocument(document metastore.Document) error {
