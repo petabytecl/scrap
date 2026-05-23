@@ -80,6 +80,10 @@ func (f *FakeTransit) UnwrapDataKey(ctx context.Context, req UnwrapDataKeyReques
 		!bytes.Equal(key.WrappedDEK, req.WrappedDEK) {
 		return DataKey{}, fmt.Errorf("%w: key %s version %d", ErrKeyMaterialUnavailable, req.KeyID, req.KeyVersion)
 	}
+	expected := fakeWrapped(req.KeyID, req.KeyVersion, req.AAD, []byte(req.Algorithm), key.PlaintextDEK)
+	if !bytes.Equal(expected, req.WrappedDEK) {
+		return DataKey{}, fmt.Errorf("%w: AAD or algorithm mismatch for key %s version %d", ErrKeyMaterialUnavailable, req.KeyID, req.KeyVersion)
+	}
 	return cloneDataKey(key), nil
 }
 
@@ -101,6 +105,10 @@ func (f *FakeTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyReques
 		source.KeyID != req.SourceKeyID ||
 		source.KeyVersion != req.SourceKeyVersion {
 		return WrappedKey{}, fmt.Errorf("%w: source key %s version %d", ErrKeyMaterialUnavailable, req.SourceKeyID, req.SourceKeyVersion)
+	}
+	expected := fakeWrapped(req.SourceKeyID, req.SourceKeyVersion, req.AAD, []byte(req.Algorithm), source.PlaintextDEK)
+	if !bytes.Equal(expected, req.WrappedDEK) {
+		return WrappedKey{}, fmt.Errorf("%w: AAD or algorithm mismatch for source key %s version %d", ErrKeyMaterialUnavailable, req.SourceKeyID, req.SourceKeyVersion)
 	}
 	wrapped := fakeWrapped(req.DestinationKeyID, destinationVersion, req.AAD, []byte(req.Algorithm), source.PlaintextDEK)
 	key := DataKey{

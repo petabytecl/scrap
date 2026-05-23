@@ -1189,6 +1189,14 @@ func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("duplicate operation result = %#v, want idempotent success", result)
 	}
+	duplicateFinished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get duplicate operation: %v", err)
+	}
+	if duplicateFinished.GetProgress().GetCounters()["envelopes_rewrapped"] != "0" ||
+		duplicateFinished.GetProgress().GetCounters()["envelopes_skipped"] != "1" {
+		t.Fatalf("duplicate finished operation = %#v, want skipped no-op rewrap", duplicateFinished)
+	}
 	duplicate, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
 	if err != nil {
 		t.Fatalf("unmarshal duplicate envelope: %v", err)

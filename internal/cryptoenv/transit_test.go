@@ -104,4 +104,61 @@ func TestRewrapEnvelopeRecordIsDeterministicAndPreservesAAD(t *testing.T) {
 	if err := ValidateEnvelopeRecordForRestore(ctx, transit, first); err != nil {
 		t.Fatalf("validate rewrapped material: %v", err)
 	}
+
+	keyless, err := RewrapEnvelopeRecord(ctx, keylessRewrapTransit{Transit: transit}, material.Record, "transit/backend-v2", time.Unix(200, 0).UTC())
+	if err != nil {
+		t.Fatalf("rewrap with keyless adapter response: %v", err)
+	}
+	if keyless.GetKeyId() != "transit/backend-v2" {
+		t.Fatalf("keyless adapter rewrap key_id = %q, want destination fallback", keyless.GetKeyId())
+	}
+}
+
+func TestFakeTransitRejectsAADOrAlgorithmMismatch(t *testing.T) {
+	ctx := context.Background()
+	transit := NewFakeTransit(map[string]uint32{
+		"transit/backend-v1": 1,
+		"transit/backend-v2": 2,
+	})
+	material, err := CreateEnvelopeRecord(ctx, transit, EnvelopeRequest{
+		BlockID:     "block-1",
+		CellID:      "cell-a",
+		BlockObject: backend.Object{Key: "blocks/block-1.blk", Length: 128, SHA256: [32]byte{1}},
+		KeyID:       "transit/backend-v1",
+		CreatedAt:   time.Unix(100, 0).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create envelope: %v", err)
+	}
+	_, err = transit.UnwrapDataKey(ctx, UnwrapDataKeyRequest{
+		KeyID:      material.Record.GetKeyId(),
+		KeyVersion: material.Record.GetKeyVersion(),
+		WrappedDEK: material.Record.GetWrappedDek(),
+		AAD:        []byte("wrong aad"),
+		Algorithm:  material.Record.GetDekAlgorithm(),
+	})
+	if !errors.Is(err, ErrKeyMaterialUnavailable) {
+		t.Fatalf("unwrap error = %v, want key material unavailable for AAD mismatch", err)
+	}
+	_, err = transit.RewrapDataKey(ctx, RewrapDataKeyRequest{
+		SourceKeyID:      material.Record.GetKeyId(),
+		SourceKeyVersion: material.Record.GetKeyVersion(),
+		DestinationKeyID: "transit/backend-v2",
+		WrappedDEK:       material.Record.GetWrappedDek(),
+		AAD:              material.Record.GetAadContext(),
+		Algorithm:        "wrong-algorithm",
+	})
+	if !errors.Is(err, ErrKeyMaterialUnavailable) {
+		t.Fatalf("rewrap error = %v, want key material unavailable for algorithm mismatch", err)
+	}
+}
+
+type keylessRewrapTransit struct {
+	Transit
+}
+
+func (t keylessRewrapTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (WrappedKey, error) {
+	wrapped, err := t.Transit.RewrapDataKey(ctx, req)
+	wrapped.KeyID = ""
+	return wrapped, err
 }

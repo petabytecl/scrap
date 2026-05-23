@@ -293,6 +293,9 @@ func (a *Application) rewrapBlockEnvelope(ctx context.Context, store backend.Mut
 	if err != nil {
 		return false, err
 	}
+	if bytes.Equal(payload, data.Bytes()) {
+		return false, nil
+	}
 	if _, err := store.PutMutableObject(ctx, intent.EnvelopeObjectKey, bytes.NewReader(payload)); err != nil {
 		return false, err
 	}

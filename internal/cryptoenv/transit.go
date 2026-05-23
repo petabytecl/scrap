@@ -184,6 +184,9 @@ func RewrapEnvelopeRecord(ctx context.Context, transit Transit, record *storagev
 	if err != nil {
 		return nil, err
 	}
+	if wrapped.KeyID == "" {
+		wrapped.KeyID = destinationKeyID
+	}
 	rewrapped := proto.Clone(record).(*storagev1.EnvelopeRecord)
 	rewrapped.KeyId = wrapped.KeyID
 	rewrapped.KeyVersion = wrapped.KeyVersion
