@@ -23,6 +23,7 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
+	"github.com/petabytecl/scrap/internal/raftmeta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -159,6 +160,61 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 	}
 	if transaction.CompletedAt == nil || !transaction.CompletedAt.Equal(completedAt) {
 		t.Fatalf("completed_at = %v, want %v", transaction.CompletedAt, completedAt)
+	}
+}
+
+func TestStrongMetadataReadsFailClosedWithoutReadIndex(t *testing.T) {
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("fresh metadata")
+	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	replaceAuthorityFreshness(t, app, staticFreshnessChecker{readErr: raftmeta.ErrReadFreshnessUnavailable})
+
+	_, err := app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
+	requireCode(t, err, codes.Unavailable)
+
+	sender := &recordingReadSender{}
+	err = app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.Unavailable)
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("read sent metadata=%v chunks=%d before freshness proof", sender.sentMetadata, len(sender.chunks))
+	}
+
+	_, err = app.FindDocuments(context.Background(), api.FindDocumentsRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+	})
+	requireCode(t, err, codes.Unavailable)
+	_, err = app.GetTransaction(context.Background(), api.GetTransactionRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+	})
+	requireCode(t, err, codes.Unavailable)
+}
+
+func TestWriteDocumentFailsClosedWhenLeaderIsStale(t *testing.T) {
+	app := openTestApplication(t)
+	replaceAuthorityFreshness(t, app, staticFreshnessChecker{writeErr: raftmeta.ErrNotLeader})
+	doc := testDocumentIdentity()
+
+	_, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("stale leader must not ack")}))
+	requireCode(t, err, codes.FailedPrecondition)
+	if got := app.blocks.CurrentBlockLength(); got != blockstore.HeaderLength {
+		t.Fatalf("open block length = %d, want stale leader rejection before byte append", got)
+	}
+	_, err = app.metadata.HeadDocument(doc)
+	if !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("metadata error = %v, want %v", err, metastore.ErrNotFound)
 	}
 }
 
@@ -2314,6 +2370,39 @@ func (s *recordingReadSender) SendMetadata(metadata api.ReadDocumentMetadata) er
 func (s *recordingReadSender) SendChunk(data []byte) error {
 	s.chunks = append(s.chunks, append([]byte(nil), data...))
 	return nil
+}
+
+type staticFreshnessChecker struct {
+	readErr  error
+	writeErr error
+}
+
+func (c staticFreshnessChecker) RequireWriteQuorum(ctx context.Context, _ raftmeta.FreshnessCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.writeErr
+}
+
+func (c staticFreshnessChecker) RequireReadIndex(ctx context.Context, _ raftmeta.FreshnessCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.readErr
+}
+
+func replaceAuthorityFreshness(t *testing.T, app *Application, checker raftmeta.FreshnessChecker) {
+	t.Helper()
+	if err := app.authority.Close(); err != nil {
+		t.Fatalf("close authority: %v", err)
+	}
+	authority, err := raftmeta.OpenAuthorityWithOptions(filepath.Join(app.dir, "raftmeta"), "local", app.metadata, raftmeta.AuthorityOptions{
+		FreshnessChecker: checker,
+	})
+	if err != nil {
+		t.Fatalf("reopen authority with freshness checker: %v", err)
+	}
+	app.authority = authority
 }
 
 func fixedClock(t time.Time) func() time.Time {

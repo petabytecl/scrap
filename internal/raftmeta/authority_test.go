@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -312,6 +313,105 @@ func TestAuthorityRejectsCompactionWithoutCoveredSnapshot(t *testing.T) {
 	}
 }
 
+func TestAuthorityReadIndexFailsClosedDuringPartition(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	freshness := newControlledFreshness(true, true)
+	authority := openTestAuthorityWithOptions(t, filepath.Join(dir, "raftmeta"), metadata, AuthorityOptions{
+		LocalMemberID:    "member-a",
+		Members:          threeVoterMembers(),
+		FreshnessChecker: freshness,
+	})
+	defer closeTestAuthority(t, authority, metadata)
+
+	document := authorityTestDocument("invoice.xml", []byte{1})
+	if err := authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()); err != nil {
+		t.Fatalf("commit document: %v", err)
+	}
+	freshness.set(true, false)
+	if err := authority.ReadFresh(context.Background()); !errors.Is(err, ErrReadFreshnessUnavailable) {
+		t.Fatalf("partitioned read freshness error = %v, want %v", err, ErrReadFreshnessUnavailable)
+	}
+	tail := authorityTestDocument("tail.xml", []byte{2})
+	tail.Identity.TransactionID = "txn-tail"
+	tail.Location.BlockID = "block-tail"
+	if err := authority.CommitDocument(context.Background(), tail, "cmd-2", time.Unix(200, 0).UTC()); !errors.Is(err, ErrQuorumUnavailable) {
+		t.Fatalf("partitioned write error = %v, want %v", err, ErrQuorumUnavailable)
+	}
+	if _, err := metadata.HeadDocument(tail.Identity); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("partitioned write document error = %v, want %v", err, metastore.ErrNotFound)
+	}
+	entries, err := authority.log.Replay()
+	if err != nil {
+		t.Fatalf("replay log: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Command.GetCommandId() != "cmd-1" {
+		t.Fatalf("entries after partition = %#v, want only first committed command", entries)
+	}
+	readChecks, _ := freshness.checks()
+	if len(readChecks) != 1 || readChecks[0].AppliedIndex != 1 {
+		t.Fatalf("read freshness checks = %#v, want applied index 1", readChecks)
+	}
+}
+
+func TestAuthorityFencesStaleLeaderAfterLeaderChange(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	freshness := newControlledFreshness(true, true)
+	authority := openTestAuthorityWithOptions(t, filepath.Join(dir, "raftmeta"), metadata, AuthorityOptions{
+		LocalMemberID:    "member-a",
+		Members:          threeVoterMembers(),
+		FreshnessChecker: freshness,
+	})
+	defer closeTestAuthority(t, authority, metadata)
+
+	document := authorityTestDocument("leader.xml", []byte{1})
+	if err := authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()); err != nil {
+		t.Fatalf("commit as leader: %v", err)
+	}
+	freshness.set(false, true)
+	if err := authority.ReadFresh(context.Background()); !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("stale leader read error = %v, want %v", err, ErrNotLeader)
+	}
+	staleWrite := authorityTestDocument("stale.xml", []byte{2})
+	staleWrite.Location.BlockID = "block-stale"
+	if err := authority.CommitDocument(context.Background(), staleWrite, "cmd-2", time.Unix(200, 0).UTC()); !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("stale leader write error = %v, want %v", err, ErrNotLeader)
+	}
+	if _, err := metadata.HeadDocument(staleWrite.Identity); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("stale leader document error = %v, want %v", err, metastore.ErrNotFound)
+	}
+
+	freshness.set(true, true)
+	recovered := authorityTestDocument("recovered.xml", []byte{3})
+	recovered.Identity.TransactionID = "txn-recovered"
+	recovered.Location.BlockID = "block-recovered"
+	if err := authority.CommitDocument(context.Background(), recovered, "cmd-3", time.Unix(300, 0).UTC()); err != nil {
+		t.Fatalf("commit after leadership recovery: %v", err)
+	}
+	if err := authority.ReadFresh(context.Background()); err != nil {
+		t.Fatalf("read after leadership recovery: %v", err)
+	}
+	entries, err := authority.log.Replay()
+	if err != nil {
+		t.Fatalf("replay log: %v", err)
+	}
+	if len(entries) != 2 || entries[1].Command.GetCommandId() != "cmd-3" {
+		t.Fatalf("entries after leader change = %#v, want cmd-1 and cmd-3 only", entries)
+	}
+}
+
+func TestAuthorityLeaseReadsRemainDisabled(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+
+	if err := authority.LeaseReadFresh(context.Background()); !errors.Is(err, ErrLeaseReadDisabled) {
+		t.Fatalf("lease read error = %v, want %v", err, ErrLeaseReadDisabled)
+	}
+}
+
 func openTestMetadata(t *testing.T, dir string) *metastore.Store {
 	t.Helper()
 	metadata, err := metastore.Open(dir)
@@ -319,6 +419,74 @@ func openTestMetadata(t *testing.T, dir string) *metastore.Store {
 		t.Fatalf("open metadata: %v", err)
 	}
 	return metadata
+}
+
+type controlledFreshness struct {
+	mu          sync.Mutex
+	leader      bool
+	quorum      bool
+	readChecks  []FreshnessCheck
+	writeChecks []FreshnessCheck
+}
+
+func newControlledFreshness(leader bool, quorum bool) *controlledFreshness {
+	return &controlledFreshness{
+		leader: leader,
+		quorum: quorum,
+	}
+}
+
+func (c *controlledFreshness) set(leader bool, quorum bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.leader = leader
+	c.quorum = quorum
+}
+
+func (c *controlledFreshness) RequireWriteQuorum(ctx context.Context, check FreshnessCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writeChecks = append(c.writeChecks, check)
+	if !c.leader {
+		return ErrNotLeader
+	}
+	if !c.quorum {
+		return ErrQuorumUnavailable
+	}
+	return nil
+}
+
+func (c *controlledFreshness) RequireReadIndex(ctx context.Context, check FreshnessCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readChecks = append(c.readChecks, check)
+	if !c.leader {
+		return ErrNotLeader
+	}
+	if !c.quorum {
+		return ErrReadFreshnessUnavailable
+	}
+	return nil
+}
+
+func (c *controlledFreshness) checks() ([]FreshnessCheck, []FreshnessCheck) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]FreshnessCheck(nil), c.readChecks...), append([]FreshnessCheck(nil), c.writeChecks...)
+}
+
+func threeVoterMembers() []Member {
+	return []Member{
+		{RaftID: 1, MemberID: "member-a", Role: metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER},
+		{RaftID: 2, MemberID: "member-b", Role: metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER},
+		{RaftID: 3, MemberID: "member-c", Role: metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER},
+	}
 }
 
 func openTestAuthority(t *testing.T, dir string, metadata *metastore.Store) *Authority {

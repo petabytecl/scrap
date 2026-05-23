@@ -239,6 +239,9 @@ func (a *Application) reconcileRebuiltLocalRefs(ctx context.Context) error {
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {
+	if err := a.authority.EnsureWriteReady(ctx); err != nil {
+		return api.WriteDocumentResult{}, mapError(err)
+	}
 	if existing, err := a.metadata.HeadDocument(init.Identity); err == nil {
 		body, err := drainChunks(chunks)
 		if err != nil {
@@ -327,7 +330,10 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	}, nil
 }
 
-func (a *Application) HeadDocument(_ context.Context, req api.HeadDocumentRequest) (api.DocumentMetadata, error) {
+func (a *Application) HeadDocument(ctx context.Context, req api.HeadDocumentRequest) (api.DocumentMetadata, error) {
+	if err := a.authority.ReadFresh(ctx); err != nil {
+		return api.DocumentMetadata{}, mapError(err)
+	}
 	document, err := a.metadata.HeadDocument(req.Identity)
 	if err != nil {
 		return api.DocumentMetadata{}, mapError(err)
@@ -336,6 +342,9 @@ func (a *Application) HeadDocument(_ context.Context, req api.HeadDocumentReques
 }
 
 func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequest, sender api.ReadDocumentSender) error {
+	if err := a.authority.ReadFresh(ctx); err != nil {
+		return mapError(err)
+	}
 	document, err := a.metadata.HeadDocument(req.Identity)
 	if err != nil {
 		return mapError(err)
@@ -506,7 +515,10 @@ func verifyFetchedBackendWindow(record blockstore.Record, offset uint64, length 
 	return nil
 }
 
-func (a *Application) FindDocuments(_ context.Context, req api.FindDocumentsRequest) (api.FindDocumentsResult, error) {
+func (a *Application) FindDocuments(ctx context.Context, req api.FindDocumentsRequest) (api.FindDocumentsResult, error) {
+	if err := a.authority.ReadFresh(ctx); err != nil {
+		return api.FindDocumentsResult{}, mapError(err)
+	}
 	documents, err := a.metadata.FindDocuments(req.Transaction, documentFilterFromAPI(req.Filter))
 	if err != nil {
 		return api.FindDocumentsResult{}, mapError(err)
@@ -529,7 +541,10 @@ func (a *Application) CompleteTransaction(ctx context.Context, req api.CompleteT
 	return transactionToAPI(transaction), nil
 }
 
-func (a *Application) GetTransaction(_ context.Context, req api.GetTransactionRequest) (api.TransactionState, error) {
+func (a *Application) GetTransaction(ctx context.Context, req api.GetTransactionRequest) (api.TransactionState, error) {
+	if err := a.authority.ReadFresh(ctx); err != nil {
+		return api.TransactionState{}, mapError(err)
+	}
 	transaction, err := a.metadata.GetTransaction(req.Transaction)
 	if err != nil {
 		return api.TransactionState{}, mapError(err)
@@ -644,6 +659,14 @@ func mapError(err error) error {
 		return status.Error(codes.DataLoss, "backend document bytes are missing")
 	case errors.Is(err, os.ErrNotExist):
 		return status.Error(codes.DataLoss, "stored document bytes are missing")
+	case errors.Is(err, raftmeta.ErrNotLeader):
+		return status.Error(codes.FailedPrecondition, "local metadata authority is not leader")
+	case errors.Is(err, raftmeta.ErrQuorumUnavailable):
+		return status.Error(codes.Unavailable, "metadata quorum is unavailable")
+	case errors.Is(err, raftmeta.ErrReadFreshnessUnavailable):
+		return status.Error(codes.Unavailable, "metadata freshness cannot be proven")
+	case errors.Is(err, raftmeta.ErrLeaseReadDisabled):
+		return status.Error(codes.FailedPrecondition, "metadata lease reads are disabled")
 	default:
 		return err
 	}
