@@ -1188,6 +1188,216 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("repair me from peer")
+	doc := testDocumentIdentity()
+	doc.DocumentName = "peer-repair.xml"
+	peer := newRecordingPreparePeer("member-1")
+	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
+	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
+	app.SetPeerRepairSource("member-1", peer)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	corruptStoredByte(t, app, stored.Location, 0)
+	if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(270, 0).UTC()); err != nil {
+		t.Fatalf("record local repair state: %v", err)
+	}
+	operation := queuedOperation("peer-repair-op-1", "repair", []*adminv1.Target{documentTarget(doc)})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one peer repair success", result)
+	}
+	if peer.repairReadCount != 1 {
+		t.Fatalf("peer repair reads = %d, want 1", peer.repairReadCount)
+	}
+	queue, err := app.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue = %#v, want resolved repair", queue)
+	}
+	sender := &recordingReadSender{}
+	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read repaired document: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
+		t.Fatalf("read source = %s, want repaired local", sender.metadata.Source)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("repaired bytes = %q, want %q", got, data)
+	}
+}
+
+func TestRunQueuedOperationsOnceQuarantinesCorruptPeerAndFailsWithoutVerifiedSource(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("corrupt peer repair")
+	doc := testDocumentIdentity()
+	doc.DocumentName = "corrupt-peer-repair.xml"
+	peer := newRecordingPreparePeer("member-1")
+	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
+	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
+	app.SetPeerRepairSource("member-1", peer)
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	peer.repairBytes = append([]byte(nil), peer.preparedBytes...)
+	peer.repairBytes[0] ^= 0xff
+	corruptStoredByte(t, app, stored.Location, 0)
+	if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(280, 0).UTC()); err != nil {
+		t.Fatalf("record local repair state: %v", err)
+	}
+	operation := queuedOperation("peer-repair-op-2", "repair", []*adminv1.Target{documentTarget(doc)})
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		t.Fatalf("operation result = %#v, want one failed repair", result)
+	}
+	if peer.repairReadCount != 1 {
+		t.Fatalf("peer repair reads = %d, want 1", peer.repairReadCount)
+	}
+	queue, err := app.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 2 ||
+		!repairQueueReasonContains(queue, "local/"+stored.Location.BlockID) ||
+		!repairQueueReasonContains(queue, "peer/member-1/"+stored.Location.BlockID) {
+		t.Fatalf("repair queue = %#v, want local and peer quarantines", queue)
+	}
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
+	requireCode(t, err, codes.DataLoss)
+}
+
+func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	app, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	store := openTestOperationStore(t)
+	data := []byte("retry repair after restart")
+	doc := testDocumentIdentity()
+	doc.DocumentName = "restart-peer-repair.xml"
+	peer := newRecordingPreparePeer("member-1")
+	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
+	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		_ = app.Close()
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		_ = app.Close()
+		t.Fatalf("head stored document: %v", err)
+	}
+	corruptStoredByte(t, app, stored.Location, 0)
+	if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(290, 0).UTC()); err != nil {
+		_ = app.Close()
+		t.Fatalf("record local repair state: %v", err)
+	}
+	first := queuedOperation("restart-peer-repair-op-1", "repair", []*adminv1.Target{documentTarget(doc)})
+	if err := store.Put(first); err != nil {
+		_ = app.Close()
+		t.Fatalf("put first operation: %v", err)
+	}
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		_ = app.Close()
+		t.Fatalf("run first queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
+		_ = app.Close()
+		t.Fatalf("first operation result = %#v, want failed repair", result)
+	}
+	peerBytes := append([]byte(nil), peer.preparedBytes...)
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen app: %v", err)
+	}
+	defer reopened.Close()
+	reopened.SetPeerRepairSource("member-1", PeerRepairSourceFunc(func(ctx context.Context, replica blockstore.ReplicaRef, writer io.Writer) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := writer.Write(peerBytes)
+		return err
+	}))
+	second := queuedOperation("restart-peer-repair-op-2", "repair", []*adminv1.Target{documentTarget(doc)})
+	if err := store.Put(second); err != nil {
+		t.Fatalf("put second operation: %v", err)
+	}
+
+	result, err = reopened.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run second queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("second operation result = %#v, want successful retry", result)
+	}
+	queue, err := reopened.GetRepairQueue(ctx, "local")
+	if err != nil {
+		t.Fatalf("get repair queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("repair queue = %#v, want resolved retry", queue)
+	}
+	sender := &recordingReadSender{}
+	if err := reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read repaired document: %v", err)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("repaired bytes = %q, want %q", got, data)
+	}
+}
+
 func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -2305,6 +2515,18 @@ func queuedOperation(operationID string, operationType string, targets []*adminv
 	}
 }
 
+func documentTarget(doc identity.Document) *adminv1.Target {
+	return &adminv1.Target{
+		Target: &adminv1.Target_Document{
+			Document: &adminv1.DocumentTarget{
+				TenantId:      doc.TenantID,
+				TransactionId: doc.TransactionID,
+				DocumentName:  doc.DocumentName,
+			},
+		},
+	}
+}
+
 var errSimulatedLocalCrash = errors.New("simulated local crash")
 
 func writeInitForCrashBoundary(doc identity.Document, data []byte, idempotencyKey string) api.WriteDocumentInit {
@@ -2421,6 +2643,15 @@ func assertUnreadableRepairRef(t *testing.T, app *Application, doc identity.Docu
 	}
 }
 
+func repairQueueReasonContains(queue []*adminv1.RepairQueueItem, want string) bool {
+	for _, item := range queue {
+		if strings.Contains(item.GetReason(), want) {
+			return true
+		}
+	}
+	return false
+}
+
 func testDocumentIdentity() identity.Document {
 	return identity.Document{
 		TenantID:      "tenant",
@@ -2448,11 +2679,14 @@ func (r *chunkReaderStub) Recv() ([]byte, error) {
 }
 
 type recordingPreparePeer struct {
-	memberID      string
-	prepareCount  int
-	preparedBytes []byte
-	errAfterRead  error
-	beforeReceipt func(replication.PrepareRequest)
+	memberID        string
+	prepareCount    int
+	repairReadCount int
+	preparedBytes   []byte
+	repairBytes     []byte
+	repairErr       error
+	errAfterRead    error
+	beforeReceipt   func(replication.PrepareRequest)
 }
 
 func newRecordingPreparePeer(memberID string) *recordingPreparePeer {
@@ -2476,6 +2710,24 @@ func (p *recordingPreparePeer) PrepareDocument(ctx context.Context, request repl
 		p.beforeReceipt(request)
 	}
 	return replication.ReceiptFromPreparedDocument(p.memberID, request.Document), nil
+}
+
+func (p *recordingPreparePeer) ReadReplica(ctx context.Context, replica blockstore.ReplicaRef, writer io.Writer) error {
+	p.repairReadCount++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	data := p.preparedBytes
+	if p.repairBytes != nil {
+		data = p.repairBytes
+	}
+	if _, err := writer.Write(data); err != nil {
+		return err
+	}
+	if p.repairErr != nil {
+		return p.repairErr
+	}
+	return ctx.Err()
 }
 
 type recordingReadSender struct {

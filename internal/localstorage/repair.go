@@ -47,7 +47,7 @@ func repairQueueItem(state metastore.RepairState) *adminv1.RepairQueueItem {
 
 func repairReason(state metastore.RepairState) string {
 	if state.Quarantined {
-		return "quarantined local reference " + state.PhysicalRef
+		return "quarantined byte source " + state.PhysicalRef
 	}
-	return "repair required for local reference " + state.PhysicalRef
+	return "repair required for byte source " + state.PhysicalRef
 }

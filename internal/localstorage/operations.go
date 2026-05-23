@@ -1,19 +1,23 @@
 package localstorage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/blockstore"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
+	"github.com/petabytecl/scrap/internal/replication"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -639,23 +643,19 @@ func (a *Application) applyRepairOperation(ctx context.Context, operation *admin
 	if err != nil {
 		return 0, err
 	}
-	blockIDs := make(map[string]bool)
 	for _, repair := range repairs {
 		document, err := a.metadata.HeadDocument(repair.Identity)
 		if err != nil {
 			return 0, err
 		}
-		blockIDs[document.Location.BlockID] = true
-	}
-	for blockID := range blockIDs {
-		if err := a.replaceBlockFromBackend(ctx, blockID); err != nil {
-			return 0, err
-		}
-	}
-	for _, repair := range repairs {
-		document, err := a.metadata.HeadDocument(repair.Identity)
+		repairedFromPeer, err := a.repairDocumentFromVerifiedPeer(ctx, document, now)
 		if err != nil {
 			return 0, err
+		}
+		if !repairedFromPeer {
+			if err := a.replaceBlockFromBackend(ctx, document.Location.BlockID); err != nil {
+				return 0, err
+			}
 		}
 		if err := a.recordDocumentRepairState(ctx, document, repair.IncidentID, false, now); err != nil {
 			return 0, err
@@ -672,7 +672,7 @@ func (a *Application) repairTargets(operation *adminv1.Operation) ([]metastore.R
 	var repairs []metastore.RepairState
 	seen := make(map[string]bool)
 	add := func(state metastore.RepairState) {
-		if !state.Quarantined {
+		if !state.Quarantined || !isLocalRepairState(state) {
 			return
 		}
 		key := state.Identity.TenantID + "\x00" + state.Identity.TransactionID + "\x00" + state.Identity.DocumentName + "\x00" + state.IncidentID
@@ -729,6 +729,67 @@ func (a *Application) repairTargets(operation *adminv1.Operation) ([]metastore.R
 		return nil, metastore.ErrNotFound
 	}
 	return repairs, nil
+}
+
+func isLocalRepairState(state metastore.RepairState) bool {
+	return strings.HasPrefix(state.PhysicalRef, "local/")
+}
+
+func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, document metastore.Document, now time.Time) (bool, error) {
+	if len(document.Location.Replicas) == 0 || len(a.peerRepairSources) == 0 {
+		return false, nil
+	}
+	prepared := replication.PreparedDocumentFromMetadata(document)
+	for _, replica := range document.Location.Replicas {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		source := a.peerRepairSources[replica.MemberID]
+		if source == nil {
+			continue
+		}
+		quarantined, err := a.peerRepairSourceQuarantined(document, replica)
+		if err != nil {
+			return false, err
+		}
+		if quarantined {
+			continue
+		}
+		var data bytes.Buffer
+		err = source.ReadReplica(ctx, replica, &data)
+		if err == nil {
+			err = replication.ValidatePreparedBytes(prepared, data.Bytes())
+		}
+		if err != nil {
+			if !isPeerIntegrityFailure(err) {
+				continue
+			}
+			if recordErr := a.recordPeerRepairState(ctx, document, replica, true, now); recordErr != nil {
+				return false, recordErr
+			}
+			continue
+		}
+		if err := a.blocks.InstallVerifiedRange(ctx, document.Location, document.StoredSHA256, bytes.NewReader(data.Bytes())); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (a *Application) peerRepairSourceQuarantined(document metastore.Document, replica blockstore.ReplicaRef) (bool, error) {
+	state, err := a.metadata.GetRepairState(document.Identity, peerIntegrityEvidenceID(document, replica))
+	if errors.Is(err, metastore.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return state.Quarantined, nil
+}
+
+func isPeerIntegrityFailure(err error) bool {
+	return isIntegrityFailure(err) || errors.Is(err, replication.ErrTransferMismatch)
 }
 
 func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID string) error {

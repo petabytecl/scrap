@@ -210,6 +210,29 @@ func TestInstallSealedBlockRestoresVerifiedBlockFile(t *testing.T) {
 	}
 }
 
+func TestInstallVerifiedRangeRepairsPreparedDocumentRange(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	record, err := store.Append(ctx, bytes.NewReader([]byte("healthy repaired range")))
+	if err != nil {
+		t.Fatalf("append source: %v", err)
+	}
+	corrupt := []byte("corrupt repaired range")
+	if err := store.InstallVerifiedRange(ctx, record, record.LogicalSHA256, bytes.NewReader(corrupt)); !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("corrupt range install error = %v, want %v", err, ErrChecksumMismatch)
+	}
+	if err := os.Remove(store.BlockPath(record.BlockID)); err != nil {
+		t.Fatalf("remove local block before repair: %v", err)
+	}
+	if err := store.InstallVerifiedRange(ctx, record, record.LogicalSHA256, bytes.NewReader([]byte("healthy repaired range"))); err != nil {
+		t.Fatalf("install verified range: %v", err)
+	}
+	length := record.StoredLength
+	if err := store.VerifyRange(record, 0, &length); err != nil {
+		t.Fatalf("verify repaired range: %v", err)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(t.TempDir())

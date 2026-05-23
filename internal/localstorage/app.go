@@ -42,6 +42,7 @@ type Application struct {
 	byteServingErr           error
 	byteServingCancel        context.CancelFunc
 	byteServingDone          chan struct{}
+	peerRepairSources        map[string]PeerRepairSource
 	sealBlockAtBytes         uint64
 	minUsableBytesAfterWrite uint64
 	peerPrepareTargets       []replication.Target
@@ -59,6 +60,16 @@ type BackendUploadOnceResult struct {
 	Upload              backendupload.RunResult
 	MetadataPublished   bool
 	MetadataPublication *published.SnapshotPublication
+}
+
+type PeerRepairSource interface {
+	ReadReplica(context.Context, blockstore.ReplicaRef, io.Writer) error
+}
+
+type PeerRepairSourceFunc func(context.Context, blockstore.ReplicaRef, io.Writer) error
+
+func (f PeerRepairSourceFunc) ReadReplica(ctx context.Context, replica blockstore.ReplicaRef, writer io.Writer) error {
+	return f(ctx, replica, writer)
 }
 
 // writeFaultHooks makes local durability boundaries injectable for deterministic
@@ -162,6 +173,17 @@ func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.
 
 func (a *Application) SetBackendStore(store backend.Store) {
 	a.backendStore = store
+}
+
+func (a *Application) SetPeerRepairSource(memberID string, source PeerRepairSource) {
+	if a.peerRepairSources == nil {
+		a.peerRepairSources = make(map[string]PeerRepairSource)
+	}
+	if source == nil {
+		delete(a.peerRepairSources, memberID)
+		return
+	}
+	a.peerRepairSources[memberID] = source
 }
 
 func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.Store) (BackendUploadOnceResult, error) {
@@ -869,17 +891,42 @@ func integrityEvidenceID(document metastore.Document) string {
 }
 
 func (a *Application) recordDocumentRepairState(ctx context.Context, document metastore.Document, incidentID string, quarantined bool, now time.Time) error {
+	return a.recordRepairState(ctx, document.Identity, repairPhysicalRef(document), incidentID, quarantined, now)
+}
+
+func (a *Application) recordPeerRepairState(ctx context.Context, document metastore.Document, replica blockstore.ReplicaRef, quarantined bool, now time.Time) error {
+	return a.recordRepairState(ctx, document.Identity, peerRepairPhysicalRef(replica), peerIntegrityEvidenceID(document, replica), quarantined, now)
+}
+
+func (a *Application) recordRepairState(ctx context.Context, doc identity.Document, physicalRef string, incidentID string, quarantined bool, now time.Time) error {
 	return a.authority.RecordRepairState(ctx, metastore.RepairState{
-		Identity:    document.Identity,
-		PhysicalRef: repairPhysicalRef(document),
+		Identity:    doc,
+		PhysicalRef: physicalRef,
 		IncidentID:  incidentID,
 		Quarantined: quarantined,
 		UpdatedAt:   now,
-	}, stableCommandID("record-repair-state", incidentID, fmt.Sprintf("%t", quarantined)), now)
+	}, stableCommandID("record-repair-state", incidentID, physicalRef, fmt.Sprintf("%t", quarantined)), now)
 }
 
 func repairPhysicalRef(document metastore.Document) string {
 	return fmt.Sprintf("local/%s/%d/%d", document.Location.BlockID, document.Location.StoredOffset, document.Location.StoredLength)
+}
+
+func peerRepairPhysicalRef(replica blockstore.ReplicaRef) string {
+	return fmt.Sprintf("peer/%s/%s/%d/%d", replica.MemberID, replica.BlockID, replica.StoredOffset, replica.StoredLength)
+}
+
+func peerIntegrityEvidenceID(document metastore.Document, replica blockstore.ReplicaRef) string {
+	return stableCommandID(
+		"peer-integrity-evidence",
+		document.Identity.TenantID,
+		document.Identity.TransactionID,
+		document.Identity.DocumentName,
+		replica.MemberID,
+		replica.BlockID,
+		fmt.Sprintf("%d", replica.StoredOffset),
+		fmt.Sprintf("%d", replica.StoredLength),
+	)
 }
 
 func documentToAPI(document metastore.Document) api.DocumentMetadata {
