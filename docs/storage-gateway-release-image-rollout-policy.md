@@ -47,7 +47,14 @@ Required targets before production write ACK eligibility:
 | `make sbom` | Generate SBOMs for binaries and images. | Release-blocking. |
 | `make sign` | Sign release artifacts and images. | Release-blocking. |
 | `make provenance` | Produce build provenance attestations. | Release-blocking. |
-| `make release-check` | Verify all release evidence exists for a release candidate. | Release-blocking. |
+| `make release-check` | Verify all release evidence exists for a release candidate using `RELEASE_EVIDENCE_MANIFEST`. | Release-blocking. |
+
+`make release-check` calls `scrap-release-gate`, which evaluates a JSON release
+evidence manifest against the gate catalog in `internal/releasegate`. Each gate
+must either point to an automated command or name a manual release artifact and
+artifact owner. The report includes the production write ACK readiness gate name
+and blocking issues for missing evidence where the gate maps to
+`SCRAP_PRODUCTION_WRITE_ACK_READINESS`.
 
 Generated-code checks are release-blocking. A release candidate must prove that
 committed generated code matches the checked-in schemas and that the Buf
