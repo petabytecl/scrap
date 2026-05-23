@@ -567,6 +567,9 @@ func (x *ObjectRef) GetEnvelopeId() string {
 	return ""
 }
 
+// SnapshotRecord is a read-only exported view of one source shard at a
+// high-watermark. Importers may build derived projections from it, but they do
+// not gain authority to mutate the source namespace.
 type SnapshotRecord struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion   uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -697,6 +700,9 @@ func (*SnapshotRecord_Transaction) isSnapshotRecord_Record() {}
 
 func (*SnapshotRecord_Tombstone) isSnapshotRecord_Record() {}
 
+// TailRecord is a read-only exported mutation fact from one source shard log.
+// Importers must preserve source ownership and treat the record as derived
+// metadata, not as a command to the source authority.
 type TailRecord struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion   uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -843,6 +849,9 @@ func (*TailRecord_ObjectState) isTailRecord_Mutation() {}
 
 func (*TailRecord_Tombstone) isTailRecord_Mutation() {}
 
+// PublishedDocument contains the document facts needed for bounded-staleness
+// reads and backend restore. It intentionally omits consensus implementation
+// state, repair internals, and shard-local authority state.
 type PublishedDocument struct {
 	state                       protoimpl.MessageState `protogen:"open.v1"`
 	TenantId                    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
