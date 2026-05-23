@@ -1173,31 +1173,11 @@ func TestCorruptReadFailsBeforeSendingMetadata(t *testing.T) {
 	app := openTestApplication(t)
 	doc := testDocumentIdentity()
 	data := []byte("verified before metadata")
-	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
-		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
-		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
-		t.Fatalf("corrupt block: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
+	stored := writeLocalReadVerificationDocument(t, app, doc, data)
+	corruptStoredByte(t, app, stored.Location, 0)
 
 	sender := &recordingReadSender{}
-	err = app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
+	err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
 	requireCode(t, err, codes.DataLoss)
 	detail := requireIntegrityDetail(t, err)
 	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
@@ -1211,6 +1191,104 @@ func TestCorruptReadFailsBeforeSendingMetadata(t *testing.T) {
 	}
 	if len(sender.chunks) != 0 {
 		t.Fatalf("sent %d chunks before corruption error", len(sender.chunks))
+	}
+}
+
+func TestCleanFullReadReturnsVerifiedLocalBytes(t *testing.T) {
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("clean full read bytes")
+	writeLocalReadVerificationDocument(t, app, doc, data)
+
+	sender := &recordingReadSender{}
+	if err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
+		t.Fatalf("read document: %v", err)
+	}
+	if !sender.sentMetadata {
+		t.Fatal("read did not send metadata")
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
+		t.Fatalf("read source = %s, want local", sender.metadata.Source)
+	}
+	if sender.metadata.SelectedRange.Offset != 0 ||
+		sender.metadata.SelectedRange.Length == nil ||
+		*sender.metadata.SelectedRange.Length != uint64(len(data)) {
+		t.Fatalf("selected range = %#v, want full document", sender.metadata.SelectedRange)
+	}
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
+		t.Fatalf("read bytes = %q, want %q", got, data)
+	}
+}
+
+func TestRangedReadVerifiesEveryTouchedFrameBeforeStreaming(t *testing.T) {
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := bytes.Repeat([]byte("a"), int(blockstore.DefaultFrameSize)+8)
+	crossFrameOffset := uint64(blockstore.DefaultFrameSize - 3)
+	readLength := uint64(6)
+	copy(data[int(crossFrameOffset):int(crossFrameOffset+readLength)], []byte("XYZ123"))
+	stored := writeLocalReadVerificationDocument(t, app, doc, data)
+
+	sender := &recordingReadSender{}
+	err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{
+		Identity: doc,
+		Range: &api.ReadRange{
+			Offset: crossFrameOffset,
+			Length: &readLength,
+		},
+	}, sender)
+	if err != nil {
+		t.Fatalf("read ranged document: %v", err)
+	}
+	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
+		t.Fatalf("read source = %s, want local", sender.metadata.Source)
+	}
+	if sender.metadata.SelectedRange.Offset != crossFrameOffset ||
+		sender.metadata.SelectedRange.Length == nil ||
+		*sender.metadata.SelectedRange.Length != readLength {
+		t.Fatalf("selected range = %#v, want cross-frame range", sender.metadata.SelectedRange)
+	}
+	expected := data[int(crossFrameOffset):int(crossFrameOffset+readLength)]
+	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, expected) {
+		t.Fatalf("ranged bytes = %q, want %q", got, expected)
+	}
+
+	corruptStoredByte(t, app, stored.Location, crossFrameOffset+4)
+	sender = &recordingReadSender{}
+	err = app.ReadDocument(context.Background(), api.ReadDocumentRequest{
+		Identity: doc,
+		Range: &api.ReadRange{
+			Offset: crossFrameOffset,
+			Length: &readLength,
+		},
+	}, sender)
+	requireCode(t, err, codes.DataLoss)
+	requireIntegrityDetail(t, err)
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d before ranged verification failure", sender.sentMetadata, len(sender.chunks))
+	}
+}
+
+func TestMissingLocalBytesFailsBeforeSendingMetadata(t *testing.T) {
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("missing local read bytes")
+	stored := writeLocalReadVerificationDocument(t, app, doc, data)
+	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("remove block: %v", err)
+	}
+
+	sender := &recordingReadSender{}
+	err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.DataLoss)
+	detail := requireIntegrityDetail(t, err)
+	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
+		len(detail.GetAttemptedSources()) != 1 ||
+		detail.GetAttemptedSources()[0] != "local" {
+		t.Fatalf("integrity detail = %#v, want local source", detail)
+	}
+	if sender.sentMetadata || len(sender.chunks) != 0 {
+		t.Fatalf("sent metadata=%v chunks=%d before missing-ref failure", sender.sentMetadata, len(sender.chunks))
 	}
 }
 
@@ -2111,6 +2189,45 @@ func appendPrepareLogTail(t *testing.T, dir string, data []byte) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("close prepare log tail: %v", err)
+	}
+}
+
+func writeLocalReadVerificationDocument(t *testing.T, app *Application, doc identity.Document, data []byte) metastore.Document {
+	t.Helper()
+	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	if err != nil {
+		t.Fatalf("head stored document: %v", err)
+	}
+	return stored
+}
+
+func corruptStoredByte(t *testing.T, app *Application, record blockstore.Record, offset uint64) {
+	t.Helper()
+	file, err := os.OpenFile(app.blocks.BlockPath(record.BlockID), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	storedOffset := int64(record.StoredOffset + offset)
+	buf := []byte{0}
+	if _, err := file.ReadAt(buf, storedOffset); err != nil {
+		_ = file.Close()
+		t.Fatalf("read block byte: %v", err)
+	}
+	buf[0] ^= 0xff
+	if _, err := file.WriteAt(buf, storedOffset); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt block: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
 	}
 }
 
