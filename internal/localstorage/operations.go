@@ -77,6 +77,8 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			succeeded, err = a.runScrubOperation(ctx, store, operation)
 		case "drain":
 			succeeded, err = a.runDrainOperation(ctx, store, operation)
+		case "capacity-override":
+			succeeded, err = a.runCapacityOverrideOperation(ctx, store, operation)
 		case "metadata-restore":
 			succeeded, err = a.runMetadataRestoreOperation(ctx, store, operation)
 		case "copy-verify":
@@ -446,6 +448,62 @@ func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *o
 		WorkUnitsTotal:     uint64(workUnits),
 		WorkUnitsCompleted: uint64(workUnits),
 		Message:            operation.GetOperationType() + " operation succeeded",
+	}
+	if err := store.Put(finished); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) runCapacityOverrideOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	running := cloneOperation(operation)
+	now := a.now()
+	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
+	running.StartedAt = timestamppb.New(now)
+	running.Progress = &adminv1.OperationProgress{Message: "running capacity-override operation"}
+	if err := store.Put(running); err != nil {
+		return false, err
+	}
+
+	finished := cloneOperation(running)
+	finished.FinishedAt = timestamppb.New(a.now())
+	capacityProfileID := finished.GetMetadata()["scrap.capacity_profile_id"]
+	expiresAt := finished.GetMetadata()["scrap.capacity_override_expires_at"]
+	reason := finished.GetMetadata()["scrap.capacity_override_reason"]
+	if capacityProfileID == "" || expiresAt == "" || reason == "" {
+		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
+		finished.Progress = &adminv1.OperationProgress{Message: "capacity-override operation failed"}
+		finished.LastError = &adminv1.OperationError{
+			Code:    "SCRAP_CAPACITY_OVERRIDE_INVALID",
+			Message: "capacity override requires capacity profile, expiry, and reason metadata",
+		}
+		if putErr := store.Put(finished); putErr != nil {
+			return false, putErr
+		}
+		return false, nil
+	}
+
+	message := "capacity-override operation recorded"
+	if operation.GetDryRun() {
+		message = "capacity-override dry-run succeeded"
+	}
+	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
+	finished.Warnings = append(finished.Warnings, &adminv1.OperationWarning{
+		Code:    "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY",
+		Message: "capacity override is recorded as operation evidence and does not force production write ACK mode",
+	})
+	finished.Progress = &adminv1.OperationProgress{
+		WorkUnitsTotal:     1,
+		WorkUnitsCompleted: 1,
+		Message:            message,
+		Counters: map[string]string{
+			"capacity_profile_id": capacityProfileID,
+			"expires_at":          expiresAt,
+			"reason":              reason,
+		},
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err

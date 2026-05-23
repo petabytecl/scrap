@@ -717,6 +717,201 @@ func TestAdminServerPlanAndStartScrubUseDurableOperationStore(t *testing.T) {
 	}
 }
 
+func TestAdminServerPlanAndStartDrainUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	memberClient, cleanup := newAdminMemberClientWithStore(t, nil, store)
+	defer cleanup()
+
+	planResp, err := memberClient.PlanDrain(context.Background(), &adminv1.PlanDrainRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		DryRun:        true,
+	})
+	if err != nil {
+		t.Fatalf("plan drain: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "drain" ||
+		len(plan.GetTargets()) != 1 ||
+		plan.GetTargets()[0].GetStorageMember().GetStorageMemberId() != "local" {
+		t.Fatalf("plan = %#v, want drain plan for local member", plan)
+	}
+
+	startResp, err := memberClient.StartDrain(context.Background(), &adminv1.StartDrainRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ac1",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start drain: %v", err)
+	}
+	if startResp.GetOperation().GetOperationType() != "drain" ||
+		!startResp.GetOperation().GetDryRun() ||
+		startResp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED {
+		t.Fatalf("operation = %#v, want queued drain dry-run", startResp.GetOperation())
+	}
+}
+
+func TestAdminServerPlanAndStartTombstoneUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	_, _, lifecycleClient, _, cleanup := newAdminWorkflowClients(t, store)
+	defer cleanup()
+
+	planResp, err := lifecycleClient.PlanTombstone(context.Background(), &adminv1.PlanTombstoneRequest{
+		Targets: []*adminv1.Target{documentAdminTarget()},
+	})
+	if err != nil {
+		t.Fatalf("plan tombstone: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "tombstone" ||
+		len(plan.GetTargets()) != 1 {
+		t.Fatalf("plan = %#v, want tombstone plan", plan)
+	}
+
+	startResp, err := lifecycleClient.StartTombstone(context.Background(), &adminv1.StartTombstoneRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ac2",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start tombstone: %v", err)
+	}
+	if startResp.GetOperation().GetOperationType() != "tombstone" ||
+		startResp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED {
+		t.Fatalf("operation = %#v, want queued tombstone", startResp.GetOperation())
+	}
+}
+
+func TestAdminServerPlanAndStartKeyRotationQueuesRewrapOperation(t *testing.T) {
+	store := openTestOperationStore(t)
+	keyClient, cleanup := newAdminKeyClient(t, store)
+	defer cleanup()
+
+	planResp, err := keyClient.PlanKeyRotation(context.Background(), &adminv1.PlanKeyRotationRequest{
+		Targets:          []*adminv1.Target{blockAdminTarget()},
+		DestinationKeyId: "transit/backend-v2",
+		DryRun:           true,
+	})
+	if err != nil {
+		t.Fatalf("plan key rotation: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "rewrap" ||
+		plan.GetMetadata()[adminDestinationKeyIDMetadata] != "transit/backend-v2" ||
+		plan.GetMetadata()[adminBackendLaneMetadata] != "rewrap" {
+		t.Fatalf("plan metadata = %#v, want rewrap key rotation plan", plan.GetMetadata())
+	}
+
+	startResp, err := keyClient.StartKeyRotation(context.Background(), &adminv1.StartKeyRotationRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ac3",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start key rotation: %v", err)
+	}
+	if startResp.GetOperation().GetOperationType() != "rewrap" ||
+		!startResp.GetOperation().GetDryRun() ||
+		startResp.GetOperation().GetMetadata()[adminDestinationKeyIDMetadata] != "transit/backend-v2" {
+		t.Fatalf("operation = %#v, want queued rewrap operation", startResp.GetOperation())
+	}
+}
+
+func TestAdminServerPlanAndStartCapacityOverrideUseDurableOperationStore(t *testing.T) {
+	store := openTestOperationStore(t)
+	capacityClient, cleanup := newAdminCapacityClient(t, store)
+	defer cleanup()
+
+	expiresAt := timestamppb.New(time.Unix(1200, 0).UTC())
+	planResp, err := capacityClient.PlanCapacityOverride(context.Background(), &adminv1.PlanCapacityOverrideRequest{
+		CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: "production-a"},
+		ExpiresAt:       expiresAt,
+		Reason:          "incident INC-42",
+		DryRun:          true,
+	})
+	if err != nil {
+		t.Fatalf("plan capacity override: %v", err)
+	}
+	plan := planResp.GetPlan()
+	if plan.GetMetadata()[adminOperationTypeMetadata] != "capacity-override" ||
+		plan.GetMetadata()[adminCapacityProfileIDMetadata] != "production-a" ||
+		plan.GetMetadata()[adminCapacityOverrideReasonMetadata] != "incident INC-42" ||
+		len(plan.GetWarnings()) != 1 ||
+		len(plan.GetTargets()) != 1 ||
+		plan.GetTargets()[0].GetCapacityProfile().GetCapacityProfileId() != "production-a" {
+		t.Fatalf("plan = %#v, want bounded capacity override plan", plan)
+	}
+
+	startResp, err := capacityClient.StartCapacityOverride(context.Background(), &adminv1.StartCapacityOverrideRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789ac4",
+		OperationPlanId: plan.GetOperationPlanId(),
+		PlanHash:        plan.GetPlanHash(),
+	})
+	if err != nil {
+		t.Fatalf("start capacity override: %v", err)
+	}
+	if startResp.GetOperation().GetOperationType() != "capacity-override" ||
+		!startResp.GetOperation().GetDryRun() ||
+		startResp.GetOperation().GetMetadata()[adminCapacityProfileIDMetadata] != "production-a" {
+		t.Fatalf("operation = %#v, want queued capacity override operation", startResp.GetOperation())
+	}
+}
+
+func TestAdminServerStartedOperationStatusSurvivesStoreReopen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := operations.Open(dir)
+	if err != nil {
+		t.Fatalf("open operation store: %v", err)
+	}
+	restoreClient, _, _, _, cleanup := newAdminWorkflowClients(t, store)
+
+	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
+		Targets: []*adminv1.Target{documentAdminTarget()},
+	})
+	if err != nil {
+		t.Fatalf("plan restore: %v", err)
+	}
+	operationID := "018f6d86-7a22-7abc-8def-123456789ac5"
+	if _, err := restoreClient.StartRestore(context.Background(), &adminv1.StartRestoreRequest{
+		OperationId:     operationID,
+		OperationPlanId: planResp.GetPlan().GetOperationPlanId(),
+		PlanHash:        planResp.GetPlan().GetPlanHash(),
+	}); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+	cleanup()
+	if err := store.Close(); err != nil {
+		t.Fatalf("close operation store: %v", err)
+	}
+
+	reopened, err := operations.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen operation store: %v", err)
+	}
+	defer reopened.Close()
+	operationClient, operationCleanup := newAdminOperationClient(t, reopened)
+	defer operationCleanup()
+
+	getResp, err := operationClient.GetOperation(context.Background(), &adminv1.GetOperationRequest{OperationId: operationID})
+	if err != nil {
+		t.Fatalf("get operation after reopen: %v", err)
+	}
+	if getResp.GetOperation().GetOperationType() != "restore" ||
+		getResp.GetOperation().GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED {
+		t.Fatalf("operation = %#v, want queued restore after reopen", getResp.GetOperation())
+	}
+	listResp, err := operationClient.ListOperations(context.Background(), &adminv1.ListOperationsRequest{
+		OperationType: ptr("restore"),
+		States:        []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_QUEUED},
+	})
+	if err != nil {
+		t.Fatalf("list operations after reopen: %v", err)
+	}
+	if len(listResp.GetOperations()) != 1 || listResp.GetOperations()[0].GetOperationId() != operationID {
+		t.Fatalf("operations = %#v, want restored operation visible after reopen", listResp.GetOperations())
+	}
+}
+
 func TestAdminServerPlanRecoveryStartsDRSuboperations(t *testing.T) {
 	store := openTestOperationStore(t)
 	drClient, cleanup := newAdminDisasterRecoveryClient(t, nil, store)
@@ -974,6 +1169,64 @@ func newAdminDisasterRecoveryClient(t *testing.T, dr DisasterRecoveryApplication
 		_ = listener.Close()
 	}
 	return adminv1.NewDisasterRecoveryServiceClient(conn), cleanup
+}
+
+func newAdminKeyClient(t *testing.T, store *operations.Store) (adminv1.KeyServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithOperationStore(store)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewKeyServiceClient(conn), cleanup
+}
+
+func newAdminCapacityClient(t *testing.T, store *operations.Store) (adminv1.CapacityServiceClient, func()) {
+	t.Helper()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	RegisterAdminServer(server, NewAdminServer(WithOperationStore(store)))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	cleanup := func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+	return adminv1.NewCapacityServiceClient(conn), cleanup
 }
 
 func newAdminOperationClient(t *testing.T, store *operations.Store) (adminv1.OperationServiceClient, func()) {

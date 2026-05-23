@@ -1383,6 +1383,282 @@ var LifecycleService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	KeyService_PlanKeyRotation_FullMethodName  = "/scrap.admin.v1.KeyService/PlanKeyRotation"
+	KeyService_StartKeyRotation_FullMethodName = "/scrap.admin.v1.KeyService/StartKeyRotation"
+)
+
+// KeyServiceClient is the client API for KeyService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type KeyServiceClient interface {
+	PlanKeyRotation(ctx context.Context, in *PlanKeyRotationRequest, opts ...grpc.CallOption) (*PlanKeyRotationResponse, error)
+	StartKeyRotation(ctx context.Context, in *StartKeyRotationRequest, opts ...grpc.CallOption) (*StartKeyRotationResponse, error)
+}
+
+type keyServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewKeyServiceClient(cc grpc.ClientConnInterface) KeyServiceClient {
+	return &keyServiceClient{cc}
+}
+
+func (c *keyServiceClient) PlanKeyRotation(ctx context.Context, in *PlanKeyRotationRequest, opts ...grpc.CallOption) (*PlanKeyRotationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PlanKeyRotationResponse)
+	err := c.cc.Invoke(ctx, KeyService_PlanKeyRotation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keyServiceClient) StartKeyRotation(ctx context.Context, in *StartKeyRotationRequest, opts ...grpc.CallOption) (*StartKeyRotationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartKeyRotationResponse)
+	err := c.cc.Invoke(ctx, KeyService_StartKeyRotation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// KeyServiceServer is the server API for KeyService service.
+// All implementations should embed UnimplementedKeyServiceServer
+// for forward compatibility.
+type KeyServiceServer interface {
+	PlanKeyRotation(context.Context, *PlanKeyRotationRequest) (*PlanKeyRotationResponse, error)
+	StartKeyRotation(context.Context, *StartKeyRotationRequest) (*StartKeyRotationResponse, error)
+}
+
+// UnimplementedKeyServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedKeyServiceServer struct{}
+
+func (UnimplementedKeyServiceServer) PlanKeyRotation(context.Context, *PlanKeyRotationRequest) (*PlanKeyRotationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PlanKeyRotation not implemented")
+}
+func (UnimplementedKeyServiceServer) StartKeyRotation(context.Context, *StartKeyRotationRequest) (*StartKeyRotationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartKeyRotation not implemented")
+}
+func (UnimplementedKeyServiceServer) testEmbeddedByValue() {}
+
+// UnsafeKeyServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to KeyServiceServer will
+// result in compilation errors.
+type UnsafeKeyServiceServer interface {
+	mustEmbedUnimplementedKeyServiceServer()
+}
+
+func RegisterKeyServiceServer(s grpc.ServiceRegistrar, srv KeyServiceServer) {
+	// If the following call pancis, it indicates UnimplementedKeyServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&KeyService_ServiceDesc, srv)
+}
+
+func _KeyService_PlanKeyRotation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PlanKeyRotationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyServiceServer).PlanKeyRotation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeyService_PlanKeyRotation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyServiceServer).PlanKeyRotation(ctx, req.(*PlanKeyRotationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeyService_StartKeyRotation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartKeyRotationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyServiceServer).StartKeyRotation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeyService_StartKeyRotation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyServiceServer).StartKeyRotation(ctx, req.(*StartKeyRotationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// KeyService_ServiceDesc is the grpc.ServiceDesc for KeyService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var KeyService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "scrap.admin.v1.KeyService",
+	HandlerType: (*KeyServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PlanKeyRotation",
+			Handler:    _KeyService_PlanKeyRotation_Handler,
+		},
+		{
+			MethodName: "StartKeyRotation",
+			Handler:    _KeyService_StartKeyRotation_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "scrap/admin/v1/admin.proto",
+}
+
+const (
+	CapacityService_PlanCapacityOverride_FullMethodName  = "/scrap.admin.v1.CapacityService/PlanCapacityOverride"
+	CapacityService_StartCapacityOverride_FullMethodName = "/scrap.admin.v1.CapacityService/StartCapacityOverride"
+)
+
+// CapacityServiceClient is the client API for CapacityService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type CapacityServiceClient interface {
+	PlanCapacityOverride(ctx context.Context, in *PlanCapacityOverrideRequest, opts ...grpc.CallOption) (*PlanCapacityOverrideResponse, error)
+	StartCapacityOverride(ctx context.Context, in *StartCapacityOverrideRequest, opts ...grpc.CallOption) (*StartCapacityOverrideResponse, error)
+}
+
+type capacityServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewCapacityServiceClient(cc grpc.ClientConnInterface) CapacityServiceClient {
+	return &capacityServiceClient{cc}
+}
+
+func (c *capacityServiceClient) PlanCapacityOverride(ctx context.Context, in *PlanCapacityOverrideRequest, opts ...grpc.CallOption) (*PlanCapacityOverrideResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PlanCapacityOverrideResponse)
+	err := c.cc.Invoke(ctx, CapacityService_PlanCapacityOverride_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *capacityServiceClient) StartCapacityOverride(ctx context.Context, in *StartCapacityOverrideRequest, opts ...grpc.CallOption) (*StartCapacityOverrideResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartCapacityOverrideResponse)
+	err := c.cc.Invoke(ctx, CapacityService_StartCapacityOverride_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CapacityServiceServer is the server API for CapacityService service.
+// All implementations should embed UnimplementedCapacityServiceServer
+// for forward compatibility.
+type CapacityServiceServer interface {
+	PlanCapacityOverride(context.Context, *PlanCapacityOverrideRequest) (*PlanCapacityOverrideResponse, error)
+	StartCapacityOverride(context.Context, *StartCapacityOverrideRequest) (*StartCapacityOverrideResponse, error)
+}
+
+// UnimplementedCapacityServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedCapacityServiceServer struct{}
+
+func (UnimplementedCapacityServiceServer) PlanCapacityOverride(context.Context, *PlanCapacityOverrideRequest) (*PlanCapacityOverrideResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PlanCapacityOverride not implemented")
+}
+func (UnimplementedCapacityServiceServer) StartCapacityOverride(context.Context, *StartCapacityOverrideRequest) (*StartCapacityOverrideResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartCapacityOverride not implemented")
+}
+func (UnimplementedCapacityServiceServer) testEmbeddedByValue() {}
+
+// UnsafeCapacityServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CapacityServiceServer will
+// result in compilation errors.
+type UnsafeCapacityServiceServer interface {
+	mustEmbedUnimplementedCapacityServiceServer()
+}
+
+func RegisterCapacityServiceServer(s grpc.ServiceRegistrar, srv CapacityServiceServer) {
+	// If the following call pancis, it indicates UnimplementedCapacityServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&CapacityService_ServiceDesc, srv)
+}
+
+func _CapacityService_PlanCapacityOverride_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PlanCapacityOverrideRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CapacityServiceServer).PlanCapacityOverride(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CapacityService_PlanCapacityOverride_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CapacityServiceServer).PlanCapacityOverride(ctx, req.(*PlanCapacityOverrideRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CapacityService_StartCapacityOverride_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartCapacityOverrideRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CapacityServiceServer).StartCapacityOverride(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CapacityService_StartCapacityOverride_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CapacityServiceServer).StartCapacityOverride(ctx, req.(*StartCapacityOverrideRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// CapacityService_ServiceDesc is the grpc.ServiceDesc for CapacityService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var CapacityService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "scrap.admin.v1.CapacityService",
+	HandlerType: (*CapacityServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PlanCapacityOverride",
+			Handler:    _CapacityService_PlanCapacityOverride_Handler,
+		},
+		{
+			MethodName: "StartCapacityOverride",
+			Handler:    _CapacityService_StartCapacityOverride_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "scrap/admin/v1/admin.proto",
+}
+
+const (
 	DisasterRecoveryService_GetRecoveryReadiness_FullMethodName = "/scrap.admin.v1.DisasterRecoveryService/GetRecoveryReadiness"
 	DisasterRecoveryService_PlanRecovery_FullMethodName         = "/scrap.admin.v1.DisasterRecoveryService/PlanRecovery"
 	DisasterRecoveryService_StartMetadataRestore_FullMethodName = "/scrap.admin.v1.DisasterRecoveryService/StartMetadataRestore"

@@ -17,22 +17,24 @@ const (
 type AdminTargetKind string
 
 const (
-	AdminTargetDocument      AdminTargetKind = "document"
-	AdminTargetTransaction   AdminTargetKind = "transaction"
-	AdminTargetBlock         AdminTargetKind = "block"
-	AdminTargetShard         AdminTargetKind = "shard"
-	AdminTargetStorageMember AdminTargetKind = "storage_member"
-	AdminTargetSnapshot      AdminTargetKind = "snapshot"
+	AdminTargetDocument        AdminTargetKind = "document"
+	AdminTargetTransaction     AdminTargetKind = "transaction"
+	AdminTargetBlock           AdminTargetKind = "block"
+	AdminTargetShard           AdminTargetKind = "shard"
+	AdminTargetStorageMember   AdminTargetKind = "storage_member"
+	AdminTargetSnapshot        AdminTargetKind = "snapshot"
+	AdminTargetCapacityProfile AdminTargetKind = "capacity_profile"
 )
 
 type AdminTarget struct {
-	Kind          AdminTargetKind
-	Document      identity.Document
-	Transaction   identity.Transaction
-	Block         BlockTarget
-	ShardID       string
-	StorageMember string
-	Snapshot      SnapshotTarget
+	Kind            AdminTargetKind
+	Document        identity.Document
+	Transaction     identity.Transaction
+	Block           BlockTarget
+	ShardID         string
+	StorageMember   string
+	Snapshot        SnapshotTarget
+	CapacityProfile string
 }
 
 type BlockTarget struct {
@@ -51,6 +53,7 @@ type OperationPlanRequest struct {
 	DryRun   bool
 	PinUntil *time.Time
 	Metadata map[string]string
+	Warnings []*adminv1.OperationWarning
 }
 
 type OperationStartRequest struct {
@@ -94,6 +97,12 @@ var scrubTargetKinds = map[AdminTargetKind]bool{
 var tombstoneTargetKinds = map[AdminTargetKind]bool{
 	AdminTargetDocument:    true,
 	AdminTargetTransaction: true,
+}
+
+var keyRotationTargetKinds = map[AdminTargetKind]bool{
+	AdminTargetDocument:    true,
+	AdminTargetTransaction: true,
+	AdminTargetBlock:       true,
 }
 
 func ValidateAdminTarget(target *adminv1.Target) (AdminTarget, error) {
@@ -140,6 +149,64 @@ func ValidatePlanTombstoneRequest(req *adminv1.PlanTombstoneRequest) (OperationP
 	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, tombstoneTargetKinds)
 }
 
+func ValidatePlanKeyRotationRequest(req *adminv1.PlanKeyRotationRequest) (OperationPlanRequest, error) {
+	if req == nil {
+		return missingPlanRequest()
+	}
+	planReq, err := validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, keyRotationTargetKinds)
+	if err != nil {
+		return OperationPlanRequest{}, err
+	}
+	var problems violations
+	validateRequiredText("destination_key_id", req.DestinationKeyId, &problems)
+	validateText("destination_key_id", req.DestinationKeyId, &problems)
+	if err := problems.err(); err != nil {
+		return OperationPlanRequest{}, err
+	}
+	if planReq.Metadata == nil {
+		planReq.Metadata = make(map[string]string)
+	}
+	planReq.Metadata[adminDestinationKeyIDMetadata] = req.DestinationKeyId
+	return planReq, nil
+}
+
+func ValidatePlanCapacityOverrideRequest(req *adminv1.PlanCapacityOverrideRequest) (OperationPlanRequest, error) {
+	var problems violations
+	if req == nil {
+		problems.add("request", identity.ReasonRequired, "request is required")
+		return OperationPlanRequest{}, problems.err()
+	}
+	capacityProfileID := validateCapacityProfileTarget("capacity_profile", req.CapacityProfile, &problems)
+	expiresAt := validateRequiredAdminTime("expires_at", req.ExpiresAt, &problems)
+	validateRequiredText("reason", req.Reason, &problems)
+	validateText("reason", req.Reason, &problems)
+	validateMetadata("metadata", req.Metadata, &problems)
+	if err := problems.err(); err != nil {
+		return OperationPlanRequest{}, err
+	}
+	metadata := cloneTags(req.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata[adminCapacityProfileIDMetadata] = capacityProfileID
+	metadata[adminCapacityOverrideExpiresAtMetadata] = expiresAt.Format(time.RFC3339Nano)
+	metadata[adminCapacityOverrideReasonMetadata] = req.Reason
+	return OperationPlanRequest{
+		Targets: []AdminTarget{{
+			Kind:            AdminTargetCapacityProfile,
+			CapacityProfile: capacityProfileID,
+		}},
+		DryRun:   req.DryRun,
+		Metadata: metadata,
+		Warnings: []*adminv1.OperationWarning{
+			{
+				Code:    "SCRAP_CAPACITY_OVERRIDE_BOUNDED",
+				Message: "capacity override is time-bounded operation evidence and does not force production write ACK mode",
+			},
+		},
+	}, nil
+}
+
 func ValidatePlanRecoveryRequest(req *adminv1.PlanRecoveryRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
@@ -183,6 +250,20 @@ func ValidateStartDrainRequest(req *adminv1.StartDrainRequest) (OperationStartRe
 }
 
 func ValidateStartTombstoneRequest(req *adminv1.StartTombstoneRequest) (OperationStartRequest, error) {
+	if req == nil {
+		return missingStartRequest()
+	}
+	return validateStartRequest(req.OperationId, req.OperationPlanId, req.PlanHash, req.Metadata)
+}
+
+func ValidateStartKeyRotationRequest(req *adminv1.StartKeyRotationRequest) (OperationStartRequest, error) {
+	if req == nil {
+		return missingStartRequest()
+	}
+	return validateStartRequest(req.OperationId, req.OperationPlanId, req.PlanHash, req.Metadata)
+}
+
+func ValidateStartCapacityOverrideRequest(req *adminv1.StartCapacityOverrideRequest) (OperationStartRequest, error) {
 	if req == nil {
 		return missingStartRequest()
 	}
@@ -347,6 +428,9 @@ func validateAdminTarget(field string, target *adminv1.Target, allowed map[Admin
 	case *adminv1.Target_Snapshot:
 		snapshot := validateSnapshotTarget(field+".snapshot", typed.Snapshot, problems)
 		return validateAllowedTarget(field, AdminTarget{Kind: AdminTargetSnapshot, Snapshot: snapshot}, allowed, problems)
+	case *adminv1.Target_CapacityProfile:
+		capacityProfileID := validateCapacityProfileTarget(field+".capacity_profile", typed.CapacityProfile, problems)
+		return validateAllowedTarget(field, AdminTarget{Kind: AdminTargetCapacityProfile, CapacityProfile: capacityProfileID}, allowed, problems)
 	default:
 		problems.add(field, reasonInvalidTargetKind, "target kind is not recognized")
 		return AdminTarget{}
@@ -428,6 +512,16 @@ func validateSnapshotTarget(field string, target *adminv1.SnapshotTarget, proble
 	}
 }
 
+func validateCapacityProfileTarget(field string, target *adminv1.CapacityProfileTarget, problems *violations) string {
+	if target == nil {
+		problems.add(field, identity.ReasonRequired, "capacity profile target is required")
+		return ""
+	}
+	validateRequiredText(field+".capacity_profile_id", target.CapacityProfileId, problems)
+	validateText(field+".capacity_profile_id", target.CapacityProfileId, problems)
+	return target.CapacityProfileId
+}
+
 func validateUUIDv7(field string, value string, problems *violations) {
 	if value == "" {
 		problems.add(field, identity.ReasonRequired, field+" is required")
@@ -452,6 +546,18 @@ func validateOptionalAdminTime(field string, value *timestamppb.Timestamp, probl
 	}
 	parsed := value.AsTime()
 	return &parsed
+}
+
+func validateRequiredAdminTime(field string, value *timestamppb.Timestamp, problems *violations) time.Time {
+	if value == nil {
+		problems.add(field, identity.ReasonRequired, field+" is required")
+		return time.Time{}
+	}
+	parsed := validateOptionalAdminTime(field, value, problems)
+	if parsed == nil {
+		return time.Time{}
+	}
+	return *parsed
 }
 
 func validateMetadata(field string, metadata map[string]string, problems *violations) {

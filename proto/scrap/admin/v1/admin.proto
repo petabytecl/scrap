@@ -51,6 +51,16 @@ service LifecycleService {
   rpc StartTombstone(StartTombstoneRequest) returns (StartTombstoneResponse);
 }
 
+service KeyService {
+  rpc PlanKeyRotation(PlanKeyRotationRequest) returns (PlanKeyRotationResponse);
+  rpc StartKeyRotation(StartKeyRotationRequest) returns (StartKeyRotationResponse);
+}
+
+service CapacityService {
+  rpc PlanCapacityOverride(PlanCapacityOverrideRequest) returns (PlanCapacityOverrideResponse);
+  rpc StartCapacityOverride(StartCapacityOverrideRequest) returns (StartCapacityOverrideResponse);
+}
+
 service DisasterRecoveryService {
   rpc GetRecoveryReadiness(GetRecoveryReadinessRequest) returns (GetRecoveryReadinessResponse);
   rpc PlanRecovery(PlanRecoveryRequest) returns (PlanRecoveryResponse);
@@ -386,6 +396,51 @@ message StartTombstoneRequest {
 }
 
 message StartTombstoneResponse {
+  Operation operation = 1;
+}
+
+message PlanKeyRotationRequest {
+  repeated Target targets = 1;
+  string destination_key_id = 2;
+  bool dry_run = 3;
+  map<string, string> metadata = 4;
+}
+
+message PlanKeyRotationResponse {
+  OperationPlan plan = 1;
+}
+
+message StartKeyRotationRequest {
+  string operation_plan_id = 1;
+  string plan_hash = 2;
+  map<string, string> metadata = 3;
+  string operation_id = 4;
+}
+
+message StartKeyRotationResponse {
+  Operation operation = 1;
+}
+
+message PlanCapacityOverrideRequest {
+  CapacityProfileTarget capacity_profile = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  string reason = 3;
+  bool dry_run = 4;
+  map<string, string> metadata = 5;
+}
+
+message PlanCapacityOverrideResponse {
+  OperationPlan plan = 1;
+}
+
+message StartCapacityOverrideRequest {
+  string operation_plan_id = 1;
+  string plan_hash = 2;
+  map<string, string> metadata = 3;
+  string operation_id = 4;
+}
+
+message StartCapacityOverrideResponse {
   Operation operation = 1;
 }
 
