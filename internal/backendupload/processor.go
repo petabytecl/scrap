@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/metastore"
 )
@@ -33,6 +34,7 @@ type RunResult struct {
 	Deferred int
 	Uploaded int
 	Failed   int
+	Errors   map[backend.ErrorClass]int
 }
 
 func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
@@ -64,6 +66,7 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 				result.Deferred++
 				continue
 			}
+			result.recordError(err)
 			if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateFailed, err.Error()); err != nil {
 				return result, err
 			}
@@ -76,6 +79,17 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 		result.Uploaded++
 	}
 	return result, nil
+}
+
+func (r *RunResult) recordError(err error) {
+	class := backend.ClassifyError(err)
+	if class == "" {
+		return
+	}
+	if r.Errors == nil {
+		r.Errors = make(map[backend.ErrorClass]int)
+	}
+	r.Errors[class]++
 }
 
 func shouldUpload(state metastore.UploadState) bool {

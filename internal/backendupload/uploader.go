@@ -92,7 +92,7 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		result.Envelope = &envelopeObject
 	}
 	if intent.IndexObjectKey == "" {
-		return result, nil
+		return result, u.verifyUpload(ctx, intent, result)
 	}
 	if u.Index == nil {
 		return result, fmt.Errorf("backendupload: block index source is not configured")
@@ -107,5 +107,45 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		return result, err
 	}
 	result.Index = &indexObject
-	return result, nil
+	return result, u.verifyUpload(ctx, intent, result)
+}
+
+func (u Uploader) verifyUpload(ctx context.Context, intent metastore.UploadIntent, result UploadResult) error {
+	if err := u.verifyObject(ctx, intent.BackendObjectKey, result.Block); err != nil {
+		return err
+	}
+	if intent.IndexObjectKey != "" {
+		if result.Index == nil {
+			return fmt.Errorf("backendupload: uploaded block index object is missing")
+		}
+		if err := u.verifyObject(ctx, intent.IndexObjectKey, *result.Index); err != nil {
+			return err
+		}
+	}
+	if intent.EnvelopeObjectKey != "" {
+		if result.Envelope == nil {
+			return fmt.Errorf("backendupload: uploaded block envelope object is missing")
+		}
+		if err := u.verifyObject(ctx, intent.EnvelopeObjectKey, *result.Envelope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u Uploader) verifyObject(ctx context.Context, key string, expected backend.Object) error {
+	if key == "" {
+		return fmt.Errorf("backendupload: backend object key is required for verification")
+	}
+	if expected.Key != key {
+		return backend.ErrChecksumMismatch
+	}
+	actual, err := u.Backend.HeadObject(ctx, key)
+	if err != nil {
+		return err
+	}
+	if actual.Key != expected.Key || actual.Length != expected.Length || actual.SHA256 != expected.SHA256 {
+		return backend.ErrChecksumMismatch
+	}
+	return nil
 }
