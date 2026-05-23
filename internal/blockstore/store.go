@@ -197,12 +197,7 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 		return err
 	}
 	tempPath := temp.Name()
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.Remove(tempPath)
-		}
-	}()
+	defer func() { _ = os.Remove(tempPath) }()
 
 	written, sum, err := copyAndHash(ctx, temp, reader)
 	if closeErr := temp.Close(); err == nil {
@@ -221,6 +216,83 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 		return err
 	}
 	if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	if err := syncDir(s.blocksDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expectedSHA256 [32]byte, reader io.Reader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if record.BlockID == "" {
+		return errors.New("blockstore: block id is required")
+	}
+	if reader == nil {
+		return errors.New("blockstore: range reader is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	temp, err := os.CreateTemp(s.blocksDir, "repair-range-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	written, sum, err := copyAndHash(ctx, temp, reader)
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if written != record.StoredLength || sum != expectedSHA256 {
+		return ErrChecksumMismatch
+	}
+	if err := verifyTempRange(tempPath, record); err != nil {
+		return err
+	}
+
+	source, err := os.Open(tempPath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	target, err := os.OpenFile(s.BlockPath(record.BlockID), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		target, err = os.OpenFile(s.BlockPath(record.BlockID), os.O_RDWR, 0o600)
+	} else if err == nil {
+		if err := writeHeader(target, record.BlockID, s.frameSize); err != nil {
+			return errors.Join(err, target.Close())
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := target.Seek(int64(record.StoredOffset), io.SeekStart); err != nil {
+		return errors.Join(err, target.Close())
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		return errors.Join(err, target.Close())
+	}
+	if err := target.Sync(); err != nil {
+		return errors.Join(err, target.Close())
+	}
+	if err := target.Close(); err != nil {
+		return err
+	}
+	if err := s.verifyReadableRange(record, 0, record.StoredLength); err != nil {
 		return err
 	}
 	if err := syncDir(s.blocksDir); err != nil {
@@ -519,6 +591,30 @@ func verifyFrame(file *os.File, frame FrameRecord) error {
 	copy(got[:], hasher.Sum(nil))
 	if got != frame.SHA256 {
 		return ErrChecksumMismatch
+	}
+	return nil
+}
+
+func verifyTempRange(path string, record Record) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	for _, frame := range record.Frames {
+		if frame.SegmentOffset < record.StoredOffset {
+			return ErrInvalidRange
+		}
+		relativeOffset := frame.SegmentOffset - record.StoredOffset
+		if relativeOffset+frame.SegmentLength < relativeOffset || relativeOffset+frame.SegmentLength > record.StoredLength {
+			return ErrInvalidRange
+		}
+		tempFrame := frame
+		tempFrame.FrameOffset = 0
+		tempFrame.SegmentOffset = relativeOffset
+		if err := verifyFrame(file, tempFrame); err != nil {
+			return err
+		}
 	}
 	return nil
 }
