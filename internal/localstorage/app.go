@@ -39,6 +39,7 @@ type Application struct {
 	sealBlockAtBytes         uint64
 	minUsableBytesAfterWrite uint64
 	now                      func() time.Time
+	writeFaults              writeFaultHooks
 }
 
 const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
@@ -50,6 +51,15 @@ type BackendUploadOnceResult struct {
 	Upload              backendupload.RunResult
 	MetadataPublished   bool
 	MetadataPublication *published.SnapshotPublication
+}
+
+// writeFaultHooks makes local durability boundaries injectable for deterministic
+// crash-recovery tests without process-level chaos.
+type writeFaultHooks struct {
+	afterBlockSync     func(blockstore.Record) error
+	afterPrepareSync   func(metastore.Document) error
+	afterMetadataApply func(metastore.Document) error
+	beforeACK          func(metastore.Document) error
 }
 
 func Open(dir string) (*Application, error) {
@@ -190,7 +200,7 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 		if err != nil {
 			return api.WriteDocumentResult{}, err
 		}
-		return a.replayExisting(init, existing, body)
+		return a.replayExisting(ctx, init, existing, body)
 	} else if !errors.Is(err, metastore.ErrNotFound) {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
@@ -209,6 +219,11 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	})
 	if err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
+	}
+	if a.writeFaults.afterBlockSync != nil {
+		if err := a.writeFaults.afterBlockSync(record); err != nil {
+			return api.WriteDocumentResult{}, err
+		}
 	}
 
 	now := a.now()
@@ -237,12 +252,27 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	if err := a.prepare.Append(document); err != nil {
 		return api.WriteDocumentResult{}, err
 	}
+	if a.writeFaults.afterPrepareSync != nil {
+		if err := a.writeFaults.afterPrepareSync(document); err != nil {
+			return api.WriteDocumentResult{}, err
+		}
+	}
 	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
+	}
+	if a.writeFaults.afterMetadataApply != nil {
+		if err := a.writeFaults.afterMetadataApply(document); err != nil {
+			return api.WriteDocumentResult{}, err
+		}
 	}
 	uploadIntent := uploadIntentForDocument(document)
 	if err := a.authority.RecordUploadIntent(ctx, uploadIntent, recordUploadIntentCommandID(uploadIntent), now); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
+	}
+	if a.writeFaults.beforeACK != nil {
+		if err := a.writeFaults.beforeACK(document); err != nil {
+			return api.WriteDocumentResult{}, err
+		}
 	}
 	return api.WriteDocumentResult{
 		Metadata:             documentToAPI(document),
@@ -463,7 +493,7 @@ func (a *Application) GetTransaction(_ context.Context, req api.GetTransactionRe
 	return transactionToAPI(transaction), nil
 }
 
-func (a *Application) replayExisting(init api.WriteDocumentInit, existing metastore.Document, body drainedBody) (api.WriteDocumentResult, error) {
+func (a *Application) replayExisting(ctx context.Context, init api.WriteDocumentInit, existing metastore.Document, body drainedBody) (api.WriteDocumentResult, error) {
 	if !existing.HasClientIdempotencyKey || existing.ClientIdempotencyKey == "" || existing.ClientIdempotencyKey != init.ClientIdempotencyKey {
 		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
 	}
@@ -475,6 +505,10 @@ func (a *Application) replayExisting(init api.WriteDocumentInit, existing metast
 	}
 	if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, existing.LogicalSHA256[:]) {
 		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
+	}
+	intent := uploadIntentForDocument(existing)
+	if err := a.authority.RecordUploadIntent(ctx, intent, recordUploadIntentCommandID(intent), a.now()); err != nil {
+		return api.WriteDocumentResult{}, mapError(err)
 	}
 	return api.WriteDocumentResult{
 		Metadata:             documentToAPI(existing),
