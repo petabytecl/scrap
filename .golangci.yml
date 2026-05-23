@@ -38,17 +38,6 @@ linters:
         linters:
           - errcheck
           - gosec
-      # Existing filesystem path construction is rooted in configured storage
-      # directories, but gosec cannot prove that through current abstractions.
-      # Issue #56 tracks these pre-existing taint findings.
-      - linters:
-          - gosec
-        text: "G(304|703):"
-      # Existing storage-format and protobuf enum conversions need explicit range
-      # guards. Issue #56 tracks this pre-existing conversion debt.
-      - linters:
-          - gosec
-        text: "G115:"
       # Close errors on read-only files, iterators, and cleanup paths are tracked
       # separately from durability-boundary sync errors by issue #57.
       - linters:

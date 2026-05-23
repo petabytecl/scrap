@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -91,7 +92,9 @@ func LoadFile(path string) (Policy, error) {
 	if strings.TrimSpace(path) == "" {
 		return Policy{}, fmt.Errorf("%w: authorization policy path is required", ErrInvalidPolicy)
 	}
-	file, err := os.Open(path)
+	cleanPath := filepath.Clean(path)
+	// #nosec G304 -- this is an operator-configured policy file path, not request input.
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return Policy{}, fmt.Errorf("open authorization policy: %w", err)
 	}

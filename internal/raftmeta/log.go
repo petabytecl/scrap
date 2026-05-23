@@ -12,6 +12,8 @@ import (
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/safepath"
 )
 
 const (
@@ -39,12 +41,15 @@ func OpenLog(dir string) (*Log, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, commandLogName)
+	path, err := safepath.UnderDir(dir, filepath.Join(dir, commandLogName))
+	if err != nil {
+		return nil, err
+	}
 	entries, err := readEntries(path)
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := openLogFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +92,10 @@ func (l *Log) Append(command *metastorev1.ShardCommand) (Entry, error) {
 		return Entry{}, errors.New("raftmeta: log is closed")
 	}
 	index := l.nextIndex
-	frame := encodeFrame(index, payload)
+	frame, err := encodeFrame(index, payload)
+	if err != nil {
+		return Entry{}, err
+	}
 	written, err := l.file.Write(frame)
 	if err != nil {
 		return Entry{}, err
@@ -174,7 +182,7 @@ func (l *Log) Compact(throughIndex uint64) error {
 }
 
 func readEntries(path string) ([]Entry, error) {
-	file, err := os.Open(path)
+	file, err := openLogReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -229,7 +237,7 @@ func readEntries(path string) ([]Entry, error) {
 }
 
 func writeEntries(path string, entries []Entry) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := openLogFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -239,7 +247,11 @@ func writeEntries(path string, entries []Entry) error {
 			_ = file.Close()
 			return err
 		}
-		frame := encodeFrame(entry.Index, payload)
+		frame, err := encodeFrame(entry.Index, payload)
+		if err != nil {
+			_ = file.Close()
+			return err
+		}
 		if _, err := file.Write(frame); err != nil {
 			_ = file.Close()
 			return err
@@ -252,14 +264,21 @@ func writeEntries(path string, entries []Entry) error {
 	return file.Close()
 }
 
-func encodeFrame(index uint64, payload []byte) []byte {
+func encodeFrame(index uint64, payload []byte) ([]byte, error) {
+	if len(payload) > MaxCommandBytes {
+		return nil, fmt.Errorf("raftmeta: command is %d bytes; maximum is %d", len(payload), MaxCommandBytes)
+	}
+	payloadLen, err := safeconv.IntToUint32("raft command payload length", len(payload))
+	if err != nil {
+		return nil, err
+	}
 	frame := make([]byte, commandLogHeaderLen+len(payload)+commandLogCRCLen)
 	binary.BigEndian.PutUint64(frame[0:8], index)
-	binary.BigEndian.PutUint32(frame[8:12], uint32(len(payload)))
+	binary.BigEndian.PutUint32(frame[8:12], payloadLen)
 	copy(frame[commandLogHeaderLen:], payload)
 	crc := checksumFrame(frame[:commandLogHeaderLen], payload)
 	binary.BigEndian.PutUint32(frame[len(frame)-commandLogCRCLen:], crc)
-	return frame
+	return frame, nil
 }
 
 func checksumFrame(header []byte, payload []byte) uint32 {
@@ -270,9 +289,20 @@ func checksumFrame(header []byte, payload []byte) uint32 {
 }
 
 func syncDir(path string) error {
+	// #nosec G304 G703 -- callers pass configured raft metadata directories.
 	dir, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	return errors.Join(dir.Sync(), dir.Close())
+}
+
+func openLogReadFile(path string) (*os.File, error) {
+	// #nosec G304 G703 -- raft metadata log paths are validated under the configured raft directory.
+	return os.Open(path)
+}
+
+func openLogFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	// #nosec G304 G703 -- raft metadata log paths are validated under the configured raft directory.
+	return os.OpenFile(path, flag, perm)
 }

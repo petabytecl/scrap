@@ -8,6 +8,7 @@ import (
 	"io"
 
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -136,8 +137,12 @@ func writeArtifactRecord(writer io.Writer, payload []byte) error {
 	if len(payload) > maxArtifactRecordPayload {
 		return fmt.Errorf("%w: %d bytes", ErrArtifactRecordTooLarge, len(payload))
 	}
+	payloadLen, err := safeconv.IntToUint32("published artifact payload length", len(payload))
+	if err != nil {
+		return err
+	}
 	var header [8]byte
-	binary.BigEndian.PutUint32(header[:4], uint32(len(payload)))
+	binary.BigEndian.PutUint32(header[:4], payloadLen)
 	binary.BigEndian.PutUint32(header[4:], crc32.Checksum(payload, crcTable))
 	if err := writeFull(writer, header[:4]); err != nil {
 		return err

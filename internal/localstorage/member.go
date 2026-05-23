@@ -11,6 +11,7 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safepath"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -144,7 +145,11 @@ func (a *Application) currentLocalMemberState() localMemberState {
 }
 
 func readLocalMemberState(dir string) (localMemberState, error) {
-	data, err := os.ReadFile(filepath.Join(dir, localMemberStateFile))
+	statePath, err := safepath.UnderDir(dir, filepath.Join(dir, localMemberStateFile))
+	if err != nil {
+		return localMemberState{}, err
+	}
+	data, err := readLocalPath(statePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return localMemberState{}, nil
 	}
@@ -167,11 +172,18 @@ func writeLocalMemberState(dir string, state localMemberState) error {
 	if err != nil {
 		return err
 	}
-	tempPath := temp.Name()
+	tempPath, err := safepath.UnderDir(dir, temp.Name())
+	if err != nil {
+		return errors.Join(err, temp.Close(), removeLocalPath(dir, temp.Name()))
+	}
+	statePath, err := safepath.UnderDir(dir, filepath.Join(dir, localMemberStateFile))
+	if err != nil {
+		return errors.Join(err, temp.Close(), removeLocalPath(dir, tempPath))
+	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.Remove(tempPath)
+			_ = removeLocalPath(dir, tempPath)
 		}
 	}()
 	if _, err := temp.Write(data); err != nil {
@@ -183,7 +195,8 @@ func writeLocalMemberState(dir string, state localMemberState) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, filepath.Join(dir, localMemberStateFile)); err != nil {
+	// #nosec G703 -- source and destination are validated under the local member directory.
+	if err := os.Rename(tempPath, statePath); err != nil {
 		return err
 	}
 	if err := syncLocalDir(dir); err != nil {
@@ -194,9 +207,29 @@ func writeLocalMemberState(dir string, state localMemberState) error {
 }
 
 func syncLocalDir(path string) error {
+	// #nosec G304 G703 -- callers pass configured local storage directories.
 	dir, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	return errors.Join(dir.Sync(), dir.Close())
+}
+
+func removeLocalPath(root string, path string) error {
+	path, err := safepath.UnderDir(root, path)
+	if err != nil {
+		return err
+	}
+	// #nosec G703 -- path is validated under the local storage directory before removal.
+	return os.Remove(path)
+}
+
+func readLocalPath(path string) ([]byte, error) {
+	// #nosec G304 G703 -- callers validate paths under the local storage directory.
+	return os.ReadFile(path)
+}
+
+func openLocalFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	// #nosec G304 G703 -- callers validate paths under the local storage directory.
+	return os.OpenFile(path, flag, perm)
 }

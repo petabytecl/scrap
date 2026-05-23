@@ -19,6 +19,7 @@ import (
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/replication"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -177,10 +178,14 @@ func (a *Application) runTombstoneOperation(ctx context.Context, store *operatio
 		return false, nil
 	}
 
+	targets, err := operationWorkUnits("tombstone targets", len(finished.GetTargets()))
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(len(finished.GetTargets())),
-		WorkUnitsCompleted: uint64(len(finished.GetTargets())),
+		WorkUnitsTotal:     targets,
+		WorkUnitsCompleted: targets,
 		Message:            "tombstone operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
@@ -224,10 +229,14 @@ func (a *Application) runScrubOperation(ctx context.Context, store *operations.S
 	if operation.GetDryRun() {
 		message = "scrub dry-run succeeded"
 	}
+	documentsScanned, err := safeconv.IntToUint64("documents scanned", summary.DocumentsScanned)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(summary.DocumentsScanned),
-		WorkUnitsCompleted: uint64(summary.DocumentsScanned),
+		WorkUnitsTotal:     documentsScanned,
+		WorkUnitsCompleted: documentsScanned,
 		Message:            message,
 		Counters: map[string]string{
 			"documents_scanned":   fmt.Sprintf("%d", summary.DocumentsScanned),
@@ -266,10 +275,14 @@ func (a *Application) runRewrapOperation(ctx context.Context, store *operations.
 		return false, nil
 	}
 
+	workUnits, err := safeconv.IntToUint64("rewrap work units", rewrapped+skipped)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(rewrapped + skipped),
-		WorkUnitsCompleted: uint64(rewrapped + skipped),
+		WorkUnitsTotal:     workUnits,
+		WorkUnitsCompleted: workUnits,
 		Message:            "rewrap operation succeeded",
 		Counters: map[string]string{
 			"envelopes_rewrapped": fmt.Sprintf("%d", rewrapped),
@@ -405,10 +418,14 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 		return false, nil
 	}
 
+	workUnitsCompleted, err := safeconv.IntToUint64("repair work units", workUnits)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(workUnits),
-		WorkUnitsCompleted: uint64(workUnits),
+		WorkUnitsTotal:     workUnitsCompleted,
+		WorkUnitsCompleted: workUnitsCompleted,
 		Message:            "repair operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
@@ -445,11 +462,15 @@ func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *o
 		return false, nil
 	}
 	workUnits := len(finished.GetTargets())
+	workUnitsCount, err := operationWorkUnits(operation.GetOperationType()+" targets", workUnits)
+	if err != nil {
+		return false, err
+	}
 	if operation.GetDryRun() {
 		finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 		finished.Progress = &adminv1.OperationProgress{
-			WorkUnitsTotal:     uint64(workUnits),
-			WorkUnitsCompleted: uint64(workUnits),
+			WorkUnitsTotal:     workUnitsCount,
+			WorkUnitsCompleted: workUnitsCount,
 			Message:            operation.GetOperationType() + " dry-run succeeded",
 		}
 		if err := store.Put(finished); err != nil {
@@ -472,8 +493,8 @@ func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *o
 
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(workUnits),
-		WorkUnitsCompleted: uint64(workUnits),
+		WorkUnitsTotal:     workUnitsCount,
+		WorkUnitsCompleted: workUnitsCount,
 		Message:            operation.GetOperationType() + " operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
@@ -566,10 +587,14 @@ func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operati
 	if operation.GetDryRun() {
 		message = "copy-verify dry-run succeeded"
 	}
+	verifiedObjects, err := operationWorkUnits("verified objects", checkpoint.VerifiedObjects)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(checkpoint.VerifiedObjects),
-		WorkUnitsCompleted: uint64(checkpoint.VerifiedObjects),
+		WorkUnitsTotal:     verifiedObjects,
+		WorkUnitsCompleted: verifiedObjects,
 		Message:            message,
 		Counters:           checkpointEvidenceCounters(checkpoint),
 	}
@@ -608,10 +633,14 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 	if operation.GetDryRun() {
 		message = "metadata-restore dry-run succeeded"
 	}
+	workUnits, err := operationWorkUnits("metadata restore work units", restore.Documents, restore.Transactions, restore.UploadIntents)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(restore.Documents + restore.Transactions + restore.UploadIntents),
-		WorkUnitsCompleted: uint64(restore.Documents + restore.Transactions + restore.UploadIntents),
+		WorkUnitsTotal:     workUnits,
+		WorkUnitsCompleted: workUnits,
 		Message:            message,
 		Counters:           restoreEvidenceCounters(restore),
 	}
@@ -650,10 +679,14 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 	if operation.GetDryRun() {
 		message = "dr-drill dry-run succeeded"
 	}
+	workUnits, err := operationWorkUnits("dr drill work units", drill.Documents, drill.Transactions, drill.UploadIntents)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(drill.Documents + drill.Transactions + drill.UploadIntents),
-		WorkUnitsCompleted: uint64(drill.Documents + drill.Transactions + drill.UploadIntents),
+		WorkUnitsTotal:     workUnits,
+		WorkUnitsCompleted: workUnits,
 		Message:            message,
 		Counters:           restoreEvidenceCounters(drill),
 	}
@@ -738,10 +771,14 @@ func (a *Application) runDrainOperation(ctx context.Context, store *operations.S
 		return false, nil
 	}
 
+	workUnitsCompleted, err := operationWorkUnits("drain work units", workUnits)
+	if err != nil {
+		return false, err
+	}
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
 	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(workUnits),
-		WorkUnitsCompleted: uint64(workUnits),
+		WorkUnitsTotal:     workUnitsCompleted,
+		WorkUnitsCompleted: workUnitsCompleted,
 		Message:            "drain operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
@@ -1128,7 +1165,11 @@ func (a *Application) runRestoreOperation(ctx context.Context, store *operations
 	if errors.Is(err, backend.ErrRestorePending) {
 		pending := cloneOperation(running)
 		pending.State = adminv1.OperationState_OPERATION_STATE_QUEUED
-		pending.Progress = restoreOperationProgress(pending, summary, operation.GetOperationType()+" operation pending backend restore")
+		progress, progressErr := restoreOperationProgress(pending, summary, operation.GetOperationType()+" operation pending backend restore")
+		if progressErr != nil {
+			return false, progressErr
+		}
+		pending.Progress = progress
 		pending.LastError = nil
 		if putErr := store.Put(pending); putErr != nil {
 			return false, putErr
@@ -1151,7 +1192,11 @@ func (a *Application) runRestoreOperation(ctx context.Context, store *operations
 	}
 
 	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
-	finished.Progress = restoreOperationProgress(finished, summary, operation.GetOperationType()+" operation succeeded")
+	progress, err := restoreOperationProgress(finished, summary, operation.GetOperationType()+" operation succeeded")
+	if err != nil {
+		return false, err
+	}
+	finished.Progress = progress
 	if err := store.Put(finished); err != nil {
 		return false, err
 	}
@@ -1342,11 +1387,18 @@ func defaultRestoreOperationLane(operationType string) string {
 	}
 }
 
-func restoreOperationProgress(operation *adminv1.Operation, summary restoreSummary, message string) *adminv1.OperationProgress {
-	total := summary.BlocksRestored + summary.BlocksSkipped + summary.BlocksPending
+func restoreOperationProgress(operation *adminv1.Operation, summary restoreSummary, message string) (*adminv1.OperationProgress, error) {
+	total, err := operationWorkUnits("restore work units", summary.BlocksRestored, summary.BlocksSkipped, summary.BlocksPending)
+	if err != nil {
+		return nil, err
+	}
+	completed, err := operationWorkUnits("completed restore work units", summary.BlocksRestored, summary.BlocksSkipped)
+	if err != nil {
+		return nil, err
+	}
 	return &adminv1.OperationProgress{
-		WorkUnitsTotal:     uint64(total),
-		WorkUnitsCompleted: uint64(summary.BlocksRestored + summary.BlocksSkipped),
+		WorkUnitsTotal:     total,
+		WorkUnitsCompleted: completed,
 		Message:            message,
 		Counters: map[string]string{
 			"blocks_restored":  fmt.Sprintf("%d", summary.BlocksRestored),
@@ -1356,7 +1408,23 @@ func restoreOperationProgress(operation *adminv1.Operation, summary restoreSumma
 			"operation_lane":   operation.GetMetadata()[operationLaneMetadata],
 			"backend_lane":     operation.GetMetadata()[backendLaneMetadata],
 		},
+	}, nil
+}
+
+func operationWorkUnits(name string, values ...int) (uint64, error) {
+	var total uint64
+	for _, value := range values {
+		converted, err := safeconv.IntToUint64(name, value)
+		if err != nil {
+			return 0, err
+		}
+		next := total + converted
+		if next < total {
+			return 0, fmt.Errorf("%s overflows uint64", name)
+		}
+		total = next
 	}
+	return total, nil
 }
 
 func restoreCompletedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {

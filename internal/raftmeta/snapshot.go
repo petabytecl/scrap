@@ -11,6 +11,8 @@ import (
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/safepath"
 )
 
 const (
@@ -55,8 +57,12 @@ func writeSnapshotFile(dir string, snapshot *metastorev1.ShardSnapshot) error {
 	if len(payload) > MaxSnapshotBytes {
 		return fmt.Errorf("raftmeta: snapshot is %d bytes; maximum is %d", len(payload), MaxSnapshotBytes)
 	}
+	payloadLen, err := safeconv.IntToUint32("raft snapshot payload length", len(payload))
+	if err != nil {
+		return err
+	}
 	frame := make([]byte, snapshotHeaderLen+len(payload)+snapshotCRCLen)
-	binary.BigEndian.PutUint32(frame[:snapshotHeaderLen], uint32(len(payload)))
+	binary.BigEndian.PutUint32(frame[:snapshotHeaderLen], payloadLen)
 	copy(frame[snapshotHeaderLen:], payload)
 	crc := checksumFrame(frame[:snapshotHeaderLen], payload)
 	binary.BigEndian.PutUint32(frame[len(frame)-snapshotCRCLen:], crc)
@@ -64,9 +70,15 @@ func writeSnapshotFile(dir string, snapshot *metastorev1.ShardSnapshot) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	path := snapshotPath(dir)
-	tempPath := path + ".tmp"
-	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	path, err := safepath.UnderDir(dir, snapshotPath(dir))
+	if err != nil {
+		return err
+	}
+	tempPath, err := safepath.UnderDir(dir, path+".tmp")
+	if err != nil {
+		return err
+	}
+	file, err := openSnapshotFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -85,6 +97,11 @@ func writeSnapshotFile(dir string, snapshot *metastorev1.ShardSnapshot) error {
 		return err
 	}
 	return syncDir(dir)
+}
+
+func openSnapshotFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	// #nosec G304 G703 -- callers validate paths under the configured raft directory.
+	return os.OpenFile(path, flag, perm)
 }
 
 func readSnapshotFile(dir string) (*metastorev1.ShardSnapshot, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"sync"
 
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/safepath"
 )
 
 const (
@@ -110,7 +113,11 @@ func (s *Store) SealPath(blockID string) string {
 }
 
 func (s *Store) IsSealed(blockID string) (bool, error) {
-	if _, err := os.Stat(s.SealPath(blockID)); err == nil {
+	sealPath, err := s.validatedSealPath(blockID)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(sealPath); err == nil {
 		return true, nil
 	} else if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -139,10 +146,14 @@ func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 		return "", ErrEmptyBlock
 	}
 	sealedBlockID := s.blockID
+	sealPath, err := s.validatedSealPath(sealedBlockID)
+	if err != nil {
+		return "", err
+	}
 	if err := s.blockFile.Sync(); err != nil {
 		return "", err
 	}
-	if err := writeSealMarker(s.SealPath(sealedBlockID)); err != nil {
+	if err := writeSealMarker(sealPath); err != nil {
 		return "", err
 	}
 	if err := syncDir(s.blocksDir); err != nil {
@@ -183,8 +194,16 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.verifyWholeFile(ctx, s.BlockPath(blockID), expectedLength, expectedSHA256); err == nil {
-		if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+	blockPath, err := s.validatedBlockPath(blockID)
+	if err != nil {
+		return err
+	}
+	sealPath, err := s.validatedSealPath(blockID)
+	if err != nil {
+		return err
+	}
+	if err := s.verifyWholeFile(ctx, blockPath, expectedLength, expectedSHA256); err == nil {
+		if err := writeSealMarker(sealPath); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
 		return syncDir(s.blocksDir)
@@ -196,8 +215,11 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	if err != nil {
 		return err
 	}
-	tempPath := temp.Name()
-	defer func() { _ = os.Remove(tempPath) }()
+	tempPath, err := s.validatedBlockStorePath(temp.Name())
+	if err != nil {
+		return errors.Join(err, temp.Close(), s.removeBlockStorePath(temp.Name()))
+	}
+	defer func() { _ = s.removeBlockStorePath(tempPath) }()
 
 	written, sum, err := copyAndHash(ctx, temp, reader)
 	if closeErr := temp.Close(); err == nil {
@@ -212,10 +234,11 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	if err := syncFile(tempPath); err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, s.BlockPath(blockID)); err != nil {
+	// #nosec G703 -- source and destination are validated under blocksDir.
+	if err := os.Rename(tempPath, blockPath); err != nil {
 		return err
 	}
-	if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := writeSealMarker(sealPath); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	if err := syncDir(s.blocksDir); err != nil {
@@ -242,11 +265,14 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 	if err != nil {
 		return err
 	}
-	tempPath := temp.Name()
+	tempPath, err := s.validatedBlockStorePath(temp.Name())
+	if err != nil {
+		return errors.Join(err, temp.Close(), s.removeBlockStorePath(temp.Name()))
+	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.Remove(tempPath)
+			_ = s.removeBlockStorePath(tempPath)
 		}
 	}()
 
@@ -264,14 +290,18 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 		return err
 	}
 
-	source, err := os.Open(tempPath)
+	source, err := openValidatedFile(tempPath)
 	if err != nil {
 		return err
 	}
 	defer source.Close()
-	target, err := os.OpenFile(s.BlockPath(record.BlockID), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	blockPath, err := s.validatedBlockPath(record.BlockID)
+	if err != nil {
+		return err
+	}
+	target, err := openValidatedFileWithFlags(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if errors.Is(err, os.ErrExist) {
-		target, err = os.OpenFile(s.BlockPath(record.BlockID), os.O_RDWR, 0o600)
+		target, err = openValidatedFileWithFlags(blockPath, os.O_RDWR, 0o600)
 	} else if err == nil {
 		if err := writeHeader(target, record.BlockID, s.frameSize); err != nil {
 			return errors.Join(err, target.Close())
@@ -280,7 +310,11 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 	if err != nil {
 		return err
 	}
-	if _, err := target.Seek(int64(record.StoredOffset), io.SeekStart); err != nil {
+	storedOffset, err := safeconv.Uint64ToInt64("stored offset", record.StoredOffset)
+	if err != nil {
+		return errors.Join(err, target.Close())
+	}
+	if _, err := target.Seek(storedOffset, io.SeekStart); err != nil {
 		return errors.Join(err, target.Close())
 	}
 	if _, err := io.Copy(target, source); err != nil {
@@ -308,16 +342,24 @@ func (s *Store) EnsureSealedBlock(ctx context.Context, blockID string, expectedL
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.verifyWholeFile(ctx, s.BlockPath(blockID), expectedLength, expectedSHA256); err != nil {
+	blockPath, err := s.validatedBlockPath(blockID)
+	if err != nil {
+		return false, err
+	}
+	sealPath, err := s.validatedSealPath(blockID)
+	if err != nil {
+		return false, err
+	}
+	if err := s.verifyWholeFile(ctx, blockPath, expectedLength, expectedSHA256); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
 	}
-	if _, err := os.Stat(s.SealPath(blockID)); err == nil {
+	if _, err := os.Stat(sealPath); err == nil {
 		return true, nil
 	} else if errors.Is(err, os.ErrNotExist) {
-		if err := writeSealMarker(s.SealPath(blockID)); err != nil && !errors.Is(err, os.ErrExist) {
+		if err := writeSealMarker(sealPath); err != nil && !errors.Is(err, os.ErrExist) {
 			return false, err
 		}
 		if err := syncDir(s.blocksDir); err != nil {
@@ -341,15 +383,19 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 		return Record{}, errors.New("blockstore: store is closed")
 	}
 	startOffset := s.blockOffset
-	if _, err := s.blockFile.Seek(int64(startOffset), io.SeekStart); err != nil {
+	startOffsetInt, err := safeconv.Uint64ToInt64("start offset", startOffset)
+	if err != nil {
+		return Record{}, err
+	}
+	if _, err := s.blockFile.Seek(startOffsetInt, io.SeekStart); err != nil {
 		return Record{}, err
 	}
 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = s.blockFile.Truncate(int64(startOffset))
-			_, _ = s.blockFile.Seek(int64(startOffset), io.SeekStart)
+			_ = s.blockFile.Truncate(startOffsetInt)
+			_, _ = s.blockFile.Seek(startOffsetInt, io.SeekStart)
 		}
 	}()
 
@@ -374,8 +420,21 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 			if _, err := hasher.Write(chunk); err != nil {
 				return Record{}, err
 			}
-			frames.Write(startOffset+storedLength, chunk)
-			storedLength += uint64(n)
+			chunkLength, err := safeconv.IntToUint64("append chunk length", n)
+			if err != nil {
+				return Record{}, err
+			}
+			segmentOffset, err := addUint64("append segment offset", startOffset, storedLength)
+			if err != nil {
+				return Record{}, err
+			}
+			if err := frames.Write(segmentOffset, chunk); err != nil {
+				return Record{}, err
+			}
+			storedLength, err = addUint64("stored length", storedLength, chunkLength)
+			if err != nil {
+				return Record{}, err
+			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
@@ -400,7 +459,11 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 			return Record{}, err
 		}
 	}
-	s.blockOffset = startOffset + storedLength
+	nextOffset, err := addUint64("block offset", startOffset, storedLength)
+	if err != nil {
+		return Record{}, err
+	}
+	s.blockOffset = nextOffset
 	committed = true
 	return record, nil
 }
@@ -416,14 +479,30 @@ func (s *Store) ReadRange(ctx context.Context, record Record, offset uint64, len
 	if err := s.verifyReadableRange(record, offset, readLength); err != nil {
 		return err
 	}
-	file, err := os.Open(s.BlockPath(record.BlockID))
+	blockPath, err := s.validatedBlockPath(record.BlockID)
+	if err != nil {
+		return err
+	}
+	file, err := openValidatedFile(blockPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
 	buf := make([]byte, defaultReadBuffer)
-	section := io.NewSectionReader(file, int64(record.StoredOffset+offset), int64(readLength))
+	readOffset, err := addUint64("read range offset", record.StoredOffset, offset)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	readOffsetInt, err := safeconv.Uint64ToInt64("read range offset", readOffset)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	readLengthInt, err := safeconv.Uint64ToInt64("read range length", readLength)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	section := io.NewSectionReader(file, readOffsetInt, readLengthInt)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -458,7 +537,11 @@ func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64)
 	if offset+length < offset || offset+length > record.StoredLength {
 		return ErrInvalidRange
 	}
-	file, err := os.Open(s.BlockPath(record.BlockID))
+	blockPath, err := s.validatedBlockPath(record.BlockID)
+	if err != nil {
+		return err
+	}
+	file, err := openValidatedFile(blockPath)
 	if err != nil {
 		return err
 	}
@@ -468,7 +551,19 @@ func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64)
 	if err != nil {
 		return err
 	}
-	if uint64(info.Size()) < record.StoredOffset+offset+length {
+	size, err := safeconv.Int64ToUint64("block file size", info.Size())
+	if err != nil {
+		return err
+	}
+	rangeStart, err := addUint64("block readable range start", record.StoredOffset, offset)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	rangeEnd, err := addUint64("block readable range end", rangeStart, length)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	if size < rangeEnd {
 		return io.ErrUnexpectedEOF
 	}
 	if len(record.Frames) == 0 {
@@ -478,7 +573,7 @@ func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64)
 }
 
 func (s *Store) verifyWholeFile(ctx context.Context, path string, expectedLength uint64, expectedSHA256 [32]byte) error {
-	file, err := os.Open(path)
+	file, err := openValidatedFile(path)
 	if err != nil {
 		return err
 	}
@@ -511,7 +606,14 @@ func copyAndHash(ctx context.Context, writer io.Writer, reader io.Reader) (uint6
 			if copied != n {
 				return 0, [32]byte{}, io.ErrShortWrite
 			}
-			written += uint64(n)
+			chunkLength, err := safeconv.IntToUint64("copied chunk length", n)
+			if err != nil {
+				return 0, [32]byte{}, err
+			}
+			written, err = addUint64("copied byte count", written, chunkLength)
+			if err != nil {
+				return 0, [32]byte{}, err
+			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			var sum [32]byte
@@ -540,7 +642,15 @@ func normalizeRange(record Record, offset uint64, length *uint64) (uint64, error
 
 func verifyWholeRecord(file *os.File, record Record) error {
 	hasher := sha256.New()
-	reader := io.NewSectionReader(file, int64(record.StoredOffset), int64(record.StoredLength))
+	storedOffset, err := safeconv.Uint64ToInt64("stored offset", record.StoredOffset)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	storedLength, err := safeconv.Uint64ToInt64("stored length", record.StoredLength)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	reader := io.NewSectionReader(file, storedOffset, storedLength)
 	if _, err := io.Copy(hasher, reader); err != nil {
 		return err
 	}
@@ -553,12 +663,21 @@ func verifyWholeRecord(file *os.File, record Record) error {
 }
 
 func verifyFrameRange(file *os.File, record Record, offset uint64, length uint64) error {
-	rangeStart := record.StoredOffset + offset
-	rangeEnd := rangeStart + length
+	rangeStart, err := addUint64("frame range start", record.StoredOffset, offset)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	rangeEnd, err := addUint64("frame range end", rangeStart, length)
+	if err != nil {
+		return ErrInvalidRange
+	}
 	coveredUntil := rangeStart
 	for _, frame := range record.Frames {
 		segmentStart := frame.SegmentOffset
-		segmentEnd := frame.SegmentOffset + frame.SegmentLength
+		segmentEnd, err := addUint64("frame segment end", frame.SegmentOffset, frame.SegmentLength)
+		if err != nil {
+			return ErrInvalidRange
+		}
 		if segmentEnd <= rangeStart {
 			continue
 		}
@@ -583,7 +702,15 @@ func verifyFrameRange(file *os.File, record Record, offset uint64, length uint64
 
 func verifyFrame(file *os.File, frame FrameRecord) error {
 	hasher := sha256.New()
-	reader := io.NewSectionReader(file, int64(frame.SegmentOffset), int64(frame.SegmentLength))
+	segmentOffset, err := safeconv.Uint64ToInt64("frame segment offset", frame.SegmentOffset)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	segmentLength, err := safeconv.Uint64ToInt64("frame segment length", frame.SegmentLength)
+	if err != nil {
+		return ErrInvalidRange
+	}
+	reader := io.NewSectionReader(file, segmentOffset, segmentLength)
 	if _, err := io.Copy(hasher, reader); err != nil {
 		return err
 	}
@@ -596,7 +723,7 @@ func verifyFrame(file *os.File, frame FrameRecord) error {
 }
 
 func verifyTempRange(path string, record Record) error {
-	file, err := os.Open(path)
+	file, err := openValidatedFile(path)
 	if err != nil {
 		return err
 	}
@@ -606,7 +733,8 @@ func verifyTempRange(path string, record Record) error {
 			return ErrInvalidRange
 		}
 		relativeOffset := frame.SegmentOffset - record.StoredOffset
-		if relativeOffset+frame.SegmentLength < relativeOffset || relativeOffset+frame.SegmentLength > record.StoredLength {
+		relativeEnd, err := addUint64("temp frame relative end", relativeOffset, frame.SegmentLength)
+		if err != nil || relativeEnd > record.StoredLength {
 			return ErrInvalidRange
 		}
 		tempFrame := frame
@@ -624,8 +752,11 @@ func createBlockFile(blocksDir string, frameSize uint64) (string, string, *os.Fi
 	if err != nil {
 		return "", "", nil, err
 	}
-	blockPath := filepath.Join(blocksDir, blockID+".blk")
-	blockFile, err := os.OpenFile(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	blockPath, err := safepath.UnderDir(blocksDir, filepath.Join(blocksDir, blockID+".blk"))
+	if err != nil {
+		return "", "", nil, err
+	}
+	blockFile, err := openValidatedFileWithFlags(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -651,7 +782,11 @@ func writeHeader(blockFile *os.File, blockID string, frameSize uint64) error {
 		return err
 	}
 	copy(header[16:32], blockBytes[:])
-	binary.BigEndian.PutUint32(header[40:44], uint32(frameSize))
+	frameSize32, err := safeconv.Uint64ToUint32("frame size", frameSize)
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint32(header[40:44], frameSize32)
 	if _, err := blockFile.WriteAt(header, 0); err != nil {
 		return err
 	}
@@ -660,7 +795,7 @@ func writeHeader(blockFile *os.File, blockID string, frameSize uint64) error {
 }
 
 func writeSealMarker(path string) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	file, err := openValidatedFileWithFlags(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil
 	}
@@ -674,6 +809,7 @@ func writeSealMarker(path string) error {
 }
 
 func syncFile(path string) error {
+	// #nosec G304 G703 -- callers pass paths validated under the configured block directory.
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -682,6 +818,7 @@ func syncFile(path string) error {
 }
 
 func syncDir(path string) error {
+	// #nosec G304 -- callers pass configured storage directories.
 	dir, err := os.Open(path)
 	if err != nil {
 		return err
@@ -705,20 +842,42 @@ func newFrameAccumulator(frameSize uint64) *frameAccumulator {
 	return &frameAccumulator{frameSize: frameSize}
 }
 
-func (a *frameAccumulator) Write(offset uint64, data []byte) {
+func (a *frameAccumulator) Write(offset uint64, data []byte) error {
 	for len(data) > 0 {
 		frameOffset := frameStart(offset, a.frameSize)
-		frameEnd := frameOffset + a.frameSize
-		n := int(frameEnd - offset)
-		if n > len(data) {
-			n = len(data)
+		frameEnd, err := addUint64("frame end", frameOffset, a.frameSize)
+		if err != nil {
+			return err
+		}
+		remaining := frameEnd - offset
+		n := len(data)
+		dataLength, err := safeconv.IntToUint64("frame data length", len(data))
+		if err != nil {
+			return err
+		}
+		if remaining < dataLength {
+			n, err = safeconv.Uint64ToInt("frame remaining length", remaining)
+			if err != nil {
+				return err
+			}
 		}
 		frame := a.current(frameOffset, offset)
 		_, _ = frame.hasher.Write(data[:n])
-		frame.segmentLength += uint64(n)
-		offset += uint64(n)
+		segmentLength, err := safeconv.IntToUint64("frame segment length", n)
+		if err != nil {
+			return err
+		}
+		frame.segmentLength, err = addUint64("frame segment length", frame.segmentLength, segmentLength)
+		if err != nil {
+			return err
+		}
+		offset, err = addUint64("frame offset", offset, segmentLength)
+		if err != nil {
+			return err
+		}
 		data = data[n:]
 	}
+	return nil
 }
 
 func (a *frameAccumulator) current(frameOffset uint64, segmentOffset uint64) *pendingFrame {
@@ -749,4 +908,43 @@ func (a *frameAccumulator) Records() []FrameRecord {
 
 func frameStart(offset uint64, frameSize uint64) uint64 {
 	return HeaderLength + ((offset - HeaderLength) / frameSize * frameSize)
+}
+
+func (s *Store) validatedBlockPath(blockID string) (string, error) {
+	return s.validatedBlockStorePath(s.BlockPath(blockID))
+}
+
+func (s *Store) validatedSealPath(blockID string) (string, error) {
+	return s.validatedBlockStorePath(s.SealPath(blockID))
+}
+
+func (s *Store) validatedBlockStorePath(path string) (string, error) {
+	return safepath.UnderDir(s.blocksDir, path)
+}
+
+func openValidatedFile(path string) (*os.File, error) {
+	// #nosec G304 G703 -- callers validate paths under the configured storage directory.
+	return os.Open(path)
+}
+
+func openValidatedFileWithFlags(path string, flag int, perm os.FileMode) (*os.File, error) {
+	// #nosec G304 G703 -- callers validate paths under the configured storage directory.
+	return os.OpenFile(path, flag, perm)
+}
+
+func (s *Store) removeBlockStorePath(path string) error {
+	path, err := s.validatedBlockStorePath(path)
+	if err != nil {
+		return err
+	}
+	// #nosec G703 -- path is validated under blocksDir before removal.
+	return os.Remove(path)
+}
+
+func addUint64(name string, left uint64, right uint64) (uint64, error) {
+	value := left + right
+	if value < left {
+		return 0, fmt.Errorf("blockstore: %s overflows uint64", name)
+	}
+	return value, nil
 }

@@ -10,6 +10,7 @@ import (
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -286,6 +287,22 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 	if document.GetLifecycleState() == 0 {
 		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document lifecycle state is required")
 	}
+	documentClass, err := safeconv.Uint32ToUint16("document class", document.GetDocumentClass())
+	if err != nil {
+		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document class is out of range: %v", err)
+	}
+	priorityClass, err := safeconv.Uint32ToUint16("document priority class", document.GetPriorityClass())
+	if err != nil {
+		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document priority class is out of range: %v", err)
+	}
+	availability, err := safeconv.Uint32ToUint16("document availability", document.GetAvailability())
+	if err != nil {
+		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document availability is out of range: %v", err)
+	}
+	lifecycleState, err := safeconv.Uint32ToUint16("document lifecycle state", document.GetLifecycleState())
+	if err != nil {
+		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document lifecycle state is out of range: %v", err)
+	}
 	locations := document.GetLocations()
 	if len(locations) == 0 {
 		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document %q has no locations", document.GetDocumentName())
@@ -319,8 +336,8 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 			TransactionID: document.GetTransactionId(),
 			DocumentName:  document.GetDocumentName(),
 		},
-		DocumentClass:               metastore.DocumentClass(document.GetDocumentClass()),
-		PriorityClass:               metastore.PriorityClass(document.GetPriorityClass()),
+		DocumentClass:               metastore.DocumentClass(documentClass),
+		PriorityClass:               metastore.PriorityClass(priorityClass),
 		ContentType:                 document.GetContentType(),
 		HasContentType:              document.ContentType != nil,
 		Length:                      document.GetLength(),
@@ -330,8 +347,8 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 		CreatedByService:            document.GetCreatedByService(),
 		WorkflowStage:               document.GetWorkflowStage(),
 		HasWorkflowStage:            document.WorkflowStage != nil,
-		Availability:                metastore.Availability(document.GetAvailability()),
-		LifecycleState:              metastore.LifecycleState(document.GetLifecycleState()),
+		Availability:                metastore.Availability(availability),
+		LifecycleState:              metastore.LifecycleState(lifecycleState),
 		UploadState:                 metastore.UploadStateUploaded,
 		Tags:                        clonePublishedTags(document.GetTags()),
 		Location: blockstore.Record{
@@ -371,6 +388,10 @@ func importTransaction(transaction *publishedv1.PublishedTransaction) (metastore
 	if transaction.GetState() == 0 {
 		return metastore.Transaction{}, invalidArtifact("transaction state is required")
 	}
+	state, err := safeconv.Uint32ToUint16("transaction state", transaction.GetState())
+	if err != nil {
+		return metastore.Transaction{}, invalidArtifact("transaction state is out of range: %v", err)
+	}
 	if transaction.GetCreatedAt() == nil {
 		return metastore.Transaction{}, invalidArtifact("transaction created_at is required")
 	}
@@ -379,7 +400,7 @@ func importTransaction(transaction *publishedv1.PublishedTransaction) (metastore
 			TenantID:      transaction.GetTenantId(),
 			TransactionID: transaction.GetTransactionId(),
 		},
-		State:                  metastore.TransactionStateKind(transaction.GetState()),
+		State:                  metastore.TransactionStateKind(state),
 		DocumentCount:          transaction.GetDocumentCount(),
 		PermanentDocumentCount: transaction.GetPermanentDocumentCount(),
 		EphemeralDocumentCount: transaction.GetEphemeralDocumentCount(),

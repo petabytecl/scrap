@@ -7,6 +7,7 @@ import (
 	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -120,6 +121,9 @@ func marshalUploadIntentRecord(record *metastorev1.UploadIntentRecord) ([]byte, 
 	if err := validateSchemaVersion("upload intent", record.GetSchemaVersion()); err != nil {
 		return nil, err
 	}
+	if err := validateInt32EnumUint16("upload intent", "state", int32(record.GetState())); err != nil {
+		return nil, err
+	}
 	return protoMarshal.Marshal(record)
 }
 
@@ -129,6 +133,9 @@ func unmarshalUploadIntentRecord(data []byte) (*metastorev1.UploadIntentRecord, 
 		return nil, err
 	}
 	if err := validateSchemaVersion("upload intent", record.GetSchemaVersion()); err != nil {
+		return nil, err
+	}
+	if err := validateInt32EnumUint16("upload intent", "state", int32(record.GetState())); err != nil {
 		return nil, err
 	}
 	return &record, nil
@@ -217,6 +224,20 @@ func validateSchemaVersion(recordKind string, version uint32) error {
 	return nil
 }
 
+func validateUint32EnumUint16(recordKind string, field string, value uint32) error {
+	if _, err := safeconv.Uint32ToUint16(field, value); err != nil {
+		return invalidRecord(recordKind, "%s is out of range: %v", field, err)
+	}
+	return nil
+}
+
+func validateInt32EnumUint16(recordKind string, field string, value int32) error {
+	if _, err := safeconv.Int32ToUint16(field, value); err != nil {
+		return invalidRecord(recordKind, "%s is out of range: %v", field, err)
+	}
+	return nil
+}
+
 func validateDocumentRecord(record *metastorev1.DocumentRecord) error {
 	if record == nil {
 		return invalidRecord("document", "record is required")
@@ -253,20 +274,38 @@ func validateDocumentRecord(record *metastorev1.DocumentRecord) error {
 	if record.GetDocumentClass() == 0 {
 		return invalidRecord("document", "document_class is required")
 	}
+	if err := validateUint32EnumUint16("document", "document_class", record.GetDocumentClass()); err != nil {
+		return err
+	}
 	if record.GetPriorityClass() == 0 {
 		return invalidRecord("document", "priority_class is required")
+	}
+	if err := validateUint32EnumUint16("document", "priority_class", record.GetPriorityClass()); err != nil {
+		return err
 	}
 	if record.GetAvailability() == 0 {
 		return invalidRecord("document", "availability is required")
 	}
+	if err := validateUint32EnumUint16("document", "availability", record.GetAvailability()); err != nil {
+		return err
+	}
 	if record.GetLifecycleState() == 0 {
 		return invalidRecord("document", "lifecycle_state is required")
+	}
+	if err := validateUint32EnumUint16("document", "lifecycle_state", record.GetLifecycleState()); err != nil {
+		return err
 	}
 	if record.GetRestoreState() == metastorev1.RestoreState_RESTORE_STATE_UNSPECIFIED {
 		return invalidRecord("document", "restore_state is required")
 	}
+	if err := validateInt32EnumUint16("document", "restore_state", int32(record.GetRestoreState())); err != nil {
+		return err
+	}
 	if record.GetUploadState() == metastorev1.UploadState_UPLOAD_STATE_UNSPECIFIED {
 		return invalidRecord("document", "upload_state is required")
+	}
+	if err := validateInt32EnumUint16("document", "upload_state", int32(record.GetUploadState())); err != nil {
+		return err
 	}
 	if err := validateTimestamp("document", "created_at", record.GetCreatedAt()); err != nil {
 		return err
@@ -414,18 +453,18 @@ func documentFromProto(record *metastorev1.DocumentRecord) Document {
 			TransactionID: record.GetTransactionId(),
 			DocumentName:  record.GetDocumentName(),
 		},
-		DocumentClass:           DocumentClass(record.GetDocumentClass()),
-		PriorityClass:           PriorityClass(record.GetPriorityClass()),
+		DocumentClass:           documentClassFromProto(record.GetDocumentClass()),
+		PriorityClass:           priorityClassFromProto(record.GetPriorityClass()),
 		ContentType:             record.GetContentType(),
 		HasContentType:          record.ContentType != nil,
 		Length:                  record.GetLength(),
 		CreatedByService:        record.GetCreatedByService(),
 		WorkflowStage:           record.GetWorkflowStage(),
 		HasWorkflowStage:        record.WorkflowStage != nil,
-		Availability:            Availability(record.GetAvailability()),
-		LifecycleState:          LifecycleState(record.GetLifecycleState()),
-		RestoreState:            RestoreState(record.GetRestoreState()),
-		UploadState:             UploadState(record.GetUploadState()),
+		Availability:            availabilityFromProto(record.GetAvailability()),
+		LifecycleState:          lifecycleStateFromProto(record.GetLifecycleState()),
+		RestoreState:            restoreStateFromProto(record.GetRestoreState()),
+		UploadState:             uploadStateEnumFromProto(record.GetUploadState()),
 		TombstoneOperationID:    record.GetTombstoneOperationId(),
 		HasTombstoneOperationID: record.TombstoneOperationId != nil,
 		Tags:                    cloneTags(record.GetTags()),
@@ -450,6 +489,62 @@ func documentFromProto(record *metastorev1.DocumentRecord) Document {
 	return document
 }
 
+func documentClassFromProto(value uint32) DocumentClass {
+	converted, err := safeconv.Uint32ToUint16("document_class", value)
+	if err != nil {
+		return 0
+	}
+	return DocumentClass(converted)
+}
+
+func priorityClassFromProto(value uint32) PriorityClass {
+	converted, err := safeconv.Uint32ToUint16("priority_class", value)
+	if err != nil {
+		return 0
+	}
+	return PriorityClass(converted)
+}
+
+func availabilityFromProto(value uint32) Availability {
+	converted, err := safeconv.Uint32ToUint16("availability", value)
+	if err != nil {
+		return 0
+	}
+	return Availability(converted)
+}
+
+func lifecycleStateFromProto(value uint32) LifecycleState {
+	converted, err := safeconv.Uint32ToUint16("lifecycle_state", value)
+	if err != nil {
+		return 0
+	}
+	return LifecycleState(converted)
+}
+
+func restoreStateFromProto(value metastorev1.RestoreState) RestoreState {
+	converted, err := safeconv.Int32ToUint16("restore_state", int32(value))
+	if err != nil {
+		return 0
+	}
+	return RestoreState(converted)
+}
+
+func uploadStateEnumFromProto(value metastorev1.UploadState) UploadState {
+	converted, err := safeconv.Int32ToUint16("upload_state", int32(value))
+	if err != nil {
+		return 0
+	}
+	return UploadState(converted)
+}
+
+func transactionStateFromProto(value uint32) TransactionStateKind {
+	converted, err := safeconv.Uint32ToUint16("transaction_state", value)
+	if err != nil {
+		return 0
+	}
+	return TransactionStateKind(converted)
+}
+
 func transactionToProto(transaction Transaction) *metastorev1.TransactionRecord {
 	return &metastorev1.TransactionRecord{
 		SchemaVersion:          CurrentSchemaVersion,
@@ -472,7 +567,7 @@ func transactionFromProto(record *metastorev1.TransactionRecord) Transaction {
 			TenantID:      record.GetTenantId(),
 			TransactionID: record.GetTransactionId(),
 		},
-		State:                  TransactionStateKind(record.GetState()),
+		State:                  transactionStateFromProto(record.GetState()),
 		DocumentCount:          record.GetDocumentCount(),
 		PermanentDocumentCount: record.GetPermanentDocumentCount(),
 		EphemeralDocumentCount: record.GetEphemeralDocumentCount(),
@@ -511,7 +606,7 @@ func uploadIntentFromProto(record *metastorev1.UploadIntentRecord) UploadIntent 
 		BackendObjectKey:  record.GetBackendObjectKey(),
 		IndexObjectKey:    record.GetIndexObjectKey(),
 		EnvelopeObjectKey: record.GetEnvelopeObjectKey(),
-		State:             UploadState(record.GetState()),
+		State:             uploadStateEnumFromProto(record.GetState()),
 		LastError:         record.GetLastError(),
 		HasLastError:      record.LastError != nil,
 	}

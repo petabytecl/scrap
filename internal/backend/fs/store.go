@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/safepath"
 )
 
 const (
@@ -92,16 +94,26 @@ func (s *Store) PutMutableObject(ctx context.Context, key string, reader io.Read
 }
 
 func (s *Store) writeObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
-	objectPath := s.objectPath(key, dataSuffix)
+	objectPath, err := s.validatedObjectPath(key, dataSuffix)
+	if err != nil {
+		return backend.Object{}, err
+	}
+	metaPath, err := s.validatedObjectPath(key, metaSuffix)
+	if err != nil {
+		return backend.Object{}, err
+	}
 	tempData, err := os.CreateTemp(s.objectsDir, "put-*.data.tmp")
 	if err != nil {
 		return backend.Object{}, err
 	}
-	tempDataPath := tempData.Name()
+	tempDataPath, err := s.validatedObjectStorePath(tempData.Name())
+	if err != nil {
+		return backend.Object{}, errors.Join(err, tempData.Close(), s.removeObjectStorePath(tempData.Name()))
+	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.Remove(tempDataPath)
+			_ = s.removeObjectStorePath(tempDataPath)
 		}
 	}()
 
@@ -126,13 +138,15 @@ func (s *Store) writeObject(ctx context.Context, key string, reader io.Reader) (
 	}
 	defer func() {
 		if !committed {
-			_ = os.Remove(tempMetaPath)
+			_ = s.removeObjectStorePath(tempMetaPath)
 		}
 	}()
+	// #nosec G703 -- source and destination are validated under objectsDir.
 	if err := os.Rename(tempDataPath, objectPath); err != nil {
 		return backend.Object{}, err
 	}
-	if err := os.Rename(tempMetaPath, s.objectPath(key, metaSuffix)); err != nil {
+	// #nosec G703 -- source and destination are validated under objectsDir.
+	if err := os.Rename(tempMetaPath, metaPath); err != nil {
 		return backend.Object{}, err
 	}
 	if err := syncDir(s.objectsDir); err != nil {
@@ -174,7 +188,7 @@ func (s *Store) ReadObjectRange(ctx context.Context, key string, selected backen
 	if readLength == 0 {
 		return nil
 	}
-	file, err := os.Open(s.objectPath(key, dataSuffix))
+	file, err := s.openObjectFile(key, dataSuffix)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return backend.ErrNotFound
@@ -182,13 +196,21 @@ func (s *Store) ReadObjectRange(ctx context.Context, key string, selected backen
 		return err
 	}
 	defer file.Close()
-	section := io.NewSectionReader(file, int64(selected.Offset), int64(readLength))
+	readOffset, err := safeconv.Uint64ToInt64("read range offset", selected.Offset)
+	if err != nil {
+		return backend.ErrInvalidRange
+	}
+	readLengthInt, err := safeconv.Uint64ToInt64("read range length", readLength)
+	if err != nil {
+		return backend.ErrInvalidRange
+	}
+	section := io.NewSectionReader(file, readOffset, readLengthInt)
 	_, err = copyWithContext(ctx, writer, section)
 	return err
 }
 
 func (s *Store) verifyObject(ctx context.Context, object backend.Object) error {
-	file, err := os.Open(s.objectPath(object.Key, dataSuffix))
+	file, err := s.openObjectFile(object.Key, dataSuffix)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return backend.ErrNotFound
@@ -207,7 +229,11 @@ func (s *Store) verifyObject(ctx context.Context, object backend.Object) error {
 }
 
 func (s *Store) readMetadata(key string) (metadata, error) {
-	data, err := os.ReadFile(s.objectPath(key, metaSuffix))
+	path, err := s.validatedObjectPath(key, metaSuffix)
+	if err != nil {
+		return metadata{}, err
+	}
+	data, err := readValidatedFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return metadata{}, backend.ErrNotFound
 	}
@@ -246,19 +272,22 @@ func (s *Store) writeTempMetadata(meta metadata) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := file.Name()
+	path, err := s.validatedObjectStorePath(file.Name())
+	if err != nil {
+		return "", errors.Join(err, file.Close(), s.removeObjectStorePath(file.Name()))
+	}
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
-		_ = os.Remove(path)
+		_ = s.removeObjectStorePath(path)
 		return "", err
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		_ = os.Remove(path)
+		_ = s.removeObjectStorePath(path)
 		return "", err
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
+		_ = s.removeObjectStorePath(path)
 		return "", err
 	}
 	return path, nil
@@ -267,6 +296,37 @@ func (s *Store) writeTempMetadata(meta metadata) (string, error) {
 func (s *Store) objectPath(key string, suffix string) string {
 	sum := sha256.Sum256([]byte(key))
 	return filepath.Join(s.objectsDir, hex.EncodeToString(sum[:])+suffix)
+}
+
+func (s *Store) validatedObjectPath(key string, suffix string) (string, error) {
+	return s.validatedObjectStorePath(s.objectPath(key, suffix))
+}
+
+func (s *Store) validatedObjectStorePath(path string) (string, error) {
+	return safepath.UnderDir(s.objectsDir, path)
+}
+
+func (s *Store) openObjectFile(key string, suffix string) (*os.File, error) {
+	path, err := s.validatedObjectPath(key, suffix)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G304 -- object paths are hash-derived and validated under objectsDir.
+	return os.Open(path)
+}
+
+func (s *Store) removeObjectStorePath(path string) error {
+	path, err := s.validatedObjectStorePath(path)
+	if err != nil {
+		return err
+	}
+	// #nosec G703 -- path is validated under objectsDir before removal.
+	return os.Remove(path)
+}
+
+func readValidatedFile(path string) ([]byte, error) {
+	// #nosec G304 G703 -- callers validate paths under the configured storage directory.
+	return os.ReadFile(path)
 }
 
 func readAndHash(ctx context.Context, reader io.Reader, writer io.Writer) (backend.Object, error) {
@@ -310,6 +370,7 @@ func copyWithContext(ctx context.Context, writer io.Writer, reader io.Reader) (i
 }
 
 func syncFile(path string) error {
+	// #nosec G304 G703 -- callers pass paths validated under the configured storage directory.
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -318,6 +379,7 @@ func syncFile(path string) error {
 }
 
 func syncDir(path string) error {
+	// #nosec G304 G703 -- callers pass configured storage directories.
 	dir, err := os.Open(path)
 	if err != nil {
 		return err

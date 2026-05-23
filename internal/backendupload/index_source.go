@@ -13,6 +13,7 @@ import (
 	"github.com/petabytecl/scrap/internal/backend"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -96,8 +97,12 @@ func buildBlockIndex(blockID string, shardID string, blockObject backend.Object,
 		}
 		index.Documents = append(index.Documents, record)
 		for _, frame := range document.Location.Frames {
+			frameIndex, err := safeconv.IntToUint32("block index frame index", len(index.Frames))
+			if err != nil {
+				return nil, err
+			}
 			index.Frames = append(index.Frames, &storagev1.FrameChecksumRecord{
-				FrameIndex:      uint32(len(index.Frames)),
+				FrameIndex:      frameIndex,
 				PlaintextOffset: frame.SegmentOffset,
 				PlaintextLength: frame.SegmentLength,
 				StoredOffset:    frame.SegmentOffset,
@@ -134,6 +139,14 @@ func buildIndexDocumentRecord(document metastore.Document, firstFrame int) (*sto
 	if len(document.Location.Frames) > 0 {
 		lastFrame = firstFrame + len(document.Location.Frames) - 1
 	}
+	firstFrameIndex, err := safeconv.IntToUint32("document first frame index", firstFrame)
+	if err != nil {
+		return nil, err
+	}
+	lastFrameIndex, err := safeconv.IntToUint32("document last frame index", lastFrame)
+	if err != nil {
+		return nil, err
+	}
 	documentFingerprint := document.DocumentIdentityFingerprint
 	if documentFingerprint == [16]byte{} {
 		documentFingerprint = fingerprint128(document.Identity.TenantID, document.Identity.TransactionID, document.Identity.DocumentName)
@@ -154,8 +167,8 @@ func buildIndexDocumentRecord(document metastore.Document, firstFrame int) (*sto
 		CreatedAtMs:                 unixMillis(document.CreatedAt),
 		MetadataBlob:                metadata,
 		TransactionFingerprint:      append([]byte(nil), transactionFingerprint[:]...),
-		FirstFrameIndex:             uint32(firstFrame),
-		LastFrameIndex:              uint32(lastFrame),
+		FirstFrameIndex:             firstFrameIndex,
+		LastFrameIndex:              lastFrameIndex,
 	}, nil
 }
 
