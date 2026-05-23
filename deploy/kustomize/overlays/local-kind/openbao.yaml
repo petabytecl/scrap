@@ -10,6 +10,19 @@ metadata:
   name: openbao-transit-smoke
 automountServiceAccountToken: false
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-config
+data:
+  config.hcl: |
+    audit "file" "file" {
+      description = "local OpenBao Transit smoke audit"
+      options {
+        file_path = "/tmp/openbao-audit.log"
+      }
+    }
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -40,11 +53,12 @@ spec:
       serviceAccountName: openbao
       containers:
         - name: openbao
-          image: openbao/openbao:2.3.2
+          image: openbao/openbao:2.5.3
           imagePullPolicy: IfNotPresent
           args:
             - server
             - -dev
+            - -config=/etc/openbao/config.hcl
             - -dev-listen-address=0.0.0.0:8200
             - -dev-root-token-id=local-root
           env:
@@ -61,6 +75,14 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+          volumeMounts:
+            - name: openbao-config
+              mountPath: /etc/openbao
+              readOnly: true
+      volumes:
+        - name: openbao-config
+          configMap:
+            name: openbao-config
 ---
 apiVersion: v1
 kind: Service
@@ -85,7 +107,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: bootstrap
-          image: openbao/openbao:2.3.2
+          image: openbao/openbao:2.5.3
           imagePullPolicy: IfNotPresent
           env:
             - name: BAO_ADDR
@@ -99,7 +121,7 @@ spec:
               until bao status >/dev/null 2>&1; do
                 sleep 1
               done
-              bao audit enable file file_path=/tmp/openbao-audit.log || true
+              bao audit list -format=json >/dev/null
               bao secrets enable -path=transit transit || true
               bao write -f transit/keys/scrap-backend || true
               bao auth enable kubernetes || true

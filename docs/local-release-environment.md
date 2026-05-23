@@ -18,7 +18,7 @@ Local evidence is intentionally limited:
 
 - Docker + kind stands in for Kubernetes scheduling and service wiring.
 - `localstack/localstack:4.8.1` stands in for the S3-compatible backend class.
-- `openbao/openbao:2.3.2` in dev/test mode stands in for real Transit API and
+- `openbao/openbao:2.5.3` in dev/test mode stands in for real Transit API and
   audit-device smoke.
 - Local disk and backend observations are rehearsal data, not production
   capacity approval.

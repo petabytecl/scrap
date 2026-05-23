@@ -90,6 +90,45 @@ func TestAuditStatusDoesNotMatchNonFileAuditPathSubstring(t *testing.T) {
 	}
 }
 
+func TestAuditStatusReadsWrappedOpenBaoAuditResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/v1/sys/audit" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"request_id": "request-from-body",
+			"data": map[string]any{
+				"file/": map[string]string{
+					"type": "file",
+				},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	report := Report{}
+	status := auditStatus(context.Background(), openBaoClient{
+		baseURL: server.URL,
+		token:   "root-token",
+		http:    server.Client(),
+	}, DefaultAuditDevice, &report)
+	if status != "enabled:"+DefaultAuditDevice {
+		t.Fatalf("audit status = %q, want enabled file device", status)
+	}
+	if len(report.RedactedRequestIDs) != 1 || strings.Contains(report.RedactedRequestIDs[0], "request-from-body") {
+		t.Fatalf("redacted request ids = %#v, want body request id hashed", report.RedactedRequestIDs)
+	}
+}
+
+func TestRedactedRequestIDUsesOpenBaoResponseBody(t *testing.T) {
+	got := redactedRequestID(http.Header{}, []byte(`{"request_id":"body-request-id"}`))
+	if got == "" || strings.Contains(got, "body-request-id") {
+		t.Fatalf("redacted request id = %q, want hashed body request id", got)
+	}
+}
+
 func newFakeOpenBao(t *testing.T, broadKeyAdmin bool) *httptest.Server {
 	t.Helper()
 	version := uint32(1)
