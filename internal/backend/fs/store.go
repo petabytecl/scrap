@@ -67,7 +67,7 @@ func (s *Store) CapacityProfile() backend.CapacityProfile {
 
 func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
 	if key == "" {
-		return backend.Object{}, fmt.Errorf("backend fs: object key is required")
+		return backend.Object{}, errors.New("backend fs: object key is required")
 	}
 	if existing, err := s.HeadObject(ctx, key); err == nil {
 		incoming, err := readAndHash(ctx, reader, io.Discard)
@@ -89,7 +89,7 @@ func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (ba
 
 func (s *Store) PutMutableObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
 	if key == "" {
-		return backend.Object{}, fmt.Errorf("backend fs: object key is required")
+		return backend.Object{}, errors.New("backend fs: object key is required")
 	}
 	return s.writeObject(ctx, key, reader)
 }

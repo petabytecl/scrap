@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ const (
 func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operations.Store) (OperationRunResult, error) {
 	var result OperationRunResult
 	if store == nil {
-		return result, fmt.Errorf("localstorage: operation store is not configured")
+		return result, errors.New("localstorage: operation store is not configured")
 	}
 	queued, err := store.List(operations.ListFilter{
 		States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_QUEUED},
@@ -114,7 +115,7 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 func (a *Application) RecoverInterruptedOperations(ctx context.Context, store *operations.Store) (operations.RecoveryResult, error) {
 	var result operations.RecoveryResult
 	if store == nil {
-		return result, fmt.Errorf("localstorage: operation store is not configured")
+		return result, errors.New("localstorage: operation store is not configured")
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -240,9 +241,9 @@ func (a *Application) runScrubOperation(ctx context.Context, store *operations.S
 		WorkUnitsCompleted: documentsScanned,
 		Message:            message,
 		Counters: map[string]string{
-			"documents_scanned":   fmt.Sprintf("%d", summary.DocumentsScanned),
-			"repair_queued":       fmt.Sprintf("%d", summary.RepairQueued),
-			"skipped_unavailable": fmt.Sprintf("%d", summary.SkippedUnavailable),
+			"documents_scanned":   strconv.Itoa(summary.DocumentsScanned),
+			"repair_queued":       strconv.Itoa(summary.RepairQueued),
+			"skipped_unavailable": strconv.Itoa(summary.SkippedUnavailable),
 		},
 	}
 	if err := store.Put(finished); err != nil {
@@ -286,8 +287,8 @@ func (a *Application) runRewrapOperation(ctx context.Context, store *operations.
 		WorkUnitsCompleted: workUnits,
 		Message:            "rewrap operation succeeded",
 		Counters: map[string]string{
-			"envelopes_rewrapped": fmt.Sprintf("%d", rewrapped),
-			"envelopes_skipped":   fmt.Sprintf("%d", skipped),
+			"envelopes_rewrapped": strconv.Itoa(rewrapped),
+			"envelopes_skipped":   strconv.Itoa(skipped),
 		},
 	}
 	if err := store.Put(finished); err != nil {
@@ -304,11 +305,11 @@ func (a *Application) applyRewrapOperation(ctx context.Context, operation *admin
 		return len(operation.GetTargets()), 0, nil
 	}
 	if a.backendStore == nil {
-		return 0, 0, fmt.Errorf("localstorage: backend store is not configured")
+		return 0, 0, errors.New("localstorage: backend store is not configured")
 	}
 	mutable, ok := a.backendStore.(backend.MutableStore)
 	if !ok {
-		return 0, 0, fmt.Errorf("localstorage: backend store does not support mutable envelope objects")
+		return 0, 0, errors.New("localstorage: backend store does not support mutable envelope objects")
 	}
 	if a.envelopeTransit == nil {
 		return 0, 0, fmt.Errorf("%w: transit client is required for rewrap", cryptoenv.ErrUnavailable)
@@ -318,7 +319,7 @@ func (a *Application) applyRewrapOperation(ctx context.Context, operation *admin
 		destinationKeyID = operation.GetMetadata()["destination_key_id"]
 	}
 	if destinationKeyID == "" {
-		return 0, 0, fmt.Errorf("localstorage: rewrap destination key id is required")
+		return 0, 0, errors.New("localstorage: rewrap destination key id is required")
 	}
 	blockIDs, _, err := a.restoreTargets(operation)
 	if err != nil {
@@ -428,75 +429,6 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 		WorkUnitsTotal:     workUnitsCompleted,
 		WorkUnitsCompleted: workUnitsCompleted,
 		Message:            "repair operation succeeded",
-	}
-	if err := store.Put(finished); err != nil {
-		return false, err
-	}
-	if err := store.AppendAuditEvent(operationCompletedAuditEvent(finished)); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (a *Application) runDisasterRecoveryOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
-	running, _ := a.beginOperationAttempt(operation, "running "+operation.GetOperationType()+" operation")
-	if err := store.Put(running); err != nil {
-		return false, err
-	}
-
-	readiness, err := a.GetRecoveryReadiness(ctx)
-	finished := cloneOperation(running)
-	finished.FinishedAt = timestamppb.New(a.now())
-	if readiness != nil {
-		finished.Warnings = append(finished.Warnings, cloneWarnings(readiness.GetWarnings())...)
-	}
-	if err != nil {
-		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
-		finished.Progress = &adminv1.OperationProgress{Message: operation.GetOperationType() + " operation failed"}
-		finished.LastError = &adminv1.OperationError{
-			Code:    "SCRAP_DR_READINESS_FAILED",
-			Message: err.Error(),
-		}
-		if putErr := store.Put(finished); putErr != nil {
-			return false, putErr
-		}
-		return false, nil
-	}
-	workUnits := len(finished.GetTargets())
-	workUnitsCount, err := operationWorkUnits(operation.GetOperationType()+" targets", workUnits)
-	if err != nil {
-		return false, err
-	}
-	if operation.GetDryRun() {
-		finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
-		finished.Progress = &adminv1.OperationProgress{
-			WorkUnitsTotal:     workUnitsCount,
-			WorkUnitsCompleted: workUnitsCount,
-			Message:            operation.GetOperationType() + " dry-run succeeded",
-		}
-		if err := store.Put(finished); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if !readiness.GetReady() {
-		finished.State = adminv1.OperationState_OPERATION_STATE_FAILED
-		finished.Progress = &adminv1.OperationProgress{Message: operation.GetOperationType() + " operation failed"}
-		finished.LastError = &adminv1.OperationError{
-			Code:    "SCRAP_DR_NOT_READY",
-			Message: "recovery readiness gates are not satisfied",
-		}
-		if err := store.Put(finished); err != nil {
-			return false, err
-		}
-		return false, nil
-	}
-
-	finished.State = adminv1.OperationState_OPERATION_STATE_SUCCEEDED
-	finished.Progress = &adminv1.OperationProgress{
-		WorkUnitsTotal:     workUnitsCount,
-		WorkUnitsCompleted: workUnitsCount,
-		Message:            operation.GetOperationType() + " operation succeeded",
 	}
 	if err := store.Put(finished); err != nil {
 		return false, err
@@ -702,46 +634,46 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 
 func (a *Application) verifyCurrentCheckpoint(ctx context.Context) (published.CheckpointVerification, error) {
 	if a.backendStore == nil {
-		return published.CheckpointVerification{}, fmt.Errorf("localstorage: backend store is not configured")
+		return published.CheckpointVerification{}, errors.New("localstorage: backend store is not configured")
 	}
 	return published.VerifyCurrentCheckpoint(ctx, a.backendStore, localPublishedCellID)
 }
 
 func checkpointEvidenceCounters(checkpoint published.CheckpointVerification) map[string]string {
 	return map[string]string{
-		"generation":                fmt.Sprintf("%d", checkpoint.Pointer.GetGeneration()),
+		"generation":                strconv.FormatUint(checkpoint.Pointer.GetGeneration(), 10),
 		"manifest_id":               checkpoint.Manifest.GetManifestId(),
 		"recovery_report_kind":      recoveryEvidenceReportKind,
 		"rpo_promise":               recoveryNoFormalPromise,
 		"rto_promise":               recoveryNoFormalPromise,
-		"verified_artifacts":        fmt.Sprintf("%d", checkpoint.VerifiedArtifacts),
-		"verified_block_objects":    fmt.Sprintf("%d", checkpoint.VerifiedBlockObjects),
-		"verified_envelope_objects": fmt.Sprintf("%d", checkpoint.VerifiedEnvelopeObjects),
-		"verified_index_objects":    fmt.Sprintf("%d", checkpoint.VerifiedIndexObjects),
-		"verified_objects":          fmt.Sprintf("%d", checkpoint.VerifiedObjects),
-		"verified_required_objects": fmt.Sprintf("%d", checkpoint.VerifiedRequiredObjects),
+		"verified_artifacts":        strconv.Itoa(checkpoint.VerifiedArtifacts),
+		"verified_block_objects":    strconv.Itoa(checkpoint.VerifiedBlockObjects),
+		"verified_envelope_objects": strconv.Itoa(checkpoint.VerifiedEnvelopeObjects),
+		"verified_index_objects":    strconv.Itoa(checkpoint.VerifiedIndexObjects),
+		"verified_objects":          strconv.Itoa(checkpoint.VerifiedObjects),
+		"verified_required_objects": strconv.Itoa(checkpoint.VerifiedRequiredObjects),
 	}
 }
 
 func restoreEvidenceCounters(restore MetadataRestoreResult) map[string]string {
 	return map[string]string{
-		"blocks_restored":           fmt.Sprintf("%d", restore.BlocksRestored),
-		"documents":                 fmt.Sprintf("%d", restore.Documents),
-		"generation":                fmt.Sprintf("%d", restore.Generation),
+		"blocks_restored":           strconv.Itoa(restore.BlocksRestored),
+		"documents":                 strconv.Itoa(restore.Documents),
+		"generation":                strconv.FormatUint(restore.Generation, 10),
 		"manifest_id":               restore.ManifestID,
 		"recovery_report_kind":      restore.ReportKind,
 		"rpo_promise":               restore.RPOPromise,
 		"rto_promise":               restore.RTOPromise,
-		"snapshots":                 fmt.Sprintf("%d", restore.Snapshots),
-		"tombstones":                fmt.Sprintf("%d", restore.Tombstones),
-		"transactions":              fmt.Sprintf("%d", restore.Transactions),
-		"upload_intents":            fmt.Sprintf("%d", restore.UploadIntents),
-		"verified":                  fmt.Sprintf("%d", restore.Verified),
-		"verified_artifacts":        fmt.Sprintf("%d", restore.VerifiedArtifacts),
-		"verified_block_objects":    fmt.Sprintf("%d", restore.VerifiedBlockObjects),
-		"verified_envelope_objects": fmt.Sprintf("%d", restore.VerifiedEnvelopeObjects),
-		"verified_index_objects":    fmt.Sprintf("%d", restore.VerifiedIndexObjects),
-		"verified_required_objects": fmt.Sprintf("%d", restore.VerifiedRequiredObjects),
+		"snapshots":                 strconv.Itoa(restore.Snapshots),
+		"tombstones":                strconv.Itoa(restore.Tombstones),
+		"transactions":              strconv.Itoa(restore.Transactions),
+		"upload_intents":            strconv.Itoa(restore.UploadIntents),
+		"verified":                  strconv.Itoa(restore.Verified),
+		"verified_artifacts":        strconv.Itoa(restore.VerifiedArtifacts),
+		"verified_block_objects":    strconv.Itoa(restore.VerifiedBlockObjects),
+		"verified_envelope_objects": strconv.Itoa(restore.VerifiedEnvelopeObjects),
+		"verified_index_objects":    strconv.Itoa(restore.VerifiedIndexObjects),
+		"verified_required_objects": strconv.Itoa(restore.VerifiedRequiredObjects),
 	}
 }
 
@@ -818,11 +750,11 @@ func (a *Application) applyDrainOperation(ctx context.Context, operation *adminv
 
 func drainOperationMember(operation *adminv1.Operation) (string, error) {
 	if len(operation.GetTargets()) != 1 {
-		return "", fmt.Errorf("localstorage: drain operation requires exactly one storage member target")
+		return "", errors.New("localstorage: drain operation requires exactly one storage member target")
 	}
 	target := operation.GetTargets()[0]
 	if target == nil {
-		return "", fmt.Errorf("localstorage: drain operation requires a storage member target")
+		return "", errors.New("localstorage: drain operation requires a storage member target")
 	}
 	typed, ok := target.GetTarget().(*adminv1.Target_StorageMember)
 	if !ok {
@@ -1126,7 +1058,7 @@ func isPeerIntegrityFailure(err error) bool {
 
 func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID string) error {
 	if a.backendStore == nil {
-		return fmt.Errorf("localstorage: backend store is not configured")
+		return errors.New("localstorage: backend store is not configured")
 	}
 	intent, err := a.metadata.GetUploadIntent(blockID)
 	if err != nil {
@@ -1321,7 +1253,7 @@ func (a *Application) restoreTargets(operation *adminv1.Operation) (map[string]b
 
 func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID string) (bool, error) {
 	if a.backendStore == nil {
-		return false, fmt.Errorf("localstorage: backend store is not configured")
+		return false, errors.New("localstorage: backend store is not configured")
 	}
 	intent, err := a.metadata.GetUploadIntent(blockID)
 	if err != nil {
@@ -1402,10 +1334,10 @@ func restoreOperationProgress(operation *adminv1.Operation, summary restoreSumma
 		WorkUnitsCompleted: completed,
 		Message:            message,
 		Counters: map[string]string{
-			"blocks_restored":  fmt.Sprintf("%d", summary.BlocksRestored),
-			"blocks_skipped":   fmt.Sprintf("%d", summary.BlocksSkipped),
-			"blocks_pending":   fmt.Sprintf("%d", summary.BlocksPending),
-			"documents_marked": fmt.Sprintf("%d", summary.DocumentsMarked),
+			"blocks_restored":  strconv.Itoa(summary.BlocksRestored),
+			"blocks_skipped":   strconv.Itoa(summary.BlocksSkipped),
+			"blocks_pending":   strconv.Itoa(summary.BlocksPending),
+			"documents_marked": strconv.Itoa(summary.DocumentsMarked),
 			"operation_lane":   operation.GetMetadata()[operationLaneMetadata],
 			"backend_lane":     operation.GetMetadata()[backendLaneMetadata],
 		},

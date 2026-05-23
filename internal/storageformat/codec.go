@@ -503,7 +503,7 @@ func clearUnknownFields(message proto.Message) {
 	fields.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		if field.IsList() && field.Kind() == protoreflect.MessageKind {
 			list := value.List()
-			for i := 0; i < list.Len(); i++ {
+			for i := range list.Len() {
 				clearUnknownFields(list.Get(i).Message().Interface())
 			}
 			return true

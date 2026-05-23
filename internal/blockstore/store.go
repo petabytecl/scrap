@@ -803,7 +803,7 @@ func writeSealMarker(path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write([]byte("sealed\n")); err != nil {
+	if _, err := file.WriteString("sealed\n"); err != nil {
 		return errors.Join(err, file.Close())
 	}
 	return errors.Join(file.Sync(), file.Close())

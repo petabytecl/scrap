@@ -37,18 +37,42 @@ formatters:
 linters:
   default: none
   enable:
+    - asasalint
     - asciicheck
     - bidichk
     - bodyclose
+    - canonicalheader
+    - copyloopvar
+    - durationcheck
     - errcheck
+    - errname
     - errorlint
+    - exptostd
+    - gocheckcompilerdirectives
+    - gomoddirectives
+    - goprintffuncname
     - gosec
     - govet
+    - ineffassign
+    - intrange
+    - makezero
+    - mirror
     - nilerr
+    - nilnesserr
     - nilnil
     - noctx
     - nolintlint
+    - nosprintfhostport
+    - perfsprint
+    - predeclared
+    - testableexamples
     - staticcheck
+    - unconvert
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
 
   exclusions:
     paths:
@@ -64,3 +88,17 @@ linters:
         linters:
           - errcheck
           - gosec
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        # Field alignment is useful during memory-layout work, but too noisy as
+        # a repository-wide correctness gate.
+        - fieldalignment
+        # The current codebase has many intentional short scoped err/ok checks.
+        # Enable shadow later as a dedicated cleanup pass.
+        - shadow
+    nolintlint:
+      require-explanation: true
+      require-specific: true

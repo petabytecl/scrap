@@ -200,7 +200,7 @@ func (h *raftFaultHarness) readIndex() error {
 	}
 	const ctx = "fresh-read"
 	h.nodes[leader].raw.ReadIndex([]byte(ctx))
-	for step := 0; step < 1000; step++ {
+	for range 1000 {
 		if h.pump(func(state raft.ReadState) bool {
 			return string(state.RequestCtx) == ctx
 		}) {
@@ -362,7 +362,7 @@ func (h *raftFaultHarness) waitAppliedOn(t *testing.T, id uint64, count int) {
 
 func (h *raftFaultHarness) pumpUntilIdle(t *testing.T) {
 	t.Helper()
-	for step := 0; step < 1000; step++ {
+	for range 1000 {
 		if !h.pump(nil) {
 			return
 		}
@@ -372,7 +372,7 @@ func (h *raftFaultHarness) pumpUntilIdle(t *testing.T) {
 
 func (h *raftFaultHarness) pumpUntil(t *testing.T, done func() bool) {
 	t.Helper()
-	for step := 0; step < 10000; step++ {
+	for range 10000 {
 		if done() {
 			return
 		}
@@ -480,7 +480,7 @@ func (h *raftFaultHarness) tick() {
 }
 
 func (h *raftFaultHarness) tickN(count int) {
-	for i := 0; i < count; i++ {
+	for range count {
 		h.tick()
 		h.pump(nil)
 	}

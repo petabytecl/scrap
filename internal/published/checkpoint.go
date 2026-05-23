@@ -30,7 +30,7 @@ type CheckpointVerification struct {
 func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID string) (CheckpointVerification, error) {
 	var verification CheckpointVerification
 	if store == nil {
-		return verification, fmt.Errorf("published metadata: backend store is required")
+		return verification, errors.New("published metadata: backend store is required")
 	}
 	pointerKey, err := CurrentPointerObjectKey(cellID)
 	if err != nil {
@@ -155,7 +155,7 @@ func readVerifiedObject(ctx context.Context, store backend.Store, key string) ([
 
 func verifyExpectedObject(ctx context.Context, store backend.Store, key string, length uint64, sha256Bytes []byte) error {
 	if key == "" {
-		return fmt.Errorf("published metadata: object key is required")
+		return errors.New("published metadata: object key is required")
 	}
 	if len(sha256Bytes) != sha256.Size {
 		return fmt.Errorf("%w: object %q checksum is %d bytes", backend.ErrChecksumMismatch, key, len(sha256Bytes))

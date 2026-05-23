@@ -3,7 +3,7 @@ package backendupload
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"time"
 
@@ -71,10 +71,10 @@ func (s TransitBlockEnvelopeSource) OpenBlockEnvelope(ctx context.Context, inten
 
 func buildLocalEnvelopeRecord(intent metastore.UploadIntent, blockObject backend.Object, cellID, keyID string) (*storagev1.EnvelopeRecord, error) {
 	if intent.BlockID == "" {
-		return nil, fmt.Errorf("backendupload: upload intent block id is required")
+		return nil, errors.New("backendupload: upload intent block id is required")
 	}
 	if blockObject.Key == "" {
-		return nil, fmt.Errorf("backendupload: uploaded block object is required")
+		return nil, errors.New("backendupload: uploaded block object is required")
 	}
 	if cellID == "" {
 		cellID = "local"

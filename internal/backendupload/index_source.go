@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -40,7 +41,7 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 		return nil, err
 	}
 	if s.Documents == nil {
-		return nil, fmt.Errorf("backendupload: block document lister is not configured")
+		return nil, errors.New("backendupload: block document lister is not configured")
 	}
 	documents, err := s.Documents.ListBlockDocuments(intent.BlockID)
 	if err != nil {

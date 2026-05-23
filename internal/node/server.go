@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -149,7 +150,7 @@ func (s *Server) Stop() {
 
 func (s *Server) ReloadAuthorizationPolicy() error {
 	if s.authorization == nil {
-		return fmt.Errorf("authorization policy is not configured")
+		return errors.New("authorization policy is not configured")
 	}
 	err := s.authorization.ReloadFile(s.policyPath)
 	auditErr := s.auditAuthorizationPolicyReload(err)
@@ -194,12 +195,12 @@ func (s authorizationAuditSink) RecordDeniedRequest(ctx context.Context, method 
 	metadata["reason_description"] = decision.ReasonDescription
 	metadata["workload_identity"] = decision.WorkloadIdentity
 	metadata["policy_version"] = decision.PolicyVersion
-	metadata["policy_generation"] = fmt.Sprintf("%d", decision.PolicyGeneration)
+	metadata["policy_generation"] = strconv.FormatUint(decision.PolicyGeneration, 10)
 	if traceID != "" {
 		metadata["trace_id"] = traceID
 	}
 	return s.store.AppendAuditEvent(&adminv1.AuditEvent{
-		EventId:       auditEventID("authorization_denied", method, actor, decision.Reason, requestID, correlationID, fmt.Sprintf("%d", now.UnixNano())),
+		EventId:       auditEventID("authorization_denied", method, actor, decision.Reason, requestID, correlationID, strconv.FormatInt(now.UnixNano(), 10)),
 		EventType:     "authorization_denied",
 		OperationId:   operationID,
 		OperationType: method,
@@ -226,13 +227,13 @@ func (s *Server) auditAuthorizationPolicyReload(reloadErr error) error {
 		"decision":          result,
 		"policy_path":       s.policyPath,
 		"policy_version":    s.authorization.PolicyVersion(),
-		"policy_generation": fmt.Sprintf("%d", s.authorization.Generation()),
+		"policy_generation": strconv.FormatUint(s.authorization.Generation(), 10),
 	}
 	if reason != "" {
 		metadata["reason"] = reason
 	}
 	return s.auditEvents.AppendAuditEvent(&adminv1.AuditEvent{
-		EventId:       auditEventID(eventType, s.policyPath, fmt.Sprintf("%d", now.UnixNano())),
+		EventId:       auditEventID(eventType, s.policyPath, strconv.FormatInt(now.UnixNano(), 10)),
 		EventType:     eventType,
 		OperationId:   "authorization-policy",
 		OperationType: "authorization-policy-reload",

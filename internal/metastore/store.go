@@ -451,10 +451,10 @@ func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time,
 
 func (s *Store) tombstoneDocument(batch *pebble.Batch, doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
 	if tombstonedAt.IsZero() {
-		return Document{}, fmt.Errorf("metastore: tombstone requires tombstoned_at")
+		return Document{}, errors.New("metastore: tombstone requires tombstoned_at")
 	}
 	if operationID == "" {
-		return Document{}, fmt.Errorf("metastore: tombstone requires operation_id")
+		return Document{}, errors.New("metastore: tombstone requires operation_id")
 	}
 	document, err := s.HeadDocument(doc)
 	if err != nil {

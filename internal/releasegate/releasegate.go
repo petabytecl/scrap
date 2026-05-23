@@ -2,6 +2,7 @@ package releasegate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -299,7 +300,7 @@ func ReadManifest(reader io.Reader) (Manifest, error) {
 	var trailing struct{}
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return Manifest{}, fmt.Errorf("manifest contains trailing JSON")
+			return Manifest{}, errors.New("manifest contains trailing JSON")
 		}
 		return Manifest{}, fmt.Errorf("manifest contains trailing data: %w", err)
 	}

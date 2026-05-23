@@ -122,7 +122,7 @@ func TestValidateCompleteTransactionRequestRejectsTooManyTags(t *testing.T) {
 		Transaction: validTransactionIdentity(),
 		Tags:        make(map[string]string, MaxTags+1),
 	}
-	for i := 0; i < MaxTags+1; i++ {
+	for i := range MaxTags + 1 {
 		req.Tags[string(rune('a'+i))] = "value"
 	}
 

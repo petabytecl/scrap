@@ -1,7 +1,7 @@
 package published
 
 import (
-	"fmt"
+	"errors"
 	"io"
 	"sort"
 	"time"
@@ -31,13 +31,13 @@ func WriteDocumentSnapshotRecords(writer io.Writer, options SnapshotOptions, doc
 
 func WriteMetadataSnapshotRecords(writer io.Writer, options SnapshotOptions, documents []metastore.Document, transactions []metastore.Transaction) error {
 	if writer == nil {
-		return fmt.Errorf("published metadata: snapshot writer is required")
+		return errors.New("published metadata: snapshot writer is required")
 	}
 	if options.SourceNamespace == "" {
-		return fmt.Errorf("published metadata: source namespace is required")
+		return errors.New("published metadata: source namespace is required")
 	}
 	if options.ShardID == "" {
-		return fmt.Errorf("published metadata: shard id is required")
+		return errors.New("published metadata: shard id is required")
 	}
 	ordered := append([]metastore.Document(nil), documents...)
 	sort.Slice(ordered, func(i, j int) bool {

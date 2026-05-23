@@ -41,7 +41,7 @@ fmt:
 	$(GOLANGCI_LINT) fmt
 
 fmt-check:
-	@test -z "$$(gofmt -l .)"
+	$(GOLANGCI_LINT) fmt --diff
 
 lint:
 	$(GOLANGCI_LINT) run --timeout=5m

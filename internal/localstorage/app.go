@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -237,7 +238,7 @@ func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.St
 	if a.shouldPublishMetadataCheckpoint(ctx, store, result.Upload) {
 		mutable, ok := store.(backend.MutableStore)
 		if !ok {
-			return result, fmt.Errorf("localstorage: backend store does not support mutable metadata pointers")
+			return result, errors.New("localstorage: backend store does not support mutable metadata pointers")
 		}
 		publication, err := a.publishMetadataSnapshot(ctx, mutable)
 		if err != nil {
@@ -1160,7 +1161,7 @@ func (a *Application) recordRepairState(ctx context.Context, doc identity.Docume
 		IncidentID:  incidentID,
 		Quarantined: quarantined,
 		UpdatedAt:   now,
-	}, stableCommandID("record-repair-state", incidentID, physicalRef, fmt.Sprintf("%t", quarantined)), now)
+	}, stableCommandID("record-repair-state", incidentID, physicalRef, strconv.FormatBool(quarantined)), now)
 }
 
 func repairPhysicalRef(document metastore.Document) string {
@@ -1179,8 +1180,8 @@ func peerIntegrityEvidenceID(document metastore.Document, replica blockstore.Rep
 		document.Identity.DocumentName,
 		replica.MemberID,
 		replica.BlockID,
-		fmt.Sprintf("%d", replica.StoredOffset),
-		fmt.Sprintf("%d", replica.StoredLength),
+		strconv.FormatUint(replica.StoredOffset, 10),
+		strconv.FormatUint(replica.StoredLength, 10),
 	)
 }
 
