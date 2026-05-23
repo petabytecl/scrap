@@ -217,7 +217,8 @@ Rollout preconditions:
 - OpenBao, backend, and local disk readiness are healthy;
 - dashboards and alerts for write admission, disk runway, backend lag, repair
   lag, restore lag, corruption incidents, Raft health, and OpenBao health are
-  live for the target deployment;
+  live for the target deployment and satisfy the
+  [Storage Gateway Dashboard And Alert Contract](storage-gateway-dashboard-alert-contract.md);
 - rollback or roll-forward path is documented for the release candidate.
 
 Shard-safe rollout requirements:

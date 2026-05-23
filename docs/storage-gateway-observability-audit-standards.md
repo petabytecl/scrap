@@ -13,6 +13,10 @@ These standards are vendor-neutral. OpenTelemetry, Prometheus exposition, and
 `log/slog` remain acceptable implementation substrates when they preserve the
 signal contracts below.
 
+The concrete production dashboard and alert contract for issue `#46` is
+captured in
+[Storage Gateway Dashboard And Alert Contract](storage-gateway-dashboard-alert-contract.md).
+
 ## Signal Boundaries
 
 `internal/observe` may provide helper types for metrics, structured logs,

@@ -157,7 +157,6 @@ func Definitions() []GateDefinition {
 			Tiers:          []Tier{TierRelease},
 			ManualArtifact: "dashboard-alert-contract-approval",
 			ArtifactOwner:  "operations owner",
-			BlockingIssues: []int{46},
 			Description:    "Write admission, disk runway, backend lag, repair lag, restore lag, corruption, Raft, OpenBao, and operation backlog signals.",
 		},
 		{
