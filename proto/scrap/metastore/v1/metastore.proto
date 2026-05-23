@@ -6,6 +6,14 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1;metastorev1";
 
+// DocumentRecord is the private authoritative shard metadata record for one
+// committed immutable document. It is stored and replayed through shard
+// authority; it is not a public gRPC request or response message.
+//
+// Local Pebble tables, in-memory indexes, read caches, and imported catalogs
+// are rebuildable projections derived from authoritative records, published
+// metadata artifacts, or both. They must not become independent metadata
+// authorities.
 message DocumentRecord {
   string tenant_id = 1;
   string transaction_id = 2;
@@ -36,6 +44,8 @@ message DocumentRecord {
   optional string tombstone_operation_id = 27;
 }
 
+// Location identifies the committed byte ranges and object refs needed to
+// verify and recover a document without embedding bytes in consensus metadata.
 message Location {
   string block_id = 1;
   uint64 stored_offset = 2;
@@ -48,6 +58,7 @@ message Location {
   uint32 format_version = 9;
 }
 
+// FrameRecord keeps checksum evidence for a document range inside a block.
 message FrameRecord {
   uint64 frame_offset = 1;
   uint64 segment_offset = 2;
@@ -55,6 +66,8 @@ message FrameRecord {
   bytes sha256 = 4;
 }
 
+// ReplicaRef records a prepared or committed local member copy that can be
+// verified before serving bytes or used as repair evidence.
 message ReplicaRef {
   string member_id = 1;
   string block_id = 2;
@@ -63,6 +76,8 @@ message ReplicaRef {
   bytes stored_sha256 = 5;
 }
 
+// EnvelopeRef points to OpenBao Transit envelope material needed to decrypt
+// encrypted backend data without storing plaintext key material in metadata.
 message EnvelopeRef {
   string envelope_id = 1;
   string key_id = 2;
