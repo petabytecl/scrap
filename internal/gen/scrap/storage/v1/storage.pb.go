@@ -22,6 +22,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type BackendObjectKind int32
+
+const (
+	BackendObjectKind_BACKEND_OBJECT_KIND_UNSPECIFIED BackendObjectKind = 0
+	BackendObjectKind_BACKEND_OBJECT_KIND_BLOCK       BackendObjectKind = 1
+	BackendObjectKind_BACKEND_OBJECT_KIND_INDEX       BackendObjectKind = 2
+	BackendObjectKind_BACKEND_OBJECT_KIND_ENVELOPE    BackendObjectKind = 3
+)
+
+// Enum value maps for BackendObjectKind.
+var (
+	BackendObjectKind_name = map[int32]string{
+		0: "BACKEND_OBJECT_KIND_UNSPECIFIED",
+		1: "BACKEND_OBJECT_KIND_BLOCK",
+		2: "BACKEND_OBJECT_KIND_INDEX",
+		3: "BACKEND_OBJECT_KIND_ENVELOPE",
+	}
+	BackendObjectKind_value = map[string]int32{
+		"BACKEND_OBJECT_KIND_UNSPECIFIED": 0,
+		"BACKEND_OBJECT_KIND_BLOCK":       1,
+		"BACKEND_OBJECT_KIND_INDEX":       2,
+		"BACKEND_OBJECT_KIND_ENVELOPE":    3,
+	}
+)
+
+func (x BackendObjectKind) Enum() *BackendObjectKind {
+	p := new(BackendObjectKind)
+	*p = x
+	return p
+}
+
+func (x BackendObjectKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BackendObjectKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_scrap_storage_v1_storage_proto_enumTypes[0].Descriptor()
+}
+
+func (BackendObjectKind) Type() protoreflect.EnumType {
+	return &file_scrap_storage_v1_storage_proto_enumTypes[0]
+}
+
+func (x BackendObjectKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BackendObjectKind.Descriptor instead.
+func (BackendObjectKind) EnumDescriptor() ([]byte, []int) {
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{0}
+}
+
 type EncryptionMode int32
 
 const (
@@ -58,11 +110,11 @@ func (x EncryptionMode) String() string {
 }
 
 func (EncryptionMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_scrap_storage_v1_storage_proto_enumTypes[0].Descriptor()
+	return file_scrap_storage_v1_storage_proto_enumTypes[1].Descriptor()
 }
 
 func (EncryptionMode) Type() protoreflect.EnumType {
-	return &file_scrap_storage_v1_storage_proto_enumTypes[0]
+	return &file_scrap_storage_v1_storage_proto_enumTypes[1]
 }
 
 func (x EncryptionMode) Number() protoreflect.EnumNumber {
@@ -71,7 +123,7 @@ func (x EncryptionMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EncryptionMode.Descriptor instead.
 func (EncryptionMode) EnumDescriptor() ([]byte, []int) {
-	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{0}
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{1}
 }
 
 type BlockHeader struct {
@@ -298,6 +350,258 @@ func (x *BlockIndex) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type BackendObjectSet struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion  uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	BlockId        string                 `protobuf:"bytes,2,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	BlockObject    *BackendObjectRef      `protobuf:"bytes,3,opt,name=block_object,json=blockObject,proto3" json:"block_object,omitempty"`
+	IndexObject    *BackendObjectRef      `protobuf:"bytes,4,opt,name=index_object,json=indexObject,proto3" json:"index_object,omitempty"`
+	EnvelopeObject *BackendObjectRef      `protobuf:"bytes,5,opt,name=envelope_object,json=envelopeObject,proto3,oneof" json:"envelope_object,omitempty"`
+	EnvelopeRef    *EnvelopeReference     `protobuf:"bytes,6,opt,name=envelope_ref,json=envelopeRef,proto3,oneof" json:"envelope_ref,omitempty"`
+	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BackendObjectSet) Reset() {
+	*x = BackendObjectSet{}
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackendObjectSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackendObjectSet) ProtoMessage() {}
+
+func (x *BackendObjectSet) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackendObjectSet.ProtoReflect.Descriptor instead.
+func (*BackendObjectSet) Descriptor() ([]byte, []int) {
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *BackendObjectSet) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *BackendObjectSet) GetBlockId() string {
+	if x != nil {
+		return x.BlockId
+	}
+	return ""
+}
+
+func (x *BackendObjectSet) GetBlockObject() *BackendObjectRef {
+	if x != nil {
+		return x.BlockObject
+	}
+	return nil
+}
+
+func (x *BackendObjectSet) GetIndexObject() *BackendObjectRef {
+	if x != nil {
+		return x.IndexObject
+	}
+	return nil
+}
+
+func (x *BackendObjectSet) GetEnvelopeObject() *BackendObjectRef {
+	if x != nil {
+		return x.EnvelopeObject
+	}
+	return nil
+}
+
+func (x *BackendObjectSet) GetEnvelopeRef() *EnvelopeReference {
+	if x != nil {
+		return x.EnvelopeRef
+	}
+	return nil
+}
+
+func (x *BackendObjectSet) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+type BackendObjectRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          BackendObjectKind      `protobuf:"varint,1,opt,name=kind,proto3,enum=scrap.storage.v1.BackendObjectKind" json:"kind,omitempty"`
+	BackendId     string                 `protobuf:"bytes,2,opt,name=backend_id,json=backendId,proto3" json:"backend_id,omitempty"`
+	ObjectKey     string                 `protobuf:"bytes,3,opt,name=object_key,json=objectKey,proto3" json:"object_key,omitempty"`
+	Length        uint64                 `protobuf:"varint,4,opt,name=length,proto3" json:"length,omitempty"`
+	Sha256        []byte                 `protobuf:"bytes,5,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	Generation    *string                `protobuf:"bytes,6,opt,name=generation,proto3,oneof" json:"generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BackendObjectRef) Reset() {
+	*x = BackendObjectRef{}
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackendObjectRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackendObjectRef) ProtoMessage() {}
+
+func (x *BackendObjectRef) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackendObjectRef.ProtoReflect.Descriptor instead.
+func (*BackendObjectRef) Descriptor() ([]byte, []int) {
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *BackendObjectRef) GetKind() BackendObjectKind {
+	if x != nil {
+		return x.Kind
+	}
+	return BackendObjectKind_BACKEND_OBJECT_KIND_UNSPECIFIED
+}
+
+func (x *BackendObjectRef) GetBackendId() string {
+	if x != nil {
+		return x.BackendId
+	}
+	return ""
+}
+
+func (x *BackendObjectRef) GetObjectKey() string {
+	if x != nil {
+		return x.ObjectKey
+	}
+	return ""
+}
+
+func (x *BackendObjectRef) GetLength() uint64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+func (x *BackendObjectRef) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+func (x *BackendObjectRef) GetGeneration() string {
+	if x != nil && x.Generation != nil {
+		return *x.Generation
+	}
+	return ""
+}
+
+type EnvelopeReference struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	EnvelopeId     string                 `protobuf:"bytes,1,opt,name=envelope_id,json=envelopeId,proto3" json:"envelope_id,omitempty"`
+	KeyId          string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	KeyVersion     uint32                 `protobuf:"varint,3,opt,name=key_version,json=keyVersion,proto3" json:"key_version,omitempty"`
+	EnvelopeSha256 []byte                 `protobuf:"bytes,4,opt,name=envelope_sha256,json=envelopeSha256,proto3" json:"envelope_sha256,omitempty"`
+	EnvelopeObject *BackendObjectRef      `protobuf:"bytes,5,opt,name=envelope_object,json=envelopeObject,proto3" json:"envelope_object,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *EnvelopeReference) Reset() {
+	*x = EnvelopeReference{}
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnvelopeReference) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnvelopeReference) ProtoMessage() {}
+
+func (x *EnvelopeReference) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnvelopeReference.ProtoReflect.Descriptor instead.
+func (*EnvelopeReference) Descriptor() ([]byte, []int) {
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *EnvelopeReference) GetEnvelopeId() string {
+	if x != nil {
+		return x.EnvelopeId
+	}
+	return ""
+}
+
+func (x *EnvelopeReference) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *EnvelopeReference) GetKeyVersion() uint32 {
+	if x != nil {
+		return x.KeyVersion
+	}
+	return 0
+}
+
+func (x *EnvelopeReference) GetEnvelopeSha256() []byte {
+	if x != nil {
+		return x.EnvelopeSha256
+	}
+	return nil
+}
+
+func (x *EnvelopeReference) GetEnvelopeObject() *BackendObjectRef {
+	if x != nil {
+		return x.EnvelopeObject
+	}
+	return nil
+}
+
 type IndexDocumentRecord struct {
 	state                       protoimpl.MessageState `protogen:"open.v1"`
 	DocumentKeyId               uint64                 `protobuf:"varint,1,opt,name=document_key_id,json=documentKeyId,proto3" json:"document_key_id,omitempty"`
@@ -324,7 +628,7 @@ type IndexDocumentRecord struct {
 
 func (x *IndexDocumentRecord) Reset() {
 	*x = IndexDocumentRecord{}
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[2]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -336,7 +640,7 @@ func (x *IndexDocumentRecord) String() string {
 func (*IndexDocumentRecord) ProtoMessage() {}
 
 func (x *IndexDocumentRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[2]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -349,7 +653,7 @@ func (x *IndexDocumentRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexDocumentRecord.ProtoReflect.Descriptor instead.
 func (*IndexDocumentRecord) Descriptor() ([]byte, []int) {
-	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{2}
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *IndexDocumentRecord) GetDocumentKeyId() uint64 {
@@ -494,7 +798,7 @@ type DocumentMetadataBlob struct {
 
 func (x *DocumentMetadataBlob) Reset() {
 	*x = DocumentMetadataBlob{}
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[3]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -506,7 +810,7 @@ func (x *DocumentMetadataBlob) String() string {
 func (*DocumentMetadataBlob) ProtoMessage() {}
 
 func (x *DocumentMetadataBlob) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[3]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -519,7 +823,7 @@ func (x *DocumentMetadataBlob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DocumentMetadataBlob.ProtoReflect.Descriptor instead.
 func (*DocumentMetadataBlob) Descriptor() ([]byte, []int) {
-	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{3}
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DocumentMetadataBlob) GetTenantId() string {
@@ -595,7 +899,7 @@ type FrameChecksumRecord struct {
 
 func (x *FrameChecksumRecord) Reset() {
 	*x = FrameChecksumRecord{}
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[4]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -607,7 +911,7 @@ func (x *FrameChecksumRecord) String() string {
 func (*FrameChecksumRecord) ProtoMessage() {}
 
 func (x *FrameChecksumRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[4]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -620,7 +924,7 @@ func (x *FrameChecksumRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FrameChecksumRecord.ProtoReflect.Descriptor instead.
 func (*FrameChecksumRecord) Descriptor() ([]byte, []int) {
-	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{4}
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FrameChecksumRecord) GetFrameIndex() uint32 {
@@ -705,7 +1009,7 @@ type EnvelopeRecord struct {
 
 func (x *EnvelopeRecord) Reset() {
 	*x = EnvelopeRecord{}
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[5]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -717,7 +1021,7 @@ func (x *EnvelopeRecord) String() string {
 func (*EnvelopeRecord) ProtoMessage() {}
 
 func (x *EnvelopeRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_storage_v1_storage_proto_msgTypes[5]
+	mi := &file_scrap_storage_v1_storage_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -730,7 +1034,7 @@ func (x *EnvelopeRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvelopeRecord.ProtoReflect.Descriptor instead.
 func (*EnvelopeRecord) Descriptor() ([]byte, []int) {
-	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{5}
+	return file_scrap_storage_v1_storage_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *EnvelopeRecord) GetSchemaVersion() uint32 {
@@ -841,7 +1145,38 @@ const file_scrap_storage_v1_storage_proto_rawDesc = "" +
 	" \x01(\fR\vindexSha256\x129\n" +
 	"\n" +
 	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAtB\x16\n" +
-	"\x14_envelope_object_key\"\x8c\x06\n" +
+	"\x14_envelope_object_key\"\xe1\x03\n" +
+	"\x10BackendObjectSet\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12\x19\n" +
+	"\bblock_id\x18\x02 \x01(\tR\ablockId\x12E\n" +
+	"\fblock_object\x18\x03 \x01(\v2\".scrap.storage.v1.BackendObjectRefR\vblockObject\x12E\n" +
+	"\findex_object\x18\x04 \x01(\v2\".scrap.storage.v1.BackendObjectRefR\vindexObject\x12P\n" +
+	"\x0fenvelope_object\x18\x05 \x01(\v2\".scrap.storage.v1.BackendObjectRefH\x00R\x0eenvelopeObject\x88\x01\x01\x12K\n" +
+	"\fenvelope_ref\x18\x06 \x01(\v2#.scrap.storage.v1.EnvelopeReferenceH\x01R\venvelopeRef\x88\x01\x01\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAtB\x12\n" +
+	"\x10_envelope_objectB\x0f\n" +
+	"\r_envelope_ref\"\xed\x01\n" +
+	"\x10BackendObjectRef\x127\n" +
+	"\x04kind\x18\x01 \x01(\x0e2#.scrap.storage.v1.BackendObjectKindR\x04kind\x12\x1d\n" +
+	"\n" +
+	"backend_id\x18\x02 \x01(\tR\tbackendId\x12\x1d\n" +
+	"\n" +
+	"object_key\x18\x03 \x01(\tR\tobjectKey\x12\x16\n" +
+	"\x06length\x18\x04 \x01(\x04R\x06length\x12\x16\n" +
+	"\x06sha256\x18\x05 \x01(\fR\x06sha256\x12#\n" +
+	"\n" +
+	"generation\x18\x06 \x01(\tH\x00R\n" +
+	"generation\x88\x01\x01B\r\n" +
+	"\v_generation\"\xe2\x01\n" +
+	"\x11EnvelopeReference\x12\x1f\n" +
+	"\venvelope_id\x18\x01 \x01(\tR\n" +
+	"envelopeId\x12\x15\n" +
+	"\x06key_id\x18\x02 \x01(\tR\x05keyId\x12\x1f\n" +
+	"\vkey_version\x18\x03 \x01(\rR\n" +
+	"keyVersion\x12'\n" +
+	"\x0fenvelope_sha256\x18\x04 \x01(\fR\x0eenvelopeSha256\x12K\n" +
+	"\x0fenvelope_object\x18\x05 \x01(\v2\".scrap.storage.v1.BackendObjectRefR\x0eenvelopeObject\"\x8c\x06\n" +
 	"\x13IndexDocumentRecord\x12&\n" +
 	"\x0fdocument_key_id\x18\x01 \x01(\x04R\rdocumentKeyId\x12,\n" +
 	"\x12transaction_key_id\x18\x02 \x01(\x04R\x10transactionKeyId\x12:\n" +
@@ -905,7 +1240,12 @@ const file_scrap_storage_v1_storage_proto_rawDesc = "" +
 	"\x0fenvelope_sha256\x18\n" +
 	" \x01(\fR\x0eenvelopeSha256\x129\n" +
 	"\n" +
-	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt*\x94\x01\n" +
+	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt*\x98\x01\n" +
+	"\x11BackendObjectKind\x12#\n" +
+	"\x1fBACKEND_OBJECT_KIND_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19BACKEND_OBJECT_KIND_BLOCK\x10\x01\x12\x1d\n" +
+	"\x19BACKEND_OBJECT_KIND_INDEX\x10\x02\x12 \n" +
+	"\x1cBACKEND_OBJECT_KIND_ENVELOPE\x10\x03*\x94\x01\n" +
 	"\x0eEncryptionMode\x12\x1f\n" +
 	"\x1bENCRYPTION_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ENCRYPTION_MODE_NONE\x10\x01\x12\x1f\n" +
@@ -924,32 +1264,43 @@ func file_scrap_storage_v1_storage_proto_rawDescGZIP() []byte {
 	return file_scrap_storage_v1_storage_proto_rawDescData
 }
 
-var file_scrap_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_scrap_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_scrap_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_scrap_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_scrap_storage_v1_storage_proto_goTypes = []any{
-	(EncryptionMode)(0),           // 0: scrap.storage.v1.EncryptionMode
-	(*BlockHeader)(nil),           // 1: scrap.storage.v1.BlockHeader
-	(*BlockIndex)(nil),            // 2: scrap.storage.v1.BlockIndex
-	(*IndexDocumentRecord)(nil),   // 3: scrap.storage.v1.IndexDocumentRecord
-	(*DocumentMetadataBlob)(nil),  // 4: scrap.storage.v1.DocumentMetadataBlob
-	(*FrameChecksumRecord)(nil),   // 5: scrap.storage.v1.FrameChecksumRecord
-	(*EnvelopeRecord)(nil),        // 6: scrap.storage.v1.EnvelopeRecord
-	nil,                           // 7: scrap.storage.v1.DocumentMetadataBlob.TagsEntry
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(BackendObjectKind)(0),        // 0: scrap.storage.v1.BackendObjectKind
+	(EncryptionMode)(0),           // 1: scrap.storage.v1.EncryptionMode
+	(*BlockHeader)(nil),           // 2: scrap.storage.v1.BlockHeader
+	(*BlockIndex)(nil),            // 3: scrap.storage.v1.BlockIndex
+	(*BackendObjectSet)(nil),      // 4: scrap.storage.v1.BackendObjectSet
+	(*BackendObjectRef)(nil),      // 5: scrap.storage.v1.BackendObjectRef
+	(*EnvelopeReference)(nil),     // 6: scrap.storage.v1.EnvelopeReference
+	(*IndexDocumentRecord)(nil),   // 7: scrap.storage.v1.IndexDocumentRecord
+	(*DocumentMetadataBlob)(nil),  // 8: scrap.storage.v1.DocumentMetadataBlob
+	(*FrameChecksumRecord)(nil),   // 9: scrap.storage.v1.FrameChecksumRecord
+	(*EnvelopeRecord)(nil),        // 10: scrap.storage.v1.EnvelopeRecord
+	nil,                           // 11: scrap.storage.v1.DocumentMetadataBlob.TagsEntry
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_scrap_storage_v1_storage_proto_depIdxs = []int32{
-	8, // 0: scrap.storage.v1.BlockHeader.created_at:type_name -> google.protobuf.Timestamp
-	3, // 1: scrap.storage.v1.BlockIndex.documents:type_name -> scrap.storage.v1.IndexDocumentRecord
-	5, // 2: scrap.storage.v1.BlockIndex.frames:type_name -> scrap.storage.v1.FrameChecksumRecord
-	8, // 3: scrap.storage.v1.BlockIndex.created_at:type_name -> google.protobuf.Timestamp
-	7, // 4: scrap.storage.v1.DocumentMetadataBlob.tags:type_name -> scrap.storage.v1.DocumentMetadataBlob.TagsEntry
-	0, // 5: scrap.storage.v1.FrameChecksumRecord.encryption_mode:type_name -> scrap.storage.v1.EncryptionMode
-	8, // 6: scrap.storage.v1.EnvelopeRecord.created_at:type_name -> google.protobuf.Timestamp
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	12, // 0: scrap.storage.v1.BlockHeader.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 1: scrap.storage.v1.BlockIndex.documents:type_name -> scrap.storage.v1.IndexDocumentRecord
+	9,  // 2: scrap.storage.v1.BlockIndex.frames:type_name -> scrap.storage.v1.FrameChecksumRecord
+	12, // 3: scrap.storage.v1.BlockIndex.created_at:type_name -> google.protobuf.Timestamp
+	5,  // 4: scrap.storage.v1.BackendObjectSet.block_object:type_name -> scrap.storage.v1.BackendObjectRef
+	5,  // 5: scrap.storage.v1.BackendObjectSet.index_object:type_name -> scrap.storage.v1.BackendObjectRef
+	5,  // 6: scrap.storage.v1.BackendObjectSet.envelope_object:type_name -> scrap.storage.v1.BackendObjectRef
+	6,  // 7: scrap.storage.v1.BackendObjectSet.envelope_ref:type_name -> scrap.storage.v1.EnvelopeReference
+	12, // 8: scrap.storage.v1.BackendObjectSet.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 9: scrap.storage.v1.BackendObjectRef.kind:type_name -> scrap.storage.v1.BackendObjectKind
+	5,  // 10: scrap.storage.v1.EnvelopeReference.envelope_object:type_name -> scrap.storage.v1.BackendObjectRef
+	11, // 11: scrap.storage.v1.DocumentMetadataBlob.tags:type_name -> scrap.storage.v1.DocumentMetadataBlob.TagsEntry
+	1,  // 12: scrap.storage.v1.FrameChecksumRecord.encryption_mode:type_name -> scrap.storage.v1.EncryptionMode
+	12, // 13: scrap.storage.v1.EnvelopeRecord.created_at:type_name -> google.protobuf.Timestamp
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_scrap_storage_v1_storage_proto_init() }
@@ -958,14 +1309,16 @@ func file_scrap_storage_v1_storage_proto_init() {
 		return
 	}
 	file_scrap_storage_v1_storage_proto_msgTypes[1].OneofWrappers = []any{}
+	file_scrap_storage_v1_storage_proto_msgTypes[2].OneofWrappers = []any{}
 	file_scrap_storage_v1_storage_proto_msgTypes[3].OneofWrappers = []any{}
+	file_scrap_storage_v1_storage_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_storage_v1_storage_proto_rawDesc), len(file_scrap_storage_v1_storage_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   7,
+			NumEnums:      2,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
