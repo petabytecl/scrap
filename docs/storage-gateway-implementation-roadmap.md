@@ -40,6 +40,10 @@ Production-readiness test policy for issue `#19` is captured in
 Observability and audit signal policy for issue `#20` is captured in
 [Storage Gateway Observability And Audit Signal Standards](storage-gateway-observability-audit-standards.md).
 
+Release image, artifact, security-gate, dependency-update, Go-upgrade, and
+rollout policy for issue `#21` is captured in
+[Storage Gateway Release Image And Rollout Policy](storage-gateway-release-image-rollout-policy.md).
+
 ## Purpose
 
 Build the S.C.R.A.P. storage gateway so billing ETL services can write and read
