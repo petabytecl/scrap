@@ -15,6 +15,7 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -168,7 +169,11 @@ func (a *Application) blockDigest(ctx context.Context, blockID string) (uint64, 
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
-	return uint64(written), hasher.Sum(nil), nil
+	length, err := safeconv.Int64ToUint64("block digest bytes written", written)
+	if err != nil {
+		return 0, nil, err
+	}
+	return length, hasher.Sum(nil), nil
 }
 
 type localDiskStats struct {

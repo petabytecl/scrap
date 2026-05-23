@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -221,6 +222,36 @@ func TestAuthoritativeDocumentRecordRejectsUnsupportedSchemaVersion(t *testing.T
 	_, err = unmarshalDocumentRecord(data)
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
 		t.Fatalf("error = %v, want %v", err, ErrUnsupportedSchemaVersion)
+	}
+}
+
+func TestTransactionRecordRejectsInvalidState(t *testing.T) {
+	tests := []struct {
+		name  string
+		state uint32
+	}{
+		{name: "missing", state: 0},
+		{name: "out of range", state: math.MaxUint16 + 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			record := &metastorev1.TransactionRecord{
+				SchemaVersion: CurrentSchemaVersion,
+				TenantId:      "tenant",
+				TransactionId: "txn",
+				State:         tc.state,
+			}
+			if _, err := marshalTransactionRecord(record); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("marshal error = %v, want %v", err, ErrInvalidRecord)
+			}
+			data, err := proto.Marshal(record)
+			if err != nil {
+				t.Fatalf("raw proto marshal: %v", err)
+			}
+			if _, err := unmarshalTransactionRecord(data); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
 	}
 }
 

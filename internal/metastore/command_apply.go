@@ -127,7 +127,7 @@ func (s *Store) applyUpdateUploadIntentState(batch *pebble.Batch, command *metas
 	_, err := s.updateUploadIntentState(
 		batch,
 		command.GetBlockId(),
-		UploadState(command.GetState()),
+		uploadStateEnumFromProto(command.GetState()),
 		command.GetLastError(),
 		updatedAt,
 	)
@@ -138,7 +138,7 @@ func (s *Store) applyUpdateRestoreState(batch *pebble.Batch, command *metastorev
 	if command == nil {
 		return fmt.Errorf("metastore: update restore state command is required")
 	}
-	state := RestoreState(command.GetRestoreState())
+	state := restoreStateFromProto(command.GetRestoreState())
 	if _, err := availabilityFromRestoreState(state); err != nil {
 		return err
 	}

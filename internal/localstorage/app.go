@@ -27,6 +27,7 @@ import (
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -432,10 +433,18 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 			return api.WriteDocumentResult{}, err
 		}
 	}
+	desiredReplicaCount, err := safeconv.IntToUint32("desired replica count", replicationResult.DesiredReplicaCount)
+	if err != nil {
+		return api.WriteDocumentResult{}, err
+	}
+	achievedReplicaCount, err := safeconv.IntToUint32("achieved replica count", replicationResult.AchievedReplicaCount)
+	if err != nil {
+		return api.WriteDocumentResult{}, err
+	}
 	return api.WriteDocumentResult{
 		Metadata:             documentToAPI(document),
-		DesiredReplicaCount:  uint32(replicationResult.DesiredReplicaCount),
-		AchievedReplicaCount: uint32(replicationResult.AchievedReplicaCount),
+		DesiredReplicaCount:  desiredReplicaCount,
+		AchievedReplicaCount: achievedReplicaCount,
 		RepairRequired:       replicationResult.RepairRequired,
 		IdempotentReplay:     false,
 	}, nil

@@ -2,6 +2,7 @@ package identity
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"time"
@@ -10,12 +11,9 @@ import (
 func NewUUIDv7() (string, error) {
 	var b [16]byte
 	now := uint64(time.Now().UnixMilli())
-	b[0] = byte(now >> 40)
-	b[1] = byte(now >> 32)
-	b[2] = byte(now >> 24)
-	b[3] = byte(now >> 16)
-	b[4] = byte(now >> 8)
-	b[5] = byte(now)
+	var timestamp [8]byte
+	binary.BigEndian.PutUint64(timestamp[:], now)
+	copy(b[0:6], timestamp[2:8])
 	if _, err := rand.Read(b[6:]); err != nil {
 		return "", err
 	}

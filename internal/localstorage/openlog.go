@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/safepath"
 )
 
 const (
@@ -30,12 +32,15 @@ func openPrepareLog(dir string) (*prepareLog, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, prepareLogName)
+	path, err := safepath.UnderDir(dir, filepath.Join(dir, prepareLogName))
+	if err != nil {
+		return nil, err
+	}
 	_, statErr := os.Stat(path)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return nil, statErr
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := openLocalFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +71,12 @@ func (l *prepareLog) Append(document metastore.Document) error {
 	if len(payload) > maxPrepareLogPayloadLen {
 		return fmt.Errorf("localstorage: prepare record too large: %d", len(payload))
 	}
+	payloadLen, err := safeconv.IntToUint32("prepare log payload length", len(payload))
+	if err != nil {
+		return err
+	}
 	frame := make([]byte, prepareLogHeaderLen+len(payload)+prepareLogCRCLen)
-	binary.BigEndian.PutUint32(frame[:prepareLogHeaderLen], uint32(len(payload)))
+	binary.BigEndian.PutUint32(frame[:prepareLogHeaderLen], payloadLen)
 	copy(frame[prepareLogHeaderLen:], payload)
 	crc := crc32.Checksum(payload, crcTable)
 	binary.BigEndian.PutUint32(frame[len(frame)-prepareLogCRCLen:], crc)

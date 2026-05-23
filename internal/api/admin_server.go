@@ -11,6 +11,7 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -147,7 +148,11 @@ func (s *AdminServer) GetClusterSummary(ctx context.Context, req *adminv1.GetClu
 		if err != nil {
 			return nil, err
 		}
-		summary.PendingOperationCount = uint32(len(pending))
+		pendingCount, err := safeconv.IntToUint32("pending operation count", len(pending))
+		if err != nil {
+			return nil, err
+		}
+		summary.PendingOperationCount = pendingCount
 	}
 	return &adminv1.GetClusterSummaryResponse{Summary: summary}, nil
 }
@@ -764,11 +769,15 @@ func (s *AdminServer) createOperationPlan(operationType string, req OperationPla
 	if err != nil {
 		return nil, err
 	}
+	impact, err := estimateOperationImpact(req.Targets)
+	if err != nil {
+		return nil, err
+	}
 	plan := &adminv1.OperationPlan{
 		OperationPlanId: planID,
 		ExpiresAt:       timestamppb.New(s.now().Add(adminOperationPlanTTL)),
 		Targets:         adminTargetsToProto(req.Targets),
-		EstimatedImpact: estimateOperationImpact(req.Targets),
+		EstimatedImpact: impact,
 		Warnings:        cloneWarnings(req.Warnings),
 		Metadata:        metadata,
 	}
@@ -1043,7 +1052,7 @@ func adminTargetsToProto(targets []AdminTarget) []*adminv1.Target {
 	return out
 }
 
-func estimateOperationImpact(targets []AdminTarget) *adminv1.OperationImpact {
+func estimateOperationImpact(targets []AdminTarget) (*adminv1.OperationImpact, error) {
 	impact := &adminv1.OperationImpact{}
 	shards := make(map[string]bool)
 	for _, target := range targets {
@@ -1058,8 +1067,12 @@ func estimateOperationImpact(targets []AdminTarget) *adminv1.OperationImpact {
 			shards[target.ShardID] = true
 		}
 	}
-	impact.AffectedShardCount += uint32(len(shards))
-	return impact
+	shardCount, err := safeconv.IntToUint32("affected shard count", len(shards))
+	if err != nil {
+		return nil, err
+	}
+	impact.AffectedShardCount += shardCount
+	return impact, nil
 }
 
 func hashPlan(plan *adminv1.OperationPlan) (string, error) {
