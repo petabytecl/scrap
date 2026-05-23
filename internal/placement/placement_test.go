@@ -43,13 +43,35 @@ func TestPlanVotersRejectsFewerThanFiveDistinctNodes(t *testing.T) {
 	}
 }
 
-func TestPlanVotersMarksProductionUnhealthyBelowSevenEligibleNodes(t *testing.T) {
+func TestPlanVotersRejectsReducedFaultToleranceByDefault(t *testing.T) {
 	plan, err := PlanVoters(testMembers(5), DefaultPolicy())
+	if !errors.Is(err, ErrUnsafePlacement) {
+		t.Fatalf("plan error = %v, want %v", err, ErrUnsafePlacement)
+	}
+	if plan.ProductionHealthy {
+		t.Fatal("production healthy = true, want unhealthy below seven eligible nodes")
+	}
+	if !hasProblem(plan.Problems, ReasonTooFewEligibleNodes) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonTooFewEligibleNodes)
+	}
+	if plan.RiskAccepted {
+		t.Fatal("risk accepted without explicit risk mode")
+	}
+	if len(plan.Voters) != 0 {
+		t.Fatalf("voters = %#v, want no unsafe placement", plan.Voters)
+	}
+}
+
+func TestPlanVotersAllowsReducedFaultToleranceOnlyWithRiskMode(t *testing.T) {
+	plan, err := PlanVoters(testMembers(5), Policy{RiskMode: RiskModeReducedFaultTolerance})
 	if err != nil {
 		t.Fatalf("plan voters: %v", err)
 	}
 	if plan.ProductionHealthy {
-		t.Fatal("production healthy = true, want unhealthy below seven eligible nodes")
+		t.Fatal("production healthy = true, want reduced-fault-tolerance risk")
+	}
+	if !plan.RiskAccepted {
+		t.Fatal("risk accepted = false, want explicit reduced-fault-tolerance mode to accept risk")
 	}
 	if !hasProblem(plan.Problems, ReasonTooFewEligibleNodes) {
 		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonTooFewEligibleNodes)
@@ -105,6 +127,117 @@ func TestPlanVotersExcludesUnavailableMembers(t *testing.T) {
 	requireDistinctNodes(t, plan.Voters)
 }
 
+func TestPlanVotersReportsNodeLabelMismatch(t *testing.T) {
+	members := testMembers(5)
+	for i := range members {
+		members[i].NodeLabels = map[string]string{"scrap.petabyte.io/storage-node": "true"}
+	}
+	members[3].NodeLabels = map[string]string{"scrap.petabyte.io/storage-node": "false"}
+
+	plan, err := PlanVoters(members, Policy{
+		VoterCount:                 5,
+		MinProductionEligibleNodes: 5,
+		RequiredNodeLabels:         map[string]string{"scrap.petabyte.io/storage-node": "true"},
+	})
+	if !errors.Is(err, ErrInsufficientDistinctNodes) {
+		t.Fatalf("plan error = %v, want %v", err, ErrInsufficientDistinctNodes)
+	}
+	if !hasProblem(plan.Problems, ReasonNodeLabelMismatch) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonNodeLabelMismatch)
+	}
+	if !hasProblem(plan.Problems, ReasonTooFewDistinctNodes) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonTooFewDistinctNodes)
+	}
+	if len(plan.Voters) != 0 {
+		t.Fatalf("voters = %#v, want no unsafe placement", plan.Voters)
+	}
+}
+
+func TestPlanVotersReportsNodeLabelMismatchWhenProductionMarginFails(t *testing.T) {
+	members := testMembers(7)
+	for i := range members {
+		members[i].NodeLabels = map[string]string{"scrap.petabyte.io/storage-node": "true"}
+	}
+	members[6].NodeLabels = map[string]string{"scrap.petabyte.io/storage-node": "false"}
+
+	plan, err := PlanVoters(members, Policy{
+		RequiredNodeLabels: map[string]string{"scrap.petabyte.io/storage-node": "true"},
+	})
+	if !errors.Is(err, ErrUnsafePlacement) {
+		t.Fatalf("plan error = %v, want %v", err, ErrUnsafePlacement)
+	}
+	if !hasProblem(plan.Problems, ReasonTooFewEligibleNodes) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonTooFewEligibleNodes)
+	}
+	if !hasProblem(plan.Problems, ReasonNodeLabelMismatch) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonNodeLabelMismatch)
+	}
+	if hasProblem(plan.Problems, ReasonTooFewDistinctNodes) {
+		t.Fatalf("problems = %#v, did not expect %s with six eligible voters", plan.Problems, ReasonTooFewDistinctNodes)
+	}
+	if len(plan.Voters) != 0 {
+		t.Fatalf("voters = %#v, want no unsafe placement", plan.Voters)
+	}
+}
+
+func TestPlanVotersRejectsUnsupportedRiskMode(t *testing.T) {
+	plan, err := PlanVoters(testMembers(7), Policy{RiskMode: RiskMode("unknown-risk")})
+	if !errors.Is(err, ErrUnsafePlacement) {
+		t.Fatalf("plan error = %v, want %v", err, ErrUnsafePlacement)
+	}
+	if plan.ProductionHealthy {
+		t.Fatal("production healthy = true, want unsupported risk mode rejected")
+	}
+	if plan.RiskAccepted {
+		t.Fatal("risk accepted = true, want unsupported risk mode rejected")
+	}
+	if !hasProblem(plan.Problems, ReasonUnsupportedRiskMode) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonUnsupportedRiskMode)
+	}
+	if len(plan.Voters) != 0 {
+		t.Fatalf("voters = %#v, want no unsafe placement", plan.Voters)
+	}
+}
+
+func TestPlanVotersRejectsSharedStoragePoolByDefault(t *testing.T) {
+	members := membersInStoragePool(testMembers(5), "pool-a")
+	plan, err := PlanVoters(members, Policy{VoterCount: 5, MinProductionEligibleNodes: 5})
+	if !errors.Is(err, ErrUnsafePlacement) {
+		t.Fatalf("plan error = %v, want %v", err, ErrUnsafePlacement)
+	}
+	if !hasProblem(plan.Problems, ReasonSelectedSharedPool) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonSelectedSharedPool)
+	}
+	if len(plan.Voters) != 0 {
+		t.Fatalf("voters = %#v, want no unsafe placement", plan.Voters)
+	}
+}
+
+func TestPlanVotersAllowsSharedStoragePoolOnlyWithRiskMode(t *testing.T) {
+	members := membersInStoragePool(testMembers(5), "pool-a")
+	plan, err := PlanVoters(members, Policy{
+		VoterCount:                 5,
+		MinProductionEligibleNodes: 5,
+		RiskMode:                   RiskModeSharedPool,
+	})
+	if err != nil {
+		t.Fatalf("plan voters: %v", err)
+	}
+	if plan.ProductionHealthy {
+		t.Fatal("production healthy = true, want shared-pool risk")
+	}
+	if !plan.RiskAccepted {
+		t.Fatal("risk accepted = false, want explicit shared-pool mode to accept risk")
+	}
+	if !hasProblem(plan.Problems, ReasonSelectedSharedPool) {
+		t.Fatalf("problems = %#v, want %s", plan.Problems, ReasonSelectedSharedPool)
+	}
+	if len(plan.Voters) != 5 {
+		t.Fatalf("voter count = %d, want 5", len(plan.Voters))
+	}
+	requireDistinctNodes(t, plan.Voters)
+}
+
 func testMembers(count int) []Member {
 	members := make([]Member, 0, count)
 	zones := []string{"zone-a", "zone-b", "zone-c"}
@@ -139,7 +272,14 @@ func requireDistinctNodes(t *testing.T, members []Member) {
 	}
 }
 
-func hasProblem(problems []Problem, reason string) bool {
+func membersInStoragePool(members []Member, pool string) []Member {
+	for i := range members {
+		members[i].StoragePool = pool
+	}
+	return members
+}
+
+func hasProblem(problems []Problem, reason Reason) bool {
 	for _, problem := range problems {
 		if problem.Reason == reason {
 			return true
