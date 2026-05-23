@@ -82,14 +82,34 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 }
 
 func (r *RunResult) recordError(err error) {
-	class := backend.ClassifyError(err)
-	if class == "" {
+	class, ok := classifyBackendUploadError(err)
+	if !ok {
 		return
 	}
 	if r.Errors == nil {
 		r.Errors = make(map[backend.ErrorClass]int)
 	}
 	r.Errors[class]++
+}
+
+func classifyBackendUploadError(err error) (backend.ErrorClass, bool) {
+	var classified *backend.Error
+	if errors.As(err, &classified) && classified.Class.Valid() {
+		return classified.Class, true
+	}
+	switch {
+	case errors.Is(err, backend.ErrThrottled),
+		errors.Is(err, backend.ErrTransient),
+		errors.Is(err, backend.ErrAuth),
+		errors.Is(err, backend.ErrNotFound),
+		errors.Is(err, backend.ErrConflict),
+		errors.Is(err, backend.ErrChecksumMismatch),
+		errors.Is(err, backend.ErrInvalidRange),
+		errors.Is(err, backend.ErrPermanent):
+		return backend.ClassifyError(err), true
+	default:
+		return "", false
+	}
 }
 
 func shouldUpload(state metastore.UploadState) bool {

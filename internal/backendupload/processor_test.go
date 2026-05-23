@@ -309,6 +309,9 @@ func TestProcessorRecordsFailedUploadAndContinues(t *testing.T) {
 	if result.Scanned != 2 || result.Failed != 2 || result.Uploaded != 0 {
 		t.Fatalf("result = %#v, want two failed uploads", result)
 	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("errors = %#v, want no backend/provider error classes for source errors", result.Errors)
+	}
 	if len(updater.calls) != 2 {
 		t.Fatalf("state calls = %#v, want two failed calls", updater.calls)
 	}

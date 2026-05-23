@@ -138,14 +138,20 @@ func (u Uploader) verifyObject(ctx context.Context, key string, expected backend
 		return fmt.Errorf("backendupload: backend object key is required for verification")
 	}
 	if expected.Key != key {
-		return backend.ErrChecksumMismatch
+		return fmt.Errorf("backendupload: verify object %q: upload result key %q does not match expected key: %w", key, expected.Key, backend.ErrChecksumMismatch)
 	}
 	actual, err := u.Backend.HeadObject(ctx, key)
 	if err != nil {
-		return err
+		return fmt.Errorf("backendupload: verify object %q: head object: %w", key, err)
 	}
-	if actual.Key != expected.Key || actual.Length != expected.Length || actual.SHA256 != expected.SHA256 {
-		return backend.ErrChecksumMismatch
+	if actual.Key != expected.Key {
+		return fmt.Errorf("backendupload: verify object %q: metadata key %q does not match upload result key %q: %w", key, actual.Key, expected.Key, backend.ErrChecksumMismatch)
+	}
+	if actual.Length != expected.Length {
+		return fmt.Errorf("backendupload: verify object %q: metadata length %d does not match upload result length %d: %w", key, actual.Length, expected.Length, backend.ErrChecksumMismatch)
+	}
+	if actual.SHA256 != expected.SHA256 {
+		return fmt.Errorf("backendupload: verify object %q: metadata sha256 %x does not match upload result sha256 %x: %w", key, actual.SHA256, expected.SHA256, backend.ErrChecksumMismatch)
 	}
 	return nil
 }
