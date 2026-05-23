@@ -38,6 +38,7 @@ make local-kind-smoke
 make local-kind-evidence
 make openbao-smoke-evidence
 make capacity-sample
+make local-soak-evidence
 make local-kind-delete
 ```
 
@@ -108,6 +109,31 @@ export BAO_TOKEN=local-root
 make capacity-sample \
   CAPACITY_SAMPLE_BACKEND_URL=http://127.0.0.1:4566/scrap-local \
   CAPACITY_SAMPLE_OPENBAO_ADDR=http://127.0.0.1:8200
+```
+
+## Local Soak And Capacity Rehearsal
+
+`make local-soak-evidence` runs the #87 local release soak against the local
+kind public and admin gRPC services and writes `local-soak-evidence.json` by
+default. It consumes the #100 `capacity-sample-advisory.json` report, writes and
+reads bounded documents through the public API, captures admin disk runway,
+repair queue lag, restore/backlog visibility, backend upload-lag samples, and
+OpenBao latency/error/saturation behavior.
+
+The report records release SHA, image identity, runner/profile, dirty-tree
+status, workload shape, document-size distribution, duration, capacity profile,
+and explicit links to #48, #87, #99, and #100. It treats #100 values as proposed
+advisory thresholds only. If a local rehearsal failure or advisory threshold
+violation appears, the evidence status is failed and the release must link a
+blocking issue or an approved owner+expiry exception before signoff.
+
+The default command expects these local services to be reachable:
+
+```sh
+make local-soak-evidence \
+  SCRAP_PUBLIC_ADDR=127.0.0.1:18080 \
+  SCRAP_ADMIN_ADDR=127.0.0.1:18081 \
+  CAPACITY_SAMPLE_REPORT=capacity-sample-advisory.json
 ```
 
 ## GitOps Boundary
