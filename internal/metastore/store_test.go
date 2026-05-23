@@ -304,6 +304,42 @@ func TestApplyRecordUploadIntentCommand(t *testing.T) {
 	}
 }
 
+func TestApplyShardCommandDuplicateRequestIDIsIdempotent(t *testing.T) {
+	store := openTestStore(t)
+	command := sampleShardCommand()
+	if err := store.ApplyShardCommand(command); err != nil {
+		t.Fatalf("apply command: %v", err)
+	}
+	if err := store.ApplyShardCommand(command); err != nil {
+		t.Fatalf("reapply duplicate command: %v", err)
+	}
+	reproposed := sampleShardCommand()
+	reproposed.ProposedAt = timestamppb.New(time.Unix(101, 0).UTC())
+	if err := store.ApplyShardCommand(reproposed); err != nil {
+		t.Fatalf("reapply duplicate command with new proposal time: %v", err)
+	}
+	transaction, err := store.GetTransaction(identity.Transaction{TenantID: "tenant", TransactionID: "txn"})
+	if err != nil {
+		t.Fatalf("get transaction: %v", err)
+	}
+	if transaction.DocumentCount != 1 {
+		t.Fatalf("document count after duplicate command = %d, want 1", transaction.DocumentCount)
+	}
+	receipts, err := store.ListCommandReceipts()
+	if err != nil {
+		t.Fatalf("list command receipts: %v", err)
+	}
+	if len(receipts) != 1 || receipts[0].CommandID != command.GetCommandId() {
+		t.Fatalf("receipts = %#v, want one receipt for duplicate command", receipts)
+	}
+
+	conflict := sampleShardCommand()
+	conflict.GetCommitDocument().Document.DocumentName = "other.xml"
+	if err := store.ApplyShardCommand(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting duplicate error = %v, want %v", err, ErrConflict)
+	}
+}
+
 func TestApplyUpdateUploadIntentStateCommand(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {

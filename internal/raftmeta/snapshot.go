@@ -36,6 +36,7 @@ type SnapshotInfo struct {
 	UploadJobs   int
 	Repairs      int
 	Members      int
+	Commands     int
 }
 
 func snapshotPath(dir string) string {
@@ -133,6 +134,7 @@ func snapshotInfo(dir string, snapshot *metastorev1.ShardSnapshot) SnapshotInfo 
 		UploadJobs:   len(snapshot.GetUploadIntents()),
 		Repairs:      len(snapshot.GetRepairStates()),
 		Members:      len(snapshot.GetMembership().GetMembers()),
+		Commands:     len(snapshot.GetCommandReceipts()),
 	}
 }
 
