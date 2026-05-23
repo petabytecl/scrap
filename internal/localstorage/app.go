@@ -23,6 +23,7 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
+	"github.com/petabytecl/scrap/internal/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -38,6 +39,8 @@ type Application struct {
 	memberState              localMemberState
 	sealBlockAtBytes         uint64
 	minUsableBytesAfterWrite uint64
+	peerPrepareTargets       []replication.Target
+	peerPreparePolicy        replication.Policy
 	now                      func() time.Time
 	writeFaults              writeFaultHooks
 }
@@ -304,6 +307,11 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 			return api.WriteDocumentResult{}, err
 		}
 	}
+	replicationResult, err := a.preparePeerReplicas(ctx, document)
+	if err != nil {
+		return api.WriteDocumentResult{}, mapError(err)
+	}
+	document.Location.Replicas = replication.ReplicaRefs(replicationResult.Receipts)
 	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
@@ -323,11 +331,33 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	}
 	return api.WriteDocumentResult{
 		Metadata:             documentToAPI(document),
-		DesiredReplicaCount:  1,
-		AchievedReplicaCount: 1,
-		RepairRequired:       false,
+		DesiredReplicaCount:  uint32(replicationResult.DesiredReplicaCount),
+		AchievedReplicaCount: uint32(replicationResult.AchievedReplicaCount),
+		RepairRequired:       replicationResult.RepairRequired,
 		IdempotentReplay:     false,
 	}, nil
+}
+
+func (a *Application) preparePeerReplicas(ctx context.Context, document metastore.Document) (replication.Result, error) {
+	if len(a.peerPrepareTargets) == 0 {
+		return replication.Result{
+			DesiredReplicaCount:  1,
+			RequiredReplicaCount: 1,
+			AchievedReplicaCount: 1,
+		}, nil
+	}
+	prepared := replication.PreparedDocumentFromMetadata(document)
+	source := replication.ByteSourceFunc(func(ctx context.Context, requested replication.PreparedDocument, writer io.Writer) error {
+		record := blockstore.Record{
+			BlockID:       requested.BlockID,
+			StoredOffset:  requested.StoredOffset,
+			StoredLength:  requested.StoredLength,
+			LogicalSHA256: requested.LogicalSHA256,
+			Frames:        append([]blockstore.FrameRecord(nil), requested.Frames...),
+		}
+		return a.blocks.ReadRange(ctx, record, 0, nil, writer)
+	})
+	return replication.PrepareDocument(ctx, prepared, source, a.peerPrepareTargets, a.peerPreparePolicy)
 }
 
 func (a *Application) HeadDocument(ctx context.Context, req api.HeadDocumentRequest) (api.DocumentMetadata, error) {
@@ -667,6 +697,14 @@ func mapError(err error) error {
 		return status.Error(codes.Unavailable, "metadata freshness cannot be proven")
 	case errors.Is(err, raftmeta.ErrLeaseReadDisabled):
 		return status.Error(codes.FailedPrecondition, "metadata lease reads are disabled")
+	case errors.Is(err, replication.ErrInsufficientReplicas):
+		return status.Error(codes.Unavailable, "required peer replicas could not be prepared")
+	case errors.Is(err, replication.ErrMissingByteSource):
+		return status.Error(codes.Internal, "peer prepare byte source is unavailable")
+	case errors.Is(err, replication.ErrReceiptMismatch):
+		return status.Error(codes.Internal, "peer prepare receipt did not match prepared document")
+	case errors.Is(err, replication.ErrTransferMismatch):
+		return status.Error(codes.DataLoss, "peer prepare transfer failed checksum verification")
 	default:
 		return err
 	}

@@ -46,6 +46,7 @@ type Record struct {
 	StoredLength  uint64
 	LogicalSHA256 [32]byte
 	Frames        []FrameRecord
+	Replicas      []ReplicaRef
 }
 
 type FrameRecord struct {
@@ -53,6 +54,14 @@ type FrameRecord struct {
 	SegmentOffset uint64
 	SegmentLength uint64
 	SHA256        [32]byte
+}
+
+type ReplicaRef struct {
+	MemberID     string
+	BlockID      string
+	StoredOffset uint64
+	StoredLength uint64
+	StoredSHA256 [32]byte
 }
 
 func Open(dir string) (*Store, error) {

@@ -1,8 +1,11 @@
 package replication
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/blockstore"
@@ -12,8 +15,9 @@ import (
 
 func TestPrepareNormalWriteSucceedsWithQuorumAndMarksRepairRequired(t *testing.T) {
 	document := testPreparedDocument(metastore.PriorityClassNormal)
+	source := testByteSource(testPreparedBytes)
 	peerErr := errors.New("peer prepare failed")
-	result, err := PrepareDocument(context.Background(), document, []Target{
+	result, err := PrepareDocument(context.Background(), document, source, []Target{
 		successTarget("member-1", document),
 		failingTarget("member-2", peerErr),
 		successTarget("member-3", document),
@@ -38,7 +42,7 @@ func TestPrepareNormalWriteSucceedsWithQuorumAndMarksRepairRequired(t *testing.T
 
 func TestPrepareCriticalWriteRequiresAllReplicasByDefault(t *testing.T) {
 	document := testPreparedDocument(metastore.PriorityClassCriticalIngest)
-	result, err := PrepareDocument(context.Background(), document, []Target{
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
 		successTarget("member-1", document),
 		successTarget("member-2", document),
 		successTarget("member-3", document),
@@ -57,7 +61,7 @@ func TestPrepareCriticalWriteRequiresAllReplicasByDefault(t *testing.T) {
 
 func TestPrepareCriticalWriteCanDegradeToQuorumWhenPolicyAllows(t *testing.T) {
 	document := testPreparedDocument(metastore.PriorityClassCriticalIngest)
-	result, err := PrepareDocument(context.Background(), document, []Target{
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
 		successTarget("member-1", document),
 		failingTarget("member-2", errors.New("peer unavailable")),
 		successTarget("member-3", document),
@@ -76,7 +80,7 @@ func TestPrepareCriticalWriteCanDegradeToQuorumWhenPolicyAllows(t *testing.T) {
 
 func TestPrepareFailsWhenPeerTargetsCannotReachQuorum(t *testing.T) {
 	document := testPreparedDocument(metastore.PriorityClassNormal)
-	result, err := PrepareDocument(context.Background(), document, []Target{
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
 		successTarget("member-1", document),
 	}, DefaultPolicy())
 	if !errors.Is(err, ErrInsufficientReplicas) {
@@ -91,7 +95,7 @@ func TestPrepareRejectsMismatchedReceipt(t *testing.T) {
 	document := testPreparedDocument(metastore.PriorityClassNormal)
 	mismatched := document
 	mismatched.BlockID = "wrong-block"
-	result, err := PrepareDocument(context.Background(), document, []Target{
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
 		successTarget("member-1", mismatched),
 		successTarget("member-2", document),
 	}, DefaultPolicy())
@@ -106,10 +110,99 @@ func TestPrepareRejectsMismatchedReceipt(t *testing.T) {
 	}
 }
 
+func TestPrepareTransfersRangeAndChecksumEvidence(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	peer := newMemoryPeer("member-1")
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
+		{MemberID: "member-1", Preparer: peer},
+	}, Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2})
+	if err != nil {
+		t.Fatalf("prepare document: %v", err)
+	}
+	if result.DesiredReplicaCount != 2 || result.RequiredReplicaCount != 2 || result.AchievedReplicaCount != 2 {
+		t.Fatalf("replica counts = desired %d required %d achieved %d, want 2/2/2", result.DesiredReplicaCount, result.RequiredReplicaCount, result.AchievedReplicaCount)
+	}
+	if peer.prepareCount != 1 {
+		t.Fatalf("prepare count = %d, want 1", peer.prepareCount)
+	}
+	if len(peer.bytesByDocument) != 1 {
+		t.Fatalf("prepared documents = %d, want 1", len(peer.bytesByDocument))
+	}
+}
+
+func TestPrepareCanRetryAfterPeerFailure(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	peer := newMemoryPeer("member-1")
+	flaky := &flakyPreparer{nextErr: errors.New("peer unavailable"), next: peer}
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
+		{MemberID: "member-1", Preparer: flaky},
+	}, Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2})
+	if !errors.Is(err, ErrInsufficientReplicas) {
+		t.Fatalf("first prepare error = %v, want %v", err, ErrInsufficientReplicas)
+	}
+	if result.AchievedReplicaCount != 1 || len(result.PeerErrors) != 1 {
+		t.Fatalf("first result = %#v, want only local replica and one peer error", result)
+	}
+
+	result, err = PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
+		{MemberID: "member-1", Preparer: flaky},
+	}, Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2})
+	if err != nil {
+		t.Fatalf("retry prepare document: %v", err)
+	}
+	if result.AchievedReplicaCount != 2 {
+		t.Fatalf("retry achieved replicas = %d, want 2", result.AchievedReplicaCount)
+	}
+}
+
+func TestPrepareDuplicateIsIdempotent(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	peer := newMemoryPeer("member-1")
+	targets := []Target{{MemberID: "member-1", Preparer: peer}}
+	policy := Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
+	first, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), targets, policy)
+	if err != nil {
+		t.Fatalf("first prepare document: %v", err)
+	}
+	second, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), targets, policy)
+	if err != nil {
+		t.Fatalf("duplicate prepare document: %v", err)
+	}
+	if len(first.Receipts) != 1 || len(second.Receipts) != 1 || first.Receipts[0] != second.Receipts[0] {
+		t.Fatalf("duplicate receipts = %#v then %#v, want same receipt", first.Receipts, second.Receipts)
+	}
+	if peer.prepareCount != 2 {
+		t.Fatalf("prepare count = %d, want duplicate call to be accepted", peer.prepareCount)
+	}
+}
+
+func TestPrepareRejectsCorruptTransfer(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	result, err := PrepareDocument(context.Background(), document, testByteSource([]byte("corrupt bytes")), []Target{
+		successTarget("member-1", document),
+	}, Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2})
+	if !errors.Is(err, ErrInsufficientReplicas) {
+		t.Fatalf("prepare error = %v, want %v", err, ErrInsufficientReplicas)
+	}
+	if len(result.PeerErrors) != 1 || !errors.Is(result.PeerErrors[0].Err, ErrTransferMismatch) {
+		t.Fatalf("peer errors = %#v, want transfer mismatch", result.PeerErrors)
+	}
+}
+
+func TestValidatePreparedBytesAllowsStoredHashDifferentFromLogicalHash(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	document.LogicalSHA256 = [32]byte{9, 8, 7}
+	if err := ValidatePreparedBytes(document, testPreparedBytes); err != nil {
+		t.Fatalf("validate prepared bytes with different logical hash: %v", err)
+	}
+}
+
+var testPreparedBytes = []byte("replicated document bytes")
+
 func testPreparedDocument(priority metastore.PriorityClass) PreparedDocument {
-	logical := [32]byte{1, 2, 3}
-	stored := [32]byte{4, 5, 6}
-	frame := [32]byte{7, 8, 9}
+	logical := sha256Bytes(testPreparedBytes)
+	stored := logical
+	frame := logical
 	return PreparedDocument{
 		Identity: identity.Document{
 			TenantID:      "tenant",
@@ -119,14 +212,14 @@ func testPreparedDocument(priority metastore.PriorityClass) PreparedDocument {
 		PriorityClass: priority,
 		BlockID:       "block-1",
 		StoredOffset:  64,
-		StoredLength:  42,
+		StoredLength:  uint64(len(testPreparedBytes)),
 		LogicalSHA256: logical,
 		StoredSHA256:  stored,
 		Frames: []blockstore.FrameRecord{
 			{
 				FrameOffset:   64,
 				SegmentOffset: 64,
-				SegmentLength: 42,
+				SegmentLength: uint64(len(testPreparedBytes)),
 				SHA256:        frame,
 			},
 		},
@@ -136,15 +229,15 @@ func testPreparedDocument(priority metastore.PriorityClass) PreparedDocument {
 func successTarget(memberID string, document PreparedDocument) Target {
 	return Target{
 		MemberID: memberID,
-		Preparer: PreparerFunc(func(context.Context, PreparedDocument) (Receipt, error) {
-			return Receipt{
-				MemberID:      memberID,
-				BlockID:       document.BlockID,
-				StoredOffset:  document.StoredOffset,
-				StoredLength:  document.StoredLength,
-				LogicalSHA256: document.LogicalSHA256,
-				StoredSHA256:  document.StoredSHA256,
-			}, nil
+		Preparer: PreparerFunc(func(ctx context.Context, request PrepareRequest) (Receipt, error) {
+			var buf bytes.Buffer
+			if err := request.WriteBytes(ctx, &buf); err != nil {
+				return Receipt{}, err
+			}
+			if err := ValidatePreparedBytes(request.Document, buf.Bytes()); err != nil {
+				return Receipt{}, err
+			}
+			return ReceiptFromPreparedDocument(memberID, document), nil
 		}),
 	}
 }
@@ -152,8 +245,78 @@ func successTarget(memberID string, document PreparedDocument) Target {
 func failingTarget(memberID string, err error) Target {
 	return Target{
 		MemberID: memberID,
-		Preparer: PreparerFunc(func(context.Context, PreparedDocument) (Receipt, error) {
+		Preparer: PreparerFunc(func(context.Context, PrepareRequest) (Receipt, error) {
 			return Receipt{}, err
 		}),
 	}
+}
+
+func testByteSource(data []byte) ByteSource {
+	return ByteSourceFunc(func(ctx context.Context, _ PreparedDocument, writer io.Writer) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := writer.Write(data)
+		return err
+	})
+}
+
+func sha256Bytes(data []byte) [32]byte {
+	return sha256.Sum256(data)
+}
+
+type memoryPeer struct {
+	memberID        string
+	prepareCount    int
+	receipts        map[string]Receipt
+	bytesByDocument map[string][]byte
+}
+
+func newMemoryPeer(memberID string) *memoryPeer {
+	return &memoryPeer{
+		memberID:        memberID,
+		receipts:        make(map[string]Receipt),
+		bytesByDocument: make(map[string][]byte),
+	}
+}
+
+func (p *memoryPeer) PrepareDocument(ctx context.Context, request PrepareRequest) (Receipt, error) {
+	p.prepareCount++
+	var buf bytes.Buffer
+	if err := request.WriteBytes(ctx, &buf); err != nil {
+		return Receipt{}, err
+	}
+	data := append([]byte(nil), buf.Bytes()...)
+	if err := ValidatePreparedBytes(request.Document, data); err != nil {
+		return Receipt{}, err
+	}
+	key := documentKey(request.Document)
+	receipt := ReceiptFromPreparedDocument(p.memberID, request.Document)
+	if existing, ok := p.receipts[key]; ok {
+		if existing != receipt || !bytes.Equal(p.bytesByDocument[key], data) {
+			return Receipt{}, ErrReceiptMismatch
+		}
+		return existing, nil
+	}
+	p.receipts[key] = receipt
+	p.bytesByDocument[key] = data
+	return receipt, nil
+}
+
+type flakyPreparer struct {
+	nextErr error
+	next    Preparer
+}
+
+func (p *flakyPreparer) PrepareDocument(ctx context.Context, request PrepareRequest) (Receipt, error) {
+	if p.nextErr != nil {
+		err := p.nextErr
+		p.nextErr = nil
+		return Receipt{}, err
+	}
+	return p.next.PrepareDocument(ctx, request)
+}
+
+func documentKey(document PreparedDocument) string {
+	return document.Identity.TenantID + "/" + document.Identity.TransactionID + "/" + document.Identity.DocumentName
 }
