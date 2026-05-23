@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+
 	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -450,10 +451,10 @@ func (s *Store) TombstoneDocument(doc identity.Document, tombstonedAt time.Time,
 
 func (s *Store) tombstoneDocument(batch *pebble.Batch, doc identity.Document, tombstonedAt time.Time, operationID string) (Document, error) {
 	if tombstonedAt.IsZero() {
-		return Document{}, fmt.Errorf("metastore: tombstone requires tombstoned_at")
+		return Document{}, errors.New("metastore: tombstone requires tombstoned_at")
 	}
 	if operationID == "" {
-		return Document{}, fmt.Errorf("metastore: tombstone requires operation_id")
+		return Document{}, errors.New("metastore: tombstone requires operation_id")
 	}
 	document, err := s.HeadDocument(doc)
 	if err != nil {
@@ -704,7 +705,7 @@ func (s *Store) replaceDocument(batch *pebble.Batch, document Document) error {
 	return nil
 }
 
-func (s *Store) getTransaction(tenantID string, transactionID string) (Transaction, bool, error) {
+func (s *Store) getTransaction(tenantID, transactionID string) (Transaction, bool, error) {
 	transaction := identity.Transaction{TenantID: tenantID, TransactionID: transactionID}
 	value, ok, err := s.get(transactionKey(transaction))
 	if err != nil || !ok {
@@ -839,7 +840,7 @@ func validateUploadIntentState(state UploadState) error {
 	}
 }
 
-func sameUploadIntentDestination(left UploadIntent, right UploadIntent) bool {
+func sameUploadIntentDestination(left, right UploadIntent) bool {
 	return left.BlockID == right.BlockID &&
 		left.BackendObjectKey == right.BackendObjectKey &&
 		left.IndexObjectKey == right.IndexObjectKey &&

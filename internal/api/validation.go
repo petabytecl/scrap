@@ -6,12 +6,13 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
-	"github.com/petabytecl/scrap/internal/identity"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
+	"github.com/petabytecl/scrap/internal/identity"
 )
 
 const (
@@ -379,7 +380,7 @@ func validateTimestamp(field string, value *timestamppb.Timestamp, problems *vio
 	}
 }
 
-func validateRequiredText(field string, value string, problems *violations) {
+func validateRequiredText(field, value string, problems *violations) {
 	if value == "" {
 		problems.add(field, identity.ReasonRequired, field+" is required")
 		return
@@ -398,7 +399,7 @@ func validateOptionalText(field string, value *string, problems *violations) {
 	validateText(field, *value, problems)
 }
 
-func validateText(field string, value string, problems *violations) {
+func validateText(field, value string, problems *violations) {
 	switch {
 	case !utf8.ValidString(value):
 		problems.add(field, identity.ReasonInvalidUTF8, field+" must be valid UTF-8")
@@ -417,7 +418,7 @@ func validateTags(field string, tags map[string]string, problems *violations) {
 	}
 }
 
-func validateTagKey(field string, key string, problems *violations) {
+func validateTagKey(field, key string, problems *violations) {
 	switch {
 	case key == "":
 		problems.add(field, identity.ReasonRequired, "tag key is required")
@@ -430,7 +431,7 @@ func validateTagKey(field string, key string, problems *violations) {
 	}
 }
 
-func validateTagValue(field string, value string, problems *violations) {
+func validateTagValue(field, value string, problems *violations) {
 	switch {
 	case len(value) > MaxTagValueBytes:
 		problems.add(field, identity.ReasonTooLong, "tag value exceeds maximum byte length")
@@ -531,7 +532,7 @@ func cloneTags(tags map[string]string) map[string]string {
 	return out
 }
 
-func (v *violations) add(field string, reason string, description string) {
+func (v *violations) add(field, reason, description string) {
 	v.fields = append(v.fields, &errdetails.BadRequest_FieldViolation{
 		Field:       field,
 		Reason:      reason,

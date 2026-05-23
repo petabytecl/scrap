@@ -402,7 +402,7 @@ func validateRunway(profileID string, budget ByteBudget, bands DiskGuardBands, r
 	return nil
 }
 
-func validateFinitePositive(profileID string, field string, value uint64) error {
+func validateFinitePositive(profileID, field string, value uint64) error {
 	if value == 0 {
 		return fmt.Errorf("backend capacity profile %s: %s must be positive", profileID, field)
 	}

@@ -3,6 +3,7 @@ package localstorage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -23,10 +24,10 @@ const (
 func (a *Application) PublishMetadataSnapshot(ctx context.Context) (published.SnapshotPublication, error) {
 	store, ok := a.backendStore.(backend.MutableStore)
 	if a.backendStore == nil {
-		return published.SnapshotPublication{}, fmt.Errorf("localstorage: backend store is not configured")
+		return published.SnapshotPublication{}, errors.New("localstorage: backend store is not configured")
 	}
 	if !ok {
-		return published.SnapshotPublication{}, fmt.Errorf("localstorage: backend store does not support mutable metadata pointers")
+		return published.SnapshotPublication{}, errors.New("localstorage: backend store does not support mutable metadata pointers")
 	}
 	return a.publishMetadataSnapshot(ctx, store)
 }
@@ -250,7 +251,7 @@ func (a *Application) applyPublishedTransaction(ctx context.Context, manifestID 
 		)
 		return err
 	case metastore.TransactionStateTimedOut:
-		return fmt.Errorf("localstorage: published timed-out transaction import is not supported")
+		return errors.New("localstorage: published timed-out transaction import is not supported")
 	default:
 		return fmt.Errorf("localstorage: unsupported published transaction state %d", transaction.State)
 	}

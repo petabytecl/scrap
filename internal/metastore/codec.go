@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/safeconv"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var protoMarshal = proto.MarshalOptions{Deterministic: true}
@@ -230,14 +231,14 @@ func validateSchemaVersion(recordKind string, version uint32) error {
 	return nil
 }
 
-func validateUint32EnumUint16(recordKind string, field string, value uint32) error {
+func validateUint32EnumUint16(recordKind, field string, value uint32) error {
 	if _, err := safeconv.Uint32ToUint16(field, value); err != nil {
 		return invalidRecord(recordKind, "%s is out of range: %v", field, err)
 	}
 	return nil
 }
 
-func validateInt32EnumUint16(recordKind string, field string, value int32) error {
+func validateInt32EnumUint16(recordKind, field string, value int32) error {
 	if _, err := safeconv.Int32ToUint16(field, value); err != nil {
 		return invalidRecord(recordKind, "%s is out of range: %v", field, err)
 	}
@@ -391,7 +392,7 @@ func validateEnvelopeRef(ref *metastorev1.EnvelopeRef) error {
 	return nil
 }
 
-func validateTimestamp(recordKind string, field string, value *timestamppb.Timestamp) error {
+func validateTimestamp(recordKind, field string, value *timestamppb.Timestamp) error {
 	if value == nil {
 		return invalidRecord(recordKind, "%s is required", field)
 	}
@@ -404,7 +405,7 @@ func validateTimestamp(recordKind string, field string, value *timestamppb.Times
 	return nil
 }
 
-func invalidRecord(recordKind string, format string, args ...any) error {
+func invalidRecord(recordKind, format string, args ...any) error {
 	return fmt.Errorf("%w: %s %s", ErrInvalidRecord, recordKind, fmt.Sprintf(format, args...))
 }
 

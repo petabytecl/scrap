@@ -42,7 +42,7 @@ type Document struct {
 	DocumentName  string
 }
 
-func NewTransaction(tenantID string, transactionID string) (Transaction, []Problem) {
+func NewTransaction(tenantID, transactionID string) (Transaction, []Problem) {
 	var problems []Problem
 	if problem := validateOpaqueID("tenant_id", tenantID, MaxTenantIDBytes); problem != nil {
 		problems = append(problems, *problem)
@@ -56,7 +56,7 @@ func NewTransaction(tenantID string, transactionID string) (Transaction, []Probl
 	return Transaction{TenantID: tenantID, TransactionID: transactionID}, nil
 }
 
-func NewDocument(tenantID string, transactionID string, documentName string) (Document, []Problem) {
+func NewDocument(tenantID, transactionID, documentName string) (Document, []Problem) {
 	transaction, problems := NewTransaction(tenantID, transactionID)
 	normalizedName, problem := NormalizeDocumentName(documentName)
 	if problem != nil {
@@ -80,7 +80,7 @@ func NormalizeDocumentNamePrefix(documentNamePrefix string) (string, *Problem) {
 	return normalizeDocumentPath(documentNamePrefix, true)
 }
 
-func validateOpaqueID(label string, value string, maxBytes int) *Problem {
+func validateOpaqueID(label, value string, maxBytes int) *Problem {
 	switch {
 	case value == "":
 		return &Problem{Field: label, Reason: ReasonRequired, Description: label + " is required"}

@@ -18,7 +18,7 @@ type IntentLister interface {
 }
 
 type IntentStateUpdater interface {
-	UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError string, commandID string, proposedAt time.Time) error
+	UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError, commandID string, proposedAt time.Time) error
 }
 
 type Processor struct {

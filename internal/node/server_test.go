@@ -11,18 +11,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/petabytecl/scrap/internal/authz"
-	"github.com/petabytecl/scrap/internal/config"
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
-	"github.com/petabytecl/scrap/internal/localstorage"
-	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+
+	"github.com/petabytecl/scrap/internal/authz"
+	"github.com/petabytecl/scrap/internal/config"
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
+	"github.com/petabytecl/scrap/internal/localstorage"
+	"github.com/petabytecl/scrap/internal/operations"
 )
 
 func TestServerServesPublicAndAdminAPIs(t *testing.T) {
@@ -623,7 +624,7 @@ func dialTestServerWithWorkload(t *testing.T, listener *bufconn.Listener, worklo
 }
 
 func workloadUnaryClientInterceptor(workload string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req any, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		return invoker(workloadContextWithBase(ctx, workload), method, req, reply, cc, opts...)
 	}
 }

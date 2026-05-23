@@ -5,21 +5,22 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/authz"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const reasonInvalidStreamOrder = "SCRAP_INVALID_STREAM_ORDER"
@@ -299,10 +300,10 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 		"document_class":         init.DocumentClass.String(),
 		"priority_class":         init.PriorityClass.String(),
 		"created_by_service":     init.CreatedByService,
-		"idempotent_replay":      fmt.Sprintf("%t", result.IdempotentReplay),
-		"desired_replica_count":  fmt.Sprintf("%d", result.DesiredReplicaCount),
-		"achieved_replica_count": fmt.Sprintf("%d", result.AchievedReplicaCount),
-		"length":                 fmt.Sprintf("%d", result.Metadata.Length),
+		"idempotent_replay":      strconv.FormatBool(result.IdempotentReplay),
+		"desired_replica_count":  strconv.FormatUint(uint64(result.DesiredReplicaCount), 10),
+		"achieved_replica_count": strconv.FormatUint(uint64(result.AchievedReplicaCount), 10),
+		"length":                 strconv.FormatUint(result.Metadata.Length, 10),
 	}
 	if traceID != "" {
 		metadata["trace_id"] = traceID
@@ -311,7 +312,7 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 		metadata["workflow_stage"] = init.WorkflowStage
 	}
 	return s.operations.AppendAuditEvent(&adminv1.AuditEvent{
-		EventId:       publicAuditEventID(eventType, operationID, requestID, correlationID, fmt.Sprintf("%d", occurredAt.UnixNano())),
+		EventId:       publicAuditEventID(eventType, operationID, requestID, correlationID, strconv.FormatInt(occurredAt.UnixNano(), 10)),
 		EventType:     eventType,
 		OperationId:   operationID,
 		OperationType: "document-write",
@@ -484,7 +485,7 @@ func optionalProtoTime(value *time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(*value)
 }
 
-func invalidArgument(field string, reason string, description string) error {
+func invalidArgument(field, reason, description string) error {
 	var problems violations
 	problems.add(field, reason, description)
 	return problems.err()

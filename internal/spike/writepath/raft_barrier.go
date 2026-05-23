@@ -330,18 +330,18 @@ func (b *RaftCommitBarrier) fail(err error) {
 
 type raftNopLogger struct{}
 
-func (raftNopLogger) Debug(...interface{})              {}
-func (raftNopLogger) Debugf(string, ...interface{})     {}
-func (raftNopLogger) Error(...interface{})              {}
-func (raftNopLogger) Errorf(string, ...interface{})     {}
-func (raftNopLogger) Info(...interface{})               {}
-func (raftNopLogger) Infof(string, ...interface{})      {}
-func (raftNopLogger) Warning(...interface{})            {}
-func (raftNopLogger) Warningf(string, ...interface{})   {}
-func (raftNopLogger) Fatal(v ...interface{})            { panic(fmt.Sprint(v...)) }
-func (raftNopLogger) Fatalf(f string, v ...interface{}) { panic(fmt.Sprintf(f, v...)) }
-func (raftNopLogger) Panic(v ...interface{})            { panic(fmt.Sprint(v...)) }
-func (raftNopLogger) Panicf(f string, v ...interface{}) { panic(fmt.Sprintf(f, v...)) }
+func (raftNopLogger) Debug(...any)              {}
+func (raftNopLogger) Debugf(string, ...any)     {}
+func (raftNopLogger) Error(...any)              {}
+func (raftNopLogger) Errorf(string, ...any)     {}
+func (raftNopLogger) Info(...any)               {}
+func (raftNopLogger) Infof(string, ...any)      {}
+func (raftNopLogger) Warning(...any)            {}
+func (raftNopLogger) Warningf(string, ...any)   {}
+func (raftNopLogger) Fatal(v ...any)            { panic(fmt.Sprint(v...)) }
+func (raftNopLogger) Fatalf(f string, v ...any) { panic(fmt.Sprintf(f, v...)) }
+func (raftNopLogger) Panic(v ...any)            { panic(fmt.Sprint(v...)) }
+func (raftNopLogger) Panicf(f string, v ...any) { panic(fmt.Sprintf(f, v...)) }
 
 func committedDocumentRecordKey(record DocumentRecord) string {
 	return committedDocumentKey(record.TenantID, record.TransactionID, record.DocumentName)

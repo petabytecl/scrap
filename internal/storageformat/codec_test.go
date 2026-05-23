@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 )
 
 func TestStorageFormatSchemaShape(t *testing.T) {

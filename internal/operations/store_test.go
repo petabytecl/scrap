@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
 
 func TestStorePutGetAndReopen(t *testing.T) {
@@ -446,7 +447,7 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
-func sampleAuditEvent(eventID string, eventType string, operationID string) *adminv1.AuditEvent {
+func sampleAuditEvent(eventID, eventType, operationID string) *adminv1.AuditEvent {
 	return &adminv1.AuditEvent{
 		EventId:       eventID,
 		EventType:     eventType,
@@ -459,7 +460,7 @@ func sampleAuditEvent(eventID string, eventType string, operationID string) *adm
 	}
 }
 
-func sampleOperation(operationID string, operationType string, state adminv1.OperationState) *adminv1.Operation {
+func sampleOperation(operationID, operationType string, state adminv1.OperationState) *adminv1.Operation {
 	return &adminv1.Operation{
 		OperationId:         operationID,
 		OperationType:       operationType,
@@ -472,7 +473,7 @@ func sampleOperation(operationID string, operationType string, state adminv1.Ope
 	}
 }
 
-func samplePlan(operationPlanID string, planHash string) *adminv1.OperationPlan {
+func samplePlan(operationPlanID, planHash string) *adminv1.OperationPlan {
 	return &adminv1.OperationPlan{
 		OperationPlanId: operationPlanID,
 		PlanHash:        planHash,

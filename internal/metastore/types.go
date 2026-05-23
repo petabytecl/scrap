@@ -7,13 +7,15 @@ import (
 	"github.com/petabytecl/scrap/internal/identity"
 )
 
-type DocumentClass uint16
-type PriorityClass uint16
-type Availability uint16
-type LifecycleState uint16
-type TransactionStateKind uint16
-type RestoreState uint16
-type UploadState uint16
+type (
+	DocumentClass        uint16
+	PriorityClass        uint16
+	Availability         uint16
+	LifecycleState       uint16
+	TransactionStateKind uint16
+	RestoreState         uint16
+	UploadState          uint16
+)
 
 const (
 	DocumentClassPermanent DocumentClass = 1

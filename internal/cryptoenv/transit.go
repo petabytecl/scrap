@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/backend"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -201,7 +202,7 @@ func RewrapEnvelopeRecord(ctx context.Context, transit Transit, record *storagev
 	return rewrapped, nil
 }
 
-func EnvelopeAAD(cellID string, blockID string, blockObject backend.Object) []byte {
+func EnvelopeAAD(cellID, blockID string, blockObject backend.Object) []byte {
 	return []byte(fmt.Sprintf("%s\x00%s\x00%s\x00%x", cellID, blockID, blockObject.Key, blockObject.SHA256))
 }
 

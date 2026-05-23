@@ -534,7 +534,7 @@ func (s *Store) VerifyRange(record Record, offset uint64, length *uint64) error 
 	return s.verifyReadableRange(record, offset, readLength)
 }
 
-func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64) error {
+func (s *Store) verifyReadableRange(record Record, offset, length uint64) error {
 	if offset+length < offset || offset+length > record.StoredLength {
 		return ErrInvalidRange
 	}
@@ -663,7 +663,7 @@ func verifyWholeRecord(file *os.File, record Record) error {
 	return nil
 }
 
-func verifyFrameRange(file *os.File, record Record, offset uint64, length uint64) error {
+func verifyFrameRange(file *os.File, record Record, offset, length uint64) error {
 	rangeStart, err := addUint64("frame range start", record.StoredOffset, offset)
 	if err != nil {
 		return ErrInvalidRange
@@ -803,7 +803,7 @@ func writeSealMarker(path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write([]byte("sealed\n")); err != nil {
+	if _, err := file.WriteString("sealed\n"); err != nil {
 		return errors.Join(err, file.Close())
 	}
 	return errors.Join(file.Sync(), file.Close())
@@ -881,7 +881,7 @@ func (a *frameAccumulator) Write(offset uint64, data []byte) error {
 	return nil
 }
 
-func (a *frameAccumulator) current(frameOffset uint64, segmentOffset uint64) *pendingFrame {
+func (a *frameAccumulator) current(frameOffset, segmentOffset uint64) *pendingFrame {
 	if len(a.frames) > 0 && a.frames[len(a.frames)-1].frameOffset == frameOffset {
 		return &a.frames[len(a.frames)-1]
 	}
@@ -907,7 +907,7 @@ func (a *frameAccumulator) Records() []FrameRecord {
 	return records
 }
 
-func frameStart(offset uint64, frameSize uint64) uint64 {
+func frameStart(offset, frameSize uint64) uint64 {
 	return HeaderLength + ((offset - HeaderLength) / frameSize * frameSize)
 }
 
@@ -942,7 +942,7 @@ func (s *Store) removeBlockStorePath(path string) error {
 	return os.Remove(path)
 }
 
-func addUint64(name string, left uint64, right uint64) (uint64, error) {
+func addUint64(name string, left, right uint64) (uint64, error) {
 	value := left + right
 	if value < left {
 		return 0, fmt.Errorf("blockstore: %s overflows uint64", name)

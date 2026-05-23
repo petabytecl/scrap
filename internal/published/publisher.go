@@ -3,6 +3,7 @@ package published
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -166,31 +167,31 @@ func PublishSnapshot(ctx context.Context, options SnapshotPublishOptions) (Snaps
 
 func validatePublishOptions(options SnapshotPublishOptions) error {
 	if options.Backend == nil {
-		return fmt.Errorf("published metadata: backend store is required")
+		return errors.New("published metadata: backend store is required")
 	}
 	if options.Metadata == nil {
-		return fmt.Errorf("published metadata: metadata source is required")
+		return errors.New("published metadata: metadata source is required")
 	}
 	if options.CellID == "" {
-		return fmt.Errorf("published metadata: cell id is required")
+		return errors.New("published metadata: cell id is required")
 	}
 	if options.SourceNamespace == "" {
-		return fmt.Errorf("published metadata: source namespace is required")
+		return errors.New("published metadata: source namespace is required")
 	}
 	if options.ShardID == "" {
-		return fmt.Errorf("published metadata: shard id is required")
+		return errors.New("published metadata: shard id is required")
 	}
 	if options.SnapshotID == "" {
-		return fmt.Errorf("published metadata: snapshot id is required")
+		return errors.New("published metadata: snapshot id is required")
 	}
 	if options.ManifestID == "" {
-		return fmt.Errorf("published metadata: manifest id is required")
+		return errors.New("published metadata: manifest id is required")
 	}
 	if options.Generation == 0 {
-		return fmt.Errorf("published metadata: generation is required")
+		return errors.New("published metadata: generation is required")
 	}
 	if options.PublishedAt.IsZero() {
-		return fmt.Errorf("published metadata: published_at is required")
+		return errors.New("published metadata: published_at is required")
 	}
 	return nil
 }
@@ -250,7 +251,7 @@ func publishedObjectRefs(ctx context.Context, store backend.Store, documents []m
 			refs = append(refs, envelopeRef)
 		}
 	}
-	sort.Slice(refs, func(i int, j int) bool {
+	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].GetObjectKey() != refs[j].GetObjectKey() {
 			return refs[i].GetObjectKey() < refs[j].GetObjectKey()
 		}

@@ -67,7 +67,7 @@ func (s *Store) CapacityProfile() backend.CapacityProfile {
 
 func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
 	if key == "" {
-		return backend.Object{}, fmt.Errorf("backend fs: object key is required")
+		return backend.Object{}, errors.New("backend fs: object key is required")
 	}
 	if existing, err := s.HeadObject(ctx, key); err == nil {
 		incoming, err := readAndHash(ctx, reader, io.Discard)
@@ -89,7 +89,7 @@ func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader) (ba
 
 func (s *Store) PutMutableObject(ctx context.Context, key string, reader io.Reader) (backend.Object, error) {
 	if key == "" {
-		return backend.Object{}, fmt.Errorf("backend fs: object key is required")
+		return backend.Object{}, errors.New("backend fs: object key is required")
 	}
 	return s.writeObject(ctx, key, reader)
 }
@@ -294,12 +294,12 @@ func (s *Store) writeTempMetadata(meta metadata) (string, error) {
 	return path, nil
 }
 
-func (s *Store) objectPath(key string, suffix string) string {
+func (s *Store) objectPath(key, suffix string) string {
 	sum := sha256.Sum256([]byte(key))
 	return filepath.Join(s.objectsDir, hex.EncodeToString(sum[:])+suffix)
 }
 
-func (s *Store) validatedObjectPath(key string, suffix string) (string, error) {
+func (s *Store) validatedObjectPath(key, suffix string) (string, error) {
 	return s.validatedObjectStorePath(s.objectPath(key, suffix))
 }
 
@@ -307,7 +307,7 @@ func (s *Store) validatedObjectStorePath(path string) (string, error) {
 	return safepath.UnderDir(s.objectsDir, path)
 }
 
-func (s *Store) openObjectFile(key string, suffix string) (*os.File, error) {
+func (s *Store) openObjectFile(key, suffix string) (*os.File, error) {
 	path, err := s.validatedObjectPath(key, suffix)
 	if err != nil {
 		return nil, err

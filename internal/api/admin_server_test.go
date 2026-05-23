@@ -8,9 +8,6 @@ import (
 	"testing"
 	"time"
 
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
-	"github.com/petabytecl/scrap/internal/identity"
-	"github.com/petabytecl/scrap/internal/operations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -18,6 +15,10 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
 )
 
 func TestAdminServerPlanRestoreRejectsInvalidTargetOverGRPC(t *testing.T) {
@@ -1393,7 +1394,7 @@ func openTestOperationStore(t *testing.T) *operations.Store {
 	return store
 }
 
-func testOperation(operationID string, operationType string, state adminv1.OperationState) *adminv1.Operation {
+func testOperation(operationID, operationType string, state adminv1.OperationState) *adminv1.Operation {
 	return &adminv1.Operation{
 		OperationId:         operationID,
 		OperationType:       operationType,

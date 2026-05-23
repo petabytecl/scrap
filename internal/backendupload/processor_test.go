@@ -368,7 +368,7 @@ type metastoreIntentStateUpdater struct {
 	Store *metastore.Store
 }
 
-func (u metastoreIntentStateUpdater) UpdateUploadIntentState(_ context.Context, blockID string, state metastore.UploadState, lastError string, _ string, proposedAt time.Time) error {
+func (u metastoreIntentStateUpdater) UpdateUploadIntentState(_ context.Context, blockID string, state metastore.UploadState, lastError, _ string, proposedAt time.Time) error {
 	_, err := u.Store.UpdateUploadIntentState(blockID, state, lastError, proposedAt)
 	return err
 }
@@ -395,7 +395,7 @@ type recordingIntentStateUpdater struct {
 	err   error
 }
 
-func (u *recordingIntentStateUpdater) UpdateUploadIntentState(_ context.Context, blockID string, state metastore.UploadState, lastError string, commandID string, proposedAt time.Time) error {
+func (u *recordingIntentStateUpdater) UpdateUploadIntentState(_ context.Context, blockID string, state metastore.UploadState, lastError, commandID string, proposedAt time.Time) error {
 	if u.err != nil {
 		return u.err
 	}

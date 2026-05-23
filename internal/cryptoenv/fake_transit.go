@@ -140,7 +140,7 @@ func (f *FakeTransit) keyVersion(keyID string) (uint32, error) {
 	return version, nil
 }
 
-func fakeWrapped(keyID string, version uint32, aad []byte, algorithm []byte, plain []byte) []byte {
+func fakeWrapped(keyID string, version uint32, aad, algorithm, plain []byte) []byte {
 	first := fakeDigest("wrapped-a", keyID, version, aad, algorithm, plain)
 	second := fakeDigest("wrapped-b", keyID, version, aad, algorithm, plain)
 	out := make([]byte, 0, len(first)+len(second))
@@ -149,7 +149,7 @@ func fakeWrapped(keyID string, version uint32, aad []byte, algorithm []byte, pla
 	return out
 }
 
-func fakeDigest(label string, keyID string, version uint32, parts ...[]byte) []byte {
+func fakeDigest(label, keyID string, version uint32, parts ...[]byte) []byte {
 	hasher := sha256.New()
 	_, _ = hasher.Write([]byte(label))
 	_, _ = hasher.Write([]byte{0})

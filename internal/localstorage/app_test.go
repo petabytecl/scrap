@@ -12,6 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/backend"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
@@ -27,9 +31,6 @@ import (
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
@@ -3486,7 +3487,7 @@ func queuedTombstoneOperation(operationID string, targets []*adminv1.Target) *ad
 	return queuedOperation(operationID, "tombstone", targets)
 }
 
-func queuedOperation(operationID string, operationType string, targets []*adminv1.Target) *adminv1.Operation {
+func queuedOperation(operationID, operationType string, targets []*adminv1.Target) *adminv1.Operation {
 	return &adminv1.Operation{
 		OperationId:         operationID,
 		OperationType:       operationType,

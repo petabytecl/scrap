@@ -53,7 +53,7 @@ func UUIDBytes(value string) ([16]byte, error) {
 	var out [16]byte
 	var compact [32]byte
 	var n int
-	for i := 0; i < len(value); i++ {
+	for i := range len(value) {
 		if value[i] == '-' {
 			continue
 		}

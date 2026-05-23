@@ -7,8 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/authz"
@@ -16,9 +21,6 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/operations"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Applications struct {
@@ -68,7 +70,7 @@ func Listen(cfg config.Config, apps Applications) (*Server, error) {
 	return newServer(publicListener, adminListener, apps, authorization, cfg.AuthorizationPolicyPath), nil
 }
 
-func newServer(publicListener net.Listener, adminListener net.Listener, apps Applications, authorization *authz.Manager, policyPath string) *Server {
+func newServer(publicListener, adminListener net.Listener, apps Applications, authorization *authz.Manager, policyPath string) *Server {
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
 	publicGRPC := grpc.NewServer(
 		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
@@ -148,7 +150,7 @@ func (s *Server) Stop() {
 
 func (s *Server) ReloadAuthorizationPolicy() error {
 	if s.authorization == nil {
-		return fmt.Errorf("authorization policy is not configured")
+		return errors.New("authorization policy is not configured")
 	}
 	err := s.authorization.ReloadFile(s.policyPath)
 	auditErr := s.auditAuthorizationPolicyReload(err)
@@ -193,12 +195,12 @@ func (s authorizationAuditSink) RecordDeniedRequest(ctx context.Context, method 
 	metadata["reason_description"] = decision.ReasonDescription
 	metadata["workload_identity"] = decision.WorkloadIdentity
 	metadata["policy_version"] = decision.PolicyVersion
-	metadata["policy_generation"] = fmt.Sprintf("%d", decision.PolicyGeneration)
+	metadata["policy_generation"] = strconv.FormatUint(decision.PolicyGeneration, 10)
 	if traceID != "" {
 		metadata["trace_id"] = traceID
 	}
 	return s.store.AppendAuditEvent(&adminv1.AuditEvent{
-		EventId:       auditEventID("authorization_denied", method, actor, decision.Reason, requestID, correlationID, fmt.Sprintf("%d", now.UnixNano())),
+		EventId:       auditEventID("authorization_denied", method, actor, decision.Reason, requestID, correlationID, strconv.FormatInt(now.UnixNano(), 10)),
 		EventType:     "authorization_denied",
 		OperationId:   operationID,
 		OperationType: method,
@@ -225,13 +227,13 @@ func (s *Server) auditAuthorizationPolicyReload(reloadErr error) error {
 		"decision":          result,
 		"policy_path":       s.policyPath,
 		"policy_version":    s.authorization.PolicyVersion(),
-		"policy_generation": fmt.Sprintf("%d", s.authorization.Generation()),
+		"policy_generation": strconv.FormatUint(s.authorization.Generation(), 10),
 	}
 	if reason != "" {
 		metadata["reason"] = reason
 	}
 	return s.auditEvents.AppendAuditEvent(&adminv1.AuditEvent{
-		EventId:       auditEventID(eventType, s.policyPath, fmt.Sprintf("%d", now.UnixNano())),
+		EventId:       auditEventID(eventType, s.policyPath, strconv.FormatInt(now.UnixNano(), 10)),
 		EventType:     eventType,
 		OperationId:   "authorization-policy",
 		OperationType: "authorization-policy-reload",

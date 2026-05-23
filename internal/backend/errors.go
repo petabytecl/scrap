@@ -60,7 +60,7 @@ func (e *Error) Is(target error) bool {
 	return classSentinel(e.Class) == target
 }
 
-func NewError(class ErrorClass, operation string, key string, err error) error {
+func NewError(class ErrorClass, operation, key string, err error) error {
 	if err == nil {
 		err = classSentinel(class)
 	}

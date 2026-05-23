@@ -2,6 +2,7 @@ package backendupload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +26,7 @@ func (s LocalBlockSource) OpenBlock(ctx context.Context, blockID string) (io.Rea
 		return nil, err
 	}
 	if s.Blocks == nil {
-		return nil, fmt.Errorf("backendupload: block source is not configured")
+		return nil, errors.New("backendupload: block source is not configured")
 	}
 	sealed, err := s.Blocks.IsSealed(blockID)
 	if err != nil {
@@ -56,19 +57,19 @@ type UploadResult struct {
 
 func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent) (UploadResult, error) {
 	if u.Backend == nil {
-		return UploadResult{}, fmt.Errorf("backendupload: backend store is not configured")
+		return UploadResult{}, errors.New("backendupload: backend store is not configured")
 	}
 	if u.Source == nil {
-		return UploadResult{}, fmt.Errorf("backendupload: block source is not configured")
+		return UploadResult{}, errors.New("backendupload: block source is not configured")
 	}
 	if intent.BlockID == "" {
-		return UploadResult{}, fmt.Errorf("backendupload: upload intent block id is required")
+		return UploadResult{}, errors.New("backendupload: upload intent block id is required")
 	}
 	if intent.BackendObjectKey == "" {
-		return UploadResult{}, fmt.Errorf("backendupload: upload intent backend object key is required")
+		return UploadResult{}, errors.New("backendupload: upload intent backend object key is required")
 	}
 	if intent.EnvelopeObjectKey != "" && u.Envelope == nil {
-		return UploadResult{}, fmt.Errorf("backendupload: block envelope source is not configured")
+		return UploadResult{}, errors.New("backendupload: block envelope source is not configured")
 	}
 	reader, err := u.Source.OpenBlock(ctx, intent.BlockID)
 	if err != nil {
@@ -96,7 +97,7 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		return result, u.verifyUpload(ctx, intent, result)
 	}
 	if u.Index == nil {
-		return result, fmt.Errorf("backendupload: block index source is not configured")
+		return result, errors.New("backendupload: block index source is not configured")
 	}
 	indexReader, err := u.Index.OpenBlockIndex(ctx, intent, blockObject)
 	if err != nil {
@@ -117,7 +118,7 @@ func (u Uploader) verifyUpload(ctx context.Context, intent metastore.UploadInten
 	}
 	if intent.IndexObjectKey != "" {
 		if result.Index == nil {
-			return fmt.Errorf("backendupload: uploaded block index object is missing")
+			return errors.New("backendupload: uploaded block index object is missing")
 		}
 		if err := u.verifyObject(ctx, intent.IndexObjectKey, *result.Index); err != nil {
 			return err
@@ -125,7 +126,7 @@ func (u Uploader) verifyUpload(ctx context.Context, intent metastore.UploadInten
 	}
 	if intent.EnvelopeObjectKey != "" {
 		if result.Envelope == nil {
-			return fmt.Errorf("backendupload: uploaded block envelope object is missing")
+			return errors.New("backendupload: uploaded block envelope object is missing")
 		}
 		if err := u.verifyObject(ctx, intent.EnvelopeObjectKey, *result.Envelope); err != nil {
 			return err
@@ -136,7 +137,7 @@ func (u Uploader) verifyUpload(ctx context.Context, intent metastore.UploadInten
 
 func (u Uploader) verifyObject(ctx context.Context, key string, expected backend.Object) error {
 	if key == "" {
-		return fmt.Errorf("backendupload: backend object key is required for verification")
+		return errors.New("backendupload: backend object key is required for verification")
 	}
 	if expected.Key != key {
 		return fmt.Errorf("backendupload: verify object %q: upload result key %q does not match expected key: %w", key, expected.Key, backend.ErrChecksumMismatch)

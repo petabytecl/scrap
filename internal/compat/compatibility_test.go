@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
@@ -17,9 +21,6 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/storageformat"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fixture struct {

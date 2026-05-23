@@ -1,18 +1,19 @@
 package safepath
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-func UnderDir(root string, path string) (string, error) {
+func UnderDir(root, path string) (string, error) {
 	if root == "" {
-		return "", fmt.Errorf("storage root is required")
+		return "", errors.New("storage root is required")
 	}
 	if path == "" {
-		return "", fmt.Errorf("storage path is required")
+		return "", errors.New("storage path is required")
 	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {

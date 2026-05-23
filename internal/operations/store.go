@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/petabytecl/scrap/internal/closeutil"
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/petabytecl/scrap/internal/closeutil"
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
 
 var (

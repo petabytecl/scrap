@@ -58,7 +58,7 @@ func (e usageError) Error() string {
 	return string(e)
 }
 
-func Main(args []string, stdout io.Writer, stderr io.Writer) int {
+func Main(args []string, stdout, stderr io.Writer) int {
 	if err := Run(context.Background(), Config{}, args, stdout); err != nil {
 		writeFailure(stderr, err)
 		var usage usageError
@@ -953,7 +953,7 @@ type targetFlag []*adminv1.Target
 func (f *targetFlag) Set(value string) error {
 	kind, spec, ok := strings.Cut(value, ":")
 	if !ok || strings.TrimSpace(kind) == "" || spec == "" {
-		return fmt.Errorf("target must be kind:value")
+		return errors.New("target must be kind:value")
 	}
 	target, err := parseTarget(strings.TrimSpace(kind), spec)
 	if err != nil {
@@ -970,12 +970,12 @@ func (f targetFlag) String() string {
 	return fmt.Sprintf("%d target(s)", len(f))
 }
 
-func parseTarget(kind string, spec string) (*adminv1.Target, error) {
+func parseTarget(kind, spec string) (*adminv1.Target, error) {
 	switch strings.ReplaceAll(strings.ToLower(kind), "-", "_") {
 	case "document", "doc":
 		parts := strings.SplitN(spec, "/", 3)
 		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-			return nil, fmt.Errorf("document target must be document:tenant_id/transaction_id/document_name")
+			return nil, errors.New("document target must be document:tenant_id/transaction_id/document_name")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_Document{Document: &adminv1.DocumentTarget{
 			TenantId:      parts[0],
@@ -985,7 +985,7 @@ func parseTarget(kind string, spec string) (*adminv1.Target, error) {
 	case "transaction", "txn":
 		parts := strings.SplitN(spec, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, fmt.Errorf("transaction target must be transaction:tenant_id/transaction_id")
+			return nil, errors.New("transaction target must be transaction:tenant_id/transaction_id")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_Transaction{Transaction: &adminv1.TransactionTarget{
 			TenantId:      parts[0],
@@ -994,7 +994,7 @@ func parseTarget(kind string, spec string) (*adminv1.Target, error) {
 	case "block":
 		parts := strings.SplitN(spec, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, fmt.Errorf("block target must be block:shard_id/block_id")
+			return nil, errors.New("block target must be block:shard_id/block_id")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_Block{Block: &adminv1.BlockTarget{
 			ShardId: parts[0],
@@ -1002,22 +1002,22 @@ func parseTarget(kind string, spec string) (*adminv1.Target, error) {
 		}}}, nil
 	case "shard":
 		if spec == "" {
-			return nil, fmt.Errorf("shard target must be shard:shard_id")
+			return nil, errors.New("shard target must be shard:shard_id")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_Shard{Shard: &adminv1.ShardTarget{ShardId: spec}}}, nil
 	case "storage_member", "member":
 		if spec == "" {
-			return nil, fmt.Errorf("member target must be member:storage_member_id")
+			return nil, errors.New("member target must be member:storage_member_id")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: spec}}}, nil
 	case "snapshot":
 		if spec == "" {
-			return nil, fmt.Errorf("snapshot target must be snapshot:snapshot_id")
+			return nil, errors.New("snapshot target must be snapshot:snapshot_id")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: &adminv1.SnapshotTarget{SnapshotId: spec}}}, nil
 	case "capacity_profile", "capacity-profile":
 		if spec == "" {
-			return nil, fmt.Errorf("capacity profile target must be capacity-profile:capacity_profile_id")
+			return nil, errors.New("capacity profile target must be capacity-profile:capacity_profile_id")
 		}
 		return &adminv1.Target{Target: &adminv1.Target_CapacityProfile{CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: spec}}}, nil
 	default:
@@ -1030,7 +1030,7 @@ type metadataFlag map[string]string
 func (f *metadataFlag) Set(value string) error {
 	key, val, ok := strings.Cut(value, "=")
 	if !ok || key == "" {
-		return fmt.Errorf("metadata must be key=value")
+		return errors.New("metadata must be key=value")
 	}
 	if *f == nil {
 		*f = make(map[string]string)
@@ -1087,7 +1087,7 @@ func (f stateFlag) String() string {
 func parseState(value string) (adminv1.OperationState, error) {
 	normalized := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(value), "-", "_"))
 	if normalized == "" {
-		return adminv1.OperationState_OPERATION_STATE_UNSPECIFIED, fmt.Errorf("state is required")
+		return adminv1.OperationState_OPERATION_STATE_UNSPECIFIED, errors.New("state is required")
 	}
 	if !strings.HasPrefix(normalized, "OPERATION_STATE_") {
 		normalized = "OPERATION_STATE_" + normalized

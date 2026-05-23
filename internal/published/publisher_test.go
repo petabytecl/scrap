@@ -147,7 +147,7 @@ func TestPublishSnapshotRejectsUnuploadedBlock(t *testing.T) {
 	}
 }
 
-func publishTestSnapshot(t *testing.T, ctx context.Context, store backend.MutableStore, metadata SnapshotMetadataSource, snapshotID string, manifestID string, generation uint64, highWatermark uint64, publishedAt time.Time) SnapshotPublication {
+func publishTestSnapshot(t *testing.T, ctx context.Context, store backend.MutableStore, metadata SnapshotMetadataSource, snapshotID, manifestID string, generation, highWatermark uint64, publishedAt time.Time) SnapshotPublication {
 	t.Helper()
 	publication, err := PublishSnapshot(ctx, SnapshotPublishOptions{
 		Backend:         store,
