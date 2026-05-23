@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"google.golang.org/protobuf/proto"
@@ -29,7 +30,7 @@ func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
 		return err
 	}
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	defer closeutil.Ignore(batch)
 	switch typed := command.GetCommand().(type) {
 	case *metastorev1.ShardCommand_CommitDocument:
 		err = s.applyCommitDocument(batch, typed.CommitDocument)

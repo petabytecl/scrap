@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
@@ -193,7 +194,7 @@ func readEntries(path string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 
 	var entries []Entry
 	expectedIndex := uint64(0)

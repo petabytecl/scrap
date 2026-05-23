@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
 
@@ -97,7 +98,7 @@ func Run(ctx context.Context, cfg Config, args []string, stdout io.Writer) error
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer closeutil.Ignore(conn)
 
 	return call(ctx, newClients(conn), stdout)
 }

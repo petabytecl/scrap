@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/safepath"
 )
@@ -195,7 +196,7 @@ func (s *Store) ReadObjectRange(ctx context.Context, key string, selected backen
 		}
 		return err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 	readOffset, err := safeconv.Uint64ToInt64("read range offset", selected.Offset)
 	if err != nil {
 		return backend.ErrInvalidRange
@@ -217,7 +218,7 @@ func (s *Store) verifyObject(ctx context.Context, object backend.Object) error {
 		}
 		return err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 	read, err := readAndHash(ctx, file, io.Discard)
 	if err != nil {
 		return err

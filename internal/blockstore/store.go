@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/safepath"
@@ -294,7 +295,7 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer closeutil.Ignore(source)
 	blockPath, err := s.validatedBlockPath(record.BlockID)
 	if err != nil {
 		return err
@@ -487,7 +488,7 @@ func (s *Store) ReadRange(ctx context.Context, record Record, offset uint64, len
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 
 	buf := make([]byte, defaultReadBuffer)
 	readOffset, err := addUint64("read range offset", record.StoredOffset, offset)
@@ -545,7 +546,7 @@ func (s *Store) verifyReadableRange(record Record, offset uint64, length uint64)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 
 	info, err := file.Stat()
 	if err != nil {
@@ -577,7 +578,7 @@ func (s *Store) verifyWholeFile(ctx context.Context, path string, expectedLength
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 	written, sum, err := copyAndHash(ctx, io.Discard, file)
 	if err != nil {
 		return err
@@ -727,7 +728,7 @@ func verifyTempRange(path string, record Record) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeutil.Ignore(file)
 	for _, frame := range record.Frames {
 		if frame.SegmentOffset < record.StoredOffset {
 			return ErrInvalidRange
