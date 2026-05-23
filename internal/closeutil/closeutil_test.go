@@ -11,6 +11,12 @@ func (f closerFunc) Close() error {
 	return f()
 }
 
+type typedNilCloser struct{}
+
+func (*typedNilCloser) Close() error {
+	panic("typed-nil closer should not be called")
+}
+
 func TestIgnoreClosesAndSuppressesError(t *testing.T) {
 	closed := false
 	Ignore(closerFunc(func() error {
@@ -20,6 +26,11 @@ func TestIgnoreClosesAndSuppressesError(t *testing.T) {
 	if !closed {
 		t.Fatal("expected closer to be called")
 	}
+}
+
+func TestIgnoreSkipsTypedNilCloser(t *testing.T) {
+	var closer *typedNilCloser
+	Ignore(closer)
 }
 
 func TestLogReportsCloseError(t *testing.T) {
@@ -41,5 +52,21 @@ func TestLogReportsCloseError(t *testing.T) {
 	gotErr, ok := gotArgs[1].(error)
 	if !ok || !errors.Is(gotErr, closeErr) {
 		t.Fatalf("log args = %#v, want resource and close error", gotArgs)
+	}
+}
+
+func TestLogSkipsTypedNilCloser(t *testing.T) {
+	var closer *typedNilCloser
+	Log("resource", t.Fatalf, closer)
+}
+
+func TestLogSuppressesReportWhenLoggerIsNil(t *testing.T) {
+	closed := false
+	Log("resource", nil, closerFunc(func() error {
+		closed = true
+		return errors.New("close failed")
+	}))
+	if !closed {
+		t.Fatal("expected closer to be called")
 	}
 }
