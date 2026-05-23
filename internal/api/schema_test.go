@@ -94,6 +94,14 @@ func TestAdminServiceCatalogShape(t *testing.T) {
 			"PlanTombstone",
 			"StartTombstone",
 		},
+		"KeyService": {
+			"PlanKeyRotation",
+			"StartKeyRotation",
+		},
+		"CapacityService": {
+			"PlanCapacityOverride",
+			"StartCapacityOverride",
+		},
 		"DisasterRecoveryService": {
 			"GetRecoveryReadiness",
 			"PlanRecovery",
@@ -138,6 +146,8 @@ func TestAdminMutatingRequestsCarryOperationID(t *testing.T) {
 		"UncordonMemberRequest",
 		"StartDrainRequest",
 		"StartTombstoneRequest",
+		"StartKeyRotationRequest",
+		"StartCapacityOverrideRequest",
 		"StartMetadataRestoreRequest",
 		"StartCopyVerifyRequest",
 		"StartDRDrillRequest",

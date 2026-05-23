@@ -3235,6 +3235,46 @@ func TestRunQueuedOperationsOnceDryRunDrainDoesNotMutateMember(t *testing.T) {
 	}
 }
 
+func TestRunQueuedOperationsOnceCapacityOverrideRecordsBoundedEvidence(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	operation := queuedOperation("capacity-override-op-1", "capacity-override", []*adminv1.Target{
+		{
+			Target: &adminv1.Target_CapacityProfile{
+				CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: "production-a"},
+			},
+		},
+	})
+	operation.DryRun = true
+	operation.Metadata = map[string]string{
+		"scrap.capacity_profile_id":          "production-a",
+		"scrap.capacity_override_expires_at": "2026-05-23T13:00:00Z",
+		"scrap.capacity_override_reason":     "incident INC-42",
+	}
+	if err := store.Put(operation); err != nil {
+		t.Fatalf("put operation: %v", err)
+	}
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	if err != nil {
+		t.Fatalf("run queued operations: %v", err)
+	}
+	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
+		t.Fatalf("operation result = %#v, want one successful capacity override dry-run", result)
+	}
+	finished, err := store.Get(operation.GetOperationId())
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
+		finished.GetProgress().GetCounters()["capacity_profile_id"] != "production-a" ||
+		finished.GetProgress().GetCounters()["reason"] != "incident INC-42" ||
+		!hasWarningCode(finished.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY") {
+		t.Fatalf("finished operation = %#v, want recorded bounded capacity override evidence", finished)
+	}
+}
+
 func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)

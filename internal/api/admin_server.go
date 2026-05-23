@@ -50,14 +50,18 @@ type DisasterRecoveryApplication interface {
 }
 
 const (
-	adminOperationPlanTTL        = 15 * time.Minute
-	adminAuditActorIdentity      = "pre-production-admin-api"
-	adminOperationTypeMetadata   = "scrap.operation_type"
-	adminOperationPlanIDMetadata = "scrap.operation_plan_id"
-	adminPlanHashMetadata        = "scrap.plan_hash"
-	adminDryRunMetadata          = "scrap.dry_run"
-	adminOperationLaneMetadata   = "scrap.operation_lane"
-	adminBackendLaneMetadata     = "scrap.backend_lane"
+	adminOperationPlanTTL                  = 15 * time.Minute
+	adminAuditActorIdentity                = "pre-production-admin-api"
+	adminOperationTypeMetadata             = "scrap.operation_type"
+	adminOperationPlanIDMetadata           = "scrap.operation_plan_id"
+	adminPlanHashMetadata                  = "scrap.plan_hash"
+	adminDryRunMetadata                    = "scrap.dry_run"
+	adminOperationLaneMetadata             = "scrap.operation_lane"
+	adminBackendLaneMetadata               = "scrap.backend_lane"
+	adminDestinationKeyIDMetadata          = "scrap.destination_key_id"
+	adminCapacityProfileIDMetadata         = "scrap.capacity_profile_id"
+	adminCapacityOverrideExpiresAtMetadata = "scrap.capacity_override_expires_at"
+	adminCapacityOverrideReasonMetadata    = "scrap.capacity_override_reason"
 
 	adminAuditEventOperationStarted  = "operation_started"
 	adminAuditEventOperationCanceled = "operation_canceled"
@@ -114,6 +118,8 @@ func RegisterAdminServer(registrar grpc.ServiceRegistrar, server *AdminServer) {
 	adminv1.RegisterRepairServiceServer(registrar, server)
 	adminv1.RegisterMemberServiceServer(registrar, server)
 	adminv1.RegisterLifecycleServiceServer(registrar, server)
+	adminv1.RegisterKeyServiceServer(registrar, server)
+	adminv1.RegisterCapacityServiceServer(registrar, server)
 	adminv1.RegisterDisasterRecoveryServiceServer(registrar, server)
 }
 
@@ -596,6 +602,66 @@ func (s *AdminServer) StartTombstone(_ context.Context, req *adminv1.StartTombst
 	return &adminv1.StartTombstoneResponse{Operation: operation}, nil
 }
 
+func (s *AdminServer) PlanKeyRotation(_ context.Context, req *adminv1.PlanKeyRotationRequest) (*adminv1.PlanKeyRotationResponse, error) {
+	planReq, err := ValidatePlanKeyRotationRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanKeyRotation")
+	}
+	plan, err := s.createOperationPlan("rewrap", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanKeyRotationResponse{Plan: plan}, nil
+}
+
+func (s *AdminServer) StartKeyRotation(_ context.Context, req *adminv1.StartKeyRotationRequest) (*adminv1.StartKeyRotationResponse, error) {
+	startReq, err := ValidateStartKeyRotationRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartKeyRotation")
+	}
+	operation, err := s.startPlannedOperation("rewrap", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartKeyRotationResponse{Operation: operation}, nil
+}
+
+func (s *AdminServer) PlanCapacityOverride(_ context.Context, req *adminv1.PlanCapacityOverrideRequest) (*adminv1.PlanCapacityOverrideResponse, error) {
+	planReq, err := ValidatePlanCapacityOverrideRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations == nil {
+		return nil, unimplementedAdmin("PlanCapacityOverride")
+	}
+	plan, err := s.createOperationPlan("capacity-override", planReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.PlanCapacityOverrideResponse{Plan: plan}, nil
+}
+
+func (s *AdminServer) StartCapacityOverride(_ context.Context, req *adminv1.StartCapacityOverrideRequest) (*adminv1.StartCapacityOverrideResponse, error) {
+	startReq, err := ValidateStartCapacityOverrideRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.operations == nil {
+		return nil, unimplementedAdmin("StartCapacityOverride")
+	}
+	operation, err := s.startPlannedOperation("capacity-override", startReq)
+	if err != nil {
+		return nil, err
+	}
+	return &adminv1.StartCapacityOverrideResponse{Operation: operation}, nil
+}
+
 func (s *AdminServer) GetRecoveryReadiness(ctx context.Context, req *adminv1.GetRecoveryReadinessRequest) (*adminv1.GetRecoveryReadinessResponse, error) {
 	if req == nil {
 		var problems violations
@@ -702,6 +768,7 @@ func (s *AdminServer) createOperationPlan(operationType string, req OperationPla
 		ExpiresAt:       timestamppb.New(s.now().Add(adminOperationPlanTTL)),
 		Targets:         adminTargetsToProto(req.Targets),
 		EstimatedImpact: estimateOperationImpact(req.Targets),
+		Warnings:        cloneWarnings(req.Warnings),
 		Metadata:        metadata,
 	}
 	plan.PlanHash, err = hashPlan(plan)
@@ -942,6 +1009,10 @@ func adminTargetsToProto(targets []AdminTarget) []*adminv1.Target {
 				snapshot.CheckpointId = &checkpointID
 			}
 			out = append(out, &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: snapshot}})
+		case AdminTargetCapacityProfile:
+			out = append(out, &adminv1.Target{Target: &adminv1.Target_CapacityProfile{CapacityProfile: &adminv1.CapacityProfileTarget{
+				CapacityProfileId: target.CapacityProfile,
+			}}})
 		}
 	}
 	return out
@@ -984,6 +1055,17 @@ func cloneTargets(targets []*adminv1.Target) []*adminv1.Target {
 	out := make([]*adminv1.Target, 0, len(targets))
 	for _, target := range targets {
 		out = append(out, proto.Clone(target).(*adminv1.Target))
+	}
+	return out
+}
+
+func cloneWarnings(warnings []*adminv1.OperationWarning) []*adminv1.OperationWarning {
+	if len(warnings) == 0 {
+		return nil
+	}
+	out := make([]*adminv1.OperationWarning, 0, len(warnings))
+	for _, warning := range warnings {
+		out = append(out, proto.Clone(warning).(*adminv1.OperationWarning))
 	}
 	return out
 }

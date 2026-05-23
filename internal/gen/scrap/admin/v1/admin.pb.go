@@ -3398,6 +3398,462 @@ func (x *StartTombstoneResponse) GetOperation() *Operation {
 	return nil
 }
 
+type PlanKeyRotationRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Targets          []*Target              `protobuf:"bytes,1,rep,name=targets,proto3" json:"targets,omitempty"`
+	DestinationKeyId string                 `protobuf:"bytes,2,opt,name=destination_key_id,json=destinationKeyId,proto3" json:"destination_key_id,omitempty"`
+	DryRun           bool                   `protobuf:"varint,3,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	Metadata         map[string]string      `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *PlanKeyRotationRequest) Reset() {
+	*x = PlanKeyRotationRequest{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlanKeyRotationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlanKeyRotationRequest) ProtoMessage() {}
+
+func (x *PlanKeyRotationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlanKeyRotationRequest.ProtoReflect.Descriptor instead.
+func (*PlanKeyRotationRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *PlanKeyRotationRequest) GetTargets() []*Target {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *PlanKeyRotationRequest) GetDestinationKeyId() string {
+	if x != nil {
+		return x.DestinationKeyId
+	}
+	return ""
+}
+
+func (x *PlanKeyRotationRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *PlanKeyRotationRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type PlanKeyRotationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Plan          *OperationPlan         `protobuf:"bytes,1,opt,name=plan,proto3" json:"plan,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PlanKeyRotationResponse) Reset() {
+	*x = PlanKeyRotationResponse{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlanKeyRotationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlanKeyRotationResponse) ProtoMessage() {}
+
+func (x *PlanKeyRotationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlanKeyRotationResponse.ProtoReflect.Descriptor instead.
+func (*PlanKeyRotationResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *PlanKeyRotationResponse) GetPlan() *OperationPlan {
+	if x != nil {
+		return x.Plan
+	}
+	return nil
+}
+
+type StartKeyRotationRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
+	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
+	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *StartKeyRotationRequest) Reset() {
+	*x = StartKeyRotationRequest{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartKeyRotationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartKeyRotationRequest) ProtoMessage() {}
+
+func (x *StartKeyRotationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartKeyRotationRequest.ProtoReflect.Descriptor instead.
+func (*StartKeyRotationRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *StartKeyRotationRequest) GetOperationPlanId() string {
+	if x != nil {
+		return x.OperationPlanId
+	}
+	return ""
+}
+
+func (x *StartKeyRotationRequest) GetPlanHash() string {
+	if x != nil {
+		return x.PlanHash
+	}
+	return ""
+}
+
+func (x *StartKeyRotationRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *StartKeyRotationRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+type StartKeyRotationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Operation     *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartKeyRotationResponse) Reset() {
+	*x = StartKeyRotationResponse{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartKeyRotationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartKeyRotationResponse) ProtoMessage() {}
+
+func (x *StartKeyRotationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartKeyRotationResponse.ProtoReflect.Descriptor instead.
+func (*StartKeyRotationResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *StartKeyRotationResponse) GetOperation() *Operation {
+	if x != nil {
+		return x.Operation
+	}
+	return nil
+}
+
+type PlanCapacityOverrideRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	CapacityProfile *CapacityProfileTarget `protobuf:"bytes,1,opt,name=capacity_profile,json=capacityProfile,proto3" json:"capacity_profile,omitempty"`
+	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Reason          string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	DryRun          bool                   `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	Metadata        map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PlanCapacityOverrideRequest) Reset() {
+	*x = PlanCapacityOverrideRequest{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlanCapacityOverrideRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlanCapacityOverrideRequest) ProtoMessage() {}
+
+func (x *PlanCapacityOverrideRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlanCapacityOverrideRequest.ProtoReflect.Descriptor instead.
+func (*PlanCapacityOverrideRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *PlanCapacityOverrideRequest) GetCapacityProfile() *CapacityProfileTarget {
+	if x != nil {
+		return x.CapacityProfile
+	}
+	return nil
+}
+
+func (x *PlanCapacityOverrideRequest) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *PlanCapacityOverrideRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *PlanCapacityOverrideRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *PlanCapacityOverrideRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type PlanCapacityOverrideResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Plan          *OperationPlan         `protobuf:"bytes,1,opt,name=plan,proto3" json:"plan,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PlanCapacityOverrideResponse) Reset() {
+	*x = PlanCapacityOverrideResponse{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlanCapacityOverrideResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlanCapacityOverrideResponse) ProtoMessage() {}
+
+func (x *PlanCapacityOverrideResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlanCapacityOverrideResponse.ProtoReflect.Descriptor instead.
+func (*PlanCapacityOverrideResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *PlanCapacityOverrideResponse) GetPlan() *OperationPlan {
+	if x != nil {
+		return x.Plan
+	}
+	return nil
+}
+
+type StartCapacityOverrideRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	OperationPlanId string                 `protobuf:"bytes,1,opt,name=operation_plan_id,json=operationPlanId,proto3" json:"operation_plan_id,omitempty"`
+	PlanHash        string                 `protobuf:"bytes,2,opt,name=plan_hash,json=planHash,proto3" json:"plan_hash,omitempty"`
+	Metadata        map[string]string      `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	OperationId     string                 `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *StartCapacityOverrideRequest) Reset() {
+	*x = StartCapacityOverrideRequest{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartCapacityOverrideRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartCapacityOverrideRequest) ProtoMessage() {}
+
+func (x *StartCapacityOverrideRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartCapacityOverrideRequest.ProtoReflect.Descriptor instead.
+func (*StartCapacityOverrideRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *StartCapacityOverrideRequest) GetOperationPlanId() string {
+	if x != nil {
+		return x.OperationPlanId
+	}
+	return ""
+}
+
+func (x *StartCapacityOverrideRequest) GetPlanHash() string {
+	if x != nil {
+		return x.PlanHash
+	}
+	return ""
+}
+
+func (x *StartCapacityOverrideRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *StartCapacityOverrideRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+type StartCapacityOverrideResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Operation     *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartCapacityOverrideResponse) Reset() {
+	*x = StartCapacityOverrideResponse{}
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartCapacityOverrideResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartCapacityOverrideResponse) ProtoMessage() {}
+
+func (x *StartCapacityOverrideResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartCapacityOverrideResponse.ProtoReflect.Descriptor instead.
+func (*StartCapacityOverrideResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *StartCapacityOverrideResponse) GetOperation() *Operation {
+	if x != nil {
+		return x.Operation
+	}
+	return nil
+}
+
 type GetRecoveryReadinessRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -3406,7 +3862,7 @@ type GetRecoveryReadinessRequest struct {
 
 func (x *GetRecoveryReadinessRequest) Reset() {
 	*x = GetRecoveryReadinessRequest{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[61]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3418,7 +3874,7 @@ func (x *GetRecoveryReadinessRequest) String() string {
 func (*GetRecoveryReadinessRequest) ProtoMessage() {}
 
 func (x *GetRecoveryReadinessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[61]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3431,7 +3887,7 @@ func (x *GetRecoveryReadinessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRecoveryReadinessRequest.ProtoReflect.Descriptor instead.
 func (*GetRecoveryReadinessRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{61}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{69}
 }
 
 type GetRecoveryReadinessResponse struct {
@@ -3443,7 +3899,7 @@ type GetRecoveryReadinessResponse struct {
 
 func (x *GetRecoveryReadinessResponse) Reset() {
 	*x = GetRecoveryReadinessResponse{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[62]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3455,7 +3911,7 @@ func (x *GetRecoveryReadinessResponse) String() string {
 func (*GetRecoveryReadinessResponse) ProtoMessage() {}
 
 func (x *GetRecoveryReadinessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[62]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3468,7 +3924,7 @@ func (x *GetRecoveryReadinessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRecoveryReadinessResponse.ProtoReflect.Descriptor instead.
 func (*GetRecoveryReadinessResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{62}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *GetRecoveryReadinessResponse) GetReadiness() *RecoveryReadiness {
@@ -3489,7 +3945,7 @@ type RecoveryReadiness struct {
 
 func (x *RecoveryReadiness) Reset() {
 	*x = RecoveryReadiness{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[63]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3501,7 +3957,7 @@ func (x *RecoveryReadiness) String() string {
 func (*RecoveryReadiness) ProtoMessage() {}
 
 func (x *RecoveryReadiness) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[63]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3514,7 +3970,7 @@ func (x *RecoveryReadiness) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecoveryReadiness.ProtoReflect.Descriptor instead.
 func (*RecoveryReadiness) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{63}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *RecoveryReadiness) GetReady() bool {
@@ -3549,7 +4005,7 @@ type PlanRecoveryRequest struct {
 
 func (x *PlanRecoveryRequest) Reset() {
 	*x = PlanRecoveryRequest{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[64]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3561,7 +4017,7 @@ func (x *PlanRecoveryRequest) String() string {
 func (*PlanRecoveryRequest) ProtoMessage() {}
 
 func (x *PlanRecoveryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[64]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3574,7 +4030,7 @@ func (x *PlanRecoveryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanRecoveryRequest.ProtoReflect.Descriptor instead.
 func (*PlanRecoveryRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{64}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *PlanRecoveryRequest) GetTargets() []*Target {
@@ -3607,7 +4063,7 @@ type PlanRecoveryResponse struct {
 
 func (x *PlanRecoveryResponse) Reset() {
 	*x = PlanRecoveryResponse{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[65]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3619,7 +4075,7 @@ func (x *PlanRecoveryResponse) String() string {
 func (*PlanRecoveryResponse) ProtoMessage() {}
 
 func (x *PlanRecoveryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[65]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3632,7 +4088,7 @@ func (x *PlanRecoveryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanRecoveryResponse.ProtoReflect.Descriptor instead.
 func (*PlanRecoveryResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{65}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *PlanRecoveryResponse) GetPlan() *OperationPlan {
@@ -3654,7 +4110,7 @@ type StartMetadataRestoreRequest struct {
 
 func (x *StartMetadataRestoreRequest) Reset() {
 	*x = StartMetadataRestoreRequest{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[66]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3666,7 +4122,7 @@ func (x *StartMetadataRestoreRequest) String() string {
 func (*StartMetadataRestoreRequest) ProtoMessage() {}
 
 func (x *StartMetadataRestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[66]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3679,7 +4135,7 @@ func (x *StartMetadataRestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartMetadataRestoreRequest.ProtoReflect.Descriptor instead.
 func (*StartMetadataRestoreRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{66}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *StartMetadataRestoreRequest) GetOperationPlanId() string {
@@ -3719,7 +4175,7 @@ type StartMetadataRestoreResponse struct {
 
 func (x *StartMetadataRestoreResponse) Reset() {
 	*x = StartMetadataRestoreResponse{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[67]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3731,7 +4187,7 @@ func (x *StartMetadataRestoreResponse) String() string {
 func (*StartMetadataRestoreResponse) ProtoMessage() {}
 
 func (x *StartMetadataRestoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[67]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3744,7 +4200,7 @@ func (x *StartMetadataRestoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartMetadataRestoreResponse.ProtoReflect.Descriptor instead.
 func (*StartMetadataRestoreResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{67}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *StartMetadataRestoreResponse) GetOperation() *Operation {
@@ -3766,7 +4222,7 @@ type StartCopyVerifyRequest struct {
 
 func (x *StartCopyVerifyRequest) Reset() {
 	*x = StartCopyVerifyRequest{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[68]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3778,7 +4234,7 @@ func (x *StartCopyVerifyRequest) String() string {
 func (*StartCopyVerifyRequest) ProtoMessage() {}
 
 func (x *StartCopyVerifyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[68]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3791,7 +4247,7 @@ func (x *StartCopyVerifyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartCopyVerifyRequest.ProtoReflect.Descriptor instead.
 func (*StartCopyVerifyRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{68}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *StartCopyVerifyRequest) GetOperationPlanId() string {
@@ -3831,7 +4287,7 @@ type StartCopyVerifyResponse struct {
 
 func (x *StartCopyVerifyResponse) Reset() {
 	*x = StartCopyVerifyResponse{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[69]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3843,7 +4299,7 @@ func (x *StartCopyVerifyResponse) String() string {
 func (*StartCopyVerifyResponse) ProtoMessage() {}
 
 func (x *StartCopyVerifyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[69]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3856,7 +4312,7 @@ func (x *StartCopyVerifyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartCopyVerifyResponse.ProtoReflect.Descriptor instead.
 func (*StartCopyVerifyResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{69}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *StartCopyVerifyResponse) GetOperation() *Operation {
@@ -3878,7 +4334,7 @@ type StartDRDrillRequest struct {
 
 func (x *StartDRDrillRequest) Reset() {
 	*x = StartDRDrillRequest{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[70]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3890,7 +4346,7 @@ func (x *StartDRDrillRequest) String() string {
 func (*StartDRDrillRequest) ProtoMessage() {}
 
 func (x *StartDRDrillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[70]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3903,7 +4359,7 @@ func (x *StartDRDrillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDRDrillRequest.ProtoReflect.Descriptor instead.
 func (*StartDRDrillRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{70}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *StartDRDrillRequest) GetOperationPlanId() string {
@@ -3943,7 +4399,7 @@ type StartDRDrillResponse struct {
 
 func (x *StartDRDrillResponse) Reset() {
 	*x = StartDRDrillResponse{}
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[71]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3955,7 +4411,7 @@ func (x *StartDRDrillResponse) String() string {
 func (*StartDRDrillResponse) ProtoMessage() {}
 
 func (x *StartDRDrillResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_admin_v1_admin_proto_msgTypes[71]
+	mi := &file_scrap_admin_v1_admin_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3968,7 +4424,7 @@ func (x *StartDRDrillResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDRDrillResponse.ProtoReflect.Descriptor instead.
 func (*StartDRDrillResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{71}
+	return file_scrap_admin_v1_admin_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *StartDRDrillResponse) GetOperation() *Operation {
@@ -4241,6 +4697,48 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
 	"\x16StartTombstoneResponse\x127\n" +
+	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\xa0\x02\n" +
+	"\x16PlanKeyRotationRequest\x120\n" +
+	"\atargets\x18\x01 \x03(\v2\x16.scrap.admin.v1.TargetR\atargets\x12,\n" +
+	"\x12destination_key_id\x18\x02 \x01(\tR\x10destinationKeyId\x12\x17\n" +
+	"\adry_run\x18\x03 \x01(\bR\x06dryRun\x12P\n" +
+	"\bmetadata\x18\x04 \x03(\v24.scrap.admin.v1.PlanKeyRotationRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"L\n" +
+	"\x17PlanKeyRotationResponse\x121\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x95\x02\n" +
+	"\x17StartKeyRotationRequest\x12*\n" +
+	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
+	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12Q\n" +
+	"\bmetadata\x18\x03 \x03(\v25.scrap.admin.v1.StartKeyRotationRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"S\n" +
+	"\x18StartKeyRotationResponse\x127\n" +
+	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\xef\x02\n" +
+	"\x1bPlanCapacityOverrideRequest\x12P\n" +
+	"\x10capacity_profile\x18\x01 \x01(\v2%.scrap.admin.v1.CapacityProfileTargetR\x0fcapacityProfile\x129\n" +
+	"\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x17\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x12U\n" +
+	"\bmetadata\x18\x05 \x03(\v29.scrap.admin.v1.PlanCapacityOverrideRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
+	"\x1cPlanCapacityOverrideResponse\x121\n" +
+	"\x04plan\x18\x01 \x01(\v2\x1d.scrap.admin.v1.OperationPlanR\x04plan\"\x9f\x02\n" +
+	"\x1cStartCapacityOverrideRequest\x12*\n" +
+	"\x11operation_plan_id\x18\x01 \x01(\tR\x0foperationPlanId\x12\x1b\n" +
+	"\tplan_hash\x18\x02 \x01(\tR\bplanHash\x12V\n" +
+	"\bmetadata\x18\x03 \x03(\v2:.scrap.admin.v1.StartCapacityOverrideRequest.MetadataEntryR\bmetadata\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"X\n" +
+	"\x1dStartCapacityOverrideResponse\x127\n" +
 	"\toperation\x18\x01 \x01(\v2\x19.scrap.admin.v1.OperationR\toperation\"\x1d\n" +
 	"\x1bGetRecoveryReadinessRequest\"_\n" +
 	"\x1cGetRecoveryReadinessResponse\x12?\n" +
@@ -4327,7 +4825,14 @@ const file_scrap_admin_v1_admin_proto_rawDesc = "" +
 	"StartDrain\x12!.scrap.admin.v1.StartDrainRequest\x1a\".scrap.admin.v1.StartDrainResponse2\xd1\x01\n" +
 	"\x10LifecycleService\x12\\\n" +
 	"\rPlanTombstone\x12$.scrap.admin.v1.PlanTombstoneRequest\x1a%.scrap.admin.v1.PlanTombstoneResponse\x12_\n" +
-	"\x0eStartTombstone\x12%.scrap.admin.v1.StartTombstoneRequest\x1a&.scrap.admin.v1.StartTombstoneResponse2\x99\x04\n" +
+	"\x0eStartTombstone\x12%.scrap.admin.v1.StartTombstoneRequest\x1a&.scrap.admin.v1.StartTombstoneResponse2\xd7\x01\n" +
+	"\n" +
+	"KeyService\x12b\n" +
+	"\x0fPlanKeyRotation\x12&.scrap.admin.v1.PlanKeyRotationRequest\x1a'.scrap.admin.v1.PlanKeyRotationResponse\x12e\n" +
+	"\x10StartKeyRotation\x12'.scrap.admin.v1.StartKeyRotationRequest\x1a(.scrap.admin.v1.StartKeyRotationResponse2\xfa\x01\n" +
+	"\x0fCapacityService\x12q\n" +
+	"\x14PlanCapacityOverride\x12+.scrap.admin.v1.PlanCapacityOverrideRequest\x1a,.scrap.admin.v1.PlanCapacityOverrideResponse\x12t\n" +
+	"\x15StartCapacityOverride\x12,.scrap.admin.v1.StartCapacityOverrideRequest\x1a-.scrap.admin.v1.StartCapacityOverrideResponse2\x99\x04\n" +
 	"\x17DisasterRecoveryService\x12q\n" +
 	"\x14GetRecoveryReadiness\x12+.scrap.admin.v1.GetRecoveryReadinessRequest\x1a,.scrap.admin.v1.GetRecoveryReadinessResponse\x12Y\n" +
 	"\fPlanRecovery\x12#.scrap.admin.v1.PlanRecoveryRequest\x1a$.scrap.admin.v1.PlanRecoveryResponse\x12q\n" +
@@ -4348,254 +4853,286 @@ func file_scrap_admin_v1_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_scrap_admin_v1_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_scrap_admin_v1_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 88)
+var file_scrap_admin_v1_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 100)
 var file_scrap_admin_v1_admin_proto_goTypes = []any{
-	(MemberState)(0),                     // 0: scrap.admin.v1.MemberState
-	(*GetClusterSummaryRequest)(nil),     // 1: scrap.admin.v1.GetClusterSummaryRequest
-	(*GetClusterSummaryResponse)(nil),    // 2: scrap.admin.v1.GetClusterSummaryResponse
-	(*ClusterSummary)(nil),               // 3: scrap.admin.v1.ClusterSummary
-	(*GetShardRequest)(nil),              // 4: scrap.admin.v1.GetShardRequest
-	(*GetShardResponse)(nil),             // 5: scrap.admin.v1.GetShardResponse
-	(*Shard)(nil),                        // 6: scrap.admin.v1.Shard
-	(*GetDocumentRequest)(nil),           // 7: scrap.admin.v1.GetDocumentRequest
-	(*GetDocumentResponse)(nil),          // 8: scrap.admin.v1.GetDocumentResponse
-	(*AdminDocument)(nil),                // 9: scrap.admin.v1.AdminDocument
-	(*GetBlockRequest)(nil),              // 10: scrap.admin.v1.GetBlockRequest
-	(*GetBlockResponse)(nil),             // 11: scrap.admin.v1.GetBlockResponse
-	(*Block)(nil),                        // 12: scrap.admin.v1.Block
-	(*GetMemberRequest)(nil),             // 13: scrap.admin.v1.GetMemberRequest
-	(*GetMemberResponse)(nil),            // 14: scrap.admin.v1.GetMemberResponse
-	(*StorageMember)(nil),                // 15: scrap.admin.v1.StorageMember
-	(*GetCapacityRunwayRequest)(nil),     // 16: scrap.admin.v1.GetCapacityRunwayRequest
-	(*GetCapacityRunwayResponse)(nil),    // 17: scrap.admin.v1.GetCapacityRunwayResponse
-	(*CapacityRunway)(nil),               // 18: scrap.admin.v1.CapacityRunway
-	(*GetOperationRequest)(nil),          // 19: scrap.admin.v1.GetOperationRequest
-	(*GetOperationResponse)(nil),         // 20: scrap.admin.v1.GetOperationResponse
-	(*WatchOperationRequest)(nil),        // 21: scrap.admin.v1.WatchOperationRequest
-	(*WatchOperationResponse)(nil),       // 22: scrap.admin.v1.WatchOperationResponse
-	(*OperationDelta)(nil),               // 23: scrap.admin.v1.OperationDelta
-	(*ListOperationsRequest)(nil),        // 24: scrap.admin.v1.ListOperationsRequest
-	(*ListOperationsResponse)(nil),       // 25: scrap.admin.v1.ListOperationsResponse
-	(*CancelOperationRequest)(nil),       // 26: scrap.admin.v1.CancelOperationRequest
-	(*CancelOperationResponse)(nil),      // 27: scrap.admin.v1.CancelOperationResponse
-	(*PlanRestoreRequest)(nil),           // 28: scrap.admin.v1.PlanRestoreRequest
-	(*PlanRestoreResponse)(nil),          // 29: scrap.admin.v1.PlanRestoreResponse
-	(*StartRestoreRequest)(nil),          // 30: scrap.admin.v1.StartRestoreRequest
-	(*StartRestoreResponse)(nil),         // 31: scrap.admin.v1.StartRestoreResponse
-	(*PlanPrewarmRequest)(nil),           // 32: scrap.admin.v1.PlanPrewarmRequest
-	(*PlanPrewarmResponse)(nil),          // 33: scrap.admin.v1.PlanPrewarmResponse
-	(*StartPrewarmRequest)(nil),          // 34: scrap.admin.v1.StartPrewarmRequest
-	(*StartPrewarmResponse)(nil),         // 35: scrap.admin.v1.StartPrewarmResponse
-	(*GetRepairQueueRequest)(nil),        // 36: scrap.admin.v1.GetRepairQueueRequest
-	(*GetRepairQueueResponse)(nil),       // 37: scrap.admin.v1.GetRepairQueueResponse
-	(*RepairQueueItem)(nil),              // 38: scrap.admin.v1.RepairQueueItem
-	(*PlanRepairRequest)(nil),            // 39: scrap.admin.v1.PlanRepairRequest
-	(*PlanRepairResponse)(nil),           // 40: scrap.admin.v1.PlanRepairResponse
-	(*StartRepairRequest)(nil),           // 41: scrap.admin.v1.StartRepairRequest
-	(*StartRepairResponse)(nil),          // 42: scrap.admin.v1.StartRepairResponse
-	(*PlanScrubRequest)(nil),             // 43: scrap.admin.v1.PlanScrubRequest
-	(*PlanScrubResponse)(nil),            // 44: scrap.admin.v1.PlanScrubResponse
-	(*StartScrubRequest)(nil),            // 45: scrap.admin.v1.StartScrubRequest
-	(*StartScrubResponse)(nil),           // 46: scrap.admin.v1.StartScrubResponse
-	(*CordonMemberRequest)(nil),          // 47: scrap.admin.v1.CordonMemberRequest
-	(*CordonMemberResponse)(nil),         // 48: scrap.admin.v1.CordonMemberResponse
-	(*UncordonMemberRequest)(nil),        // 49: scrap.admin.v1.UncordonMemberRequest
-	(*UncordonMemberResponse)(nil),       // 50: scrap.admin.v1.UncordonMemberResponse
-	(*GetEvictionSafetyRequest)(nil),     // 51: scrap.admin.v1.GetEvictionSafetyRequest
-	(*GetEvictionSafetyResponse)(nil),    // 52: scrap.admin.v1.GetEvictionSafetyResponse
-	(*EvictionSafety)(nil),               // 53: scrap.admin.v1.EvictionSafety
-	(*PlanDrainRequest)(nil),             // 54: scrap.admin.v1.PlanDrainRequest
-	(*PlanDrainResponse)(nil),            // 55: scrap.admin.v1.PlanDrainResponse
-	(*StartDrainRequest)(nil),            // 56: scrap.admin.v1.StartDrainRequest
-	(*StartDrainResponse)(nil),           // 57: scrap.admin.v1.StartDrainResponse
-	(*PlanTombstoneRequest)(nil),         // 58: scrap.admin.v1.PlanTombstoneRequest
-	(*PlanTombstoneResponse)(nil),        // 59: scrap.admin.v1.PlanTombstoneResponse
-	(*StartTombstoneRequest)(nil),        // 60: scrap.admin.v1.StartTombstoneRequest
-	(*StartTombstoneResponse)(nil),       // 61: scrap.admin.v1.StartTombstoneResponse
-	(*GetRecoveryReadinessRequest)(nil),  // 62: scrap.admin.v1.GetRecoveryReadinessRequest
-	(*GetRecoveryReadinessResponse)(nil), // 63: scrap.admin.v1.GetRecoveryReadinessResponse
-	(*RecoveryReadiness)(nil),            // 64: scrap.admin.v1.RecoveryReadiness
-	(*PlanRecoveryRequest)(nil),          // 65: scrap.admin.v1.PlanRecoveryRequest
-	(*PlanRecoveryResponse)(nil),         // 66: scrap.admin.v1.PlanRecoveryResponse
-	(*StartMetadataRestoreRequest)(nil),  // 67: scrap.admin.v1.StartMetadataRestoreRequest
-	(*StartMetadataRestoreResponse)(nil), // 68: scrap.admin.v1.StartMetadataRestoreResponse
-	(*StartCopyVerifyRequest)(nil),       // 69: scrap.admin.v1.StartCopyVerifyRequest
-	(*StartCopyVerifyResponse)(nil),      // 70: scrap.admin.v1.StartCopyVerifyResponse
-	(*StartDRDrillRequest)(nil),          // 71: scrap.admin.v1.StartDRDrillRequest
-	(*StartDRDrillResponse)(nil),         // 72: scrap.admin.v1.StartDRDrillResponse
-	nil,                                  // 73: scrap.admin.v1.PlanRestoreRequest.MetadataEntry
-	nil,                                  // 74: scrap.admin.v1.StartRestoreRequest.MetadataEntry
-	nil,                                  // 75: scrap.admin.v1.PlanPrewarmRequest.MetadataEntry
-	nil,                                  // 76: scrap.admin.v1.StartPrewarmRequest.MetadataEntry
-	nil,                                  // 77: scrap.admin.v1.PlanRepairRequest.MetadataEntry
-	nil,                                  // 78: scrap.admin.v1.StartRepairRequest.MetadataEntry
-	nil,                                  // 79: scrap.admin.v1.PlanScrubRequest.MetadataEntry
-	nil,                                  // 80: scrap.admin.v1.StartScrubRequest.MetadataEntry
-	nil,                                  // 81: scrap.admin.v1.PlanDrainRequest.MetadataEntry
-	nil,                                  // 82: scrap.admin.v1.StartDrainRequest.MetadataEntry
-	nil,                                  // 83: scrap.admin.v1.PlanTombstoneRequest.MetadataEntry
-	nil,                                  // 84: scrap.admin.v1.StartTombstoneRequest.MetadataEntry
-	nil,                                  // 85: scrap.admin.v1.PlanRecoveryRequest.MetadataEntry
-	nil,                                  // 86: scrap.admin.v1.StartMetadataRestoreRequest.MetadataEntry
-	nil,                                  // 87: scrap.admin.v1.StartCopyVerifyRequest.MetadataEntry
-	nil,                                  // 88: scrap.admin.v1.StartDRDrillRequest.MetadataEntry
-	(*DocumentTarget)(nil),               // 89: scrap.admin.v1.DocumentTarget
-	(*BlockTarget)(nil),                  // 90: scrap.admin.v1.BlockTarget
-	(*StorageMemberTarget)(nil),          // 91: scrap.admin.v1.StorageMemberTarget
-	(*timestamppb.Timestamp)(nil),        // 92: google.protobuf.Timestamp
-	(*OperationWarning)(nil),             // 93: scrap.admin.v1.OperationWarning
-	(*Operation)(nil),                    // 94: scrap.admin.v1.Operation
-	(OperationState)(0),                  // 95: scrap.admin.v1.OperationState
-	(*OperationProgress)(nil),            // 96: scrap.admin.v1.OperationProgress
-	(*OperationError)(nil),               // 97: scrap.admin.v1.OperationError
-	(*Target)(nil),                       // 98: scrap.admin.v1.Target
-	(*OperationPlan)(nil),                // 99: scrap.admin.v1.OperationPlan
+	(MemberState)(0),                      // 0: scrap.admin.v1.MemberState
+	(*GetClusterSummaryRequest)(nil),      // 1: scrap.admin.v1.GetClusterSummaryRequest
+	(*GetClusterSummaryResponse)(nil),     // 2: scrap.admin.v1.GetClusterSummaryResponse
+	(*ClusterSummary)(nil),                // 3: scrap.admin.v1.ClusterSummary
+	(*GetShardRequest)(nil),               // 4: scrap.admin.v1.GetShardRequest
+	(*GetShardResponse)(nil),              // 5: scrap.admin.v1.GetShardResponse
+	(*Shard)(nil),                         // 6: scrap.admin.v1.Shard
+	(*GetDocumentRequest)(nil),            // 7: scrap.admin.v1.GetDocumentRequest
+	(*GetDocumentResponse)(nil),           // 8: scrap.admin.v1.GetDocumentResponse
+	(*AdminDocument)(nil),                 // 9: scrap.admin.v1.AdminDocument
+	(*GetBlockRequest)(nil),               // 10: scrap.admin.v1.GetBlockRequest
+	(*GetBlockResponse)(nil),              // 11: scrap.admin.v1.GetBlockResponse
+	(*Block)(nil),                         // 12: scrap.admin.v1.Block
+	(*GetMemberRequest)(nil),              // 13: scrap.admin.v1.GetMemberRequest
+	(*GetMemberResponse)(nil),             // 14: scrap.admin.v1.GetMemberResponse
+	(*StorageMember)(nil),                 // 15: scrap.admin.v1.StorageMember
+	(*GetCapacityRunwayRequest)(nil),      // 16: scrap.admin.v1.GetCapacityRunwayRequest
+	(*GetCapacityRunwayResponse)(nil),     // 17: scrap.admin.v1.GetCapacityRunwayResponse
+	(*CapacityRunway)(nil),                // 18: scrap.admin.v1.CapacityRunway
+	(*GetOperationRequest)(nil),           // 19: scrap.admin.v1.GetOperationRequest
+	(*GetOperationResponse)(nil),          // 20: scrap.admin.v1.GetOperationResponse
+	(*WatchOperationRequest)(nil),         // 21: scrap.admin.v1.WatchOperationRequest
+	(*WatchOperationResponse)(nil),        // 22: scrap.admin.v1.WatchOperationResponse
+	(*OperationDelta)(nil),                // 23: scrap.admin.v1.OperationDelta
+	(*ListOperationsRequest)(nil),         // 24: scrap.admin.v1.ListOperationsRequest
+	(*ListOperationsResponse)(nil),        // 25: scrap.admin.v1.ListOperationsResponse
+	(*CancelOperationRequest)(nil),        // 26: scrap.admin.v1.CancelOperationRequest
+	(*CancelOperationResponse)(nil),       // 27: scrap.admin.v1.CancelOperationResponse
+	(*PlanRestoreRequest)(nil),            // 28: scrap.admin.v1.PlanRestoreRequest
+	(*PlanRestoreResponse)(nil),           // 29: scrap.admin.v1.PlanRestoreResponse
+	(*StartRestoreRequest)(nil),           // 30: scrap.admin.v1.StartRestoreRequest
+	(*StartRestoreResponse)(nil),          // 31: scrap.admin.v1.StartRestoreResponse
+	(*PlanPrewarmRequest)(nil),            // 32: scrap.admin.v1.PlanPrewarmRequest
+	(*PlanPrewarmResponse)(nil),           // 33: scrap.admin.v1.PlanPrewarmResponse
+	(*StartPrewarmRequest)(nil),           // 34: scrap.admin.v1.StartPrewarmRequest
+	(*StartPrewarmResponse)(nil),          // 35: scrap.admin.v1.StartPrewarmResponse
+	(*GetRepairQueueRequest)(nil),         // 36: scrap.admin.v1.GetRepairQueueRequest
+	(*GetRepairQueueResponse)(nil),        // 37: scrap.admin.v1.GetRepairQueueResponse
+	(*RepairQueueItem)(nil),               // 38: scrap.admin.v1.RepairQueueItem
+	(*PlanRepairRequest)(nil),             // 39: scrap.admin.v1.PlanRepairRequest
+	(*PlanRepairResponse)(nil),            // 40: scrap.admin.v1.PlanRepairResponse
+	(*StartRepairRequest)(nil),            // 41: scrap.admin.v1.StartRepairRequest
+	(*StartRepairResponse)(nil),           // 42: scrap.admin.v1.StartRepairResponse
+	(*PlanScrubRequest)(nil),              // 43: scrap.admin.v1.PlanScrubRequest
+	(*PlanScrubResponse)(nil),             // 44: scrap.admin.v1.PlanScrubResponse
+	(*StartScrubRequest)(nil),             // 45: scrap.admin.v1.StartScrubRequest
+	(*StartScrubResponse)(nil),            // 46: scrap.admin.v1.StartScrubResponse
+	(*CordonMemberRequest)(nil),           // 47: scrap.admin.v1.CordonMemberRequest
+	(*CordonMemberResponse)(nil),          // 48: scrap.admin.v1.CordonMemberResponse
+	(*UncordonMemberRequest)(nil),         // 49: scrap.admin.v1.UncordonMemberRequest
+	(*UncordonMemberResponse)(nil),        // 50: scrap.admin.v1.UncordonMemberResponse
+	(*GetEvictionSafetyRequest)(nil),      // 51: scrap.admin.v1.GetEvictionSafetyRequest
+	(*GetEvictionSafetyResponse)(nil),     // 52: scrap.admin.v1.GetEvictionSafetyResponse
+	(*EvictionSafety)(nil),                // 53: scrap.admin.v1.EvictionSafety
+	(*PlanDrainRequest)(nil),              // 54: scrap.admin.v1.PlanDrainRequest
+	(*PlanDrainResponse)(nil),             // 55: scrap.admin.v1.PlanDrainResponse
+	(*StartDrainRequest)(nil),             // 56: scrap.admin.v1.StartDrainRequest
+	(*StartDrainResponse)(nil),            // 57: scrap.admin.v1.StartDrainResponse
+	(*PlanTombstoneRequest)(nil),          // 58: scrap.admin.v1.PlanTombstoneRequest
+	(*PlanTombstoneResponse)(nil),         // 59: scrap.admin.v1.PlanTombstoneResponse
+	(*StartTombstoneRequest)(nil),         // 60: scrap.admin.v1.StartTombstoneRequest
+	(*StartTombstoneResponse)(nil),        // 61: scrap.admin.v1.StartTombstoneResponse
+	(*PlanKeyRotationRequest)(nil),        // 62: scrap.admin.v1.PlanKeyRotationRequest
+	(*PlanKeyRotationResponse)(nil),       // 63: scrap.admin.v1.PlanKeyRotationResponse
+	(*StartKeyRotationRequest)(nil),       // 64: scrap.admin.v1.StartKeyRotationRequest
+	(*StartKeyRotationResponse)(nil),      // 65: scrap.admin.v1.StartKeyRotationResponse
+	(*PlanCapacityOverrideRequest)(nil),   // 66: scrap.admin.v1.PlanCapacityOverrideRequest
+	(*PlanCapacityOverrideResponse)(nil),  // 67: scrap.admin.v1.PlanCapacityOverrideResponse
+	(*StartCapacityOverrideRequest)(nil),  // 68: scrap.admin.v1.StartCapacityOverrideRequest
+	(*StartCapacityOverrideResponse)(nil), // 69: scrap.admin.v1.StartCapacityOverrideResponse
+	(*GetRecoveryReadinessRequest)(nil),   // 70: scrap.admin.v1.GetRecoveryReadinessRequest
+	(*GetRecoveryReadinessResponse)(nil),  // 71: scrap.admin.v1.GetRecoveryReadinessResponse
+	(*RecoveryReadiness)(nil),             // 72: scrap.admin.v1.RecoveryReadiness
+	(*PlanRecoveryRequest)(nil),           // 73: scrap.admin.v1.PlanRecoveryRequest
+	(*PlanRecoveryResponse)(nil),          // 74: scrap.admin.v1.PlanRecoveryResponse
+	(*StartMetadataRestoreRequest)(nil),   // 75: scrap.admin.v1.StartMetadataRestoreRequest
+	(*StartMetadataRestoreResponse)(nil),  // 76: scrap.admin.v1.StartMetadataRestoreResponse
+	(*StartCopyVerifyRequest)(nil),        // 77: scrap.admin.v1.StartCopyVerifyRequest
+	(*StartCopyVerifyResponse)(nil),       // 78: scrap.admin.v1.StartCopyVerifyResponse
+	(*StartDRDrillRequest)(nil),           // 79: scrap.admin.v1.StartDRDrillRequest
+	(*StartDRDrillResponse)(nil),          // 80: scrap.admin.v1.StartDRDrillResponse
+	nil,                                   // 81: scrap.admin.v1.PlanRestoreRequest.MetadataEntry
+	nil,                                   // 82: scrap.admin.v1.StartRestoreRequest.MetadataEntry
+	nil,                                   // 83: scrap.admin.v1.PlanPrewarmRequest.MetadataEntry
+	nil,                                   // 84: scrap.admin.v1.StartPrewarmRequest.MetadataEntry
+	nil,                                   // 85: scrap.admin.v1.PlanRepairRequest.MetadataEntry
+	nil,                                   // 86: scrap.admin.v1.StartRepairRequest.MetadataEntry
+	nil,                                   // 87: scrap.admin.v1.PlanScrubRequest.MetadataEntry
+	nil,                                   // 88: scrap.admin.v1.StartScrubRequest.MetadataEntry
+	nil,                                   // 89: scrap.admin.v1.PlanDrainRequest.MetadataEntry
+	nil,                                   // 90: scrap.admin.v1.StartDrainRequest.MetadataEntry
+	nil,                                   // 91: scrap.admin.v1.PlanTombstoneRequest.MetadataEntry
+	nil,                                   // 92: scrap.admin.v1.StartTombstoneRequest.MetadataEntry
+	nil,                                   // 93: scrap.admin.v1.PlanKeyRotationRequest.MetadataEntry
+	nil,                                   // 94: scrap.admin.v1.StartKeyRotationRequest.MetadataEntry
+	nil,                                   // 95: scrap.admin.v1.PlanCapacityOverrideRequest.MetadataEntry
+	nil,                                   // 96: scrap.admin.v1.StartCapacityOverrideRequest.MetadataEntry
+	nil,                                   // 97: scrap.admin.v1.PlanRecoveryRequest.MetadataEntry
+	nil,                                   // 98: scrap.admin.v1.StartMetadataRestoreRequest.MetadataEntry
+	nil,                                   // 99: scrap.admin.v1.StartCopyVerifyRequest.MetadataEntry
+	nil,                                   // 100: scrap.admin.v1.StartDRDrillRequest.MetadataEntry
+	(*DocumentTarget)(nil),                // 101: scrap.admin.v1.DocumentTarget
+	(*BlockTarget)(nil),                   // 102: scrap.admin.v1.BlockTarget
+	(*StorageMemberTarget)(nil),           // 103: scrap.admin.v1.StorageMemberTarget
+	(*timestamppb.Timestamp)(nil),         // 104: google.protobuf.Timestamp
+	(*OperationWarning)(nil),              // 105: scrap.admin.v1.OperationWarning
+	(*Operation)(nil),                     // 106: scrap.admin.v1.Operation
+	(OperationState)(0),                   // 107: scrap.admin.v1.OperationState
+	(*OperationProgress)(nil),             // 108: scrap.admin.v1.OperationProgress
+	(*OperationError)(nil),                // 109: scrap.admin.v1.OperationError
+	(*Target)(nil),                        // 110: scrap.admin.v1.Target
+	(*OperationPlan)(nil),                 // 111: scrap.admin.v1.OperationPlan
+	(*CapacityProfileTarget)(nil),         // 112: scrap.admin.v1.CapacityProfileTarget
 }
 var file_scrap_admin_v1_admin_proto_depIdxs = []int32{
 	3,   // 0: scrap.admin.v1.GetClusterSummaryResponse.summary:type_name -> scrap.admin.v1.ClusterSummary
 	6,   // 1: scrap.admin.v1.GetShardResponse.shard:type_name -> scrap.admin.v1.Shard
-	89,  // 2: scrap.admin.v1.GetDocumentRequest.document:type_name -> scrap.admin.v1.DocumentTarget
+	101, // 2: scrap.admin.v1.GetDocumentRequest.document:type_name -> scrap.admin.v1.DocumentTarget
 	9,   // 3: scrap.admin.v1.GetDocumentResponse.document:type_name -> scrap.admin.v1.AdminDocument
-	89,  // 4: scrap.admin.v1.AdminDocument.document:type_name -> scrap.admin.v1.DocumentTarget
-	90,  // 5: scrap.admin.v1.GetBlockRequest.block:type_name -> scrap.admin.v1.BlockTarget
+	101, // 4: scrap.admin.v1.AdminDocument.document:type_name -> scrap.admin.v1.DocumentTarget
+	102, // 5: scrap.admin.v1.GetBlockRequest.block:type_name -> scrap.admin.v1.BlockTarget
 	12,  // 6: scrap.admin.v1.GetBlockResponse.block:type_name -> scrap.admin.v1.Block
-	91,  // 7: scrap.admin.v1.GetMemberRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
+	103, // 7: scrap.admin.v1.GetMemberRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
 	15,  // 8: scrap.admin.v1.GetMemberResponse.storage_member:type_name -> scrap.admin.v1.StorageMember
 	0,   // 9: scrap.admin.v1.StorageMember.state:type_name -> scrap.admin.v1.MemberState
-	92,  // 10: scrap.admin.v1.StorageMember.last_seen_at:type_name -> google.protobuf.Timestamp
+	104, // 10: scrap.admin.v1.StorageMember.last_seen_at:type_name -> google.protobuf.Timestamp
 	18,  // 11: scrap.admin.v1.GetCapacityRunwayResponse.runway:type_name -> scrap.admin.v1.CapacityRunway
-	93,  // 12: scrap.admin.v1.CapacityRunway.warnings:type_name -> scrap.admin.v1.OperationWarning
-	94,  // 13: scrap.admin.v1.GetOperationResponse.operation:type_name -> scrap.admin.v1.Operation
-	94,  // 14: scrap.admin.v1.WatchOperationResponse.operation:type_name -> scrap.admin.v1.Operation
+	105, // 12: scrap.admin.v1.CapacityRunway.warnings:type_name -> scrap.admin.v1.OperationWarning
+	106, // 13: scrap.admin.v1.GetOperationResponse.operation:type_name -> scrap.admin.v1.Operation
+	106, // 14: scrap.admin.v1.WatchOperationResponse.operation:type_name -> scrap.admin.v1.Operation
 	23,  // 15: scrap.admin.v1.WatchOperationResponse.delta:type_name -> scrap.admin.v1.OperationDelta
-	95,  // 16: scrap.admin.v1.OperationDelta.state:type_name -> scrap.admin.v1.OperationState
-	96,  // 17: scrap.admin.v1.OperationDelta.progress:type_name -> scrap.admin.v1.OperationProgress
-	93,  // 18: scrap.admin.v1.OperationDelta.warnings:type_name -> scrap.admin.v1.OperationWarning
-	97,  // 19: scrap.admin.v1.OperationDelta.last_error:type_name -> scrap.admin.v1.OperationError
-	95,  // 20: scrap.admin.v1.ListOperationsRequest.states:type_name -> scrap.admin.v1.OperationState
-	94,  // 21: scrap.admin.v1.ListOperationsResponse.operations:type_name -> scrap.admin.v1.Operation
-	94,  // 22: scrap.admin.v1.CancelOperationResponse.operation:type_name -> scrap.admin.v1.Operation
-	98,  // 23: scrap.admin.v1.PlanRestoreRequest.targets:type_name -> scrap.admin.v1.Target
-	73,  // 24: scrap.admin.v1.PlanRestoreRequest.metadata:type_name -> scrap.admin.v1.PlanRestoreRequest.MetadataEntry
-	99,  // 25: scrap.admin.v1.PlanRestoreResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	74,  // 26: scrap.admin.v1.StartRestoreRequest.metadata:type_name -> scrap.admin.v1.StartRestoreRequest.MetadataEntry
-	94,  // 27: scrap.admin.v1.StartRestoreResponse.operation:type_name -> scrap.admin.v1.Operation
-	98,  // 28: scrap.admin.v1.PlanPrewarmRequest.targets:type_name -> scrap.admin.v1.Target
-	92,  // 29: scrap.admin.v1.PlanPrewarmRequest.pin_until:type_name -> google.protobuf.Timestamp
-	75,  // 30: scrap.admin.v1.PlanPrewarmRequest.metadata:type_name -> scrap.admin.v1.PlanPrewarmRequest.MetadataEntry
-	99,  // 31: scrap.admin.v1.PlanPrewarmResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	76,  // 32: scrap.admin.v1.StartPrewarmRequest.metadata:type_name -> scrap.admin.v1.StartPrewarmRequest.MetadataEntry
-	94,  // 33: scrap.admin.v1.StartPrewarmResponse.operation:type_name -> scrap.admin.v1.Operation
+	107, // 16: scrap.admin.v1.OperationDelta.state:type_name -> scrap.admin.v1.OperationState
+	108, // 17: scrap.admin.v1.OperationDelta.progress:type_name -> scrap.admin.v1.OperationProgress
+	105, // 18: scrap.admin.v1.OperationDelta.warnings:type_name -> scrap.admin.v1.OperationWarning
+	109, // 19: scrap.admin.v1.OperationDelta.last_error:type_name -> scrap.admin.v1.OperationError
+	107, // 20: scrap.admin.v1.ListOperationsRequest.states:type_name -> scrap.admin.v1.OperationState
+	106, // 21: scrap.admin.v1.ListOperationsResponse.operations:type_name -> scrap.admin.v1.Operation
+	106, // 22: scrap.admin.v1.CancelOperationResponse.operation:type_name -> scrap.admin.v1.Operation
+	110, // 23: scrap.admin.v1.PlanRestoreRequest.targets:type_name -> scrap.admin.v1.Target
+	81,  // 24: scrap.admin.v1.PlanRestoreRequest.metadata:type_name -> scrap.admin.v1.PlanRestoreRequest.MetadataEntry
+	111, // 25: scrap.admin.v1.PlanRestoreResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	82,  // 26: scrap.admin.v1.StartRestoreRequest.metadata:type_name -> scrap.admin.v1.StartRestoreRequest.MetadataEntry
+	106, // 27: scrap.admin.v1.StartRestoreResponse.operation:type_name -> scrap.admin.v1.Operation
+	110, // 28: scrap.admin.v1.PlanPrewarmRequest.targets:type_name -> scrap.admin.v1.Target
+	104, // 29: scrap.admin.v1.PlanPrewarmRequest.pin_until:type_name -> google.protobuf.Timestamp
+	83,  // 30: scrap.admin.v1.PlanPrewarmRequest.metadata:type_name -> scrap.admin.v1.PlanPrewarmRequest.MetadataEntry
+	111, // 31: scrap.admin.v1.PlanPrewarmResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	84,  // 32: scrap.admin.v1.StartPrewarmRequest.metadata:type_name -> scrap.admin.v1.StartPrewarmRequest.MetadataEntry
+	106, // 33: scrap.admin.v1.StartPrewarmResponse.operation:type_name -> scrap.admin.v1.Operation
 	38,  // 34: scrap.admin.v1.GetRepairQueueResponse.items:type_name -> scrap.admin.v1.RepairQueueItem
-	98,  // 35: scrap.admin.v1.RepairQueueItem.target:type_name -> scrap.admin.v1.Target
-	92,  // 36: scrap.admin.v1.RepairQueueItem.detected_at:type_name -> google.protobuf.Timestamp
-	98,  // 37: scrap.admin.v1.PlanRepairRequest.targets:type_name -> scrap.admin.v1.Target
-	77,  // 38: scrap.admin.v1.PlanRepairRequest.metadata:type_name -> scrap.admin.v1.PlanRepairRequest.MetadataEntry
-	99,  // 39: scrap.admin.v1.PlanRepairResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	78,  // 40: scrap.admin.v1.StartRepairRequest.metadata:type_name -> scrap.admin.v1.StartRepairRequest.MetadataEntry
-	94,  // 41: scrap.admin.v1.StartRepairResponse.operation:type_name -> scrap.admin.v1.Operation
-	98,  // 42: scrap.admin.v1.PlanScrubRequest.targets:type_name -> scrap.admin.v1.Target
-	79,  // 43: scrap.admin.v1.PlanScrubRequest.metadata:type_name -> scrap.admin.v1.PlanScrubRequest.MetadataEntry
-	99,  // 44: scrap.admin.v1.PlanScrubResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	80,  // 45: scrap.admin.v1.StartScrubRequest.metadata:type_name -> scrap.admin.v1.StartScrubRequest.MetadataEntry
-	94,  // 46: scrap.admin.v1.StartScrubResponse.operation:type_name -> scrap.admin.v1.Operation
-	91,  // 47: scrap.admin.v1.CordonMemberRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
+	110, // 35: scrap.admin.v1.RepairQueueItem.target:type_name -> scrap.admin.v1.Target
+	104, // 36: scrap.admin.v1.RepairQueueItem.detected_at:type_name -> google.protobuf.Timestamp
+	110, // 37: scrap.admin.v1.PlanRepairRequest.targets:type_name -> scrap.admin.v1.Target
+	85,  // 38: scrap.admin.v1.PlanRepairRequest.metadata:type_name -> scrap.admin.v1.PlanRepairRequest.MetadataEntry
+	111, // 39: scrap.admin.v1.PlanRepairResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	86,  // 40: scrap.admin.v1.StartRepairRequest.metadata:type_name -> scrap.admin.v1.StartRepairRequest.MetadataEntry
+	106, // 41: scrap.admin.v1.StartRepairResponse.operation:type_name -> scrap.admin.v1.Operation
+	110, // 42: scrap.admin.v1.PlanScrubRequest.targets:type_name -> scrap.admin.v1.Target
+	87,  // 43: scrap.admin.v1.PlanScrubRequest.metadata:type_name -> scrap.admin.v1.PlanScrubRequest.MetadataEntry
+	111, // 44: scrap.admin.v1.PlanScrubResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	88,  // 45: scrap.admin.v1.StartScrubRequest.metadata:type_name -> scrap.admin.v1.StartScrubRequest.MetadataEntry
+	106, // 46: scrap.admin.v1.StartScrubResponse.operation:type_name -> scrap.admin.v1.Operation
+	103, // 47: scrap.admin.v1.CordonMemberRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
 	15,  // 48: scrap.admin.v1.CordonMemberResponse.storage_member:type_name -> scrap.admin.v1.StorageMember
-	91,  // 49: scrap.admin.v1.UncordonMemberRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
+	103, // 49: scrap.admin.v1.UncordonMemberRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
 	15,  // 50: scrap.admin.v1.UncordonMemberResponse.storage_member:type_name -> scrap.admin.v1.StorageMember
-	91,  // 51: scrap.admin.v1.GetEvictionSafetyRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
+	103, // 51: scrap.admin.v1.GetEvictionSafetyRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
 	53,  // 52: scrap.admin.v1.GetEvictionSafetyResponse.safety:type_name -> scrap.admin.v1.EvictionSafety
-	91,  // 53: scrap.admin.v1.EvictionSafety.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
-	93,  // 54: scrap.admin.v1.EvictionSafety.warnings:type_name -> scrap.admin.v1.OperationWarning
-	91,  // 55: scrap.admin.v1.PlanDrainRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
-	81,  // 56: scrap.admin.v1.PlanDrainRequest.metadata:type_name -> scrap.admin.v1.PlanDrainRequest.MetadataEntry
-	99,  // 57: scrap.admin.v1.PlanDrainResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	82,  // 58: scrap.admin.v1.StartDrainRequest.metadata:type_name -> scrap.admin.v1.StartDrainRequest.MetadataEntry
-	94,  // 59: scrap.admin.v1.StartDrainResponse.operation:type_name -> scrap.admin.v1.Operation
-	98,  // 60: scrap.admin.v1.PlanTombstoneRequest.targets:type_name -> scrap.admin.v1.Target
-	83,  // 61: scrap.admin.v1.PlanTombstoneRequest.metadata:type_name -> scrap.admin.v1.PlanTombstoneRequest.MetadataEntry
-	99,  // 62: scrap.admin.v1.PlanTombstoneResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	84,  // 63: scrap.admin.v1.StartTombstoneRequest.metadata:type_name -> scrap.admin.v1.StartTombstoneRequest.MetadataEntry
-	94,  // 64: scrap.admin.v1.StartTombstoneResponse.operation:type_name -> scrap.admin.v1.Operation
-	64,  // 65: scrap.admin.v1.GetRecoveryReadinessResponse.readiness:type_name -> scrap.admin.v1.RecoveryReadiness
-	93,  // 66: scrap.admin.v1.RecoveryReadiness.warnings:type_name -> scrap.admin.v1.OperationWarning
-	92,  // 67: scrap.admin.v1.RecoveryReadiness.latest_restorable_checkpoint_at:type_name -> google.protobuf.Timestamp
-	98,  // 68: scrap.admin.v1.PlanRecoveryRequest.targets:type_name -> scrap.admin.v1.Target
-	85,  // 69: scrap.admin.v1.PlanRecoveryRequest.metadata:type_name -> scrap.admin.v1.PlanRecoveryRequest.MetadataEntry
-	99,  // 70: scrap.admin.v1.PlanRecoveryResponse.plan:type_name -> scrap.admin.v1.OperationPlan
-	86,  // 71: scrap.admin.v1.StartMetadataRestoreRequest.metadata:type_name -> scrap.admin.v1.StartMetadataRestoreRequest.MetadataEntry
-	94,  // 72: scrap.admin.v1.StartMetadataRestoreResponse.operation:type_name -> scrap.admin.v1.Operation
-	87,  // 73: scrap.admin.v1.StartCopyVerifyRequest.metadata:type_name -> scrap.admin.v1.StartCopyVerifyRequest.MetadataEntry
-	94,  // 74: scrap.admin.v1.StartCopyVerifyResponse.operation:type_name -> scrap.admin.v1.Operation
-	88,  // 75: scrap.admin.v1.StartDRDrillRequest.metadata:type_name -> scrap.admin.v1.StartDRDrillRequest.MetadataEntry
-	94,  // 76: scrap.admin.v1.StartDRDrillResponse.operation:type_name -> scrap.admin.v1.Operation
-	1,   // 77: scrap.admin.v1.InspectService.GetClusterSummary:input_type -> scrap.admin.v1.GetClusterSummaryRequest
-	4,   // 78: scrap.admin.v1.InspectService.GetShard:input_type -> scrap.admin.v1.GetShardRequest
-	7,   // 79: scrap.admin.v1.InspectService.GetDocument:input_type -> scrap.admin.v1.GetDocumentRequest
-	10,  // 80: scrap.admin.v1.InspectService.GetBlock:input_type -> scrap.admin.v1.GetBlockRequest
-	13,  // 81: scrap.admin.v1.InspectService.GetMember:input_type -> scrap.admin.v1.GetMemberRequest
-	16,  // 82: scrap.admin.v1.InspectService.GetCapacityRunway:input_type -> scrap.admin.v1.GetCapacityRunwayRequest
-	19,  // 83: scrap.admin.v1.OperationService.GetOperation:input_type -> scrap.admin.v1.GetOperationRequest
-	21,  // 84: scrap.admin.v1.OperationService.WatchOperation:input_type -> scrap.admin.v1.WatchOperationRequest
-	24,  // 85: scrap.admin.v1.OperationService.ListOperations:input_type -> scrap.admin.v1.ListOperationsRequest
-	26,  // 86: scrap.admin.v1.OperationService.CancelOperation:input_type -> scrap.admin.v1.CancelOperationRequest
-	28,  // 87: scrap.admin.v1.RestoreService.PlanRestore:input_type -> scrap.admin.v1.PlanRestoreRequest
-	30,  // 88: scrap.admin.v1.RestoreService.StartRestore:input_type -> scrap.admin.v1.StartRestoreRequest
-	32,  // 89: scrap.admin.v1.RestoreService.PlanPrewarm:input_type -> scrap.admin.v1.PlanPrewarmRequest
-	34,  // 90: scrap.admin.v1.RestoreService.StartPrewarm:input_type -> scrap.admin.v1.StartPrewarmRequest
-	36,  // 91: scrap.admin.v1.RepairService.GetRepairQueue:input_type -> scrap.admin.v1.GetRepairQueueRequest
-	39,  // 92: scrap.admin.v1.RepairService.PlanRepair:input_type -> scrap.admin.v1.PlanRepairRequest
-	41,  // 93: scrap.admin.v1.RepairService.StartRepair:input_type -> scrap.admin.v1.StartRepairRequest
-	43,  // 94: scrap.admin.v1.RepairService.PlanScrub:input_type -> scrap.admin.v1.PlanScrubRequest
-	45,  // 95: scrap.admin.v1.RepairService.StartScrub:input_type -> scrap.admin.v1.StartScrubRequest
-	47,  // 96: scrap.admin.v1.MemberService.CordonMember:input_type -> scrap.admin.v1.CordonMemberRequest
-	49,  // 97: scrap.admin.v1.MemberService.UncordonMember:input_type -> scrap.admin.v1.UncordonMemberRequest
-	51,  // 98: scrap.admin.v1.MemberService.GetEvictionSafety:input_type -> scrap.admin.v1.GetEvictionSafetyRequest
-	54,  // 99: scrap.admin.v1.MemberService.PlanDrain:input_type -> scrap.admin.v1.PlanDrainRequest
-	56,  // 100: scrap.admin.v1.MemberService.StartDrain:input_type -> scrap.admin.v1.StartDrainRequest
-	58,  // 101: scrap.admin.v1.LifecycleService.PlanTombstone:input_type -> scrap.admin.v1.PlanTombstoneRequest
-	60,  // 102: scrap.admin.v1.LifecycleService.StartTombstone:input_type -> scrap.admin.v1.StartTombstoneRequest
-	62,  // 103: scrap.admin.v1.DisasterRecoveryService.GetRecoveryReadiness:input_type -> scrap.admin.v1.GetRecoveryReadinessRequest
-	65,  // 104: scrap.admin.v1.DisasterRecoveryService.PlanRecovery:input_type -> scrap.admin.v1.PlanRecoveryRequest
-	67,  // 105: scrap.admin.v1.DisasterRecoveryService.StartMetadataRestore:input_type -> scrap.admin.v1.StartMetadataRestoreRequest
-	69,  // 106: scrap.admin.v1.DisasterRecoveryService.StartCopyVerify:input_type -> scrap.admin.v1.StartCopyVerifyRequest
-	71,  // 107: scrap.admin.v1.DisasterRecoveryService.StartDRDrill:input_type -> scrap.admin.v1.StartDRDrillRequest
-	2,   // 108: scrap.admin.v1.InspectService.GetClusterSummary:output_type -> scrap.admin.v1.GetClusterSummaryResponse
-	5,   // 109: scrap.admin.v1.InspectService.GetShard:output_type -> scrap.admin.v1.GetShardResponse
-	8,   // 110: scrap.admin.v1.InspectService.GetDocument:output_type -> scrap.admin.v1.GetDocumentResponse
-	11,  // 111: scrap.admin.v1.InspectService.GetBlock:output_type -> scrap.admin.v1.GetBlockResponse
-	14,  // 112: scrap.admin.v1.InspectService.GetMember:output_type -> scrap.admin.v1.GetMemberResponse
-	17,  // 113: scrap.admin.v1.InspectService.GetCapacityRunway:output_type -> scrap.admin.v1.GetCapacityRunwayResponse
-	20,  // 114: scrap.admin.v1.OperationService.GetOperation:output_type -> scrap.admin.v1.GetOperationResponse
-	22,  // 115: scrap.admin.v1.OperationService.WatchOperation:output_type -> scrap.admin.v1.WatchOperationResponse
-	25,  // 116: scrap.admin.v1.OperationService.ListOperations:output_type -> scrap.admin.v1.ListOperationsResponse
-	27,  // 117: scrap.admin.v1.OperationService.CancelOperation:output_type -> scrap.admin.v1.CancelOperationResponse
-	29,  // 118: scrap.admin.v1.RestoreService.PlanRestore:output_type -> scrap.admin.v1.PlanRestoreResponse
-	31,  // 119: scrap.admin.v1.RestoreService.StartRestore:output_type -> scrap.admin.v1.StartRestoreResponse
-	33,  // 120: scrap.admin.v1.RestoreService.PlanPrewarm:output_type -> scrap.admin.v1.PlanPrewarmResponse
-	35,  // 121: scrap.admin.v1.RestoreService.StartPrewarm:output_type -> scrap.admin.v1.StartPrewarmResponse
-	37,  // 122: scrap.admin.v1.RepairService.GetRepairQueue:output_type -> scrap.admin.v1.GetRepairQueueResponse
-	40,  // 123: scrap.admin.v1.RepairService.PlanRepair:output_type -> scrap.admin.v1.PlanRepairResponse
-	42,  // 124: scrap.admin.v1.RepairService.StartRepair:output_type -> scrap.admin.v1.StartRepairResponse
-	44,  // 125: scrap.admin.v1.RepairService.PlanScrub:output_type -> scrap.admin.v1.PlanScrubResponse
-	46,  // 126: scrap.admin.v1.RepairService.StartScrub:output_type -> scrap.admin.v1.StartScrubResponse
-	48,  // 127: scrap.admin.v1.MemberService.CordonMember:output_type -> scrap.admin.v1.CordonMemberResponse
-	50,  // 128: scrap.admin.v1.MemberService.UncordonMember:output_type -> scrap.admin.v1.UncordonMemberResponse
-	52,  // 129: scrap.admin.v1.MemberService.GetEvictionSafety:output_type -> scrap.admin.v1.GetEvictionSafetyResponse
-	55,  // 130: scrap.admin.v1.MemberService.PlanDrain:output_type -> scrap.admin.v1.PlanDrainResponse
-	57,  // 131: scrap.admin.v1.MemberService.StartDrain:output_type -> scrap.admin.v1.StartDrainResponse
-	59,  // 132: scrap.admin.v1.LifecycleService.PlanTombstone:output_type -> scrap.admin.v1.PlanTombstoneResponse
-	61,  // 133: scrap.admin.v1.LifecycleService.StartTombstone:output_type -> scrap.admin.v1.StartTombstoneResponse
-	63,  // 134: scrap.admin.v1.DisasterRecoveryService.GetRecoveryReadiness:output_type -> scrap.admin.v1.GetRecoveryReadinessResponse
-	66,  // 135: scrap.admin.v1.DisasterRecoveryService.PlanRecovery:output_type -> scrap.admin.v1.PlanRecoveryResponse
-	68,  // 136: scrap.admin.v1.DisasterRecoveryService.StartMetadataRestore:output_type -> scrap.admin.v1.StartMetadataRestoreResponse
-	70,  // 137: scrap.admin.v1.DisasterRecoveryService.StartCopyVerify:output_type -> scrap.admin.v1.StartCopyVerifyResponse
-	72,  // 138: scrap.admin.v1.DisasterRecoveryService.StartDRDrill:output_type -> scrap.admin.v1.StartDRDrillResponse
-	108, // [108:139] is the sub-list for method output_type
-	77,  // [77:108] is the sub-list for method input_type
-	77,  // [77:77] is the sub-list for extension type_name
-	77,  // [77:77] is the sub-list for extension extendee
-	0,   // [0:77] is the sub-list for field type_name
+	103, // 53: scrap.admin.v1.EvictionSafety.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
+	105, // 54: scrap.admin.v1.EvictionSafety.warnings:type_name -> scrap.admin.v1.OperationWarning
+	103, // 55: scrap.admin.v1.PlanDrainRequest.storage_member:type_name -> scrap.admin.v1.StorageMemberTarget
+	89,  // 56: scrap.admin.v1.PlanDrainRequest.metadata:type_name -> scrap.admin.v1.PlanDrainRequest.MetadataEntry
+	111, // 57: scrap.admin.v1.PlanDrainResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	90,  // 58: scrap.admin.v1.StartDrainRequest.metadata:type_name -> scrap.admin.v1.StartDrainRequest.MetadataEntry
+	106, // 59: scrap.admin.v1.StartDrainResponse.operation:type_name -> scrap.admin.v1.Operation
+	110, // 60: scrap.admin.v1.PlanTombstoneRequest.targets:type_name -> scrap.admin.v1.Target
+	91,  // 61: scrap.admin.v1.PlanTombstoneRequest.metadata:type_name -> scrap.admin.v1.PlanTombstoneRequest.MetadataEntry
+	111, // 62: scrap.admin.v1.PlanTombstoneResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	92,  // 63: scrap.admin.v1.StartTombstoneRequest.metadata:type_name -> scrap.admin.v1.StartTombstoneRequest.MetadataEntry
+	106, // 64: scrap.admin.v1.StartTombstoneResponse.operation:type_name -> scrap.admin.v1.Operation
+	110, // 65: scrap.admin.v1.PlanKeyRotationRequest.targets:type_name -> scrap.admin.v1.Target
+	93,  // 66: scrap.admin.v1.PlanKeyRotationRequest.metadata:type_name -> scrap.admin.v1.PlanKeyRotationRequest.MetadataEntry
+	111, // 67: scrap.admin.v1.PlanKeyRotationResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	94,  // 68: scrap.admin.v1.StartKeyRotationRequest.metadata:type_name -> scrap.admin.v1.StartKeyRotationRequest.MetadataEntry
+	106, // 69: scrap.admin.v1.StartKeyRotationResponse.operation:type_name -> scrap.admin.v1.Operation
+	112, // 70: scrap.admin.v1.PlanCapacityOverrideRequest.capacity_profile:type_name -> scrap.admin.v1.CapacityProfileTarget
+	104, // 71: scrap.admin.v1.PlanCapacityOverrideRequest.expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 72: scrap.admin.v1.PlanCapacityOverrideRequest.metadata:type_name -> scrap.admin.v1.PlanCapacityOverrideRequest.MetadataEntry
+	111, // 73: scrap.admin.v1.PlanCapacityOverrideResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	96,  // 74: scrap.admin.v1.StartCapacityOverrideRequest.metadata:type_name -> scrap.admin.v1.StartCapacityOverrideRequest.MetadataEntry
+	106, // 75: scrap.admin.v1.StartCapacityOverrideResponse.operation:type_name -> scrap.admin.v1.Operation
+	72,  // 76: scrap.admin.v1.GetRecoveryReadinessResponse.readiness:type_name -> scrap.admin.v1.RecoveryReadiness
+	105, // 77: scrap.admin.v1.RecoveryReadiness.warnings:type_name -> scrap.admin.v1.OperationWarning
+	104, // 78: scrap.admin.v1.RecoveryReadiness.latest_restorable_checkpoint_at:type_name -> google.protobuf.Timestamp
+	110, // 79: scrap.admin.v1.PlanRecoveryRequest.targets:type_name -> scrap.admin.v1.Target
+	97,  // 80: scrap.admin.v1.PlanRecoveryRequest.metadata:type_name -> scrap.admin.v1.PlanRecoveryRequest.MetadataEntry
+	111, // 81: scrap.admin.v1.PlanRecoveryResponse.plan:type_name -> scrap.admin.v1.OperationPlan
+	98,  // 82: scrap.admin.v1.StartMetadataRestoreRequest.metadata:type_name -> scrap.admin.v1.StartMetadataRestoreRequest.MetadataEntry
+	106, // 83: scrap.admin.v1.StartMetadataRestoreResponse.operation:type_name -> scrap.admin.v1.Operation
+	99,  // 84: scrap.admin.v1.StartCopyVerifyRequest.metadata:type_name -> scrap.admin.v1.StartCopyVerifyRequest.MetadataEntry
+	106, // 85: scrap.admin.v1.StartCopyVerifyResponse.operation:type_name -> scrap.admin.v1.Operation
+	100, // 86: scrap.admin.v1.StartDRDrillRequest.metadata:type_name -> scrap.admin.v1.StartDRDrillRequest.MetadataEntry
+	106, // 87: scrap.admin.v1.StartDRDrillResponse.operation:type_name -> scrap.admin.v1.Operation
+	1,   // 88: scrap.admin.v1.InspectService.GetClusterSummary:input_type -> scrap.admin.v1.GetClusterSummaryRequest
+	4,   // 89: scrap.admin.v1.InspectService.GetShard:input_type -> scrap.admin.v1.GetShardRequest
+	7,   // 90: scrap.admin.v1.InspectService.GetDocument:input_type -> scrap.admin.v1.GetDocumentRequest
+	10,  // 91: scrap.admin.v1.InspectService.GetBlock:input_type -> scrap.admin.v1.GetBlockRequest
+	13,  // 92: scrap.admin.v1.InspectService.GetMember:input_type -> scrap.admin.v1.GetMemberRequest
+	16,  // 93: scrap.admin.v1.InspectService.GetCapacityRunway:input_type -> scrap.admin.v1.GetCapacityRunwayRequest
+	19,  // 94: scrap.admin.v1.OperationService.GetOperation:input_type -> scrap.admin.v1.GetOperationRequest
+	21,  // 95: scrap.admin.v1.OperationService.WatchOperation:input_type -> scrap.admin.v1.WatchOperationRequest
+	24,  // 96: scrap.admin.v1.OperationService.ListOperations:input_type -> scrap.admin.v1.ListOperationsRequest
+	26,  // 97: scrap.admin.v1.OperationService.CancelOperation:input_type -> scrap.admin.v1.CancelOperationRequest
+	28,  // 98: scrap.admin.v1.RestoreService.PlanRestore:input_type -> scrap.admin.v1.PlanRestoreRequest
+	30,  // 99: scrap.admin.v1.RestoreService.StartRestore:input_type -> scrap.admin.v1.StartRestoreRequest
+	32,  // 100: scrap.admin.v1.RestoreService.PlanPrewarm:input_type -> scrap.admin.v1.PlanPrewarmRequest
+	34,  // 101: scrap.admin.v1.RestoreService.StartPrewarm:input_type -> scrap.admin.v1.StartPrewarmRequest
+	36,  // 102: scrap.admin.v1.RepairService.GetRepairQueue:input_type -> scrap.admin.v1.GetRepairQueueRequest
+	39,  // 103: scrap.admin.v1.RepairService.PlanRepair:input_type -> scrap.admin.v1.PlanRepairRequest
+	41,  // 104: scrap.admin.v1.RepairService.StartRepair:input_type -> scrap.admin.v1.StartRepairRequest
+	43,  // 105: scrap.admin.v1.RepairService.PlanScrub:input_type -> scrap.admin.v1.PlanScrubRequest
+	45,  // 106: scrap.admin.v1.RepairService.StartScrub:input_type -> scrap.admin.v1.StartScrubRequest
+	47,  // 107: scrap.admin.v1.MemberService.CordonMember:input_type -> scrap.admin.v1.CordonMemberRequest
+	49,  // 108: scrap.admin.v1.MemberService.UncordonMember:input_type -> scrap.admin.v1.UncordonMemberRequest
+	51,  // 109: scrap.admin.v1.MemberService.GetEvictionSafety:input_type -> scrap.admin.v1.GetEvictionSafetyRequest
+	54,  // 110: scrap.admin.v1.MemberService.PlanDrain:input_type -> scrap.admin.v1.PlanDrainRequest
+	56,  // 111: scrap.admin.v1.MemberService.StartDrain:input_type -> scrap.admin.v1.StartDrainRequest
+	58,  // 112: scrap.admin.v1.LifecycleService.PlanTombstone:input_type -> scrap.admin.v1.PlanTombstoneRequest
+	60,  // 113: scrap.admin.v1.LifecycleService.StartTombstone:input_type -> scrap.admin.v1.StartTombstoneRequest
+	62,  // 114: scrap.admin.v1.KeyService.PlanKeyRotation:input_type -> scrap.admin.v1.PlanKeyRotationRequest
+	64,  // 115: scrap.admin.v1.KeyService.StartKeyRotation:input_type -> scrap.admin.v1.StartKeyRotationRequest
+	66,  // 116: scrap.admin.v1.CapacityService.PlanCapacityOverride:input_type -> scrap.admin.v1.PlanCapacityOverrideRequest
+	68,  // 117: scrap.admin.v1.CapacityService.StartCapacityOverride:input_type -> scrap.admin.v1.StartCapacityOverrideRequest
+	70,  // 118: scrap.admin.v1.DisasterRecoveryService.GetRecoveryReadiness:input_type -> scrap.admin.v1.GetRecoveryReadinessRequest
+	73,  // 119: scrap.admin.v1.DisasterRecoveryService.PlanRecovery:input_type -> scrap.admin.v1.PlanRecoveryRequest
+	75,  // 120: scrap.admin.v1.DisasterRecoveryService.StartMetadataRestore:input_type -> scrap.admin.v1.StartMetadataRestoreRequest
+	77,  // 121: scrap.admin.v1.DisasterRecoveryService.StartCopyVerify:input_type -> scrap.admin.v1.StartCopyVerifyRequest
+	79,  // 122: scrap.admin.v1.DisasterRecoveryService.StartDRDrill:input_type -> scrap.admin.v1.StartDRDrillRequest
+	2,   // 123: scrap.admin.v1.InspectService.GetClusterSummary:output_type -> scrap.admin.v1.GetClusterSummaryResponse
+	5,   // 124: scrap.admin.v1.InspectService.GetShard:output_type -> scrap.admin.v1.GetShardResponse
+	8,   // 125: scrap.admin.v1.InspectService.GetDocument:output_type -> scrap.admin.v1.GetDocumentResponse
+	11,  // 126: scrap.admin.v1.InspectService.GetBlock:output_type -> scrap.admin.v1.GetBlockResponse
+	14,  // 127: scrap.admin.v1.InspectService.GetMember:output_type -> scrap.admin.v1.GetMemberResponse
+	17,  // 128: scrap.admin.v1.InspectService.GetCapacityRunway:output_type -> scrap.admin.v1.GetCapacityRunwayResponse
+	20,  // 129: scrap.admin.v1.OperationService.GetOperation:output_type -> scrap.admin.v1.GetOperationResponse
+	22,  // 130: scrap.admin.v1.OperationService.WatchOperation:output_type -> scrap.admin.v1.WatchOperationResponse
+	25,  // 131: scrap.admin.v1.OperationService.ListOperations:output_type -> scrap.admin.v1.ListOperationsResponse
+	27,  // 132: scrap.admin.v1.OperationService.CancelOperation:output_type -> scrap.admin.v1.CancelOperationResponse
+	29,  // 133: scrap.admin.v1.RestoreService.PlanRestore:output_type -> scrap.admin.v1.PlanRestoreResponse
+	31,  // 134: scrap.admin.v1.RestoreService.StartRestore:output_type -> scrap.admin.v1.StartRestoreResponse
+	33,  // 135: scrap.admin.v1.RestoreService.PlanPrewarm:output_type -> scrap.admin.v1.PlanPrewarmResponse
+	35,  // 136: scrap.admin.v1.RestoreService.StartPrewarm:output_type -> scrap.admin.v1.StartPrewarmResponse
+	37,  // 137: scrap.admin.v1.RepairService.GetRepairQueue:output_type -> scrap.admin.v1.GetRepairQueueResponse
+	40,  // 138: scrap.admin.v1.RepairService.PlanRepair:output_type -> scrap.admin.v1.PlanRepairResponse
+	42,  // 139: scrap.admin.v1.RepairService.StartRepair:output_type -> scrap.admin.v1.StartRepairResponse
+	44,  // 140: scrap.admin.v1.RepairService.PlanScrub:output_type -> scrap.admin.v1.PlanScrubResponse
+	46,  // 141: scrap.admin.v1.RepairService.StartScrub:output_type -> scrap.admin.v1.StartScrubResponse
+	48,  // 142: scrap.admin.v1.MemberService.CordonMember:output_type -> scrap.admin.v1.CordonMemberResponse
+	50,  // 143: scrap.admin.v1.MemberService.UncordonMember:output_type -> scrap.admin.v1.UncordonMemberResponse
+	52,  // 144: scrap.admin.v1.MemberService.GetEvictionSafety:output_type -> scrap.admin.v1.GetEvictionSafetyResponse
+	55,  // 145: scrap.admin.v1.MemberService.PlanDrain:output_type -> scrap.admin.v1.PlanDrainResponse
+	57,  // 146: scrap.admin.v1.MemberService.StartDrain:output_type -> scrap.admin.v1.StartDrainResponse
+	59,  // 147: scrap.admin.v1.LifecycleService.PlanTombstone:output_type -> scrap.admin.v1.PlanTombstoneResponse
+	61,  // 148: scrap.admin.v1.LifecycleService.StartTombstone:output_type -> scrap.admin.v1.StartTombstoneResponse
+	63,  // 149: scrap.admin.v1.KeyService.PlanKeyRotation:output_type -> scrap.admin.v1.PlanKeyRotationResponse
+	65,  // 150: scrap.admin.v1.KeyService.StartKeyRotation:output_type -> scrap.admin.v1.StartKeyRotationResponse
+	67,  // 151: scrap.admin.v1.CapacityService.PlanCapacityOverride:output_type -> scrap.admin.v1.PlanCapacityOverrideResponse
+	69,  // 152: scrap.admin.v1.CapacityService.StartCapacityOverride:output_type -> scrap.admin.v1.StartCapacityOverrideResponse
+	71,  // 153: scrap.admin.v1.DisasterRecoveryService.GetRecoveryReadiness:output_type -> scrap.admin.v1.GetRecoveryReadinessResponse
+	74,  // 154: scrap.admin.v1.DisasterRecoveryService.PlanRecovery:output_type -> scrap.admin.v1.PlanRecoveryResponse
+	76,  // 155: scrap.admin.v1.DisasterRecoveryService.StartMetadataRestore:output_type -> scrap.admin.v1.StartMetadataRestoreResponse
+	78,  // 156: scrap.admin.v1.DisasterRecoveryService.StartCopyVerify:output_type -> scrap.admin.v1.StartCopyVerifyResponse
+	80,  // 157: scrap.admin.v1.DisasterRecoveryService.StartDRDrill:output_type -> scrap.admin.v1.StartDRDrillResponse
+	123, // [123:158] is the sub-list for method output_type
+	88,  // [88:123] is the sub-list for method input_type
+	88,  // [88:88] is the sub-list for extension type_name
+	88,  // [88:88] is the sub-list for extension extendee
+	0,   // [0:88] is the sub-list for field type_name
 }
 
 func init() { file_scrap_admin_v1_admin_proto_init() }
@@ -4616,9 +5153,9 @@ func file_scrap_admin_v1_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_admin_v1_admin_proto_rawDesc), len(file_scrap_admin_v1_admin_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   88,
+			NumMessages:   100,
 			NumExtensions: 0,
-			NumServices:   7,
+			NumServices:   9,
 		},
 		GoTypes:           file_scrap_admin_v1_admin_proto_goTypes,
 		DependencyIndexes: file_scrap_admin_v1_admin_proto_depIdxs,
