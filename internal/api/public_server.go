@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -109,7 +110,7 @@ func (s *PublicServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1.W
 
 	first, err := stream.Recv()
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return invalidArgument("message", reasonInvalidStreamOrder, "first write message must be init")
 		}
 		return err

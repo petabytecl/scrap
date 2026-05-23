@@ -26,6 +26,7 @@ func (r Runner) run(ctx context.Context, ticks <-chan time.Time) error {
 	for {
 		result, err := r.runOnce(ctx)
 		if err != nil && ctx.Err() != nil {
+			//nolint:nilerr // Context cancellation is the normal shutdown path for this runner.
 			return nil
 		}
 		if r.Report != nil {

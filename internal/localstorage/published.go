@@ -110,12 +110,16 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	if err != nil {
 		return MetadataRestoreResult{}, err
 	}
-	defer os.RemoveAll(drillDir)
+	defer func() {
+		_ = os.RemoveAll(drillDir)
+	}()
 	drillApp, err := Open(drillDir)
 	if err != nil {
 		return MetadataRestoreResult{}, err
 	}
-	defer drillApp.Close()
+	defer func() {
+		_ = drillApp.Close()
+	}()
 	drillApp.now = a.now
 	drillApp.SetBackendStore(a.backendStore)
 	result, err := drillApp.RestorePublishedMetadataCheckpoint(ctx, true)

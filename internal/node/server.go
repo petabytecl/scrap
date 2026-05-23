@@ -35,11 +35,12 @@ func Listen(cfg config.Config, apps Applications) (*Server, error) {
 		return nil, err
 	}
 
-	publicListener, err := net.Listen("tcp", cfg.PublicListenAddress)
+	listenConfig := net.ListenConfig{}
+	publicListener, err := listenConfig.Listen(context.Background(), "tcp", cfg.PublicListenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("listen public grpc: %w", err)
 	}
-	adminListener, err := net.Listen("tcp", cfg.AdminListenAddress)
+	adminListener, err := listenConfig.Listen(context.Background(), "tcp", cfg.AdminListenAddress)
 	if err != nil {
 		_ = publicListener.Close()
 		return nil, fmt.Errorf("listen admin grpc: %w", err)

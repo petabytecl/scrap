@@ -2,6 +2,7 @@
 .PHONY: proto-check
 .PHONY: fmt-check
 .PHONY: lint
+.PHONY: vuln
 .PHONY: test
 .PHONY: test-race
 .PHONY: build
@@ -13,6 +14,9 @@
 
 GO ?= go
 BUF ?= buf
+GOLANGCI_LINT_VERSION ?= v2.10.1
+GOLANGCI_LINT ?= $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+GOVULNCHECK_VERSION ?= v1.3.0
 PROTO_BREAKING_REF ?= main
 PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 
@@ -33,7 +37,10 @@ fmt-check:
 	@test -z "$$(gofmt -l .)"
 
 lint:
-	$(GO) vet ./...
+	$(GOLANGCI_LINT) run --timeout=5m
+
+vuln:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 test:
 	$(GO) test ./...

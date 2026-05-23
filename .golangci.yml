@@ -1,0 +1,56 @@
+version: "2"
+
+run:
+  go: "1.26"
+  timeout: 5m
+  tests: true
+
+issues:
+  max-same-issues: 20
+
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - errcheck
+    - errorlint
+    - gosec
+    - govet
+    - nilerr
+    - nilnil
+    - noctx
+    - nolintlint
+    - staticcheck
+
+  exclusions:
+    paths:
+      # Generated protobuf/gRPC code is verified by buf and generated-code
+      # cleanliness checks. Handwritten code must satisfy the lint baseline.
+      - ^internal/gen/
+      # Spike code is disposable evidence, not production storage-gateway code.
+      # Production code paths remain covered by the lint baseline.
+      - ^internal/spike/
+    rules:
+      # Test cleanup and temporary-file probes are not release-safety signals.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      # Existing filesystem path construction is rooted in configured storage
+      # directories, but gosec cannot prove that through current abstractions.
+      # Issue #56 tracks these pre-existing taint findings.
+      - linters:
+          - gosec
+        text: "G(304|703):"
+      # Existing storage-format and protobuf enum conversions need explicit range
+      # guards. Issue #56 tracks this pre-existing conversion debt.
+      - linters:
+          - gosec
+        text: "G115:"
+      # Close errors on read-only files, iterators, and cleanup paths are tracked
+      # separately from durability-boundary sync errors by issue #57.
+      - linters:
+          - errcheck
+        text: "Error return value of `.*\\.Close` is not checked"
