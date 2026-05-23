@@ -7,10 +7,14 @@ import (
 )
 
 var (
+	ErrThrottled        = errors.New("backend: throttled")
+	ErrTransient        = errors.New("backend: transient failure")
+	ErrAuth             = errors.New("backend: authentication or authorization failed")
 	ErrNotFound         = errors.New("backend: object not found")
 	ErrConflict         = errors.New("backend: object already exists with different content")
 	ErrChecksumMismatch = errors.New("backend: checksum mismatch")
 	ErrInvalidRange     = errors.New("backend: invalid range")
+	ErrPermanent        = errors.New("backend: permanent failure")
 )
 
 type Object struct {
