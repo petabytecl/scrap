@@ -24,3 +24,41 @@ Evidence artifacts should include the OpenBao namespace/key path, key version
 before and after rewrap, operation ID, audit device status, and redacted request
 IDs. They must not include plaintext DEKs, wrapped DEKs, backend object bytes, or
 OpenBao tokens.
+
+## Local Rehearsal Command
+
+The repo-owned local evidence path is:
+
+```sh
+export BAO_TOKEN=local-root
+make openbao-smoke-evidence
+```
+
+`make openbao-smoke-evidence` creates a short-lived Kubernetes service account
+JWT for `openbao-transit-smoke` in the `scrap-local` namespace and runs
+`scrap-openbao-smoke`. The token is passed through the process environment, not
+through CLI flags. The generated report defaults to
+`openbao-transit-smoke-evidence.json`.
+
+The local-kind OpenBao bootstrap job enables the `kubernetes` auth method,
+creates the `scrap-transit-client` policy, and binds it to the
+`openbao-transit-smoke` service account. That policy can request data keys,
+unwrap, rewrap, and inspect its own capabilities; it does not grant broad
+Transit key-admin permissions such as create, update, delete, or sudo on
+`transit/keys/*`.
+
+The report records:
+
+- release SHA, dirty-tree status, profile ID, namespace, and OpenBao deployment;
+- Kubernetes auth role, returned policies, and self-reported capabilities;
+- Transit key name and key versions before data-key, after rotate, and after
+  rewrap;
+- AAD context digest, unwrap/rewrap AAD match status, operation IDs, audit
+  device status, and redacted request IDs;
+- crypto-unavailable outcomes for a missing key version and a configured
+  transport outage probe;
+- explicit evidence limits stating that local smoke is release rehearsal only.
+
+The command returns non-zero if the Kubernetes-authenticated token has broad key
+admin capabilities, if the expected Transit operations fail, or if
+crypto-unavailable cases unexpectedly succeed.
