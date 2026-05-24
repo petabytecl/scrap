@@ -20,6 +20,7 @@ Thumbs.db
 /dist/
 /tmp/
 coverage.out
+test-results/
 *.coverprofile
 *.prof
 *.pprof

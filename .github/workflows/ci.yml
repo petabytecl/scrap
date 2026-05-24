@@ -30,12 +30,19 @@ jobs:
           go install github.com/bufbuild/buf/cmd/buf@v1.66.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - run: make check
+      - name: Run validation gate
+        id: check
+        run: make check
+        continue-on-error: true
 
       - name: Generate coverage profile
+        id: coverage
+        if: ${{ always() && steps.check.outcome == 'success' }}
         run: make cover
+        continue-on-error: true
 
       - name: Upload coverage to Codecov
+        if: ${{ always() && steps.coverage.outcome == 'success' }}
         uses: codecov/codecov-action@v6
         with:
           files: ./coverage.out
@@ -44,6 +51,28 @@ jobs:
           use_oidc: true
           fail_ci_if_error: true
           disable_search: true
+
+      - name: Generate JUnit test report
+        id: test-results
+        if: ${{ always() }}
+        run: make test-junit
+        continue-on-error: true
+
+      - name: Upload test results to Codecov
+        if: ${{ always() && hashFiles('test-results/junit.xml') != '' }}
+        uses: codecov/codecov-action@v6
+        with:
+          report_type: test_results
+          files: ./test-results/junit.xml
+          flags: go
+          name: scrap-go-tests
+          use_oidc: true
+          fail_ci_if_error: true
+          disable_search: true
+
+      - name: Fail if validation failed
+        if: ${{ steps.check.outcome == 'failure' || steps.coverage.outcome == 'failure' || steps.test-results.outcome == 'failure' }}
+        run: exit 1
 
   vulnerability:
     runs-on: ubuntu-latest

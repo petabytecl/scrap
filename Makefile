@@ -3,7 +3,7 @@
 .PHONY: help
 .PHONY: proto proto-check
 .PHONY: fmt fmt-check lint vuln
-.PHONY: test test-compat test-race cover build check
+.PHONY: test test-compat test-race test-junit cover build check
 .PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
 .PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence local-dr-drill-evidence
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
@@ -19,6 +19,10 @@ COMPAT_PACKAGES ?= ./internal/compat
 COVER_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
 COVERPROFILE ?= coverage.out
 COVERMODE ?= atomic
+TEST_RESULTS_DIR ?= test-results
+JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
+GOTESTSUM_VERSION ?= v1.13.0
+GOTESTSUM ?= $(GO) run gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 LINT_TIMEOUT ?= 5m
 GOLANGCI_LINT_VERSION ?= v2.10.1
 GOLANGCI_LINT ?= $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -98,6 +102,10 @@ test-compat: ## Run compatibility tests for stored data and metadata boundaries.
 
 test-race: ## Run package tests with the Go race detector.
 	$(GO) test -race $(TEST_PACKAGES)
+
+test-junit: ## Run package tests and write a JUnit XML report.
+	mkdir -p "$(TEST_RESULTS_DIR)"
+	$(GOTESTSUM) --junitfile "$(JUNIT_REPORT)" --format testname -- $(TEST_PACKAGES)
 
 cover: ## Run package tests and write a coverage profile.
 	$(GO) test -covermode=$(COVERMODE) -coverprofile=$(COVERPROFILE) $(COVER_PACKAGES)

@@ -12,9 +12,66 @@ coverage:
         if_ci_failed: error
 
 comment:
-  layout: "reach,diff,flags,tree,footer"
+  layout: "reach,diff,flags,components,tree,footer"
   behavior: default
   require_changes: false
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 2%
+  individual_components:
+    - component_id: service-runtime
+      name: Service Runtime
+      paths:
+        - cmd/scrapd/**
+        - internal/api/**
+        - internal/appstatus/**
+        - internal/authz/**
+        - internal/config/**
+        - internal/identity/**
+        - internal/node/**
+        - internal/storageapp/**
+    - component_id: storage-core
+      name: Storage Core
+      paths:
+        - internal/backend/**
+        - internal/backendupload/**
+        - internal/blockstore/**
+        - internal/compat/**
+        - internal/cryptoenv/**
+        - internal/localstorage/**
+        - internal/storageformat/**
+    - component_id: metadata-plane
+      name: Metadata Plane
+      paths:
+        - internal/metastore/**
+        - internal/published/**
+        - internal/raftmeta/**
+    - component_id: replication-placement
+      name: Replication and Placement
+      paths:
+        - internal/placement/**
+        - internal/replication/**
+    - component_id: operator-release
+      name: Operator and Release Evidence
+      paths:
+        - cmd/scrap-crash-fault-evidence/**
+        - cmd/scrap-local-dr-drill-evidence/**
+        - cmd/scrap-local-soak-evidence/**
+        - cmd/scrap-openbao-smoke/**
+        - cmd/scrap-release-gate/**
+        - cmd/scrapctl/**
+        - internal/capacitysample/**
+        - internal/crashfault/**
+        - internal/localdrill/**
+        - internal/localsoak/**
+        - internal/openbaosmoke/**
+        - internal/operations/**
+        - internal/releasegate/**
+        - internal/scrapctl/**
 
 ignore:
   - "internal/gen/**"
