@@ -70,6 +70,58 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	requireRebuiltRepairState(t, repair)
 }
 
+func TestAuthorityCompleteTransactionRetryDoesNotAppend(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	document := authorityTestDocument("invoice.xml", []byte{1})
+	completedAt := time.Unix(200, 0).UTC()
+
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()), "commit document")
+	first, err := authority.CompleteTransaction(context.Background(), identity.Transaction{
+		TenantID:      document.Identity.TenantID,
+		TransactionID: document.Identity.TransactionID,
+	}, completedAt, map[string]string{"closed_by": "first"}, "cmd-2")
+	testutil.RequireNoErrorf(t, err, "complete transaction")
+	firstIndex := authority.AppliedIndex()
+
+	retry, err := authority.CompleteTransaction(context.Background(), first.Identity, completedAt.Add(time.Hour), map[string]string{"closed_by": "retry"}, "cmd-3")
+	testutil.RequireNoErrorf(t, err, "retry complete transaction")
+
+	testutil.RequireEqualf(t, authority.AppliedIndex(), firstIndex, "applied index after retry")
+	testutil.RequireDeepEqualf(t, retry.Tags, first.Tags, "retry tags")
+	if retry.CompletedAt == nil || !retry.CompletedAt.Equal(completedAt) {
+		t.Fatalf("retry completed_at = %v, want original %v", retry.CompletedAt, completedAt)
+	}
+}
+
+func TestAuthorityCompleteTransactionRejectsClosedTransactionWithoutAppending(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	timeoutAt := time.Unix(200, 0).UTC()
+	transaction := metastore.Transaction{
+		Identity: identity.Transaction{
+			TenantID:      "tenant",
+			TransactionID: "txn",
+		},
+		State:     metastore.TransactionStateTimedOut,
+		CreatedAt: time.Unix(100, 0).UTC(),
+		TimeoutAt: &timeoutAt,
+		Tags:      map[string]string{"reason": "timeout"},
+	}
+	installAuthorityTransactionSnapshot(t, metadata, transaction)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	beforeIndex := authority.AppliedIndex()
+
+	_, err := authority.CompleteTransaction(context.Background(), transaction.Identity, timeoutAt.Add(time.Minute), nil, "cmd-1")
+	if !errors.Is(err, metastore.ErrTransactionClosed) {
+		t.Fatalf("complete closed transaction error = %v, want %v", err, metastore.ErrTransactionClosed)
+	}
+	testutil.RequireEqualf(t, authority.AppliedIndex(), beforeIndex, "applied index after rejected completion")
+}
+
 func TestAuthorityRejectsConflictingCommitWithoutPoisoningLog(t *testing.T) {
 	dir := t.TempDir()
 	metadata := openTestMetadata(t, dir)
@@ -366,6 +418,25 @@ func openTestMetadata(t *testing.T, dir string) *metastore.Store {
 	metadata, err := metastore.Open(dir)
 	testutil.RequireNoErrorf(t, err, "open metadata")
 	return metadata
+}
+
+func installAuthorityTransactionSnapshot(t *testing.T, metadata *metastore.Store, transaction metastore.Transaction) {
+	t.Helper()
+	err := metadata.ApplyShardSnapshot(&metastorev1.ShardSnapshot{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		Membership: &metastorev1.MembershipState{
+			Members: []*metastorev1.MembershipMember{
+				{
+					RaftId:   1,
+					MemberId: "member-a",
+					Role:     metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER,
+				},
+			},
+		},
+		Transactions: []*metastorev1.TransactionRecord{metastore.TransactionRecord(transaction)},
+	})
+	testutil.RequireNoErrorf(t, err, "install transaction snapshot")
 }
 
 type controlledFreshness struct {
