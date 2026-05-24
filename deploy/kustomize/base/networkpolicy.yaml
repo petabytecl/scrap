@@ -14,6 +14,12 @@ spec:
         - podSelector:
             matchLabels:
               scrap.petabyte.cl/allowed-public-client: "true"
+        - namespaceSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-public-client-namespace: "true"
+          podSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-public-client: "true"
       ports:
         - protocol: TCP
           port: 18080

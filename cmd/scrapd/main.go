@@ -33,6 +33,10 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		return runHealthcheck(os.Args[2:], os.Stderr)
+	}
+
 	cfg := config.Default()
 	registerFlags(&cfg)
 	flag.Parse()

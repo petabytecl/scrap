@@ -43,16 +43,26 @@ spec:
             - name: metrics
               containerPort: 18082
           readinessProbe:
-            grpc:
-              port: 18081
-              service: scrap.admin.v1-readiness
+            exec:
+              command:
+                - /scrapd
+                - healthcheck
+                - --address=127.0.0.1:18081
+                - --service=scrap.admin.v1-readiness
+                - --timeout=1s
             initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 2
           livenessProbe:
-            grpc:
-              port: 18081
+            exec:
+              command:
+                - /scrapd
+                - healthcheck
+                - --address=127.0.0.1:18081
+                - --timeout=1s
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 2
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
