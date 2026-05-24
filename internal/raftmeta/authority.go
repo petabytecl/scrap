@@ -27,12 +27,45 @@ type Authority struct {
 	localMemberID string
 	freshness     FreshnessChecker
 	snapshotIndex uint64
+	appliedIndex  uint64
+
+	proposals         chan *authorityProposal
+	stopProposals     chan struct{}
+	proposalsDone     chan struct{}
+	closeOnce         sync.Once
+	metadataBatchWait time.Duration
+	metadataBatchMax  int
+	failureErr        error
 }
 
 type AuthorityOptions struct {
 	Members          []Member
 	LocalMemberID    string
 	FreshnessChecker FreshnessChecker
+}
+
+const (
+	defaultAuthorityProposalQueue = 1024
+	defaultMetadataBatchWait      = 2 * time.Millisecond
+	defaultMetadataBatchMax       = 64
+)
+
+type authorityProposal struct {
+	ctx     context.Context
+	prepare func() (preparedAuthorityCommand, error)
+	done    chan authorityProposalResult
+}
+
+type preparedAuthorityCommand struct {
+	proposal *authorityProposal
+	command  *metastorev1.ShardCommand
+	result   any
+	after    func() (any, error)
+}
+
+type authorityProposalResult struct {
+	value any
+	err   error
 }
 
 func OpenAuthority(dir, shardID string, store *metastore.Store) (*Authority, error) {
@@ -57,6 +90,12 @@ func OpenAuthorityWithOptions(dir, shardID string, store *metastore.Store, optio
 		store:     store,
 		members:   normalizeMembers(options.Members),
 		freshness: options.FreshnessChecker,
+
+		proposals:         make(chan *authorityProposal, defaultAuthorityProposalQueue),
+		stopProposals:     make(chan struct{}),
+		proposalsDone:     make(chan struct{}),
+		metadataBatchWait: defaultMetadataBatchWait,
+		metadataBatchMax:  defaultMetadataBatchMax,
 	}
 	if err := authority.installLatestSnapshot(); err != nil {
 		_ = log.Close()
@@ -73,6 +112,7 @@ func OpenAuthorityWithOptions(dir, shardID string, store *metastore.Store, optio
 	if authority.freshness == nil {
 		authority.freshness = singleVoterFreshnessChecker{}
 	}
+	go authority.runProposalWorker()
 	return authority, nil
 }
 
@@ -80,14 +120,20 @@ func (a *Authority) Close() error {
 	if a == nil || a.log == nil {
 		return nil
 	}
+	a.closeOnce.Do(func() {
+		close(a.stopProposals)
+		<-a.proposalsDone
+	})
 	return a.log.Close()
 }
 
 func (a *Authority) AppliedIndex() uint64 {
-	if a == nil || a.log == nil {
+	if a == nil {
 		return 0
 	}
-	return a.log.LastIndex()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.appliedIndex
 }
 
 func (a *Authority) EnsureWriteReady(ctx context.Context) error {
@@ -108,7 +154,7 @@ func (a *Authority) CreateSnapshot(ctx context.Context) (SnapshotInfo, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	snapshot, err := a.buildSnapshotLocked(a.log.LastIndex())
+	snapshot, err := a.buildSnapshotLocked(a.appliedIndex)
 	if err != nil {
 		return SnapshotInfo{}, err
 	}
@@ -163,12 +209,13 @@ func (a *Authority) CommitDocument(ctx context.Context, document metastore.Docum
 			},
 		},
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	if err := a.ensureNoConflictingDocument(document); err != nil {
-		return err
-	}
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		if err := a.ensureNoConflictingDocument(document); err != nil {
+			return preparedAuthorityCommand{}, err
+		}
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) CompleteTransaction(ctx context.Context, transaction identity.Transaction, completedAt time.Time, tags map[string]string, commandID string) (metastore.Transaction, error) {
@@ -177,18 +224,6 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 	}
 	if err := a.requireWriteQuorum(ctx); err != nil {
 		return metastore.Transaction{}, err
-	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	current, err := a.store.GetTransaction(transaction)
-	if err != nil {
-		return metastore.Transaction{}, err
-	}
-	if current.State == metastore.TransactionStateCompleted {
-		return current, nil
-	}
-	if current.State != metastore.TransactionStateOpen {
-		return metastore.Transaction{}, fmt.Errorf("%w: transaction %s/%s is not open", metastore.ErrTransactionClosed, transaction.TenantID, transaction.TransactionID)
 	}
 	command := &metastorev1.ShardCommand{
 		SchemaVersion: metastore.CurrentSchemaVersion,
@@ -204,10 +239,32 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 			},
 		},
 	}
-	if err := a.appendAndApplyLocked(command); err != nil {
+	result, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		current, err := a.store.GetTransaction(transaction)
+		if err != nil {
+			return preparedAuthorityCommand{}, err
+		}
+		if current.State == metastore.TransactionStateCompleted {
+			return preparedAuthorityCommand{result: current}, nil
+		}
+		if current.State != metastore.TransactionStateOpen {
+			return preparedAuthorityCommand{}, fmt.Errorf("%w: transaction %s/%s is not open", metastore.ErrTransactionClosed, transaction.TenantID, transaction.TransactionID)
+		}
+		return preparedAuthorityCommand{
+			command: command,
+			after: func() (any, error) {
+				return a.store.GetTransaction(transaction)
+			},
+		}, nil
+	})
+	if err != nil {
 		return metastore.Transaction{}, err
 	}
-	return a.store.GetTransaction(transaction)
+	completed, ok := result.(metastore.Transaction)
+	if !ok {
+		return metastore.Transaction{}, errors.New("raftmeta: complete transaction returned invalid result")
+	}
+	return completed, nil
 }
 
 func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.UploadIntent, commandID string, proposedAt time.Time) error {
@@ -231,9 +288,10 @@ func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.Upl
 			},
 		},
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string, state metastore.UploadState, lastError, commandID string, proposedAt time.Time) error {
@@ -258,9 +316,10 @@ func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string,
 	if lastError != "" {
 		command.GetUpdateUploadIntentState().LastError = &lastError
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity.Document, state metastore.RestoreState, reason, commandID string, proposedAt time.Time) error {
@@ -286,9 +345,10 @@ func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity
 			},
 		},
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transaction identity.Transaction, state metastore.RestoreState, reason, commandID string, proposedAt time.Time) error {
@@ -312,9 +372,10 @@ func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transacti
 			},
 		},
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) RecordRepairState(ctx context.Context, state metastore.RepairState, commandID string, proposedAt time.Time) error {
@@ -340,9 +401,10 @@ func (a *Authority) RecordRepairState(ctx context.Context, state metastore.Repai
 			},
 		},
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID, commandID string) error {
@@ -367,9 +429,10 @@ func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document
 			},
 		},
 	}
-	unlock := a.lockPendingProposal()
-	defer unlock()
-	return a.appendAndApplyLocked(command)
+	_, err := a.submitProposal(ctx, func() (preparedAuthorityCommand, error) {
+		return preparedAuthorityCommand{command: command}, nil
+	})
+	return err
 }
 
 func (a *Authority) replay() error {
@@ -390,6 +453,7 @@ func (a *Authority) replay() error {
 		}
 		expectedIndex++
 	}
+	a.appliedIndex = expectedIndex - 1
 	return nil
 }
 
@@ -408,6 +472,7 @@ func (a *Authority) installLatestSnapshot() error {
 		return err
 	}
 	a.snapshotIndex = snapshot.GetLastIndex()
+	a.appliedIndex = a.snapshotIndex
 	a.log.EnsureNextIndex(a.snapshotIndex + 1)
 	a.members = normalizeMembers(membershipFromProto(snapshot.GetMembership()))
 	return nil
@@ -575,24 +640,189 @@ func (a *Authority) ensureNoConflictingDocument(document metastore.Document) err
 	return fmt.Errorf("%w: document already exists with different metadata", metastore.ErrConflict)
 }
 
-func (a *Authority) appendAndApplyLocked(command *metastorev1.ShardCommand) error {
-	entry, err := a.log.Append(command)
-	if err != nil {
-		return err
+func (a *Authority) submitProposal(ctx context.Context, prepare func() (preparedAuthorityCommand, error)) (any, error) {
+	proposal := &authorityProposal{
+		ctx:     ctx,
+		prepare: prepare,
+		done:    make(chan authorityProposalResult, 1),
 	}
-	if err := a.store.ApplyShardCommand(entry.Command); err != nil {
-		return err
+	observe.IncrementRaftQueueDepth()
+	defer observe.DecrementRaftQueueDepth()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-a.stopProposals:
+		return nil, errors.New("raftmeta: authority is closed")
+	case a.proposals <- proposal:
 	}
-	return nil
+
+	select {
+	case result := <-proposal.done:
+		return result.value, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-a.stopProposals:
+		return nil, errors.New("raftmeta: authority is closed")
+	}
 }
 
-func (a *Authority) lockPendingProposal() func() {
-	observe.IncrementRaftQueueDepth()
-	a.mu.Lock()
-	return func() {
-		observe.DecrementRaftQueueDepth()
-		a.mu.Unlock()
+func (a *Authority) runProposalWorker() {
+	defer close(a.proposalsDone)
+	for {
+		proposal, ok := a.receiveProposal()
+		if !ok {
+			a.failPendingProposals(errors.New("raftmeta: authority is closed"))
+			return
+		}
+		a.processProposalBatch(a.collectProposalBatch(proposal))
 	}
+}
+
+func (a *Authority) receiveProposal() (*authorityProposal, bool) {
+	select {
+	case <-a.stopProposals:
+		return nil, false
+	case proposal := <-a.proposals:
+		return proposal, true
+	}
+}
+
+func (a *Authority) collectProposalBatch(first *authorityProposal) []*authorityProposal {
+	batch := []*authorityProposal{first}
+	maxBatch := a.metadataBatchMax
+	if maxBatch < 1 {
+		maxBatch = 1
+	}
+	if a.metadataBatchWait <= 0 {
+		return a.drainReadyProposals(batch, maxBatch)
+	}
+	timer := time.NewTimer(a.metadataBatchWait)
+	defer timer.Stop()
+	for len(batch) < maxBatch {
+		select {
+		case proposal := <-a.proposals:
+			batch = append(batch, proposal)
+		case <-timer.C:
+			return batch
+		case <-a.stopProposals:
+			return batch
+		}
+	}
+	return batch
+}
+
+func (a *Authority) drainReadyProposals(batch []*authorityProposal, maxBatch int) []*authorityProposal {
+	for len(batch) < maxBatch {
+		select {
+		case proposal := <-a.proposals:
+			batch = append(batch, proposal)
+		default:
+			return batch
+		}
+	}
+	return batch
+}
+
+func (a *Authority) processProposalBatch(batch []*authorityProposal) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.failureErr != nil {
+		replyProposalBatch(batch, nil, a.failureErr)
+		return
+	}
+	prepared := a.prepareProposalBatch(batch)
+	if len(prepared) == 0 {
+		return
+	}
+	commands := make([]*metastorev1.ShardCommand, 0, len(prepared))
+	for _, command := range prepared {
+		commands = append(commands, command.command)
+	}
+	entries, err := a.log.AppendBatch(commands)
+	if err != nil {
+		failure := a.recordFailureLocked(err)
+		replyPreparedBatch(prepared, 0, failure)
+		return
+	}
+	a.applyPreparedEntries(prepared, entries)
+}
+
+func (a *Authority) prepareProposalBatch(batch []*authorityProposal) []preparedAuthorityCommand {
+	prepared := make([]preparedAuthorityCommand, 0, len(batch))
+	for _, proposal := range batch {
+		if err := proposal.ctx.Err(); err != nil {
+			proposal.reply(nil, err)
+			continue
+		}
+		command, err := proposal.prepare()
+		if err != nil {
+			proposal.reply(nil, err)
+			continue
+		}
+		command.proposal = proposal
+		if command.command == nil {
+			proposal.reply(command.result, nil)
+			continue
+		}
+		prepared = append(prepared, command)
+	}
+	return prepared
+}
+
+func (a *Authority) applyPreparedEntries(prepared []preparedAuthorityCommand, entries []Entry) {
+	for index, entry := range entries {
+		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
+			failure := a.recordFailureLocked(fmt.Errorf("raftmeta: apply command at index %d: %w", entry.Index, err))
+			replyPreparedBatch(prepared, index, failure)
+			return
+		}
+		a.appliedIndex = entry.Index
+		value, err := prepared[index].afterApply()
+		prepared[index].proposal.reply(value, err)
+	}
+}
+
+func (command preparedAuthorityCommand) afterApply() (any, error) {
+	if command.after == nil {
+		return command.result, nil
+	}
+	return command.after()
+}
+
+func (a *Authority) recordFailureLocked(err error) error {
+	if a.failureErr == nil {
+		a.failureErr = err
+	}
+	return a.failureErr
+}
+
+func replyPreparedBatch(prepared []preparedAuthorityCommand, start int, err error) {
+	for _, command := range prepared[start:] {
+		command.proposal.reply(nil, err)
+	}
+}
+
+func replyProposalBatch(batch []*authorityProposal, value any, err error) {
+	for _, proposal := range batch {
+		proposal.reply(value, err)
+	}
+}
+
+func (a *Authority) failPendingProposals(err error) {
+	for {
+		select {
+		case proposal := <-a.proposals:
+			proposal.reply(nil, err)
+		default:
+			return
+		}
+	}
+}
+
+func (p *authorityProposal) reply(value any, err error) {
+	p.done <- authorityProposalResult{value: value, err: err}
 }
 
 func (a *Authority) requireWriteQuorum(ctx context.Context) error {
@@ -621,7 +851,7 @@ func (a *Authority) freshnessCheckLocked() FreshnessCheck {
 	return FreshnessCheck{
 		ShardID:       a.shardID,
 		LocalMemberID: a.localMemberID,
-		AppliedIndex:  a.log.LastIndex(),
+		AppliedIndex:  a.appliedIndex,
 		Members:       append([]Member(nil), a.members...),
 	}
 }

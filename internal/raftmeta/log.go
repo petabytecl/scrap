@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/closeutil"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/safepath"
 )
@@ -33,10 +35,12 @@ type Entry struct {
 }
 
 type Log struct {
-	mu        sync.Mutex
-	path      string
-	file      *os.File
-	nextIndex uint64
+	mu          sync.Mutex
+	path        string
+	file        *os.File
+	nextIndex   uint64
+	syncLogFile func() error
+	failureErr  error
 }
 
 func OpenLog(dir string) (*Log, error) {
@@ -65,7 +69,9 @@ func OpenLog(dir string) (*Log, error) {
 	if len(entries) > 0 {
 		nextIndex = entries[len(entries)-1].Index + 1
 	}
-	return &Log{path: path, file: file, nextIndex: nextIndex}, nil
+	log := &Log{path: path, file: file, nextIndex: nextIndex}
+	log.syncLogFile = log.defaultSyncLogFile
+	return log, nil
 }
 
 func (l *Log) Close() error {
@@ -80,36 +86,129 @@ func (l *Log) Close() error {
 }
 
 func (l *Log) Append(command *metastorev1.ShardCommand) (Entry, error) {
-	payload, err := metastore.MarshalShardCommand(command)
+	entries, err := l.AppendBatch([]*metastorev1.ShardCommand{command})
 	if err != nil {
 		return Entry{}, err
 	}
-	if len(payload) > MaxCommandBytes {
-		return Entry{}, fmt.Errorf("raftmeta: command is %d bytes; maximum is %d", len(payload), MaxCommandBytes)
+	if len(entries) == 0 {
+		return Entry{}, errors.New("raftmeta: no command appended")
 	}
+	return entries[0], nil
+}
 
+func (l *Log) AppendBatch(commands []*metastorev1.ShardCommand) ([]Entry, error) {
+	payloads, err := marshalCommandBatch(commands)
+	if err != nil {
+		return nil, err
+	}
+	if len(payloads) == 0 {
+		return nil, nil
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
-		return Entry{}, errors.New("raftmeta: log is closed")
+		return nil, errors.New("raftmeta: log is closed")
 	}
-	index := l.nextIndex
-	frame, err := encodeFrame(index, payload)
+	if l.failureErr != nil {
+		return nil, l.failureErr
+	}
+	entries, frames, err := l.buildFramesLocked(commands, payloads)
 	if err != nil {
-		return Entry{}, err
+		return nil, err
 	}
-	written, err := l.file.Write(frame)
+	if err := l.writeFrames(frames); err != nil {
+		return nil, l.recordFailureLocked(err)
+	}
+	start := time.Now()
+	err = l.syncLogFile()
+	outcome := observe.OutcomeSuccess
 	if err != nil {
-		return Entry{}, err
+		outcome = observe.OutcomeError
 	}
-	if written != len(frame) {
-		return Entry{}, io.ErrShortWrite
+	observe.RecordMetadataCommandSyncLatency(outcome, time.Since(start))
+	if err != nil {
+		observe.RecordBatchFailure(observe.BatchComponentRaftMeta, observe.BatchStageSync)
+		return nil, l.recordFailureLocked(err)
 	}
-	if err := l.file.Sync(); err != nil {
-		return Entry{}, err
+	observe.RecordMetadataCommandBatchSize(len(entries))
+	nextIndex, err := addLogIndex(l.nextIndex, len(entries))
+	if err != nil {
+		return nil, l.recordFailureLocked(err)
 	}
-	l.nextIndex++
-	return Entry{Index: index, Command: command}, nil
+	l.nextIndex = nextIndex
+	return entries, nil
+}
+
+func marshalCommandBatch(commands []*metastorev1.ShardCommand) ([][]byte, error) {
+	payloads := make([][]byte, 0, len(commands))
+	for _, command := range commands {
+		payload, err := metastore.MarshalShardCommand(command)
+		if err != nil {
+			return nil, err
+		}
+		if len(payload) > MaxCommandBytes {
+			return nil, fmt.Errorf("raftmeta: command is %d bytes; maximum is %d", len(payload), MaxCommandBytes)
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads, nil
+}
+
+func (l *Log) buildFramesLocked(commands []*metastorev1.ShardCommand, payloads [][]byte) ([]Entry, [][]byte, error) {
+	entries := make([]Entry, 0, len(payloads))
+	frames := make([][]byte, 0, len(payloads))
+	for index, payload := range payloads {
+		logIndex, err := addLogIndex(l.nextIndex, index)
+		if err != nil {
+			return nil, nil, err
+		}
+		frame, err := encodeFrame(logIndex, payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		entries = append(entries, Entry{Index: logIndex, Command: commands[index]})
+		frames = append(frames, frame)
+	}
+	return entries, frames, nil
+}
+
+func addLogIndex(first uint64, offset int) (uint64, error) {
+	offset64, err := safeconv.IntToUint64("command index offset", offset)
+	if err != nil {
+		return 0, err
+	}
+	value := first + offset64
+	if value < first {
+		return 0, errors.New("raftmeta: command index overflows uint64")
+	}
+	return value, nil
+}
+
+func (l *Log) writeFrames(frames [][]byte) error {
+	for _, frame := range frames {
+		written, err := l.file.Write(frame)
+		if err != nil {
+			return err
+		}
+		if written != len(frame) {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+
+func (l *Log) recordFailureLocked(err error) error {
+	if l.failureErr == nil {
+		l.failureErr = fmt.Errorf("raftmeta: command log sync failed: %w", err)
+	}
+	return l.failureErr
+}
+
+func (l *Log) defaultSyncLogFile() error {
+	if l.file == nil {
+		return errors.New("raftmeta: log is closed")
+	}
+	return l.file.Sync()
 }
 
 func (l *Log) Replay() ([]Entry, error) {

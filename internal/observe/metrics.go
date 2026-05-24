@@ -37,6 +37,8 @@ type metrics struct {
 	blockAppendQueueDepth prometheus.Gauge
 	blockSyncBatchSize    prometheus.Histogram
 	blockSyncLatency      *prometheus.HistogramVec
+	metadataBatchSize     prometheus.Histogram
+	metadataSyncLatency   *prometheus.HistogramVec
 	batchFailure          *prometheus.CounterVec
 }
 
@@ -117,6 +119,41 @@ func newMetrics() *metrics {
 				5,
 			},
 		}, []string{"outcome"}),
+		metadataBatchSize: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "scrap",
+			Name:      "metadata_command_batch_size",
+			Help:      "Number of metadata commands completed by one durable command-log sync.",
+			Buckets: []float64{
+				1,
+				2,
+				4,
+				8,
+				16,
+				32,
+				64,
+				128,
+				256,
+			},
+		}),
+		metadataSyncLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "scrap",
+			Name:      "metadata_command_sync_latency_seconds",
+			Help:      "Metadata command-log durable sync latency by outcome.",
+			Buckets: []float64{
+				0.001,
+				0.0025,
+				0.005,
+				0.01,
+				0.025,
+				0.05,
+				0.1,
+				0.25,
+				0.5,
+				1,
+				2.5,
+				5,
+			},
+		}, []string{"outcome"}),
 		batchFailure: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "scrap",
 			Name:      "batch_failures_total",
@@ -131,6 +168,8 @@ func newMetrics() *metrics {
 		m.blockAppendQueueDepth,
 		m.blockSyncBatchSize,
 		m.blockSyncLatency,
+		m.metadataBatchSize,
+		m.metadataSyncLatency,
 		m.batchFailure,
 	)
 	m.initializeZeroValueSeries()
@@ -151,6 +190,7 @@ func (m *metrics) initializeZeroValueSeries() {
 	m.blockAppendQueueDepth.Set(0)
 	for _, outcome := range []string{OutcomeSuccess, OutcomeError} {
 		m.blockSyncLatency.WithLabelValues(outcome)
+		m.metadataSyncLatency.WithLabelValues(outcome)
 	}
 	for _, component := range []string{BatchComponentBlockstore, BatchComponentRaftMeta} {
 		m.batchFailure.WithLabelValues(component, BatchStageSync)
@@ -212,6 +252,20 @@ func RecordBlockSyncLatency(outcome string, elapsed time.Duration) {
 		elapsed = 0
 	}
 	defaultMetrics.blockSyncLatency.WithLabelValues(normalizeWriteOutcome(outcome)).Observe(elapsed.Seconds())
+}
+
+func RecordMetadataCommandBatchSize(size int) {
+	if size < 0 {
+		size = 0
+	}
+	defaultMetrics.metadataBatchSize.Observe(float64(size))
+}
+
+func RecordMetadataCommandSyncLatency(outcome string, elapsed time.Duration) {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	defaultMetrics.metadataSyncLatency.WithLabelValues(normalizeWriteOutcome(outcome)).Observe(elapsed.Seconds())
 }
 
 func RecordBatchFailure(component, stage string) {

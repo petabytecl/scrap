@@ -57,9 +57,9 @@ The report includes:
 - ACK latency min, average, p50, p95, p99, and max;
 - threshold settings and violations;
 - component signal availability for block append sync latency, block append
-  queue depth, block sync batch size, metadata commit latency, and raft queue
-  depth.
+  queue depth, block sync batch size, metadata command sync latency, metadata
+  command batch size, and raft queue depth.
 
-#178 adds blockstore split metrics through Prometheus. Metadata-specific
-latency remains unavailable until #179. This local in-process harness records
+#178 adds blockstore split metrics through Prometheus. #179 adds metadata
+command-log sync and batch-size metrics. This local in-process harness records
 which component signals exist but does not scrape Prometheus.

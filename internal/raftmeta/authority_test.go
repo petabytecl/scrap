@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
@@ -146,6 +151,146 @@ func TestAuthorityRejectsConflictingCommitWithoutPoisoningLog(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "head document after reopen")
 	if head.Length != document.Length {
 		t.Fatalf("head length = %d, want %d", head.Length, document.Length)
+	}
+}
+
+func TestAuthorityConcurrentCommitsShareCommandLogSync(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	authority.metadataBatchWait = 50 * time.Millisecond
+	authority.metadataBatchMax = 16
+	var syncCalls atomic.Int32
+	authority.log.syncLogFile = func() error {
+		syncCalls.Add(1)
+		return authority.log.file.Sync()
+	}
+
+	documents := []metastore.Document{
+		authorityTestDocument("invoice-1.xml", []byte{1}),
+		authorityTestDocument("invoice-2.xml", []byte{2}),
+		authorityTestDocument("invoice-3.xml", []byte{3}),
+		authorityTestDocument("invoice-4.xml", []byte{4}),
+	}
+	for index := range documents {
+		documents[index].Location.BlockID = "block-batch-" + documents[index].Identity.DocumentName
+	}
+	start := make(chan struct{})
+	errs := make([]error, len(documents))
+	var wg sync.WaitGroup
+	wg.Add(len(documents))
+	for index, document := range documents {
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[index] = authority.CommitDocument(context.Background(), document, "cmd-batch-"+document.Identity.DocumentName, time.Unix(100, 0).UTC())
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for index, err := range errs {
+		testutil.RequireNoErrorf(t, err, "commit %d", index)
+	}
+	if got := syncCalls.Load(); got != 1 {
+		t.Fatalf("sync calls = %d, want 1", got)
+	}
+	if got := authority.AppliedIndex(); got != uint64(len(documents)) {
+		t.Fatalf("applied index = %d, want %d", got, len(documents))
+	}
+	for _, document := range documents {
+		_, err := metadata.HeadDocument(document.Identity)
+		testutil.RequireNoErrorf(t, err, "head committed document %s", document.Identity.DocumentName)
+	}
+	entries, err := authority.log.Replay()
+	testutil.RequireNoErrorf(t, err, "replay log")
+	if len(entries) != len(documents) {
+		t.Fatalf("entries = %d, want %d", len(entries), len(documents))
+	}
+	for index, entry := range entries {
+		want := uint64(index + 1)
+		if entry.Index != want {
+			t.Fatalf("entry %d index = %d, want %d", index, entry.Index, want)
+		}
+	}
+}
+
+func TestAuthorityDoesNotExposeMetadataBeforeCommandSync(t *testing.T) {
+	observe.SetRaftQueueDepth(0)
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	authority.metadataBatchWait = 0
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	var syncCalls atomic.Int32
+	authority.log.syncLogFile = func() error {
+		if syncCalls.Add(1) == 1 {
+			close(syncStarted)
+			<-releaseSync
+		}
+		return authority.log.file.Sync()
+	}
+	document := authorityTestDocument("pending-sync.xml", []byte{1})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.CommitDocument(context.Background(), document, "cmd-pending-sync", time.Unix(100, 0).UTC())
+	}()
+	<-syncStarted
+	if _, err := metadata.HeadDocument(document.Identity); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("head before durable sync error = %v, want %v", err, metastore.ErrNotFound)
+	}
+	requireScrapedMetric(t, "scrap_raft_queue_depth 1")
+	close(releaseSync)
+	testutil.RequireNoErrorf(t, <-done, "commit after sync")
+	_, err := metadata.HeadDocument(document.Identity)
+	testutil.RequireNoErrorf(t, err, "head after durable sync")
+	requireScrapedMetric(t, "scrap_raft_queue_depth 0")
+}
+
+func TestAuthoritySyncErrorFailsBatchAndSubsequentCommands(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	authority.metadataBatchWait = 50 * time.Millisecond
+	syncErr := errors.New("metadata sync failed")
+	authority.log.syncLogFile = func() error {
+		return syncErr
+	}
+
+	documents := []metastore.Document{
+		authorityTestDocument("failed-1.xml", []byte{1}),
+		authorityTestDocument("failed-2.xml", []byte{2}),
+	}
+	start := make(chan struct{})
+	errs := make([]error, len(documents))
+	var wg sync.WaitGroup
+	wg.Add(len(documents))
+	for index, document := range documents {
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[index] = authority.CommitDocument(context.Background(), document, "cmd-failed-"+document.Identity.DocumentName, time.Unix(100, 0).UTC())
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for index, err := range errs {
+		if !errors.Is(err, syncErr) {
+			t.Fatalf("commit %d error = %v, want %v", index, err, syncErr)
+		}
+	}
+	_, err := metadata.HeadDocument(documents[0].Identity)
+	if !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("failed document metadata error = %v, want %v", err, metastore.ErrNotFound)
+	}
+	recovered := authorityTestDocument("after-failure.xml", []byte{3})
+	err = authority.CommitDocument(context.Background(), recovered, "cmd-after-failure", time.Unix(200, 0).UTC())
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("commit after sync failure error = %v, want %v", err, syncErr)
 	}
 }
 
@@ -523,6 +668,17 @@ func closeTestAuthority(t *testing.T, authority *Authority, metadata *metastore.
 	t.Helper()
 	testutil.RequireNoErrorf(t, authority.Close(), "close authority")
 	testutil.RequireNoErrorf(t, metadata.Close(), "close metadata")
+}
+
+func requireScrapedMetric(t *testing.T, want string) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	observe.Handler().ServeHTTP(recorder, request)
+	testutil.RequireEqualf(t, recorder.Code, http.StatusOK, "metrics status")
+	if !strings.Contains(recorder.Body.String(), want) {
+		t.Fatalf("metrics body missing %q:\n%s", want, recorder.Body.String())
+	}
 }
 
 func authorityTestDocument(name string, fill []byte) metastore.Document {
