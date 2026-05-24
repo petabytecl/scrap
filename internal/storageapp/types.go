@@ -4,8 +4,62 @@ import (
 	"context"
 	"time"
 
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+)
+
+type DocumentClass uint8
+
+const (
+	DocumentClassUnspecified DocumentClass = iota
+	DocumentClassPermanent
+	DocumentClassEphemeral
+)
+
+type PriorityClass uint8
+
+const (
+	PriorityClassUnspecified PriorityClass = iota
+	PriorityClassCriticalIngest
+	PriorityClassNormal
+	PriorityClassBulk
+)
+
+type DocumentAvailability uint8
+
+const (
+	DocumentAvailabilityUnspecified DocumentAvailability = iota
+	DocumentAvailabilityHot
+	DocumentAvailabilityCold
+	DocumentAvailabilityRestorePending
+	DocumentAvailabilityCryptoUnavailable
+	DocumentAvailabilityDegradedRepair
+)
+
+type DocumentLifecycleState uint8
+
+const (
+	DocumentLifecycleStateUnspecified DocumentLifecycleState = iota
+	DocumentLifecycleStateActive
+	DocumentLifecycleStateTransactionCompleted
+	DocumentLifecycleStateTombstoned
+	DocumentLifecycleStatePendingReclamation
+)
+
+type StorageSource uint8
+
+const (
+	StorageSourceUnspecified StorageSource = iota
+	StorageSourceLocal
+	StorageSourceBackend
+)
+
+type TransactionStateKind uint8
+
+const (
+	TransactionStateUnspecified TransactionStateKind = iota
+	TransactionStateOpen
+	TransactionStateCompleted
+	TransactionStateTimedOut
 )
 
 type DocumentApplication interface {
@@ -31,8 +85,8 @@ type ReadDocumentSender interface {
 
 type WriteDocumentInit struct {
 	Identity             identity.Document
-	DocumentClass        scrapv1.DocumentClass
-	PriorityClass        scrapv1.PriorityClass
+	DocumentClass        DocumentClass
+	PriorityClass        PriorityClass
 	ContentType          string
 	ExpectedLength       *uint64
 	ExpectedSHA256       []byte
@@ -72,7 +126,7 @@ type DocumentFilter struct {
 	HasDocumentNameExact  bool
 	DocumentNamePrefix    string
 	HasDocumentNamePrefix bool
-	DocumentClass         scrapv1.DocumentClass
+	DocumentClass         DocumentClass
 	HasDocumentClass      bool
 	ContentType           string
 	HasContentType        bool
@@ -108,8 +162,8 @@ type FindDocumentsResult struct {
 
 type DocumentMetadata struct {
 	Identity                    identity.Document
-	DocumentClass               scrapv1.DocumentClass
-	PriorityClass               scrapv1.PriorityClass
+	DocumentClass               DocumentClass
+	PriorityClass               PriorityClass
 	ContentType                 string
 	HasContentType              bool
 	Length                      uint64
@@ -120,20 +174,20 @@ type DocumentMetadata struct {
 	HasWorkflowStage            bool
 	CreatedAt                   time.Time
 	FinalizedAt                 time.Time
-	Availability                scrapv1.DocumentAvailability
-	LifecycleState              scrapv1.DocumentLifecycleState
+	Availability                DocumentAvailability
+	LifecycleState              DocumentLifecycleState
 	Tags                        map[string]string
 }
 
 type ReadDocumentMetadata struct {
 	Metadata      DocumentMetadata
 	SelectedRange ReadRange
-	Source        scrapv1.StorageSource
+	Source        StorageSource
 }
 
 type TransactionState struct {
 	Transaction            identity.Transaction
-	State                  scrapv1.TransactionStateKind
+	State                  TransactionStateKind
 	DocumentCount          uint32
 	PermanentDocumentCount uint32
 	EphemeralDocumentCount uint32

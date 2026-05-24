@@ -33,6 +33,7 @@ import (
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/storageapp"
 	"github.com/petabytecl/scrap/internal/storageformat"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
@@ -47,8 +48,8 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 
 	result, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:             doc,
-		DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:        storageapp.DocumentClassPermanent,
+		PriorityClass:        storageapp.PriorityClassNormal,
 		ContentType:          "application/xml",
 		ExpectedLength:       &expectedLength,
 		ExpectedSHA256:       sum[:],
@@ -87,7 +88,7 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 		},
 	}, sender)
 	testutil.RequireNoErrorf(t, err, "read document")
-	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL)
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
 	requireSelectedRange(t, sender.metadata.SelectedRange, 3, 4)
 	requireReadBytes(t, sender, []byte("3456"))
 
@@ -96,7 +97,7 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 		Filter: api.DocumentFilter{
 			DocumentNamePrefix:    "invoice",
 			HasDocumentNamePrefix: true,
-			DocumentClass:         scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+			DocumentClass:         storageapp.DocumentClassPermanent,
 			HasDocumentClass:      true,
 			Tags: map[string]string{
 				"workflow": "billing",
@@ -123,7 +124,7 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 		},
 	})
 	testutil.RequireNoErrorf(t, err, "complete transaction")
-	testutil.RequireEqualf(t, transaction.State, scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED, "transaction state")
+	testutil.RequireEqualf(t, transaction.State, storageapp.TransactionStateCompleted, "transaction state")
 	testutil.RequireNotNilf(t, transaction.CompletedAt, "completed_at is nil")
 	testutil.RequireTruef(t, transaction.CompletedAt.Equal(completedAt), "completed_at = %v, want %v", transaction.CompletedAt, completedAt)
 }
@@ -144,7 +145,7 @@ func requirePendingUploadIntent(t *testing.T, intent metastore.UploadIntent, blo
 	testutil.RequireEqualf(t, intent.EnvelopeObjectKey, "blocks/"+blockID+".env", "envelope object key")
 }
 
-func requireReadSource(t *testing.T, sender *recordingReadSender, source scrapv1.StorageSource) {
+func requireReadSource(t *testing.T, sender *recordingReadSender, source storageapp.StorageSource) {
 	t.Helper()
 	testutil.RequireEqualf(t, sender.metadata.Source, source, "read source")
 }
@@ -204,8 +205,8 @@ func TestWriteDocumentPreparesPeersBeforeMetadataVisibility(t *testing.T) {
 
 	result, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -241,8 +242,8 @@ func TestWriteDocumentPeerPrepareFailureLeavesDocumentInvisible(t *testing.T) {
 
 	_, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	requireCode(t, err, codes.Unavailable)
@@ -260,8 +261,8 @@ func TestStrongMetadataReadsFailClosedWithoutReadIndex(t *testing.T) {
 	data := []byte("fresh metadata")
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -295,8 +296,8 @@ func TestWriteDocumentFailsClosedWhenLeaderIsStale(t *testing.T) {
 
 	_, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("stale leader must not ack")}))
 	requireCode(t, err, codes.FailedPrecondition)
@@ -318,8 +319,8 @@ func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
 
 	_, err = app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassEphemeral,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		ExpectedSHA256:   badSHA,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("real bytes")}))
@@ -354,8 +355,8 @@ func TestUnsafeCapacityAdmissionLeavesDocumentInvisible(t *testing.T) {
 
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		ExpectedLength:   &expectedLength,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
@@ -381,8 +382,8 @@ func TestCommittedWriteSurvivesReopen(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "open app")
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -591,8 +592,8 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	app.now = fixedClock(time.Unix(100, 0).UTC())
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -736,8 +737,8 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	testutil.RequireNoErrorf(t, err, "open app")
 	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -774,8 +775,8 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -807,8 +808,8 @@ func TestRunBackendUploadOnceDoesNotPublishDeferredOpenBlock(t *testing.T) {
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -838,8 +839,8 @@ func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -876,8 +877,8 @@ func TestRunBackendUploadOnceRepublishesMissingCurrentPointerAfterUploadedIntent
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -912,8 +913,8 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -933,8 +934,8 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read document")
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_BACKEND {
-		t.Fatalf("read source = %s, want backend", sender.metadata.Source)
+	if sender.metadata.Source != storageapp.StorageSourceBackend {
+		t.Fatalf("read source = %v, want backend", sender.metadata.Source)
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read bytes = %q, want %q", got, data)
@@ -960,8 +961,8 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	app.SetEnvelopeTransit(transit, "transit/backend")
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -993,7 +994,7 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	transit.SetMissingKey("transit/backend", false)
 	sender = &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read document with key material restored")
-	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_BACKEND)
+	requireReadSource(t, sender, storageapp.StorageSourceBackend)
 	requireReadBytes(t, sender, data)
 }
 
@@ -1024,8 +1025,8 @@ func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
 	app.SetEnvelopeTransit(transit, "transit/backend-v1")
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -1107,8 +1108,8 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1150,7 +1151,7 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 	testutil.RequireEqualf(t, restored.Availability, metastore.AvailabilityHot, "availability")
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
-	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL)
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
 	requireReadBytes(t, sender, data)
 }
 
@@ -1171,8 +1172,8 @@ func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1193,7 +1194,7 @@ func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
 
 	metadata, err := app.HeadDocument(ctx, api.HeadDocumentRequest{Identity: doc})
 	testutil.RequireNoErrorf(t, err, "head cold document")
-	if metadata.Availability != scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_COLD ||
+	if metadata.Availability != storageapp.DocumentAvailabilityCold ||
 		metadata.Length != uint64(len(data)) ||
 		metadata.Identity != doc {
 		t.Fatalf("metadata = %#v, want cold metadata from metastore", metadata)
@@ -1212,8 +1213,8 @@ func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T)
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1258,7 +1259,7 @@ func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T)
 	requireRestoreQueuedAndCompletedEvents(t, events)
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
-	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL)
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
 	requireReadBytes(t, sender, data)
 }
 
@@ -1289,8 +1290,8 @@ func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("terminal restore retry")})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1335,8 +1336,8 @@ func TestRunQueuedOperationsOnceKeepsArchiveRestorePendingAndRetries(t *testing.
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -1384,8 +1385,8 @@ func TestRunQueuedOperationsOncePrewarmsDocumentFromBackendAndAudits(t *testing.
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -1426,8 +1427,8 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1472,8 +1473,8 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	}
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read repaired document")
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want repaired local", sender.metadata.Source)
+	if sender.metadata.Source != storageapp.StorageSourceLocal {
+		t.Fatalf("read source = %v, want repaired local", sender.metadata.Source)
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("repaired bytes = %q, want %q", got, data)
@@ -1493,8 +1494,8 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.
 	app.SetPeerRepairSource("member-1", peer)
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1521,8 +1522,8 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.
 	}
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read repaired document")
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want repaired local", sender.metadata.Source)
+	if sender.metadata.Source != storageapp.StorageSourceLocal {
+		t.Fatalf("read source = %v, want repaired local", sender.metadata.Source)
 	}
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("repaired bytes = %q, want %q", got, data)
@@ -1542,8 +1543,8 @@ func TestRunQueuedOperationsOnceQuarantinesCorruptPeerAndFailsWithoutVerifiedSou
 	app.SetPeerRepairSource("member-1", peer)
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1590,8 +1591,8 @@ func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
 	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
 	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	requireNoErrorBeforeClosef(t, app, err, "write document")
@@ -1704,8 +1705,8 @@ func writeBackendDedupeDocument(ctx context.Context, t *testing.T, app *Applicat
 	t.Helper()
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write %s document", label)
@@ -1741,8 +1742,8 @@ func TestRepairDocumentFromVerifiedPeerPropagatesContextCancellation(t *testing.
 	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1768,8 +1769,8 @@ func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing
 	doc := testDocumentIdentity()
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -1810,8 +1811,8 @@ func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("cold bytes")})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1840,8 +1841,8 @@ func TestReadDocumentReturnsCryptoUnavailableDetail(t *testing.T) {
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("encrypted bytes")})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -1898,8 +1899,8 @@ func TestCleanFullReadReturnsVerifiedLocalBytes(t *testing.T) {
 	if !sender.sentMetadata {
 		t.Fatal("read did not send metadata")
 	}
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want local", sender.metadata.Source)
+	if sender.metadata.Source != storageapp.StorageSourceLocal {
+		t.Fatalf("read source = %v, want local", sender.metadata.Source)
 	}
 	if sender.metadata.SelectedRange.Offset != 0 ||
 		sender.metadata.SelectedRange.Length == nil ||
@@ -1929,8 +1930,8 @@ func TestRangedReadVerifiesEveryTouchedFrameBeforeStreaming(t *testing.T) {
 		},
 	}, sender)
 	testutil.RequireNoErrorf(t, err, "read ranged document")
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want local", sender.metadata.Source)
+	if sender.metadata.Source != storageapp.StorageSourceLocal {
+		t.Fatalf("read source = %v, want local", sender.metadata.Source)
 	}
 	if sender.metadata.SelectedRange.Offset != crossFrameOffset ||
 		sender.metadata.SelectedRange.Length == nil ||
@@ -1987,8 +1988,8 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	sum := sha256.Sum256(data)
 	init := api.WriteDocumentInit{
 		Identity:             doc,
-		DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:        storageapp.DocumentClassPermanent,
+		PriorityClass:        storageapp.PriorityClassNormal,
 		ExpectedLength:       &length,
 		ExpectedSHA256:       sum[:],
 		ClientIdempotencyKey: "replay-key",
@@ -2024,8 +2025,8 @@ func TestDuplicateWriteWithoutMatchingIdempotencyKeyIsConflict(t *testing.T) {
 	doc := testDocumentIdentity()
 	init := api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}
 	if _, err := app.WriteDocument(context.Background(), init, newChunkReader([][]byte{[]byte("first")})); err != nil {
@@ -2043,8 +2044,8 @@ func TestRunQueuedOperationsOnceAppliesDocumentTombstone(t *testing.T) {
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("delete me")})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -2090,8 +2091,8 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 	data := []byte("inspect me")
 	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -2232,8 +2233,8 @@ func TestCordonedLocalMemberRejectsNewWritesButAllowsReplay(t *testing.T) {
 	sum := sha256.Sum256(data)
 	init := api.WriteDocumentInit{
 		Identity:             doc,
-		DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:        storageapp.DocumentClassPermanent,
+		PriorityClass:        storageapp.PriorityClassNormal,
 		ExpectedLength:       &length,
 		ExpectedSHA256:       sum[:],
 		ClientIdempotencyKey: "write-1",
@@ -2282,8 +2283,8 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	app.SetBackendStore(backendStore)
 	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("published metadata bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -2343,8 +2344,8 @@ func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *tes
 	app.SetBackendStore(backendStore)
 	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("copy verify bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -2396,8 +2397,8 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 	doc := testDocumentIdentity()
 	_, err = source.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("metadata restore bytes")}))
 	testutil.RequireNoErrorf(t, err, "write source document")
@@ -2516,8 +2517,8 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 	app.SetBackendStore(backendStore)
 	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("dry-run drill bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -2565,8 +2566,8 @@ func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 	app.SetBackendStore(backendStore)
 	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("scratch drill bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
@@ -2911,8 +2912,8 @@ func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 	for _, doc := range []identity.Document{first, second} {
 		if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 			Identity:         doc,
-			DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-			PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+			DocumentClass:    storageapp.DocumentClassPermanent,
+			PriorityClass:    storageapp.PriorityClassNormal,
 			CreatedByService: "billing-etl",
 		}, newChunkReader([][]byte{[]byte(doc.DocumentName)})); err != nil {
 			t.Fatalf("write document %s: %v", doc.DocumentName, err)
@@ -3060,8 +3061,8 @@ func writeInitForCrashBoundary(doc identity.Document, data []byte, idempotencyKe
 	sum := sha256.Sum256(data)
 	return api.WriteDocumentInit{
 		Identity:             doc,
-		DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:        storageapp.DocumentClassPermanent,
+		PriorityClass:        storageapp.PriorityClassNormal,
 		ExpectedLength:       &length,
 		ExpectedSHA256:       sum[:],
 		ClientIdempotencyKey: idempotencyKey,
@@ -3089,8 +3090,8 @@ func writeLocalReadVerificationDocument(t *testing.T, app *Application, doc iden
 	t.Helper()
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
@@ -3131,8 +3132,8 @@ func writeDocumentForProjectionRebuild(t *testing.T, dir string, doc identity.Do
 	testutil.RequireNoErrorf(t, err, "open app")
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		_ = app.Close()
@@ -3341,8 +3342,8 @@ func publishDRDrillTestDocument(ctx context.Context, t *testing.T, app *Applicat
 	app.SetBackendStore(backendStore)
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)

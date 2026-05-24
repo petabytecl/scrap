@@ -210,7 +210,7 @@ func (s readDocumentSender) SendMetadata(metadata ReadDocumentMetadata) error {
 			Metadata: &scrapv1.ReadDocumentMetadata{
 				Metadata:      documentMetadataToProto(metadata.Metadata),
 				SelectedRange: readRangeToProto(metadata.SelectedRange),
-				Source:        metadata.Source,
+				Source:        storageSourceToProto(metadata.Source),
 			},
 		},
 	})
@@ -229,7 +229,7 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 		return nil
 	}
 	eventType := "document_write_critical"
-	if init.PriorityClass != scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST {
+	if init.PriorityClass != storageapp.PriorityClassCriticalIngest {
 		eventType = "document_write_ephemeral"
 	}
 	actor := workloadIdentityFromContext(ctx)
@@ -246,8 +246,8 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 		"decision":               "succeeded",
 		"request_id":             requestID,
 		"correlation_id":         correlationID,
-		"document_class":         init.DocumentClass.String(),
-		"priority_class":         init.PriorityClass.String(),
+		"document_class":         documentClassToProto(init.DocumentClass).String(),
+		"priority_class":         priorityClassToProto(init.PriorityClass).String(),
 		"created_by_service":     init.CreatedByService,
 		"idempotent_replay":      strconv.FormatBool(result.IdempotentReplay),
 		"desired_replica_count":  strconv.FormatUint(uint64(result.DesiredReplicaCount), 10),
@@ -273,8 +273,8 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 }
 
 func isAuditedWrite(init WriteDocumentInit) bool {
-	return init.PriorityClass == scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST ||
-		init.DocumentClass == scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
+	return init.PriorityClass == storageapp.PriorityClassCriticalIngest ||
+		init.DocumentClass == storageapp.DocumentClassEphemeral
 }
 
 func workloadIdentityFromContext(ctx context.Context) string {
@@ -368,8 +368,8 @@ func writeDocumentResultToProto(r WriteDocumentResult) *scrapv1.WriteDocumentRes
 func documentMetadataToProto(m DocumentMetadata) *scrapv1.DocumentMetadata {
 	return &scrapv1.DocumentMetadata{
 		Identity:                    documentIdentityToProto(m.Identity),
-		DocumentClass:               m.DocumentClass,
-		PriorityClass:               m.PriorityClass,
+		DocumentClass:               documentClassToProto(m.DocumentClass),
+		PriorityClass:               priorityClassToProto(m.PriorityClass),
 		ContentType:                 optionalProtoString(m.ContentType, m.HasContentType),
 		Length:                      m.Length,
 		LogicalSha256:               cloneBytes(m.LogicalSHA256),
@@ -378,8 +378,8 @@ func documentMetadataToProto(m DocumentMetadata) *scrapv1.DocumentMetadata {
 		WorkflowStage:               optionalProtoString(m.WorkflowStage, m.HasWorkflowStage),
 		CreatedAt:                   timestamppb.New(m.CreatedAt),
 		FinalizedAt:                 timestamppb.New(m.FinalizedAt),
-		Availability:                m.Availability,
-		LifecycleState:              m.LifecycleState,
+		Availability:                documentAvailabilityToProto(m.Availability),
+		LifecycleState:              documentLifecycleStateToProto(m.LifecycleState),
 		Tags:                        cloneTags(m.Tags),
 	}
 }
@@ -394,7 +394,7 @@ func readRangeToProto(r ReadRange) *scrapv1.ReadRange {
 func transactionStateToProto(s TransactionState) *scrapv1.TransactionState {
 	return &scrapv1.TransactionState{
 		Transaction:            transactionIdentityToProto(s.Transaction),
-		State:                  s.State,
+		State:                  transactionStateKindToProto(s.State),
 		DocumentCount:          s.DocumentCount,
 		PermanentDocumentCount: s.PermanentDocumentCount,
 		EphemeralDocumentCount: s.EphemeralDocumentCount,

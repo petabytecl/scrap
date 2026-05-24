@@ -474,8 +474,8 @@ func validateWrittenRecord(init storageapp.WriteDocumentInit, record blockstore.
 func newDocument(init storageapp.WriteDocumentInit, record blockstore.Record, now time.Time) metastore.Document {
 	return metastore.Document{
 		Identity:                    init.Identity,
-		DocumentClass:               documentClassFromAPI(init.DocumentClass),
-		PriorityClass:               priorityClassFromAPI(init.PriorityClass),
+		DocumentClass:               documentClassFromStorageApp(init.DocumentClass),
+		PriorityClass:               priorityClassFromStorageApp(init.PriorityClass),
 		ContentType:                 init.ContentType,
 		HasContentType:              init.ContentType != "",
 		Length:                      record.StoredLength,
@@ -541,7 +541,7 @@ func writeDocumentResult(document metastore.Document, replicationResult replicat
 		return storageapp.WriteDocumentResult{}, err
 	}
 	return storageapp.WriteDocumentResult{
-		Metadata:             documentToAPI(document),
+		Metadata:             documentToStorageApp(document),
 		DesiredReplicaCount:  desiredReplicaCount,
 		AchievedReplicaCount: achievedReplicaCount,
 		RepairRequired:       replicationResult.RepairRequired,
@@ -579,7 +579,7 @@ func (a *Application) HeadDocument(ctx context.Context, req storageapp.HeadDocum
 	if err != nil {
 		return storageapp.DocumentMetadata{}, mapError(err)
 	}
-	return documentToAPI(document), nil
+	return documentToStorageApp(document), nil
 }
 
 func (a *Application) ReadDocument(ctx context.Context, req storageapp.ReadDocumentRequest, sender storageapp.ReadDocumentSender) error {
@@ -599,9 +599,9 @@ func (a *Application) ReadDocument(ctx context.Context, req storageapp.ReadDocum
 		return a.readDocumentFromBackend(ctx, document, selectedRange, sender, err)
 	}
 	if err := sender.SendMetadata(storageapp.ReadDocumentMetadata{
-		Metadata:      documentToAPI(document),
+		Metadata:      documentToStorageApp(document),
 		SelectedRange: selectedRange,
-		Source:        scrapv1.StorageSource_STORAGE_SOURCE_LOCAL,
+		Source:        storageapp.StorageSourceLocal,
 	}); err != nil {
 		return err
 	}
@@ -652,9 +652,9 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 		return err
 	}
 	if err := sender.SendMetadata(storageapp.ReadDocumentMetadata{
-		Metadata:      documentToAPI(document),
+		Metadata:      documentToStorageApp(document),
 		SelectedRange: selectedRange,
-		Source:        scrapv1.StorageSource_STORAGE_SOURCE_BACKEND,
+		Source:        storageapp.StorageSourceBackend,
 	}); err != nil {
 		return err
 	}
@@ -1013,7 +1013,7 @@ func (a *Application) FindDocuments(ctx context.Context, req storageapp.FindDocu
 	if err := a.authority.ReadFresh(ctx); err != nil {
 		return storageapp.FindDocumentsResult{}, mapError(err)
 	}
-	documents, err := a.metadata.FindDocuments(req.Transaction, documentFilterFromAPI(req.Filter))
+	documents, err := a.metadata.FindDocuments(req.Transaction, documentFilterFromStorageApp(req.Filter))
 	if err != nil {
 		return storageapp.FindDocumentsResult{}, mapError(err)
 	}
@@ -1021,7 +1021,7 @@ func (a *Application) FindDocuments(ctx context.Context, req storageapp.FindDocu
 		Documents: make([]storageapp.DocumentMetadata, 0, len(documents)),
 	}
 	for _, document := range documents {
-		result.Documents = append(result.Documents, documentToAPI(document))
+		result.Documents = append(result.Documents, documentToStorageApp(document))
 	}
 	return result, nil
 }
@@ -1032,7 +1032,7 @@ func (a *Application) CompleteTransaction(ctx context.Context, req storageapp.Co
 	if err != nil {
 		return storageapp.TransactionState{}, mapError(err)
 	}
-	return transactionToAPI(transaction), nil
+	return transactionToStorageApp(transaction), nil
 }
 
 func (a *Application) GetTransaction(ctx context.Context, req storageapp.GetTransactionRequest) (storageapp.TransactionState, error) {
@@ -1043,7 +1043,7 @@ func (a *Application) GetTransaction(ctx context.Context, req storageapp.GetTran
 	if err != nil {
 		return storageapp.TransactionState{}, mapError(err)
 	}
-	return transactionToAPI(transaction), nil
+	return transactionToStorageApp(transaction), nil
 }
 
 func (a *Application) replayExisting(ctx context.Context, init storageapp.WriteDocumentInit, existing metastore.Document, body drainedBody) (storageapp.WriteDocumentResult, error) {
@@ -1055,7 +1055,7 @@ func (a *Application) replayExisting(ctx context.Context, init storageapp.WriteD
 		return storageapp.WriteDocumentResult{}, mapError(err)
 	}
 	return storageapp.WriteDocumentResult{
-		Metadata:             documentToAPI(existing),
+		Metadata:             documentToStorageApp(existing),
 		DesiredReplicaCount:  1,
 		AchievedReplicaCount: 1,
 		IdempotentReplay:     true,
@@ -1309,11 +1309,11 @@ func peerIntegrityEvidenceID(document metastore.Document, replica blockstore.Rep
 	)
 }
 
-func documentToAPI(document metastore.Document) storageapp.DocumentMetadata {
+func documentToStorageApp(document metastore.Document) storageapp.DocumentMetadata {
 	return storageapp.DocumentMetadata{
 		Identity:                    document.Identity,
-		DocumentClass:               documentClassToAPI(document.DocumentClass),
-		PriorityClass:               priorityClassToAPI(document.PriorityClass),
+		DocumentClass:               documentClassToStorageApp(document.DocumentClass),
+		PriorityClass:               priorityClassToStorageApp(document.PriorityClass),
 		ContentType:                 document.ContentType,
 		HasContentType:              document.HasContentType,
 		Length:                      document.Length,
@@ -1324,16 +1324,16 @@ func documentToAPI(document metastore.Document) storageapp.DocumentMetadata {
 		HasWorkflowStage:            document.HasWorkflowStage,
 		CreatedAt:                   document.CreatedAt,
 		FinalizedAt:                 document.FinalizedAt,
-		Availability:                availabilityToAPI(document.Availability),
-		LifecycleState:              lifecycleStateToAPI(document.LifecycleState),
+		Availability:                availabilityToStorageApp(document.Availability),
+		LifecycleState:              lifecycleStateToStorageApp(document.LifecycleState),
 		Tags:                        cloneTags(document.Tags),
 	}
 }
 
-func transactionToAPI(transaction metastore.Transaction) storageapp.TransactionState {
+func transactionToStorageApp(transaction metastore.Transaction) storageapp.TransactionState {
 	return storageapp.TransactionState{
 		Transaction:            transaction.Identity,
-		State:                  transactionStateToAPI(transaction.State),
+		State:                  transactionStateToStorageApp(transaction.State),
 		DocumentCount:          transaction.DocumentCount,
 		PermanentDocumentCount: transaction.PermanentDocumentCount,
 		EphemeralDocumentCount: transaction.EphemeralDocumentCount,
@@ -1344,13 +1344,13 @@ func transactionToAPI(transaction metastore.Transaction) storageapp.TransactionS
 	}
 }
 
-func documentFilterFromAPI(filter storageapp.DocumentFilter) metastore.DocumentFilter {
+func documentFilterFromStorageApp(filter storageapp.DocumentFilter) metastore.DocumentFilter {
 	out := metastore.DocumentFilter{
 		DocumentNameExact:     filter.DocumentNameExact,
 		HasDocumentNameExact:  filter.HasDocumentNameExact,
 		DocumentNamePrefix:    filter.DocumentNamePrefix,
 		HasDocumentNamePrefix: filter.HasDocumentNamePrefix,
-		DocumentClass:         documentClassFromAPI(filter.DocumentClass),
+		DocumentClass:         documentClassFromStorageApp(filter.DocumentClass),
 		HasDocumentClass:      filter.HasDocumentClass,
 		ContentType:           filter.ContentType,
 		HasContentType:        filter.HasContentType,
@@ -1367,96 +1367,96 @@ func documentFilterFromAPI(filter storageapp.DocumentFilter) metastore.DocumentF
 	return out
 }
 
-func documentClassFromAPI(value scrapv1.DocumentClass) metastore.DocumentClass {
+func documentClassFromStorageApp(value storageapp.DocumentClass) metastore.DocumentClass {
 	switch value {
-	case scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT:
+	case storageapp.DocumentClassPermanent:
 		return metastore.DocumentClassPermanent
-	case scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL:
+	case storageapp.DocumentClassEphemeral:
 		return metastore.DocumentClassEphemeral
 	default:
 		return 0
 	}
 }
 
-func documentClassToAPI(value metastore.DocumentClass) scrapv1.DocumentClass {
+func documentClassToStorageApp(value metastore.DocumentClass) storageapp.DocumentClass {
 	switch value {
 	case metastore.DocumentClassPermanent:
-		return scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT
+		return storageapp.DocumentClassPermanent
 	case metastore.DocumentClassEphemeral:
-		return scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
+		return storageapp.DocumentClassEphemeral
 	default:
-		return scrapv1.DocumentClass_DOCUMENT_CLASS_UNSPECIFIED
+		return storageapp.DocumentClassUnspecified
 	}
 }
 
-func priorityClassFromAPI(value scrapv1.PriorityClass) metastore.PriorityClass {
+func priorityClassFromStorageApp(value storageapp.PriorityClass) metastore.PriorityClass {
 	switch value {
-	case scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST:
+	case storageapp.PriorityClassCriticalIngest:
 		return metastore.PriorityClassCriticalIngest
-	case scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL:
+	case storageapp.PriorityClassNormal:
 		return metastore.PriorityClassNormal
-	case scrapv1.PriorityClass_PRIORITY_CLASS_BULK:
+	case storageapp.PriorityClassBulk:
 		return metastore.PriorityClassBulk
 	default:
 		return 0
 	}
 }
 
-func priorityClassToAPI(value metastore.PriorityClass) scrapv1.PriorityClass {
+func priorityClassToStorageApp(value metastore.PriorityClass) storageapp.PriorityClass {
 	switch value {
 	case metastore.PriorityClassCriticalIngest:
-		return scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST
+		return storageapp.PriorityClassCriticalIngest
 	case metastore.PriorityClassNormal:
-		return scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL
+		return storageapp.PriorityClassNormal
 	case metastore.PriorityClassBulk:
-		return scrapv1.PriorityClass_PRIORITY_CLASS_BULK
+		return storageapp.PriorityClassBulk
 	default:
-		return scrapv1.PriorityClass_PRIORITY_CLASS_UNSPECIFIED
+		return storageapp.PriorityClassUnspecified
 	}
 }
 
-func availabilityToAPI(value metastore.Availability) scrapv1.DocumentAvailability {
+func availabilityToStorageApp(value metastore.Availability) storageapp.DocumentAvailability {
 	switch value {
 	case metastore.AvailabilityHot:
-		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_HOT
+		return storageapp.DocumentAvailabilityHot
 	case metastore.AvailabilityCold:
-		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_COLD
+		return storageapp.DocumentAvailabilityCold
 	case metastore.AvailabilityRestorePending:
-		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_RESTORE_PENDING
+		return storageapp.DocumentAvailabilityRestorePending
 	case metastore.AvailabilityCryptoUnavailable:
-		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_CRYPTO_UNAVAILABLE
+		return storageapp.DocumentAvailabilityCryptoUnavailable
 	case metastore.AvailabilityDegradedRepair:
-		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_DEGRADED_REPAIR
+		return storageapp.DocumentAvailabilityDegradedRepair
 	default:
-		return scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_UNSPECIFIED
+		return storageapp.DocumentAvailabilityUnspecified
 	}
 }
 
-func lifecycleStateToAPI(value metastore.LifecycleState) scrapv1.DocumentLifecycleState {
+func lifecycleStateToStorageApp(value metastore.LifecycleState) storageapp.DocumentLifecycleState {
 	switch value {
 	case metastore.LifecycleStateActive:
-		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_ACTIVE
+		return storageapp.DocumentLifecycleStateActive
 	case metastore.LifecycleStateTransactionCompleted:
-		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_TRANSACTION_COMPLETED
+		return storageapp.DocumentLifecycleStateTransactionCompleted
 	case metastore.LifecycleStateTombstoned:
-		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_TOMBSTONED
+		return storageapp.DocumentLifecycleStateTombstoned
 	case metastore.LifecycleStatePendingReclamation:
-		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_PENDING_RECLAMATION
+		return storageapp.DocumentLifecycleStatePendingReclamation
 	default:
-		return scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_UNSPECIFIED
+		return storageapp.DocumentLifecycleStateUnspecified
 	}
 }
 
-func transactionStateToAPI(value metastore.TransactionStateKind) scrapv1.TransactionStateKind {
+func transactionStateToStorageApp(value metastore.TransactionStateKind) storageapp.TransactionStateKind {
 	switch value {
 	case metastore.TransactionStateOpen:
-		return scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_OPEN
+		return storageapp.TransactionStateOpen
 	case metastore.TransactionStateCompleted:
-		return scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED
+		return storageapp.TransactionStateCompleted
 	case metastore.TransactionStateTimedOut:
-		return scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_TIMED_OUT
+		return storageapp.TransactionStateTimedOut
 	default:
-		return scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_UNSPECIFIED
+		return storageapp.TransactionStateUnspecified
 	}
 }
 

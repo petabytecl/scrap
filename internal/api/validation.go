@@ -92,8 +92,8 @@ func ValidateWriteDocumentInit(init *scrapv1.WriteDocumentInit) (WriteDocumentIn
 
 	return WriteDocumentInit{
 		Identity:             doc,
-		DocumentClass:        init.DocumentClass,
-		PriorityClass:        init.PriorityClass,
+		DocumentClass:        documentClassFromProto(init.DocumentClass),
+		PriorityClass:        priorityClassFromProto(init.PriorityClass),
 		ContentType:          optionalString(init.ContentType),
 		ExpectedLength:       cloneUint64(init.ExpectedLength),
 		ExpectedSHA256:       cloneBytes(init.ExpectedSha256),
@@ -283,7 +283,7 @@ func validateDocumentFilter(filter *scrapv1.DocumentFilter, problems *violations
 	validateTags("filter.tags", filter.Tags, problems)
 
 	if filter.DocumentClass != nil {
-		out.DocumentClass = *filter.DocumentClass
+		out.DocumentClass = documentClassFromProto(*filter.DocumentClass)
 		out.HasDocumentClass = true
 	}
 	if filter.ContentType != nil {
