@@ -36,6 +36,8 @@ import (
 
 const backendReadChunkSize = 1024 * 1024
 
+var ErrCorruptVerificationWindow = errors.New("localstorage: corrupt verification window")
+
 type BackendUploadOnceResult struct {
 	SealedBlockID       string
 	SealedBlockIDs      []string
@@ -832,34 +834,83 @@ func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verify
 	}()
 
 	if len(record.Frames) == 0 {
-		if uint64(len(data)) != record.StoredLength {
-			return io.ErrUnexpectedEOF
-		}
-		got := sha256.Sum256(data)
-		if got != record.LogicalSHA256 {
-			return blockstore.ErrChecksumMismatch
-		}
-		return nil
+		return verifyFetchedBackendDocument(record, verifyStart, data)
 	}
 	selectedStart := record.StoredOffset + offset
 	selectedEnd := selectedStart + length
 	for _, frame := range record.Frames {
-		frameStart := frame.SegmentOffset
-		frameEnd := frame.SegmentOffset + frame.SegmentLength
-		if frameEnd <= selectedStart || frameStart >= selectedEnd {
-			continue
-		}
-		start := frameStart - verifyStart
-		end := start + frame.SegmentLength
-		if end > uint64(len(data)) {
-			return io.ErrUnexpectedEOF
-		}
-		got := sha256.Sum256(data[start:end])
-		if got != frame.SHA256 {
-			return blockstore.ErrChecksumMismatch
+		if err := verifyFetchedBackendFrame(frame, selectedStart, selectedEnd, verifyStart, data); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func verifyFetchedBackendDocument(record blockstore.Record, verifyStart uint64, data []byte) error {
+	if verifyStart != record.StoredOffset {
+		return fmt.Errorf(
+			"localstorage: verification window start %d does not match document start %d: %w",
+			verifyStart,
+			record.StoredOffset,
+			ErrCorruptVerificationWindow,
+		)
+	}
+	if uint64(len(data)) != record.StoredLength {
+		return fmt.Errorf(
+			"localstorage: verification window length %d does not match fetched data length %d: %w",
+			record.StoredLength,
+			len(data),
+			ErrCorruptVerificationWindow,
+		)
+	}
+	got := sha256.Sum256(data)
+	if got != record.LogicalSHA256 {
+		return blockstore.ErrChecksumMismatch
+	}
+	return nil
+}
+
+func verifyFetchedBackendFrame(frame blockstore.FrameRecord, selectedStart, selectedEnd, verifyStart uint64, data []byte) error {
+	frameStart := frame.SegmentOffset
+	frameEnd := frame.SegmentOffset + frame.SegmentLength
+	if frameEnd < frameStart {
+		return blockstore.ErrInvalidRange
+	}
+	if frameEnd <= selectedStart || frameStart >= selectedEnd {
+		return nil
+	}
+	start, end, err := verificationFrameDataRange(frameStart, frameEnd, frame.SegmentLength, verifyStart, uint64(len(data)))
+	if err != nil {
+		return err
+	}
+	got := sha256.Sum256(data[start:end])
+	if got != frame.SHA256 {
+		return blockstore.ErrChecksumMismatch
+	}
+	return nil
+}
+
+func verificationFrameDataRange(frameStart, frameEnd, frameLength, verifyStart, dataLength uint64) (uint64, uint64, error) {
+	if frameStart < verifyStart {
+		return 0, 0, fmt.Errorf(
+			"localstorage: verification window start %d exceeds frame start %d: %w",
+			verifyStart,
+			frameStart,
+			ErrCorruptVerificationWindow,
+		)
+	}
+	start := frameStart - verifyStart
+	if start > dataLength || frameLength > dataLength-start {
+		return 0, 0, fmt.Errorf(
+			"localstorage: verification window frame [%d,%d) exceeds fetched data length %d from start %d: %w",
+			frameStart,
+			frameEnd,
+			dataLength,
+			verifyStart,
+			ErrCorruptVerificationWindow,
+		)
+	}
+	return start, start + frameLength, nil
 }
 
 func verificationOutcome(err error) string {
@@ -870,6 +921,9 @@ func verificationOutcome(err error) string {
 		errors.Is(err, blockstore.ErrInvalidRange) ||
 		errors.Is(err, io.ErrUnexpectedEOF) {
 		return observe.VerificationOutcomeMismatch
+	}
+	if errors.Is(err, ErrCorruptVerificationWindow) {
+		return observe.VerificationOutcomeError
 	}
 	return observe.VerificationOutcomeSkipped
 }
@@ -1053,6 +1107,7 @@ var applicationErrorMappings = []struct {
 	{target: blockstore.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "stored document bytes failed checksum verification"},
 	{target: backend.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "backend document bytes failed checksum verification"},
 	{target: backend.ErrNotFound, code: appstatus.CodeDataLoss, message: "backend document bytes are missing"},
+	{target: ErrCorruptVerificationWindow, code: appstatus.CodeDataLoss, message: "backend verification window is corrupt"},
 	{target: os.ErrNotExist, code: appstatus.CodeDataLoss, message: "stored document bytes are missing"},
 	{target: raftmeta.ErrNotLeader, code: appstatus.CodeFailedPrecondition, message: "local metadata authority is not leader"},
 	{target: raftmeta.ErrQuorumUnavailable, code: appstatus.CodeUnavailable, message: "metadata quorum is unavailable"},
@@ -1141,6 +1196,7 @@ func isIntegrityFailure(err error) bool {
 	return errors.Is(err, blockstore.ErrChecksumMismatch) ||
 		errors.Is(err, backend.ErrChecksumMismatch) ||
 		errors.Is(err, backend.ErrNotFound) ||
+		errors.Is(err, ErrCorruptVerificationWindow) ||
 		errors.Is(err, os.ErrNotExist) ||
 		errors.Is(err, io.ErrUnexpectedEOF)
 }

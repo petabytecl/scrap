@@ -15,6 +15,7 @@ const (
 
 	VerificationOutcomeMatch    = "match"
 	VerificationOutcomeMismatch = "mismatch"
+	VerificationOutcomeError    = OutcomeError
 	VerificationOutcomeSkipped  = "skipped"
 
 	BackendOperationHead = "head"
@@ -77,7 +78,7 @@ func (m *metrics) initializeZeroValueSeries() {
 	for _, outcome := range []string{OutcomeSuccess, OutcomeError} {
 		m.writeLatency.WithLabelValues(outcome)
 	}
-	for _, outcome := range []string{VerificationOutcomeMatch, VerificationOutcomeMismatch, VerificationOutcomeSkipped} {
+	for _, outcome := range []string{VerificationOutcomeMatch, VerificationOutcomeMismatch, VerificationOutcomeError, VerificationOutcomeSkipped} {
 		m.verification.WithLabelValues(outcome)
 	}
 	for _, outcome := range []string{OutcomeSuccess, OutcomeNotFound, OutcomeError} {
@@ -131,7 +132,7 @@ func normalizeWriteOutcome(outcome string) string {
 
 func normalizeVerificationOutcome(outcome string) string {
 	switch outcome {
-	case VerificationOutcomeMatch, VerificationOutcomeMismatch, VerificationOutcomeSkipped:
+	case VerificationOutcomeMatch, VerificationOutcomeMismatch, VerificationOutcomeError, VerificationOutcomeSkipped:
 		return outcome
 	default:
 		return VerificationOutcomeMismatch
