@@ -22,9 +22,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: bufbuild/buf-setup-action@v1
-        with:
-          version: 1.66.0
+      - name: Install buf
+        run: |
+          go install github.com/bufbuild/buf/cmd/buf@v1.66.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - run: make check
 
