@@ -193,3 +193,19 @@ environment-specific values:
 - node class, disk class, filesystem, topology, and live capacity profile;
 - legal hold authority, retention periods, and compliance approval;
 - applying manifests and recording production rollout evidence.
+
+## Network Exposure
+
+The base manifests keep `scrapd-public` and `scrapd-admin` as `ClusterIP`
+services and rely on the base `NetworkPolicy` to isolate the `scrapd` pods.
+Only pods with the public-client label can reach port 18080, and only
+admin-client pods in the `scrap-ops` namespace can reach port 18081.
+
+The local-kind overlay patches those two services back to NodePort so the
+existing host port mappings in `deploy/kind/cluster.yaml` continue to support
+local rehearsal commands. That exception belongs only to the local overlay.
+
+Runtime enforcement requires the target cluster CNI to implement Kubernetes
+`networking.k8s.io/v1` NetworkPolicy, such as Calico or Cilium. The repository
+manifest checks verify the rendered policy shape; live production rollout
+evidence must verify that the target cluster enforces the policy.

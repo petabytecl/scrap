@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scrapd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: scrapd
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-public-client: "true"
+      ports:
+        - protocol: TCP
+          port: 18080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scrap-ops
+          podSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-admin-client: "true"
+      ports:
+        - protocol: TCP
+          port: 18081
+    - from:
+        - podSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-metrics-scraper: "true"
+        - namespaceSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-metrics-namespace: "true"
+          podSelector:
+            matchLabels:
+              scrap.petabyte.cl/allowed-metrics-scraper: "true"
+      ports:
+        - protocol: TCP
+          port: 18082
+  egress:
+    - {}

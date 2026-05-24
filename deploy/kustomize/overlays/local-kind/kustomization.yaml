@@ -10,8 +10,12 @@ images:
   - name: ghcr.io/petabytecl/scrap/scrapd
     newName: localhost/scrapd
     newTag: local
+patches:
+  - path: service-admin-nodeport-patch.yaml
+  - path: service-public-nodeport-patch.yaml
 labels:
-  - includeSelectors: true
+  - includeSelectors: false
+    includeTemplates: true
     pairs:
       cl.petabyte.scrap/release-profile: scrap-prod-v1
       cl.petabyte.scrap/environment: local-kind

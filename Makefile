@@ -114,7 +114,7 @@ cover: ## Run package tests and write a coverage profile.
 build: ## Build all supported command binaries.
 	$(GO) build $(SCRAP_BINS)
 
-check: fmt-check proto-check test-compat lint test test-race build ## Run the full local verification gate.
+check: manifests-check fmt-check proto-check test-compat lint test test-race build ## Run the full local verification gate.
 
 ##@ Release Artifacts
 
@@ -133,11 +133,8 @@ image: ## Build the local scrapd container image.
 manifests-render: ## Render the local-kind GitOps manifests.
 	@$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)"
 
-manifests-check: ## Validate that the local-kind GitOps manifests render.
-	@tmp="$$(mktemp)"; \
-		trap 'rm -f "$$tmp"' EXIT; \
-		$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" > "$$tmp"; \
-		test -s "$$tmp"
+manifests-check: ## Validate rendered GitOps manifests and deployment hardening invariants.
+	@KUSTOMIZE_CMD='$(KUSTOMIZE)' LOCAL_KIND_OVERLAY='$(LOCAL_KIND_OVERLAY)' sh ./scripts/check-kustomize-manifests.sh
 
 local-kind-create: ## Create the local kind cluster for release rehearsal.
 	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml

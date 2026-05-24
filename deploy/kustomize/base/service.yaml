@@ -26,25 +26,23 @@ kind: Service
 metadata:
   name: scrapd-public
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app.kubernetes.io/component: scrapd
   ports:
     - name: public-grpc
       port: 18080
       targetPort: public-grpc
-      nodePort: 30080
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: scrapd-admin
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app.kubernetes.io/component: scrapd
   ports:
     - name: admin-grpc
       port: 18081
       targetPort: admin-grpc
-      nodePort: 30081
