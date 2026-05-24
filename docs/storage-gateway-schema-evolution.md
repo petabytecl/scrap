@@ -8,6 +8,27 @@ This example describes how S.C.R.A.P. rolls out an additive metadata field
 without breaking old readers, old writers, old stored data, or in-flight
 published metadata imports.
 
+## Current Version Registry
+
+The durable version numbers are intentionally small and explicit:
+
+| Surface | Current version | Owner | Changelog |
+| --- | --- | --- | --- |
+| Authoritative metadata protobuf records | `metastore.CurrentSchemaVersion = 1` | `internal/metastore` | V1 is the initial authoritative document, transaction, upload intent, repair state, command receipt, Raft command, and Raft snapshot schema. |
+| Metastore Pebble key schema | `metastore.PebbleKeySchemaV1 = 0x01` | `internal/metastore` | V1 prefixes every logical Pebble key with one schema byte before the existing logical key bytes. Opening legacy unversioned keys fails fast and requires rebuild or explicit migration. |
+| Block, index, backend object, and envelope protobuf records | `storageformat.CurrentSchemaVersion = 1` | `internal/storageformat` | V1 is the initial durable block metadata and backend object schema. |
+| Published metadata protobuf records | `published.CurrentSchemaVersion = 1` | `internal/published` | V1 is the initial current pointer, manifest, snapshot record, and tail record schema. |
+| Published document location format | `published.CurrentLocationFormatVersion = 1` | `internal/published` | V1 describes block/index/envelope object references and frame ranges for imported document locations. |
+
+Compatibility fixtures live in:
+
+- `internal/compat/testdata/v1/` for durable protobuf records;
+- `internal/metastore/testdata/pebble_key_schema_v1.txt` for Pebble key
+  layout bytes.
+
+Version changes must update this registry, the owning constant comment, and
+the compatibility fixture set in the same pull request.
+
 ## Example Change
 
 Add a future optional `compression_profile_id` to storage block indexes and
@@ -83,6 +104,30 @@ That change requires:
 - an operator-visible rollout and rollback plan;
 - a DR drill proving old artifacts remain recoverable.
 
+## Retention Compatibility
+
+Billing documents have a seven-year retention requirement. S.C.R.A.P. treats
+durable metadata compatibility as a retention contract, not only a rolling
+upgrade convenience.
+
+Any document written with schema version N must remain readable by software
+that supports schema version N+5 or later throughout the retention window. New
+readers may re-encode accepted old records into the current version during
+snapshot restore or DR import, but only after validating the old record and its
+referenced objects. If future software cannot carry direct reader support for
+an old required version, the release must provide a tested migration/export
+path before any writer emits the incompatible format.
+
+During rolling upgrades:
+
+- readers accept every supported version from V1 through current;
+- writers emit only the shard's current committed version;
+- old binaries must refuse leadership or write admission when the committed
+  shard format requires fields they cannot understand;
+- local Pebble projections may be rebuilt from authoritative metadata, but
+  key-schema migrations still require compatibility fixtures and a rollback
+  plan.
+
 ## Current Test Coverage
 
 The current pre-production tests enforce the base compatibility contract:
@@ -90,7 +135,8 @@ The current pre-production tests enforce the base compatibility contract:
 - `make test-compat` reads initial v1 fixtures from
   `internal/compat/testdata/v1` for authoritative metadata, published
   metadata, block index, frame checksum, backend object refs, and envelope
-  records;
+  records, and verifies the V1 metastore Pebble key layout fixture in
+  `internal/metastore/testdata/pebble_key_schema_v1.txt`;
 - authoritative metadata rejects unsupported required schema versions;
 - published metadata rejects unsupported required schema versions;
 - storage-format records reject unsupported required schema versions;

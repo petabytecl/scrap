@@ -13,6 +13,9 @@ import (
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 )
 
+// CurrentSchemaVersion is the durable storage-format protobuf schema version.
+// Additive fields keep the current value; required semantic changes must bump
+// it and update the schema evolution changelog.
 const CurrentSchemaVersion uint32 = 1
 
 const fingerprintLength = 16

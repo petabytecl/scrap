@@ -41,6 +41,38 @@ and covered by generated-code and compatibility checks before production use.
 Writers use only the shard's active committed format until an explicit feature
 gate changes it.
 
+Compatibility guarantees are part of this decision:
+
+- Fields may be added, but existing field numbers must not be reused,
+  renumbered, or removed from durable protobuf messages.
+- Field type or meaning changes are prohibited unless the owning schema or
+  format version is incremented and old readers fail closed on the new required
+  version.
+- `schema_version` increments mean the reader must understand a new required
+  invariant before it can safely accept the record. Purely additive fields do
+  not increment `schema_version`.
+- Durable storage changes require at least two release trains of deprecation
+  notice before a field can be intentionally zeroed or ignored by writers.
+- During rolling upgrades, readers accept every supported version from V1
+  through current, while writers emit only the current committed version for
+  the shard.
+- Snapshot restore and DR import may re-encode accepted old metadata into the
+  current version only after the old record has been fully validated.
+- Any document written with schema version N must remain readable by software
+  that supports schema version N+5 or later for the seven-year billing
+  retention window. If a future reader cannot carry that compatibility directly,
+  the release must include a tested migration/export path before writers emit
+  the incompatible format.
+
+Pebble key layouts are durable enough to need an explicit schema byte even
+though local projections are rebuildable. Metastore Pebble keys use
+`PebbleKeySchemaV1 = 0x01` followed by the logical key bytes. Future key-schema
+versions must coexist with V1 during migration; deleting or rewriting V1 keys
+is allowed only after authoritative metadata has been verified or rebuilt from
+Raft/published sources. Software that opens a database containing legacy
+unversioned metastore keys must fail with an operator-visible error instead of
+silently treating the old state as empty.
+
 ## Consequences
 
 - Metadata evolution has a clear compatibility discipline across old readers,

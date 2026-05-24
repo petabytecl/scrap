@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -70,6 +71,21 @@ func TestCheckReachableHandlesNilStoreAndHealthKey(t *testing.T) {
 	store := openTestStore(t)
 	testutil.RequireNoErrorf(t, store.db.Set([]byte("__scrap_healthcheck__"), []byte("ok"), pebble.Sync), "write health key")
 	testutil.RequireNoErrorf(t, store.CheckReachable(), "check reachable metastore with health key")
+}
+
+func TestOpenRejectsLegacyUnversionedPebbleKeys(t *testing.T) {
+	dir := t.TempDir()
+	db, err := pebble.Open(filepath.Join(dir, "metadata"), &pebble.Options{})
+	testutil.RequireNoErrorf(t, err, "open raw pebble db")
+	err = db.Set([]byte("document\x00tenant-a\x00txn-001\x00invoice.xml"), []byte("legacy"), pebble.Sync)
+	testutil.RequireNoErrorf(t, err, "write legacy key")
+	testutil.RequireNoErrorf(t, db.Close(), "close raw pebble db")
+
+	store, err := Open(dir)
+	if store != nil {
+		testutil.RequireNoErrorf(t, store.Close(), "close store after unexpected open")
+	}
+	testutil.RequireErrorIsf(t, err, ErrLegacyPebbleKeySchema, "open legacy metastore")
 }
 
 func TestPutDocumentIsIdempotentAndCountsOnce(t *testing.T) {
