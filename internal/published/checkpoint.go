@@ -144,7 +144,7 @@ func verifyManifestArtifacts(ctx context.Context, store backend.Store, manifest 
 
 func verifyArtifactRef(ctx context.Context, store backend.Store, artifact *publishedv1.ArtifactRef, kind publishedv1.ArtifactKind) error {
 	if artifact.GetKind() != kind {
-		return fmt.Errorf("published metadata: invalid %s artifact kind %s", kind, artifact.GetKind())
+		return fmt.Errorf("published metadata: invalid %s artifact kind %s", kind.String(), artifact.GetKind().String())
 	}
 	return verifyExpectedObject(ctx, store, artifact.GetObjectKey(), artifact.GetLength(), artifact.GetSha256())
 }

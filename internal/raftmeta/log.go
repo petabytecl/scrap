@@ -254,7 +254,11 @@ func readEntryPayload(file *os.File, header [commandLogHeaderLen]byte, index uin
 	if length > MaxCommandBytes {
 		return nil, fmt.Errorf("raftmeta: command length %d exceeds maximum %d", length, MaxCommandBytes)
 	}
-	payload := make([]byte, length)
+	payloadLength, err := safeconv.Uint64ToInt("raftmeta: command length", uint64(length))
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, payloadLength)
 	if _, err := io.ReadFull(file, payload); err != nil {
 		return nil, err
 	}
