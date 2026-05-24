@@ -1529,6 +1529,91 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	}
 }
 
+func TestReplaceBlockFromBackendKeepsLocalBlockWhenBackendReadFails(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("failed replace keeps the local block")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	backendStore, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(backendStore)
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
+	stored, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	blockPath := app.blocks.BlockPath(stored.Location.BlockID)
+	originalBlock := readTestBlockFile(t, blockPath, "read original block")
+	app.SetBackendStore(&faultingBackendStore{
+		Store:      backendStore,
+		readErrors: map[string]error{intent.BackendObjectKey: backend.ErrTransient},
+	})
+
+	err = app.replaceBlockFromBackend(ctx, stored.Location.BlockID)
+	if !errors.Is(err, backend.ErrTransient) {
+		t.Fatalf("replace error = %v, want backend transient", err)
+	}
+	afterBlock := readTestBlockFile(t, blockPath, "read local block after failed replace")
+	if !bytes.Equal(afterBlock, originalBlock) {
+		t.Fatalf("local block changed after failed replace")
+	}
+	if _, err := os.Stat(app.blocks.SealPath(stored.Location.BlockID)); err != nil {
+		t.Fatalf("seal marker after failed replace: %v", err)
+	}
+}
+
+func TestReplaceBlockFromBackendInstallsVerifiedBackendBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("successful replace restores the backend block")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	backendStore, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(backendStore)
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
+	stored, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	backendObject, err := backendStore.HeadObject(ctx, intent.BackendObjectKey)
+	testutil.RequireNoErrorf(t, err, "head backend block")
+	corruptStoredByte(t, app, stored.Location, 0)
+
+	testutil.RequireNoErrorf(t, app.replaceBlockFromBackend(ctx, stored.Location.BlockID), "replace block from backend")
+	blockBytes := readTestBlockFile(t, app.blocks.BlockPath(stored.Location.BlockID), "read replaced block")
+	testutil.RequireEqualf(t, sha256.Sum256(blockBytes), backendObject.SHA256, "replaced block checksum")
+	sender := &recordingReadSender{}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read replaced document")
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
+	requireReadBytes(t, sender, data)
+}
+
+func readTestBlockFile(t *testing.T, path, message string) []byte {
+	t.Helper()
+	// #nosec G304 -- tests pass blockstore-generated paths rooted in t.TempDir().
+	data, err := os.ReadFile(path)
+	testutil.RequireNoErrorf(t, err, message)
+	return data
+}
+
 func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)

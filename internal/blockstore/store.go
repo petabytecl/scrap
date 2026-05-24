@@ -267,6 +267,30 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	return s.installSealedBlock(ctx, blockPath, sealPath, expectedLength, expectedSHA256, reader)
 }
 
+// ReplaceSealedBlock atomically installs a verified sealed block, preserving the
+// current block until the replacement is fully written and checksum-verified.
+func (s *Store) ReplaceSealedBlock(ctx context.Context, blockID string, expectedLength uint64, expectedSHA256 [32]byte, reader io.Reader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateInstallReader(blockID, reader, "replacement block reader"); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	blockPath, err := s.validatedBlockPath(blockID)
+	if err != nil {
+		return err
+	}
+	sealPath, err := s.validatedSealPath(blockID)
+	if err != nil {
+		return err
+	}
+	return s.installSealedBlock(ctx, blockPath, sealPath, expectedLength, expectedSHA256, reader)
+}
+
 func validateInstallReader(blockID string, reader io.Reader, readerName string) error {
 	if blockID == "" {
 		return errors.New("blockstore: block id is required")
