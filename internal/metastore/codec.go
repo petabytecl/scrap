@@ -513,6 +513,7 @@ func documentFromProto(record *metastorev1.DocumentRecord) Document {
 	copy(document.StoredSHA256[:], record.GetStoredSha256())
 	copy(document.DocumentIdentityFingerprint[:], record.GetDocumentIdentityFingerprint())
 	document.Location.LogicalSHA256 = document.LogicalSHA256
+	document.Location.StoredSHA256 = document.StoredSHA256
 	if record.GetCreatedAt() != nil {
 		document.CreatedAt = record.GetCreatedAt().AsTime()
 	}

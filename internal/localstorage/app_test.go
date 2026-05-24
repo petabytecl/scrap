@@ -180,6 +180,51 @@ func requirePendingUploadIntent(t *testing.T, intent metastore.UploadIntent, blo
 	testutil.RequireEqualf(t, intent.EnvelopeObjectKey, "blocks/"+blockID+".env", "envelope object key")
 }
 
+func TestStoredSHA256EqualsLogicalSHA256WithoutEncryption(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("plaintext stored bytes")
+	want := sha256.Sum256(data)
+
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+
+	stored, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireEqualf(t, stored.LogicalSHA256, want, "logical sha256")
+	testutil.RequireEqualf(t, stored.StoredSHA256, want, "stored sha256")
+}
+
+func TestStoredSHA256DiffersFromLogicalSHA256WhenEncrypted(t *testing.T) {
+	logicalSHA := sha256.Sum256([]byte("client-visible plaintext"))
+	storedSHA := sha256.Sum256([]byte("encrypted stored bytes"))
+
+	document := newDocument(api.WriteDocumentInit{
+		Identity:         testDocumentIdentity(),
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, blockstore.Record{
+		BlockID:       "block-1",
+		StoredOffset:  blockstore.HeaderLength,
+		StoredLength:  uint64(len("encrypted stored bytes")),
+		LogicalSHA256: logicalSHA,
+		StoredSHA256:  storedSHA,
+	}, time.Unix(100, 0).UTC())
+
+	testutil.RequireEqualf(t, document.LogicalSHA256, logicalSHA, "logical sha256")
+	testutil.RequireEqualf(t, document.StoredSHA256, storedSHA, "stored sha256")
+	if document.StoredSHA256 == document.LogicalSHA256 {
+		t.Fatal("stored sha256 matched logical sha256 for encrypted stored bytes")
+	}
+}
+
 func requireReadSource(t *testing.T, sender *recordingReadSender, source storageapp.StorageSource) {
 	t.Helper()
 	testutil.RequireEqualf(t, sender.metadata.Source, source, "read source")

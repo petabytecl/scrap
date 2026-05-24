@@ -27,6 +27,9 @@ func TestPutHeadFindDocument(t *testing.T) {
 	if got.LogicalSHA256 != doc.LogicalSHA256 {
 		t.Fatal("logical sha was not preserved")
 	}
+	if got.StoredSHA256 != doc.StoredSHA256 || got.Location.StoredSHA256 != doc.StoredSHA256 {
+		t.Fatal("stored sha was not preserved")
+	}
 	if got.Location.StoredOffset != doc.Location.StoredOffset {
 		t.Fatalf("stored offset = %d, want %d", got.Location.StoredOffset, doc.Location.StoredOffset)
 	}

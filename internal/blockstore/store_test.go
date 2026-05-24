@@ -38,6 +38,18 @@ func TestAppendReadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAppendRecordsStoredSHA256FromWrittenBytes(t *testing.T) {
+	store := openTestStore(t)
+	data := []byte("stored checksum bytes")
+	want := sha256.Sum256(data)
+
+	record, err := store.Append(context.Background(), bytes.NewReader(data))
+	testutil.RequireNoErrorf(t, err, "append")
+
+	testutil.RequireEqualf(t, record.StoredSHA256, want, "stored sha256")
+	testutil.RequireEqualf(t, record.LogicalSHA256, want, "logical sha256")
+}
+
 func TestReadRangeReadsSubset(t *testing.T) {
 	store := openTestStore(t)
 	data := []byte("0123456789")
