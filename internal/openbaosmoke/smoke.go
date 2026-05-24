@@ -31,9 +31,10 @@ const (
 	DefaultAuditDevice      = "file:/tmp/openbao-audit.log"
 	DefaultKubernetesClient = "openbao-transit-smoke"
 
-	httpClientErrorStatus = 400
-	transitKeyPathParts   = 2
-	transitKeysPathParts  = 3
+	httpClientErrorStatus  = 400
+	transitKeyPathParts    = 2
+	transitKeysPathParts   = 3
+	transitCiphertextParts = 3
 )
 
 var ErrSmokeFailed = errors.New("openbao transit smoke failed")
@@ -530,7 +531,7 @@ func splitTransitKeyPath(value string) (string, string, error) {
 
 func ciphertextVersion(ciphertext string) (uint32, error) {
 	parts := strings.Split(ciphertext, ":")
-	if len(parts) < transitKeysPathParts || !strings.HasPrefix(parts[1], "v") {
+	if len(parts) < transitCiphertextParts || !strings.HasPrefix(parts[1], "v") {
 		return 0, errors.New("unexpected Transit ciphertext shape")
 	}
 	var version uint64
@@ -544,8 +545,8 @@ func ciphertextVersion(ciphertext string) (uint32, error) {
 }
 
 func replaceCiphertextVersion(ciphertext, version string) string {
-	parts := strings.SplitN(ciphertext, ":", transitKeysPathParts)
-	if len(parts) != transitKeysPathParts {
+	parts := strings.SplitN(ciphertext, ":", transitCiphertextParts)
+	if len(parts) != transitCiphertextParts {
 		return "vault:v" + version + ":redacted"
 	}
 	return parts[0] + ":v" + version + ":" + parts[2]
