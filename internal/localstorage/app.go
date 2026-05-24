@@ -17,7 +17,6 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/appstatus"
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/backendupload"
@@ -32,6 +31,7 @@ import (
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/storageapp"
 	"github.com/petabytecl/scrap/internal/storageformat"
 )
 
@@ -404,48 +404,48 @@ func (a *Application) repairStateIsQuarantined(document metastore.Document, inci
 	return state.Quarantined, nil
 }
 
-func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {
+func (a *Application) WriteDocument(ctx context.Context, init storageapp.WriteDocumentInit, chunks storageapp.ChunkReader) (storageapp.WriteDocumentResult, error) {
 	if err := a.authority.EnsureWriteReady(ctx); err != nil {
-		return api.WriteDocumentResult{}, mapError(err)
+		return storageapp.WriteDocumentResult{}, mapError(err)
 	}
 	if result, replayed, err := a.replayExistingDocument(ctx, init, chunks); err != nil || replayed {
 		return result, err
 	}
 	if err := a.requireWriteAdmission(ctx, init.ExpectedLength); err != nil {
-		return api.WriteDocumentResult{}, err
+		return storageapp.WriteDocumentResult{}, err
 	}
 
 	record, err := a.appendValidatedDocument(ctx, init, chunks)
 	if err != nil {
-		return api.WriteDocumentResult{}, err
+		return storageapp.WriteDocumentResult{}, err
 	}
 
 	now := a.now()
 	document := newDocument(init, record, now)
 	document, replicationResult, err := a.commitDocumentWrite(ctx, document, now)
 	if err != nil {
-		return api.WriteDocumentResult{}, err
+		return storageapp.WriteDocumentResult{}, err
 	}
 	return writeDocumentResult(document, replicationResult)
 }
 
-func (a *Application) replayExistingDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, bool, error) {
+func (a *Application) replayExistingDocument(ctx context.Context, init storageapp.WriteDocumentInit, chunks storageapp.ChunkReader) (storageapp.WriteDocumentResult, bool, error) {
 	existing, err := a.metadata.HeadDocument(init.Identity)
 	if errors.Is(err, metastore.ErrNotFound) {
-		return api.WriteDocumentResult{}, false, nil
+		return storageapp.WriteDocumentResult{}, false, nil
 	}
 	if err != nil {
-		return api.WriteDocumentResult{}, false, mapError(err)
+		return storageapp.WriteDocumentResult{}, false, mapError(err)
 	}
 	body, err := drainChunks(chunks)
 	if err != nil {
-		return api.WriteDocumentResult{}, true, err
+		return storageapp.WriteDocumentResult{}, true, err
 	}
 	result, err := a.replayExisting(ctx, init, existing, body)
 	return result, true, err
 }
 
-func (a *Application) appendValidatedDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (blockstore.Record, error) {
+func (a *Application) appendValidatedDocument(ctx context.Context, init storageapp.WriteDocumentInit, chunks storageapp.ChunkReader) (blockstore.Record, error) {
 	record, err := a.blocks.AppendValidated(ctx, &chunkReader{chunks: chunks}, func(record blockstore.Record) error {
 		return validateWrittenRecord(init, record)
 	})
@@ -461,7 +461,7 @@ func (a *Application) appendValidatedDocument(ctx context.Context, init api.Writ
 	return record, nil
 }
 
-func validateWrittenRecord(init api.WriteDocumentInit, record blockstore.Record) error {
+func validateWrittenRecord(init storageapp.WriteDocumentInit, record blockstore.Record) error {
 	if init.ExpectedLength != nil && *init.ExpectedLength != record.StoredLength {
 		return appstatus.Errorf(appstatus.CodeInvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
 	}
@@ -471,7 +471,7 @@ func validateWrittenRecord(init api.WriteDocumentInit, record blockstore.Record)
 	return nil
 }
 
-func newDocument(init api.WriteDocumentInit, record blockstore.Record, now time.Time) metastore.Document {
+func newDocument(init storageapp.WriteDocumentInit, record blockstore.Record, now time.Time) metastore.Document {
 	return metastore.Document{
 		Identity:                    init.Identity,
 		DocumentClass:               documentClassFromAPI(init.DocumentClass),
@@ -531,16 +531,16 @@ func runDocumentWriteFault(fault func(metastore.Document) error, document metast
 	return fault(document)
 }
 
-func writeDocumentResult(document metastore.Document, replicationResult replication.Result) (api.WriteDocumentResult, error) {
+func writeDocumentResult(document metastore.Document, replicationResult replication.Result) (storageapp.WriteDocumentResult, error) {
 	desiredReplicaCount, err := safeconv.IntToUint32("desired replica count", replicationResult.DesiredReplicaCount)
 	if err != nil {
-		return api.WriteDocumentResult{}, err
+		return storageapp.WriteDocumentResult{}, err
 	}
 	achievedReplicaCount, err := safeconv.IntToUint32("achieved replica count", replicationResult.AchievedReplicaCount)
 	if err != nil {
-		return api.WriteDocumentResult{}, err
+		return storageapp.WriteDocumentResult{}, err
 	}
-	return api.WriteDocumentResult{
+	return storageapp.WriteDocumentResult{
 		Metadata:             documentToAPI(document),
 		DesiredReplicaCount:  desiredReplicaCount,
 		AchievedReplicaCount: achievedReplicaCount,
@@ -571,18 +571,18 @@ func (a *Application) preparePeerReplicas(ctx context.Context, document metastor
 	return replication.PrepareDocument(ctx, prepared, source, a.peerPrepareTargets, a.peerPreparePolicy)
 }
 
-func (a *Application) HeadDocument(ctx context.Context, req api.HeadDocumentRequest) (api.DocumentMetadata, error) {
+func (a *Application) HeadDocument(ctx context.Context, req storageapp.HeadDocumentRequest) (storageapp.DocumentMetadata, error) {
 	if err := a.authority.ReadFresh(ctx); err != nil {
-		return api.DocumentMetadata{}, mapError(err)
+		return storageapp.DocumentMetadata{}, mapError(err)
 	}
 	document, err := a.metadata.HeadDocument(req.Identity)
 	if err != nil {
-		return api.DocumentMetadata{}, mapError(err)
+		return storageapp.DocumentMetadata{}, mapError(err)
 	}
 	return documentToAPI(document), nil
 }
 
-func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequest, sender api.ReadDocumentSender) error {
+func (a *Application) ReadDocument(ctx context.Context, req storageapp.ReadDocumentRequest, sender storageapp.ReadDocumentSender) error {
 	document, err := a.readableDocument(ctx, req.Identity)
 	if err != nil {
 		return mapError(err)
@@ -598,7 +598,7 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 	if err := a.blocks.VerifyRange(document.Location, selectedRange.Offset, &readLength); err != nil {
 		return a.readDocumentFromBackend(ctx, document, selectedRange, sender, err)
 	}
-	if err := sender.SendMetadata(api.ReadDocumentMetadata{
+	if err := sender.SendMetadata(storageapp.ReadDocumentMetadata{
 		Metadata:      documentToAPI(document),
 		SelectedRange: selectedRange,
 		Source:        scrapv1.StorageSource_STORAGE_SOURCE_LOCAL,
@@ -625,25 +625,25 @@ func (a *Application) readableDocument(ctx context.Context, documentIdentity ide
 	return a.queueRestoreOnColdRead(ctx, document)
 }
 
-func selectedDocumentRange(documentLength uint64, requested *api.ReadRange) (api.ReadRange, error) {
+func selectedDocumentRange(documentLength uint64, requested *storageapp.ReadRange) (storageapp.ReadRange, error) {
 	offset := uint64(0)
 	if requested != nil {
 		offset = requested.Offset
 	}
 	if offset > documentLength {
-		return api.ReadRange{}, blockstore.ErrInvalidRange
+		return storageapp.ReadRange{}, blockstore.ErrInvalidRange
 	}
 	readLength := documentLength - offset
 	if requested != nil && requested.Length != nil {
 		if *requested.Length > documentLength-offset {
-			return api.ReadRange{}, blockstore.ErrInvalidRange
+			return storageapp.ReadRange{}, blockstore.ErrInvalidRange
 		}
 		readLength = *requested.Length
 	}
-	return api.ReadRange{Offset: offset, Length: &readLength}, nil
+	return storageapp.ReadRange{Offset: offset, Length: &readLength}, nil
 }
 
-func (a *Application) readDocumentFromBackend(ctx context.Context, document metastore.Document, selectedRange api.ReadRange, sender api.ReadDocumentSender, localErr error) error {
+func (a *Application) readDocumentFromBackend(ctx context.Context, document metastore.Document, selectedRange storageapp.ReadRange, sender storageapp.ReadDocumentSender, localErr error) error {
 	data, err := a.backendReadFallbackData(ctx, document, selectedRange, localErr)
 	if err != nil {
 		return err
@@ -651,7 +651,7 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 	if err := a.recordBackendFallbackRepair(ctx, document, localErr); err != nil {
 		return err
 	}
-	if err := sender.SendMetadata(api.ReadDocumentMetadata{
+	if err := sender.SendMetadata(storageapp.ReadDocumentMetadata{
 		Metadata:      documentToAPI(document),
 		SelectedRange: selectedRange,
 		Source:        scrapv1.StorageSource_STORAGE_SOURCE_BACKEND,
@@ -661,7 +661,7 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 	return sendReadChunks(sender, data)
 }
 
-func (a *Application) backendReadFallbackData(ctx context.Context, document metastore.Document, selectedRange api.ReadRange, localErr error) ([]byte, error) {
+func (a *Application) backendReadFallbackData(ctx context.Context, document metastore.Document, selectedRange storageapp.ReadRange, localErr error) ([]byte, error) {
 	if a.backendStore == nil {
 		return nil, readIntegrityError(document, []string{"local"}, localErr)
 	}
@@ -696,7 +696,7 @@ func (a *Application) recordBackendFallbackRepair(ctx context.Context, document 
 	return a.recordDocumentRepairState(ctx, document, integrityEvidenceID(document), true, a.now())
 }
 
-func sendReadChunks(sender api.ReadDocumentSender, data []byte) error {
+func sendReadChunks(sender storageapp.ReadDocumentSender, data []byte) error {
 	for len(data) > 0 {
 		n := backendReadChunkSize
 		if n > len(data) {
@@ -885,7 +885,7 @@ func restoreQueuedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
 	}
 }
 
-func (a *Application) readVerifiedBackendRange(ctx context.Context, document metastore.Document, intent metastore.UploadIntent, selectedRange api.ReadRange) ([]byte, error) {
+func (a *Application) readVerifiedBackendRange(ctx context.Context, document metastore.Document, intent metastore.UploadIntent, selectedRange storageapp.ReadRange) ([]byte, error) {
 	if selectedRange.Length == nil {
 		return nil, blockstore.ErrInvalidRange
 	}
@@ -1009,16 +1009,16 @@ func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verify
 	return nil
 }
 
-func (a *Application) FindDocuments(ctx context.Context, req api.FindDocumentsRequest) (api.FindDocumentsResult, error) {
+func (a *Application) FindDocuments(ctx context.Context, req storageapp.FindDocumentsRequest) (storageapp.FindDocumentsResult, error) {
 	if err := a.authority.ReadFresh(ctx); err != nil {
-		return api.FindDocumentsResult{}, mapError(err)
+		return storageapp.FindDocumentsResult{}, mapError(err)
 	}
 	documents, err := a.metadata.FindDocuments(req.Transaction, documentFilterFromAPI(req.Filter))
 	if err != nil {
-		return api.FindDocumentsResult{}, mapError(err)
+		return storageapp.FindDocumentsResult{}, mapError(err)
 	}
-	result := api.FindDocumentsResult{
-		Documents: make([]api.DocumentMetadata, 0, len(documents)),
+	result := storageapp.FindDocumentsResult{
+		Documents: make([]storageapp.DocumentMetadata, 0, len(documents)),
 	}
 	for _, document := range documents {
 		result.Documents = append(result.Documents, documentToAPI(document))
@@ -1026,35 +1026,35 @@ func (a *Application) FindDocuments(ctx context.Context, req api.FindDocumentsRe
 	return result, nil
 }
 
-func (a *Application) CompleteTransaction(ctx context.Context, req api.CompleteTransactionRequest) (api.TransactionState, error) {
+func (a *Application) CompleteTransaction(ctx context.Context, req storageapp.CompleteTransactionRequest) (storageapp.TransactionState, error) {
 	completedAt := a.now()
 	transaction, err := a.authority.CompleteTransaction(ctx, req.Transaction, completedAt, cloneTags(req.Tags), completeTransactionCommandID(req.Transaction, completedAt, req.Tags))
 	if err != nil {
-		return api.TransactionState{}, mapError(err)
+		return storageapp.TransactionState{}, mapError(err)
 	}
 	return transactionToAPI(transaction), nil
 }
 
-func (a *Application) GetTransaction(ctx context.Context, req api.GetTransactionRequest) (api.TransactionState, error) {
+func (a *Application) GetTransaction(ctx context.Context, req storageapp.GetTransactionRequest) (storageapp.TransactionState, error) {
 	if err := a.authority.ReadFresh(ctx); err != nil {
-		return api.TransactionState{}, mapError(err)
+		return storageapp.TransactionState{}, mapError(err)
 	}
 	transaction, err := a.metadata.GetTransaction(req.Transaction)
 	if err != nil {
-		return api.TransactionState{}, mapError(err)
+		return storageapp.TransactionState{}, mapError(err)
 	}
 	return transactionToAPI(transaction), nil
 }
 
-func (a *Application) replayExisting(ctx context.Context, init api.WriteDocumentInit, existing metastore.Document, body drainedBody) (api.WriteDocumentResult, error) {
+func (a *Application) replayExisting(ctx context.Context, init storageapp.WriteDocumentInit, existing metastore.Document, body drainedBody) (storageapp.WriteDocumentResult, error) {
 	if !validExistingReplay(init, existing, body) {
-		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
+		return storageapp.WriteDocumentResult{}, mapError(metastore.ErrConflict)
 	}
 	intent := uploadIntentForDocument(existing)
 	if err := a.ensureReplayUploadIntent(ctx, intent); err != nil {
-		return api.WriteDocumentResult{}, mapError(err)
+		return storageapp.WriteDocumentResult{}, mapError(err)
 	}
-	return api.WriteDocumentResult{
+	return storageapp.WriteDocumentResult{
 		Metadata:             documentToAPI(existing),
 		DesiredReplicaCount:  1,
 		AchievedReplicaCount: 1,
@@ -1062,7 +1062,7 @@ func (a *Application) replayExisting(ctx context.Context, init api.WriteDocument
 	}, nil
 }
 
-func validExistingReplay(init api.WriteDocumentInit, existing metastore.Document, body drainedBody) bool {
+func validExistingReplay(init storageapp.WriteDocumentInit, existing metastore.Document, body drainedBody) bool {
 	if !existing.HasClientIdempotencyKey || existing.ClientIdempotencyKey == "" || existing.ClientIdempotencyKey != init.ClientIdempotencyKey {
 		return false
 	}
@@ -1085,7 +1085,7 @@ func (a *Application) ensureReplayUploadIntent(ctx context.Context, intent metas
 }
 
 type chunkReader struct {
-	chunks  api.ChunkReader
+	chunks  storageapp.ChunkReader
 	pending []byte
 }
 
@@ -1103,7 +1103,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 }
 
 type senderWriter struct {
-	sender api.ReadDocumentSender
+	sender storageapp.ReadDocumentSender
 }
 
 func (w senderWriter) Write(p []byte) (int, error) {
@@ -1121,7 +1121,7 @@ type drainedBody struct {
 	sha256 [32]byte
 }
 
-func drainChunks(chunks api.ChunkReader) (drainedBody, error) {
+func drainChunks(chunks storageapp.ChunkReader) (drainedBody, error) {
 	hasher := sha256.New()
 	var length uint64
 	for {
@@ -1309,8 +1309,8 @@ func peerIntegrityEvidenceID(document metastore.Document, replica blockstore.Rep
 	)
 }
 
-func documentToAPI(document metastore.Document) api.DocumentMetadata {
-	return api.DocumentMetadata{
+func documentToAPI(document metastore.Document) storageapp.DocumentMetadata {
+	return storageapp.DocumentMetadata{
 		Identity:                    document.Identity,
 		DocumentClass:               documentClassToAPI(document.DocumentClass),
 		PriorityClass:               priorityClassToAPI(document.PriorityClass),
@@ -1330,8 +1330,8 @@ func documentToAPI(document metastore.Document) api.DocumentMetadata {
 	}
 }
 
-func transactionToAPI(transaction metastore.Transaction) api.TransactionState {
-	return api.TransactionState{
+func transactionToAPI(transaction metastore.Transaction) storageapp.TransactionState {
+	return storageapp.TransactionState{
 		Transaction:            transaction.Identity,
 		State:                  transactionStateToAPI(transaction.State),
 		DocumentCount:          transaction.DocumentCount,
@@ -1344,7 +1344,7 @@ func transactionToAPI(transaction metastore.Transaction) api.TransactionState {
 	}
 }
 
-func documentFilterFromAPI(filter api.DocumentFilter) metastore.DocumentFilter {
+func documentFilterFromAPI(filter storageapp.DocumentFilter) metastore.DocumentFilter {
 	out := metastore.DocumentFilter{
 		DocumentNameExact:     filter.DocumentNameExact,
 		HasDocumentNameExact:  filter.HasDocumentNameExact,
