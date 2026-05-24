@@ -28,6 +28,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
@@ -1104,6 +1105,48 @@ func TestVerificationWindowRejectsWindowStartingAfterSelection(t *testing.T) {
 	}, 0, 512)
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("verification window error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
+func TestVerifyFetchedBackendWindowRejectsFrameBeforeWindow(t *testing.T) {
+	frameData := []byte("data")
+	frameSHA256 := sha256.Sum256(frameData)
+	err := verifyFetchedBackendWindow(blockstore.Record{
+		StoredOffset:  0,
+		StoredLength:  uint64(len(frameData)),
+		LogicalSHA256: frameSHA256,
+		Frames: []blockstore.FrameRecord{
+			{SegmentOffset: 0, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
+		},
+	}, 0, uint64(len(frameData)), 1, frameData)
+	if !errors.Is(err, ErrCorruptVerificationWindow) {
+		t.Fatalf("verify fetched backend window error = %v, want %v", err, ErrCorruptVerificationWindow)
+	}
+}
+
+func TestVerifyFetchedBackendWindowRejectsFrameBeyondFetchedData(t *testing.T) {
+	frameData := []byte("data")
+	frameSHA256 := sha256.Sum256(frameData)
+	err := verifyFetchedBackendWindow(blockstore.Record{
+		StoredOffset:  0,
+		StoredLength:  uint64(len(frameData)),
+		LogicalSHA256: frameSHA256,
+		Frames: []blockstore.FrameRecord{
+			{SegmentOffset: 0, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
+		},
+	}, 0, uint64(len(frameData)), 0, frameData[:len(frameData)-1])
+	if !errors.Is(err, ErrCorruptVerificationWindow) {
+		t.Fatalf("verify fetched backend window error = %v, want %v", err, ErrCorruptVerificationWindow)
+	}
+}
+
+func TestVerificationOutcomeRecordsCorruptWindowAsError(t *testing.T) {
+	testutil.RequireEqualf(t, verificationOutcome(ErrCorruptVerificationWindow), observe.VerificationOutcomeError, "verification outcome")
+}
+
+func TestCorruptVerificationWindowIsIntegrityFailure(t *testing.T) {
+	if !isIntegrityFailure(ErrCorruptVerificationWindow) {
+		t.Fatalf("isIntegrityFailure(%v) = false, want true", ErrCorruptVerificationWindow)
 	}
 }
 

@@ -19,6 +19,7 @@ func TestMetricsHandlerExposesCriticalSignalsAtStartup(t *testing.T) {
 		"scrap_write_latency_seconds_count{outcome=\"error\"} 0",
 		"scrap_verification_total{outcome=\"match\"} 0",
 		"scrap_verification_total{outcome=\"mismatch\"} 0",
+		"scrap_verification_total{outcome=\"error\"} 0",
 		"scrap_verification_total{outcome=\"skipped\"} 0",
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"success\"} 0",
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"not_found\"} 0",
@@ -36,6 +37,7 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 
 	RecordWriteLatency(OutcomeSuccess, 12*time.Millisecond)
 	RecordVerification(VerificationOutcomeMatch)
+	RecordVerification(VerificationOutcomeError)
 	RecordBackendProbe(BackendOperationHead, OutcomeNotFound)
 	IncrementRaftQueueDepth()
 	IncrementRaftQueueDepth()
@@ -45,6 +47,7 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 	for _, want := range []string{
 		"scrap_write_latency_seconds_count{outcome=\"success\"} 1",
 		"scrap_verification_total{outcome=\"match\"} 1",
+		"scrap_verification_total{outcome=\"error\"} 1",
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"not_found\"} 1",
 		"scrap_raft_queue_depth 3",
 	} {
