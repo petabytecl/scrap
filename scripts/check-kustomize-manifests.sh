@@ -7,7 +7,8 @@ LOCAL_KIND_OVERLAY=${LOCAL_KIND_OVERLAY:-deploy/kustomize/overlays/local-kind}
 base_render="$(mktemp)"
 local_kind_render="$(mktemp)"
 network_policy_render="$(mktemp)"
-trap 'rm -f "$base_render" "$local_kind_render" "$network_policy_render"' EXIT
+statefulset_render="$(mktemp)"
+trap 'rm -f "$base_render" "$local_kind_render" "$network_policy_render" "$statefulset_render"' EXIT
 
 render() {
 	# KUSTOMIZE_CMD intentionally supports commands with arguments, as defined by Makefile.
@@ -37,33 +38,45 @@ reject() {
 	fi
 }
 
+extract_first_kind() {
+	kind=$1
+	file=$2
+
+	awk -v target_kind="$kind" '
+		function matches_target_kind(value) {
+			return value ~ "(^|\n)kind:[[:space:]]*" target_kind "[[:space:]]*(\n|$)"
+		}
+		/^---$/ {
+			if (matches_target_kind(doc)) {
+				printf "%s", doc
+				found = 1
+				exit
+			}
+			doc = ""
+			next
+		}
+		{
+			doc = doc $0 ORS
+		}
+		END {
+			if (!found && matches_target_kind(doc)) {
+				printf "%s", doc
+			}
+		}
+	' "$file"
+}
+
 render deploy/kustomize/base > "$base_render"
 render "$LOCAL_KIND_OVERLAY" > "$local_kind_render"
 
 test -s "$base_render"
 test -s "$local_kind_render"
 
-awk '
-	/^---$/ {
-		if (doc ~ /(^|\n)kind:[[:space:]]*NetworkPolicy[[:space:]]*(\n|$)/) {
-			printf "%s", doc
-			found = 1
-			exit
-		}
-		doc = ""
-		next
-	}
-	{
-		doc = doc $0 ORS
-	}
-	END {
-		if (!found && doc ~ /(^|\n)kind:[[:space:]]*NetworkPolicy[[:space:]]*(\n|$)/) {
-			printf "%s", doc
-		}
-	}
-' "$base_render" > "$network_policy_render"
-
+extract_first_kind NetworkPolicy "$base_render" > "$network_policy_render"
 test -s "$network_policy_render"
+
+extract_first_kind StatefulSet "$base_render" > "$statefulset_render"
+test -s "$statefulset_render"
 
 reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "NodePort service in base render"
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
@@ -80,6 +93,10 @@ require 'port:[[:space:]]*18081[[:space:]]*$' "$network_policy_render" "admin gR
 require 'port:[[:space:]]*18082[[:space:]]*$' "$network_policy_render" "metrics ingress port"
 require 'healthcheck' "$base_render" "in-container healthcheck probe"
 require 'scrap\.admin\.v1-readiness' "$base_render" "readiness healthcheck service"
+require 'cpu:[[:space:]]*"?250m"?[[:space:]]*$' "$statefulset_render" "scrapd CPU request"
+require 'memory:[[:space:]]*"?256Mi"?[[:space:]]*$' "$statefulset_render" "scrapd memory request"
+require 'cpu:[[:space:]]*"?1000m"?[[:space:]]*$' "$statefulset_render" "scrapd CPU limit"
+require 'memory:[[:space:]]*"?512Mi"?[[:space:]]*$' "$statefulset_render" "scrapd memory limit"
 
 require '^[[:space:]]*nodePort:[[:space:]]*30080[[:space:]]*$' "$local_kind_render" "local-kind public NodePort"
 require '^[[:space:]]*nodePort:[[:space:]]*30081[[:space:]]*$' "$local_kind_render" "local-kind admin NodePort"
