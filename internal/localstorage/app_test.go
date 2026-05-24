@@ -1156,7 +1156,7 @@ func TestVerifyFetchedBackendWindowWithoutFrames(t *testing.T) {
 	}{
 		{name: "match", verifyStart: 7, data: documentData},
 		{name: "start mismatch", verifyStart: 8, data: documentData, want: ErrCorruptVerificationWindow},
-		{name: "short data", verifyStart: 7, data: documentData[:len(documentData)-1], want: io.ErrUnexpectedEOF},
+		{name: "short data", verifyStart: 7, data: documentData[:len(documentData)-1], want: ErrCorruptVerificationWindow},
 		{name: "checksum mismatch", verifyStart: 7, data: []byte("WHole"), want: blockstore.ErrChecksumMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

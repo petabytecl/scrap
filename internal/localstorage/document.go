@@ -856,7 +856,12 @@ func verifyFetchedBackendDocument(record blockstore.Record, verifyStart uint64, 
 		)
 	}
 	if uint64(len(data)) != record.StoredLength {
-		return io.ErrUnexpectedEOF
+		return fmt.Errorf(
+			"localstorage: verification window length %d does not match fetched data length %d: %w",
+			record.StoredLength,
+			len(data),
+			ErrCorruptVerificationWindow,
+		)
 	}
 	got := sha256.Sum256(data)
 	if got != record.LogicalSHA256 {
