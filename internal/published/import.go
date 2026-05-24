@@ -63,41 +63,52 @@ func ReadSnapshotContentsForImport(reader io.Reader, options ImportOptions) (Sna
 	for {
 		record, err := ReadSnapshotRecord(reader)
 		if errors.Is(err, io.EOF) {
-			if !seen && hasSnapshotConstraints(options) {
-				return contents, invalidArtifact("snapshot artifact is empty")
-			}
-			return contents, nil
+			return contents, validateSnapshotImportComplete(seen, options)
 		}
 		if err != nil {
 			return contents, err
 		}
-		if err := applySnapshotHeader(&contents, record, options, !seen); err != nil {
+		if err := applySnapshotImportRecord(&contents, record, options, !seen); err != nil {
 			return contents, err
 		}
 		seen = true
-		switch typed := record.GetRecord().(type) {
-		case *publishedv1.SnapshotRecord_Document:
-			document, intent, err := importDocument(typed.Document)
-			if err != nil {
-				return contents, err
-			}
-			contents.Documents = append(contents.Documents, document)
-			contents.UploadIntents = append(contents.UploadIntents, intent)
-		case *publishedv1.SnapshotRecord_Transaction:
-			transaction, err := importTransaction(typed.Transaction)
-			if err != nil {
-				return contents, err
-			}
-			contents.Transactions = append(contents.Transactions, transaction)
-		case *publishedv1.SnapshotRecord_Tombstone:
-			if err := importTombstone(typed.Tombstone); err != nil {
-				return contents, err
-			}
-			contents.Tombstones++
-		default:
-			return contents, invalidArtifact("unsupported snapshot record %T", record.GetRecord())
-		}
 	}
+}
+
+func validateSnapshotImportComplete(seen bool, options ImportOptions) error {
+	if !seen && hasSnapshotConstraints(options) {
+		return invalidArtifact("snapshot artifact is empty")
+	}
+	return nil
+}
+
+func applySnapshotImportRecord(contents *SnapshotContents, record *publishedv1.SnapshotRecord, options ImportOptions, first bool) error {
+	if err := applySnapshotHeader(contents, record, options, first); err != nil {
+		return err
+	}
+	switch typed := record.GetRecord().(type) {
+	case *publishedv1.SnapshotRecord_Document:
+		document, intent, err := importDocument(typed.Document)
+		if err != nil {
+			return err
+		}
+		contents.Documents = append(contents.Documents, document)
+		contents.UploadIntents = append(contents.UploadIntents, intent)
+	case *publishedv1.SnapshotRecord_Transaction:
+		transaction, err := importTransaction(typed.Transaction)
+		if err != nil {
+			return err
+		}
+		contents.Transactions = append(contents.Transactions, transaction)
+	case *publishedv1.SnapshotRecord_Tombstone:
+		if err := importTombstone(typed.Tombstone); err != nil {
+			return err
+		}
+		contents.Tombstones++
+	default:
+		return invalidArtifact("unsupported snapshot record %T", record.GetRecord())
+	}
+	return nil
 }
 
 func ReadTailContents(reader io.Reader) (TailContents, error) {
@@ -110,55 +121,67 @@ func ReadTailContentsForImport(reader io.Reader, options ImportOptions) (TailCon
 	for {
 		record, err := ReadTailRecord(reader)
 		if errors.Is(err, io.EOF) {
-			if !seen && hasTailConstraints(options) {
-				return contents, invalidArtifact("tail artifact is empty")
-			}
-			if seen {
-				if (options.RequireLogRange || options.FirstLogIndex != 0) && contents.FirstLogIndex != options.FirstLogIndex {
-					return contents, invalidArtifact("tail first log index %d does not match expected %d", contents.FirstLogIndex, options.FirstLogIndex)
-				}
-				if (options.RequireLogRange || options.LastLogIndex != 0) && contents.LastLogIndex != options.LastLogIndex {
-					return contents, invalidArtifact("tail last log index %d does not match expected %d", contents.LastLogIndex, options.LastLogIndex)
-				}
-			}
-			return contents, nil
+			return contents, validateTailImportComplete(contents, seen, options)
 		}
 		if err != nil {
 			return contents, err
 		}
-		if err := applyTailHeader(&contents, record, options, !seen); err != nil {
+		if err := applyTailImportRecord(&contents, record, options, !seen); err != nil {
 			return contents, err
 		}
 		seen = true
-		switch typed := record.GetMutation().(type) {
-		case *publishedv1.TailRecord_FinalizedDocument:
-			document, intent, err := importDocument(typed.FinalizedDocument)
-			if err != nil {
-				return contents, err
-			}
-			contents.FinalizedDocuments = append(contents.FinalizedDocuments, document)
-			contents.UploadIntents = append(contents.UploadIntents, intent)
-		case *publishedv1.TailRecord_TransactionState:
-			transaction, err := importTransaction(typed.TransactionState)
-			if err != nil {
-				return contents, err
-			}
-			contents.Transactions = append(contents.Transactions, transaction)
-		case *publishedv1.TailRecord_ObjectState:
-			objectState, err := importObjectState(typed.ObjectState)
-			if err != nil {
-				return contents, err
-			}
-			contents.ObjectStates = append(contents.ObjectStates, objectState)
-		case *publishedv1.TailRecord_Tombstone:
-			if err := importTombstone(typed.Tombstone); err != nil {
-				return contents, err
-			}
-			contents.Tombstones++
-		default:
-			return contents, invalidArtifact("unsupported tail mutation %T", record.GetMutation())
-		}
 	}
+}
+
+func validateTailImportComplete(contents TailContents, seen bool, options ImportOptions) error {
+	if !seen && hasTailConstraints(options) {
+		return invalidArtifact("tail artifact is empty")
+	}
+	if !seen {
+		return nil
+	}
+	if (options.RequireLogRange || options.FirstLogIndex != 0) && contents.FirstLogIndex != options.FirstLogIndex {
+		return invalidArtifact("tail first log index %d does not match expected %d", contents.FirstLogIndex, options.FirstLogIndex)
+	}
+	if (options.RequireLogRange || options.LastLogIndex != 0) && contents.LastLogIndex != options.LastLogIndex {
+		return invalidArtifact("tail last log index %d does not match expected %d", contents.LastLogIndex, options.LastLogIndex)
+	}
+	return nil
+}
+
+func applyTailImportRecord(contents *TailContents, record *publishedv1.TailRecord, options ImportOptions, first bool) error {
+	if err := applyTailHeader(contents, record, options, first); err != nil {
+		return err
+	}
+	switch typed := record.GetMutation().(type) {
+	case *publishedv1.TailRecord_FinalizedDocument:
+		document, intent, err := importDocument(typed.FinalizedDocument)
+		if err != nil {
+			return err
+		}
+		contents.FinalizedDocuments = append(contents.FinalizedDocuments, document)
+		contents.UploadIntents = append(contents.UploadIntents, intent)
+	case *publishedv1.TailRecord_TransactionState:
+		transaction, err := importTransaction(typed.TransactionState)
+		if err != nil {
+			return err
+		}
+		contents.Transactions = append(contents.Transactions, transaction)
+	case *publishedv1.TailRecord_ObjectState:
+		objectState, err := importObjectState(typed.ObjectState)
+		if err != nil {
+			return err
+		}
+		contents.ObjectStates = append(contents.ObjectStates, objectState)
+	case *publishedv1.TailRecord_Tombstone:
+		if err := importTombstone(typed.Tombstone); err != nil {
+			return err
+		}
+		contents.Tombstones++
+	default:
+		return invalidArtifact("unsupported tail mutation %T", record.GetMutation())
+	}
+	return nil
 }
 
 func hasSnapshotConstraints(options ImportOptions) bool {
@@ -267,42 +290,12 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 	if document == nil {
 		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document record is required")
 	}
-	if document.GetTenantId() == "" {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document tenant id is required")
+	if err := validatePublishedDocumentFields(document); err != nil {
+		return metastore.Document{}, metastore.UploadIntent{}, err
 	}
-	if document.GetTransactionId() == "" {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document transaction id is required")
-	}
-	if document.GetDocumentName() == "" {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document name is required")
-	}
-	if document.GetDocumentClass() == 0 {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document class is required")
-	}
-	if document.GetPriorityClass() == 0 {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document priority class is required")
-	}
-	if document.GetAvailability() == 0 {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document availability is required")
-	}
-	if document.GetLifecycleState() == 0 {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document lifecycle state is required")
-	}
-	documentClass, err := safeconv.Uint32ToUint16("document class", document.GetDocumentClass())
+	enums, err := importPublishedDocumentEnums(document)
 	if err != nil {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document class is out of range: %v", err)
-	}
-	priorityClass, err := safeconv.Uint32ToUint16("document priority class", document.GetPriorityClass())
-	if err != nil {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document priority class is out of range: %v", err)
-	}
-	availability, err := safeconv.Uint32ToUint16("document availability", document.GetAvailability())
-	if err != nil {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document availability is out of range: %v", err)
-	}
-	lifecycleState, err := safeconv.Uint32ToUint16("document lifecycle state", document.GetLifecycleState())
-	if err != nil {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document lifecycle state is out of range: %v", err)
+		return metastore.Document{}, metastore.UploadIntent{}, err
 	}
 	locations := document.GetLocations()
 	if len(locations) == 0 {
@@ -324,12 +317,6 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 	if err != nil {
 		return metastore.Document{}, metastore.UploadIntent{}, err
 	}
-	if document.GetCreatedAt() == nil {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document %q created_at is required", document.GetDocumentName())
-	}
-	if document.GetFinalizedAt() == nil {
-		return metastore.Document{}, metastore.UploadIntent{}, invalidArtifact("document %q finalized_at is required", document.GetDocumentName())
-	}
 
 	imported := metastore.Document{
 		Identity: identity.Document{
@@ -337,8 +324,8 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 			TransactionID: document.GetTransactionId(),
 			DocumentName:  document.GetDocumentName(),
 		},
-		DocumentClass:               metastore.DocumentClass(documentClass),
-		PriorityClass:               metastore.PriorityClass(priorityClass),
+		DocumentClass:               metastore.DocumentClass(enums.documentClass),
+		PriorityClass:               metastore.PriorityClass(enums.priorityClass),
 		ContentType:                 document.GetContentType(),
 		HasContentType:              document.ContentType != nil,
 		Length:                      document.GetLength(),
@@ -348,8 +335,8 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 		CreatedByService:            document.GetCreatedByService(),
 		WorkflowStage:               document.GetWorkflowStage(),
 		HasWorkflowStage:            document.WorkflowStage != nil,
-		Availability:                metastore.Availability(availability),
-		LifecycleState:              metastore.LifecycleState(lifecycleState),
+		Availability:                metastore.Availability(enums.availability),
+		LifecycleState:              metastore.LifecycleState(enums.lifecycleState),
 		UploadState:                 metastore.UploadStateUploaded,
 		Tags:                        clonePublishedTags(document.GetTags()),
 		Location: blockstore.Record{
@@ -360,12 +347,8 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 			Frames:        frames,
 		},
 	}
-	if document.GetCreatedAt() != nil {
-		imported.CreatedAt = document.GetCreatedAt().AsTime()
-	}
-	if document.GetFinalizedAt() != nil {
-		imported.FinalizedAt = document.GetFinalizedAt().AsTime()
-	}
+	imported.CreatedAt = document.GetCreatedAt().AsTime()
+	imported.FinalizedAt = document.GetFinalizedAt().AsTime()
 	intent := metastore.UploadIntent{
 		BlockID:           location.GetBlockId(),
 		BackendObjectKey:  location.GetBackendObjectKey(),
@@ -374,6 +357,73 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 		State:             metastore.UploadStateUploaded,
 	}
 	return imported, intent, nil
+}
+
+func validatePublishedDocumentFields(document *publishedv1.PublishedDocument) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "tenant id", value: document.GetTenantId()},
+		{name: "transaction id", value: document.GetTransactionId()},
+		{name: "name", value: document.GetDocumentName()},
+	} {
+		if field.value == "" {
+			return invalidArtifact("document %s is required", field.name)
+		}
+	}
+	for _, field := range []struct {
+		name  string
+		value uint32
+	}{
+		{name: "class", value: document.GetDocumentClass()},
+		{name: "priority class", value: document.GetPriorityClass()},
+		{name: "availability", value: document.GetAvailability()},
+		{name: "lifecycle state", value: document.GetLifecycleState()},
+	} {
+		if field.value == 0 {
+			return invalidArtifact("document %s is required", field.name)
+		}
+	}
+	if document.GetCreatedAt() == nil {
+		return invalidArtifact("document %q created_at is required", document.GetDocumentName())
+	}
+	if document.GetFinalizedAt() == nil {
+		return invalidArtifact("document %q finalized_at is required", document.GetDocumentName())
+	}
+	return nil
+}
+
+type publishedDocumentEnums struct {
+	documentClass  uint16
+	priorityClass  uint16
+	availability   uint16
+	lifecycleState uint16
+}
+
+func importPublishedDocumentEnums(document *publishedv1.PublishedDocument) (publishedDocumentEnums, error) {
+	documentClass, err := safeconv.Uint32ToUint16("document class", document.GetDocumentClass())
+	if err != nil {
+		return publishedDocumentEnums{}, invalidArtifact("document class is out of range: %v", err)
+	}
+	priorityClass, err := safeconv.Uint32ToUint16("document priority class", document.GetPriorityClass())
+	if err != nil {
+		return publishedDocumentEnums{}, invalidArtifact("document priority class is out of range: %v", err)
+	}
+	availability, err := safeconv.Uint32ToUint16("document availability", document.GetAvailability())
+	if err != nil {
+		return publishedDocumentEnums{}, invalidArtifact("document availability is out of range: %v", err)
+	}
+	lifecycleState, err := safeconv.Uint32ToUint16("document lifecycle state", document.GetLifecycleState())
+	if err != nil {
+		return publishedDocumentEnums{}, invalidArtifact("document lifecycle state is out of range: %v", err)
+	}
+	return publishedDocumentEnums{
+		documentClass:  documentClass,
+		priorityClass:  priorityClass,
+		availability:   availability,
+		lifecycleState: lifecycleState,
+	}, nil
 }
 
 func importTransaction(transaction *publishedv1.PublishedTransaction) (metastore.Transaction, error) {

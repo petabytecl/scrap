@@ -124,22 +124,43 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	now := opts.Now
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
+	now := smokeClock(opts)
 	if opts.OperationID == "" {
 		opts.OperationID = "openbao-smoke-" + now().UTC().Format("20060102T150405Z")
 	}
-	client := opts.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := smokeHTTPClient(opts)
 	mount, keyName, err := splitTransitKeyPath(opts.TransitKeyPath)
 	if err != nil {
 		return Report{}, err
 	}
-	report := Report{
+	report := newSmokeReport(opts, now)
+
+	admin := openBaoClient{baseURL: opts.Address, token: opts.AdminToken, http: client}
+	kube := collectAuthEvidence(ctx, opts, admin, mount, keyName, &report)
+	collectTransitEvidence(ctx, opts, admin, kube, mount, keyName, client, &report)
+	if len(report.Errors) > 0 {
+		report.Status = "failed"
+		return report, ErrSmokeFailed
+	}
+	return report, nil
+}
+
+func smokeClock(opts Options) func() time.Time {
+	if opts.Now != nil {
+		return opts.Now
+	}
+	return func() time.Time { return time.Now().UTC() }
+}
+
+func smokeHTTPClient(opts Options) *http.Client {
+	if opts.HTTPClient != nil {
+		return opts.HTTPClient
+	}
+	return http.DefaultClient
+}
+
+func newSmokeReport(opts Options, now func() time.Time) Report {
+	return Report{
 		ReportKind:         ReportKind,
 		GeneratedAt:        now().UTC().Format(time.RFC3339),
 		ReleaseSHA:         opts.ReleaseSHA,
@@ -161,15 +182,16 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 			"evidence redacts plaintext DEKs, wrapped DEKs, OpenBao tokens, backend object bytes, and customer payloads",
 		},
 	}
+}
 
-	admin := openBaoClient{baseURL: opts.Address, token: opts.AdminToken, http: client}
+func collectAuthEvidence(ctx context.Context, opts Options, admin openBaoClient, mount, keyName string, report *Report) openBaoClient {
 	keyBefore, err := admin.keyVersion(ctx, mount, keyName)
 	if err != nil {
 		report.fail("read key version before smoke: " + err.Error())
 	}
 	report.Transit.KeyName = keyName
 	report.Transit.KeyVersionBefore = keyBefore
-	report.AuditDeviceStatus = auditStatus(ctx, admin, opts.AuditDevice, &report)
+	report.AuditDeviceStatus = auditStatus(ctx, admin, opts.AuditDevice, report)
 
 	kubeToken, policies, loginRequestID, err := admin.kubernetesLogin(ctx, opts.KubernetesRole, opts.KubernetesJWT)
 	if err != nil {
@@ -180,16 +202,19 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		report.KubernetesAuth.LoginRequestID = loginRequestID
 		report.addRequestID(loginRequestID)
 	}
-	kube := openBaoClient{baseURL: opts.Address, token: kubeToken, http: client}
-	dataCapabilities := capabilities(ctx, kube, fmt.Sprintf("%s/datakey/plaintext/%s", mount, keyName), &report)
-	keyCapabilities := capabilities(ctx, kube, fmt.Sprintf("%s/keys/%s", mount, keyName), &report)
+	kube := openBaoClient{baseURL: opts.Address, token: kubeToken, http: admin.http}
+	dataCapabilities := capabilities(ctx, kube, fmt.Sprintf("%s/datakey/plaintext/%s", mount, keyName), report)
+	keyCapabilities := capabilities(ctx, kube, fmt.Sprintf("%s/keys/%s", mount, keyName), report)
 	report.KubernetesAuth.DataKeyCapabilities = dataCapabilities
 	report.KubernetesAuth.KeyAdminCapabilities = keyCapabilities
 	report.KubernetesAuth.BroadKeyAdminPermissions = hasBroadKeyAdmin(keyCapabilities)
 	if report.KubernetesAuth.BroadKeyAdminPermissions {
 		report.fail("kubernetes client has broad key-admin permissions")
 	}
+	return kube
+}
 
+func collectTransitEvidence(ctx context.Context, opts Options, admin, kube openBaoClient, mount, keyName string, client *http.Client, report *Report) {
 	aad := []byte(fmt.Sprintf("scrap:%s:%s:%s", opts.ProfileID, opts.EnvironmentID, opts.OperationID))
 	report.Transit.AADContextSHA256 = sha256String(aad)
 	contextValue := base64.StdEncoding.EncodeToString(aad)
@@ -238,11 +263,6 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 			report.fail(outcome.Name + " did not produce crypto-unavailable")
 		}
 	}
-	if len(report.Errors) > 0 {
-		report.Status = "failed"
-		return report, ErrSmokeFailed
-	}
-	return report, nil
 }
 
 func validateOptions(opts Options) (Options, error) {

@@ -152,23 +152,48 @@ func validateBlockHeader(header *storagev1.BlockHeader) error {
 	return validateTimestamp("block header", header.GetCreatedAt())
 }
 
+type requiredString struct {
+	name  string
+	value string
+}
+
+func validateRequiredStrings(recordKind string, fields ...requiredString) error {
+	for _, field := range fields {
+		if field.value == "" {
+			return invalidRecord(recordKind, "%s is required", field.name)
+		}
+	}
+	return nil
+}
+
 func validateBlockIndex(index *storagev1.BlockIndex, requireDigest bool) error {
 	if index == nil {
 		return invalidRecord("block index", "record is required")
 	}
+	if err := validateBlockIndexHeader(index); err != nil {
+		return err
+	}
+	if err := validateBlockIndexFrames(index); err != nil {
+		return err
+	}
+	if err := validateBlockIndexDocuments(index); err != nil {
+		return err
+	}
+	if err := validateTimestamp("block index", index.GetCreatedAt()); err != nil {
+		return err
+	}
+	return validateBlockIndexDigest(index, requireDigest)
+}
+
+func validateBlockIndexHeader(index *storagev1.BlockIndex) error {
 	if err := validateSchemaVersion("block index", index.GetSchemaVersion()); err != nil {
 		return err
 	}
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
-		{name: "block_id", value: index.GetBlockId()},
-		{name: "shard_id", value: index.GetShardId()},
-	} {
-		if field.value == "" {
-			return invalidRecord("block index", "%s is required", field.name)
-		}
+	if err := validateRequiredStrings("block index",
+		requiredString{name: "block_id", value: index.GetBlockId()},
+		requiredString{name: "shard_id", value: index.GetShardId()},
+	); err != nil {
+		return err
 	}
 	if index.GetFormatVersion() == 0 {
 		return invalidRecord("block index", "format_version is required")
@@ -179,9 +204,10 @@ func validateBlockIndex(index *storagev1.BlockIndex, requireDigest bool) error {
 	if len(index.GetBlockSha256()) != sha256.Size {
 		return invalidRecord("block index", "block_sha256 must be 32 bytes")
 	}
-	if len(index.GetDocuments()) == 0 {
-		return invalidRecord("block index", "documents are required")
-	}
+	return nil
+}
+
+func validateBlockIndexFrames(index *storagev1.BlockIndex) error {
 	if len(index.GetFrames()) == 0 {
 		return invalidRecord("block index", "frames are required")
 	}
@@ -190,25 +216,34 @@ func validateBlockIndex(index *storagev1.BlockIndex, requireDigest bool) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func validateBlockIndexDocuments(index *storagev1.BlockIndex) error {
+	if len(index.GetDocuments()) == 0 {
+		return invalidRecord("block index", "documents are required")
+	}
 	for i, document := range index.GetDocuments() {
 		if err := validateIndexDocumentRecord(document, i, index.GetFrames(), index.GetBlockLength()); err != nil {
 			return err
 		}
 	}
-	if err := validateTimestamp("block index", index.GetCreatedAt()); err != nil {
+	return nil
+}
+
+func validateBlockIndexDigest(index *storagev1.BlockIndex, requireDigest bool) error {
+	if !requireDigest {
+		return nil
+	}
+	if len(index.GetIndexSha256()) != sha256.Size {
+		return invalidRecord("block index", "index_sha256 must be 32 bytes")
+	}
+	digest, err := blockIndexDigest(index)
+	if err != nil {
 		return err
 	}
-	if requireDigest {
-		if len(index.GetIndexSha256()) != sha256.Size {
-			return invalidRecord("block index", "index_sha256 must be 32 bytes")
-		}
-		digest, err := blockIndexDigest(index)
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(index.GetIndexSha256(), digest) {
-			return invalidRecord("block index", "index_sha256 does not match record payload")
-		}
+	if !bytes.Equal(index.GetIndexSha256(), digest) {
+		return invalidRecord("block index", "index_sha256 does not match record payload")
 	}
 	return nil
 }
@@ -218,49 +253,62 @@ func validateIndexDocumentRecord(document *storagev1.IndexDocumentRecord, index 
 	if document == nil {
 		return invalidRecord(recordKind, "record is required")
 	}
-	if document.GetDocumentKeyId() == 0 {
-		return invalidRecord(recordKind, "document_key_id is required")
+	if err := validateIndexDocumentFields(recordKind, document, blockLength); err != nil {
+		return err
 	}
-	if document.GetTransactionKeyId() == 0 {
-		return invalidRecord(recordKind, "transaction_key_id is required")
+	return validateIndexDocumentFrames(recordKind, document, frames)
+}
+
+func validateIndexDocumentFields(recordKind string, document *storagev1.IndexDocumentRecord, blockLength uint64) error {
+	for _, field := range []struct {
+		name  string
+		value uint64
+	}{
+		{name: "document_key_id", value: document.GetDocumentKeyId()},
+		{name: "transaction_key_id", value: document.GetTransactionKeyId()},
+		{name: "stored_length", value: document.GetStoredLength()},
+		{name: "logical_length", value: document.GetLogicalLength()},
+		{name: "document_class", value: uint64(document.GetDocumentClass())},
+		{name: "priority_class", value: uint64(document.GetPriorityClass())},
+		{name: "created_at_ms", value: document.GetCreatedAtMs()},
+	} {
+		if field.value == 0 {
+			return invalidRecord(recordKind, "%s is required", field.name)
+		}
 	}
-	if len(document.GetDocumentNameFingerprint()) != fingerprintLength {
-		return invalidRecord(recordKind, "document_name_fingerprint must be 16 bytes")
-	}
-	if len(document.GetDocumentIdentityFingerprint()) != fingerprintLength {
-		return invalidRecord(recordKind, "document_identity_fingerprint must be 16 bytes")
-	}
-	if document.GetStoredLength() == 0 {
-		return invalidRecord(recordKind, "stored_length is required")
+	if err := validateIndexDocumentByteFields(recordKind, document); err != nil {
+		return err
 	}
 	if document.GetStoredOffset()+document.GetStoredLength() < document.GetStoredOffset() ||
 		document.GetStoredOffset()+document.GetStoredLength() > blockLength {
 		return invalidRecord(recordKind, "stored range exceeds block length")
 	}
-	if document.GetLogicalLength() == 0 {
-		return invalidRecord(recordKind, "logical_length is required")
-	}
-	if len(document.GetLogicalSha256()) != sha256.Size {
-		return invalidRecord(recordKind, "logical_sha256 must be 32 bytes")
-	}
-	if len(document.GetStoredSha256()) != sha256.Size {
-		return invalidRecord(recordKind, "stored_sha256 must be 32 bytes")
-	}
-	if document.GetDocumentClass() == 0 {
-		return invalidRecord(recordKind, "document_class is required")
-	}
-	if document.GetPriorityClass() == 0 {
-		return invalidRecord(recordKind, "priority_class is required")
-	}
-	if document.GetCreatedAtMs() == 0 {
-		return invalidRecord(recordKind, "created_at_ms is required")
-	}
 	if len(document.GetMetadataBlob()) == 0 {
 		return invalidRecord(recordKind, "metadata_blob is required")
 	}
-	if len(document.GetTransactionFingerprint()) != fingerprintLength {
-		return invalidRecord(recordKind, "transaction_fingerprint must be 16 bytes")
+	return nil
+}
+
+func validateIndexDocumentByteFields(recordKind string, document *storagev1.IndexDocumentRecord) error {
+	for _, field := range []struct {
+		name string
+		data []byte
+		size int
+	}{
+		{name: "document_name_fingerprint", data: document.GetDocumentNameFingerprint(), size: fingerprintLength},
+		{name: "document_identity_fingerprint", data: document.GetDocumentIdentityFingerprint(), size: fingerprintLength},
+		{name: "logical_sha256", data: document.GetLogicalSha256(), size: sha256.Size},
+		{name: "stored_sha256", data: document.GetStoredSha256(), size: sha256.Size},
+		{name: "transaction_fingerprint", data: document.GetTransactionFingerprint(), size: fingerprintLength},
+	} {
+		if len(field.data) != field.size {
+			return invalidRecord(recordKind, "%s must be %d bytes", field.name, field.size)
+		}
 	}
+	return nil
+}
+
+func validateIndexDocumentFrames(recordKind string, document *storagev1.IndexDocumentRecord, frames []*storagev1.FrameChecksumRecord) error {
 	if int(document.GetFirstFrameIndex()) >= len(frames) || int(document.GetLastFrameIndex()) >= len(frames) {
 		return invalidRecord(recordKind, "frame index range exceeds frames")
 	}

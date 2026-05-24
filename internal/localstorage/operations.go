@@ -66,50 +66,67 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 			return result, err
 		}
 		result.Scanned++
-		var succeeded bool
-		switch operation.GetOperationType() {
-		case "tombstone":
-			succeeded, err = a.runTombstoneOperation(ctx, store, operation)
-		case "restore", "prewarm":
-			succeeded, err = a.runRestoreOperation(ctx, store, operation)
-		case "rewrap":
-			succeeded, err = a.runRewrapOperation(ctx, store, operation)
-		case "repair":
-			succeeded, err = a.runRepairOperation(ctx, store, operation)
-		case "scrub":
-			succeeded, err = a.runScrubOperation(ctx, store, operation)
-		case "drain":
-			succeeded, err = a.runDrainOperation(ctx, store, operation)
-		case "capacity-override":
-			succeeded, err = a.runCapacityOverrideOperation(ctx, store, operation)
-		case "metadata-restore":
-			succeeded, err = a.runMetadataRestoreOperation(ctx, store, operation)
-		case "copy-verify":
-			succeeded, err = a.runCopyVerifyOperation(ctx, store, operation)
-		case "dr-drill":
-			succeeded, err = a.runDRDrillOperation(ctx, store, operation)
-		default:
-			result.Skipped++
-			continue
-		}
+		succeeded, supported, err := a.runQueuedOperation(ctx, store, operation)
 		if err != nil {
 			return result, err
 		}
-		if succeeded {
-			result.Succeeded++
-		} else {
-			queued, queueErr := isOperationQueued(store, operation.GetOperationId())
-			if queueErr != nil {
-				return result, queueErr
-			}
-			if queued {
-				result.Pending++
-				continue
-			}
-			result.Failed++
+		if !supported {
+			result.Skipped++
+			continue
+		}
+		if err := recordQueuedOperationOutcome(store, operation, succeeded, &result); err != nil {
+			return result, err
 		}
 	}
 	return result, nil
+}
+
+func (a *Application) runQueuedOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, bool, error) {
+	switch operation.GetOperationType() {
+	case "tombstone":
+		return runSupportedOperation(a.runTombstoneOperation(ctx, store, operation))
+	case "restore", "prewarm":
+		return runSupportedOperation(a.runRestoreOperation(ctx, store, operation))
+	case "rewrap":
+		return runSupportedOperation(a.runRewrapOperation(ctx, store, operation))
+	case "repair":
+		return runSupportedOperation(a.runRepairOperation(ctx, store, operation))
+	case "scrub":
+		return runSupportedOperation(a.runScrubOperation(ctx, store, operation))
+	case "drain":
+		return runSupportedOperation(a.runDrainOperation(ctx, store, operation))
+	case "capacity-override":
+		return runSupportedOperation(a.runCapacityOverrideOperation(ctx, store, operation))
+	case "metadata-restore":
+		return runSupportedOperation(a.runMetadataRestoreOperation(ctx, store, operation))
+	case "copy-verify":
+		return runSupportedOperation(a.runCopyVerifyOperation(ctx, store, operation))
+	case "dr-drill":
+		return runSupportedOperation(a.runDRDrillOperation(ctx, store, operation))
+	default:
+		return false, false, nil
+	}
+}
+
+func runSupportedOperation(succeeded bool, err error) (bool, bool, error) {
+	return succeeded, true, err
+}
+
+func recordQueuedOperationOutcome(store *operations.Store, operation *adminv1.Operation, succeeded bool, result *OperationRunResult) error {
+	if succeeded {
+		result.Succeeded++
+		return nil
+	}
+	queued, err := isOperationQueued(store, operation.GetOperationId())
+	if err != nil {
+		return err
+	}
+	if queued {
+		result.Pending++
+		return nil
+	}
+	result.Failed++
+	return nil
 }
 
 func (a *Application) RecoverInterruptedOperations(ctx context.Context, store *operations.Store) (operations.RecoveryResult, error) {
@@ -1044,49 +1061,77 @@ func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, docume
 	}
 	prepared := replication.PreparedDocumentFromMetadata(document)
 	for _, replica := range document.Location.Replicas {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		source := a.peerRepairSources[replica.MemberID]
-		if source == nil {
-			continue
-		}
-		quarantined, err := a.peerRepairSourceQuarantined(document, replica)
+		repaired, err := a.repairDocumentFromReplica(ctx, document, prepared, replica, now)
 		if err != nil {
 			return false, err
 		}
-		if quarantined {
-			continue
+		if repaired {
+			return true, nil
 		}
-		var data bytes.Buffer
-		err = source.ReadReplica(ctx, replica, &data)
-		if err == nil {
-			err = replication.ValidatePreparedBytes(prepared, data.Bytes())
-		}
-		if err != nil {
-			if contextErr := ctx.Err(); contextErr != nil {
-				return false, contextErr
-			}
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return false, err
-			}
-			if !isPeerIntegrityFailure(err) {
-				continue
-			}
-			if recordErr := a.recordPeerRepairState(ctx, document, replica, true, now); recordErr != nil {
-				return false, recordErr
-			}
-			continue
-		}
-		if err := a.blocks.InstallVerifiedRange(ctx, document.Location, document.StoredSHA256, bytes.NewReader(data.Bytes())); err != nil {
-			return false, err
-		}
-		return true, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	return false, nil
+}
+
+func (a *Application) repairDocumentFromReplica(
+	ctx context.Context,
+	document metastore.Document,
+	prepared replication.PreparedDocument,
+	replica blockstore.ReplicaRef,
+	now time.Time,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	source := a.peerRepairSources[replica.MemberID]
+	if source == nil {
+		return false, nil
+	}
+	quarantined, err := a.peerRepairSourceQuarantined(document, replica)
+	if err != nil || quarantined {
+		return false, err
+	}
+	data, err := a.readVerifiedPeerReplica(ctx, document, prepared, replica, source, now)
+	if err != nil || data == nil {
+		return false, err
+	}
+	if err := a.blocks.InstallVerifiedRange(ctx, document.Location, document.StoredSHA256, bytes.NewReader(data)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Application) readVerifiedPeerReplica(
+	ctx context.Context,
+	document metastore.Document,
+	prepared replication.PreparedDocument,
+	replica blockstore.ReplicaRef,
+	source PeerRepairSource,
+	now time.Time,
+) ([]byte, error) {
+	var data bytes.Buffer
+	err := source.ReadReplica(ctx, replica, &data)
+	if err == nil {
+		err = replication.ValidatePreparedBytes(prepared, data.Bytes())
+	}
+	if err == nil {
+		return data.Bytes(), nil
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if !isPeerIntegrityFailure(err) {
+		return nil, nil
+	}
+	if err := a.recordPeerRepairState(ctx, document, replica, true, now); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (a *Application) peerRepairSourceQuarantined(document metastore.Document, replica blockstore.ReplicaRef) (bool, error) {
@@ -1245,58 +1290,86 @@ func (a *Application) applyRestoreOperation(ctx context.Context, operation *admi
 }
 
 func (a *Application) restoreTargets(operation *adminv1.Operation) (map[string]bool, []identity.Document, error) {
-	blockIDs := make(map[string]bool)
-	documentsByKey := make(map[identity.Document]bool)
-	var documents []identity.Document
-	addDocument := func(document metastore.Document) {
-		blockIDs[document.Location.BlockID] = true
-		if !documentsByKey[document.Identity] {
-			documentsByKey[document.Identity] = true
-			documents = append(documents, document.Identity)
-		}
+	collector := restoreTargetCollector{
+		blockIDs:       make(map[string]bool),
+		documentsByKey: make(map[identity.Document]bool),
 	}
 
 	for _, target := range operation.GetTargets() {
-		switch typed := target.GetTarget().(type) {
-		case *adminv1.Target_Document:
-			document, err := a.metadata.HeadDocument(adminDocumentIdentity(typed.Document))
-			if err != nil {
-				return nil, nil, err
-			}
-			addDocument(document)
-		case *adminv1.Target_Transaction:
-			docs, err := a.metadata.FindDocuments(identity.Transaction{
-				TenantID:      typed.Transaction.GetTenantId(),
-				TransactionID: typed.Transaction.GetTransactionId(),
-			}, metastore.DocumentFilter{})
-			if err != nil {
-				return nil, nil, err
-			}
-			if len(docs) == 0 {
-				return nil, nil, metastore.ErrNotFound
-			}
-			for _, document := range docs {
-				addDocument(document)
-			}
-		case *adminv1.Target_Block:
-			if typed.Block.GetShardId() != "local" {
-				return nil, nil, metastore.ErrNotFound
-			}
-			docs, err := a.metadata.ListBlockDocuments(typed.Block.GetBlockId())
-			if err != nil {
-				return nil, nil, err
-			}
-			if len(docs) == 0 {
-				return nil, nil, metastore.ErrNotFound
-			}
-			for _, document := range docs {
-				addDocument(document)
-			}
-		default:
-			return nil, nil, fmt.Errorf("localstorage: unsupported %s target %T", operation.GetOperationType(), target.GetTarget())
+		if err := collector.addTarget(a, target, operation.GetOperationType()); err != nil {
+			return nil, nil, err
 		}
 	}
-	return blockIDs, documents, nil
+	return collector.blockIDs, collector.documents, nil
+}
+
+type restoreTargetCollector struct {
+	blockIDs       map[string]bool
+	documentsByKey map[identity.Document]bool
+	documents      []identity.Document
+}
+
+func (c *restoreTargetCollector) addTarget(a *Application, target *adminv1.Target, operationType string) error {
+	switch typed := target.GetTarget().(type) {
+	case *adminv1.Target_Document:
+		return c.addDocumentTarget(a, typed.Document)
+	case *adminv1.Target_Transaction:
+		return c.addTransactionTarget(a, typed.Transaction)
+	case *adminv1.Target_Block:
+		return c.addBlockTarget(a, typed.Block)
+	default:
+		return fmt.Errorf("localstorage: unsupported %s target %T", operationType, target.GetTarget())
+	}
+}
+
+func (c *restoreTargetCollector) addDocumentTarget(a *Application, target *adminv1.DocumentTarget) error {
+	document, err := a.metadata.HeadDocument(adminDocumentIdentity(target))
+	if err != nil {
+		return err
+	}
+	c.addDocument(document)
+	return nil
+}
+
+func (c *restoreTargetCollector) addTransactionTarget(a *Application, target *adminv1.TransactionTarget) error {
+	docs, err := a.metadata.FindDocuments(identity.Transaction{
+		TenantID:      target.GetTenantId(),
+		TransactionID: target.GetTransactionId(),
+	}, metastore.DocumentFilter{})
+	if err != nil {
+		return err
+	}
+	return c.addDocuments(docs)
+}
+
+func (c *restoreTargetCollector) addBlockTarget(a *Application, target *adminv1.BlockTarget) error {
+	if target.GetShardId() != "local" {
+		return metastore.ErrNotFound
+	}
+	docs, err := a.metadata.ListBlockDocuments(target.GetBlockId())
+	if err != nil {
+		return err
+	}
+	return c.addDocuments(docs)
+}
+
+func (c *restoreTargetCollector) addDocuments(documents []metastore.Document) error {
+	if len(documents) == 0 {
+		return metastore.ErrNotFound
+	}
+	for _, document := range documents {
+		c.addDocument(document)
+	}
+	return nil
+}
+
+func (c *restoreTargetCollector) addDocument(document metastore.Document) {
+	c.blockIDs[document.Location.BlockID] = true
+	if c.documentsByKey[document.Identity] {
+		return
+	}
+	c.documentsByKey[document.Identity] = true
+	c.documents = append(c.documents, document.Identity)
 }
 
 func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID string) (bool, error) {

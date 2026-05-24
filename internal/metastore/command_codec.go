@@ -79,10 +79,20 @@ func validateShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 	if snapshot.GetShardId() == "" {
 		return invalidRecord("shard snapshot", "shard_id is required")
 	}
-	if snapshot.GetMembership() == nil || len(snapshot.GetMembership().GetMembers()) == 0 {
+	if err := validateSnapshotMembership(snapshot.GetMembership()); err != nil {
+		return err
+	}
+	if err := validateSnapshotDocuments(snapshot.GetDocuments()); err != nil {
+		return err
+	}
+	return validateSnapshotRecords(snapshot)
+}
+
+func validateSnapshotMembership(membership *metastorev1.MembershipState) error {
+	if membership == nil || len(membership.GetMembers()) == 0 {
 		return invalidRecord("shard snapshot", "membership members are required")
 	}
-	for i, member := range snapshot.GetMembership().GetMembers() {
+	for i, member := range membership.GetMembers() {
 		if member.GetRaftId() == 0 {
 			return invalidRecord("shard snapshot membership", "member %d raft_id is required", i)
 		}
@@ -96,11 +106,19 @@ func validateShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return invalidRecord("shard snapshot membership", "member %d role is required", i)
 		}
 	}
-	for i, document := range snapshot.GetDocuments() {
+	return nil
+}
+
+func validateSnapshotDocuments(documents []*metastorev1.DocumentRecord) error {
+	for i, document := range documents {
 		if err := validateDocumentRecord(document); err != nil {
 			return invalidRecord("shard snapshot", "document %d: %v", i, err)
 		}
 	}
+	return nil
+}
+
+func validateSnapshotRecords(snapshot *metastorev1.ShardSnapshot) error {
 	for i, transaction := range snapshot.GetTransactions() {
 		if _, err := marshalTransactionRecord(transaction); err != nil {
 			return invalidRecord("shard snapshot", "transaction %d: %v", i, err)

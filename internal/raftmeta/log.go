@@ -200,46 +200,77 @@ func readEntries(path string) ([]Entry, error) {
 	var entries []Entry
 	expectedIndex := uint64(0)
 	for {
-		var header [commandLogHeaderLen]byte
-		if _, err := io.ReadFull(file, header[:]); err != nil {
-			if errors.Is(err, io.EOF) {
-				return entries, nil
-			}
-			return nil, err
-		}
-		index := binary.BigEndian.Uint64(header[0:8])
-		if index == 0 {
-			return nil, errors.New("raftmeta: command index 0 is invalid")
-		}
-		if expectedIndex == 0 {
-			expectedIndex = index
-		}
-		if index != expectedIndex {
-			return nil, fmt.Errorf("raftmeta: command index %d after %d", index, expectedIndex-1)
-		}
-		length := binary.BigEndian.Uint32(header[8:12])
-		if length > MaxCommandBytes {
-			return nil, fmt.Errorf("raftmeta: command length %d exceeds maximum %d", length, MaxCommandBytes)
-		}
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(file, payload); err != nil {
-			return nil, err
-		}
-		var checksum [commandLogCRCLen]byte
-		if _, err := io.ReadFull(file, checksum[:]); err != nil {
-			return nil, err
-		}
-		want := binary.BigEndian.Uint32(checksum[:])
-		if got := checksumFrame(header[:], payload); got != want {
-			return nil, fmt.Errorf("raftmeta: command log checksum mismatch at index %d", index)
-		}
-		command, err := metastore.UnmarshalShardCommand(payload)
+		entry, nextIndex, done, err := readEntry(file, expectedIndex)
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, Entry{Index: index, Command: command})
-		expectedIndex++
+		if done {
+			return entries, nil
+		}
+		entries = append(entries, entry)
+		expectedIndex = nextIndex
 	}
+}
+
+func readEntry(file *os.File, expectedIndex uint64) (Entry, uint64, bool, error) {
+	var header [commandLogHeaderLen]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		if errors.Is(err, io.EOF) {
+			return Entry{}, expectedIndex, true, nil
+		}
+		return Entry{}, expectedIndex, false, err
+	}
+	index, err := validateEntryHeader(header, expectedIndex)
+	if err != nil {
+		return Entry{}, expectedIndex, false, err
+	}
+	payload, err := readEntryPayload(file, header, index)
+	if err != nil {
+		return Entry{}, expectedIndex, false, err
+	}
+	command, err := metastore.UnmarshalShardCommand(payload)
+	if err != nil {
+		return Entry{}, expectedIndex, false, err
+	}
+	return Entry{Index: index, Command: command}, index + 1, false, nil
+}
+
+func validateEntryHeader(header [commandLogHeaderLen]byte, expectedIndex uint64) (uint64, error) {
+	index := binary.BigEndian.Uint64(header[0:8])
+	if index == 0 {
+		return 0, errors.New("raftmeta: command index 0 is invalid")
+	}
+	if expectedIndex == 0 {
+		return index, nil
+	}
+	if index != expectedIndex {
+		return 0, fmt.Errorf("raftmeta: command index %d after %d", index, expectedIndex-1)
+	}
+	return index, nil
+}
+
+func readEntryPayload(file *os.File, header [commandLogHeaderLen]byte, index uint64) ([]byte, error) {
+	length := binary.BigEndian.Uint32(header[8:12])
+	if length > MaxCommandBytes {
+		return nil, fmt.Errorf("raftmeta: command length %d exceeds maximum %d", length, MaxCommandBytes)
+	}
+	payloadLength, err := safeconv.Uint64ToInt("raftmeta: command length", uint64(length))
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, payloadLength)
+	if _, err := io.ReadFull(file, payload); err != nil {
+		return nil, err
+	}
+	var checksum [commandLogCRCLen]byte
+	if _, err := io.ReadFull(file, checksum[:]); err != nil {
+		return nil, err
+	}
+	want := binary.BigEndian.Uint32(checksum[:])
+	if got := checksumFrame(header[:], payload); got != want {
+		return nil, fmt.Errorf("raftmeta: command log checksum mismatch at index %d", index)
+	}
+	return payload, nil
 }
 
 func writeEntries(path string, entries []Entry) error {

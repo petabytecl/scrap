@@ -118,7 +118,7 @@ linters:
 
   settings:
     cyclop:
-      max-complexity: 25
+      max-complexity: 15
       package-average: 0.0
     depguard:
       rules:
@@ -150,7 +150,7 @@ linters:
     gochecksumtype:
       default-signifies-exhaustive: false
     gocognit:
-      min-complexity: 40
+      min-complexity: 20
     gocritic:
       settings:
         captLocal:

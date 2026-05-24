@@ -396,39 +396,71 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 	if err := a.authority.EnsureWriteReady(ctx); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
-	if existing, err := a.metadata.HeadDocument(init.Identity); err == nil {
-		body, err := drainChunks(chunks)
-		if err != nil {
-			return api.WriteDocumentResult{}, err
-		}
-		return a.replayExisting(ctx, init, existing, body)
-	} else if !errors.Is(err, metastore.ErrNotFound) {
-		return api.WriteDocumentResult{}, mapError(err)
+	if result, replayed, err := a.replayExistingDocument(ctx, init, chunks); err != nil || replayed {
+		return result, err
 	}
 	if err := a.requireWriteAdmission(ctx, init.ExpectedLength); err != nil {
 		return api.WriteDocumentResult{}, err
 	}
 
-	record, err := a.blocks.AppendValidated(ctx, &chunkReader{chunks: chunks}, func(record blockstore.Record) error {
-		if init.ExpectedLength != nil && *init.ExpectedLength != record.StoredLength {
-			return status.Errorf(codes.InvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
-		}
-		if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, record.LogicalSHA256[:]) {
-			return status.Error(codes.InvalidArgument, "expected sha256 does not match written bytes")
-		}
-		return nil
-	})
+	record, err := a.appendValidatedDocument(ctx, init, chunks)
 	if err != nil {
-		return api.WriteDocumentResult{}, mapError(err)
-	}
-	if a.writeFaults.afterBlockSync != nil {
-		if err := a.writeFaults.afterBlockSync(record); err != nil {
-			return api.WriteDocumentResult{}, err
-		}
+		return api.WriteDocumentResult{}, err
 	}
 
 	now := a.now()
-	document := metastore.Document{
+	document := newDocument(init, record, now)
+	document, replicationResult, err := a.commitDocumentWrite(ctx, document, now)
+	if err != nil {
+		return api.WriteDocumentResult{}, err
+	}
+	return writeDocumentResult(document, replicationResult)
+}
+
+func (a *Application) replayExistingDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, bool, error) {
+	existing, err := a.metadata.HeadDocument(init.Identity)
+	if errors.Is(err, metastore.ErrNotFound) {
+		return api.WriteDocumentResult{}, false, nil
+	}
+	if err != nil {
+		return api.WriteDocumentResult{}, false, mapError(err)
+	}
+	body, err := drainChunks(chunks)
+	if err != nil {
+		return api.WriteDocumentResult{}, true, err
+	}
+	result, err := a.replayExisting(ctx, init, existing, body)
+	return result, true, err
+}
+
+func (a *Application) appendValidatedDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (blockstore.Record, error) {
+	record, err := a.blocks.AppendValidated(ctx, &chunkReader{chunks: chunks}, func(record blockstore.Record) error {
+		return validateWrittenRecord(init, record)
+	})
+	if err != nil {
+		return blockstore.Record{}, mapError(err)
+	}
+	if a.writeFaults.afterBlockSync == nil {
+		return record, nil
+	}
+	if err := a.writeFaults.afterBlockSync(record); err != nil {
+		return blockstore.Record{}, err
+	}
+	return record, nil
+}
+
+func validateWrittenRecord(init api.WriteDocumentInit, record blockstore.Record) error {
+	if init.ExpectedLength != nil && *init.ExpectedLength != record.StoredLength {
+		return status.Errorf(codes.InvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
+	}
+	if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, record.LogicalSHA256[:]) {
+		return status.Error(codes.InvalidArgument, "expected sha256 does not match written bytes")
+	}
+	return nil
+}
+
+func newDocument(init api.WriteDocumentInit, record blockstore.Record, now time.Time) metastore.Document {
+	return metastore.Document{
 		Identity:                    init.Identity,
 		DocumentClass:               documentClassFromAPI(init.DocumentClass),
 		PriorityClass:               priorityClassFromAPI(init.PriorityClass),
@@ -450,36 +482,43 @@ func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentI
 		ClientIdempotencyKey:        init.ClientIdempotencyKey,
 		HasClientIdempotencyKey:     init.ClientIdempotencyKey != "",
 	}
+}
+
+func (a *Application) commitDocumentWrite(ctx context.Context, document metastore.Document, now time.Time) (metastore.Document, replication.Result, error) {
 	if err := a.prepare.Append(document); err != nil {
-		return api.WriteDocumentResult{}, err
+		return metastore.Document{}, replication.Result{}, err
 	}
 	if a.writeFaults.afterPrepareSync != nil {
 		if err := a.writeFaults.afterPrepareSync(document); err != nil {
-			return api.WriteDocumentResult{}, err
+			return metastore.Document{}, replication.Result{}, err
 		}
 	}
 	replicationResult, err := a.preparePeerReplicas(ctx, document)
 	if err != nil {
-		return api.WriteDocumentResult{}, mapError(err)
+		return metastore.Document{}, replication.Result{}, mapError(err)
 	}
 	document.Location.Replicas = replication.ReplicaRefs(replicationResult.Receipts)
 	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
-		return api.WriteDocumentResult{}, mapError(err)
+		return metastore.Document{}, replication.Result{}, mapError(err)
 	}
 	if a.writeFaults.afterMetadataApply != nil {
 		if err := a.writeFaults.afterMetadataApply(document); err != nil {
-			return api.WriteDocumentResult{}, err
+			return metastore.Document{}, replication.Result{}, err
 		}
 	}
 	uploadIntent := uploadIntentForDocument(document)
 	if err := a.authority.RecordUploadIntent(ctx, uploadIntent, recordUploadIntentCommandID(uploadIntent), now); err != nil {
-		return api.WriteDocumentResult{}, mapError(err)
+		return metastore.Document{}, replication.Result{}, mapError(err)
 	}
 	if a.writeFaults.beforeACK != nil {
 		if err := a.writeFaults.beforeACK(document); err != nil {
-			return api.WriteDocumentResult{}, err
+			return metastore.Document{}, replication.Result{}, err
 		}
 	}
+	return document, replicationResult, nil
+}
+
+func writeDocumentResult(document metastore.Document, replicationResult replication.Result) (api.WriteDocumentResult, error) {
 	desiredReplicaCount, err := safeconv.IntToUint32("desired replica count", replicationResult.DesiredReplicaCount)
 	if err != nil {
 		return api.WriteDocumentResult{}, err
@@ -1045,42 +1084,37 @@ func drainChunks(chunks api.ChunkReader) (drainedBody, error) {
 }
 
 func mapError(err error) error {
-	switch {
-	case err == nil:
+	if err == nil {
 		return nil
-	case errors.Is(err, metastore.ErrNotFound):
-		return status.Error(codes.NotFound, "document or transaction not found")
-	case errors.Is(err, metastore.ErrConflict):
-		return status.Error(codes.AlreadyExists, "document already exists")
-	case errors.Is(err, blockstore.ErrInvalidRange):
-		return status.Error(codes.InvalidArgument, "read range is outside document bounds")
-	case errors.Is(err, blockstore.ErrChecksumMismatch):
-		return status.Error(codes.DataLoss, "stored document bytes failed checksum verification")
-	case errors.Is(err, backend.ErrChecksumMismatch):
-		return status.Error(codes.DataLoss, "backend document bytes failed checksum verification")
-	case errors.Is(err, backend.ErrNotFound):
-		return status.Error(codes.DataLoss, "backend document bytes are missing")
-	case errors.Is(err, os.ErrNotExist):
-		return status.Error(codes.DataLoss, "stored document bytes are missing")
-	case errors.Is(err, raftmeta.ErrNotLeader):
-		return status.Error(codes.FailedPrecondition, "local metadata authority is not leader")
-	case errors.Is(err, raftmeta.ErrQuorumUnavailable):
-		return status.Error(codes.Unavailable, "metadata quorum is unavailable")
-	case errors.Is(err, raftmeta.ErrReadFreshnessUnavailable):
-		return status.Error(codes.Unavailable, "metadata freshness cannot be proven")
-	case errors.Is(err, raftmeta.ErrLeaseReadDisabled):
-		return status.Error(codes.FailedPrecondition, "metadata lease reads are disabled")
-	case errors.Is(err, replication.ErrInsufficientReplicas):
-		return status.Error(codes.Unavailable, "required peer replicas could not be prepared")
-	case errors.Is(err, replication.ErrMissingByteSource):
-		return status.Error(codes.Internal, "peer prepare byte source is unavailable")
-	case errors.Is(err, replication.ErrReceiptMismatch):
-		return status.Error(codes.Internal, "peer prepare receipt did not match prepared document")
-	case errors.Is(err, replication.ErrTransferMismatch):
-		return status.Error(codes.DataLoss, "peer prepare transfer failed checksum verification")
-	default:
-		return err
 	}
+	for _, mapping := range grpcErrorMappings {
+		if errors.Is(err, mapping.target) {
+			return status.Error(mapping.code, mapping.message)
+		}
+	}
+	return err
+}
+
+var grpcErrorMappings = []struct {
+	target  error
+	code    codes.Code
+	message string
+}{
+	{target: metastore.ErrNotFound, code: codes.NotFound, message: "document or transaction not found"},
+	{target: metastore.ErrConflict, code: codes.AlreadyExists, message: "document already exists"},
+	{target: blockstore.ErrInvalidRange, code: codes.InvalidArgument, message: "read range is outside document bounds"},
+	{target: blockstore.ErrChecksumMismatch, code: codes.DataLoss, message: "stored document bytes failed checksum verification"},
+	{target: backend.ErrChecksumMismatch, code: codes.DataLoss, message: "backend document bytes failed checksum verification"},
+	{target: backend.ErrNotFound, code: codes.DataLoss, message: "backend document bytes are missing"},
+	{target: os.ErrNotExist, code: codes.DataLoss, message: "stored document bytes are missing"},
+	{target: raftmeta.ErrNotLeader, code: codes.FailedPrecondition, message: "local metadata authority is not leader"},
+	{target: raftmeta.ErrQuorumUnavailable, code: codes.Unavailable, message: "metadata quorum is unavailable"},
+	{target: raftmeta.ErrReadFreshnessUnavailable, code: codes.Unavailable, message: "metadata freshness cannot be proven"},
+	{target: raftmeta.ErrLeaseReadDisabled, code: codes.FailedPrecondition, message: "metadata lease reads are disabled"},
+	{target: replication.ErrInsufficientReplicas, code: codes.Unavailable, message: "required peer replicas could not be prepared"},
+	{target: replication.ErrMissingByteSource, code: codes.Internal, message: "peer prepare byte source is unavailable"},
+	{target: replication.ErrReceiptMismatch, code: codes.Internal, message: "peer prepare receipt did not match prepared document"},
+	{target: replication.ErrTransferMismatch, code: codes.DataLoss, message: "peer prepare transfer failed checksum verification"},
 }
 
 func readIntegrityError(document metastore.Document, attemptedSources []string, cause error) error {

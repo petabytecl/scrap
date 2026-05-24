@@ -936,37 +936,12 @@ func percentileMillis(sorted []int64, percentile int) int64 {
 
 func collectThresholdViolations(report Report) []ThresholdViolation {
 	var violations []ThresholdViolation
-	if report.AdvisoryCapacitySample.ProfileID != report.CampaignConfig.ProfileID {
-		violations = append(violations, thresholdViolation("capacity-sample", "SCRAP_CAPACITY_PROFILE_MISMATCH",
-			fmt.Sprintf("capacity sample profile %q does not match campaign profile %q", report.AdvisoryCapacitySample.ProfileID, report.CampaignConfig.ProfileID)))
-	}
-	if !report.AdvisoryCapacitySample.AdvisoryOnly || !report.AdvisoryCapacitySample.DoesNotSatisfyProductionReadinessGates {
-		violations = append(violations, thresholdViolation("capacity-sample", "SCRAP_CAPACITY_SAMPLE_BOUNDARY_MISSING",
-			"capacity sample must remain advisory-only and must not satisfy production readiness gates by itself"))
-	}
-	for _, sample := range report.Results.LocalWriteAdmission.Samples {
-		if sample.ErrorClass != "" {
-			violations = append(violations, thresholdViolation("write-admission", "SCRAP_LOCAL_WRITE_FAILED", sample.Error))
-		}
-		if sample.RepairRequired {
-			violations = append(violations, thresholdViolation("write-admission", "SCRAP_LOCAL_WRITE_REPAIR_REQUIRED",
-				sample.Document.DocumentName+" requires repair after admission"))
-		}
-	}
-	for _, sample := range report.Results.LocalReadBack.Samples {
-		if sample.ErrorClass != "" {
-			violations = append(violations, thresholdViolation("read-back", "SCRAP_LOCAL_READ_BACK_FAILED", sample.Error))
-		}
-	}
-	appendSummaryViolations := func(scope string, summary LatencySummary) {
-		for _, errorClass := range summary.ErrorClasses {
-			violations = append(violations, thresholdViolation(scope, "SCRAP_REHEARSAL_SAMPLE_ERROR",
-				fmt.Sprintf("%s observed %s errors", summary.Operation, errorClass)))
-		}
-	}
-	appendSummaryViolations("backend-upload-lag", report.Results.BackendUploadLag)
+	violations = append(violations, capacitySampleViolations(report)...)
+	violations = append(violations, writeAdmissionViolations(report.Results.LocalWriteAdmission.Samples)...)
+	violations = append(violations, readBackViolations(report.Results.LocalReadBack.Samples)...)
+	violations = append(violations, latencySummaryViolations("backend-upload-lag", report.Results.BackendUploadLag)...)
 	for _, summary := range report.Results.OpenBao.LatencySamples {
-		appendSummaryViolations("openbao", summary)
+		violations = append(violations, latencySummaryViolations("openbao", summary)...)
 	}
 	if report.Results.OpenBao.SaturationBehavior.Classification == "exceeds-advisory-threshold" {
 		violations = append(violations, thresholdViolation("openbao", "SCRAP_OPENBAO_SATURATION_THRESHOLD_EXCEEDED",
@@ -984,6 +959,52 @@ func collectThresholdViolations(report Report) []ThresholdViolation {
 	}
 	if report.Results.OperationBacklog.ErrorClass != "" {
 		violations = append(violations, thresholdViolation("operation-backlog", "SCRAP_OPERATION_BACKLOG_UNAVAILABLE", report.Results.OperationBacklog.Error))
+	}
+	return violations
+}
+
+func capacitySampleViolations(report Report) []ThresholdViolation {
+	var violations []ThresholdViolation
+	if report.AdvisoryCapacitySample.ProfileID != report.CampaignConfig.ProfileID {
+		violations = append(violations, thresholdViolation("capacity-sample", "SCRAP_CAPACITY_PROFILE_MISMATCH",
+			fmt.Sprintf("capacity sample profile %q does not match campaign profile %q", report.AdvisoryCapacitySample.ProfileID, report.CampaignConfig.ProfileID)))
+	}
+	if !report.AdvisoryCapacitySample.AdvisoryOnly || !report.AdvisoryCapacitySample.DoesNotSatisfyProductionReadinessGates {
+		violations = append(violations, thresholdViolation("capacity-sample", "SCRAP_CAPACITY_SAMPLE_BOUNDARY_MISSING",
+			"capacity sample must remain advisory-only and must not satisfy production readiness gates by itself"))
+	}
+	return violations
+}
+
+func writeAdmissionViolations(samples []WriteSample) []ThresholdViolation {
+	var violations []ThresholdViolation
+	for _, sample := range samples {
+		if sample.ErrorClass != "" {
+			violations = append(violations, thresholdViolation("write-admission", "SCRAP_LOCAL_WRITE_FAILED", sample.Error))
+		}
+		if sample.RepairRequired {
+			violations = append(violations, thresholdViolation("write-admission", "SCRAP_LOCAL_WRITE_REPAIR_REQUIRED",
+				sample.Document.DocumentName+" requires repair after admission"))
+		}
+	}
+	return violations
+}
+
+func readBackViolations(samples []ReadSample) []ThresholdViolation {
+	var violations []ThresholdViolation
+	for _, sample := range samples {
+		if sample.ErrorClass != "" {
+			violations = append(violations, thresholdViolation("read-back", "SCRAP_LOCAL_READ_BACK_FAILED", sample.Error))
+		}
+	}
+	return violations
+}
+
+func latencySummaryViolations(scope string, summary LatencySummary) []ThresholdViolation {
+	var violations []ThresholdViolation
+	for _, errorClass := range summary.ErrorClasses {
+		violations = append(violations, thresholdViolation(scope, "SCRAP_REHEARSAL_SAMPLE_ERROR",
+			fmt.Sprintf("%s observed %s errors", summary.Operation, errorClass)))
 	}
 	return violations
 }

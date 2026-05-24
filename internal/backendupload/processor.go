@@ -39,46 +39,64 @@ type RunResult struct {
 
 func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 	var result RunResult
-	if p.Intents == nil {
-		return result, errNotConfigured("upload intent lister")
-	}
-	if p.Updater == nil {
-		return result, errNotConfigured("upload intent state updater")
+	if err := p.validate(); err != nil {
+		return result, err
 	}
 	intents, err := p.Intents.ListUploadIntents()
 	if err != nil {
 		return result, err
 	}
 	for _, intent := range intents {
-		if err := ctx.Err(); err != nil {
+		if err := p.processIntent(ctx, intent, &result); err != nil {
 			return result, err
 		}
-		result.Scanned++
-		if !shouldUpload(intent.State) {
-			result.Skipped++
-			continue
-		}
-		if _, err := p.Uploader.UploadBlock(ctx, intent); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return result, ctxErr
-			}
-			if errors.Is(err, blockstore.ErrBlockOpen) {
-				result.Deferred++
-				continue
-			}
-			result.recordError(err)
-			if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateFailed, err.Error()); err != nil {
-				return result, err
-			}
-			result.Failed++
-			continue
-		}
-		if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateUploaded, ""); err != nil {
-			return result, err
-		}
-		result.Uploaded++
 	}
 	return result, nil
+}
+
+func (p Processor) validate() error {
+	if p.Intents == nil {
+		return errNotConfigured("upload intent lister")
+	}
+	if p.Updater == nil {
+		return errNotConfigured("upload intent state updater")
+	}
+	return nil
+}
+
+func (p Processor) processIntent(ctx context.Context, intent metastore.UploadIntent, result *RunResult) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	result.Scanned++
+	if !shouldUpload(intent.State) {
+		result.Skipped++
+		return nil
+	}
+	if _, err := p.Uploader.UploadBlock(ctx, intent); err != nil {
+		return p.recordUploadFailure(ctx, intent, err, result)
+	}
+	if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateUploaded, ""); err != nil {
+		return err
+	}
+	result.Uploaded++
+	return nil
+}
+
+func (p Processor) recordUploadFailure(ctx context.Context, intent metastore.UploadIntent, uploadErr error, result *RunResult) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(uploadErr, blockstore.ErrBlockOpen) {
+		result.Deferred++
+		return nil
+	}
+	result.recordError(uploadErr)
+	if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateFailed, uploadErr.Error()); err != nil {
+		return err
+	}
+	result.Failed++
+	return nil
 }
 
 func (r *RunResult) recordError(err error) {

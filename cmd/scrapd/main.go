@@ -29,6 +29,40 @@ func main() {
 
 func run(logger *slog.Logger) error {
 	cfg := config.Default()
+	registerFlags(&cfg)
+	flag.Parse()
+
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	logPrintf := logPrintfFunc(logger)
+	apps, uploadRunner, cleanup, err := buildApplications(cfg, logger, logPrintf)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	server, err := node.Listen(cfg, apps)
+	if err != nil {
+		return fmt.Errorf("start listeners: %w", err)
+	}
+	defer closeutil.Log("server", logPrintf, server)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	logger.Info("public grpc listening", "address", server.PublicAddress())
+	logger.Info("admin grpc listening", "address", server.AdminAddress())
+	go reloadAuthorizationPolicy(ctx, server, logger)
+	startBackgroundRunners(ctx, cfg, apps, uploadRunner, logger)
+	if err := server.Serve(ctx); err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	return nil
+}
+
+func registerFlags(cfg *config.Config) {
 	flag.StringVar(&cfg.PublicListenAddress, "public-listen", cfg.PublicListenAddress, "public gRPC listen address")
 	flag.StringVar(&cfg.AdminListenAddress, "admin-listen", cfg.AdminListenAddress, "admin gRPC listen address")
 	flag.StringVar(&cfg.AuthorizationPolicyPath, "authorization-policy", cfg.AuthorizationPolicyPath, "authorization policy JSON path; required for public and admin APIs")
@@ -62,74 +96,85 @@ func run(logger *slog.Logger) error {
 	flag.BoolVar(&cfg.ProductionReadinessEvidence.DownstreamDeploymentApproval, "production-readiness-downstream-deployment", cfg.ProductionReadinessEvidence.DownstreamDeploymentApproval, "readiness evidence: downstream deployment owner approved live production deployment-specific requirements")
 	flag.StringVar(&cfg.ProductionReadinessEvidence.DownstreamDeploymentArtifact, "production-readiness-downstream-deployment-artifact", cfg.ProductionReadinessEvidence.DownstreamDeploymentArtifact, "release artifact URI for downstream deployment approval evidence")
 	flag.StringVar(&cfg.ProductionReadinessEvidence.DownstreamDeploymentDeferral, "production-readiness-downstream-deployment-deferral", cfg.ProductionReadinessEvidence.DownstreamDeploymentDeferral, "optional downstream deployment deferral reason to report when approval is missing")
-	flag.Parse()
+}
 
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
+func buildApplications(cfg config.Config, logger *slog.Logger, logPrintf closeutil.Logger) (node.Applications, *backendupload.Runner, func(), error) {
+	if !cfg.EnableLocalNonProductionStorage {
+		return node.Applications{}, nil, func() {}, nil
 	}
-
-	logPrintf := logPrintfFunc(logger)
-	apps := node.Applications{}
-	var uploadRunner *backendupload.Runner
-	if cfg.EnableLocalNonProductionStorage {
-		localApp, err := localstorage.Open(cfg.LocalDataDir)
-		if err != nil {
-			return fmt.Errorf("open local non-production storage: %w", err)
-		}
-		defer closeutil.Log("local storage application", logPrintf, localApp)
-		operationStore, err := operations.Open(cfg.LocalDataDir)
-		if err != nil {
-			return fmt.Errorf("open operation store: %w", err)
-		}
-		defer closeutil.Log("operation store", logPrintf, operationStore)
-		localApp.SetOperationStore(operationStore)
-		localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
-		apps.Documents = localApp
-		apps.Transactions = localApp
-		apps.Inspect = localApp
-		apps.Repair = localApp
-		apps.Member = localApp
-		apps.DR = localApp
-		apps.Operations = operationStore
-		logger.Warn("local non-production storage enabled; this does not satisfy the production write ACK contract", "path", cfg.LocalDataDir)
-		if cfg.EnableLocalFilesystemBackend {
-			backendStore, err := backendfs.Open(cfg.LocalBackendDataDir)
-			if err != nil {
-				return fmt.Errorf("open local filesystem backend: %w", err)
-			}
-			localApp.SetBackendStore(backendStore)
-			uploadRunner = &backendupload.Runner{
-				RunOnceFunc: func(ctx context.Context) (backendupload.RunResult, error) {
-					result, err := localApp.RunBackendUploadOnce(ctx, backendStore)
-					if result.Sealed {
-						logger.Info("backend upload sealed block", "sealed_block_id", result.SealedBlockID)
-					}
-					if result.MetadataPublished && result.MetadataPublication != nil {
-						logger.Info("published metadata checkpoint", "manifest_id", result.MetadataPublication.Manifest.GetManifestId())
-					}
-					return result.Upload, err
-				},
-				Interval: cfg.BackendUploadInterval,
-				Report: func(result backendupload.RunResult, err error) {
-					logBackendUploadReport(logger, result, err)
-				},
-			}
-			logger.Warn("local filesystem backend enabled; this is a non-production backend adapter", "path", cfg.LocalBackendDataDir)
-		}
-	}
-
-	server, err := node.Listen(cfg, apps)
+	apps, localApp, operationStore, err := buildLocalApplications(cfg)
 	if err != nil {
-		return fmt.Errorf("start listeners: %w", err)
+		return node.Applications{}, nil, nil, err
 	}
-	defer closeutil.Log("server", logPrintf, server)
+	cleanup := func() {
+		closeutil.Log("operation store", logPrintf, operationStore)
+		closeutil.Log("local storage application", logPrintf, localApp)
+	}
+	logger.Warn("local non-production storage enabled; this does not satisfy the production write ACK contract", "path", cfg.LocalDataDir)
+	var uploadRunner *backendupload.Runner
+	if cfg.EnableLocalFilesystemBackend {
+		uploadRunner, err = buildUploadRunner(cfg, localApp, logger)
+		if err != nil {
+			cleanup()
+			return node.Applications{}, nil, nil, err
+		}
+	}
+	return apps, uploadRunner, cleanup, nil
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage.Application, *operations.Store, error) {
+	localApp, err := localstorage.Open(cfg.LocalDataDir)
+	if err != nil {
+		return node.Applications{}, nil, nil, fmt.Errorf("open local non-production storage: %w", err)
+	}
+	operationStore, err := operations.Open(cfg.LocalDataDir)
+	if err != nil {
+		closeutil.Ignore(localApp)
+		return node.Applications{}, nil, nil, fmt.Errorf("open operation store: %w", err)
+	}
+	localApp.SetOperationStore(operationStore)
+	localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
+	return node.Applications{
+		Documents:    localApp,
+		Transactions: localApp,
+		Inspect:      localApp,
+		Repair:       localApp,
+		Member:       localApp,
+		DR:           localApp,
+		Operations:   operationStore,
+	}, localApp, operationStore, nil
+}
 
-	logger.Info("public grpc listening", "address", server.PublicAddress())
-	logger.Info("admin grpc listening", "address", server.AdminAddress())
-	go reloadAuthorizationPolicy(ctx, server, logger)
+func buildUploadRunner(cfg config.Config, localApp *localstorage.Application, logger *slog.Logger) (*backendupload.Runner, error) {
+	backendStore, err := backendfs.Open(cfg.LocalBackendDataDir)
+	if err != nil {
+		return nil, fmt.Errorf("open local filesystem backend: %w", err)
+	}
+	localApp.SetBackendStore(backendStore)
+	logger.Warn("local filesystem backend enabled; this is a non-production backend adapter", "path", cfg.LocalBackendDataDir)
+	return &backendupload.Runner{
+		RunOnceFunc: func(ctx context.Context) (backendupload.RunResult, error) {
+			result, err := localApp.RunBackendUploadOnce(ctx, backendStore)
+			logBackendUploadPublication(logger, result)
+			return result.Upload, err
+		},
+		Interval: cfg.BackendUploadInterval,
+		Report: func(result backendupload.RunResult, err error) {
+			logBackendUploadReport(logger, result, err)
+		},
+	}, nil
+}
+
+func logBackendUploadPublication(logger *slog.Logger, result localstorage.BackendUploadOnceResult) {
+	if result.Sealed {
+		logger.Info("backend upload sealed block", "sealed_block_id", result.SealedBlockID)
+	}
+	if result.MetadataPublished && result.MetadataPublication != nil {
+		logger.Info("published metadata checkpoint", "manifest_id", result.MetadataPublication.Manifest.GetManifestId())
+	}
+}
+
+func startBackgroundRunners(ctx context.Context, cfg config.Config, apps node.Applications, uploadRunner *backendupload.Runner, logger *slog.Logger) {
 	if cfg.EnableLocalNonProductionStorage {
 		go runOperationLoop(ctx, apps, cfg.OperationRunInterval, logger)
 	}
@@ -140,10 +185,6 @@ func run(logger *slog.Logger) error {
 			}
 		}()
 	}
-	if err := server.Serve(ctx); err != nil {
-		return fmt.Errorf("serve: %w", err)
-	}
-	return nil
 }
 
 func logPrintfFunc(logger *slog.Logger) func(string, ...any) {

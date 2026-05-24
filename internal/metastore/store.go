@@ -156,6 +156,28 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 	batch := s.db.NewBatch()
 	defer closeutil.Ignore(batch)
 
+	if err := clearSnapshotBatch(batch); err != nil {
+		return err
+	}
+	if err := applySnapshotDocuments(batch, snapshot.GetDocuments()); err != nil {
+		return err
+	}
+	if err := applySnapshotTransactions(batch, snapshot.GetTransactions()); err != nil {
+		return err
+	}
+	if err := applySnapshotUploadIntents(batch, snapshot.GetUploadIntents()); err != nil {
+		return err
+	}
+	if err := applySnapshotRepairStates(batch, snapshot.GetRepairStates()); err != nil {
+		return err
+	}
+	if err := applySnapshotCommandReceipts(batch, snapshot.GetCommandReceipts()); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+func clearSnapshotBatch(batch *pebble.Batch) error {
 	for _, prefix := range [][]byte{
 		documentPrefix(),
 		transactionDocumentsRootPrefix(),
@@ -169,7 +191,11 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 	}
-	for _, record := range snapshot.GetDocuments() {
+	return nil
+}
+
+func applySnapshotDocuments(batch *pebble.Batch, records []*metastorev1.DocumentRecord) error {
+	for _, record := range records {
 		document := documentFromProto(record)
 		value, err := marshalDocument(document)
 		if err != nil {
@@ -185,7 +211,11 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 	}
-	for _, record := range snapshot.GetTransactions() {
+	return nil
+}
+
+func applySnapshotTransactions(batch *pebble.Batch, records []*metastorev1.TransactionRecord) error {
+	for _, record := range records {
 		transaction := transactionFromProto(record)
 		value, err := marshalTransaction(transaction)
 		if err != nil {
@@ -195,7 +225,11 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 	}
-	for _, record := range snapshot.GetUploadIntents() {
+	return nil
+}
+
+func applySnapshotUploadIntents(batch *pebble.Batch, records []*metastorev1.UploadIntentRecord) error {
+	for _, record := range records {
 		intent := uploadIntentFromProto(record)
 		value, err := marshalUploadIntent(intent)
 		if err != nil {
@@ -205,7 +239,11 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 	}
-	for _, record := range snapshot.GetRepairStates() {
+	return nil
+}
+
+func applySnapshotRepairStates(batch *pebble.Batch, records []*metastorev1.RepairStateRecord) error {
+	for _, record := range records {
 		state := repairStateFromProto(record)
 		value, err := marshalRepairState(state)
 		if err != nil {
@@ -215,7 +253,11 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 	}
-	for _, record := range snapshot.GetCommandReceipts() {
+	return nil
+}
+
+func applySnapshotCommandReceipts(batch *pebble.Batch, records []*metastorev1.CommandReceiptRecord) error {
+	for _, record := range records {
 		receipt := commandReceiptFromProto(record)
 		value, err := marshalCommandReceipt(receipt)
 		if err != nil {
@@ -225,7 +267,7 @@ func (s *Store) ApplyShardSnapshot(snapshot *metastorev1.ShardSnapshot) error {
 			return err
 		}
 	}
-	return batch.Commit(pebble.Sync)
+	return nil
 }
 
 func (s *Store) FindDocuments(transaction identity.Transaction, filter DocumentFilter) ([]Document, error) {
@@ -730,12 +772,23 @@ func (s *Store) get(key []byte) ([]byte, bool, error) {
 }
 
 func matchesFilter(document Document, filter DocumentFilter) bool {
+	return matchesIdentityFilter(document, filter) &&
+		matchesAttributeFilter(document, filter) &&
+		matchesTimeFilter(document, filter) &&
+		matchesTagFilter(document, filter)
+}
+
+func matchesIdentityFilter(document Document, filter DocumentFilter) bool {
 	if filter.HasDocumentNameExact && document.Identity.DocumentName != filter.DocumentNameExact {
 		return false
 	}
 	if filter.HasDocumentNamePrefix && !strings.HasPrefix(document.Identity.DocumentName, filter.DocumentNamePrefix) {
 		return false
 	}
+	return true
+}
+
+func matchesAttributeFilter(document Document, filter DocumentFilter) bool {
 	if filter.HasDocumentClass && document.DocumentClass != filter.DocumentClass {
 		return false
 	}
@@ -748,12 +801,20 @@ func matchesFilter(document Document, filter DocumentFilter) bool {
 	if filter.HasCreatedByService && document.CreatedByService != filter.CreatedByService {
 		return false
 	}
+	return true
+}
+
+func matchesTimeFilter(document Document, filter DocumentFilter) bool {
 	if filter.CreatedAfter != nil && document.CreatedAt.Before(*filter.CreatedAfter) {
 		return false
 	}
 	if filter.CreatedBefore != nil && document.CreatedAt.After(*filter.CreatedBefore) {
 		return false
 	}
+	return true
+}
+
+func matchesTagFilter(document Document, filter DocumentFilter) bool {
 	for key, value := range filter.Tags {
 		if document.Tags[key] != value {
 			return false
