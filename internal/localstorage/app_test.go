@@ -1140,8 +1140,106 @@ func TestVerifyFetchedBackendWindowRejectsFrameBeyondFetchedData(t *testing.T) {
 	}
 }
 
-func TestVerificationOutcomeRecordsCorruptWindowAsError(t *testing.T) {
-	testutil.RequireEqualf(t, verificationOutcome(ErrCorruptVerificationWindow), observe.VerificationOutcomeError, "verification outcome")
+func TestVerifyFetchedBackendWindowWithoutFrames(t *testing.T) {
+	documentData := []byte("whole")
+	documentSHA256 := sha256.Sum256(documentData)
+	record := blockstore.Record{
+		StoredOffset:  7,
+		StoredLength:  uint64(len(documentData)),
+		LogicalSHA256: documentSHA256,
+	}
+	for _, tc := range []struct {
+		name        string
+		verifyStart uint64
+		data        []byte
+		want        error
+	}{
+		{name: "match", verifyStart: 7, data: documentData},
+		{name: "start mismatch", verifyStart: 8, data: documentData, want: ErrCorruptVerificationWindow},
+		{name: "short data", verifyStart: 7, data: documentData[:len(documentData)-1], want: io.ErrUnexpectedEOF},
+		{name: "checksum mismatch", verifyStart: 7, data: []byte("WHole"), want: blockstore.ErrChecksumMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyFetchedBackendWindow(record, 0, uint64(len(documentData)), tc.verifyStart, tc.data)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("verify fetched backend window error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyFetchedBackendWindowFrameSelectionAndChecksum(t *testing.T) {
+	frameData := []byte("data")
+	frameSHA256 := sha256.Sum256(frameData)
+	for _, tc := range []struct {
+		name   string
+		record blockstore.Record
+		offset uint64
+		length uint64
+		data   []byte
+		want   error
+	}{
+		{
+			name: "skips frame outside selection",
+			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+				{SegmentOffset: 8, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
+			}},
+			offset: 0,
+			length: 4,
+		},
+		{
+			name: "accepts selected frame",
+			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+				{SegmentOffset: 8, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
+			}},
+			offset: 8,
+			length: uint64(len(frameData)),
+			data:   frameData,
+		},
+		{
+			name: "rejects frame checksum mismatch",
+			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+				{SegmentOffset: 8, SegmentLength: uint64(len(frameData))},
+			}},
+			offset: 8,
+			length: uint64(len(frameData)),
+			data:   frameData,
+			want:   blockstore.ErrChecksumMismatch,
+		},
+		{
+			name: "rejects frame offset overflow",
+			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+				{SegmentOffset: ^uint64(0), SegmentLength: 2},
+			}},
+			offset: 0,
+			length: 1,
+			want:   blockstore.ErrInvalidRange,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyFetchedBackendWindow(tc.record, tc.offset, tc.length, tc.record.Frames[0].SegmentOffset, tc.data)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("verify fetched backend window error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerificationOutcomeClassifiesKnownOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "match", want: observe.VerificationOutcomeMatch},
+		{name: "mismatch", err: blockstore.ErrInvalidRange, want: observe.VerificationOutcomeMismatch},
+		{name: "window error", err: ErrCorruptVerificationWindow, want: observe.VerificationOutcomeError},
+		{name: "skipped", err: context.Canceled, want: observe.VerificationOutcomeSkipped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.RequireEqualf(t, verificationOutcome(tc.err), tc.want, "verification outcome")
+		})
+	}
 }
 
 func TestCorruptVerificationWindowIsIntegrityFailure(t *testing.T) {
