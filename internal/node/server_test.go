@@ -664,6 +664,8 @@ func TestListenFailsClosedWithoutAuthorizationPolicy(t *testing.T) {
 	cfg := config.Default()
 	cfg.PublicListenAddress = "127.0.0.1:0"
 	cfg.AdminListenAddress = "127.0.0.1:1"
+	cfg.EnableLocalNonProductionStorage = true
+	cfg.LocalDataDir = t.TempDir()
 
 	server, err := Listen(cfg, Applications{})
 	if server != nil {

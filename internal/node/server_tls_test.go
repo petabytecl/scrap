@@ -118,7 +118,9 @@ func TestServerMTLSRequiresClientCertificateOnBothListeners(t *testing.T) {
 
 	publicWithCert := dialMTLSTestServer(t, publicListener, certs.clientTLSConfig(t, true))
 	publicClient = scrapv1.NewDocumentServiceClient(publicWithCert)
-	_, err = publicClient.HeadDocument(workloadContext("test-workload"), mtlsHeadRequest())
+	publicSuccessCtx, publicSuccessCancel := context.WithTimeout(workloadContext("test-workload"), time.Second)
+	defer publicSuccessCancel()
+	_, err = publicClient.HeadDocument(publicSuccessCtx, mtlsHeadRequest())
 	requireCode(t, err, codes.Unimplemented)
 	testutil.RequireNoErrorf(t, publicWithCert.Close(), "close client with cert")
 
@@ -132,7 +134,9 @@ func TestServerMTLSRequiresClientCertificateOnBothListeners(t *testing.T) {
 
 	adminWithCert := dialMTLSTestServer(t, adminListener, certs.clientTLSConfig(t, true))
 	healthClient = healthv1.NewHealthClient(adminWithCert)
-	resp, err := healthClient.Check(context.Background(), &healthv1.HealthCheckRequest{})
+	adminSuccessCtx, adminSuccessCancel := context.WithTimeout(context.Background(), time.Second)
+	defer adminSuccessCancel()
+	resp, err := healthClient.Check(adminSuccessCtx, &healthv1.HealthCheckRequest{})
 	testutil.RequireNoErrorf(t, err, "admin health check with client cert")
 	testutil.RequireEqualf(t, resp.GetStatus(), healthv1.HealthCheckResponse_SERVING, "admin health status")
 	testutil.RequireNoErrorf(t, adminWithCert.Close(), "close admin client with cert")

@@ -58,12 +58,12 @@ func Listen(cfg config.Config, apps Applications) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireGRPCMTLSConfig(cfg); err != nil {
+		return nil, err
+	}
 	authorization, err := authz.LoadManagerFromFile(cfg.AuthorizationPolicyPath, authorizationCapabilities())
 	if err != nil {
 		return nil, fmt.Errorf("load authorization policy: %w", err)
-	}
-	if err := requireGRPCMTLSConfig(cfg); err != nil {
-		return nil, err
 	}
 
 	listenConfig := net.ListenConfig{}
