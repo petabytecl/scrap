@@ -282,8 +282,10 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 		if current.State != metastore.TransactionStateOpen {
 			return preparedAuthorityCommand{}, fmt.Errorf("%w: transaction %s/%s is not open", metastore.ErrTransactionClosed, transaction.TenantID, transaction.TransactionID)
 		}
+		completed := completedTransactionResult(current, completedAt, tags)
 		return preparedAuthorityCommand{
 			command: command,
+			result:  completed,
 			after: func() (any, error) {
 				return a.store.GetTransaction(transaction)
 			},
@@ -882,7 +884,19 @@ func (command preparedAuthorityCommand) afterApply() (any, error) {
 	if command.after == nil {
 		return command.result, nil
 	}
-	return command.after()
+	value, err := command.after()
+	if err != nil && command.result != nil {
+		return command.result, nil
+	}
+	return value, err
+}
+
+func completedTransactionResult(current metastore.Transaction, completedAt time.Time, tags map[string]string) metastore.Transaction {
+	completedAtCopy := completedAt
+	current.State = metastore.TransactionStateCompleted
+	current.CompletedAt = &completedAtCopy
+	current.Tags = cloneTags(tags)
+	return current
 }
 
 func (a *Authority) recordFailureLocked(err error) error {
