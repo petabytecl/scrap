@@ -348,6 +348,12 @@ func (s *Store) completeTransaction(batch *pebble.Batch, transaction identity.Tr
 	if !ok {
 		return Transaction{}, ErrNotFound
 	}
+	if current.State == TransactionStateCompleted {
+		return current, nil
+	}
+	if current.State != TransactionStateOpen {
+		return Transaction{}, fmt.Errorf("%w: transaction %s/%s is not open", ErrTransactionClosed, current.Identity.TenantID, current.Identity.TransactionID)
+	}
 	current.State = TransactionStateCompleted
 	current.CompletedAt = &completedAt
 	current.Tags = cloneTags(tags)

@@ -1033,7 +1033,7 @@ func (a *Application) FindDocuments(ctx context.Context, req storageapp.FindDocu
 
 func (a *Application) CompleteTransaction(ctx context.Context, req storageapp.CompleteTransactionRequest) (storageapp.TransactionState, error) {
 	completedAt := a.now()
-	transaction, err := a.authority.CompleteTransaction(ctx, req.Transaction, completedAt, cloneTags(req.Tags), completeTransactionCommandID(req.Transaction, completedAt, req.Tags))
+	transaction, err := a.authority.CompleteTransaction(ctx, req.Transaction, completedAt, cloneTags(req.Tags), completeTransactionCommandID(req.Transaction, req.Tags))
 	if err != nil {
 		return storageapp.TransactionState{}, mapError(err)
 	}
@@ -1488,11 +1488,10 @@ func commitDocumentCommandID(document metastore.Document) string {
 	)
 }
 
-func completeTransactionCommandID(transaction identity.Transaction, completedAt time.Time, tags map[string]string) string {
+func completeTransactionCommandID(transaction identity.Transaction, tags map[string]string) string {
 	parts := []string{
 		transaction.TenantID,
 		transaction.TransactionID,
-		completedAt.Format(time.RFC3339Nano),
 	}
 	keys := make([]string, 0, len(tags))
 	for key := range tags {

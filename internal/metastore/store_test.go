@@ -116,6 +116,31 @@ func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestCompleteTransactionIsIdempotentAndPreservesFirstState(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassEphemeral)
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
+	completedAt := doc.CreatedAt.Add(time.Minute)
+	first, err := store.CompleteTransaction(identity.Transaction{
+		TenantID:      doc.Identity.TenantID,
+		TransactionID: doc.Identity.TransactionID,
+	}, completedAt, map[string]string{"closed_by": "first"})
+	testutil.RequireNoErrorf(t, err, "complete transaction")
+
+	retryAt := completedAt.Add(time.Hour)
+	retry, err := store.CompleteTransaction(identity.Transaction{
+		TenantID:      doc.Identity.TenantID,
+		TransactionID: doc.Identity.TransactionID,
+	}, retryAt, map[string]string{"closed_by": "retry"})
+	testutil.RequireNoErrorf(t, err, "retry complete transaction")
+
+	testutil.RequireEqualf(t, retry.State, TransactionStateCompleted, "transaction state")
+	testutil.RequireDeepEqualf(t, retry.Tags, first.Tags, "retry tags")
+	if retry.CompletedAt == nil || !retry.CompletedAt.Equal(completedAt) {
+		t.Fatalf("retry completed_at = %v, want original %v", retry.CompletedAt, completedAt)
+	}
+}
+
 func TestPutDocumentRejectsNewDocumentAfterTransactionCompleted(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
