@@ -178,18 +178,48 @@ func TestListPendingUploadIntentsFiltersAndLimits(t *testing.T) {
 	store := openTestStore(t)
 	uploaded := sampleUploadIntent("block-1")
 	uploaded.State = UploadStateUploaded
+	uploaded.UpdatedAt = time.Unix(10, 0).UTC()
 	pending := sampleUploadIntent("block-2")
+	pending.UpdatedAt = time.Unix(40, 0).UTC()
 	failed := sampleUploadIntent("block-3")
 	failed.State = UploadStateFailed
+	failed.UpdatedAt = time.Unix(20, 0).UTC()
 	laterPending := sampleUploadIntent("block-4")
+	laterPending.UpdatedAt = time.Unix(30, 0).UTC()
 	for _, intent := range []UploadIntent{uploaded, pending, failed, laterPending} {
 		testutil.RequireNoErrorf(t, store.RecordUploadIntent(intent), "record upload intent %s", intent.BlockID)
 	}
 
 	intents, err := store.ListPendingUploadIntents(2)
 	testutil.RequireNoErrorf(t, err, "list pending upload intents")
-	if len(intents) != 2 || intents[0].BlockID != "block-2" || intents[1].BlockID != "block-3" {
-		t.Fatalf("pending intents = %#v, want block-2 then block-3", intents)
+	if len(intents) != 2 || intents[0].BlockID != "block-3" || intents[1].BlockID != "block-4" {
+		t.Fatalf("pending intents = %#v, want oldest processable intents", intents)
+	}
+}
+
+func TestUpdateUploadIntentStateRefreshesPendingIndex(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleUploadIntent("block-1")
+	first.UpdatedAt = time.Unix(10, 0).UTC()
+	second := sampleUploadIntent("block-2")
+	second.UpdatedAt = time.Unix(20, 0).UTC()
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(first), "record first upload intent")
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(second), "record second upload intent")
+
+	_, err := store.UpdateUploadIntentState(first.BlockID, UploadStateFailed, "retry later", time.Unix(30, 0).UTC())
+	testutil.RequireNoErrorf(t, err, "move first upload intent to later retry")
+	intents, err := store.ListPendingUploadIntents(2)
+	testutil.RequireNoErrorf(t, err, "list pending upload intents")
+	if len(intents) != 2 || intents[0].BlockID != second.BlockID || intents[1].BlockID != first.BlockID {
+		t.Fatalf("pending intents after retry update = %#v, want second then first", intents)
+	}
+
+	_, err = store.UpdateUploadIntentState(second.BlockID, UploadStateUploaded, "", time.Unix(40, 0).UTC())
+	testutil.RequireNoErrorf(t, err, "remove uploaded intent from pending index")
+	intents, err = store.ListPendingUploadIntents(2)
+	testutil.RequireNoErrorf(t, err, "list pending upload intents after upload")
+	if len(intents) != 1 || intents[0].BlockID != first.BlockID {
+		t.Fatalf("pending intents after upload = %#v, want first only", intents)
 	}
 }
 
