@@ -539,6 +539,13 @@ func (c *raftCluster) proposePending() {
 			continue
 		}
 		if err := c.nodes[leaderID].raw.Propose(pending.command); err != nil {
+			if errors.Is(err, raft.ErrProposalDropped) {
+				// A leader can step down between Status and Propose; retry on the next leader term.
+				pending.lastLeaderID = leaderID
+				pending.lastTerm = term
+				c.pending[id] = pending
+				continue
+			}
 			c.complete(id, err)
 			continue
 		}
