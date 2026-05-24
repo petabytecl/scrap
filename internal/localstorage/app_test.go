@@ -950,6 +950,19 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	}
 }
 
+func TestVerificationWindowAcceptsFrameAtSegmentOffsetZero(t *testing.T) {
+	start, end, err := verificationWindow(blockstore.Record{
+		StoredOffset: 0,
+		StoredLength: 4,
+		Frames: []blockstore.FrameRecord{
+			{SegmentOffset: 0, SegmentLength: 4},
+		},
+	}, 0, 4)
+	testutil.RequireNoErrorf(t, err, "verification window")
+	testutil.RequireEqualf(t, start, uint64(0), "verification start")
+	testutil.RequireEqualf(t, end, uint64(4), "verification end")
+}
+
 func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
@@ -2308,6 +2321,17 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	readiness, err := app.GetRecoveryReadiness(ctx)
 	testutil.RequireNoErrorf(t, err, "get recovery readiness")
 	requireRecoveryReadinessReady(t, readiness, app.now())
+}
+
+func TestPublishMetadataSnapshotRejectsTypedNilBackendStore(t *testing.T) {
+	app := openTestApplication(t)
+	var store *backendfs.Store
+	app.SetBackendStore(store)
+
+	_, err := app.PublishMetadataSnapshot(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "backend store is not configured") {
+		t.Fatalf("PublishMetadataSnapshot error = %v, want not configured", err)
+	}
 }
 
 func requireSnapshotPublication(t *testing.T, publication published.SnapshotPublication) {

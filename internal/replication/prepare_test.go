@@ -51,8 +51,8 @@ func TestPrepareCriticalWriteRequiresAllReplicasByDefault(t *testing.T) {
 	if !errors.Is(err, ErrInsufficientReplicas) {
 		t.Fatalf("prepare error = %v, want %v", err, ErrInsufficientReplicas)
 	}
-	if result.RequiredReplicaCount != 5 || result.AchievedReplicaCount != 4 {
-		t.Fatalf("replica counts = required %d achieved %d, want 5/4", result.RequiredReplicaCount, result.AchievedReplicaCount)
+	if result.DesiredReplicaCount != 5 || result.RequiredReplicaCount != 5 || result.AchievedReplicaCount != 4 {
+		t.Fatalf("replica counts = desired %d required %d achieved %d, want 5/5/4", result.DesiredReplicaCount, result.RequiredReplicaCount, result.AchievedReplicaCount)
 	}
 	if result.Degraded {
 		t.Fatal("critical prepare degraded without explicit critical quorum policy")
@@ -98,8 +98,8 @@ func TestPreparePeerPreparesUseConfiguredConcurrency(t *testing.T) {
 	close(release)
 	outcome := requirePrepareResult(t, done)
 	testutil.RequireNoErrorf(t, outcome.err, "prepare document")
-	if outcome.result.AchievedReplicaCount != 3 {
-		t.Fatalf("achieved replicas = %d, want 3", outcome.result.AchievedReplicaCount)
+	if outcome.result.AchievedReplicaCount != 3 || outcome.result.RepairRequired {
+		t.Fatalf("result achieved/repair = %d/%v, want 3/false", outcome.result.AchievedReplicaCount, outcome.result.RepairRequired)
 	}
 }
 

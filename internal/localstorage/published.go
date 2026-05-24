@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -23,14 +24,27 @@ const (
 )
 
 func (a *Application) PublishMetadataSnapshot(ctx context.Context) (published.SnapshotPublication, error) {
-	store, ok := a.backendStore.(backend.MutableStore)
-	if a.backendStore == nil {
+	if backendStoreIsNil(a.backendStore) {
 		return published.SnapshotPublication{}, errors.New("localstorage: backend store is not configured")
 	}
+	store, ok := a.backendStore.(backend.MutableStore)
 	if !ok {
 		return published.SnapshotPublication{}, errors.New("localstorage: backend store does not support mutable metadata pointers")
 	}
 	return a.publishMetadataSnapshot(ctx, store)
+}
+
+func backendStoreIsNil(store backend.Store) bool {
+	if store == nil {
+		return true
+	}
+	value := reflect.ValueOf(store)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (a *Application) publishMetadataSnapshot(ctx context.Context, store backend.MutableStore) (published.SnapshotPublication, error) {
