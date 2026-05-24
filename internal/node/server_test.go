@@ -9,7 +9,9 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,6 +27,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/localstorage"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/storageapp"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
@@ -96,6 +99,159 @@ func TestServerServesHealthChecksWithoutWorkloadIdentity(t *testing.T) {
 	_ = adminConn.Close()
 	cancel()
 	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerRejectsOversizedReceivedMessages(t *testing.T) {
+	cfg := config.Default()
+	cfg.GRPCServerLimits.MaxRecvMsgSizeBytes = 1024
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{
+		Documents: readAllDocuments{},
+	}, testAuthorizationManager(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialAuthorizedTestServer(t, publicListener)
+	defer func() { _ = publicConn.Close() }()
+	client := scrapv1.NewDocumentServiceClient(publicConn)
+	write, err := client.WriteDocument(context.Background())
+	testutil.RequireNoErrorf(t, err, "WriteDocument")
+	testutil.RequireNoErrorf(t, write.Send(&scrapv1.WriteDocumentRequest{
+		Message: &scrapv1.WriteDocumentRequest_Init{Init: validWriteInit("oversized.xml")},
+	}), "send init")
+
+	err = write.Send(&scrapv1.WriteDocumentRequest{
+		Message: &scrapv1.WriteDocumentRequest_Chunk{Chunk: &scrapv1.WriteDocumentChunk{Data: bytes.Repeat([]byte("x"), 2*1024)}},
+	})
+	if err == nil {
+		_, err = write.CloseAndRecv()
+	}
+	requireCode(t, err, codes.ResourceExhausted)
+
+	_ = publicConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerRejectsOversizedAdminMessages(t *testing.T) {
+	cfg := config.Default()
+	cfg.GRPCServerLimits.MaxRecvMsgSizeBytes = 1024
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	adminConn := dialAuthorizedTestServer(t, adminListener)
+	defer func() { _ = adminConn.Close() }()
+	client := adminv1.NewRestoreServiceClient(adminConn)
+	_, err := client.StartRestore(context.Background(), &adminv1.StartRestoreRequest{
+		OperationId:     "018f6d86-7a22-7abc-8def-123456789abc",
+		OperationPlanId: strings.Repeat("x", 2*1024),
+		PlanHash:        "hash-1",
+	})
+	requireCode(t, err, codes.ResourceExhausted)
+
+	_ = adminConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerRejectsOversizedSentMessages(t *testing.T) {
+	cfg := config.Default()
+	cfg.GRPCServerLimits.MaxSendMsgSizeBytes = 1024
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{
+		Documents: largeReadDocuments{data: bytes.Repeat([]byte("x"), 2*1024)},
+	}, testAuthorizationManager(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialAuthorizedTestServer(t, publicListener)
+	defer func() { _ = publicConn.Close() }()
+	client := scrapv1.NewDocumentServiceClient(publicConn)
+	read, err := client.ReadDocument(context.Background(), validReadRequest("large-read.xml"))
+	testutil.RequireNoErrorf(t, err, "open read stream")
+	_, err = read.Recv()
+	requireCode(t, err, codes.ResourceExhausted)
+
+	_ = publicConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerConcurrentStreamLimitAppliesToPublicServer(t *testing.T) {
+	cfg := config.Default()
+	cfg.GRPCServerLimits.MaxConcurrentStreams = 1
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	documents := newBlockingReadDocuments()
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{
+		Documents: documents,
+	}, testAuthorizationManager(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialAuthorizedTestServer(t, publicListener)
+	defer func() { _ = publicConn.Close() }()
+	client := scrapv1.NewDocumentServiceClient(publicConn)
+	first, err := client.ReadDocument(context.Background(), validReadRequest("first.xml"))
+	testutil.RequireNoErrorf(t, err, "open first read stream")
+	<-documents.started
+
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer secondCancel()
+	_, err = client.ReadDocument(secondCtx, validReadRequest("second.xml"))
+	requireStreamLimitRejection(t, err)
+	testutil.RequireEqualf(t, documents.callCount(), 1, "read handler call count")
+
+	close(documents.release)
+	_, err = first.Recv()
+	testutil.RequireErrorIsf(t, err, io.EOF, "first stream completion")
+	_ = publicConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerRejectsInvalidGRPCLimitConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.GRPCServerLimits.MaxConcurrentStreams = 1 << 32
+	publicListener := bufconn.Listen(1024 * 1024)
+	defer func() { testutil.RequireNoErrorf(t, publicListener.Close(), "close public listener") }()
+	adminListener := bufconn.Listen(1024 * 1024)
+	defer func() { testutil.RequireNoErrorf(t, adminListener.Close(), "close admin listener") }()
+
+	_, err := newServerWithConfig(cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
+
+	if err == nil {
+		t.Fatal("invalid grpc max concurrent streams error = nil, want error")
+	}
 }
 
 func TestServerHealthReadinessReflectsReadFreshFailure(t *testing.T) {
@@ -781,6 +937,30 @@ func testAuthorizationManager(t *testing.T) *authz.Manager {
 	return manager
 }
 
+func requireNewServerWithConfig(
+	t *testing.T,
+	cfg config.Config,
+	publicListener,
+	adminListener net.Listener,
+	apps Applications,
+	authorization *authz.Manager,
+) *Server {
+	t.Helper()
+	server, err := newServerWithConfig(cfg, publicListener, adminListener, apps, authorization, "")
+	testutil.RequireNoErrorf(t, err, "new server with config")
+	return server
+}
+
+func requireStreamLimitRejection(t *testing.T, err error) {
+	t.Helper()
+	switch status.Code(err) {
+	case codes.DeadlineExceeded, codes.ResourceExhausted, codes.Unavailable:
+		return
+	default:
+		t.Fatalf("stream limit error code = %s, want DeadlineExceeded, ResourceExhausted, or Unavailable; err = %v", status.Code(err), err)
+	}
+}
+
 func requireCode(t *testing.T, err error, code codes.Code) {
 	t.Helper()
 	st, ok := status.FromError(err)
@@ -811,4 +991,122 @@ func (a fakeHealthApplication) CheckReadiness(context.Context) error {
 
 func (a fakeHealthApplication) CheckLiveness(context.Context) error {
 	return a.livenessErr
+}
+
+type readAllDocuments struct{}
+
+func (d readAllDocuments) WriteDocument(
+	_ context.Context,
+	init storageapp.WriteDocumentInit,
+	chunks storageapp.ChunkReader,
+) (storageapp.WriteDocumentResult, error) {
+	for {
+		_, err := chunks.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return storageapp.WriteDocumentResult{}, err
+		}
+	}
+	return storageapp.WriteDocumentResult{
+		Metadata: storageapp.DocumentMetadata{Identity: init.Identity},
+	}, nil
+}
+
+func (d readAllDocuments) HeadDocument(
+	_ context.Context,
+	req storageapp.HeadDocumentRequest,
+) (storageapp.DocumentMetadata, error) {
+	return storageapp.DocumentMetadata{Identity: req.Identity}, nil
+}
+
+func (d readAllDocuments) ReadDocument(
+	context.Context,
+	storageapp.ReadDocumentRequest,
+	storageapp.ReadDocumentSender,
+) error {
+	return nil
+}
+
+func (d readAllDocuments) FindDocuments(
+	context.Context,
+	storageapp.FindDocumentsRequest,
+) (storageapp.FindDocumentsResult, error) {
+	return storageapp.FindDocumentsResult{}, nil
+}
+
+type blockingReadDocuments struct {
+	readAllDocuments
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	calls   int
+}
+
+type largeReadDocuments struct {
+	readAllDocuments
+	data []byte
+}
+
+func (d largeReadDocuments) ReadDocument(
+	_ context.Context,
+	_ storageapp.ReadDocumentRequest,
+	sender storageapp.ReadDocumentSender,
+) error {
+	return sender.SendChunk(d.data)
+}
+
+func newBlockingReadDocuments() *blockingReadDocuments {
+	return &blockingReadDocuments{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (d *blockingReadDocuments) ReadDocument(
+	ctx context.Context,
+	_ storageapp.ReadDocumentRequest,
+	_ storageapp.ReadDocumentSender,
+) error {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
+	d.once.Do(func() {
+		close(d.started)
+	})
+	select {
+	case <-d.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (d *blockingReadDocuments) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+func validWriteInit(documentName string) *scrapv1.WriteDocumentInit {
+	return &scrapv1.WriteDocumentInit{
+		Identity:         documentIdentity(documentName),
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}
+}
+
+func validReadRequest(documentName string) *scrapv1.ReadDocumentRequest {
+	return &scrapv1.ReadDocumentRequest{Identity: documentIdentity(documentName)}
+}
+
+func documentIdentity(documentName string) *scrapv1.DocumentIdentity {
+	return &scrapv1.DocumentIdentity{
+		TenantId:      "tenant",
+		TransactionId: "txn",
+		DocumentName:  documentName,
+	}
 }

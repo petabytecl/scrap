@@ -163,6 +163,79 @@ func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testin
 	testutil.RequireNoErrorf(t, cfg.Validate(), "local filesystem backend config did not validate")
 }
 
+func TestGRPCServerLimitsDefaultAndValidation(t *testing.T) {
+	cfg := Default()
+	testutil.RequireEqualf(t, cfg.GRPCServerLimits.MaxConcurrentStreams, DefaultGRPCMaxConcurrentStreams, "max concurrent streams")
+	testutil.RequireEqualf(t, cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, DefaultGRPCMaxRecvMsgSizeBytes, "max recv message bytes")
+	testutil.RequireEqualf(t, cfg.GRPCServerLimits.MaxSendMsgSizeBytes, DefaultGRPCMaxSendMsgSizeBytes, "max send message bytes")
+	testutil.RequireNoErrorf(t, cfg.Validate(), "default grpc server limits")
+}
+
+func TestGRPCServerLimitsRejectUnsafeValues(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*Config)
+		wantErr string
+	}{
+		"zero streams": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.MaxConcurrentStreams = 0 },
+			wantErr: "grpc_max_concurrent_streams must be positive",
+		},
+		"stream overflow": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.MaxConcurrentStreams = 1 << 32 },
+			wantErr: "grpc_max_concurrent_streams must be no more than 4294967295",
+		},
+		"zero recv": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.MaxRecvMsgSizeBytes = 0 },
+			wantErr: "grpc_max_recv_msg_size_bytes must be positive",
+		},
+		"negative recv": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.MaxRecvMsgSizeBytes = -1 },
+			wantErr: "grpc_max_recv_msg_size_bytes must be positive",
+		},
+		"zero send": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.MaxSendMsgSizeBytes = 0 },
+			wantErr: "grpc_max_send_msg_size_bytes must be positive",
+		},
+		"zero keepalive min": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.KeepaliveMinTime = 0 },
+			wantErr: "grpc_keepalive_min_time must be positive",
+		},
+		"zero keepalive idle": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.KeepaliveMaxConnectionIdle = 0 },
+			wantErr: "grpc_keepalive_max_connection_idle must be positive",
+		},
+		"zero keepalive age": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.KeepaliveMaxConnectionAge = 0 },
+			wantErr: "grpc_keepalive_max_connection_age must be positive",
+		},
+		"zero keepalive age grace": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.KeepaliveMaxConnectionAgeGrace = 0 },
+			wantErr: "grpc_keepalive_max_connection_age_grace must be positive",
+		},
+		"zero keepalive time": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.KeepaliveTime = 0 },
+			wantErr: "grpc_keepalive_time must be positive",
+		},
+		"zero keepalive timeout": {
+			mutate:  func(cfg *Config) { cfg.GRPCServerLimits.KeepaliveTimeout = 0 },
+			wantErr: "grpc_keepalive_timeout must be positive",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			tt.mutate(&cfg)
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			testutil.RequireEqualf(t, err.Error(), tt.wantErr, "validation error")
+		})
+	}
+}
+
 func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T) {
 	cfg := Default()
 	cfg.EnableProductionWriteACK = true

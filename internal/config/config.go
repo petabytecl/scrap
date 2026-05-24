@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"strings"
 	"time"
@@ -16,6 +17,19 @@ const (
 	DefaultOperationRunInterval  = 5 * time.Second
 	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
 	DefaultProductionProfileID   = "scrap-prod-v1"
+)
+
+const (
+	DefaultGRPCMaxConcurrentStreams           uint64 = 256
+	DefaultGRPCMaxRecvMsgSizeBytes                   = 8 * 1024 * 1024
+	DefaultGRPCMaxSendMsgSizeBytes                   = 8 * 1024 * 1024
+	DefaultGRPCKeepaliveMinTime                      = 30 * time.Second
+	DefaultGRPCKeepalivePermitWithoutStream          = true
+	DefaultGRPCKeepaliveMaxConnectionIdle            = 5 * time.Minute
+	DefaultGRPCKeepaliveMaxConnectionAge             = 30 * time.Minute
+	DefaultGRPCKeepaliveMaxConnectionAgeGrace        = 5 * time.Second
+	DefaultGRPCKeepaliveTime                         = 2 * time.Minute
+	DefaultGRPCKeepaliveTimeout                      = 20 * time.Second
 )
 
 const (
@@ -47,8 +61,22 @@ type Config struct {
 	BackendUploadInterval           time.Duration
 	OperationRunInterval            time.Duration
 	LocalSealBlockAtBytes           uint64
+	GRPCServerLimits                GRPCServerLimits
 	EnableProductionWriteACK        bool
 	ProductionReadinessEvidence     ProductionReadinessEvidence
+}
+
+type GRPCServerLimits struct {
+	MaxConcurrentStreams           uint64
+	MaxRecvMsgSizeBytes            int
+	MaxSendMsgSizeBytes            int
+	KeepaliveMinTime               time.Duration
+	KeepalivePermitWithoutStream   bool
+	KeepaliveMaxConnectionIdle     time.Duration
+	KeepaliveMaxConnectionAge      time.Duration
+	KeepaliveMaxConnectionAgeGrace time.Duration
+	KeepaliveTime                  time.Duration
+	KeepaliveTimeout               time.Duration
 }
 
 type ProductionReadinessEvidence struct {
@@ -98,6 +126,18 @@ func Default() Config {
 		BackendUploadInterval: DefaultBackendUploadInterval,
 		OperationRunInterval:  DefaultOperationRunInterval,
 		LocalSealBlockAtBytes: DefaultLocalSealBlockAtBytes,
+		GRPCServerLimits: GRPCServerLimits{
+			MaxConcurrentStreams:           DefaultGRPCMaxConcurrentStreams,
+			MaxRecvMsgSizeBytes:            DefaultGRPCMaxRecvMsgSizeBytes,
+			MaxSendMsgSizeBytes:            DefaultGRPCMaxSendMsgSizeBytes,
+			KeepaliveMinTime:               DefaultGRPCKeepaliveMinTime,
+			KeepalivePermitWithoutStream:   DefaultGRPCKeepalivePermitWithoutStream,
+			KeepaliveMaxConnectionIdle:     DefaultGRPCKeepaliveMaxConnectionIdle,
+			KeepaliveMaxConnectionAge:      DefaultGRPCKeepaliveMaxConnectionAge,
+			KeepaliveMaxConnectionAgeGrace: DefaultGRPCKeepaliveMaxConnectionAgeGrace,
+			KeepaliveTime:                  DefaultGRPCKeepaliveTime,
+			KeepaliveTimeout:               DefaultGRPCKeepaliveTimeout,
+		},
 	}
 }
 
@@ -120,7 +160,59 @@ func (c Config) Validate() error {
 	if c.LocalSealBlockAtBytes == 0 {
 		return errors.New("local_seal_block_at_bytes must be positive")
 	}
+	if err := c.GRPCServerLimits.validate(); err != nil {
+		return err
+	}
 	return c.validateLocalFilesystemBackend()
+}
+
+func (l GRPCServerLimits) validate() error {
+	if err := validateGRPCMaxConcurrentStreams(l.MaxConcurrentStreams); err != nil {
+		return err
+	}
+	return firstValidationError(
+		validatePositiveInt("grpc_max_recv_msg_size_bytes", l.MaxRecvMsgSizeBytes),
+		validatePositiveInt("grpc_max_send_msg_size_bytes", l.MaxSendMsgSizeBytes),
+		validatePositiveDuration("grpc_keepalive_min_time", l.KeepaliveMinTime),
+		validatePositiveDuration("grpc_keepalive_max_connection_idle", l.KeepaliveMaxConnectionIdle),
+		validatePositiveDuration("grpc_keepalive_max_connection_age", l.KeepaliveMaxConnectionAge),
+		validatePositiveDuration("grpc_keepalive_max_connection_age_grace", l.KeepaliveMaxConnectionAgeGrace),
+		validatePositiveDuration("grpc_keepalive_time", l.KeepaliveTime),
+		validatePositiveDuration("grpc_keepalive_timeout", l.KeepaliveTimeout),
+	)
+}
+
+func validateGRPCMaxConcurrentStreams(value uint64) error {
+	if value == 0 {
+		return errors.New("grpc_max_concurrent_streams must be positive")
+	}
+	if value > math.MaxUint32 {
+		return fmt.Errorf("grpc_max_concurrent_streams must be no more than %d", uint64(math.MaxUint32))
+	}
+	return nil
+}
+
+func validatePositiveInt(field string, value int) error {
+	if value <= 0 {
+		return fmt.Errorf("%s must be positive", field)
+	}
+	return nil
+}
+
+func validatePositiveDuration(field string, value time.Duration) error {
+	if value <= 0 {
+		return fmt.Errorf("%s must be positive", field)
+	}
+	return nil
+}
+
+func firstValidationError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c Config) validateListenAddresses() error {
