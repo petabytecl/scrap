@@ -100,46 +100,73 @@ func (l *prepareLog) Recover() ([]metastore.Document, error) {
 	var documents []metastore.Document
 	var validOffset int64
 	for {
-		recordOffset := validOffset
-		var header [prepareLogHeaderLen]byte
-		if _, err := io.ReadFull(file, header[:]); err != nil {
-			if errors.Is(err, io.EOF) {
-				return documents, nil
-			}
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return documents, truncatePrepareLogTail(file, recordOffset)
-			}
-			return nil, err
-		}
-		length := binary.BigEndian.Uint32(header[:])
-		if length > maxPrepareLogPayloadLen {
-			return documents, truncatePrepareLogTail(file, recordOffset)
-		}
-		payload := make([]byte, int(length))
-		if _, err := io.ReadFull(file, payload); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return documents, truncatePrepareLogTail(file, recordOffset)
-			}
-			return nil, err
-		}
-		var checksum [prepareLogCRCLen]byte
-		if _, err := io.ReadFull(file, checksum[:]); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return documents, truncatePrepareLogTail(file, recordOffset)
-			}
-			return nil, err
-		}
-		want := binary.BigEndian.Uint32(checksum[:])
-		if got := crc32.Checksum(payload, crcTable); got != want {
-			return documents, truncatePrepareLogTail(file, recordOffset)
-		}
-		document, err := metastore.UnmarshalDocument(payload)
+		document, advance, action, err := readPrepareLogRecord(file)
 		if err != nil {
 			return nil, err
 		}
+		switch action {
+		case prepareLogContinue:
+		case prepareLogDone:
+			return documents, nil
+		case prepareLogTruncate:
+			return documents, truncatePrepareLogTail(file, validOffset)
+		}
 		documents = append(documents, document)
-		validOffset += int64(prepareLogHeaderLen + len(payload) + prepareLogCRCLen)
+		validOffset += advance
 	}
+}
+
+type prepareLogReadAction int
+
+const (
+	prepareLogContinue prepareLogReadAction = iota
+	prepareLogDone
+	prepareLogTruncate
+)
+
+func readPrepareLogRecord(file *os.File) (metastore.Document, int64, prepareLogReadAction, error) {
+	var header [prepareLogHeaderLen]byte
+	action, err := readPrepareLogBytes(file, header[:], true)
+	if action != prepareLogContinue || err != nil {
+		return metastore.Document{}, 0, action, err
+	}
+	length := binary.BigEndian.Uint32(header[:])
+	if length > maxPrepareLogPayloadLen {
+		return metastore.Document{}, 0, prepareLogTruncate, nil
+	}
+	payload := make([]byte, int(length))
+	action, err = readPrepareLogBytes(file, payload, false)
+	if action != prepareLogContinue || err != nil {
+		return metastore.Document{}, 0, action, err
+	}
+	var checksum [prepareLogCRCLen]byte
+	action, err = readPrepareLogBytes(file, checksum[:], false)
+	if action != prepareLogContinue || err != nil {
+		return metastore.Document{}, 0, action, err
+	}
+	want := binary.BigEndian.Uint32(checksum[:])
+	if got := crc32.Checksum(payload, crcTable); got != want {
+		return metastore.Document{}, 0, prepareLogTruncate, nil
+	}
+	document, err := metastore.UnmarshalDocument(payload)
+	if err != nil {
+		return metastore.Document{}, 0, prepareLogContinue, err
+	}
+	advance := int64(prepareLogHeaderLen + len(payload) + prepareLogCRCLen)
+	return document, advance, prepareLogContinue, nil
+}
+
+func readPrepareLogBytes(file *os.File, data []byte, eofEndsLog bool) (prepareLogReadAction, error) {
+	if _, err := io.ReadFull(file, data); err != nil {
+		if eofEndsLog && errors.Is(err, io.EOF) {
+			return prepareLogDone, nil
+		}
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return prepareLogTruncate, nil
+		}
+		return prepareLogContinue, err
+	}
+	return prepareLogContinue, nil
 }
 
 func truncatePrepareLogTail(file *os.File, validOffset int64) error {

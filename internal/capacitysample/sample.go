@@ -267,6 +267,26 @@ func Run(ctx context.Context, opts Options, admin AdminClient) (Report, error) {
 }
 
 func ValidateOptions(opts Options) (Options, error) {
+	opts = defaultOptions(opts)
+	if err := validateOptionBounds(opts); err != nil {
+		return Options{}, err
+	}
+	if err := validateHTTPURL("backend url", opts.BackendURL); err != nil {
+		return Options{}, err
+	}
+	if err := validateHTTPURL("openbao address", opts.OpenBaoAddress); err != nil {
+		return Options{}, err
+	}
+	if strings.TrimSpace(opts.OpenBaoToken) == "" {
+		return Options{}, errors.New("capacity sample requires openbao token")
+	}
+	if _, _, err := splitOpenBaoTransitKeyPath(opts.OpenBaoTransitKeyPath); err != nil {
+		return Options{}, err
+	}
+	return opts, nil
+}
+
+func defaultOptions(opts Options) Options {
 	opts.ReleaseSHA = defaultText(opts.ReleaseSHA, "unknown")
 	opts.DirtyTree = defaultText(opts.DirtyTree, "unknown")
 	opts.ProfileID = strings.TrimSpace(opts.ProfileID)
@@ -285,37 +305,29 @@ func ValidateOptions(opts Options) (Options, error) {
 	if opts.Duration == 0 {
 		opts.Duration = DefaultDuration
 	}
-	if opts.ProfileID == "" {
-		return Options{}, errors.New("capacity sample requires profile_id")
-	}
 	opts.BackendAccessKeyID = defaultText(opts.BackendAccessKeyID, DefaultBackendAccessKey)
 	opts.BackendSecretAccessKey = defaultText(opts.BackendSecretAccessKey, DefaultBackendSecretKey)
 	opts.BackendRegion = defaultText(opts.BackendRegion, DefaultBackendRegion)
 	opts.BackendService = defaultText(opts.BackendService, DefaultBackendService)
+	return opts
+}
+
+func validateOptionBounds(opts Options) error {
+	if opts.ProfileID == "" {
+		return errors.New("capacity sample requires profile_id")
+	}
 	if opts.SampleCount < 1 || opts.SampleCount > MaxSampleCount {
-		return Options{}, fmt.Errorf("capacity sample --samples must be 1..%d", MaxSampleCount)
+		return fmt.Errorf("capacity sample --samples must be 1..%d", MaxSampleCount)
 	}
 	if opts.Duration <= 0 || opts.Duration > MaxDuration {
-		return Options{}, fmt.Errorf("capacity sample --duration must be positive and no more than %s", MaxDuration)
+		return fmt.Errorf("capacity sample --duration must be positive and no more than %s", MaxDuration)
 	}
 	for _, size := range opts.DocumentSizesBytes {
 		if size == 0 || size > MaxDocumentSizeBytes {
-			return Options{}, fmt.Errorf("capacity sample --document-size must be 1..%d bytes", MaxDocumentSizeBytes)
+			return fmt.Errorf("capacity sample --document-size must be 1..%d bytes", MaxDocumentSizeBytes)
 		}
 	}
-	if err := validateHTTPURL("backend url", opts.BackendURL); err != nil {
-		return Options{}, err
-	}
-	if err := validateHTTPURL("openbao address", opts.OpenBaoAddress); err != nil {
-		return Options{}, err
-	}
-	if strings.TrimSpace(opts.OpenBaoToken) == "" {
-		return Options{}, errors.New("capacity sample requires openbao token")
-	}
-	if _, _, err := splitOpenBaoTransitKeyPath(opts.OpenBaoTransitKeyPath); err != nil {
-		return Options{}, err
-	}
-	return opts, nil
+	return nil
 }
 
 func (p ProposedCapacityProfile) Validate() error {

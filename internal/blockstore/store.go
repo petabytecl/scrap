@@ -245,11 +245,8 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if blockID == "" {
-		return errors.New("blockstore: block id is required")
-	}
-	if reader == nil {
-		return errors.New("blockstore: sealed block reader is required")
+	if err := validateInstallReader(blockID, reader, "sealed block reader"); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -263,25 +260,39 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	if err != nil {
 		return err
 	}
-	if err := s.verifyWholeFile(ctx, blockPath, expectedLength, expectedSHA256); err == nil {
-		if err := writeSealMarker(sealPath); err != nil && !errors.Is(err, os.ErrExist) {
-			return err
-		}
-		return syncDir(s.blocksDir)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if sealed, err := s.sealExistingBlock(ctx, blockPath, sealPath, expectedLength, expectedSHA256); sealed || err != nil {
 		return err
 	}
+	return s.installSealedBlock(ctx, blockPath, sealPath, expectedLength, expectedSHA256, reader)
+}
 
-	temp, err := os.CreateTemp(s.blocksDir, "restore-*.blk.tmp")
+func validateInstallReader(blockID string, reader io.Reader, readerName string) error {
+	if blockID == "" {
+		return errors.New("blockstore: block id is required")
+	}
+	if reader == nil {
+		return fmt.Errorf("blockstore: %s is required", readerName)
+	}
+	return nil
+}
+
+func (s *Store) sealExistingBlock(ctx context.Context, blockPath, sealPath string, expectedLength uint64, expectedSHA256 [32]byte) (bool, error) {
+	err := s.verifyWholeFile(ctx, blockPath, expectedLength, expectedSHA256)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, s.writeSealMarkerAndSync(sealPath)
+}
+
+func (s *Store) installSealedBlock(ctx context.Context, blockPath, sealPath string, expectedLength uint64, expectedSHA256 [32]byte, reader io.Reader) error {
+	temp, tempPath, err := s.createTempBlockFile("restore-*.blk.tmp")
 	if err != nil {
 		return err
-	}
-	tempPath, err := s.validatedBlockStorePath(temp.Name())
-	if err != nil {
-		return errors.Join(err, temp.Close(), s.removeBlockStorePath(temp.Name()))
 	}
 	defer func() { _ = s.removeBlockStorePath(tempPath) }()
-
 	written, sum, err := copyAndHash(ctx, temp, reader)
 	if closeErr := temp.Close(); err == nil {
 		err = closeErr
@@ -299,36 +310,30 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 	if err := os.Rename(tempPath, blockPath); err != nil {
 		return err
 	}
+	return s.writeSealMarkerAndSync(sealPath)
+}
+
+func (s *Store) writeSealMarkerAndSync(sealPath string) error {
 	if err := writeSealMarker(sealPath); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	if err := syncDir(s.blocksDir); err != nil {
-		return err
-	}
-	return nil
+	return syncDir(s.blocksDir)
 }
 
 func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expectedSHA256 [32]byte, reader io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if record.BlockID == "" {
-		return errors.New("blockstore: block id is required")
-	}
-	if reader == nil {
-		return errors.New("blockstore: range reader is required")
+	if err := validateInstallReader(record.BlockID, reader, "range reader"); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	temp, err := os.CreateTemp(s.blocksDir, "repair-range-*.tmp")
+	temp, tempPath, err := s.createTempBlockFile("repair-range-*.tmp")
 	if err != nil {
 		return err
-	}
-	tempPath, err := s.validatedBlockStorePath(temp.Name())
-	if err != nil {
-		return errors.Join(err, temp.Close(), s.removeBlockStorePath(temp.Name()))
 	}
 	committed := false
 	defer func() {
@@ -350,7 +355,26 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 	if err := verifyTempRange(tempPath, record); err != nil {
 		return err
 	}
+	if err := s.installVerifiedTempRange(tempPath, record); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
 
+func (s *Store) createTempBlockFile(pattern string) (*os.File, string, error) {
+	temp, err := os.CreateTemp(s.blocksDir, pattern)
+	if err != nil {
+		return nil, "", err
+	}
+	tempPath, err := s.validatedBlockStorePath(temp.Name())
+	if err != nil {
+		return nil, "", errors.Join(err, temp.Close(), s.removeBlockStorePath(temp.Name()))
+	}
+	return temp, tempPath, nil
+}
+
+func (s *Store) installVerifiedTempRange(tempPath string, record Record) error {
 	source, err := openValidatedFile(tempPath)
 	if err != nil {
 		return err
@@ -393,7 +417,6 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 	if err := syncDir(s.blocksDir); err != nil {
 		return err
 	}
-	committed = true
 	return nil
 }
 
@@ -461,49 +484,9 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 		}
 	}()
 
-	hasher := sha256.New()
-	frames := newFrameAccumulator(s.frameSize)
-	var storedLength uint64
-	buf := make([]byte, DefaultFrameSize)
-	for {
-		if err := ctx.Err(); err != nil {
-			return Record{}, err
-		}
-		n, readErr := reader.Read(buf)
-		if n > 0 {
-			chunk := buf[:n]
-			written, err := s.blockFile.Write(chunk)
-			if err != nil {
-				return Record{}, err
-			}
-			if written != n {
-				return Record{}, io.ErrShortWrite
-			}
-			if _, err := hasher.Write(chunk); err != nil {
-				return Record{}, err
-			}
-			chunkLength, err := safeconv.IntToUint64("append chunk length", n)
-			if err != nil {
-				return Record{}, err
-			}
-			segmentOffset, err := addUint64("append segment offset", startOffset, storedLength)
-			if err != nil {
-				return Record{}, err
-			}
-			if err := frames.Write(segmentOffset, chunk); err != nil {
-				return Record{}, err
-			}
-			storedLength, err = addUint64("stored length", storedLength, chunkLength)
-			if err != nil {
-				return Record{}, err
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return Record{}, readErr
-		}
+	appended, err := s.appendReader(ctx, reader, startOffset)
+	if err != nil {
+		return Record{}, err
 	}
 	if err := s.blockFile.Sync(); err != nil {
 		return Record{}, err
@@ -512,22 +495,99 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 	record := Record{
 		BlockID:      s.blockID,
 		StoredOffset: startOffset,
-		StoredLength: storedLength,
-		Frames:       frames.Records(),
+		StoredLength: appended.storedLength,
+		Frames:       appended.frames,
 	}
-	copy(record.LogicalSHA256[:], hasher.Sum(nil))
+	record.LogicalSHA256 = appended.logicalSHA256
 	if validate != nil {
 		if err := validate(record); err != nil {
 			return Record{}, err
 		}
 	}
-	nextOffset, err := addUint64("block offset", startOffset, storedLength)
+	nextOffset, err := addUint64("block offset", startOffset, appended.storedLength)
 	if err != nil {
 		return Record{}, err
 	}
 	s.blockOffset = nextOffset
 	committed = true
 	return record, nil
+}
+
+type appendResult struct {
+	storedLength  uint64
+	logicalSHA256 [32]byte
+	frames        []FrameRecord
+}
+
+func (s *Store) appendReader(ctx context.Context, reader io.Reader, startOffset uint64) (appendResult, error) {
+	accumulator := blockAppendAccumulator{
+		file:        s.blockFile,
+		hasher:      sha256.New(),
+		frames:      newFrameAccumulator(s.frameSize),
+		startOffset: startOffset,
+	}
+	buf := make([]byte, DefaultFrameSize)
+	for {
+		if err := ctx.Err(); err != nil {
+			return appendResult{}, err
+		}
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			if err := accumulator.write(buf[:n]); err != nil {
+				return appendResult{}, err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return accumulator.result(), nil
+		}
+		if readErr != nil {
+			return appendResult{}, readErr
+		}
+	}
+}
+
+type blockAppendAccumulator struct {
+	file         *os.File
+	hasher       hash.Hash
+	frames       *frameAccumulator
+	startOffset  uint64
+	storedLength uint64
+}
+
+func (a *blockAppendAccumulator) write(chunk []byte) error {
+	written, err := a.file.Write(chunk)
+	if err != nil {
+		return err
+	}
+	if written != len(chunk) {
+		return io.ErrShortWrite
+	}
+	if _, err := a.hasher.Write(chunk); err != nil {
+		return err
+	}
+	chunkLength, err := safeconv.IntToUint64("append chunk length", len(chunk))
+	if err != nil {
+		return err
+	}
+	segmentOffset, err := addUint64("append segment offset", a.startOffset, a.storedLength)
+	if err != nil {
+		return err
+	}
+	if err := a.frames.Write(segmentOffset, chunk); err != nil {
+		return err
+	}
+	a.storedLength, err = addUint64("stored length", a.storedLength, chunkLength)
+	return err
+}
+
+func (a *blockAppendAccumulator) result() appendResult {
+	var sum [32]byte
+	copy(sum[:], a.hasher.Sum(nil))
+	return appendResult{
+		storedLength:  a.storedLength,
+		logicalSHA256: sum,
+		frames:        a.frames.Records(),
+	}
 }
 
 func (s *Store) ReadRange(ctx context.Context, record Record, offset uint64, length *uint64, writer io.Writer) error {
@@ -661,18 +721,8 @@ func copyAndHash(ctx context.Context, writer io.Writer, reader io.Reader) (uint6
 		}
 		n, readErr := reader.Read(buf)
 		if n > 0 {
-			copied, err := multi.Write(buf[:n])
-			if err != nil {
-				return 0, [32]byte{}, err
-			}
-			if copied != n {
-				return 0, [32]byte{}, io.ErrShortWrite
-			}
-			chunkLength, err := safeconv.IntToUint64("copied chunk length", n)
-			if err != nil {
-				return 0, [32]byte{}, err
-			}
-			written, err = addUint64("copied byte count", written, chunkLength)
+			var err error
+			written, err = copyHashChunk(multi, buf[:n], written)
 			if err != nil {
 				return 0, [32]byte{}, err
 			}
@@ -686,6 +736,21 @@ func copyAndHash(ctx context.Context, writer io.Writer, reader io.Reader) (uint6
 			return 0, [32]byte{}, readErr
 		}
 	}
+}
+
+func copyHashChunk(writer io.Writer, chunk []byte, written uint64) (uint64, error) {
+	copied, err := writer.Write(chunk)
+	if err != nil {
+		return 0, err
+	}
+	if copied != len(chunk) {
+		return 0, io.ErrShortWrite
+	}
+	chunkLength, err := safeconv.IntToUint64("copied chunk length", len(chunk))
+	if err != nil {
+		return 0, err
+	}
+	return addUint64("copied byte count", written, chunkLength)
 }
 
 func normalizeRange(record Record, offset uint64, length *uint64) (uint64, error) {

@@ -353,35 +353,12 @@ func Run(ctx context.Context, opts Options, clients Clients) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	if clients.FixtureWriter == nil {
-		return Report{}, errors.New("local DR drill requires fixture writer")
-	}
-	if clients.DR == nil {
-		return Report{}, errors.New("local DR drill requires disaster recovery client")
-	}
-	if clients.Operations == nil {
-		return Report{}, errors.New("local DR drill requires operation client")
-	}
-	capacityReport, err := loadCapacityReport(opts.CapacitySampleReportPath)
-	if err != nil {
+	if err := validateClients(clients); err != nil {
 		return Report{}, err
 	}
-	openbaoReport, err := loadOpenBaoReport(opts.OpenBaoSmokeReportPath)
+	report, err := prepareReport(opts)
 	if err != nil {
 		return Report{}, err
-	}
-
-	now := opts.Now
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
-	generatedAt := now().UTC()
-	report := newReport(opts, generatedAt, summarizeCapacity(opts.CapacitySampleReportPath, capacityReport), summarizeOpenBao(opts.OpenBaoSmokeReportPath, openbaoReport))
-	if !report.BackendArtifacts.LocalStackProbe.Passed {
-		report.addFailure("localstack-backend-artifacts", "capacity sample does not contain successful LocalStack PUT/HEAD/GET backend probes")
-	}
-	if !report.OpenBao.Passed {
-		report.addFailure("openbao-key-material", "OpenBao smoke report does not prove key material and crypto-unavailable outcomes")
 	}
 	if report.Status == StatusFailed {
 		return report, ErrDrillFailed
@@ -390,14 +367,97 @@ func Run(ctx context.Context, opts Options, clients Clients) (Report, error) {
 	runCtx, cancel := context.WithTimeout(ctx, opts.Duration)
 	defer cancel()
 	runStarted := time.Now()
+	fixtureStarted, err := writeDrillFixture(runCtx, opts, clients.FixtureWriter, &report)
+	if err != nil {
+		return report, ErrDrillFailed
+	}
+
+	if err := inspectRecoveryReadiness(runCtx, opts, clients.DR, fixtureStarted, &report); err != nil {
+		return report, ErrDrillFailed
+	}
+	if err := runRecoveryOperations(runCtx, opts, clients, runStarted, &report); err != nil {
+		return report, ErrDrillFailed
+	}
+	return report, nil
+}
+
+func runRecoveryOperations(ctx context.Context, opts Options, clients Clients, runStarted time.Time, report *Report) error {
+	dryPlan, command := planRecoveryCommand(ctx, opts, clients.DR, true)
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("plan recovery dry-run", command.Error)
+		return ErrDrillFailed
+	}
+	report.Recovery.DryRunPlanID = dryPlan.GetOperationPlanId()
+	report.Recovery.DryRunPlanHash = dryPlan.GetPlanHash()
+
+	metadataRestore, command := startOperationCommand(ctx, opts, clients.DR, dryPlan, "metadata-restore")
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("start metadata-restore", command.Error)
+		return ErrDrillFailed
+	}
+	report.Recovery.OperationIDs["metadata_restore"] = metadataRestore.GetOperationId()
+	_, command = waitOperationCommand(ctx, opts, clients.Operations, metadataRestore.GetOperationId(), "metadata-restore")
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("watch metadata-restore", command.Error)
+		return ErrDrillFailed
+	}
+
+	plan, command := planRecoveryCommand(ctx, opts, clients.DR, false)
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("plan recovery", command.Error)
+		return ErrDrillFailed
+	}
+	report.Recovery.PlanID = plan.GetOperationPlanId()
+	report.Recovery.PlanHash = plan.GetPlanHash()
+
+	copyVerify, command := startOperationCommand(ctx, opts, clients.DR, plan, "copy-verify")
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("start copy-verify", command.Error)
+		return ErrDrillFailed
+	}
+	report.Recovery.OperationIDs["copy_verify"] = copyVerify.GetOperationId()
+	copyVerify, command = waitOperationCommand(ctx, opts, clients.Operations, copyVerify.GetOperationId(), "copy-verify")
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("watch copy-verify", command.Error)
+		return ErrDrillFailed
+	}
+	report.BackendArtifacts.PublishedCheckpoint = checkpointEvidence(copyVerify.GetProgress().GetCounters())
+
+	drill, command := startOperationCommand(ctx, opts, clients.DR, plan, "dr-drill")
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("start dr-drill", command.Error)
+		return ErrDrillFailed
+	}
+	report.Recovery.OperationIDs["dr_drill"] = drill.GetOperationId()
+	drill, command = waitOperationCommand(ctx, opts, clients.Operations, drill.GetOperationId(), "dr-drill")
+	report.Commands = append(report.Commands, command)
+	if command.Status != StatusPassed {
+		report.addFailure("watch dr-drill", command.Error)
+		return ErrDrillFailed
+	}
+	report.Recovery.MeasuredLocalRecoveryMillis = durationMillis(time.Since(runStarted))
+	report.Recovery.RecoveryPointEvidence = cloneCounters(drill.GetProgress().GetCounters())
+	report.Recovery.MetadataImportProvedBy = "metadata-restore dry-run verifies the published checkpoint and dr-drill imports it into a fresh scratch metadata store before restoring backend bytes"
+	report.BackendArtifacts.PublishedCheckpoint = mergeCheckpointEvidence(report.BackendArtifacts.PublishedCheckpoint, checkpointEvidence(drill.GetProgress().GetCounters()))
+	return nil
+}
+
+func writeDrillFixture(ctx context.Context, opts Options, writer FixtureWriter, report *Report) (time.Time, error) {
 	fixture := FixtureDocument{
 		TenantID:      "local-dr-drill",
 		TransactionID: opts.DrillID,
 		DocumentName:  "issue-88/fixture.bin",
 	}
-	fixtureData := sampleBytes(opts.FixtureSizeBytes)
 	fixtureStarted := time.Now()
-	report.Fixture, err = clients.FixtureWriter.WriteFixtureDocument(runCtx, fixture, fixtureData, opts)
+	var err error
+	report.Fixture, err = writer.WriteFixtureDocument(ctx, fixture, sampleBytes(opts.FixtureSizeBytes), opts)
 	fixtureResult := commandResult{Status: StatusPassed}
 	if err != nil {
 		fixtureResult = commandError(err)
@@ -405,86 +465,60 @@ func Run(ctx context.Context, opts Options, clients Clients) (Report, error) {
 	report.Commands = append(report.Commands, commandEvidence(fixtureStarted, "fixture-write", fixtureCommand(opts, fixture), fixtureResult))
 	if err != nil {
 		report.addFailure("fixture-write", err.Error())
-		return report, ErrDrillFailed
+		return fixtureStarted, err
 	}
+	return fixtureStarted, nil
+}
 
-	readiness, command := waitForReadinessCommand(runCtx, opts, clients.DR, fixtureStarted)
+func inspectRecoveryReadiness(ctx context.Context, opts Options, client adminv1.DisasterRecoveryServiceClient, fixtureStarted time.Time, report *Report) error {
+	readiness, command := waitForReadinessCommand(ctx, opts, client, fixtureStarted)
 	report.Commands = append(report.Commands, command)
 	if command.Status != StatusPassed {
 		report.addFailure("inspect recovery-readiness", command.Error)
-		return report, ErrDrillFailed
+		return ErrDrillFailed
 	}
 	checkpointAt := readiness.GetLatestRestorableCheckpointAt()
 	if checkpointAt == nil {
 		report.addFailure("inspect recovery-readiness", "recovery readiness did not include latest restorable checkpoint timestamp")
-		return report, ErrDrillFailed
+		return ErrDrillFailed
 	}
 	report.Recovery.LatestRestorableCheckpointAt = checkpointAt.AsTime().UTC().Format(time.RFC3339)
+	return nil
+}
 
-	dryPlan, command := planRecoveryCommand(runCtx, opts, clients.DR, true)
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("plan recovery dry-run", command.Error)
-		return report, ErrDrillFailed
+func validateClients(clients Clients) error {
+	if clients.FixtureWriter == nil {
+		return errors.New("local DR drill requires fixture writer")
 	}
-	report.Recovery.DryRunPlanID = dryPlan.GetOperationPlanId()
-	report.Recovery.DryRunPlanHash = dryPlan.GetPlanHash()
+	if clients.DR == nil {
+		return errors.New("local DR drill requires disaster recovery client")
+	}
+	if clients.Operations == nil {
+		return errors.New("local DR drill requires operation client")
+	}
+	return nil
+}
 
-	metadataRestore, command := startOperationCommand(runCtx, opts, clients.DR, dryPlan, "metadata-restore")
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("start metadata-restore", command.Error)
-		return report, ErrDrillFailed
+func prepareReport(opts Options) (Report, error) {
+	capacityReport, err := loadCapacityReport(opts.CapacitySampleReportPath)
+	if err != nil {
+		return Report{}, err
 	}
-	report.Recovery.OperationIDs["metadata_restore"] = metadataRestore.GetOperationId()
-	_, command = waitOperationCommand(runCtx, opts, clients.Operations, metadataRestore.GetOperationId(), "metadata-restore")
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("watch metadata-restore", command.Error)
-		return report, ErrDrillFailed
+	openbaoReport, err := loadOpenBaoReport(opts.OpenBaoSmokeReportPath)
+	if err != nil {
+		return Report{}, err
 	}
-
-	plan, command := planRecoveryCommand(runCtx, opts, clients.DR, false)
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("plan recovery", command.Error)
-		return report, ErrDrillFailed
+	now := opts.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
 	}
-	report.Recovery.PlanID = plan.GetOperationPlanId()
-	report.Recovery.PlanHash = plan.GetPlanHash()
-
-	copyVerify, command := startOperationCommand(runCtx, opts, clients.DR, plan, "copy-verify")
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("start copy-verify", command.Error)
-		return report, ErrDrillFailed
+	report := newReport(opts, now().UTC(), summarizeCapacity(opts.CapacitySampleReportPath, capacityReport), summarizeOpenBao(opts.OpenBaoSmokeReportPath, openbaoReport))
+	if !report.BackendArtifacts.LocalStackProbe.Passed {
+		report.addFailure("localstack-backend-artifacts", "capacity sample does not contain successful LocalStack PUT/HEAD/GET backend probes")
 	}
-	report.Recovery.OperationIDs["copy_verify"] = copyVerify.GetOperationId()
-	copyVerify, command = waitOperationCommand(runCtx, opts, clients.Operations, copyVerify.GetOperationId(), "copy-verify")
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("watch copy-verify", command.Error)
-		return report, ErrDrillFailed
+	if !report.OpenBao.Passed {
+		report.addFailure("openbao-key-material", "OpenBao smoke report does not prove key material and crypto-unavailable outcomes")
 	}
-	report.BackendArtifacts.PublishedCheckpoint = checkpointEvidence(copyVerify.GetProgress().GetCounters())
-
-	drill, command := startOperationCommand(runCtx, opts, clients.DR, plan, "dr-drill")
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("start dr-drill", command.Error)
-		return report, ErrDrillFailed
-	}
-	report.Recovery.OperationIDs["dr_drill"] = drill.GetOperationId()
-	drill, command = waitOperationCommand(runCtx, opts, clients.Operations, drill.GetOperationId(), "dr-drill")
-	report.Commands = append(report.Commands, command)
-	if command.Status != StatusPassed {
-		report.addFailure("watch dr-drill", command.Error)
-		return report, ErrDrillFailed
-	}
-	report.Recovery.MeasuredLocalRecoveryMillis = durationMillis(time.Since(runStarted))
-	report.Recovery.RecoveryPointEvidence = cloneCounters(drill.GetProgress().GetCounters())
-	report.Recovery.MetadataImportProvedBy = "metadata-restore dry-run verifies the published checkpoint and dr-drill imports it into a fresh scratch metadata store before restoring backend bytes"
-	report.BackendArtifacts.PublishedCheckpoint = mergeCheckpointEvidence(report.BackendArtifacts.PublishedCheckpoint, checkpointEvidence(drill.GetProgress().GetCounters()))
 	return report, nil
 }
 

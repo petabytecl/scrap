@@ -943,77 +943,96 @@ func buildMemberAction(args []string) (action, error) {
 	}
 	switch args[0] {
 	case "cordon":
-		fs := newFlagSet("member cordon")
-		memberID := fs.String("member-id", "", "storage member id")
-		reason := fs.String("reason", "", "operator reason")
-		operationID := fs.String("operation-id", "", "operation id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *memberID == "" {
-			return nil, usageError("member cordon requires --member-id")
-		}
-		if *reason == "" {
-			return nil, usageError("member cordon requires --reason")
-		}
-		if *operationID == "" {
-			return nil, usageError("member cordon requires --operation-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.member.CordonMember(ctx, &adminv1.CordonMemberRequest{
-				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
-				Reason:        *reason,
-				OperationId:   *operationID,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetStorageMember())
-		}, nil
+		return buildCordonMemberAction(args[1:])
 	case "uncordon":
-		fs := newFlagSet("member uncordon")
-		memberID := fs.String("member-id", "", "storage member id")
-		operationID := fs.String("operation-id", "", "operation id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *memberID == "" {
-			return nil, usageError("member uncordon requires --member-id")
-		}
-		if *operationID == "" {
-			return nil, usageError("member uncordon requires --operation-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.member.UncordonMember(ctx, &adminv1.UncordonMemberRequest{
-				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
-				OperationId:   *operationID,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetStorageMember())
-		}, nil
+		return buildUncordonMemberAction(args[1:])
 	case "eviction-safety":
-		fs := newFlagSet("member eviction-safety")
-		memberID := fs.String("member-id", "", "storage member id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *memberID == "" {
-			return nil, usageError("member eviction-safety requires --member-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.member.GetEvictionSafety(ctx, &adminv1.GetEvictionSafetyRequest{
-				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetSafety())
-		}, nil
+		return buildEvictionSafetyAction(args[1:])
 	default:
 		return nil, usageError(fmt.Sprintf("unknown member command %q", args[0]))
 	}
+}
+
+func buildCordonMemberAction(args []string) (action, error) {
+	fs := newFlagSet("member cordon")
+	memberID := fs.String("member-id", "", "storage member id")
+	reason := fs.String("reason", "", "operator reason")
+	operationID := fs.String("operation-id", "", "operation id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if err := requireFlag("member cordon", "member-id", *memberID); err != nil {
+		return nil, err
+	}
+	if err := requireFlag("member cordon", "reason", *reason); err != nil {
+		return nil, err
+	}
+	if err := requireFlag("member cordon", "operation-id", *operationID); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.member.CordonMember(ctx, &adminv1.CordonMemberRequest{
+			StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
+			Reason:        *reason,
+			OperationId:   *operationID,
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetStorageMember())
+	}, nil
+}
+
+func buildUncordonMemberAction(args []string) (action, error) {
+	fs := newFlagSet("member uncordon")
+	memberID := fs.String("member-id", "", "storage member id")
+	operationID := fs.String("operation-id", "", "operation id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if err := requireFlag("member uncordon", "member-id", *memberID); err != nil {
+		return nil, err
+	}
+	if err := requireFlag("member uncordon", "operation-id", *operationID); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.member.UncordonMember(ctx, &adminv1.UncordonMemberRequest{
+			StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
+			OperationId:   *operationID,
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetStorageMember())
+	}, nil
+}
+
+func buildEvictionSafetyAction(args []string) (action, error) {
+	fs := newFlagSet("member eviction-safety")
+	memberID := fs.String("member-id", "", "storage member id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if err := requireFlag("member eviction-safety", "member-id", *memberID); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.member.GetEvictionSafety(ctx, &adminv1.GetEvictionSafetyRequest{
+			StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetSafety())
+	}, nil
+}
+
+func requireFlag(command, name, value string) error {
+	if value == "" {
+		return usageError(fmt.Sprintf("%s requires --%s", command, name))
+	}
+	return nil
 }
 
 type targetPlanOptions struct {
@@ -1168,56 +1187,71 @@ func (f targetFlag) String() string {
 func parseTarget(kind, spec string) (*adminv1.Target, error) {
 	switch strings.ReplaceAll(strings.ToLower(kind), "-", "_") {
 	case "document", "doc":
-		parts := strings.SplitN(spec, "/", 3)
-		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-			return nil, errors.New("document target must be document:tenant_id/transaction_id/document_name")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_Document{Document: &adminv1.DocumentTarget{
-			TenantId:      parts[0],
-			TransactionId: parts[1],
-			DocumentName:  parts[2],
-		}}}, nil
+		return parseDocumentTarget(spec)
 	case "transaction", "txn":
-		parts := strings.SplitN(spec, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, errors.New("transaction target must be transaction:tenant_id/transaction_id")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_Transaction{Transaction: &adminv1.TransactionTarget{
-			TenantId:      parts[0],
-			TransactionId: parts[1],
-		}}}, nil
+		return parseTransactionTarget(spec)
 	case "block":
-		parts := strings.SplitN(spec, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, errors.New("block target must be block:shard_id/block_id")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_Block{Block: &adminv1.BlockTarget{
-			ShardId: parts[0],
-			BlockId: parts[1],
-		}}}, nil
+		return parseBlockTarget(spec)
 	case "shard":
-		if spec == "" {
-			return nil, errors.New("shard target must be shard:shard_id")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_Shard{Shard: &adminv1.ShardTarget{ShardId: spec}}}, nil
+		return parseSingleValueTarget(spec, "shard target must be shard:shard_id", func(value string) *adminv1.Target {
+			return &adminv1.Target{Target: &adminv1.Target_Shard{Shard: &adminv1.ShardTarget{ShardId: value}}}
+		})
 	case "storage_member", "member":
-		if spec == "" {
-			return nil, errors.New("member target must be member:storage_member_id")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: spec}}}, nil
+		return parseSingleValueTarget(spec, "member target must be member:storage_member_id", func(value string) *adminv1.Target {
+			return &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: value}}}
+		})
 	case "snapshot":
-		if spec == "" {
-			return nil, errors.New("snapshot target must be snapshot:snapshot_id")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: &adminv1.SnapshotTarget{SnapshotId: spec}}}, nil
+		return parseSingleValueTarget(spec, "snapshot target must be snapshot:snapshot_id", func(value string) *adminv1.Target {
+			return &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: &adminv1.SnapshotTarget{SnapshotId: value}}}
+		})
 	case "capacity_profile", "capacity-profile":
-		if spec == "" {
-			return nil, errors.New("capacity profile target must be capacity-profile:capacity_profile_id")
-		}
-		return &adminv1.Target{Target: &adminv1.Target_CapacityProfile{CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: spec}}}, nil
+		return parseSingleValueTarget(spec, "capacity profile target must be capacity-profile:capacity_profile_id", func(value string) *adminv1.Target {
+			return &adminv1.Target{Target: &adminv1.Target_CapacityProfile{CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: value}}}
+		})
 	default:
 		return nil, fmt.Errorf("unknown target kind %q", kind)
 	}
+}
+
+func parseDocumentTarget(spec string) (*adminv1.Target, error) {
+	parts := strings.SplitN(spec, "/", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return nil, errors.New("document target must be document:tenant_id/transaction_id/document_name")
+	}
+	return &adminv1.Target{Target: &adminv1.Target_Document{Document: &adminv1.DocumentTarget{
+		TenantId:      parts[0],
+		TransactionId: parts[1],
+		DocumentName:  parts[2],
+	}}}, nil
+}
+
+func parseTransactionTarget(spec string) (*adminv1.Target, error) {
+	parts := strings.SplitN(spec, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, errors.New("transaction target must be transaction:tenant_id/transaction_id")
+	}
+	return &adminv1.Target{Target: &adminv1.Target_Transaction{Transaction: &adminv1.TransactionTarget{
+		TenantId:      parts[0],
+		TransactionId: parts[1],
+	}}}, nil
+}
+
+func parseBlockTarget(spec string) (*adminv1.Target, error) {
+	parts := strings.SplitN(spec, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, errors.New("block target must be block:shard_id/block_id")
+	}
+	return &adminv1.Target{Target: &adminv1.Target_Block{Block: &adminv1.BlockTarget{
+		ShardId: parts[0],
+		BlockId: parts[1],
+	}}}, nil
+}
+
+func parseSingleValueTarget(spec, message string, build func(string) *adminv1.Target) (*adminv1.Target, error) {
+	if spec == "" {
+		return nil, errors.New(message)
+	}
+	return build(spec), nil
 }
 
 type metadataFlag map[string]string

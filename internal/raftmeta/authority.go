@@ -406,10 +406,106 @@ func (a *Authority) installLatestSnapshot() error {
 }
 
 func (a *Authority) buildSnapshotLocked(lastIndex uint64) (*metastorev1.ShardSnapshot, error) {
-	documents, err := a.store.ListDocuments(metastore.DocumentFilter{})
+	source, err := a.loadSnapshotSource()
 	if err != nil {
 		return nil, err
 	}
+	return a.buildSnapshotFromSource(lastIndex, source), nil
+}
+
+type snapshotSource struct {
+	documents       []metastore.Document
+	transactions    []metastore.Transaction
+	uploadIntents   []metastore.UploadIntent
+	repairStates    []metastore.RepairState
+	commandReceipts []metastore.CommandReceipt
+}
+
+func (a *Authority) loadSnapshotSource() (snapshotSource, error) {
+	documents, err := a.store.ListDocuments(metastore.DocumentFilter{})
+	if err != nil {
+		return snapshotSource{}, err
+	}
+	sortDocuments(documents)
+	transactions, err := a.store.ListTransactions()
+	if err != nil {
+		return snapshotSource{}, err
+	}
+	sortTransactions(transactions)
+	uploadIntents, err := a.store.ListUploadIntents()
+	if err != nil {
+		return snapshotSource{}, err
+	}
+	sort.Slice(uploadIntents, func(i, j int) bool {
+		return uploadIntents[i].BlockID < uploadIntents[j].BlockID
+	})
+	repairStates, err := a.store.ListRepairStates()
+	if err != nil {
+		return snapshotSource{}, err
+	}
+	sortRepairStates(repairStates)
+	commandReceipts, err := a.store.ListCommandReceipts()
+	if err != nil {
+		return snapshotSource{}, err
+	}
+	sort.Slice(commandReceipts, func(i, j int) bool {
+		return commandReceipts[i].CommandID < commandReceipts[j].CommandID
+	})
+	return snapshotSource{
+		documents:       documents,
+		transactions:    transactions,
+		uploadIntents:   uploadIntents,
+		repairStates:    repairStates,
+		commandReceipts: commandReceipts,
+	}, nil
+}
+
+func (a *Authority) buildSnapshotFromSource(lastIndex uint64, source snapshotSource) *metastorev1.ShardSnapshot {
+	snapshot := &metastorev1.ShardSnapshot{
+		SchemaVersion:   metastore.CurrentSchemaVersion,
+		ShardId:         a.shardID,
+		LastIndex:       lastIndex,
+		Documents:       make([]*metastorev1.DocumentRecord, 0, len(source.documents)),
+		Transactions:    make([]*metastorev1.TransactionRecord, 0, len(source.transactions)),
+		UploadIntents:   make([]*metastorev1.UploadIntentRecord, 0, len(source.uploadIntents)),
+		RepairStates:    make([]*metastorev1.RepairStateRecord, 0, len(source.repairStates)),
+		CommandReceipts: make([]*metastorev1.CommandReceiptRecord, 0, len(source.commandReceipts)),
+		Membership:      membershipToProto(a.members),
+	}
+	for _, document := range source.documents {
+		record := metastore.DocumentRecord(document)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.Documents = append(snapshot.Documents, record)
+	}
+	for _, transaction := range source.transactions {
+		record := metastore.TransactionRecord(transaction)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.Transactions = append(snapshot.Transactions, record)
+	}
+	for _, intent := range source.uploadIntents {
+		record := metastore.UploadIntentRecord(intent)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.UploadIntents = append(snapshot.UploadIntents, record)
+	}
+	for _, state := range source.repairStates {
+		record := metastore.RepairStateRecord(state)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.RepairStates = append(snapshot.RepairStates, record)
+	}
+	for _, receipt := range source.commandReceipts {
+		record := metastore.CommandReceiptRecord(receipt)
+		record.ShardId = a.shardID
+		record.CommittedIndex = lastIndex
+		snapshot.CommandReceipts = append(snapshot.CommandReceipts, record)
+	}
+	return snapshot
+}
+
+func sortDocuments(documents []metastore.Document) {
 	sort.Slice(documents, func(i, j int) bool {
 		left := documents[i].Identity
 		right := documents[j].Identity
@@ -421,27 +517,18 @@ func (a *Authority) buildSnapshotLocked(lastIndex uint64) (*metastorev1.ShardSna
 		}
 		return left.DocumentName < right.DocumentName
 	})
-	transactions, err := a.store.ListTransactions()
-	if err != nil {
-		return nil, err
-	}
+}
+
+func sortTransactions(transactions []metastore.Transaction) {
 	sort.Slice(transactions, func(i, j int) bool {
 		if transactions[i].Identity.TenantID != transactions[j].Identity.TenantID {
 			return transactions[i].Identity.TenantID < transactions[j].Identity.TenantID
 		}
 		return transactions[i].Identity.TransactionID < transactions[j].Identity.TransactionID
 	})
-	uploadIntents, err := a.store.ListUploadIntents()
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(uploadIntents, func(i, j int) bool {
-		return uploadIntents[i].BlockID < uploadIntents[j].BlockID
-	})
-	repairStates, err := a.store.ListRepairStates()
-	if err != nil {
-		return nil, err
-	}
+}
+
+func sortRepairStates(repairStates []metastore.RepairState) {
 	sort.Slice(repairStates, func(i, j int) bool {
 		left := repairStates[i]
 		right := repairStates[j]
@@ -456,56 +543,6 @@ func (a *Authority) buildSnapshotLocked(lastIndex uint64) (*metastorev1.ShardSna
 		}
 		return left.IncidentID < right.IncidentID
 	})
-	commandReceipts, err := a.store.ListCommandReceipts()
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(commandReceipts, func(i, j int) bool {
-		return commandReceipts[i].CommandID < commandReceipts[j].CommandID
-	})
-
-	snapshot := &metastorev1.ShardSnapshot{
-		SchemaVersion:   metastore.CurrentSchemaVersion,
-		ShardId:         a.shardID,
-		LastIndex:       lastIndex,
-		Documents:       make([]*metastorev1.DocumentRecord, 0, len(documents)),
-		Transactions:    make([]*metastorev1.TransactionRecord, 0, len(transactions)),
-		UploadIntents:   make([]*metastorev1.UploadIntentRecord, 0, len(uploadIntents)),
-		RepairStates:    make([]*metastorev1.RepairStateRecord, 0, len(repairStates)),
-		CommandReceipts: make([]*metastorev1.CommandReceiptRecord, 0, len(commandReceipts)),
-		Membership:      membershipToProto(a.members),
-	}
-	for _, document := range documents {
-		record := metastore.DocumentRecord(document)
-		record.ShardId = a.shardID
-		record.CommittedIndex = lastIndex
-		snapshot.Documents = append(snapshot.Documents, record)
-	}
-	for _, transaction := range transactions {
-		record := metastore.TransactionRecord(transaction)
-		record.ShardId = a.shardID
-		record.CommittedIndex = lastIndex
-		snapshot.Transactions = append(snapshot.Transactions, record)
-	}
-	for _, intent := range uploadIntents {
-		record := metastore.UploadIntentRecord(intent)
-		record.ShardId = a.shardID
-		record.CommittedIndex = lastIndex
-		snapshot.UploadIntents = append(snapshot.UploadIntents, record)
-	}
-	for _, state := range repairStates {
-		record := metastore.RepairStateRecord(state)
-		record.ShardId = a.shardID
-		record.CommittedIndex = lastIndex
-		snapshot.RepairStates = append(snapshot.RepairStates, record)
-	}
-	for _, receipt := range commandReceipts {
-		record := metastore.CommandReceiptRecord(receipt)
-		record.ShardId = a.shardID
-		record.CommittedIndex = lastIndex
-		snapshot.CommandReceipts = append(snapshot.CommandReceipts, record)
-	}
-	return snapshot, nil
 }
 
 func (a *Authority) ensureNoConflictingDocument(document metastore.Document) error {

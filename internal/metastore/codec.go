@@ -260,6 +260,25 @@ func validateDocumentRecord(record *metastorev1.DocumentRecord) error {
 	if err := validateSchemaVersion("document", record.GetSchemaVersion()); err != nil {
 		return err
 	}
+	if err := validateDocumentRequiredFields(record); err != nil {
+		return err
+	}
+	if err := validateDocumentEnumFields(record); err != nil {
+		return err
+	}
+	if err := validateDocumentTimestamps(record); err != nil {
+		return err
+	}
+	if err := validateLocation(record.GetLocation()); err != nil {
+		return err
+	}
+	if err := validateEnvelopeRef(record.GetEnvelopeRef()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDocumentRequiredFields(record *metastorev1.DocumentRecord) error {
 	for _, field := range []struct {
 		name  string
 		value string
@@ -286,30 +305,30 @@ func validateDocumentRecord(record *metastorev1.DocumentRecord) error {
 			return invalidRecord("document", "%s must be %d bytes", field.name, field.size)
 		}
 	}
-	if record.GetDocumentClass() == 0 {
-		return invalidRecord("document", "document_class is required")
+	return nil
+}
+
+func validateDocumentEnumFields(record *metastorev1.DocumentRecord) error {
+	for _, field := range []struct {
+		name  string
+		value uint32
+	}{
+		{name: "document_class", value: record.GetDocumentClass()},
+		{name: "priority_class", value: record.GetPriorityClass()},
+		{name: "availability", value: record.GetAvailability()},
+		{name: "lifecycle_state", value: record.GetLifecycleState()},
+	} {
+		if field.value == 0 {
+			return invalidRecord("document", "%s is required", field.name)
+		}
+		if err := validateUint32EnumUint16("document", field.name, field.value); err != nil {
+			return err
+		}
 	}
-	if err := validateUint32EnumUint16("document", "document_class", record.GetDocumentClass()); err != nil {
-		return err
-	}
-	if record.GetPriorityClass() == 0 {
-		return invalidRecord("document", "priority_class is required")
-	}
-	if err := validateUint32EnumUint16("document", "priority_class", record.GetPriorityClass()); err != nil {
-		return err
-	}
-	if record.GetAvailability() == 0 {
-		return invalidRecord("document", "availability is required")
-	}
-	if err := validateUint32EnumUint16("document", "availability", record.GetAvailability()); err != nil {
-		return err
-	}
-	if record.GetLifecycleState() == 0 {
-		return invalidRecord("document", "lifecycle_state is required")
-	}
-	if err := validateUint32EnumUint16("document", "lifecycle_state", record.GetLifecycleState()); err != nil {
-		return err
-	}
+	return validateDocumentStateEnums(record)
+}
+
+func validateDocumentStateEnums(record *metastorev1.DocumentRecord) error {
 	if record.GetRestoreState() == metastorev1.RestoreState_RESTORE_STATE_UNSPECIFIED {
 		return invalidRecord("document", "restore_state is required")
 	}
@@ -319,22 +338,14 @@ func validateDocumentRecord(record *metastorev1.DocumentRecord) error {
 	if record.GetUploadState() == metastorev1.UploadState_UPLOAD_STATE_UNSPECIFIED {
 		return invalidRecord("document", "upload_state is required")
 	}
-	if err := validateInt32EnumUint16("document", "upload_state", int32(record.GetUploadState())); err != nil {
-		return err
-	}
+	return validateInt32EnumUint16("document", "upload_state", int32(record.GetUploadState()))
+}
+
+func validateDocumentTimestamps(record *metastorev1.DocumentRecord) error {
 	if err := validateTimestamp("document", "created_at", record.GetCreatedAt()); err != nil {
 		return err
 	}
-	if err := validateTimestamp("document", "finalized_at", record.GetFinalizedAt()); err != nil {
-		return err
-	}
-	if err := validateLocation(record.GetLocation()); err != nil {
-		return err
-	}
-	if err := validateEnvelopeRef(record.GetEnvelopeRef()); err != nil {
-		return err
-	}
-	return nil
+	return validateTimestamp("document", "finalized_at", record.GetFinalizedAt())
 }
 
 func validateLocation(location *metastorev1.Location) error {
