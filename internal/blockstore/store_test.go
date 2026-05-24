@@ -57,6 +57,17 @@ func TestCheckOpenReflectsClosedBlockFile(t *testing.T) {
 	testutil.RequireErrorIsf(t, store.CheckOpen(context.Background()), ErrClosed, "closed blockstore health")
 }
 
+func TestCheckOpenRejectsNilStoreAndCanceledContext(t *testing.T) {
+	var nilStore *Store
+	testutil.RequireErrorIsf(t, nilStore.CheckOpen(context.Background()), ErrClosed, "nil blockstore health")
+
+	store := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	testutil.RequireErrorIsf(t, store.CheckOpen(ctx), context.Canceled, "canceled blockstore health")
+}
+
 func TestReadRangeReadsSubset(t *testing.T) {
 	store := openTestStore(t)
 	data := []byte("0123456789")

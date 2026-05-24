@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/blockstore"
@@ -60,6 +61,15 @@ func TestCheckReachableReflectsClosedStore(t *testing.T) {
 	testutil.RequireNoErrorf(t, store.CheckReachable(), "check reachable metastore")
 	testutil.RequireNoErrorf(t, store.Close(), "close metastore")
 	testutil.RequireErrorIsf(t, store.CheckReachable(), ErrClosed, "closed metastore health")
+}
+
+func TestCheckReachableHandlesNilStoreAndHealthKey(t *testing.T) {
+	var nilStore *Store
+	testutil.RequireErrorIsf(t, nilStore.CheckReachable(), ErrClosed, "nil metastore health")
+
+	store := openTestStore(t)
+	testutil.RequireNoErrorf(t, store.db.Set([]byte("__scrap_healthcheck__"), []byte("ok"), pebble.Sync), "write health key")
+	testutil.RequireNoErrorf(t, store.CheckReachable(), "check reachable metastore with health key")
 }
 
 func TestPutDocumentIsIdempotentAndCountsOnce(t *testing.T) {

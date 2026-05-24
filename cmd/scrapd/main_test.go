@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/petabytecl/scrap/internal/config"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
@@ -36,4 +37,17 @@ func TestMetricsEndpointServesMetricsPath(t *testing.T) {
 
 	testutil.RequireNoErrorf(t, endpoint.Close(), "close metrics endpoint")
 	testutil.RequireNoErrorf(t, <-errCh, "metrics endpoint stopped")
+}
+
+func TestBuildLocalApplicationsRegistersHealthApplication(t *testing.T) {
+	cfg := config.Default()
+	cfg.LocalDataDir = t.TempDir()
+
+	apps, localApp, operationStore, err := buildLocalApplications(cfg)
+	testutil.RequireNoErrorf(t, err, "build local applications")
+	defer func() { testutil.RequireNoErrorf(t, operationStore.Close(), "close operation store") }()
+	defer func() { testutil.RequireNoErrorf(t, localApp.Close(), "close local application") }()
+
+	testutil.RequireNotNilf(t, apps.Health, "health application")
+	testutil.RequireTruef(t, apps.Health == localApp, "health application is not local application")
 }
