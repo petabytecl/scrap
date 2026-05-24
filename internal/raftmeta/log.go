@@ -117,7 +117,7 @@ func (l *Log) AppendBatch(commands []*metastorev1.ShardCommand) ([]Entry, error)
 		return nil, err
 	}
 	if err := l.writeFrames(frames); err != nil {
-		return nil, l.recordFailureLocked(err)
+		return nil, l.recordFailureLocked("write", err)
 	}
 	start := time.Now()
 	err = l.syncLogFile()
@@ -128,12 +128,12 @@ func (l *Log) AppendBatch(commands []*metastorev1.ShardCommand) ([]Entry, error)
 	observe.RecordMetadataCommandSyncLatency(outcome, time.Since(start))
 	if err != nil {
 		observe.RecordBatchFailure(observe.BatchComponentRaftMeta, observe.BatchStageSync)
-		return nil, l.recordFailureLocked(err)
+		return nil, l.recordFailureLocked("sync", err)
 	}
 	observe.RecordMetadataCommandBatchSize(len(entries))
 	nextIndex, err := addLogIndex(l.nextIndex, len(entries))
 	if err != nil {
-		return nil, l.recordFailureLocked(err)
+		return nil, l.recordFailureLocked("index advance", err)
 	}
 	l.nextIndex = nextIndex
 	return entries, nil
@@ -197,9 +197,9 @@ func (l *Log) writeFrames(frames [][]byte) error {
 	return nil
 }
 
-func (l *Log) recordFailureLocked(err error) error {
+func (l *Log) recordFailureLocked(stage string, err error) error {
 	if l.failureErr == nil {
-		l.failureErr = fmt.Errorf("raftmeta: command log sync failed: %w", err)
+		l.failureErr = fmt.Errorf("raftmeta: command log %s failed: %w", stage, err)
 	}
 	return l.failureErr
 }

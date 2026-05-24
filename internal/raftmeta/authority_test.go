@@ -250,6 +250,38 @@ func TestAuthorityDoesNotExposeMetadataBeforeCommandSync(t *testing.T) {
 	requireScrapedMetric(t, "scrap_raft_queue_depth 0")
 }
 
+func TestAuthorityAdmittedProposalWaitsForDurableResultAfterContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	authority.metadataBatchWait = 0
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	var syncCalls atomic.Int32
+	authority.log.syncLogFile = func() error {
+		if syncCalls.Add(1) == 1 {
+			close(syncStarted)
+			<-releaseSync
+		}
+		return authority.log.file.Sync()
+	}
+	document := authorityTestDocument("cancel-after-admit.xml", []byte{1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.CommitDocument(ctx, document, "cmd-cancel-after-admit", time.Unix(100, 0).UTC())
+	}()
+	<-syncStarted
+	cancel()
+	close(releaseSync)
+	testutil.RequireNoErrorf(t, <-done, "commit after admitted context cancellation")
+	_, err := metadata.HeadDocument(document.Identity)
+	testutil.RequireNoErrorf(t, err, "head after admitted cancellation")
+}
+
 func TestAuthoritySyncErrorFailsBatchAndSubsequentCommands(t *testing.T) {
 	dir := t.TempDir()
 	metadata := openTestMetadata(t, dir)
@@ -291,6 +323,34 @@ func TestAuthoritySyncErrorFailsBatchAndSubsequentCommands(t *testing.T) {
 	err = authority.CommitDocument(context.Background(), recovered, "cmd-after-failure", time.Unix(200, 0).UTC())
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("commit after sync failure error = %v, want %v", err, syncErr)
+	}
+}
+
+func TestAuthorityRejectsProposalAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	testutil.RequireNoErrorf(t, authority.Close(), "close authority")
+	defer func() { testutil.RequireNoErrorf(t, metadata.Close(), "close metadata") }()
+	document := authorityTestDocument("after-close.xml", []byte{1})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- authority.CommitDocument(context.Background(), document, "cmd-after-close", time.Unix(100, 0).UTC())
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "authority is closed") {
+			t.Fatalf("commit after close error = %v, want authority closed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("commit after close did not return")
+	}
+	select {
+	case proposal := <-authority.proposals:
+		t.Fatalf("proposal queued after close: %#v", proposal)
+	default:
 	}
 }
 

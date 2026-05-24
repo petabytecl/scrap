@@ -46,10 +46,14 @@ func TestBuildReportSerializesRequiredEvidence(t *testing.T) {
 		`"p50_micros":2000`,
 		`"p95_micros":3000`,
 		`"p99_micros":3000`,
+		`"name":"metadata_command_sync_latency"`,
 	} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("encoded report missing %s: %s", want, raw)
 		}
+	}
+	if strings.Contains(raw, `"name":"metadata_commit_latency"`) {
+		t.Fatalf("encoded report uses stale metadata signal name: %s", raw)
 	}
 	if got := report.Results.Throughput.WritesPerSecond; got < 299.9 || got > 300.1 {
 		t.Fatalf("writes per second = %.4f, want near 300", got)

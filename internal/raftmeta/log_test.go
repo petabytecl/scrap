@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,9 +105,32 @@ func TestLogAppendBatchSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("append batch error = %v, want %v", err, syncErr)
 	}
+	if !strings.Contains(err.Error(), "command log sync failed") {
+		t.Fatalf("append batch error = %q, want sync failure stage", err)
+	}
 	_, err = log.Append(sampleCommand("cmd-3", "invoice-3.xml"))
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("append after sync failure error = %v, want %v", err, syncErr)
+	}
+}
+
+func TestLogAppendBatchIndexAdvanceFailureUsesDistinctStage(t *testing.T) {
+	log, err := OpenLog(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open log")
+	defer func() { testutil.RequireNoErrorf(t, log.Close(), "close log") }()
+	log.mu.Lock()
+	log.nextIndex = ^uint64(0)
+	log.mu.Unlock()
+
+	_, err = log.AppendBatch([]*metastorev1.ShardCommand{
+		sampleCommand("cmd-1", "invoice-1.xml"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "command log index advance failed") {
+		t.Fatalf("append batch error = %v, want index advance failure stage", err)
+	}
+	_, err = log.Append(sampleCommand("cmd-2", "invoice-2.xml"))
+	if err == nil || !strings.Contains(err.Error(), "command log index advance failed") {
+		t.Fatalf("append after index failure error = %v, want retained index advance failure", err)
 	}
 }
 

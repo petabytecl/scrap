@@ -30,6 +30,9 @@ type Authority struct {
 	appliedIndex  uint64
 
 	proposals         chan *authorityProposal
+	proposalsMu       sync.Mutex
+	proposalsClosed   bool
+	proposalSenders   sync.WaitGroup
 	stopProposals     chan struct{}
 	proposalsDone     chan struct{}
 	closeOnce         sync.Once
@@ -121,8 +124,13 @@ func (a *Authority) Close() error {
 		return nil
 	}
 	a.closeOnce.Do(func() {
+		a.proposalsMu.Lock()
+		a.proposalsClosed = true
 		close(a.stopProposals)
+		a.proposalsMu.Unlock()
+		a.proposalSenders.Wait()
 		<-a.proposalsDone
+		a.failPendingProposals(errors.New("raftmeta: authority is closed"))
 	})
 	return a.log.Close()
 }
@@ -641,30 +649,43 @@ func (a *Authority) ensureNoConflictingDocument(document metastore.Document) err
 }
 
 func (a *Authority) submitProposal(ctx context.Context, prepare func() (preparedAuthorityCommand, error)) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	proposal := &authorityProposal{
 		ctx:     ctx,
 		prepare: prepare,
 		done:    make(chan authorityProposalResult, 1),
 	}
+
+	a.proposalsMu.Lock()
+	if a.proposalsClosed {
+		a.proposalsMu.Unlock()
+		return nil, errors.New("raftmeta: authority is closed")
+	}
+	a.proposalSenders.Add(1)
+	a.proposalsMu.Unlock()
+
+	var enqueueErr error
+	sent := false
+	select {
+	case <-ctx.Done():
+		enqueueErr = ctx.Err()
+	case <-a.stopProposals:
+		enqueueErr = errors.New("raftmeta: authority is closed")
+	case a.proposals <- proposal:
+		sent = true
+	}
+	a.proposalSenders.Done()
+	if !sent {
+		return nil, enqueueErr
+	}
+
 	observe.IncrementRaftQueueDepth()
 	defer observe.DecrementRaftQueueDepth()
 
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-a.stopProposals:
-		return nil, errors.New("raftmeta: authority is closed")
-	case a.proposals <- proposal:
-	}
-
-	select {
-	case result := <-proposal.done:
-		return result.value, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-a.stopProposals:
-		return nil, errors.New("raftmeta: authority is closed")
-	}
+	result := <-proposal.done
+	return result.value, result.err
 }
 
 func (a *Authority) runProposalWorker() {
