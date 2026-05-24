@@ -239,6 +239,72 @@ func TestStoreRaftClusterBarrierKeepsDocumentInvisibleUntilQuorum(t *testing.T) 
 	assertReadDocument(t, store, "tenant-a", "tx-017", "cluster-quorum.xml", data)
 }
 
+func TestStoreRaftClusterBarrierRetriesCommitAfterNoLeader(t *testing.T) {
+	dir := t.TempDir()
+	barrier, err := NewRaftClusterCommitBarrier()
+	testutil.RequireNoErrorf(t, err, "new raft cluster barrier")
+	t.Cleanup(func() {
+		testutil.RequireNoErrorf(t, barrier.Close(), "close raft cluster barrier")
+	})
+
+	leader := barrier.LeaderID()
+	followers := clusterFollowers(leader)
+	for _, follower := range followers {
+		testutil.RequireNoErrorf(t, barrier.IsolateNode(follower), "isolate follower")
+	}
+	waitForRaftClusterNoLeader(t, barrier)
+
+	var afterOpenLog sync.Once
+	reachedBarrier := make(chan struct{})
+	store := openStoreAtWithOptions(t, dir, StoreOptions{
+		MetadataCommitBarrier: barrier,
+		Faults: StoreFaults{
+			AfterOpenLogSync: func(DocumentRecord) error {
+				afterOpenLog.Do(func() {
+					close(reachedBarrier)
+				})
+				return nil
+			},
+		},
+	})
+
+	data := []byte("visible after raft quorum returns")
+	writeResult := make(chan error, 1)
+	go func() {
+		_, err := store.WriteDocument(&WriteDocumentMetadata{
+			TenantID:       "tenant-a",
+			TransactionID:  "tx-017",
+			DocumentName:   "cluster-no-leader-retry.xml",
+			ExpectedLength: int64(len(data)),
+		}, chunkSource([][]byte{data}))
+		writeResult <- err
+	}()
+
+	select {
+	case <-reachedBarrier:
+	case err := <-writeResult:
+		t.Fatalf("write completed before reaching raft barrier: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("write did not reach raft barrier")
+	}
+
+	select {
+	case err := <-writeResult:
+		t.Fatalf("write completed without restored quorum: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	assertNotFound(t, store, "tenant-a", "tx-017", "cluster-no-leader-retry.xml")
+
+	testutil.RequireNoErrorf(t, barrier.HealNode(followers[0]), "heal one follower")
+	select {
+	case err := <-writeResult:
+		testutil.RequireNoErrorf(t, err, "write after quorum restored")
+	case <-time.After(raftCommitTimeout):
+		t.Fatal("write did not complete after quorum was restored")
+	}
+	assertReadDocument(t, store, "tenant-a", "tx-017", "cluster-no-leader-retry.xml", data)
+}
+
 func TestStoreRaftClusterBarrierCommitsWithOneDroppedFollowerLink(t *testing.T) {
 	dir := t.TempDir()
 	barrier, err := NewRaftClusterCommitBarrier()
@@ -332,6 +398,19 @@ func TestRaftClusterReadIndexRequiresCurrentQuorum(t *testing.T) {
 
 	testutil.RequireNoErrorf(t, barrier.HealNode(clusterFollowers(leader)[0]), "heal one follower")
 	testutil.RequireNoErrorf(t, barrier.ReadFresh(context.Background()), "read index after quorum restored")
+}
+
+func waitForRaftClusterNoLeader(t *testing.T, barrier *RaftClusterCommitBarrier) {
+	t.Helper()
+
+	deadline := time.Now().Add(raftCommitTimeout)
+	for time.Now().Before(deadline) {
+		if barrier.LeaderID() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("raft cluster still had a leader after quorum loss")
 }
 
 func clusterFollowers(leader uint64) []uint64 {
