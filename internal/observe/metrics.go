@@ -114,6 +114,14 @@ func SetRaftQueueDepth(depth int) {
 	defaultMetrics.raftQueueDepth.Set(float64(depth))
 }
 
+func IncrementRaftQueueDepth() {
+	defaultMetrics.raftQueueDepth.Inc()
+}
+
+func DecrementRaftQueueDepth() {
+	defaultMetrics.raftQueueDepth.Dec()
+}
+
 func normalizeWriteOutcome(outcome string) string {
 	if outcome == OutcomeSuccess {
 		return OutcomeSuccess

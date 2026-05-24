@@ -124,22 +124,27 @@ func (c Config) Validate() error {
 }
 
 func (c Config) validateListenAddresses() error {
-	addresses := map[string]string{
-		"public_listen_address":  c.PublicListenAddress,
-		"admin_listen_address":   c.AdminListenAddress,
-		"metrics_listen_address": c.MetricsListenAddress,
+	addresses := []listenAddress{
+		{field: "public_listen_address", value: c.PublicListenAddress},
+		{field: "admin_listen_address", value: c.AdminListenAddress},
+		{field: "metrics_listen_address", value: c.MetricsListenAddress},
 	}
 	seen := make(map[string]string, len(addresses))
-	for field, address := range addresses {
-		if err := validateListenAddress(field, address); err != nil {
+	for _, address := range addresses {
+		if err := validateListenAddress(address.field, address.value); err != nil {
 			return err
 		}
-		if otherField, exists := seen[address]; exists {
-			return fmt.Errorf("%s and %s listen addresses must be distinct", otherField, field)
+		if otherField, exists := seen[address.value]; exists {
+			return fmt.Errorf("%s and %s listen addresses must be distinct", otherField, address.field)
 		}
-		seen[address] = field
+		seen[address.value] = address.field
 	}
 	return nil
+}
+
+type listenAddress struct {
+	field string
+	value string
 }
 
 func (c Config) validateLocalStorage() error {

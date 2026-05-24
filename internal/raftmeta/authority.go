@@ -163,8 +163,8 @@ func (a *Authority) CommitDocument(ctx context.Context, document metastore.Docum
 			},
 		},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	if err := a.ensureNoConflictingDocument(document); err != nil {
 		return err
 	}
@@ -178,8 +178,8 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 	if err := a.requireWriteQuorum(ctx); err != nil {
 		return metastore.Transaction{}, err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	current, err := a.store.GetTransaction(transaction)
 	if err != nil {
 		return metastore.Transaction{}, err
@@ -231,8 +231,8 @@ func (a *Authority) RecordUploadIntent(ctx context.Context, intent metastore.Upl
 			},
 		},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	return a.appendAndApplyLocked(command)
 }
 
@@ -258,8 +258,8 @@ func (a *Authority) UpdateUploadIntentState(ctx context.Context, blockID string,
 	if lastError != "" {
 		command.GetUpdateUploadIntentState().LastError = &lastError
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	return a.appendAndApplyLocked(command)
 }
 
@@ -286,8 +286,8 @@ func (a *Authority) UpdateDocumentRestoreState(ctx context.Context, doc identity
 			},
 		},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	return a.appendAndApplyLocked(command)
 }
 
@@ -312,8 +312,8 @@ func (a *Authority) UpdateTransactionRestoreState(ctx context.Context, transacti
 			},
 		},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	return a.appendAndApplyLocked(command)
 }
 
@@ -340,8 +340,8 @@ func (a *Authority) RecordRepairState(ctx context.Context, state metastore.Repai
 			},
 		},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	return a.appendAndApplyLocked(command)
 }
 
@@ -367,8 +367,8 @@ func (a *Authority) TombstoneDocument(ctx context.Context, doc identity.Document
 			},
 		},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	unlock := a.lockPendingProposal()
+	defer unlock()
 	return a.appendAndApplyLocked(command)
 }
 
@@ -576,9 +576,6 @@ func (a *Authority) ensureNoConflictingDocument(document metastore.Document) err
 }
 
 func (a *Authority) appendAndApplyLocked(command *metastorev1.ShardCommand) error {
-	observe.SetRaftQueueDepth(1)
-	defer observe.SetRaftQueueDepth(0)
-
 	entry, err := a.log.Append(command)
 	if err != nil {
 		return err
@@ -587,6 +584,15 @@ func (a *Authority) appendAndApplyLocked(command *metastorev1.ShardCommand) erro
 		return err
 	}
 	return nil
+}
+
+func (a *Authority) lockPendingProposal() func() {
+	observe.IncrementRaftQueueDepth()
+	a.mu.Lock()
+	return func() {
+		observe.DecrementRaftQueueDepth()
+		a.mu.Unlock()
+	}
 }
 
 func (a *Authority) requireWriteQuorum(ctx context.Context) error {

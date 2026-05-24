@@ -37,7 +37,9 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 	RecordWriteLatency(OutcomeSuccess, 12*time.Millisecond)
 	RecordVerification(VerificationOutcomeMatch)
 	RecordBackendProbe(BackendOperationHead, OutcomeNotFound)
-	SetRaftQueueDepth(3)
+	IncrementRaftQueueDepth()
+	IncrementRaftQueueDepth()
+	IncrementRaftQueueDepth()
 
 	body := scrapeMetrics(t)
 	for _, want := range []string{
