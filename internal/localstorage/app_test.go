@@ -38,6 +38,15 @@ import (
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
+func TestHealthChecksReflectLocalStorageState(t *testing.T) {
+	app := openTestApplication(t)
+	testutil.RequireNoErrorf(t, app.CheckReadiness(context.Background()), "readiness health")
+	testutil.RequireNoErrorf(t, app.CheckLiveness(context.Background()), "liveness health")
+
+	testutil.RequireNoErrorf(t, app.blocks.Close(), "close blockstore")
+	testutil.RequireErrorIsf(t, app.CheckLiveness(context.Background()), blockstore.ErrClosed, "liveness after closed blockstore")
+}
+
 func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 	app := openTestApplication(t)
 	app.now = fixedClock(time.Unix(100, 0).UTC())

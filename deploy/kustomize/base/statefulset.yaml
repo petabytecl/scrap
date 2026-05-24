@@ -43,13 +43,14 @@ spec:
             - name: metrics
               containerPort: 18082
           readinessProbe:
-            tcpSocket:
-              port: admin-grpc
+            grpc:
+              port: 18081
+              service: scrap.admin.v1.AdminService
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: admin-grpc
+            grpc:
+              port: 18081
             initialDelaySeconds: 10
             periodSeconds: 10
           securityContext:

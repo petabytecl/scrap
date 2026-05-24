@@ -55,6 +55,13 @@ func TestPutHeadFindDocument(t *testing.T) {
 	}
 }
 
+func TestCheckReachableReflectsClosedStore(t *testing.T) {
+	store := openTestStore(t)
+	testutil.RequireNoErrorf(t, store.CheckReachable(), "check reachable metastore")
+	testutil.RequireNoErrorf(t, store.Close(), "close metastore")
+	testutil.RequireErrorIsf(t, store.CheckReachable(), ErrClosed, "closed metastore health")
+}
+
 func TestPutDocumentIsIdempotentAndCountsOnce(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)

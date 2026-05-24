@@ -22,6 +22,7 @@ var (
 	ErrInvalidRecord            = errors.New("metastore: invalid record")
 	ErrTransactionClosed        = errors.New("metastore: transaction is closed")
 	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
+	ErrClosed                   = errors.New("metastore: store is closed")
 )
 
 const (
@@ -48,6 +49,20 @@ func (s *Store) Close() error {
 	err := s.db.Close()
 	s.db = nil
 	return err
+}
+
+func (s *Store) CheckReachable() error {
+	if s == nil || s.db == nil {
+		return ErrClosed
+	}
+	_, closer, err := s.db.Get([]byte("__scrap_healthcheck__"))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return closer.Close()
 }
 
 func (s *Store) PutDocument(document Document) error {
