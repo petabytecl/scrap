@@ -107,6 +107,7 @@ func VerifyCurrentCheckpoint(ctx context.Context, store backend.Store, cellID st
 		verified++
 		verifiedRequiredObjects++
 		switch object.GetKind() {
+		case publishedv1.ObjectKind_OBJECT_KIND_UNSPECIFIED:
 		case publishedv1.ObjectKind_OBJECT_KIND_BLOCK:
 			verifiedBlockObjects++
 		case publishedv1.ObjectKind_OBJECT_KIND_INDEX:

@@ -23,6 +23,8 @@ var (
 
 var protoMarshal = proto.MarshalOptions{Deterministic: true}
 
+const maxKeyByte = 0xff
+
 type Store struct {
 	db *pebble.DB
 }
@@ -526,7 +528,7 @@ func auditEventKey(eventID string) []byte {
 func prefixUpperBound(prefix []byte) []byte {
 	out := append([]byte(nil), prefix...)
 	for i := len(out) - 1; i >= 0; i-- {
-		if out[i] != 0xff {
+		if out[i] != maxKeyByte {
 			out[i]++
 			return out[:i+1]
 		}

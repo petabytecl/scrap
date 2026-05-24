@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,14 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := run(logger); err != nil {
+		logger.Error("scrapd stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(logger *slog.Logger) error {
 	cfg := config.Default()
 	flag.StringVar(&cfg.PublicListenAddress, "public-listen", cfg.PublicListenAddress, "public gRPC listen address")
 	flag.StringVar(&cfg.AdminListenAddress, "admin-listen", cfg.AdminListenAddress, "admin gRPC listen address")
@@ -56,22 +65,23 @@ func main() {
 	flag.Parse()
 
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("invalid config: %v", err)
+		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	logPrintf := logPrintfFunc(logger)
 	apps := node.Applications{}
 	var uploadRunner *backendupload.Runner
 	if cfg.EnableLocalNonProductionStorage {
 		localApp, err := localstorage.Open(cfg.LocalDataDir)
 		if err != nil {
-			log.Fatalf("open local non-production storage: %v", err)
+			return fmt.Errorf("open local non-production storage: %w", err)
 		}
-		defer closeutil.Log("local storage application", log.Printf, localApp)
+		defer closeutil.Log("local storage application", logPrintf, localApp)
 		operationStore, err := operations.Open(cfg.LocalDataDir)
 		if err != nil {
-			log.Fatalf("open operation store: %v", err)
+			return fmt.Errorf("open operation store: %w", err)
 		}
-		defer closeutil.Log("operation store", log.Printf, operationStore)
+		defer closeutil.Log("operation store", logPrintf, operationStore)
 		localApp.SetOperationStore(operationStore)
 		localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
 		apps.Documents = localApp
@@ -81,59 +91,68 @@ func main() {
 		apps.Member = localApp
 		apps.DR = localApp
 		apps.Operations = operationStore
-		log.Printf("WARNING: local non-production storage enabled at %s; this does not satisfy the production write ACK contract", cfg.LocalDataDir)
+		logger.Warn("local non-production storage enabled; this does not satisfy the production write ACK contract", "path", cfg.LocalDataDir)
 		if cfg.EnableLocalFilesystemBackend {
 			backendStore, err := backendfs.Open(cfg.LocalBackendDataDir)
 			if err != nil {
-				log.Fatalf("open local filesystem backend: %v", err)
+				return fmt.Errorf("open local filesystem backend: %w", err)
 			}
 			localApp.SetBackendStore(backendStore)
 			uploadRunner = &backendupload.Runner{
 				RunOnceFunc: func(ctx context.Context) (backendupload.RunResult, error) {
 					result, err := localApp.RunBackendUploadOnce(ctx, backendStore)
 					if result.Sealed {
-						log.Printf("backend upload sealed block %s", result.SealedBlockID)
+						logger.Info("backend upload sealed block", "sealed_block_id", result.SealedBlockID)
 					}
 					if result.MetadataPublished && result.MetadataPublication != nil {
-						log.Printf("published metadata checkpoint %s", result.MetadataPublication.Manifest.GetManifestId())
+						logger.Info("published metadata checkpoint", "manifest_id", result.MetadataPublication.Manifest.GetManifestId())
 					}
 					return result.Upload, err
 				},
 				Interval: cfg.BackendUploadInterval,
-				Report:   logBackendUploadReport,
+				Report: func(result backendupload.RunResult, err error) {
+					logBackendUploadReport(logger, result, err)
+				},
 			}
-			log.Printf("WARNING: local filesystem backend enabled at %s; this is a non-production backend adapter", cfg.LocalBackendDataDir)
+			logger.Warn("local filesystem backend enabled; this is a non-production backend adapter", "path", cfg.LocalBackendDataDir)
 		}
 	}
 
 	server, err := node.Listen(cfg, apps)
 	if err != nil {
-		log.Fatalf("start listeners: %v", err)
+		return fmt.Errorf("start listeners: %w", err)
 	}
-	defer closeutil.Log("server", log.Printf, server)
+	defer closeutil.Log("server", logPrintf, server)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("public grpc listening on %s", server.PublicAddress())
-	log.Printf("admin grpc listening on %s", server.AdminAddress())
-	go reloadAuthorizationPolicy(ctx, server)
+	logger.Info("public grpc listening", "address", server.PublicAddress())
+	logger.Info("admin grpc listening", "address", server.AdminAddress())
+	go reloadAuthorizationPolicy(ctx, server, logger)
 	if cfg.EnableLocalNonProductionStorage {
-		go runOperationLoop(ctx, apps, cfg.OperationRunInterval)
+		go runOperationLoop(ctx, apps, cfg.OperationRunInterval, logger)
 	}
 	if uploadRunner != nil {
 		go func() {
 			if err := uploadRunner.Run(ctx); err != nil {
-				log.Printf("backend upload runner stopped: %v", err)
+				logger.Info("backend upload runner stopped", "error", err)
 			}
 		}()
 	}
 	if err := server.Serve(ctx); err != nil {
-		log.Fatalf("serve: %v", err)
+		return fmt.Errorf("serve: %w", err)
+	}
+	return nil
+}
+
+func logPrintfFunc(logger *slog.Logger) func(string, ...any) {
+	return func(format string, args ...any) {
+		logger.Info(fmt.Sprintf(format, args...))
 	}
 }
 
-func reloadAuthorizationPolicy(ctx context.Context, server *node.Server) {
+func reloadAuthorizationPolicy(ctx context.Context, server *node.Server, logger *slog.Logger) {
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGHUP)
 	defer signal.Stop(signalCh)
@@ -143,15 +162,15 @@ func reloadAuthorizationPolicy(ctx context.Context, server *node.Server) {
 			return
 		case <-signalCh:
 			if err := server.ReloadAuthorizationPolicy(); err != nil {
-				log.Printf("authorization policy reload rejected: %v", err)
+				logger.WarnContext(ctx, "authorization policy reload rejected", "error", err)
 				continue
 			}
-			log.Printf("authorization policy reloaded")
+			logger.InfoContext(ctx, "authorization policy reloaded")
 		}
 	}
 }
 
-func runOperationLoop(ctx context.Context, apps node.Applications, interval time.Duration) {
+func runOperationLoop(ctx context.Context, apps node.Applications, interval time.Duration, logger *slog.Logger) {
 	if apps.Operations == nil {
 		return
 	}
@@ -162,7 +181,7 @@ func runOperationLoop(ctx context.Context, apps node.Applications, interval time
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	recovery, err := localApp.RecoverInterruptedOperations(ctx, apps.Operations)
-	logOperationRecoveryReport(recovery, err)
+	logOperationRecoveryReport(logger, recovery, err)
 	if err != nil {
 		return
 	}
@@ -171,7 +190,7 @@ func runOperationLoop(ctx context.Context, apps node.Applications, interval time
 		if err != nil && ctx.Err() != nil {
 			return
 		}
-		logOperationRunReport(result, err)
+		logOperationRunReport(logger, result, err)
 		select {
 		case <-ctx.Done():
 			return
@@ -180,57 +199,57 @@ func runOperationLoop(ctx context.Context, apps node.Applications, interval time
 	}
 }
 
-func logOperationRecoveryReport(result operations.RecoveryResult, err error) {
+func logOperationRecoveryReport(logger *slog.Logger, result operations.RecoveryResult, err error) {
 	if err != nil {
-		log.Printf("operation recovery failed: %v", err)
+		logger.Warn("operation recovery failed", "error", err)
 		return
 	}
 	if result.Requeued == 0 && result.FailedUnsupported == 0 {
 		return
 	}
-	log.Printf(
-		"operation recovery: scanned=%d queued=%d requeued=%d failed_unsupported=%d terminal=%d ignored=%d",
-		result.Scanned,
-		result.Queued,
-		result.Requeued,
-		result.FailedUnsupported,
-		result.Terminal,
-		result.Ignored,
+	logger.Info(
+		"operation recovery",
+		"scanned", result.Scanned,
+		"queued", result.Queued,
+		"requeued", result.Requeued,
+		"failed_unsupported", result.FailedUnsupported,
+		"terminal", result.Terminal,
+		"ignored", result.Ignored,
 	)
 }
 
-func logOperationRunReport(result localstorage.OperationRunResult, err error) {
+func logOperationRunReport(logger *slog.Logger, result localstorage.OperationRunResult, err error) {
 	if err != nil {
-		log.Printf("operation scan failed: %v", err)
+		logger.Warn("operation scan failed", "error", err)
 		return
 	}
 	if result.Scanned == 0 {
 		return
 	}
-	log.Printf(
-		"operation scan: scanned=%d skipped=%d pending=%d succeeded=%d failed=%d",
-		result.Scanned,
-		result.Skipped,
-		result.Pending,
-		result.Succeeded,
-		result.Failed,
+	logger.Info(
+		"operation scan",
+		"scanned", result.Scanned,
+		"skipped", result.Skipped,
+		"pending", result.Pending,
+		"succeeded", result.Succeeded,
+		"failed", result.Failed,
 	)
 }
 
-func logBackendUploadReport(result backendupload.RunResult, err error) {
+func logBackendUploadReport(logger *slog.Logger, result backendupload.RunResult, err error) {
 	if err != nil {
-		log.Printf("backend upload scan failed: %v", err)
+		logger.Warn("backend upload scan failed", "error", err)
 		return
 	}
 	if result.Scanned == 0 {
 		return
 	}
-	log.Printf(
-		"backend upload scan: scanned=%d skipped=%d deferred=%d uploaded=%d failed=%d",
-		result.Scanned,
-		result.Skipped,
-		result.Deferred,
-		result.Uploaded,
-		result.Failed,
+	logger.Info(
+		"backend upload scan",
+		"scanned", result.Scanned,
+		"skipped", result.Skipped,
+		"deferred", result.Deferred,
+		"uploaded", result.Uploaded,
+		"failed", result.Failed,
 	)
 }

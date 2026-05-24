@@ -801,86 +801,110 @@ func (a *Application) applyScrubOperation(ctx context.Context, operation *adminv
 }
 
 func (a *Application) scrubTargets(operation *adminv1.Operation) ([]metastore.Document, error) {
-	var documents []metastore.Document
-	seen := make(map[identity.Document]bool)
-	add := func(document metastore.Document) {
-		if seen[document.Identity] {
-			return
+	collector := newDocumentCollector()
+	if len(operation.GetTargets()) == 0 {
+		if err := a.addAllDocuments(collector); err != nil {
+			return nil, err
 		}
-		seen[document.Identity] = true
-		documents = append(documents, document)
+		return collector.documents, nil
 	}
-	addAll := func() error {
-		all, err := a.metadata.ListDocuments(metastore.DocumentFilter{})
+	for _, target := range operation.GetTargets() {
+		if err := a.addScrubTarget(collector, target); err != nil {
+			return nil, err
+		}
+	}
+	return collector.documents, nil
+}
+
+type documentCollector struct {
+	documents []metastore.Document
+	seen      map[identity.Document]bool
+}
+
+func newDocumentCollector() *documentCollector {
+	return &documentCollector{seen: make(map[identity.Document]bool)}
+}
+
+func (c *documentCollector) add(document metastore.Document) {
+	if c.seen[document.Identity] {
+		return
+	}
+	c.seen[document.Identity] = true
+	c.documents = append(c.documents, document)
+}
+
+func (a *Application) addAllDocuments(collector *documentCollector) error {
+	all, err := a.metadata.ListDocuments(metastore.DocumentFilter{})
+	if err != nil {
+		return err
+	}
+	for _, document := range all {
+		collector.add(document)
+	}
+	return nil
+}
+
+func (a *Application) addScrubTarget(collector *documentCollector, target *adminv1.Target) error {
+	switch typed := target.GetTarget().(type) {
+	case *adminv1.Target_Document:
+		document, err := a.metadata.HeadDocument(adminDocumentIdentity(typed.Document))
 		if err != nil {
 			return err
 		}
-		for _, document := range all {
-			add(document)
-		}
+		collector.add(document)
 		return nil
+	case *adminv1.Target_Transaction:
+		return a.addScrubTransactionTarget(collector, typed.Transaction)
+	case *adminv1.Target_Block:
+		return a.addScrubBlockTarget(collector, typed.Block)
+	case *adminv1.Target_Shard:
+		return a.addLocalScrubScope(collector, typed.Shard.GetShardId())
+	case *adminv1.Target_StorageMember:
+		return a.addLocalScrubScope(collector, typed.StorageMember.GetStorageMemberId())
+	default:
+		return fmt.Errorf("localstorage: unsupported scrub target %T", target.GetTarget())
 	}
-	if len(operation.GetTargets()) == 0 {
-		if err := addAll(); err != nil {
-			return nil, err
-		}
-		return documents, nil
+}
+
+func (a *Application) addScrubTransactionTarget(collector *documentCollector, target *adminv1.TransactionTarget) error {
+	docs, err := a.metadata.FindDocuments(identity.Transaction{
+		TenantID:      target.GetTenantId(),
+		TransactionID: target.GetTransactionId(),
+	}, metastore.DocumentFilter{})
+	if err != nil {
+		return err
 	}
-	for _, target := range operation.GetTargets() {
-		switch typed := target.GetTarget().(type) {
-		case *adminv1.Target_Document:
-			document, err := a.metadata.HeadDocument(adminDocumentIdentity(typed.Document))
-			if err != nil {
-				return nil, err
-			}
-			add(document)
-		case *adminv1.Target_Transaction:
-			docs, err := a.metadata.FindDocuments(identity.Transaction{
-				TenantID:      typed.Transaction.GetTenantId(),
-				TransactionID: typed.Transaction.GetTransactionId(),
-			}, metastore.DocumentFilter{})
-			if err != nil {
-				return nil, err
-			}
-			if len(docs) == 0 {
-				return nil, metastore.ErrNotFound
-			}
-			for _, document := range docs {
-				add(document)
-			}
-		case *adminv1.Target_Block:
-			if typed.Block.GetShardId() != "local" {
-				return nil, metastore.ErrNotFound
-			}
-			docs, err := a.metadata.ListBlockDocuments(typed.Block.GetBlockId())
-			if err != nil {
-				return nil, err
-			}
-			if len(docs) == 0 {
-				return nil, metastore.ErrNotFound
-			}
-			for _, document := range docs {
-				add(document)
-			}
-		case *adminv1.Target_Shard:
-			if typed.Shard.GetShardId() != "local" {
-				return nil, metastore.ErrNotFound
-			}
-			if err := addAll(); err != nil {
-				return nil, err
-			}
-		case *adminv1.Target_StorageMember:
-			if typed.StorageMember.GetStorageMemberId() != "local" {
-				return nil, metastore.ErrNotFound
-			}
-			if err := addAll(); err != nil {
-				return nil, err
-			}
-		default:
-			return nil, fmt.Errorf("localstorage: unsupported scrub target %T", target.GetTarget())
-		}
+	if len(docs) == 0 {
+		return metastore.ErrNotFound
 	}
-	return documents, nil
+	for _, document := range docs {
+		collector.add(document)
+	}
+	return nil
+}
+
+func (a *Application) addScrubBlockTarget(collector *documentCollector, target *adminv1.BlockTarget) error {
+	if target.GetShardId() != "local" {
+		return metastore.ErrNotFound
+	}
+	docs, err := a.metadata.ListBlockDocuments(target.GetBlockId())
+	if err != nil {
+		return err
+	}
+	if len(docs) == 0 {
+		return metastore.ErrNotFound
+	}
+	for _, document := range docs {
+		collector.add(document)
+	}
+	return nil
+}
+
+func (a *Application) addLocalScrubScope(collector *documentCollector, shardOrMemberID string) error {
+	if shardOrMemberID != "local" {
+		return metastore.ErrNotFound
+	}
+	return a.addAllDocuments(collector)
 }
 
 func (a *Application) applyRepairOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {
@@ -921,66 +945,90 @@ func (a *Application) repairTargets(operation *adminv1.Operation) ([]metastore.R
 	if err != nil {
 		return nil, err
 	}
-	var repairs []metastore.RepairState
-	seen := make(map[string]bool)
-	add := func(state metastore.RepairState) {
-		if !state.Quarantined || !isLocalRepairState(state) {
-			return
-		}
-		key := state.Identity.TenantID + "\x00" + state.Identity.TransactionID + "\x00" + state.Identity.DocumentName + "\x00" + state.IncidentID
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		repairs = append(repairs, state)
-	}
+	collector := newRepairStateCollector()
 	for _, target := range operation.GetTargets() {
-		switch typed := target.GetTarget().(type) {
-		case *adminv1.Target_Document:
-			doc := adminDocumentIdentity(typed.Document)
-			for _, state := range states {
-				if state.Identity == doc {
-					add(state)
-				}
-			}
-		case *adminv1.Target_Block:
-			if typed.Block.GetShardId() != "local" {
-				return nil, metastore.ErrNotFound
-			}
-			for _, state := range states {
-				if !state.Quarantined {
-					continue
-				}
-				document, err := a.metadata.HeadDocument(state.Identity)
-				if err != nil {
-					return nil, err
-				}
-				if document.Location.BlockID == typed.Block.GetBlockId() {
-					add(state)
-				}
-			}
-		case *adminv1.Target_Shard:
-			if typed.Shard.GetShardId() != "local" {
-				return nil, metastore.ErrNotFound
-			}
-			for _, state := range states {
-				add(state)
-			}
-		case *adminv1.Target_StorageMember:
-			if typed.StorageMember.GetStorageMemberId() != "local" {
-				return nil, metastore.ErrNotFound
-			}
-			for _, state := range states {
-				add(state)
-			}
-		default:
-			return nil, fmt.Errorf("localstorage: unsupported repair target %T", target.GetTarget())
+		if err := a.addRepairTarget(collector, states, target); err != nil {
+			return nil, err
 		}
 	}
-	if len(repairs) == 0 {
+	if len(collector.repairs) == 0 {
 		return nil, metastore.ErrNotFound
 	}
-	return repairs, nil
+	return collector.repairs, nil
+}
+
+type repairStateCollector struct {
+	repairs []metastore.RepairState
+	seen    map[string]bool
+}
+
+func newRepairStateCollector() *repairStateCollector {
+	return &repairStateCollector{seen: make(map[string]bool)}
+}
+
+func (c *repairStateCollector) add(state metastore.RepairState) {
+	if !state.Quarantined || !isLocalRepairState(state) {
+		return
+	}
+	key := state.Identity.TenantID + "\x00" + state.Identity.TransactionID + "\x00" + state.Identity.DocumentName + "\x00" + state.IncidentID
+	if c.seen[key] {
+		return
+	}
+	c.seen[key] = true
+	c.repairs = append(c.repairs, state)
+}
+
+func (a *Application) addRepairTarget(collector *repairStateCollector, states []metastore.RepairState, target *adminv1.Target) error {
+	switch typed := target.GetTarget().(type) {
+	case *adminv1.Target_Document:
+		addDocumentRepairStates(collector, states, adminDocumentIdentity(typed.Document))
+		return nil
+	case *adminv1.Target_Block:
+		return a.addBlockRepairStates(collector, states, typed.Block)
+	case *adminv1.Target_Shard:
+		return addLocalRepairScope(collector, states, typed.Shard.GetShardId())
+	case *adminv1.Target_StorageMember:
+		return addLocalRepairScope(collector, states, typed.StorageMember.GetStorageMemberId())
+	default:
+		return fmt.Errorf("localstorage: unsupported repair target %T", target.GetTarget())
+	}
+}
+
+func addDocumentRepairStates(collector *repairStateCollector, states []metastore.RepairState, doc identity.Document) {
+	for _, state := range states {
+		if state.Identity == doc {
+			collector.add(state)
+		}
+	}
+}
+
+func (a *Application) addBlockRepairStates(collector *repairStateCollector, states []metastore.RepairState, target *adminv1.BlockTarget) error {
+	if target.GetShardId() != "local" {
+		return metastore.ErrNotFound
+	}
+	for _, state := range states {
+		if !state.Quarantined {
+			continue
+		}
+		document, err := a.metadata.HeadDocument(state.Identity)
+		if err != nil {
+			return err
+		}
+		if document.Location.BlockID == target.GetBlockId() {
+			collector.add(state)
+		}
+	}
+	return nil
+}
+
+func addLocalRepairScope(collector *repairStateCollector, states []metastore.RepairState, shardOrMemberID string) error {
+	if shardOrMemberID != "local" {
+		return metastore.ErrNotFound
+	}
+	for _, state := range states {
+		collector.add(state)
+	}
+	return nil
 }
 
 func isLocalRepairState(state metastore.RepairState) bool {

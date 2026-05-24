@@ -206,8 +206,7 @@ func (s *Store) ReadObjectRange(ctx context.Context, key string, selected backen
 		return backend.ErrInvalidRange
 	}
 	section := io.NewSectionReader(file, readOffset, readLengthInt)
-	_, err = copyWithContext(ctx, writer, section)
-	return err
+	return copyWithContext(ctx, writer, section)
 }
 
 func (s *Store) verifyObject(ctx context.Context, object backend.Object) error {
@@ -334,7 +333,7 @@ func readAndHash(ctx context.Context, reader io.Reader, writer io.Writer) (backe
 	hasher := sha256.New()
 	counter := &countingWriter{}
 	multi := io.MultiWriter(writer, hasher, counter)
-	if _, err := copyWithContext(ctx, multi, reader); err != nil {
+	if err := copyWithContext(ctx, multi, reader); err != nil {
 		return backend.Object{}, err
 	}
 	var object backend.Object
@@ -343,29 +342,27 @@ func readAndHash(ctx context.Context, reader io.Reader, writer io.Writer) (backe
 	return object, nil
 }
 
-func copyWithContext(ctx context.Context, writer io.Writer, reader io.Reader) (int64, error) {
+func copyWithContext(ctx context.Context, writer io.Writer, reader io.Reader) error {
 	buf := make([]byte, 1024*1024)
-	var total int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return total, err
+			return err
 		}
 		n, readErr := reader.Read(buf)
 		if n > 0 {
 			written, err := writer.Write(buf[:n])
-			total += int64(written)
 			if err != nil {
-				return total, err
+				return err
 			}
 			if written != n {
-				return total, io.ErrShortWrite
+				return io.ErrShortWrite
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
-			return total, nil
+			return nil
 		}
 		if readErr != nil {
-			return total, readErr
+			return readErr
 		}
 	}
 }

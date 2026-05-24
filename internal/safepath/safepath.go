@@ -17,15 +17,15 @@ func UnderDir(root, path string) (string, error) {
 	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve storage root: %w", err)
 	}
 	pathAbs, err := filepath.Abs(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve storage path: %w", err)
 	}
 	rel, err := filepath.Rel(rootAbs, pathAbs)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("compare storage path to root: %w", err)
 	}
 	if rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("storage path %q escapes root %q", pathAbs, rootAbs)

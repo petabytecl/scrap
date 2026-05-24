@@ -15,6 +15,8 @@ import (
 
 const CurrentSchemaVersion uint32 = 1
 
+const fingerprintLength = 16
+
 var (
 	ErrUnsupportedSchemaVersion = errors.New("storage format: unsupported schema version")
 	ErrInvalidRecord            = errors.New("storage format: invalid record")
@@ -147,7 +149,7 @@ func validateBlockHeader(header *storagev1.BlockHeader) error {
 	if header.GetFrameSize() == 0 {
 		return invalidRecord("block header", "frame_size is required")
 	}
-	return validateTimestamp("block header", "created_at", header.GetCreatedAt())
+	return validateTimestamp("block header", header.GetCreatedAt())
 }
 
 func validateBlockIndex(index *storagev1.BlockIndex, requireDigest bool) error {
@@ -174,7 +176,7 @@ func validateBlockIndex(index *storagev1.BlockIndex, requireDigest bool) error {
 	if index.GetBlockLength() == 0 {
 		return invalidRecord("block index", "block_length is required")
 	}
-	if len(index.GetBlockSha256()) != 32 {
+	if len(index.GetBlockSha256()) != sha256.Size {
 		return invalidRecord("block index", "block_sha256 must be 32 bytes")
 	}
 	if len(index.GetDocuments()) == 0 {
@@ -193,11 +195,11 @@ func validateBlockIndex(index *storagev1.BlockIndex, requireDigest bool) error {
 			return err
 		}
 	}
-	if err := validateTimestamp("block index", "created_at", index.GetCreatedAt()); err != nil {
+	if err := validateTimestamp("block index", index.GetCreatedAt()); err != nil {
 		return err
 	}
 	if requireDigest {
-		if len(index.GetIndexSha256()) != 32 {
+		if len(index.GetIndexSha256()) != sha256.Size {
 			return invalidRecord("block index", "index_sha256 must be 32 bytes")
 		}
 		digest, err := blockIndexDigest(index)
@@ -222,10 +224,10 @@ func validateIndexDocumentRecord(document *storagev1.IndexDocumentRecord, index 
 	if document.GetTransactionKeyId() == 0 {
 		return invalidRecord(recordKind, "transaction_key_id is required")
 	}
-	if len(document.GetDocumentNameFingerprint()) != 16 {
+	if len(document.GetDocumentNameFingerprint()) != fingerprintLength {
 		return invalidRecord(recordKind, "document_name_fingerprint must be 16 bytes")
 	}
-	if len(document.GetDocumentIdentityFingerprint()) != 16 {
+	if len(document.GetDocumentIdentityFingerprint()) != fingerprintLength {
 		return invalidRecord(recordKind, "document_identity_fingerprint must be 16 bytes")
 	}
 	if document.GetStoredLength() == 0 {
@@ -238,10 +240,10 @@ func validateIndexDocumentRecord(document *storagev1.IndexDocumentRecord, index 
 	if document.GetLogicalLength() == 0 {
 		return invalidRecord(recordKind, "logical_length is required")
 	}
-	if len(document.GetLogicalSha256()) != 32 {
+	if len(document.GetLogicalSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "logical_sha256 must be 32 bytes")
 	}
-	if len(document.GetStoredSha256()) != 32 {
+	if len(document.GetStoredSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "stored_sha256 must be 32 bytes")
 	}
 	if document.GetDocumentClass() == 0 {
@@ -256,7 +258,7 @@ func validateIndexDocumentRecord(document *storagev1.IndexDocumentRecord, index 
 	if len(document.GetMetadataBlob()) == 0 {
 		return invalidRecord(recordKind, "metadata_blob is required")
 	}
-	if len(document.GetTransactionFingerprint()) != 16 {
+	if len(document.GetTransactionFingerprint()) != fingerprintLength {
 		return invalidRecord(recordKind, "transaction_fingerprint must be 16 bytes")
 	}
 	if int(document.GetFirstFrameIndex()) >= len(frames) || int(document.GetLastFrameIndex()) >= len(frames) {
@@ -313,10 +315,10 @@ func validateFrameChecksumRecord(frame *storagev1.FrameChecksumRecord, index int
 		frame.GetStoredOffset()+frame.GetStoredLength() > blockLength {
 		return invalidRecord(recordKind, "stored range exceeds block length")
 	}
-	if len(frame.GetPlaintextSha256()) != 32 {
+	if len(frame.GetPlaintextSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "plaintext_sha256 must be 32 bytes")
 	}
-	if len(frame.GetStoredSha256()) != 32 {
+	if len(frame.GetStoredSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "stored_sha256 must be 32 bytes")
 	}
 	if frame.GetEncryptionMode() == storagev1.EncryptionMode_ENCRYPTION_MODE_UNSPECIFIED {
@@ -361,11 +363,11 @@ func validateEnvelopeRecord(record *storagev1.EnvelopeRecord, requireDigest bool
 	if len(record.GetAadContext()) == 0 {
 		return invalidRecord("envelope", "aad_context is required")
 	}
-	if err := validateTimestamp("envelope", "created_at", record.GetCreatedAt()); err != nil {
+	if err := validateTimestamp("envelope", record.GetCreatedAt()); err != nil {
 		return err
 	}
 	if requireDigest {
-		if len(record.GetEnvelopeSha256()) != 32 {
+		if len(record.GetEnvelopeSha256()) != sha256.Size {
 			return invalidRecord("envelope", "envelope_sha256 must be 32 bytes")
 		}
 		digest, err := envelopeRecordDigest(record)
@@ -411,7 +413,7 @@ func validateBackendObjectSet(set *storagev1.BackendObjectSet) error {
 			return invalidRecord("backend object set", "envelope_object is required when envelope_ref is present")
 		}
 	}
-	return validateTimestamp("backend object set", "created_at", set.GetCreatedAt())
+	return validateTimestamp("backend object set", set.GetCreatedAt())
 }
 
 func validateEnvelopeReference(recordKind string, ref *storagev1.EnvelopeReference) error {
@@ -432,7 +434,7 @@ func validateEnvelopeReference(recordKind string, ref *storagev1.EnvelopeReferen
 	if ref.GetKeyVersion() == 0 {
 		return invalidRecord(recordKind, "key_version is required")
 	}
-	if len(ref.GetEnvelopeSha256()) != 32 {
+	if len(ref.GetEnvelopeSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "envelope_sha256 must be 32 bytes")
 	}
 	return validateBackendObjectRef(recordKind+" envelope_object", ref.GetEnvelopeObject(), storagev1.BackendObjectKind_BACKEND_OBJECT_KIND_ENVELOPE)
@@ -454,21 +456,21 @@ func validateBackendObjectRef(recordKind string, ref *storagev1.BackendObjectRef
 	if ref.GetLength() == 0 {
 		return invalidRecord(recordKind, "length is required")
 	}
-	if len(ref.GetSha256()) != 32 {
+	if len(ref.GetSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "sha256 must be 32 bytes")
 	}
 	return nil
 }
 
-func validateTimestamp(recordKind, field string, value *timestamppb.Timestamp) error {
+func validateTimestamp(recordKind string, value *timestamppb.Timestamp) error {
 	if value == nil {
-		return invalidRecord(recordKind, "%s is required", field)
+		return invalidRecord(recordKind, "created_at is required")
 	}
 	if err := value.CheckValid(); err != nil {
-		return fmt.Errorf("%w: %s %s is invalid: %w", ErrInvalidRecord, recordKind, field, err)
+		return fmt.Errorf("%w: %s created_at is invalid: %w", ErrInvalidRecord, recordKind, err)
 	}
 	if value.AsTime().IsZero() {
-		return invalidRecord(recordKind, "%s must be non-zero", field)
+		return invalidRecord(recordKind, "created_at must be non-zero")
 	}
 	return nil
 }

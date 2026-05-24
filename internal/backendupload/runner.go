@@ -19,22 +19,22 @@ func (r Runner) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(r.Interval)
 	defer ticker.Stop()
-	return r.run(ctx, ticker.C)
+	r.run(ctx, ticker.C)
+	return nil
 }
 
-func (r Runner) run(ctx context.Context, ticks <-chan time.Time) error {
+func (r Runner) run(ctx context.Context, ticks <-chan time.Time) {
 	for {
 		result, err := r.runOnce(ctx)
 		if err != nil && ctx.Err() != nil {
-			//nolint:nilerr // Context cancellation is the normal shutdown path for this runner.
-			return nil
+			return
 		}
 		if r.Report != nil {
 			r.Report(result, err)
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticks:
 		}
 	}

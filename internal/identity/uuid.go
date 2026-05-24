@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const uuidTextLength = 36
+
 func NewUUIDv7() (string, error) {
 	var b [16]byte
 	now := uint64(time.Now().UnixMilli())
@@ -15,7 +17,7 @@ func NewUUIDv7() (string, error) {
 	binary.BigEndian.PutUint64(timestamp[:], now)
 	copy(b[0:6], timestamp[2:8])
 	if _, err := rand.Read(b[6:]); err != nil {
-		return "", err
+		return "", fmt.Errorf("generate UUIDv7 randomness: %w", err)
 	}
 	b[6] = (b[6] & 0x0f) | 0x70
 	b[8] = (b[8] & 0x3f) | 0x80
@@ -23,7 +25,7 @@ func NewUUIDv7() (string, error) {
 }
 
 func IsUUIDv7(value string) bool {
-	if len(value) != 36 {
+	if len(value) != uuidTextLength {
 		return false
 	}
 	for i, r := range value {
