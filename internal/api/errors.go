@@ -30,20 +30,13 @@ func ToGRPCError(err error) error {
 	return withDetails.Err()
 }
 
-func statusWithDetails(st *status.Status, details []any) (*status.Status, error) {
+func statusWithDetails(st *status.Status, details []proto.Message) (*status.Status, error) {
 	if len(details) == 0 {
 		return st, nil
 	}
 	messages := make([]protoadapt.MessageV1, 0, len(details))
 	for _, detail := range details {
-		message, ok := detail.(proto.Message)
-		if !ok {
-			continue
-		}
-		messages = append(messages, protoadapt.MessageV1Of(message))
-	}
-	if len(messages) == 0 {
-		return st, nil
+		messages = append(messages, protoadapt.MessageV1Of(detail))
 	}
 	return st.WithDetails(messages...)
 }
