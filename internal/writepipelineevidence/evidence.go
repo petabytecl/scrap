@@ -298,9 +298,14 @@ func componentSignals() []ComponentSignal {
 			Observation: "scrap_block_sync_batch_size exposes append waiters completed by one durable sync",
 		},
 		{
-			Name:        "metadata_commit_latency",
-			Status:      "not_available",
-			Observation: "current production code exposes raft queue depth, not a split metadata commit latency signal",
+			Name:        "metadata_command_sync_latency",
+			Status:      "available-via-metrics",
+			Observation: "scrap_metadata_command_sync_latency_seconds exposes the metadata command-log durable sync boundary",
+		},
+		{
+			Name:        "metadata_command_batch_size",
+			Status:      "available-via-metrics",
+			Observation: "scrap_metadata_command_batch_size exposes commands completed by one durable command-log sync",
 		},
 		{
 			Name:        "raft_queue_depth",

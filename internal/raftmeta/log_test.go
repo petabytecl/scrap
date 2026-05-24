@@ -2,8 +2,11 @@ package raftmeta
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +42,95 @@ func TestLogAppendReplayAndContinueAfterReopen(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "append third")
 	if third.Index != 3 {
 		t.Fatalf("third index = %d, want 3", third.Index)
+	}
+}
+
+func TestLogAppendBatchSyncsOnceAndReplaysInOrder(t *testing.T) {
+	log, err := OpenLog(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open log")
+	defer func() { testutil.RequireNoErrorf(t, log.Close(), "close log") }()
+	var syncCalls atomic.Int32
+	log.syncLogFile = func() error {
+		syncCalls.Add(1)
+		return log.file.Sync()
+	}
+
+	entries, err := log.AppendBatch([]*metastorev1.ShardCommand{
+		sampleCommand("cmd-1", "invoice-1.xml"),
+		sampleCommand("cmd-2", "invoice-2.xml"),
+		sampleCommand("cmd-3", "invoice-3.xml"),
+	})
+	testutil.RequireNoErrorf(t, err, "append batch")
+	if got := syncCalls.Load(); got != 1 {
+		t.Fatalf("sync calls = %d, want 1", got)
+	}
+	for index, entry := range entries {
+		want := uint64(index + 1)
+		if entry.Index != want {
+			t.Fatalf("entry %d index = %d, want %d", index, entry.Index, want)
+		}
+	}
+	replayed, err := log.Replay()
+	testutil.RequireNoErrorf(t, err, "replay")
+	if len(replayed) != 3 {
+		t.Fatalf("replayed entries = %d, want 3", len(replayed))
+	}
+	for index, entry := range replayed {
+		wantCommandID := entries[index].Command.GetCommandId()
+		if entry.Command.GetCommandId() != wantCommandID {
+			t.Fatalf("replayed command %d = %q, want %q", index, entry.Command.GetCommandId(), wantCommandID)
+		}
+	}
+
+	fourth, err := log.Append(sampleCommand("cmd-4", "invoice-4.xml"))
+	testutil.RequireNoErrorf(t, err, "append after batch")
+	if fourth.Index != 4 {
+		t.Fatalf("fourth index = %d, want 4", fourth.Index)
+	}
+}
+
+func TestLogAppendBatchSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
+	log, err := OpenLog(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open log")
+	defer func() { testutil.RequireNoErrorf(t, log.Close(), "close log") }()
+	syncErr := errors.New("sync failed")
+	log.syncLogFile = func() error {
+		return syncErr
+	}
+
+	_, err = log.AppendBatch([]*metastorev1.ShardCommand{
+		sampleCommand("cmd-1", "invoice-1.xml"),
+		sampleCommand("cmd-2", "invoice-2.xml"),
+	})
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("append batch error = %v, want %v", err, syncErr)
+	}
+	if !strings.Contains(err.Error(), "command log sync failed") {
+		t.Fatalf("append batch error = %q, want sync failure stage", err)
+	}
+	_, err = log.Append(sampleCommand("cmd-3", "invoice-3.xml"))
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("append after sync failure error = %v, want %v", err, syncErr)
+	}
+}
+
+func TestLogAppendBatchIndexAdvanceFailureUsesDistinctStage(t *testing.T) {
+	log, err := OpenLog(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open log")
+	defer func() { testutil.RequireNoErrorf(t, log.Close(), "close log") }()
+	log.mu.Lock()
+	log.nextIndex = ^uint64(0)
+	log.mu.Unlock()
+
+	_, err = log.AppendBatch([]*metastorev1.ShardCommand{
+		sampleCommand("cmd-1", "invoice-1.xml"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "command log index advance failed") {
+		t.Fatalf("append batch error = %v, want index advance failure stage", err)
+	}
+	_, err = log.Append(sampleCommand("cmd-2", "invoice-2.xml"))
+	if err == nil || !strings.Contains(err.Error(), "command log index advance failed") {
+		t.Fatalf("append after index failure error = %v, want retained index advance failure", err)
 	}
 }
 
