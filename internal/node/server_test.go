@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -63,6 +64,118 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	requireCode(t, err, codes.Unimplemented)
 
 	_ = publicConn.Close()
+	_ = adminConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerServesHealthChecksWithoutWorkloadIdentity(t *testing.T) {
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{
+		Health: fakeHealthApplication{},
+	}, testAuthorizationManager(t), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	adminConn := dialTestServer(t, adminListener)
+	defer func() { _ = adminConn.Close() }()
+	healthClient := healthv1.NewHealthClient(adminConn)
+	for _, service := range []string{"", adminReadinessHealthService} {
+		resp, err := healthClient.Check(context.Background(), &healthv1.HealthCheckRequest{Service: service})
+		testutil.RequireNoErrorf(t, err, "health check %q", service)
+		testutil.RequireEqualf(t, resp.GetStatus(), healthv1.HealthCheckResponse_SERVING, "health status for %q", service)
+	}
+
+	_ = adminConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerHealthReadinessReflectsReadFreshFailure(t *testing.T) {
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{
+		Health: fakeHealthApplication{readinessErr: errors.New("read index unavailable")},
+	}, testAuthorizationManager(t), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	adminConn := dialTestServer(t, adminListener)
+	defer func() { _ = adminConn.Close() }()
+	healthClient := healthv1.NewHealthClient(adminConn)
+	resp, err := healthClient.Check(context.Background(), &healthv1.HealthCheckRequest{Service: adminReadinessHealthService})
+	testutil.RequireNoErrorf(t, err, "readiness health check")
+	testutil.RequireEqualf(t, resp.GetStatus(), healthv1.HealthCheckResponse_NOT_SERVING, "readiness status")
+	resp, err = healthClient.Check(context.Background(), &healthv1.HealthCheckRequest{})
+	testutil.RequireNoErrorf(t, err, "liveness health check")
+	testutil.RequireEqualf(t, resp.GetStatus(), healthv1.HealthCheckResponse_SERVING, "liveness status")
+
+	_ = adminConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerHealthLivenessReflectsLocalStorageFailure(t *testing.T) {
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{
+		Health: fakeHealthApplication{livenessErr: errors.New("blockstore closed")},
+	}, testAuthorizationManager(t), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	adminConn := dialTestServer(t, adminListener)
+	defer func() { _ = adminConn.Close() }()
+	healthClient := healthv1.NewHealthClient(adminConn)
+	resp, err := healthClient.Check(context.Background(), &healthv1.HealthCheckRequest{})
+	testutil.RequireNoErrorf(t, err, "liveness health check")
+	testutil.RequireEqualf(t, resp.GetStatus(), healthv1.HealthCheckResponse_NOT_SERVING, "liveness status")
+
+	_ = adminConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerHealthRejectsUnknownService(t *testing.T) {
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{
+		Health: fakeHealthApplication{},
+	}, testAuthorizationManager(t), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	adminConn := dialTestServer(t, adminListener)
+	defer func() { _ = adminConn.Close() }()
+	healthClient := healthv1.NewHealthClient(adminConn)
+	_, err := healthClient.Check(context.Background(), &healthv1.HealthCheckRequest{Service: "scrap.unknown.v1.Service"})
+	requireCode(t, err, codes.NotFound)
+
 	_ = adminConn.Close()
 	cancel()
 	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
@@ -685,4 +798,17 @@ type failingAuditEventAppender struct {
 
 func (s failingAuditEventAppender) AppendAuditEvent(*adminv1.AuditEvent) error {
 	return s.err
+}
+
+type fakeHealthApplication struct {
+	readinessErr error
+	livenessErr  error
+}
+
+func (a fakeHealthApplication) CheckReadiness(context.Context) error {
+	return a.readinessErr
+}
+
+func (a fakeHealthApplication) CheckLiveness(context.Context) error {
+	return a.livenessErr
 }

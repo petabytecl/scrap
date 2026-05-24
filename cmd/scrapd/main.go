@@ -225,6 +225,7 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 		Member:       localApp,
 		DR:           localApp,
 		Operations:   operationStore,
+		Health:       localApp,
 	}, localApp, operationStore, nil
 }
 

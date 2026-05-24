@@ -31,6 +31,7 @@ type Applications struct {
 	Member       api.MemberApplication
 	DR           api.DisasterRecoveryApplication
 	Operations   *operations.Store
+	Health       HealthApplication
 }
 
 type Server struct {
@@ -78,8 +79,8 @@ func newServer(publicListener, adminListener net.Listener, apps Applications, au
 	)
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions, api.WithPublicAuditStore(apps.Operations)))
 	adminGRPC := grpc.NewServer(
-		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities(), auditSink)),
-		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities(), auditSink)),
+		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
+		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
 	)
 	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(
 		api.WithInspectApplication(apps.Inspect),
@@ -88,6 +89,7 @@ func newServer(publicListener, adminListener net.Listener, apps Applications, au
 		api.WithDisasterRecoveryApplication(apps.DR),
 		api.WithOperationStore(apps.Operations),
 	))
+	registerHealthServer(adminGRPC, apps.Health)
 	return &Server{
 		publicListener: publicListener,
 		adminListener:  adminListener,

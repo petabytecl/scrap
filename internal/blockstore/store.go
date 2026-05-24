@@ -34,6 +34,7 @@ var (
 	ErrInvalidRange     = errors.New("blockstore: invalid range")
 	ErrBlockOpen        = errors.New("blockstore: block is still open")
 	ErrEmptyBlock       = errors.New("blockstore: cannot seal empty block")
+	ErrClosed           = errors.New("blockstore: store is closed")
 )
 
 type Store struct {
@@ -106,6 +107,22 @@ func (s *Store) Close() error {
 	}
 	err := s.blockFile.Close()
 	s.blockFile = nil
+	return err
+}
+
+func (s *Store) CheckOpen(ctx context.Context) error {
+	if s == nil {
+		return ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blockFile == nil {
+		return ErrClosed
+	}
+	_, err := s.blockFile.Stat()
 	return err
 }
 

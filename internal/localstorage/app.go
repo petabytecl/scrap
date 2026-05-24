@@ -1192,6 +1192,20 @@ func mapError(err error) error {
 	return err
 }
 
+func (a *Application) CheckReadiness(ctx context.Context) error {
+	if a == nil || a.authority == nil {
+		return errors.New("localstorage: application is closed")
+	}
+	return a.authority.ReadFresh(ctx)
+}
+
+func (a *Application) CheckLiveness(ctx context.Context) error {
+	if a == nil || a.metadata == nil || a.blocks == nil {
+		return errors.New("localstorage: application is closed")
+	}
+	return errors.Join(a.metadata.CheckReachable(), a.blocks.CheckOpen(ctx))
+}
+
 var applicationErrorMappings = []struct {
 	target  error
 	code    appstatus.Code

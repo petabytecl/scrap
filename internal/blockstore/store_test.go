@@ -50,6 +50,24 @@ func TestAppendRecordsStoredSHA256FromWrittenBytes(t *testing.T) {
 	testutil.RequireEqualf(t, record.LogicalSHA256, want, "logical sha256")
 }
 
+func TestCheckOpenReflectsClosedBlockFile(t *testing.T) {
+	store := openTestStore(t)
+	testutil.RequireNoErrorf(t, store.CheckOpen(context.Background()), "check open blockstore")
+	testutil.RequireNoErrorf(t, store.Close(), "close blockstore")
+	testutil.RequireErrorIsf(t, store.CheckOpen(context.Background()), ErrClosed, "closed blockstore health")
+}
+
+func TestCheckOpenRejectsNilStoreAndCanceledContext(t *testing.T) {
+	var nilStore *Store
+	testutil.RequireErrorIsf(t, nilStore.CheckOpen(context.Background()), ErrClosed, "nil blockstore health")
+
+	store := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	testutil.RequireErrorIsf(t, store.CheckOpen(ctx), context.Canceled, "canceled blockstore health")
+}
+
 func TestReadRangeReadsSubset(t *testing.T) {
 	store := openTestStore(t)
 	data := []byte("0123456789")
