@@ -184,6 +184,47 @@ func TestConcurrentAppendsShareDurableSync(t *testing.T) {
 	requireNoOverlappingRecords(t, records)
 }
 
+func TestCompletingLastSyncBatchKeepsWorkerOwnership(t *testing.T) {
+	store := openTestStore(t)
+	batch := &durableSyncBatch{
+		done:    make(chan struct{}),
+		waiters: 1,
+	}
+	store.syncMu.Lock()
+	store.syncBatches = []*durableSyncBatch{batch}
+	store.syncQueueDepth = 1
+	store.syncRunning = true
+	store.syncMu.Unlock()
+
+	store.completeDurableSyncBatch(batch)
+
+	store.syncMu.Lock()
+	running := store.syncRunning
+	queueDepth := store.syncQueueDepth
+	queuedBatches := len(store.syncBatches)
+	store.syncMu.Unlock()
+
+	if !running {
+		t.Fatal("syncRunning = false; worker ownership must remain until the worker exits")
+	}
+	if queueDepth != 0 {
+		t.Fatalf("sync queue depth = %d, want 0", queueDepth)
+	}
+	if queuedBatches != 0 {
+		t.Fatalf("queued sync batches = %d, want 0", queuedBatches)
+	}
+	select {
+	case <-batch.done:
+	default:
+		t.Fatal("completed batch done channel is not closed")
+	}
+
+	store.syncMu.Lock()
+	store.syncRunning = false
+	store.syncCond.Broadcast()
+	store.syncMu.Unlock()
+}
+
 func TestSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
 	ctx := context.Background()
 	syncErr := errors.New("sync failed")

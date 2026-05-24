@@ -27,7 +27,7 @@ const (
 	formatMinor          = 1
 	defaultReadBuffer    = 1024 * 1024
 	blockFilePerm        = 0o600
-	defaultSyncBatchWait = 2 * time.Millisecond
+	defaultSyncBatchWait = 0
 )
 
 var (
@@ -776,9 +776,6 @@ func (s *Store) completeDurableSyncBatch(batch *durableSyncBatch) {
 	observe.SetBlockAppendQueueDepth(s.syncQueueDepth)
 	observe.RecordBlockSyncBatchSize(batch.waiters)
 	close(batch.done)
-	if len(s.syncBatches) == 0 {
-		s.syncRunning = false
-	}
 	s.syncCond.Broadcast()
 }
 

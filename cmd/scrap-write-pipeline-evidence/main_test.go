@@ -37,6 +37,12 @@ func TestRunWritesEvidenceToStdout(t *testing.T) {
 	if report.Workload.SampleCount != 2 || report.Workload.DocumentSizeBytes != 16 {
 		t.Fatalf("workload = %#v, want two 16-byte samples", report.Workload)
 	}
+	if signalStatus(report, "block_sync_batch_size") != writepipelineevidence.ComponentSignalObserved {
+		t.Fatalf("block sync batch size signal = %#v, want observed", report.Results.ComponentSignals)
+	}
+	if signalStatus(report, "metadata_command_sync_latency") != writepipelineevidence.ComponentSignalObserved {
+		t.Fatalf("metadata sync latency signal = %#v, want observed", report.Results.ComponentSignals)
+	}
 }
 
 func TestRunWritesFailureReportBeforeReturningNonZero(t *testing.T) {
@@ -119,4 +125,13 @@ func decodeReport(t *testing.T, data []byte) writepipelineevidence.Report {
 		t.Fatalf("decode report: %v\n%s", err, string(data))
 	}
 	return report
+}
+
+func signalStatus(report writepipelineevidence.Report, name string) string {
+	for _, signal := range report.Results.ComponentSignals {
+		if signal.Name == name {
+			return signal.Status
+		}
+	}
+	return ""
 }

@@ -69,6 +69,91 @@ func TestBuildReportSerializesRequiredEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildReportSerializesObservedComponentEvidence(t *testing.T) {
+	started := time.Unix(1700000000, 0).UTC()
+	report := BuildReport(Options{
+		ReleaseSHA:        "abc123",
+		DirtyTree:         "clean",
+		RunnerID:          "local-application",
+		SampleCount:       1,
+		Concurrency:       1,
+		DocumentSizeBytes: 64,
+		MaxDuration:       time.Second,
+		ComponentSignals: []ComponentSignal{
+			{
+				Name:        "block_sync_batch_size",
+				Status:      ComponentSignalObserved,
+				Observation: "observed batch size",
+				Unit:        "waiters_per_sync",
+				Count:       2,
+				Sum:         float64Ptr(8),
+				Average:     float64Ptr(4),
+				Required:    true,
+			},
+			{
+				Name:        "block_append_queue_depth",
+				Status:      ComponentSignalSampled,
+				Observation: "sampled queue depth",
+				Unit:        "waiters",
+				Current:     float64Ptr(0),
+				MaxObserved: float64Ptr(4),
+				Samples:     10,
+			},
+		},
+		Now: func() time.Time { return started },
+	}, []WriteSample{{DocumentName: "doc-001.xml", Bytes: 64, LatencyMicros: 1000}}, started, started.Add(time.Millisecond))
+
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %q, want %q; violations=%#v", report.Status, StatusPassed, report.ThresholdViolations)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("Marshal report: %v", err)
+	}
+	raw := string(encoded)
+	for _, want := range []string{
+		`"status":"observed"`,
+		`"unit":"waiters_per_sync"`,
+		`"count":2`,
+		`"average":4`,
+		`"max_observed":4`,
+		`"samples":10`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("encoded report missing %s: %s", want, raw)
+		}
+	}
+}
+
+func TestBuildReportFailsWhenRequiredComponentEvidenceIsMissing(t *testing.T) {
+	started := time.Unix(1700000000, 0).UTC()
+	report := BuildReport(Options{
+		ReleaseSHA:        "abc123",
+		DirtyTree:         "clean",
+		RunnerID:          "local-application",
+		SampleCount:       1,
+		Concurrency:       1,
+		DocumentSizeBytes: 64,
+		MaxDuration:       time.Second,
+		ComponentSignals: []ComponentSignal{
+			{
+				Name:        "metadata_command_batch_size",
+				Status:      ComponentSignalNotObserved,
+				Observation: "missing metadata batch size",
+				Required:    true,
+			},
+		},
+		Now: func() time.Time { return started },
+	}, []WriteSample{{DocumentName: "doc-001.xml", Bytes: 64, LatencyMicros: 1000}}, started, started.Add(time.Millisecond))
+
+	if report.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", report.Status, StatusFailed)
+	}
+	if !hasViolation(report.ThresholdViolations, "SCRAP_WRITE_PIPELINE_SIGNAL_NOT_OBSERVED") {
+		t.Fatalf("violations = %#v, want component signal violation", report.ThresholdViolations)
+	}
+}
+
 func TestBuildReportFailsWhenThresholdsAreExceeded(t *testing.T) {
 	started := time.Unix(1700000000, 0).UTC()
 	opts := Options{
@@ -140,6 +225,10 @@ func hasViolation(violations []ThresholdViolation, code string) bool {
 		}
 	}
 	return false
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }
 
 type recordingWriteApplication struct {
