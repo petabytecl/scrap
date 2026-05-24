@@ -15,11 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/appstatus"
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
@@ -464,10 +463,10 @@ func (a *Application) appendValidatedDocument(ctx context.Context, init api.Writ
 
 func validateWrittenRecord(init api.WriteDocumentInit, record blockstore.Record) error {
 	if init.ExpectedLength != nil && *init.ExpectedLength != record.StoredLength {
-		return status.Errorf(codes.InvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
+		return appstatus.Errorf(appstatus.CodeInvalidArgument, "expected length %d does not match written length %d", *init.ExpectedLength, record.StoredLength)
 	}
 	if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, record.LogicalSHA256[:]) {
-		return status.Error(codes.InvalidArgument, "expected sha256 does not match written bytes")
+		return appstatus.New(appstatus.CodeInvalidArgument, "expected sha256 does not match written bytes")
 	}
 	return nil
 }
@@ -1149,43 +1148,42 @@ func mapError(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, mapping := range grpcErrorMappings {
+	for _, mapping := range applicationErrorMappings {
 		if errors.Is(err, mapping.target) {
-			return status.Error(mapping.code, mapping.message)
+			return appstatus.Wrap(mapping.code, mapping.message, err)
 		}
 	}
 	return err
 }
 
-var grpcErrorMappings = []struct {
+var applicationErrorMappings = []struct {
 	target  error
-	code    codes.Code
+	code    appstatus.Code
 	message string
 }{
-	{target: metastore.ErrNotFound, code: codes.NotFound, message: "document or transaction not found"},
-	{target: metastore.ErrConflict, code: codes.AlreadyExists, message: "document already exists"},
-	{target: metastore.ErrTransactionClosed, code: codes.FailedPrecondition, message: "transaction is closed"},
-	{target: blockstore.ErrInvalidRange, code: codes.InvalidArgument, message: "read range is outside document bounds"},
-	{target: blockstore.ErrChecksumMismatch, code: codes.DataLoss, message: "stored document bytes failed checksum verification"},
-	{target: backend.ErrChecksumMismatch, code: codes.DataLoss, message: "backend document bytes failed checksum verification"},
-	{target: backend.ErrNotFound, code: codes.DataLoss, message: "backend document bytes are missing"},
-	{target: os.ErrNotExist, code: codes.DataLoss, message: "stored document bytes are missing"},
-	{target: raftmeta.ErrNotLeader, code: codes.FailedPrecondition, message: "local metadata authority is not leader"},
-	{target: raftmeta.ErrQuorumUnavailable, code: codes.Unavailable, message: "metadata quorum is unavailable"},
-	{target: raftmeta.ErrReadFreshnessUnavailable, code: codes.Unavailable, message: "metadata freshness cannot be proven"},
-	{target: raftmeta.ErrLeaseReadDisabled, code: codes.FailedPrecondition, message: "metadata lease reads are disabled"},
-	{target: replication.ErrInsufficientReplicas, code: codes.Unavailable, message: "required peer replicas could not be prepared"},
-	{target: replication.ErrMissingByteSource, code: codes.Internal, message: "peer prepare byte source is unavailable"},
-	{target: replication.ErrReceiptMismatch, code: codes.Internal, message: "peer prepare receipt did not match prepared document"},
-	{target: replication.ErrTransferMismatch, code: codes.DataLoss, message: "peer prepare transfer failed checksum verification"},
+	{target: metastore.ErrNotFound, code: appstatus.CodeNotFound, message: "document or transaction not found"},
+	{target: metastore.ErrConflict, code: appstatus.CodeAlreadyExists, message: "document already exists"},
+	{target: metastore.ErrTransactionClosed, code: appstatus.CodeFailedPrecondition, message: "transaction is closed"},
+	{target: blockstore.ErrInvalidRange, code: appstatus.CodeInvalidArgument, message: "read range is outside document bounds"},
+	{target: blockstore.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "stored document bytes failed checksum verification"},
+	{target: backend.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "backend document bytes failed checksum verification"},
+	{target: backend.ErrNotFound, code: appstatus.CodeDataLoss, message: "backend document bytes are missing"},
+	{target: os.ErrNotExist, code: appstatus.CodeDataLoss, message: "stored document bytes are missing"},
+	{target: raftmeta.ErrNotLeader, code: appstatus.CodeFailedPrecondition, message: "local metadata authority is not leader"},
+	{target: raftmeta.ErrQuorumUnavailable, code: appstatus.CodeUnavailable, message: "metadata quorum is unavailable"},
+	{target: raftmeta.ErrReadFreshnessUnavailable, code: appstatus.CodeUnavailable, message: "metadata freshness cannot be proven"},
+	{target: raftmeta.ErrLeaseReadDisabled, code: appstatus.CodeFailedPrecondition, message: "metadata lease reads are disabled"},
+	{target: replication.ErrInsufficientReplicas, code: appstatus.CodeUnavailable, message: "required peer replicas could not be prepared"},
+	{target: replication.ErrMissingByteSource, code: appstatus.CodeInternal, message: "peer prepare byte source is unavailable"},
+	{target: replication.ErrReceiptMismatch, code: appstatus.CodeInternal, message: "peer prepare receipt did not match prepared document"},
+	{target: replication.ErrTransferMismatch, code: appstatus.CodeDataLoss, message: "peer prepare transfer failed checksum verification"},
 }
 
 func readIntegrityError(document metastore.Document, attemptedSources []string, cause error) error {
 	if !isIntegrityFailure(cause) {
 		return mapError(cause)
 	}
-	st := status.New(codes.DataLoss, "document bytes failed integrity verification")
-	withDetails, err := st.WithDetails(&scrapv1.IntegrityFailureDetail{
+	return appstatus.New(appstatus.CodeDataLoss, "document bytes failed integrity verification", appstatus.WithDetails(&scrapv1.IntegrityFailureDetail{
 		Identity: &scrapv1.DocumentIdentity{
 			TenantId:      document.Identity.TenantID,
 			TransactionId: document.Identity.TransactionID,
@@ -1193,11 +1191,7 @@ func readIntegrityError(document metastore.Document, attemptedSources []string, 
 		},
 		AttemptedSources: append([]string(nil), attemptedSources...),
 		EvidenceId:       integrityEvidenceID(document),
-	})
-	if err != nil {
-		return st.Err()
-	}
-	return withDetails.Err()
+	}))
 }
 
 func unavailableReadStateError(document metastore.Document) error {
@@ -1212,8 +1206,7 @@ func unavailableReadStateError(document metastore.Document) error {
 }
 
 func restorePendingError(document metastore.Document) error {
-	st := status.New(codes.Unavailable, "document bytes require backend restore")
-	withDetails, err := st.WithDetails(&scrapv1.RestorePendingDetail{
+	return appstatus.New(appstatus.CodeUnavailable, "document bytes require backend restore", appstatus.WithDetails(&scrapv1.RestorePendingDetail{
 		Identity: &scrapv1.DocumentIdentity{
 			TenantId:      document.Identity.TenantID,
 			TransactionId: document.Identity.TransactionID,
@@ -1226,16 +1219,11 @@ func restorePendingError(document metastore.Document) error {
 			Retryable: true,
 			Reason:    "restore_pending",
 		},
-	})
-	if err != nil {
-		return st.Err()
-	}
-	return withDetails.Err()
+	}))
 }
 
 func cryptoUnavailableError(document metastore.Document) error {
-	st := status.New(codes.Unavailable, "document bytes require unavailable crypto material")
-	withDetails, err := st.WithDetails(&scrapv1.CryptoUnavailableDetail{
+	return appstatus.New(appstatus.CodeUnavailable, "document bytes require unavailable crypto material", appstatus.WithDetails(&scrapv1.CryptoUnavailableDetail{
 		Identity: &scrapv1.DocumentIdentity{
 			TenantId:      document.Identity.TenantID,
 			TransactionId: document.Identity.TransactionID,
@@ -1246,11 +1234,7 @@ func cryptoUnavailableError(document metastore.Document) error {
 			Retryable: true,
 			Reason:    "crypto_unavailable",
 		},
-	})
-	if err != nil {
-		return st.Err()
-	}
-	return withDetails.Err()
+	}))
 }
 
 func restoreStateText(state metastore.RestoreState) string {

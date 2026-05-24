@@ -150,7 +150,7 @@ func (s *PublicServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1.W
 
 	result, err := s.documents.WriteDocument(stream.Context(), init, &writeChunkReader{stream: stream})
 	if err != nil {
-		return err
+		return ToGRPCError(err)
 	}
 	if err := s.auditSuccessfulWrite(stream.Context(), init, result); err != nil {
 		return err
@@ -168,7 +168,7 @@ func (s *PublicServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocume
 	}
 	metadata, err := s.documents.HeadDocument(ctx, validated)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &scrapv1.HeadDocumentResponse{Metadata: metadata.toProto()}, nil
 }
@@ -181,7 +181,7 @@ func (s *PublicServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream grp
 	if err != nil {
 		return err
 	}
-	return s.documents.ReadDocument(stream.Context(), validated, readDocumentSender{stream: stream})
+	return ToGRPCError(s.documents.ReadDocument(stream.Context(), validated, readDocumentSender{stream: stream}))
 }
 
 func (s *PublicServer) FindDocuments(ctx context.Context, req *scrapv1.FindDocumentsRequest) (*scrapv1.FindDocumentsResponse, error) {
@@ -194,7 +194,7 @@ func (s *PublicServer) FindDocuments(ctx context.Context, req *scrapv1.FindDocum
 	}
 	result, err := s.documents.FindDocuments(ctx, validated)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	response := &scrapv1.FindDocumentsResponse{
 		Documents: make([]*scrapv1.DocumentMetadata, 0, len(result.Documents)),
@@ -215,7 +215,7 @@ func (s *PublicServer) CompleteTransaction(ctx context.Context, req *scrapv1.Com
 	}
 	state, err := s.transactions.CompleteTransaction(ctx, validated)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &scrapv1.CompleteTransactionResponse{Transaction: state.toProto()}, nil
 }
@@ -230,7 +230,7 @@ func (s *PublicServer) GetTransaction(ctx context.Context, req *scrapv1.GetTrans
 	}
 	state, err := s.transactions.GetTransaction(ctx, validated)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &scrapv1.GetTransactionResponse{Transaction: state.toProto()}, nil
 }

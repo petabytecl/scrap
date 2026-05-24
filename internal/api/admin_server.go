@@ -137,7 +137,7 @@ func (s *AdminServer) GetClusterSummary(ctx context.Context, req *adminv1.GetClu
 	}
 	summary, err := s.inspect.GetAdminClusterSummary(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	if s.operations != nil {
 		pending, err := s.operations.List(operations.ListFilter{
@@ -167,7 +167,7 @@ func (s *AdminServer) GetShard(ctx context.Context, req *adminv1.GetShardRequest
 	}
 	shard, err := s.inspect.GetAdminShard(ctx, req.ShardId)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetShardResponse{Shard: shard}, nil
 }
@@ -191,7 +191,7 @@ func (s *AdminServer) GetDocument(ctx context.Context, req *adminv1.GetDocumentR
 		DocumentName:  req.Document.GetDocumentName(),
 	})
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetDocumentResponse{Document: document}, nil
 }
@@ -211,7 +211,7 @@ func (s *AdminServer) GetBlock(ctx context.Context, req *adminv1.GetBlockRequest
 	}
 	block, err := s.inspect.GetAdminBlock(ctx, target)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetBlockResponse{Block: block}, nil
 }
@@ -231,7 +231,7 @@ func (s *AdminServer) GetMember(ctx context.Context, req *adminv1.GetMemberReque
 	}
 	member, err := s.inspect.GetAdminMember(ctx, memberID)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetMemberResponse{StorageMember: member}, nil
 }
@@ -251,7 +251,7 @@ func (s *AdminServer) GetCapacityRunway(ctx context.Context, req *adminv1.GetCap
 	}
 	runway, err := s.inspect.GetAdminCapacityRunway(ctx, req.GetCapacityProfileId())
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetCapacityRunwayResponse{Runway: runway}, nil
 }
@@ -433,7 +433,7 @@ func (s *AdminServer) GetRepairQueue(ctx context.Context, req *adminv1.GetRepair
 	}
 	items, err := s.repair.GetRepairQueue(ctx, req.GetShardId())
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetRepairQueueResponse{Items: items}, nil
 }
@@ -508,7 +508,7 @@ func (s *AdminServer) CordonMember(ctx context.Context, req *adminv1.CordonMembe
 	}
 	member, err := s.member.CordonMember(ctx, validated)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	if err := s.auditMemberMutation(adminAuditEventMemberCordoned, "cordon-member", validated); err != nil {
 		return nil, err
@@ -526,7 +526,7 @@ func (s *AdminServer) UncordonMember(ctx context.Context, req *adminv1.UncordonM
 	}
 	member, err := s.member.UncordonMember(ctx, validated)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	if err := s.auditMemberMutation(adminAuditEventMemberUncordoned, "uncordon-member", validated); err != nil {
 		return nil, err
@@ -544,7 +544,7 @@ func (s *AdminServer) GetEvictionSafety(ctx context.Context, req *adminv1.GetEvi
 	}
 	safety, err := s.member.GetEvictionSafety(ctx, validated.StorageMember)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetEvictionSafetyResponse{Safety: safety}, nil
 }
@@ -680,7 +680,7 @@ func (s *AdminServer) GetRecoveryReadiness(ctx context.Context, req *adminv1.Get
 	}
 	readiness, err := s.dr.GetRecoveryReadiness(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ToGRPCError(err)
 	}
 	return &adminv1.GetRecoveryReadinessResponse{Readiness: readiness}, nil
 }
