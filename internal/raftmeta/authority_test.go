@@ -290,6 +290,24 @@ func TestAuthorityConcurrentConflictingCommitsDoNotPoisonShard(t *testing.T) {
 	close(start)
 	wg.Wait()
 
+	requireOneSuccessfulCommitAndOneConflict(t, errs)
+	testutil.RequireEqualf(t, int32(1), syncCalls.Load(), "conflicting commit batch sync count")
+	head, err := metadata.HeadDocument(first.Identity)
+	testutil.RequireNoErrorf(t, err, "head winning conflicting document")
+	if head.LogicalSHA256 != first.LogicalSHA256 && head.LogicalSHA256 != second.LogicalSHA256 {
+		t.Fatalf("winning document hash = %x, want one proposed document", head.LogicalSHA256)
+	}
+
+	recovered := authorityTestDocument("after-batch-conflict.xml", []byte{3})
+	recovered.Location.BlockID = "block-after-batch-conflict"
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), recovered, "cmd-after-batch-conflict", time.Unix(200, 0).UTC()), "commit after batch conflict")
+	entries, err := authority.log.Replay()
+	testutil.RequireNoErrorf(t, err, "replay log")
+	requireConflictingCommandsBeforeRecovered(t, entries)
+}
+
+func requireOneSuccessfulCommitAndOneConflict(t *testing.T, errs []error) {
+	t.Helper()
 	successes := 0
 	conflicts := 0
 	for index, err := range errs {
@@ -304,20 +322,21 @@ func TestAuthorityConcurrentConflictingCommitsDoNotPoisonShard(t *testing.T) {
 	}
 	testutil.RequireEqualf(t, 1, successes, "successful conflicting commit count")
 	testutil.RequireEqualf(t, 1, conflicts, "rejected conflicting commit count")
-	testutil.RequireEqualf(t, int32(1), syncCalls.Load(), "conflicting commit batch sync count")
-	head, err := metadata.HeadDocument(first.Identity)
-	testutil.RequireNoErrorf(t, err, "head winning conflicting document")
-	if head.LogicalSHA256 != first.LogicalSHA256 && head.LogicalSHA256 != second.LogicalSHA256 {
-		t.Fatalf("winning document hash = %x, want one proposed document", head.LogicalSHA256)
-	}
+}
 
-	recovered := authorityTestDocument("after-batch-conflict.xml", []byte{3})
-	recovered.Location.BlockID = "block-after-batch-conflict"
-	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), recovered, "cmd-after-batch-conflict", time.Unix(200, 0).UTC()), "commit after batch conflict")
-	entries, err := authority.log.Replay()
-	testutil.RequireNoErrorf(t, err, "replay log")
-	if len(entries) < 2 || entries[len(entries)-1].Command.GetCommandId() != "cmd-after-batch-conflict" {
-		t.Fatalf("entries = %#v, want recovered command after conflicting batch", entries)
+func requireConflictingCommandsBeforeRecovered(t *testing.T, entries []Entry) {
+	t.Helper()
+	if len(entries) != 3 {
+		t.Fatalf("entries = %#v, want both conflict commands before recovered command", entries)
+	}
+	conflictCommandIDs := map[string]bool{
+		entries[0].Command.GetCommandId(): true,
+		entries[1].Command.GetCommandId(): true,
+	}
+	if !conflictCommandIDs["cmd-conflict-first"] ||
+		!conflictCommandIDs["cmd-conflict-second"] ||
+		entries[2].Command.GetCommandId() != "cmd-after-batch-conflict" {
+		t.Fatalf("entries = %#v, want both conflict commands before recovered command", entries)
 	}
 }
 
