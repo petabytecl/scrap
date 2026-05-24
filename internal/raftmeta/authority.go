@@ -177,6 +177,18 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 	if err := a.requireWriteQuorum(ctx); err != nil {
 		return metastore.Transaction{}, err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current, err := a.store.GetTransaction(transaction)
+	if err != nil {
+		return metastore.Transaction{}, err
+	}
+	if current.State == metastore.TransactionStateCompleted {
+		return current, nil
+	}
+	if current.State != metastore.TransactionStateOpen {
+		return metastore.Transaction{}, fmt.Errorf("%w: transaction %s/%s is not open", metastore.ErrTransactionClosed, transaction.TenantID, transaction.TransactionID)
+	}
 	command := &metastorev1.ShardCommand{
 		SchemaVersion: metastore.CurrentSchemaVersion,
 		ShardId:       a.shardID,
@@ -190,11 +202,6 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 				Tags:          cloneTags(tags),
 			},
 		},
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, err := a.store.GetTransaction(transaction); err != nil {
-		return metastore.Transaction{}, err
 	}
 	if err := a.appendAndApplyLocked(command); err != nil {
 		return metastore.Transaction{}, err

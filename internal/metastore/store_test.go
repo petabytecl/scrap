@@ -116,6 +116,59 @@ func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestCompleteTransactionIsIdempotentAndPreservesFirstState(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassEphemeral)
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
+	completedAt := doc.CreatedAt.Add(time.Minute)
+	first, err := store.CompleteTransaction(identity.Transaction{
+		TenantID:      doc.Identity.TenantID,
+		TransactionID: doc.Identity.TransactionID,
+	}, completedAt, map[string]string{"closed_by": "first"})
+	testutil.RequireNoErrorf(t, err, "complete transaction")
+
+	retryAt := completedAt.Add(time.Hour)
+	retry, err := store.CompleteTransaction(identity.Transaction{
+		TenantID:      doc.Identity.TenantID,
+		TransactionID: doc.Identity.TransactionID,
+	}, retryAt, map[string]string{"closed_by": "retry"})
+	testutil.RequireNoErrorf(t, err, "retry complete transaction")
+
+	testutil.RequireEqualf(t, retry.State, TransactionStateCompleted, "transaction state")
+	testutil.RequireDeepEqualf(t, retry.Tags, first.Tags, "retry tags")
+	if retry.CompletedAt == nil || !retry.CompletedAt.Equal(completedAt) {
+		t.Fatalf("retry completed_at = %v, want original %v", retry.CompletedAt, completedAt)
+	}
+}
+
+func TestCompleteTransactionRejectsTimedOutTransaction(t *testing.T) {
+	store := openTestStore(t)
+	timeoutAt := time.Unix(300, 0).UTC()
+	transaction := Transaction{
+		Identity: identity.Transaction{
+			TenantID:      "tenant",
+			TransactionID: "txn",
+		},
+		State:     TransactionStateTimedOut,
+		CreatedAt: time.Unix(100, 0).UTC(),
+		TimeoutAt: &timeoutAt,
+		Tags: map[string]string{
+			"reason": "timeout",
+		},
+	}
+	installTransactionSnapshot(t, store, transaction)
+
+	_, err := store.CompleteTransaction(transaction.Identity, timeoutAt.Add(time.Minute), map[string]string{"closed_by": "retry"})
+	if !errors.Is(err, ErrTransactionClosed) {
+		t.Fatalf("complete timed-out transaction error = %v, want %v", err, ErrTransactionClosed)
+	}
+	got, err := store.GetTransaction(transaction.Identity)
+	testutil.RequireNoErrorf(t, err, "get transaction")
+	testutil.RequireEqualf(t, got.State, TransactionStateTimedOut, "transaction state")
+	testutil.RequireNilf(t, got.CompletedAt, "completed_at")
+	testutil.RequireDeepEqualf(t, got.Tags, transaction.Tags, "transaction tags")
+}
+
 func TestPutDocumentRejectsNewDocumentAfterTransactionCompleted(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
@@ -647,6 +700,25 @@ func openTestStore(t *testing.T) *Store {
 		testutil.RequireNoErrorf(t, store.Close(), "close store")
 	})
 	return store
+}
+
+func installTransactionSnapshot(t *testing.T, store *Store, transaction Transaction) {
+	t.Helper()
+	err := store.ApplyShardSnapshot(&metastorev1.ShardSnapshot{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		Membership: &metastorev1.MembershipState{
+			Members: []*metastorev1.MembershipMember{
+				{
+					RaftId:   1,
+					MemberId: "member-a",
+					Role:     metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER,
+				},
+			},
+		},
+		Transactions: []*metastorev1.TransactionRecord{TransactionRecord(transaction)},
+	})
+	testutil.RequireNoErrorf(t, err, "install transaction snapshot")
 }
 
 func sampleDocument(name string, class DocumentClass) Document {

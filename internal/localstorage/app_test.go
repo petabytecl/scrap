@@ -129,6 +129,41 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 	testutil.RequireTruef(t, transaction.CompletedAt.Equal(completedAt), "completed_at = %v, want %v", transaction.CompletedAt, completedAt)
 }
 
+func TestCompleteTransactionRetryPreservesOriginalStateAndDoesNotAppend(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	data := []byte("transaction retry bytes")
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+
+	completedAt := time.Unix(200, 0).UTC()
+	app.now = fixedClock(completedAt)
+	first, err := app.CompleteTransaction(ctx, api.CompleteTransactionRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+		Tags:        map[string]string{"closed_by": "first"},
+	})
+	testutil.RequireNoErrorf(t, err, "complete transaction")
+	firstIndex := app.authority.AppliedIndex()
+
+	app.now = fixedClock(completedAt.Add(time.Hour))
+	retry, err := app.CompleteTransaction(ctx, api.CompleteTransactionRequest{
+		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
+		Tags:        map[string]string{"closed_by": "retry"},
+	})
+	testutil.RequireNoErrorf(t, err, "retry complete transaction")
+
+	testutil.RequireEqualf(t, app.authority.AppliedIndex(), firstIndex, "applied index after retry")
+	testutil.RequireDeepEqualf(t, retry.Tags, first.Tags, "retry tags")
+	testutil.RequireNotNilf(t, retry.CompletedAt, "retry completed_at")
+	testutil.RequireTruef(t, retry.CompletedAt.Equal(completedAt), "retry completed_at = %v, want %v", retry.CompletedAt, completedAt)
+}
+
 func requireWriteResult(t *testing.T, result api.WriteDocumentResult, expectedLength uint64, expectedSHA []byte) {
 	t.Helper()
 	testutil.RequireEqualf(t, result.DesiredReplicaCount, uint32(1), "desired replica count")
