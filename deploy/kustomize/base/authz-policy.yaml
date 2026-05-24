@@ -8,6 +8,7 @@ data:
       "version": "local-kind-v1",
       "workloads": {
         "local-operator": {
+          "allowed_tenants": [],
           "capabilities": [
             "admin.inspect.cluster_summary",
             "admin.inspect.shard",
@@ -47,6 +48,9 @@ data:
           ]
         },
         "local-public-client": {
+          "allowed_tenants": [
+            "tenant-a"
+          ],
           "capabilities": [
             "public.document.write",
             "public.document.head",

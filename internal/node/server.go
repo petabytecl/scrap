@@ -106,7 +106,12 @@ func newServerWithConfig(
 		return nil, err
 	}
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
-	authorizationOptions := authz.InterceptorOptions{
+	publicAuthorizationOptions := authz.InterceptorOptions{
+		DeniedAuditSink:            auditSink,
+		RequireCertificateIdentity: cfg.RequireCertificateIdentity,
+		TenantExtractors:           publicTenantExtractors(),
+	}
+	adminAuthorizationOptions := authz.InterceptorOptions{
 		DeniedAuditSink:            auditSink,
 		RequireCertificateIdentity: cfg.RequireCertificateIdentity,
 	}
@@ -115,14 +120,14 @@ func newServerWithConfig(
 		return nil, err
 	}
 	publicOptions := combineServerOptions(baseOptions,
-		grpc.UnaryInterceptor(authz.UnaryServerInterceptorWithOptions(authorization, publicMethodCapabilities(), authorizationOptions)),
-		grpc.StreamInterceptor(authz.StreamServerInterceptorWithOptions(authorization, publicMethodCapabilities(), authorizationOptions)),
+		grpc.UnaryInterceptor(authz.UnaryServerInterceptorWithOptions(authorization, publicMethodCapabilities(), publicAuthorizationOptions)),
+		grpc.StreamInterceptor(authz.StreamServerInterceptorWithOptions(authorization, publicMethodCapabilities(), publicAuthorizationOptions)),
 	)
 	publicGRPC := grpc.NewServer(publicOptions...)
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions, api.WithPublicAuditStore(apps.Operations)))
 	adminOptions := combineServerOptions(baseOptions,
-		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptorWithOptions(authorization, adminMethodCapabilities(), authorizationOptions))),
-		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptorWithOptions(authorization, adminMethodCapabilities(), authorizationOptions))),
+		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptorWithOptions(authorization, adminMethodCapabilities(), adminAuthorizationOptions))),
+		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptorWithOptions(authorization, adminMethodCapabilities(), adminAuthorizationOptions))),
 	)
 	adminGRPC := grpc.NewServer(adminOptions...)
 	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(
@@ -320,6 +325,9 @@ func (s authorizationAuditSink) RecordDeniedRequest(ctx context.Context, method 
 	metadata["workload_identity"] = decision.WorkloadIdentity
 	metadata["policy_version"] = decision.PolicyVersion
 	metadata["policy_generation"] = strconv.FormatUint(decision.PolicyGeneration, 10)
+	if decision.TenantID != "" {
+		metadata["tenant_id"] = decision.TenantID
+	}
 	if traceID != "" {
 		metadata["trace_id"] = traceID
 	}
@@ -418,6 +426,83 @@ func publicMethodCapabilities() map[string]authz.Capability {
 		scrapv1.TransactionService_CompleteTransaction_FullMethodName: "public.transaction.complete",
 		scrapv1.TransactionService_GetTransaction_FullMethodName:      "public.transaction.get",
 	}
+}
+
+func publicTenantExtractors() map[string]authz.TenantExtractor {
+	return map[string]authz.TenantExtractor{
+		scrapv1.DocumentService_WriteDocument_FullMethodName:          tenantFromWriteDocumentRequest,
+		scrapv1.DocumentService_HeadDocument_FullMethodName:           tenantFromHeadDocumentRequest,
+		scrapv1.DocumentService_ReadDocument_FullMethodName:           tenantFromReadDocumentRequest,
+		scrapv1.DocumentService_FindDocuments_FullMethodName:          tenantFromFindDocumentsRequest,
+		scrapv1.TransactionService_CompleteTransaction_FullMethodName: tenantFromCompleteTransactionRequest,
+		scrapv1.TransactionService_GetTransaction_FullMethodName:      tenantFromGetTransactionRequest,
+	}
+}
+
+func tenantFromWriteDocumentRequest(req any) (string, bool) {
+	request, ok := req.(*scrapv1.WriteDocumentRequest)
+	if !ok {
+		return "", false
+	}
+	init := request.GetInit()
+	if init == nil {
+		return "", false
+	}
+	return tenantFromDocumentIdentity(init.GetIdentity())
+}
+
+func tenantFromHeadDocumentRequest(req any) (string, bool) {
+	request, ok := req.(*scrapv1.HeadDocumentRequest)
+	if !ok {
+		return "", false
+	}
+	return tenantFromDocumentIdentity(request.GetIdentity())
+}
+
+func tenantFromReadDocumentRequest(req any) (string, bool) {
+	request, ok := req.(*scrapv1.ReadDocumentRequest)
+	if !ok {
+		return "", false
+	}
+	return tenantFromDocumentIdentity(request.GetIdentity())
+}
+
+func tenantFromFindDocumentsRequest(req any) (string, bool) {
+	request, ok := req.(*scrapv1.FindDocumentsRequest)
+	if !ok {
+		return "", false
+	}
+	return tenantFromTransactionIdentity(request.GetTransaction())
+}
+
+func tenantFromCompleteTransactionRequest(req any) (string, bool) {
+	request, ok := req.(*scrapv1.CompleteTransactionRequest)
+	if !ok {
+		return "", false
+	}
+	return tenantFromTransactionIdentity(request.GetTransaction())
+}
+
+func tenantFromGetTransactionRequest(req any) (string, bool) {
+	request, ok := req.(*scrapv1.GetTransactionRequest)
+	if !ok {
+		return "", false
+	}
+	return tenantFromTransactionIdentity(request.GetTransaction())
+}
+
+func tenantFromDocumentIdentity(identity *scrapv1.DocumentIdentity) (string, bool) {
+	if identity == nil || identity.GetTenantId() == "" {
+		return "", false
+	}
+	return identity.GetTenantId(), true
+}
+
+func tenantFromTransactionIdentity(identity *scrapv1.TransactionIdentity) (string, bool) {
+	if identity == nil || identity.GetTenantId() == "" {
+		return "", false
+	}
+	return identity.GetTenantId(), true
 }
 
 func adminMethodCapabilities() map[string]authz.Capability {

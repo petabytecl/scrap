@@ -728,6 +728,53 @@ func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
 	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
+func TestServerDeniesPublicRequestOutsideAllowedTenant(t *testing.T) {
+	policyPath := writeAuthorizationPolicy(t, `{
+  "version": "policy-v1",
+  "workloads": {
+    "billing-etl": {
+      "capabilities": ["public.document.head"],
+      "allowed_tenants": ["tenant-a"]
+    }
+  }
+}`)
+	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
+	testutil.RequireNoErrorf(t, err, "load authorization policy")
+
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := newServer(publicListener, adminListener, Applications{Documents: readAllDocuments{}}, manager, policyPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialTestServer(t, publicListener)
+	defer func() { _ = publicConn.Close() }()
+	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
+	_, err = publicClient.HeadDocument(workloadContext("billing-etl"), &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
+		TenantId:      "tenant-b",
+		TransactionId: "txn",
+		DocumentName:  "invoice.xml",
+	}})
+	requireCode(t, err, codes.PermissionDenied)
+
+	_, err = publicClient.HeadDocument(workloadContext("billing-etl"), &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
+		TenantId:      "tenant-a",
+		TransactionId: "txn",
+		DocumentName:  "invoice.xml",
+	}})
+	testutil.RequireNoErrorf(t, err, "allowed tenant head")
+
+	_ = publicConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
 func TestServerAuditsDeniedRequests(t *testing.T) {
 	policyPath := writeAuthorizationPolicy(t, `{
   "version": "policy-v1",
@@ -775,16 +822,15 @@ func TestServerAuditsDeniedRequests(t *testing.T) {
 		t.Fatalf("audit events = %#v, want one denied request event", events)
 	}
 	event := events[0]
-	if event.GetEventType() != "authorization_denied" ||
-		event.GetActorIdentity() != "operator" ||
-		event.GetOperationType() != scrapv1.DocumentService_HeadDocument_FullMethodName ||
-		event.GetOperationId() != "corr-denied" ||
-		event.GetMetadata()["capability"] != "public.document.head" ||
-		event.GetMetadata()["reason"] != authz.ReasonCapabilityDenied ||
-		event.GetMetadata()["correlation_id"] != "corr-denied" ||
-		event.GetMetadata()["request_id"] != "req-denied" {
-		t.Fatalf("denied audit event = %#v, want actor/capability/operation/reason/correlation evidence", event)
-	}
+	testutil.RequireEqualf(t, event.GetEventType(), "authorization_denied", "audit event type")
+	testutil.RequireEqualf(t, event.GetActorIdentity(), "operator", "audit actor")
+	testutil.RequireEqualf(t, event.GetOperationType(), scrapv1.DocumentService_HeadDocument_FullMethodName, "audit operation type")
+	testutil.RequireEqualf(t, event.GetOperationId(), "corr-denied", "audit operation id")
+	testutil.RequireEqualf(t, event.GetMetadata()["capability"], "public.document.head", "audit capability")
+	testutil.RequireEqualf(t, event.GetMetadata()["reason"], authz.ReasonCapabilityDenied, "audit reason")
+	testutil.RequireEqualf(t, event.GetMetadata()["tenant_id"], "tenant", "audit tenant")
+	testutil.RequireEqualf(t, event.GetMetadata()["correlation_id"], "corr-denied", "audit correlation id")
+	testutil.RequireEqualf(t, event.GetMetadata()["request_id"], "req-denied", "audit request id")
 
 	_ = publicConn.Close()
 	cancel()
