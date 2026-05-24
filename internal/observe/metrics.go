@@ -1,11 +1,13 @@
 package observe
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
 )
 
 const (
@@ -201,6 +203,14 @@ func Handler() http.Handler {
 	return promhttp.HandlerFor(defaultMetrics.registry, promhttp.HandlerOpts{
 		Registry: defaultMetrics.registry,
 	})
+}
+
+func GatherMetrics() ([]*dto.MetricFamily, error) {
+	families, err := defaultMetrics.registry.Gather()
+	if err != nil {
+		return nil, fmt.Errorf("gather metrics: %w", err)
+	}
+	return families, nil
 }
 
 func RecordWriteLatency(outcome string, elapsed time.Duration) {

@@ -53,6 +53,7 @@ func Run(ctx context.Context, opts Options, app WriteApplication) (Report, error
 	jobs := make(chan int, opts.SampleCount)
 	results := make(chan WriteSample, opts.SampleCount)
 	workers := min(opts.Concurrency, opts.SampleCount)
+	sampler := startComponentSignalSampler()
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
@@ -76,6 +77,7 @@ func Run(ctx context.Context, opts Options, app WriteApplication) (Report, error
 		samples = append(samples, sample)
 	}
 	sortSamples(samples)
+	opts.ComponentSignals = sampler.stopAndBuild(opts.RequireSignals)
 	report := BuildReport(opts, samples, startedAt, time.Now().UTC())
 	if report.Status != StatusPassed {
 		return report, fmt.Errorf("write pipeline evidence status %s; update #148 with the blocking issue or threshold exception", report.Status)

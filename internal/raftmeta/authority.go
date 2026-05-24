@@ -49,7 +49,7 @@ type AuthorityOptions struct {
 
 const (
 	defaultAuthorityProposalQueue = 1024
-	defaultMetadataBatchWait      = 2 * time.Millisecond
+	defaultMetadataBatchWait      = 0
 	defaultMetadataBatchMax       = 64
 )
 

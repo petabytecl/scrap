@@ -23,6 +23,8 @@ type Options struct {
 	MaxDuration        time.Duration
 	MinWritesPerSecond float64
 	MaxP99AckLatency   time.Duration
+	ComponentSignals   []ComponentSignal
+	RequireSignals     bool
 	Now                func() time.Time
 }
 
@@ -92,9 +94,17 @@ type WriteSample struct {
 }
 
 type ComponentSignal struct {
-	Name        string `json:"name"`
-	Status      string `json:"status"`
-	Observation string `json:"observation"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Observation string   `json:"observation"`
+	Unit        string   `json:"unit,omitempty"`
+	Count       uint64   `json:"count,omitempty"`
+	Sum         *float64 `json:"sum,omitempty"`
+	Average     *float64 `json:"average,omitempty"`
+	Current     *float64 `json:"current,omitempty"`
+	MaxObserved *float64 `json:"max_observed,omitempty"`
+	Samples     uint64   `json:"samples,omitempty"`
+	Required    bool     `json:"required,omitempty"`
 }
 
 type Thresholds struct {
@@ -134,7 +144,7 @@ func BuildReport(opts Options, samples []WriteSample, startedAt, endedAt time.Ti
 		Results: Results{
 			DurationMillis:   durationMillis(duration),
 			Samples:          append([]WriteSample(nil), samples...),
-			ComponentSignals: componentSignals(),
+			ComponentSignals: componentSignals(opts.ComponentSignals),
 		},
 		Thresholds: Thresholds{
 			MinWritesPerSecond:  opts.MinWritesPerSecond,
@@ -277,10 +287,33 @@ func collectThresholdViolations(report Report) []ThresholdViolation {
 				report.Thresholds.MaxP99LatencyMicros),
 		})
 	}
+	if reportRequiresSignals(report) {
+		for _, signal := range report.Results.ComponentSignals {
+			if signal.Required && signal.Status != ComponentSignalObserved {
+				violations = append(violations, ThresholdViolation{
+					Scope:   "write-pipeline",
+					Code:    "SCRAP_WRITE_PIPELINE_SIGNAL_NOT_OBSERVED",
+					Message: signal.Name + " was not observed during the write-pipeline run",
+				})
+			}
+		}
+	}
 	return violations
 }
 
-func componentSignals() []ComponentSignal {
+func reportRequiresSignals(report Report) bool {
+	for _, signal := range report.Results.ComponentSignals {
+		if signal.Required {
+			return true
+		}
+	}
+	return false
+}
+
+func componentSignals(observed []ComponentSignal) []ComponentSignal {
+	if len(observed) > 0 {
+		return append([]ComponentSignal(nil), observed...)
+	}
 	return []ComponentSignal{
 		{
 			Name:        "block_append_sync_latency",

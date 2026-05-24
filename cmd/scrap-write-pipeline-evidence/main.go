@@ -50,6 +50,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		MaxDuration:        *duration,
 		MinWritesPerSecond: *minWritesPerSecond,
 		MaxP99AckLatency:   *maxP99AckLatency,
+		RequireSignals:     true,
 	}
 	if err := runEvidence(context.Background(), opts, *dir, *outPath, stdout); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)

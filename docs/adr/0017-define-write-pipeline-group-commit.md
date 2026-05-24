@@ -40,7 +40,8 @@ bottleneck.
 Use this initial batch policy for both block append syncs and metadata command
 log syncs:
 
-- flush at most 2 ms after the first ready waiter enters an empty batch;
+- flush immediately by default, while keeping any evidence-justified linger
+  capped at 2 ms after the first ready waiter enters an empty batch;
 - flush immediately when a batch reaches 128 operations;
 - flush immediately when known encoded payload bytes reach 8 MiB, while allowing
   a single operation that is valid under its existing per-operation size limit to
@@ -60,6 +61,13 @@ Component-specific lifecycle flushes are required:
 These limits are starting points, not product SLOs. Issue #177 must capture
 before/after evidence and should be used to tune the constants before #148 is
 closed.
+
+2026-05-24 tuning note: #185 reproduced that the first 2 ms fixed linger added
+more delay than this local runner's observed sync cost. The implementation now
+uses zero default linger and relies on opportunistic draining of already queued
+concurrent callers. A non-zero linger remains a future tuning option only when a
+representative evidence runner proves it improves throughput without violating
+the p99 ACK target.
 
 ## Block Append Model
 

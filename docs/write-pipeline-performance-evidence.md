@@ -56,10 +56,40 @@ The report includes:
 - writes/sec and bytes/sec;
 - ACK latency min, average, p50, p95, p99, and max;
 - threshold settings and violations;
-- component signal availability for block append sync latency, block append
-  queue depth, block sync batch size, metadata command sync latency, metadata
-  command batch size, and raft queue depth.
+- observed component signals for block append sync latency, block append queue
+  depth, block sync batch size, metadata command sync latency, metadata command
+  batch size, and raft queue depth.
 
 #178 adds blockstore split metrics through Prometheus. #179 adds metadata
-command-log sync and batch-size metrics. This local in-process harness records
-which component signals exist but does not scrape Prometheus.
+command-log sync and batch-size metrics. The local in-process harness gathers
+those Prometheus metrics at the end of the run and samples queue-depth gauges
+while the workload is active, so the report shows actual counts, sums,
+averages, current values, and max observed queue depth instead of only metric
+availability.
+
+## Interpreting Local Fsync Evidence
+
+The local runner may have very low `fsync` cost because of filesystem,
+virtualization, cache, or temporary-directory behavior. In that profile,
+artificial batch linger can dominate ACK latency even when the implementation is
+correct. Treat the component sync-latency averages as part of the result: if
+durable sync latency is already below the configured linger, the evidence runner
+is measuring the linger policy more than a real fsync bottleneck.
+
+For #148, use a target-load run that is large enough to exercise concurrency,
+for example:
+
+```sh
+make write-pipeline-evidence \
+  WRITE_PIPELINE_REPORT=write-pipeline-target-load.json \
+  WRITE_PIPELINE_SAMPLES=1024 \
+  WRITE_PIPELINE_CONCURRENCY=128 \
+  WRITE_PIPELINE_DOCUMENT_SIZE=4096 \
+  WRITE_PIPELINE_DURATION=30s \
+  WRITE_PIPELINE_MIN_WRITES_PER_SECOND=500 \
+  WRITE_PIPELINE_MAX_P99_ACK_LATENCY=25ms
+```
+
+The default 128-sample run remains useful as a quick smoke test, but parent
+performance claims should cite the larger target-load profile plus the observed
+component signals.
