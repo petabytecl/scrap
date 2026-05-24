@@ -261,6 +261,21 @@ func TestWriteDocumentPreparesPeersBeforeMetadataVisibility(t *testing.T) {
 	}
 }
 
+func TestWriteDocumentRejectsEmptyChunk(t *testing.T) {
+	app := openTestApplication(t)
+	doc := testDocumentIdentity()
+	_, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{{}}))
+	requireCode(t, err, codes.InvalidArgument)
+	if _, headErr := app.metadata.HeadDocument(doc); !errors.Is(headErr, metastore.ErrNotFound) {
+		t.Fatalf("head after empty chunk write = %v, want %v", headErr, metastore.ErrNotFound)
+	}
+}
+
 func TestWriteDocumentPeerPrepareFailureLeavesDocumentInvisible(t *testing.T) {
 	app := openTestApplication(t)
 	data := []byte("partial peer prepare")
@@ -1025,6 +1040,19 @@ func TestVerificationWindowRejectsWindowStartingAfterSelection(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("verification window error = %v, want %v", err, io.ErrUnexpectedEOF)
 	}
+}
+
+func TestChunkReaderRejectsEmptyChunkWithoutDrainingStream(t *testing.T) {
+	emptyChunks := make([][]byte, 1000)
+	chunks := newChunkReader(emptyChunks)
+	reader := &chunkReader{chunks: chunks}
+
+	n, err := reader.Read(make([]byte, 1))
+	testutil.RequireEqualf(t, n, 0, "read byte count")
+	if !errors.Is(err, errEmptyWriteChunk) {
+		t.Fatalf("read error = %v, want %v", err, errEmptyWriteChunk)
+	}
+	testutil.RequireEqualf(t, chunks.index, 1, "empty chunks consumed before rejection")
 }
 
 func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {

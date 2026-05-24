@@ -1102,11 +1102,16 @@ type chunkReader struct {
 	pending []byte
 }
 
+var errEmptyWriteChunk = errors.New("localstorage: empty write chunk received")
+
 func (r *chunkReader) Read(p []byte) (int, error) {
 	for len(r.pending) == 0 {
 		chunk, err := r.chunks.Recv()
 		if err != nil {
 			return 0, err
+		}
+		if len(chunk) == 0 {
+			return 0, errEmptyWriteChunk
 		}
 		r.pending = chunk
 	}
@@ -1177,6 +1182,7 @@ var applicationErrorMappings = []struct {
 	{target: metastore.ErrNotFound, code: appstatus.CodeNotFound, message: "document or transaction not found"},
 	{target: metastore.ErrConflict, code: appstatus.CodeAlreadyExists, message: "document already exists"},
 	{target: metastore.ErrTransactionClosed, code: appstatus.CodeFailedPrecondition, message: "transaction is closed"},
+	{target: errEmptyWriteChunk, code: appstatus.CodeInvalidArgument, message: "write chunk must not be empty"},
 	{target: blockstore.ErrInvalidRange, code: appstatus.CodeInvalidArgument, message: "read range is outside document bounds"},
 	{target: blockstore.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "stored document bytes failed checksum verification"},
 	{target: backend.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "backend document bytes failed checksum verification"},
