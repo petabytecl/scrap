@@ -112,6 +112,10 @@ func TestLogAppendBatchSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("append after sync failure error = %v, want %v", err, syncErr)
 	}
+	healthErr := log.CheckHealth()
+	if !errors.Is(healthErr, syncErr) || !strings.Contains(healthErr.Error(), "restart required") {
+		t.Fatalf("log health error = %v, want restart-required sync failure", healthErr)
+	}
 }
 
 func TestLogAppendBatchIndexAdvanceFailureUsesDistinctStage(t *testing.T) {

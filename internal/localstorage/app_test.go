@@ -48,6 +48,20 @@ func TestHealthChecksReflectLocalStorageState(t *testing.T) {
 	testutil.RequireErrorIsf(t, app.CheckLiveness(context.Background()), blockstore.ErrClosed, "liveness after closed blockstore")
 }
 
+func TestHealthChecksReflectClosedRaftMetadataAuthority(t *testing.T) {
+	app := openTestApplication(t)
+	testutil.RequireNoErrorf(t, app.authority.Close(), "close authority")
+
+	readinessErr := app.CheckReadiness(context.Background())
+	if readinessErr == nil || !strings.Contains(readinessErr.Error(), "command log is closed") {
+		t.Fatalf("readiness after closed authority = %v, want command log closed", readinessErr)
+	}
+	livenessErr := app.CheckLiveness(context.Background())
+	if livenessErr == nil || !strings.Contains(livenessErr.Error(), "command log is closed") {
+		t.Fatalf("liveness after closed authority = %v, want command log closed", livenessErr)
+	}
+}
+
 func TestHealthChecksRejectNilApplication(t *testing.T) {
 	var app *Application
 

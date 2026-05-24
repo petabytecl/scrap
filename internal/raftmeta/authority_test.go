@@ -449,6 +449,10 @@ func TestAuthoritySyncErrorFailsBatchAndSubsequentCommands(t *testing.T) {
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("commit after sync failure error = %v, want %v", err, syncErr)
 	}
+	healthErr := authority.CheckHealth()
+	if !errors.Is(healthErr, syncErr) || !strings.Contains(healthErr.Error(), "restart required") {
+		t.Fatalf("authority health error = %v, want restart-required sync failure", healthErr)
+	}
 }
 
 func TestAuthorityProposalWorkerPanicFailsInFlightAndFutureProposals(t *testing.T) {

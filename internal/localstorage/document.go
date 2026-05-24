@@ -1084,14 +1084,17 @@ func (a *Application) CheckReadiness(ctx context.Context) error {
 	if a == nil || a.authority == nil {
 		return errors.New("localstorage: application is closed")
 	}
+	if err := a.authority.CheckHealth(); err != nil {
+		return err
+	}
 	return a.authority.ReadFresh(ctx)
 }
 
 func (a *Application) CheckLiveness(ctx context.Context) error {
-	if a == nil || a.metadata == nil || a.blocks == nil {
+	if a == nil || a.metadata == nil || a.blocks == nil || a.authority == nil {
 		return errors.New("localstorage: application is closed")
 	}
-	return errors.Join(a.metadata.CheckReachable(), a.blocks.CheckOpen(ctx))
+	return errors.Join(a.metadata.CheckReachable(), a.blocks.CheckOpen(ctx), a.authority.CheckHealth())
 }
 
 var applicationErrorMappings = []struct {
