@@ -92,6 +92,12 @@ Required audit evidence includes `operation_started`, `operation_canceled`,
 action audit events for restore, repair, scrub, key rotation, capacity
 override, and DR workflows.
 
+Focused incident runbooks live under [`docs/runbooks/`](runbooks/):
+
+- [Raft Leadership Loss](runbooks/raft-leadership-loss.md)
+- [Block Store Corruption](runbooks/block-store-corruption.md)
+- [Backend Restore Failure](runbooks/backend-restore-failure.md)
+
 ## Bootstrap A Cell
 
 Use when creating a new cell or validating that a freshly deployed non-traffic
