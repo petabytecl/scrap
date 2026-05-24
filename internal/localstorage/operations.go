@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -1192,17 +1191,30 @@ func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID strin
 	if intent.State != metastore.UploadStateUploaded {
 		return fmt.Errorf("localstorage: block %s is not uploaded", blockID)
 	}
-	if _, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey); err != nil {
+	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
 		return err
 	}
-	if err := os.Remove(a.blocks.BlockPath(blockID)); err != nil && !os.IsNotExist(err) {
+	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
+	if err != nil {
 		return err
 	}
-	if err := os.Remove(a.blocks.SealPath(blockID)); err != nil && !os.IsNotExist(err) {
-		return err
+	reader, writer := io.Pipe()
+	errc := make(chan error, 1)
+	go func() {
+		err := a.backendStore.ReadObjectRange(ctx, intent.BackendObjectKey, backend.Range{}, writer)
+		_ = writer.CloseWithError(err)
+		errc <- err
+	}()
+	installErr := a.blocks.ReplaceSealedBlock(ctx, blockID, object.Length, object.SHA256, reader)
+	_ = reader.Close()
+	readErr := <-errc
+	if installErr != nil {
+		return installErr
 	}
-	_, err = a.restoreBlockFromBackend(ctx, blockID)
-	return err
+	if readErr != nil {
+		return readErr
+	}
+	return nil
 }
 
 type restoreSummary struct {
