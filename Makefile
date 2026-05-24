@@ -3,7 +3,7 @@
 .PHONY: help
 .PHONY: proto proto-check
 .PHONY: fmt fmt-check lint vuln
-.PHONY: test test-compat test-race test-junit cover build check
+.PHONY: test test-compat test-crashfault-catalog test-race test-junit cover build check
 .PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
 .PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence local-dr-drill-evidence
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
@@ -100,6 +100,9 @@ test: ## Run package tests.
 test-compat: ## Run compatibility tests for stored data and metadata boundaries.
 	$(GO) test $(COMPAT_PACKAGES)
 
+test-crashfault-catalog: ## Verify crash/fault catalog patterns match real tests.
+	GO="$(GO)" $(GO) test -tags=integration ./internal/crashfault
+
 test-race: ## Run package tests with the Go race detector.
 	$(GO) test -race $(TEST_PACKAGES)
 
@@ -114,7 +117,7 @@ cover: ## Run package tests and write a coverage profile.
 build: ## Build all supported command binaries.
 	$(GO) build $(SCRAP_BINS)
 
-check: manifests-check fmt-check proto-check test-compat lint test test-race build ## Run the full local verification gate.
+check: manifests-check fmt-check proto-check test-compat lint test test-crashfault-catalog test-race build ## Run the full local verification gate.
 
 ##@ Release Artifacts
 
