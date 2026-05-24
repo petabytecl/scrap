@@ -154,6 +154,48 @@ func TestAuthorityRejectsConflictingCommitWithoutPoisoningLog(t *testing.T) {
 	}
 }
 
+func TestAuthorityRejectsCommandReceiptConflictWithoutPoisoningShard(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	original := authorityTestDocument("invoice.xml", []byte{1})
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), original, "cmd-1", time.Unix(100, 0).UTC()), "commit original document")
+
+	conflictingCommand := authorityTestDocument("summary.xml", []byte{2})
+	conflictingCommand.Location.BlockID = "block-conflict"
+	if err := authority.CommitDocument(context.Background(), conflictingCommand, "cmd-1", time.Unix(101, 0).UTC()); !errors.Is(err, metastore.ErrConflict) {
+		t.Fatalf("command receipt conflict error = %v, want %v", err, metastore.ErrConflict)
+	}
+	if _, err := metadata.HeadDocument(conflictingCommand.Identity); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("conflicting command document error = %v, want %v", err, metastore.ErrNotFound)
+	}
+
+	recovered := authorityTestDocument("after-conflict.xml", []byte{3})
+	recovered.Location.BlockID = "block-after-conflict"
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), recovered, "cmd-2", time.Unix(102, 0).UTC()), "commit after command receipt conflict")
+	entries, err := authority.log.Replay()
+	testutil.RequireNoErrorf(t, err, "replay log")
+	if len(entries) != 3 ||
+		entries[0].Command.GetCommandId() != "cmd-1" ||
+		entries[1].Command.GetCommandId() != "cmd-1" ||
+		entries[2].Command.GetCommandId() != "cmd-2" {
+		t.Fatalf("entries = %#v, want original, rejected, and recovered commands", entries)
+	}
+	if got := authority.AppliedIndex(); got != 3 {
+		t.Fatalf("applied index = %d, want rejected command counted as applied log index 3", got)
+	}
+	closeTestAuthority(t, authority, metadata)
+
+	reopenedMetadata := openTestMetadata(t, dir)
+	reopenedAuthority := openTestAuthority(t, dir, reopenedMetadata)
+	defer closeTestAuthority(t, reopenedAuthority, reopenedMetadata)
+	_, err = reopenedMetadata.HeadDocument(recovered.Identity)
+	testutil.RequireNoErrorf(t, err, "head recovered document after reopen")
+	if _, err := reopenedMetadata.HeadDocument(conflictingCommand.Identity); !errors.Is(err, metastore.ErrNotFound) {
+		t.Fatalf("conflicting command document after reopen error = %v, want %v", err, metastore.ErrNotFound)
+	}
+}
+
 func TestAuthorityConcurrentCommitsShareCommandLogSync(t *testing.T) {
 	dir := t.TempDir()
 	metadata := openTestMetadata(t, dir)
