@@ -457,6 +457,10 @@ func (a *Authority) replay() error {
 			return fmt.Errorf("raftmeta: command index %d after snapshot index %d; want %d", entry.Index, a.snapshotIndex, expectedIndex)
 		}
 		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
+			if isDeterministicCommandRejection(err) {
+				expectedIndex++
+				continue
+			}
 			return fmt.Errorf("raftmeta: apply command at index %d: %w", entry.Index, err)
 		}
 		expectedIndex++
@@ -795,6 +799,11 @@ func (a *Authority) prepareProposalBatch(batch []*authorityProposal) []preparedA
 func (a *Authority) applyPreparedEntries(prepared []preparedAuthorityCommand, entries []Entry) {
 	for index, entry := range entries {
 		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
+			if isDeterministicCommandRejection(err) {
+				a.appliedIndex = entry.Index
+				prepared[index].proposal.reply(nil, err)
+				continue
+			}
 			failure := a.recordFailureLocked(fmt.Errorf("raftmeta: apply command at index %d: %w", entry.Index, err))
 			replyPreparedBatch(prepared, index, failure)
 			return
@@ -817,6 +826,13 @@ func (a *Authority) recordFailureLocked(err error) error {
 		a.failureErr = err
 	}
 	return a.failureErr
+}
+
+// These errors are deterministic no-op command outcomes, not local durability failures.
+func isDeterministicCommandRejection(err error) bool {
+	return errors.Is(err, metastore.ErrConflict) ||
+		errors.Is(err, metastore.ErrTransactionClosed) ||
+		errors.Is(err, metastore.ErrNotFound)
 }
 
 func replyPreparedBatch(prepared []preparedAuthorityCommand, start int, err error) {
