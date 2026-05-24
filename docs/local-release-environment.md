@@ -215,3 +215,14 @@ Runtime enforcement requires the target cluster CNI to implement Kubernetes
 `networking.k8s.io/v1` NetworkPolicy, such as Calico or Cilium. The repository
 manifest checks verify the rendered policy shape; live production rollout
 evidence must verify that the target cluster enforces the policy.
+
+## Resource Envelope
+
+The base `scrapd` container declares a conservative resource envelope:
+`250m` CPU and `256Mi` memory requests, with `1000m` CPU and `512Mi` memory
+limits. The limits prevent a runaway local rehearsal process from monopolizing
+a node or being the first unbounded pod killed under pressure.
+
+These defaults are a release-artifact safety baseline only. Production capacity
+approval still requires downstream deployment evidence for the target node
+class, storage class, workload shape, and live memory headroom under write load.
