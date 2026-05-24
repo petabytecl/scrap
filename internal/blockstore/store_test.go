@@ -162,14 +162,15 @@ func TestConcurrentAppendsShareDurableSync(t *testing.T) {
 	errs := make([]error, appendCount)
 	var wg sync.WaitGroup
 	wg.Add(appendCount)
-	for index := range appendCount {
-		go func() {
-			defer wg.Done()
-			<-start
-			record, err := store.Append(ctx, bytes.NewReader([]byte("x")))
-			errs[index] = err
-			records[index] = record
-		}()
+	appendAt := func(index int) {
+		defer wg.Done()
+		<-start
+		record, err := store.Append(ctx, bytes.NewReader([]byte("x")))
+		errs[index] = err
+		records[index] = record
+	}
+	for _, index := range appendIndexes(appendCount) {
+		go appendAt(index)
 	}
 	close(start)
 	wg.Wait()
@@ -204,12 +205,13 @@ func TestSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
 	errs := make([]error, appendCount)
 	var wg sync.WaitGroup
 	wg.Add(appendCount)
-	for index := range appendCount {
-		go func() {
-			defer wg.Done()
-			<-start
-			_, errs[index] = store.Append(ctx, bytes.NewReader([]byte("x")))
-		}()
+	appendWithSyncFailure := func(index int) {
+		defer wg.Done()
+		<-start
+		_, errs[index] = store.Append(ctx, bytes.NewReader([]byte("x")))
+	}
+	for _, index := range appendIndexes(appendCount) {
+		go appendWithSyncFailure(index)
 	}
 	close(start)
 	wg.Wait()
@@ -333,6 +335,39 @@ func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	}
 }
 
+func TestAppendRollsBackOffsetWhenSyncFailureArrivesBeforeEnqueue(t *testing.T) {
+	ctx := context.Background()
+	syncErr := errors.New("late sync failure")
+	store, err := Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open store")
+	t.Cleanup(func() {
+		closeErr := store.Close()
+		if closeErr != nil && !errors.Is(closeErr, syncErr) {
+			t.Fatalf("close store: %v", closeErr)
+		}
+	})
+
+	_, err = store.Append(ctx, &sideEffectReader{
+		data: []byte("pending offset rollback"),
+		onRead: func() {
+			store.syncMu.Lock()
+			defer store.syncMu.Unlock()
+			_ = store.syncFailureLocked(syncErr)
+		},
+	})
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("append error = %v, want %v", err, syncErr)
+	}
+	if got := store.CurrentBlockLength(); got != HeaderLength {
+		t.Fatalf("current block length = %d, want %d", got, HeaderLength)
+	}
+	info, err := os.Stat(store.BlockPath(store.CurrentBlockID()))
+	testutil.RequireNoErrorf(t, err, "stat block after failed enqueue")
+	if got := info.Size(); got != HeaderLength {
+		t.Fatalf("block file size = %d, want %d", got, HeaderLength)
+	}
+}
+
 func requireNoOverlappingRecords(t *testing.T, records []Record) {
 	t.Helper()
 	sorted := append([]Record(nil), records...)
@@ -348,6 +383,14 @@ func requireNoOverlappingRecords(t *testing.T, records []Record) {
 		nextOffset, err = addUint64("test offset", nextOffset, record.StoredLength)
 		testutil.RequireNoErrorf(t, err, "advance test offset")
 	}
+}
+
+func appendIndexes(count int) []int {
+	indexes := make([]int, count)
+	for index := range indexes {
+		indexes[index] = index
+	}
+	return indexes
 }
 
 type appendOutcome struct {
@@ -533,5 +576,23 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	}
 	copy(p, r.data)
 	r.sent = true
+	return len(r.data), nil
+}
+
+type sideEffectReader struct {
+	data   []byte
+	onRead func()
+	sent   bool
+}
+
+func (r *sideEffectReader) Read(p []byte) (int, error) {
+	if r.sent {
+		return 0, io.EOF
+	}
+	r.sent = true
+	if r.onRead != nil {
+		r.onRead()
+	}
+	copy(p, r.data)
 	return len(r.data), nil
 }

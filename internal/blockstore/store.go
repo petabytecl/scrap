@@ -613,11 +613,11 @@ func (s *Store) appendAndEnqueueDurableSync(ctx context.Context, reader io.Reade
 	if err != nil {
 		return nil, Record{}, err
 	}
-	s.blockOffset = nextOffset
 	syncBatch, err := s.enqueueDurableSyncLocked()
 	if err != nil {
 		return nil, Record{}, err
 	}
+	s.blockOffset = nextOffset
 	committed = true
 	return syncBatch, record, nil
 }
