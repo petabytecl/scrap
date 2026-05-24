@@ -951,35 +951,43 @@ func verificationWindow(record blockstore.Record, offset, length uint64) (uint64
 	}
 	selectedStart := record.StoredOffset + offset
 	selectedEnd := selectedStart + length
-	var verifyStart uint64
-	var verifyEnd uint64
-	frameMatched := false
+	window := verificationFrameWindow{}
 	for _, frame := range record.Frames {
-		prevStart, prevEnd := verifyStart, verifyEnd
-		verifyStart, verifyEnd = includeVerificationFrame(frame, selectedStart, selectedEnd, verifyStart, verifyEnd)
-		if verifyStart != prevStart || verifyEnd != prevEnd {
-			frameMatched = true
+		var err error
+		window, err = includeVerificationFrame(frame, selectedStart, selectedEnd, window)
+		if err != nil {
+			return 0, 0, err
 		}
 	}
-	if !frameMatched || verifyEnd < selectedEnd {
+	if !window.initialized || window.start > selectedStart || window.end < selectedEnd {
 		return 0, 0, io.ErrUnexpectedEOF
 	}
-	return verifyStart, verifyEnd, nil
+	return window.start, window.end, nil
 }
 
-func includeVerificationFrame(frame blockstore.FrameRecord, selectedStart, selectedEnd, verifyStart, verifyEnd uint64) (uint64, uint64) {
+type verificationFrameWindow struct {
+	start       uint64
+	end         uint64
+	initialized bool
+}
+
+func includeVerificationFrame(frame blockstore.FrameRecord, selectedStart, selectedEnd uint64, window verificationFrameWindow) (verificationFrameWindow, error) {
 	frameStart := frame.SegmentOffset
 	frameEnd := frame.SegmentOffset + frame.SegmentLength
+	if frameEnd < frameStart {
+		return window, blockstore.ErrInvalidRange
+	}
 	if frameEnd <= selectedStart || frameStart >= selectedEnd {
-		return verifyStart, verifyEnd
+		return window, nil
 	}
-	if verifyStart == 0 || frameStart < verifyStart {
-		verifyStart = frameStart
+	if !window.initialized || frameStart < window.start {
+		window.start = frameStart
 	}
-	if frameEnd > verifyEnd {
-		verifyEnd = frameEnd
+	if frameEnd > window.end {
+		window.end = frameEnd
 	}
-	return verifyStart, verifyEnd
+	window.initialized = true
+	return window, nil
 }
 
 func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verifyStart uint64, data []byte) error {
