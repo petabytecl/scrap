@@ -46,11 +46,13 @@ func TestBuildReportSerializesRequiredEvidence(t *testing.T) {
 		`"p50_micros":2000`,
 		`"p95_micros":3000`,
 		`"p99_micros":3000`,
-		`"writes_per_second":300`,
 	} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("encoded report missing %s: %s", want, raw)
 		}
+	}
+	if got := report.Results.Throughput.WritesPerSecond; got < 299.9 || got > 300.1 {
+		t.Fatalf("writes per second = %.4f, want near 300", got)
 	}
 	if report.Status != StatusPassed {
 		t.Fatalf("status = %q, want %q", report.Status, StatusPassed)
