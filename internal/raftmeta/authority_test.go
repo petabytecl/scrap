@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -99,6 +101,109 @@ func TestAuthorityCompleteTransactionRetryDoesNotAppend(t *testing.T) {
 	if retry.CompletedAt == nil || !retry.CompletedAt.Equal(completedAt) {
 		t.Fatalf("retry completed_at = %v, want original %v", retry.CompletedAt, completedAt)
 	}
+}
+
+func TestAuthorityCompleteTransactionAfterApplyReadErrorReturnsCommittedResult(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	document := authorityTestDocument("invoice.xml", []byte{1})
+	tailDocument := authorityTestDocument("summary.xml", []byte{2})
+	tailDocument.Location.BlockID = "block-2"
+	completedAt := time.Unix(200, 0).UTC()
+	tags := map[string]string{"closed_by": "test"}
+
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()), "commit document")
+	current, err := metadata.GetTransaction(identity.Transaction{
+		TenantID:      document.Identity.TenantID,
+		TransactionID: document.Identity.TransactionID,
+	})
+	testutil.RequireNoErrorf(t, err, "get open transaction")
+	committed := current
+	committed.DocumentCount++
+	committed.PermanentDocumentCount++
+	committed.State = metastore.TransactionStateCompleted
+	committed.CompletedAt = &completedAt
+	committed.Tags = cloneTags(tags)
+	commitCommand := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "cmd-2",
+		ProposedAt:    timestamppb.New(time.Unix(150, 0).UTC()),
+		Command: &metastorev1.ShardCommand_CommitDocument{
+			CommitDocument: &metastorev1.CommitDocumentCommand{
+				Document: metastore.DocumentRecord(tailDocument),
+			},
+		},
+	}
+	completeCommand := &metastorev1.ShardCommand{
+		SchemaVersion: metastore.CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "cmd-3",
+		ProposedAt:    timestamppb.New(completedAt),
+		Command: &metastorev1.ShardCommand_CompleteTransaction{
+			CompleteTransaction: &metastorev1.CompleteTransactionCommand{
+				TenantId:      document.Identity.TenantID,
+				TransactionId: document.Identity.TransactionID,
+				CompletedAt:   timestamppb.New(completedAt),
+				Tags:          tags,
+			},
+		},
+	}
+	entries, err := authority.log.AppendBatch([]*metastorev1.ShardCommand{commitCommand, completeCommand})
+	testutil.RequireNoErrorf(t, err, "append batched commit and complete transaction")
+	readErr := errors.New("post-apply transaction read failed")
+	commitProposal := &authorityProposal{done: make(chan authorityProposalResult, 1)}
+	completeProposal := &authorityProposal{done: make(chan authorityProposalResult, 1)}
+
+	authority.mu.Lock()
+	authority.applyPreparedEntries([]preparedAuthorityCommand{
+		{
+			proposal: commitProposal,
+			command:  commitCommand,
+		},
+		{
+			proposal: completeProposal,
+			command:  completeCommand,
+			after: func() (any, error) {
+				return nil, readErr
+			},
+		},
+	}, entries)
+	authority.mu.Unlock()
+
+	commitResult := <-commitProposal.done
+	testutil.RequireNoErrorf(t, commitResult.err, "batched commit reply")
+	result := <-completeProposal.done
+	testutil.RequireNoErrorf(t, result.err, "complete transaction reply after post-apply read failure")
+	got, ok := result.value.(metastore.Transaction)
+	if !ok {
+		t.Fatalf("complete transaction result = %T, want metastore.Transaction", result.value)
+	}
+	requireCompletedTransaction(t, got, committed)
+	stored, err := metadata.GetTransaction(committed.Identity)
+	testutil.RequireNoErrorf(t, err, "get stored completed transaction")
+	requireCompletedTransaction(t, stored, committed)
+	requireScrapedMetric(t, "scrap_batch_failures_total{component=\"raftmeta\",stage=\"post_apply_read\"} 1")
+}
+
+func TestPreparedAuthorityCommandAfterApplyReturnsApplyResultWithoutRead(t *testing.T) {
+	applied := metastore.Transaction{
+		Identity: identity.Transaction{
+			TenantID:      "tenant",
+			TransactionID: "txn",
+		},
+		State: metastore.TransactionStateCompleted,
+	}
+
+	result, err := preparedAuthorityCommand{result: "stale"}.afterApply(applied)
+	testutil.RequireNoErrorf(t, err, "after apply")
+	got, ok := result.(metastore.Transaction)
+	if !ok {
+		t.Fatalf("after apply result = %T, want metastore.Transaction", result)
+	}
+	testutil.RequireDeepEqualf(t, got, applied, "after apply transaction")
 }
 
 func TestAuthorityCompleteTransactionRejectsClosedTransactionWithoutAppending(t *testing.T) {
@@ -749,6 +854,16 @@ func requireRebuiltTransaction(t *testing.T, transaction metastore.Transaction, 
 	testutil.RequireNotNilf(t, transaction.CompletedAt, "rebuilt transaction completion timestamp")
 	testutil.RequireTruef(t, transaction.CompletedAt.Equal(completedAt), "rebuilt completed_at = %v, want %v", transaction.CompletedAt, completedAt)
 	testutil.RequireEqualf(t, "test", transaction.Tags["closed_by"], "rebuilt closed_by tag")
+}
+
+func requireCompletedTransaction(t *testing.T, got, want metastore.Transaction) {
+	t.Helper()
+	testutil.RequireEqualf(t, want.Identity, got.Identity, "completed transaction identity")
+	testutil.RequireEqualf(t, metastore.TransactionStateCompleted, got.State, "completed transaction state")
+	testutil.RequireNotNilf(t, got.CompletedAt, "completed transaction timestamp")
+	testutil.RequireNotNilf(t, want.CompletedAt, "expected completed transaction timestamp")
+	testutil.RequireTruef(t, got.CompletedAt.Equal(*want.CompletedAt), "completed_at = %v, want %v", got.CompletedAt, want.CompletedAt)
+	testutil.RequireDeepEqualf(t, want.Tags, got.Tags, "completed transaction tags")
 }
 
 func requireRebuiltUploadIntent(t *testing.T, intent metastore.UploadIntent) {

@@ -862,7 +862,8 @@ func (a *Authority) prepareProposalBatch(batch []*authorityProposal) []preparedA
 
 func (a *Authority) applyPreparedEntries(prepared []preparedAuthorityCommand, entries []Entry) {
 	for index, entry := range entries {
-		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
+		appliedResult, err := a.store.ApplyShardCommandWithResult(entry.Command)
+		if err != nil {
 			if isDeterministicCommandRejection(err) {
 				a.appliedIndex = entry.Index
 				prepared[index].proposal.reply(nil, err)
@@ -873,16 +874,24 @@ func (a *Authority) applyPreparedEntries(prepared []preparedAuthorityCommand, en
 			return
 		}
 		a.appliedIndex = entry.Index
-		value, err := prepared[index].afterApply()
+		value, err := prepared[index].afterApply(appliedResult.Value)
 		prepared[index].proposal.reply(value, err)
 	}
 }
 
-func (command preparedAuthorityCommand) afterApply() (any, error) {
+func (command preparedAuthorityCommand) afterApply(appliedResult any) (any, error) {
 	if command.after == nil {
+		if appliedResult != nil {
+			return appliedResult, nil
+		}
 		return command.result, nil
 	}
-	return command.after()
+	value, err := command.after()
+	if err != nil && appliedResult != nil {
+		observe.RecordBatchFailure(observe.BatchComponentRaftMeta, observe.BatchStagePostApplyRead)
+		return appliedResult, nil
+	}
+	return value, err
 }
 
 func (a *Authority) recordFailureLocked(err error) error {

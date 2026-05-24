@@ -15,50 +15,68 @@ import (
 	"github.com/petabytecl/scrap/internal/identity"
 )
 
+// ShardCommandApplyResult carries optional data produced while applying a command.
+type ShardCommandApplyResult struct {
+	Value any
+}
+
 func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
+	_, err := s.ApplyShardCommandWithResult(command)
+	return err
+}
+
+func (s *Store) ApplyShardCommandWithResult(command *metastorev1.ShardCommand) (ShardCommandApplyResult, error) {
 	receipt, err := commandReceipt(command)
 	if err != nil {
-		return err
+		return ShardCommandApplyResult{}, err
 	}
 	existing, err := s.GetCommandReceipt(receipt.CommandID)
 	if err == nil {
 		if existing.CommandSHA256 == receipt.CommandSHA256 {
-			return nil
+			return ShardCommandApplyResult{}, nil
 		}
-		return fmt.Errorf("%w: command id already applied with different payload", ErrConflict)
+		return ShardCommandApplyResult{}, fmt.Errorf("%w: command id already applied with different payload", ErrConflict)
 	}
 	if !errors.Is(err, ErrNotFound) {
-		return err
+		return ShardCommandApplyResult{}, err
 	}
 	batch := s.db.NewBatch()
 	defer closeutil.Ignore(batch)
-	if err := s.applyShardCommandMutation(batch, command); err != nil {
-		return err
+	result, err := s.applyShardCommandMutation(batch, command)
+	if err != nil {
+		return ShardCommandApplyResult{}, err
 	}
 	if err := s.recordCommandReceipt(batch, receipt); err != nil {
-		return err
+		return ShardCommandApplyResult{}, err
 	}
-	return batch.Commit(pebble.Sync)
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return ShardCommandApplyResult{}, err
+	}
+	return result, nil
 }
 
-func (s *Store) applyShardCommandMutation(batch *pebble.Batch, command *metastorev1.ShardCommand) error {
+func (s *Store) applyShardCommandMutation(batch *pebble.Batch, command *metastorev1.ShardCommand) (ShardCommandApplyResult, error) {
 	switch typed := command.GetCommand().(type) {
 	case *metastorev1.ShardCommand_CommitDocument:
-		return s.applyCommitDocument(batch, typed.CommitDocument)
+		return ShardCommandApplyResult{}, s.applyCommitDocument(batch, typed.CommitDocument)
 	case *metastorev1.ShardCommand_CompleteTransaction:
-		return s.applyCompleteTransaction(batch, typed.CompleteTransaction)
+		transaction, err := s.applyCompleteTransaction(batch, typed.CompleteTransaction)
+		if err != nil {
+			return ShardCommandApplyResult{}, err
+		}
+		return ShardCommandApplyResult{Value: transaction}, nil
 	case *metastorev1.ShardCommand_RecordUploadIntent:
-		return s.applyRecordUploadIntent(batch, typed.RecordUploadIntent, command.GetProposedAt())
+		return ShardCommandApplyResult{}, s.applyRecordUploadIntent(batch, typed.RecordUploadIntent, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateUploadIntentState:
-		return s.applyUpdateUploadIntentState(batch, typed.UpdateUploadIntentState, command.GetProposedAt())
+		return ShardCommandApplyResult{}, s.applyUpdateUploadIntentState(batch, typed.UpdateUploadIntentState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_UpdateRestoreState:
-		return s.applyUpdateRestoreState(batch, typed.UpdateRestoreState)
+		return ShardCommandApplyResult{}, s.applyUpdateRestoreState(batch, typed.UpdateRestoreState)
 	case *metastorev1.ShardCommand_RecordRepairState:
-		return s.applyRecordRepairState(batch, typed.RecordRepairState, command.GetProposedAt())
+		return ShardCommandApplyResult{}, s.applyRecordRepairState(batch, typed.RecordRepairState, command.GetProposedAt())
 	case *metastorev1.ShardCommand_TombstoneDocument:
-		return s.applyTombstoneDocument(batch, typed.TombstoneDocument)
+		return ShardCommandApplyResult{}, s.applyTombstoneDocument(batch, typed.TombstoneDocument)
 	default:
-		return fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
+		return ShardCommandApplyResult{}, fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
 	}
 }
 
@@ -88,19 +106,18 @@ func (s *Store) applyCommitDocument(batch *pebble.Batch, command *metastorev1.Co
 	return s.putDocument(batch, documentFromProto(command.GetDocument()))
 }
 
-func (s *Store) applyCompleteTransaction(batch *pebble.Batch, command *metastorev1.CompleteTransactionCommand) error {
+func (s *Store) applyCompleteTransaction(batch *pebble.Batch, command *metastorev1.CompleteTransactionCommand) (Transaction, error) {
 	if command == nil {
-		return errors.New("metastore: complete transaction command is required")
+		return Transaction{}, errors.New("metastore: complete transaction command is required")
 	}
 	completedAt := command.GetCompletedAt()
 	if completedAt == nil {
-		return errors.New("metastore: complete transaction command requires completed_at")
+		return Transaction{}, errors.New("metastore: complete transaction command requires completed_at")
 	}
-	_, err := s.completeTransaction(batch, identity.Transaction{
+	return s.completeTransaction(batch, identity.Transaction{
 		TenantID:      command.GetTenantId(),
 		TransactionID: command.GetTransactionId(),
 	}, completedAt.AsTime(), cloneTags(command.GetTags()))
-	return err
 }
 
 func (s *Store) applyRecordUploadIntent(batch *pebble.Batch, command *metastorev1.RecordUploadIntentCommand, proposedAt *timestamppb.Timestamp) error {

@@ -34,6 +34,7 @@ func TestMetricsHandlerExposesCriticalSignalsAtStartup(t *testing.T) {
 		"scrap_metadata_command_sync_latency_seconds_count{outcome=\"error\"} 0",
 		"scrap_batch_failures_total{component=\"blockstore\",stage=\"sync\"} 0",
 		"scrap_batch_failures_total{component=\"raftmeta\",stage=\"sync\"} 0",
+		"scrap_batch_failures_total{component=\"raftmeta\",stage=\"post_apply_read\"} 0",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
@@ -59,6 +60,7 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 	RecordMetadataCommandSyncLatency(OutcomeSuccess, 4*time.Millisecond)
 	RecordBatchFailure(BatchComponentBlockstore, BatchStageSync)
 	RecordBatchFailure(BatchComponentRaftMeta, BatchStageSync)
+	RecordBatchFailure(BatchComponentRaftMeta, BatchStagePostApplyRead)
 
 	body := scrapeMetrics(t)
 	for _, want := range []string{
@@ -77,6 +79,7 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 		"scrap_metadata_command_sync_latency_seconds_count{outcome=\"success\"} 1",
 		"scrap_batch_failures_total{component=\"blockstore\",stage=\"sync\"} 1",
 		"scrap_batch_failures_total{component=\"raftmeta\",stage=\"sync\"} 1",
+		"scrap_batch_failures_total{component=\"raftmeta\",stage=\"post_apply_read\"} 1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
@@ -106,8 +109,15 @@ func TestMetricsHandlerDoesNotExposeHighCardinalityInput(t *testing.T) {
 	resetForTest(t)
 
 	RecordBackendProbe("tenant/document/backend-key", OutcomeError)
+	RecordBatchFailure("tenant/component", "tenant/stage")
 	body := scrapeMetrics(t)
 	if strings.Contains(body, "tenant/document/backend-key") {
 		t.Fatalf("metrics body exposed high-cardinality operation label:\n%s", body)
+	}
+	if strings.Contains(body, "tenant/component") || strings.Contains(body, "tenant/stage") {
+		t.Fatalf("metrics body exposed high-cardinality batch labels:\n%s", body)
+	}
+	if !strings.Contains(body, "scrap_batch_failures_total{component=\"unknown\",stage=\"unknown\"} 1") {
+		t.Fatalf("metrics body missing unknown batch labels:\n%s", body)
 	}
 }
