@@ -953,10 +953,15 @@ func verificationWindow(record blockstore.Record, offset, length uint64) (uint64
 	selectedEnd := selectedStart + length
 	var verifyStart uint64
 	var verifyEnd uint64
+	frameMatched := false
 	for _, frame := range record.Frames {
+		prevStart, prevEnd := verifyStart, verifyEnd
 		verifyStart, verifyEnd = includeVerificationFrame(frame, selectedStart, selectedEnd, verifyStart, verifyEnd)
+		if verifyStart != prevStart || verifyEnd != prevEnd {
+			frameMatched = true
+		}
 	}
-	if verifyStart == 0 || verifyEnd < selectedEnd {
+	if !frameMatched || verifyEnd < selectedEnd {
 		return 0, 0, io.ErrUnexpectedEOF
 	}
 	return verifyStart, verifyEnd, nil
