@@ -19,6 +19,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/storageapp"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
@@ -334,7 +335,7 @@ func (f *fakeDocuments) ReadDocument(_ context.Context, req ReadDocumentRequest,
 	if err := sender.SendMetadata(ReadDocumentMetadata{
 		Metadata:      sampleDocumentMetadata(req.Identity),
 		SelectedRange: ReadRange{Offset: 0},
-		Source:        scrapv1.StorageSource_STORAGE_SOURCE_LOCAL,
+		Source:        storageapp.StorageSourceLocal,
 	}); err != nil {
 		return err
 	}
@@ -359,7 +360,7 @@ func (f *fakeTransactions) CompleteTransaction(_ context.Context, req CompleteTr
 	now := time.Unix(20, 0).UTC()
 	return TransactionState{
 		Transaction:            req.Transaction,
-		State:                  scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED,
+		State:                  storageapp.TransactionStateCompleted,
 		DocumentCount:          1,
 		PermanentDocumentCount: 1,
 		CreatedAt:              time.Unix(10, 0).UTC(),
@@ -370,7 +371,7 @@ func (f *fakeTransactions) CompleteTransaction(_ context.Context, req CompleteTr
 func (f *fakeTransactions) GetTransaction(_ context.Context, req GetTransactionRequest) (TransactionState, error) {
 	return TransactionState{
 		Transaction: req.Transaction,
-		State:       scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_OPEN,
+		State:       storageapp.TransactionStateOpen,
 		CreatedAt:   time.Unix(10, 0).UTC(),
 	}, nil
 }
@@ -378,8 +379,8 @@ func (f *fakeTransactions) GetTransaction(_ context.Context, req GetTransactionR
 func sampleDocumentMetadata(doc identity.Document) DocumentMetadata {
 	return DocumentMetadata{
 		Identity:                    doc,
-		DocumentClass:               scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:               scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		DocumentClass:               storageapp.DocumentClassPermanent,
+		PriorityClass:               storageapp.PriorityClassNormal,
 		ContentType:                 "application/pdf",
 		HasContentType:              true,
 		Length:                      3,
@@ -388,8 +389,8 @@ func sampleDocumentMetadata(doc identity.Document) DocumentMetadata {
 		CreatedByService:            "billing-etl",
 		CreatedAt:                   time.Unix(10, 0).UTC(),
 		FinalizedAt:                 time.Unix(20, 0).UTC(),
-		Availability:                scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_HOT,
-		LifecycleState:              scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_ACTIVE,
+		Availability:                storageapp.DocumentAvailabilityHot,
+		LifecycleState:              storageapp.DocumentLifecycleStateActive,
 		Tags: map[string]string{
 			"workflow": "billing",
 		},

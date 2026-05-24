@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -13,6 +12,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/storageapp"
 )
 
 const (
@@ -38,70 +38,23 @@ const (
 	reasonRangeOverflow         = "SCRAP_RANGE_OVERFLOW"
 )
 
-type WriteDocumentInit struct {
-	Identity             identity.Document
-	DocumentClass        scrapv1.DocumentClass
-	PriorityClass        scrapv1.PriorityClass
-	ContentType          string
-	ExpectedLength       *uint64
-	ExpectedSHA256       []byte
-	ClientIdempotencyKey string
-	CreatedByService     string
-	WorkflowStage        string
-	Tags                 map[string]string
-}
+type WriteDocumentInit = storageapp.WriteDocumentInit
 
-type HeadDocumentRequest struct {
-	Identity identity.Document
-}
+type HeadDocumentRequest = storageapp.HeadDocumentRequest
 
-type ReadRange struct {
-	Offset uint64
-	Length *uint64
-}
+type ReadRange = storageapp.ReadRange
 
-type TimeRange struct {
-	StartTime *time.Time
-	EndTime   *time.Time
-}
+type TimeRange = storageapp.TimeRange
 
-type ReadDocumentRequest struct {
-	Identity  identity.Document
-	Range     *ReadRange
-	ChunkSize uint32
-}
+type ReadDocumentRequest = storageapp.ReadDocumentRequest
 
-type FindDocumentsRequest struct {
-	Transaction identity.Transaction
-	Filter      DocumentFilter
-}
+type FindDocumentsRequest = storageapp.FindDocumentsRequest
 
-type DocumentFilter struct {
-	DocumentNameExact     string
-	HasDocumentNameExact  bool
-	DocumentNamePrefix    string
-	HasDocumentNamePrefix bool
-	DocumentClass         scrapv1.DocumentClass
-	HasDocumentClass      bool
-	ContentType           string
-	HasContentType        bool
-	WorkflowStage         string
-	HasWorkflowStage      bool
-	CreatedByService      string
-	HasCreatedByService   bool
-	CreatedAt             *TimeRange
-	Tags                  map[string]string
-}
+type DocumentFilter = storageapp.DocumentFilter
 
-type CompleteTransactionRequest struct {
-	Transaction        identity.Transaction
-	CompletedByService string
-	Tags               map[string]string
-}
+type CompleteTransactionRequest = storageapp.CompleteTransactionRequest
 
-type GetTransactionRequest struct {
-	Transaction identity.Transaction
-}
+type GetTransactionRequest = storageapp.GetTransactionRequest
 
 type violations struct {
 	fields []*errdetails.BadRequest_FieldViolation
@@ -139,8 +92,8 @@ func ValidateWriteDocumentInit(init *scrapv1.WriteDocumentInit) (WriteDocumentIn
 
 	return WriteDocumentInit{
 		Identity:             doc,
-		DocumentClass:        init.DocumentClass,
-		PriorityClass:        init.PriorityClass,
+		DocumentClass:        documentClassFromProto(init.DocumentClass),
+		PriorityClass:        priorityClassFromProto(init.PriorityClass),
 		ContentType:          optionalString(init.ContentType),
 		ExpectedLength:       cloneUint64(init.ExpectedLength),
 		ExpectedSHA256:       cloneBytes(init.ExpectedSha256),
@@ -330,7 +283,7 @@ func validateDocumentFilter(filter *scrapv1.DocumentFilter, problems *violations
 	validateTags("filter.tags", filter.Tags, problems)
 
 	if filter.DocumentClass != nil {
-		out.DocumentClass = *filter.DocumentClass
+		out.DocumentClass = documentClassFromProto(*filter.DocumentClass)
 		out.HasDocumentClass = true
 	}
 	if filter.ContentType != nil {

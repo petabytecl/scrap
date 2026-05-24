@@ -21,30 +21,18 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/storageapp"
 )
 
 const reasonInvalidStreamOrder = "SCRAP_INVALID_STREAM_ORDER"
 
-type DocumentApplication interface {
-	WriteDocument(context.Context, WriteDocumentInit, ChunkReader) (WriteDocumentResult, error)
-	HeadDocument(context.Context, HeadDocumentRequest) (DocumentMetadata, error)
-	ReadDocument(context.Context, ReadDocumentRequest, ReadDocumentSender) error
-	FindDocuments(context.Context, FindDocumentsRequest) (FindDocumentsResult, error)
-}
+type DocumentApplication = storageapp.DocumentApplication
 
-type TransactionApplication interface {
-	CompleteTransaction(context.Context, CompleteTransactionRequest) (TransactionState, error)
-	GetTransaction(context.Context, GetTransactionRequest) (TransactionState, error)
-}
+type TransactionApplication = storageapp.TransactionApplication
 
-type ChunkReader interface {
-	Recv() ([]byte, error)
-}
+type ChunkReader = storageapp.ChunkReader
 
-type ReadDocumentSender interface {
-	SendMetadata(ReadDocumentMetadata) error
-	SendChunk([]byte) error
-}
+type ReadDocumentSender = storageapp.ReadDocumentSender
 
 type PublicServer struct {
 	documents    DocumentApplication
@@ -53,54 +41,15 @@ type PublicServer struct {
 	now          func() time.Time
 }
 
-type WriteDocumentResult struct {
-	Metadata             DocumentMetadata
-	DesiredReplicaCount  uint32
-	AchievedReplicaCount uint32
-	RepairRequired       bool
-	IdempotentReplay     bool
-}
+type WriteDocumentResult = storageapp.WriteDocumentResult
 
-type FindDocumentsResult struct {
-	Documents []DocumentMetadata
-}
+type FindDocumentsResult = storageapp.FindDocumentsResult
 
-type DocumentMetadata struct {
-	Identity                    identity.Document
-	DocumentClass               scrapv1.DocumentClass
-	PriorityClass               scrapv1.PriorityClass
-	ContentType                 string
-	HasContentType              bool
-	Length                      uint64
-	LogicalSHA256               []byte
-	DocumentIdentityFingerprint []byte
-	CreatedByService            string
-	WorkflowStage               string
-	HasWorkflowStage            bool
-	CreatedAt                   time.Time
-	FinalizedAt                 time.Time
-	Availability                scrapv1.DocumentAvailability
-	LifecycleState              scrapv1.DocumentLifecycleState
-	Tags                        map[string]string
-}
+type DocumentMetadata = storageapp.DocumentMetadata
 
-type ReadDocumentMetadata struct {
-	Metadata      DocumentMetadata
-	SelectedRange ReadRange
-	Source        scrapv1.StorageSource
-}
+type ReadDocumentMetadata = storageapp.ReadDocumentMetadata
 
-type TransactionState struct {
-	Transaction            identity.Transaction
-	State                  scrapv1.TransactionStateKind
-	DocumentCount          uint32
-	PermanentDocumentCount uint32
-	EphemeralDocumentCount uint32
-	CreatedAt              time.Time
-	CompletedAt            *time.Time
-	TimeoutAt              *time.Time
-	Tags                   map[string]string
-}
+type TransactionState = storageapp.TransactionState
 
 type PublicOption func(*PublicServer)
 
@@ -155,7 +104,7 @@ func (s *PublicServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1.W
 	if err := s.auditSuccessfulWrite(stream.Context(), init, result); err != nil {
 		return err
 	}
-	return stream.SendAndClose(result.toProto())
+	return stream.SendAndClose(writeDocumentResultToProto(result))
 }
 
 func (s *PublicServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocumentRequest) (*scrapv1.HeadDocumentResponse, error) {
@@ -170,7 +119,7 @@ func (s *PublicServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocume
 	if err != nil {
 		return nil, ToGRPCError(err)
 	}
-	return &scrapv1.HeadDocumentResponse{Metadata: metadata.toProto()}, nil
+	return &scrapv1.HeadDocumentResponse{Metadata: documentMetadataToProto(metadata)}, nil
 }
 
 func (s *PublicServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream grpc.ServerStreamingServer[scrapv1.ReadDocumentResponse]) error {
@@ -200,7 +149,7 @@ func (s *PublicServer) FindDocuments(ctx context.Context, req *scrapv1.FindDocum
 		Documents: make([]*scrapv1.DocumentMetadata, 0, len(result.Documents)),
 	}
 	for _, metadata := range result.Documents {
-		response.Documents = append(response.Documents, metadata.toProto())
+		response.Documents = append(response.Documents, documentMetadataToProto(metadata))
 	}
 	return response, nil
 }
@@ -217,7 +166,7 @@ func (s *PublicServer) CompleteTransaction(ctx context.Context, req *scrapv1.Com
 	if err != nil {
 		return nil, ToGRPCError(err)
 	}
-	return &scrapv1.CompleteTransactionResponse{Transaction: state.toProto()}, nil
+	return &scrapv1.CompleteTransactionResponse{Transaction: transactionStateToProto(state)}, nil
 }
 
 func (s *PublicServer) GetTransaction(ctx context.Context, req *scrapv1.GetTransactionRequest) (*scrapv1.GetTransactionResponse, error) {
@@ -232,7 +181,7 @@ func (s *PublicServer) GetTransaction(ctx context.Context, req *scrapv1.GetTrans
 	if err != nil {
 		return nil, ToGRPCError(err)
 	}
-	return &scrapv1.GetTransactionResponse{Transaction: state.toProto()}, nil
+	return &scrapv1.GetTransactionResponse{Transaction: transactionStateToProto(state)}, nil
 }
 
 type writeChunkReader struct {
@@ -259,9 +208,9 @@ func (s readDocumentSender) SendMetadata(metadata ReadDocumentMetadata) error {
 	return s.stream.Send(&scrapv1.ReadDocumentResponse{
 		Message: &scrapv1.ReadDocumentResponse_Metadata{
 			Metadata: &scrapv1.ReadDocumentMetadata{
-				Metadata:      metadata.Metadata.toProto(),
-				SelectedRange: metadata.SelectedRange.toProto(),
-				Source:        metadata.Source,
+				Metadata:      documentMetadataToProto(metadata.Metadata),
+				SelectedRange: readRangeToProto(metadata.SelectedRange),
+				Source:        storageSourceToProto(metadata.Source),
 			},
 		},
 	})
@@ -280,7 +229,7 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 		return nil
 	}
 	eventType := "document_write_critical"
-	if init.PriorityClass != scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST {
+	if init.PriorityClass != storageapp.PriorityClassCriticalIngest {
 		eventType = "document_write_ephemeral"
 	}
 	actor := workloadIdentityFromContext(ctx)
@@ -297,8 +246,8 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 		"decision":               "succeeded",
 		"request_id":             requestID,
 		"correlation_id":         correlationID,
-		"document_class":         init.DocumentClass.String(),
-		"priority_class":         init.PriorityClass.String(),
+		"document_class":         documentClassToProto(init.DocumentClass).String(),
+		"priority_class":         priorityClassToProto(init.PriorityClass).String(),
 		"created_by_service":     init.CreatedByService,
 		"idempotent_replay":      strconv.FormatBool(result.IdempotentReplay),
 		"desired_replica_count":  strconv.FormatUint(uint64(result.DesiredReplicaCount), 10),
@@ -324,8 +273,8 @@ func (s *PublicServer) auditSuccessfulWrite(ctx context.Context, init WriteDocum
 }
 
 func isAuditedWrite(init WriteDocumentInit) bool {
-	return init.PriorityClass == scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST ||
-		init.DocumentClass == scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
+	return init.PriorityClass == storageapp.PriorityClassCriticalIngest ||
+		init.DocumentClass == storageapp.DocumentClassEphemeral
 }
 
 func workloadIdentityFromContext(ctx context.Context) string {
@@ -406,9 +355,9 @@ func publicAuditMetadataKeyIsSensitive(key string) bool {
 	return false
 }
 
-func (r WriteDocumentResult) toProto() *scrapv1.WriteDocumentResponse {
+func writeDocumentResultToProto(r WriteDocumentResult) *scrapv1.WriteDocumentResponse {
 	return &scrapv1.WriteDocumentResponse{
-		Metadata:             r.Metadata.toProto(),
+		Metadata:             documentMetadataToProto(r.Metadata),
 		DesiredReplicaCount:  r.DesiredReplicaCount,
 		AchievedReplicaCount: r.AchievedReplicaCount,
 		RepairRequired:       r.RepairRequired,
@@ -416,11 +365,11 @@ func (r WriteDocumentResult) toProto() *scrapv1.WriteDocumentResponse {
 	}
 }
 
-func (m DocumentMetadata) toProto() *scrapv1.DocumentMetadata {
+func documentMetadataToProto(m DocumentMetadata) *scrapv1.DocumentMetadata {
 	return &scrapv1.DocumentMetadata{
 		Identity:                    documentIdentityToProto(m.Identity),
-		DocumentClass:               m.DocumentClass,
-		PriorityClass:               m.PriorityClass,
+		DocumentClass:               documentClassToProto(m.DocumentClass),
+		PriorityClass:               priorityClassToProto(m.PriorityClass),
 		ContentType:                 optionalProtoString(m.ContentType, m.HasContentType),
 		Length:                      m.Length,
 		LogicalSha256:               cloneBytes(m.LogicalSHA256),
@@ -429,23 +378,23 @@ func (m DocumentMetadata) toProto() *scrapv1.DocumentMetadata {
 		WorkflowStage:               optionalProtoString(m.WorkflowStage, m.HasWorkflowStage),
 		CreatedAt:                   timestamppb.New(m.CreatedAt),
 		FinalizedAt:                 timestamppb.New(m.FinalizedAt),
-		Availability:                m.Availability,
-		LifecycleState:              m.LifecycleState,
+		Availability:                documentAvailabilityToProto(m.Availability),
+		LifecycleState:              documentLifecycleStateToProto(m.LifecycleState),
 		Tags:                        cloneTags(m.Tags),
 	}
 }
 
-func (r ReadRange) toProto() *scrapv1.ReadRange {
+func readRangeToProto(r ReadRange) *scrapv1.ReadRange {
 	return &scrapv1.ReadRange{
 		Offset: r.Offset,
 		Length: cloneUint64(r.Length),
 	}
 }
 
-func (s TransactionState) toProto() *scrapv1.TransactionState {
+func transactionStateToProto(s TransactionState) *scrapv1.TransactionState {
 	return &scrapv1.TransactionState{
 		Transaction:            transactionIdentityToProto(s.Transaction),
-		State:                  s.State,
+		State:                  transactionStateKindToProto(s.State),
 		DocumentCount:          s.DocumentCount,
 		PermanentDocumentCount: s.PermanentDocumentCount,
 		EphemeralDocumentCount: s.EphemeralDocumentCount,

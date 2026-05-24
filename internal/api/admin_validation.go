@@ -8,6 +8,7 @@ import (
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/storageapp"
 )
 
 const (
@@ -38,10 +39,7 @@ type AdminTarget struct {
 	CapacityProfile string
 }
 
-type BlockTarget struct {
-	ShardID string
-	BlockID string
-}
+type BlockTarget = storageapp.BlockTarget
 
 type SnapshotTarget struct {
 	ShardID      string
@@ -64,11 +62,7 @@ type OperationStartRequest struct {
 	Metadata        map[string]string
 }
 
-type MemberMutationRequest struct {
-	OperationID   string
-	StorageMember string
-	Reason        string
-}
+type MemberMutationRequest = storageapp.MemberMutationRequest
 
 type MemberTargetRequest struct {
 	StorageMember string

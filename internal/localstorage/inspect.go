@@ -14,12 +14,12 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/closeutil"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
+	"github.com/petabytecl/scrap/internal/storageapp"
 )
 
 const localCapacityProfileID = "local-non-production"
@@ -71,7 +71,7 @@ func (a *Application) GetAdminDocument(_ context.Context, doc identity.Document)
 	}, nil
 }
 
-func (a *Application) GetAdminBlock(ctx context.Context, target api.BlockTarget) (*adminv1.Block, error) {
+func (a *Application) GetAdminBlock(ctx context.Context, target storageapp.BlockTarget) (*adminv1.Block, error) {
 	if target.ShardID != "local" {
 		return nil, mapError(metastore.ErrNotFound)
 	}

@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/appstatus"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safepath"
+	"github.com/petabytecl/scrap/internal/storageapp"
 )
 
 const localMemberStateFile = "local-member-state.json"
@@ -22,7 +22,7 @@ type localMemberState struct {
 	Draining bool `json:"draining"`
 }
 
-func (a *Application) CordonMember(ctx context.Context, req api.MemberMutationRequest) (*adminv1.StorageMember, error) {
+func (a *Application) CordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (a *Application) CordonMember(ctx context.Context, req api.MemberMutationRe
 	return a.GetAdminMember(ctx, "local")
 }
 
-func (a *Application) UncordonMember(ctx context.Context, req api.MemberMutationRequest) (*adminv1.StorageMember, error) {
+func (a *Application) UncordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
