@@ -199,7 +199,7 @@ func buildApplications(
 	cfg config.Config,
 	logger *slog.Logger,
 	logPrintf closeutil.Logger,
-) (node.Applications, *backendupload.Runner, *localstorage.OperationExecutor, func(), error) {
+) (node.Applications, *backendupload.Runner, localstorage.OperationExecution, func(), error) {
 	if !cfg.EnableLocalNonProductionStorage {
 		return node.Applications{}, nil, nil, func() {}, nil
 	}
@@ -281,7 +281,7 @@ func startBackgroundRunners(
 	cfg config.Config,
 	apps node.Applications,
 	uploadRunner *backendupload.Runner,
-	operationExecutor *localstorage.OperationExecutor,
+	operationExecutor localstorage.OperationExecution,
 	logger *slog.Logger,
 ) {
 	if cfg.EnableLocalNonProductionStorage {
@@ -323,7 +323,7 @@ func reloadAuthorizationPolicy(ctx context.Context, server *node.Server, logger 
 func runOperationLoop(
 	ctx context.Context,
 	apps node.Applications,
-	operationExecutor *localstorage.OperationExecutor,
+	operationExecutor localstorage.OperationExecution,
 	interval time.Duration,
 	logger *slog.Logger,
 ) {

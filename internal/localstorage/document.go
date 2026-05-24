@@ -729,7 +729,7 @@ func (a *verificationEngine) readVerifiedBackendRange(ctx context.Context, docum
 	if readLength == 0 {
 		return nil, nil
 	}
-	if err := a.verifier.verifyBackendEnvelope(ctx, intent); err != nil {
+	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
 		return nil, err
 	}
 	verifyStart, verifyEnd, err := verificationWindow(document.Location, selectedRange.Offset, readLength)

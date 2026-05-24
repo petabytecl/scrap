@@ -46,8 +46,8 @@ type Application struct {
 	writeFaults              writeFaultHooks
 
 	documents         *documentApplication
-	transactions      *transactionCoordinator
-	verifier          *verificationEngine
+	transactions      TransactionCoordinator
+	verifier          verificationEngineRole
 	operationExecutor *OperationExecutor
 }
 
@@ -167,7 +167,7 @@ func (a *Application) Transactions() storageapp.TransactionApplication {
 	return a.transactions
 }
 
-func (a *Application) OperationExecutor() *OperationExecutor {
+func (a *Application) OperationExecutor() OperationExecution {
 	if a == nil {
 		return nil
 	}

@@ -7,7 +7,8 @@ import (
 	"github.com/petabytecl/scrap/internal/storageapp"
 )
 
-type VerificationEngine interface {
+type verificationEngineRole interface {
+	startByteServingVerifier(context.Context)
 	waitByteServingReady(context.Context) error
 	readVerifiedBackendRange(context.Context, metastore.Document, metastore.UploadIntent, storageapp.ReadRange) ([]byte, error)
 	verifyBackendEnvelope(context.Context, metastore.UploadIntent) error
