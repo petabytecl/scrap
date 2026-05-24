@@ -187,6 +187,20 @@ func TestServerAuthorizesCertificateIdentityWithoutMetadataHeader(t *testing.T) 
 	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
+func TestServerRejectsCertificateIdentityRequirementWithoutTLS(t *testing.T) {
+	cfg := config.Default()
+	cfg.RequireCertificateIdentity = true
+	publicListener := bufconn.Listen(1024 * 1024)
+	defer func() { testutil.RequireNoErrorf(t, publicListener.Close(), "close public listener") }()
+	adminListener := bufconn.Listen(1024 * 1024)
+	defer func() { testutil.RequireNoErrorf(t, adminListener.Close(), "close admin listener") }()
+
+	_, err := newServerWithConfig(cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
+	if err == nil || !strings.Contains(err.Error(), "require_certificate_identity requires grpc TLS to be enabled") {
+		t.Fatalf("newServerWithConfig error = %v, want require-certificate TLS error", err)
+	}
+}
+
 func mtlsHeadRequest() *scrapv1.HeadDocumentRequest {
 	return &scrapv1.HeadDocumentRequest{
 		Identity: &scrapv1.DocumentIdentity{

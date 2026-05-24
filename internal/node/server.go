@@ -102,6 +102,9 @@ func newServerWithConfig(
 	authorization *authz.Manager,
 	policyPath string,
 ) (*Server, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
 	authorizationOptions := authz.InterceptorOptions{
 		DeniedAuditSink:            auditSink,
