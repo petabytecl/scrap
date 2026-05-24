@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -16,6 +18,8 @@ import (
 const (
 	defaultTargetReplicaCount = 5
 	defaultQuorumReplicaCount = 3
+	defaultPrepareTimeout     = 30 * time.Second
+	defaultPrepareConcurrency = 4
 )
 
 var (
@@ -29,6 +33,8 @@ type Policy struct {
 	TargetReplicaCount         int
 	QuorumReplicaCount         int
 	AllowCriticalQuorumDegrade bool
+	PrepareTimeout             time.Duration
+	MaxConcurrentPrepares      int
 }
 
 type PreparedDocument struct {
@@ -135,14 +141,10 @@ func PrepareDocument(ctx context.Context, document PreparedDocument, source Byte
 		return result, err
 	}
 
-	for _, target := range targets {
-		if result.AchievedReplicaCount >= policy.TargetReplicaCount {
-			break
-		}
-		stop := prepareTargetReplica(ctx, document, source, target, &result)
-		if stop {
-			break
-		}
+	prepareTargetReplicas(ctx, document, source, targets, policy, &result)
+	if err := ctx.Err(); err != nil {
+		result.RepairRequired = result.AchievedReplicaCount < policy.TargetReplicaCount
+		return result, err
 	}
 
 	if result.AchievedReplicaCount < policy.TargetReplicaCount {
@@ -155,19 +157,74 @@ func PrepareDocument(ctx context.Context, document PreparedDocument, source Byte
 	return result, nil
 }
 
-func prepareTargetReplica(ctx context.Context, document PreparedDocument, source ByteSource, target Target, result *Result) bool {
-	receipt, err := preparePeerDocument(ctx, document, source, target)
-	if err != nil {
-		result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
-		return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+func prepareTargetReplicas(ctx context.Context, document PreparedDocument, source ByteSource, targets []Target, policy Policy, result *Result) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := runPeerPrepares(ctx, document, source, targets, policy)
+	for attempt := range results {
+		recordPrepareAttempt(document, attempt, result)
+		if result.AchievedReplicaCount >= policy.TargetReplicaCount {
+			cancel()
+		}
 	}
-	if err := validateReceipt(document, target.MemberID, receipt); err != nil {
-		result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
-		return false
+}
+
+type prepareAttempt struct {
+	target  Target
+	receipt Receipt
+	err     error
+}
+
+func runPeerPrepares(ctx context.Context, document PreparedDocument, source ByteSource, targets []Target, policy Policy) <-chan prepareAttempt {
+	results := make(chan prepareAttempt, len(targets))
+	limit := min(policy.MaxConcurrentPrepares, len(targets))
+	semaphore := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, target := range targets {
+		wg.Add(1)
+		go func(target Target) {
+			defer wg.Done()
+			runPeerPrepare(ctx, document, source, target, policy.PrepareTimeout, semaphore, results)
+		}(target)
 	}
-	result.Receipts = append(result.Receipts, receipt)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	return results
+}
+
+func runPeerPrepare(ctx context.Context, document PreparedDocument, source ByteSource, target Target, timeout time.Duration, semaphore chan struct{}, results chan<- prepareAttempt) {
+	select {
+	case semaphore <- struct{}{}:
+		defer func() { <-semaphore }()
+	case <-ctx.Done():
+		results <- prepareAttempt{target: target, err: ctx.Err()}
+		return
+	}
+	receipt, err := preparePeerDocument(ctx, document, source, target, timeout)
+	results <- prepareAttempt{target: target, receipt: receipt, err: err}
+}
+
+func recordPrepareAttempt(document PreparedDocument, attempt prepareAttempt, result *Result) {
+	if shouldIgnoreCanceledAttempt(attempt, result) {
+		return
+	}
+	if err := attempt.err; err != nil {
+		result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: attempt.target.MemberID, Err: err})
+		return
+	}
+	if err := validateReceipt(document, attempt.target.MemberID, attempt.receipt); err != nil {
+		result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: attempt.target.MemberID, Err: err})
+		return
+	}
+	result.Receipts = append(result.Receipts, attempt.receipt)
 	result.AchievedReplicaCount++
-	return false
+}
+
+func shouldIgnoreCanceledAttempt(attempt prepareAttempt, result *Result) bool {
+	return result.AchievedReplicaCount >= result.DesiredReplicaCount && errors.Is(attempt.err, context.Canceled)
 }
 
 func validatePrepareInputs(targets []Target, source ByteSource, required int, result *Result) error {
@@ -182,13 +239,15 @@ func validatePrepareInputs(targets []Target, source ByteSource, required int, re
 	return nil
 }
 
-func preparePeerDocument(ctx context.Context, document PreparedDocument, source ByteSource, target Target) (Receipt, error) {
+func preparePeerDocument(ctx context.Context, document PreparedDocument, source ByteSource, target Target, timeout time.Duration) (Receipt, error) {
 	if target.MemberID == "" || target.Preparer == nil {
 		return Receipt{}, ErrReceiptMismatch
 	}
 	if err := ctx.Err(); err != nil {
 		return Receipt{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	return target.Preparer.PrepareDocument(ctx, PrepareRequest{
 		Document: document,
 		Source:   source,
@@ -251,6 +310,12 @@ func normalizePolicy(policy Policy) Policy {
 	}
 	if policy.QuorumReplicaCount == 0 {
 		policy.QuorumReplicaCount = defaultQuorumReplicaCount
+	}
+	if policy.PrepareTimeout <= 0 {
+		policy.PrepareTimeout = defaultPrepareTimeout
+	}
+	if policy.MaxConcurrentPrepares <= 0 {
+		policy.MaxConcurrentPrepares = defaultPrepareConcurrency
 	}
 	return policy
 }

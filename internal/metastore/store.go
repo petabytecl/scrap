@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -19,10 +20,14 @@ var (
 	ErrNotFound                 = errors.New("metastore: not found")
 	ErrConflict                 = errors.New("metastore: conflict")
 	ErrInvalidRecord            = errors.New("metastore: invalid record")
+	ErrTransactionClosed        = errors.New("metastore: transaction is closed")
 	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
 )
 
-const maxKeyByte = 0xff
+const (
+	maxKeyByte          = 0xff
+	unixNanoSortSignBit = uint64(1) << 63
+)
 
 type Store struct {
 	db *pebble.DB
@@ -67,6 +72,9 @@ func (s *Store) putDocument(batch *pebble.Batch, document Document) error {
 	transaction, err := s.transactionForDocument(document)
 	if err != nil {
 		return err
+	}
+	if transaction.State != TransactionStateOpen {
+		return fmt.Errorf("%w: transaction %s/%s is not open", ErrTransactionClosed, transaction.Identity.TenantID, transaction.Identity.TransactionID)
 	}
 	transaction = incrementTransactionDocumentCount(transaction, document.DocumentClass)
 	transactionValue, err := marshalTransaction(transaction)
@@ -205,6 +213,7 @@ func clearSnapshotBatch(batch *pebble.Batch) error {
 		blockDocumentsRootPrefix(),
 		transactionPrefix(),
 		uploadIntentPrefix(),
+		processableUploadIntentPrefix(),
 		repairStatesPrefix(),
 		commandReceiptPrefix(),
 	} {
@@ -256,7 +265,7 @@ func applySnapshotUploadIntents(batch *pebble.Batch, records []*metastorev1.Uplo
 		if err != nil {
 			return err
 		}
-		if err := batch.Set(uploadIntentKey(intent.BlockID), value, nil); err != nil {
+		if err := setUploadIntentIndexes(batch, intent, value); err != nil {
 			return err
 		}
 	}
@@ -388,7 +397,24 @@ func (s *Store) recordUploadIntent(batch *pebble.Batch, intent UploadIntent) err
 		}
 		return fmt.Errorf("%w: upload intent already exists with different metadata", ErrConflict)
 	}
-	return batch.Set(key, value, nil)
+	return setUploadIntentIndexes(batch, intent, value)
+}
+
+func setUploadIntentIndexes(batch *pebble.Batch, intent UploadIntent, value []byte) error {
+	if err := batch.Set(uploadIntentKey(intent.BlockID), value, nil); err != nil {
+		return err
+	}
+	if shouldProcessUploadIntent(intent) {
+		return batch.Set(processableUploadIntentKey(intent), value, nil)
+	}
+	return nil
+}
+
+func deleteProcessableUploadIntentIndex(batch *pebble.Batch, intent UploadIntent) error {
+	if !shouldProcessUploadIntent(intent) {
+		return nil
+	}
+	return batch.Delete(processableUploadIntentKey(intent), nil)
 }
 
 func (s *Store) UpdateUploadIntentState(blockID string, state UploadState, lastError string, updatedAt time.Time) (UploadIntent, error) {
@@ -415,6 +441,9 @@ func (s *Store) updateUploadIntentState(batch *pebble.Batch, blockID string, sta
 	if updatedAt.IsZero() {
 		updatedAt = time.Now().UTC()
 	}
+	if err := deleteProcessableUploadIntentIndex(batch, intent); err != nil {
+		return UploadIntent{}, err
+	}
 	intent.State = state
 	intent.LastError = lastError
 	intent.HasLastError = lastError != ""
@@ -423,7 +452,7 @@ func (s *Store) updateUploadIntentState(batch *pebble.Batch, blockID string, sta
 	if err != nil {
 		return UploadIntent{}, err
 	}
-	if err := batch.Set(uploadIntentKey(intent.BlockID), value, nil); err != nil {
+	if err := setUploadIntentIndexes(batch, intent, value); err != nil {
 		return UploadIntent{}, err
 	}
 	return intent, nil
@@ -668,6 +697,17 @@ func (s *Store) GetUploadIntent(blockID string) (UploadIntent, error) {
 }
 
 func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
+	return s.listUploadIntents(0)
+}
+
+func (s *Store) ListPendingUploadIntents(limit int) ([]UploadIntent, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("%w: pending upload intent limit must be positive", ErrInvalidRecord)
+	}
+	return s.listProcessableUploadIntents(limit)
+}
+
+func (s *Store) listUploadIntents(limit int) ([]UploadIntent, error) {
 	prefix := uploadIntentPrefix()
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -685,11 +725,46 @@ func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
 			return nil, err
 		}
 		intents = append(intents, intent)
+		if limit > 0 && len(intents) >= limit {
+			break
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
 	return intents, nil
+}
+
+func (s *Store) listProcessableUploadIntents(limit int) ([]UploadIntent, error) {
+	prefix := processableUploadIntentPrefix()
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer closeutil.Ignore(iter)
+
+	intents := make([]UploadIntent, 0, limit)
+	for valid := iter.First(); valid; valid = iter.Next() {
+		intent, err := unmarshalUploadIntent(iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, intent)
+		if len(intents) >= limit {
+			break
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return intents, nil
+}
+
+func shouldProcessUploadIntent(intent UploadIntent) bool {
+	return intent.State == UploadStatePending || intent.State == UploadStateFailed
 }
 
 func (s *Store) ListBlockDocuments(blockID string) ([]Document, error) {
@@ -897,6 +972,23 @@ func uploadIntentPrefix() []byte {
 
 func uploadIntentKey(blockID string) []byte {
 	return append(uploadIntentPrefix(), []byte(blockID)...)
+}
+
+func processableUploadIntentPrefix() []byte {
+	return []byte("upload_intent_processable\x00")
+}
+
+func processableUploadIntentKey(intent UploadIntent) []byte {
+	prefix := processableUploadIntentPrefix()
+	key := make([]byte, 0, len(prefix)+len(intent.BlockID)+9)
+	key = append(key, prefix...)
+	key = binary.BigEndian.AppendUint64(key, uploadIntentUpdatedAtSortKey(intent.UpdatedAt))
+	key = append(key, 0)
+	return append(key, []byte(intent.BlockID)...)
+}
+
+func uploadIntentUpdatedAtSortKey(updatedAt time.Time) uint64 {
+	return uint64(updatedAt.UTC().UnixNano()) ^ unixNanoSortSignBit
 }
 
 func repairStatesPrefix() []byte {
