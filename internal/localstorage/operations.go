@@ -49,7 +49,7 @@ const (
 	operationEventPrewarmComplete = "prewarm_completed"
 )
 
-func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operations.Store) (OperationRunResult, error) {
+func (a *OperationExecutor) RunQueuedOperationsOnce(ctx context.Context, store *operations.Store) (OperationRunResult, error) {
 	var result OperationRunResult
 	if store == nil {
 		return result, errors.New("localstorage: operation store is not configured")
@@ -80,7 +80,7 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 	return result, nil
 }
 
-func (a *Application) runQueuedOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, bool, error) {
+func (a *OperationExecutor) runQueuedOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, bool, error) {
 	runners := map[string]func() (bool, error){
 		"tombstone":         func() (bool, error) { return a.runTombstoneOperation(ctx, store, operation) },
 		"restore":           func() (bool, error) { return a.runRestoreOperation(ctx, store, operation) },
@@ -122,7 +122,7 @@ func recordQueuedOperationOutcome(store *operations.Store, operation *adminv1.Op
 	return nil
 }
 
-func (a *Application) RecoverInterruptedOperations(ctx context.Context, store *operations.Store) (operations.RecoveryResult, error) {
+func (a *OperationExecutor) RecoverInterruptedOperations(ctx context.Context, store *operations.Store) (operations.RecoveryResult, error) {
 	var result operations.RecoveryResult
 	if store == nil {
 		return result, errors.New("localstorage: operation store is not configured")
@@ -157,7 +157,7 @@ func isOperationQueued(store *operations.Store, operationID string) (bool, error
 	return current.GetState() == adminv1.OperationState_OPERATION_STATE_QUEUED, nil
 }
 
-func (a *Application) beginOperationAttempt(operation *adminv1.Operation, message string) (*adminv1.Operation, time.Time) {
+func (a *OperationExecutor) beginOperationAttempt(operation *adminv1.Operation, message string) (*adminv1.Operation, time.Time) {
 	now := a.now()
 	running := cloneOperation(operation)
 	running.State = adminv1.OperationState_OPERATION_STATE_RUNNING
@@ -168,7 +168,7 @@ func (a *Application) beginOperationAttempt(operation *adminv1.Operation, messag
 	return running, now
 }
 
-func (a *Application) runTombstoneOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runTombstoneOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, now := a.beginOperationAttempt(operation, "running tombstone operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -215,7 +215,7 @@ type scrubSummary struct {
 	SkippedUnavailable int
 }
 
-func (a *Application) runScrubOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runScrubOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, now := a.beginOperationAttempt(operation, "running scrub operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -265,7 +265,7 @@ func (a *Application) runScrubOperation(ctx context.Context, store *operations.S
 	return true, nil
 }
 
-func (a *Application) runRewrapOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runRewrapOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, _ := a.beginOperationAttempt(operation, "running rewrap operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -310,7 +310,7 @@ func (a *Application) runRewrapOperation(ctx context.Context, store *operations.
 	return true, nil
 }
 
-func (a *Application) applyRewrapOperation(ctx context.Context, operation *adminv1.Operation) (int, int, error) {
+func (a *OperationExecutor) applyRewrapOperation(ctx context.Context, operation *adminv1.Operation) (int, int, error) {
 	if operation.GetDryRun() {
 		return len(operation.GetTargets()), 0, nil
 	}
@@ -328,7 +328,7 @@ type rewrapOperationConfig struct {
 	rewrappedAt      time.Time
 }
 
-func (a *Application) rewrapOperationConfig(operation *adminv1.Operation) (rewrapOperationConfig, error) {
+func (a *OperationExecutor) rewrapOperationConfig(operation *adminv1.Operation) (rewrapOperationConfig, error) {
 	if a.backendStore == nil {
 		return rewrapOperationConfig{}, errors.New("localstorage: backend store is not configured")
 	}
@@ -362,7 +362,7 @@ func (a *Application) rewrapOperationConfig(operation *adminv1.Operation) (rewra
 	return config, nil
 }
 
-func (a *Application) rewrapBlocks(ctx context.Context, config rewrapOperationConfig) (int, int, error) {
+func (a *OperationExecutor) rewrapBlocks(ctx context.Context, config rewrapOperationConfig) (int, int, error) {
 	rewrapped := 0
 	skipped := 0
 	for blockID := range config.blockIDs {
@@ -379,7 +379,7 @@ func (a *Application) rewrapBlocks(ctx context.Context, config rewrapOperationCo
 	return rewrapped, skipped, nil
 }
 
-func (a *Application) rewrapBlockEnvelope(ctx context.Context, store backend.MutableStore, blockID, destinationKeyID string, rewrappedAt time.Time) (bool, error) {
+func (a *OperationExecutor) rewrapBlockEnvelope(ctx context.Context, store backend.MutableStore, blockID, destinationKeyID string, rewrappedAt time.Time) (bool, error) {
 	intent, err := a.metadata.GetUploadIntent(blockID)
 	if err != nil {
 		return false, err
@@ -432,7 +432,7 @@ func rewrapAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
 	}
 }
 
-func (a *Application) runRepairOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runRepairOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, now := a.beginOperationAttempt(operation, "running repair operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -473,7 +473,7 @@ func (a *Application) runRepairOperation(ctx context.Context, store *operations.
 	return true, nil
 }
 
-func (a *Application) runCapacityOverrideOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runCapacityOverrideOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -528,7 +528,7 @@ func (a *Application) runCapacityOverrideOperation(ctx context.Context, store *o
 	return true, nil
 }
 
-func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runCopyVerifyOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, _ := a.beginOperationAttempt(operation, "running copy-verify operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -574,7 +574,7 @@ func (a *Application) runCopyVerifyOperation(ctx context.Context, store *operati
 	return true, nil
 }
 
-func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runMetadataRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, _ := a.beginOperationAttempt(operation, "running metadata-restore operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -620,7 +620,7 @@ func (a *Application) runMetadataRestoreOperation(ctx context.Context, store *op
 	return true, nil
 }
 
-func (a *Application) runDRDrillOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runDRDrillOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, _ := a.beginOperationAttempt(operation, "running dr-drill operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -666,7 +666,7 @@ func (a *Application) runDRDrillOperation(ctx context.Context, store *operations
 	return true, nil
 }
 
-func (a *Application) verifyCurrentCheckpoint(ctx context.Context) (published.CheckpointVerification, error) {
+func (a *OperationExecutor) verifyCurrentCheckpoint(ctx context.Context) (published.CheckpointVerification, error) {
 	if a.backendStore == nil {
 		return published.CheckpointVerification{}, errors.New("localstorage: backend store is not configured")
 	}
@@ -711,7 +711,7 @@ func restoreEvidenceCounters(restore MetadataRestoreResult) map[string]string {
 	}
 }
 
-func (a *Application) runDrainOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runDrainOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, _ := a.beginOperationAttempt(operation, "running drain operation")
 	if err := store.Put(running); err != nil {
 		return false, err
@@ -757,7 +757,7 @@ func (a *Application) runDrainOperation(ctx context.Context, store *operations.S
 	return true, nil
 }
 
-func (a *Application) applyDrainOperation(ctx context.Context, operation *adminv1.Operation) (int, []*adminv1.OperationWarning, error) {
+func (a *OperationExecutor) applyDrainOperation(ctx context.Context, operation *adminv1.Operation) (int, []*adminv1.OperationWarning, error) {
 	memberID, err := drainOperationMember(operation)
 	if err != nil {
 		return 0, nil, err
@@ -801,7 +801,7 @@ func drainOperationMember(operation *adminv1.Operation) (string, error) {
 	return memberID, nil
 }
 
-func (a *Application) applyScrubOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (scrubSummary, error) {
+func (a *OperationExecutor) applyScrubOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (scrubSummary, error) {
 	documents, err := a.scrubTargets(operation)
 	if err != nil {
 		return scrubSummary{}, err
@@ -834,7 +834,7 @@ func (a *Application) applyScrubOperation(ctx context.Context, operation *adminv
 	return summary, nil
 }
 
-func (a *Application) scrubTargets(operation *adminv1.Operation) ([]metastore.Document, error) {
+func (a *OperationExecutor) scrubTargets(operation *adminv1.Operation) ([]metastore.Document, error) {
 	collector := newDocumentCollector()
 	if len(operation.GetTargets()) == 0 {
 		if err := a.addAllDocuments(collector); err != nil {
@@ -867,7 +867,7 @@ func (c *documentCollector) add(document metastore.Document) {
 	c.documents = append(c.documents, document)
 }
 
-func (a *Application) addAllDocuments(collector *documentCollector) error {
+func (a *OperationExecutor) addAllDocuments(collector *documentCollector) error {
 	all, err := a.metadata.ListDocuments(metastore.DocumentFilter{})
 	if err != nil {
 		return err
@@ -878,7 +878,7 @@ func (a *Application) addAllDocuments(collector *documentCollector) error {
 	return nil
 }
 
-func (a *Application) addScrubTarget(collector *documentCollector, target *adminv1.Target) error {
+func (a *OperationExecutor) addScrubTarget(collector *documentCollector, target *adminv1.Target) error {
 	switch typed := target.GetTarget().(type) {
 	case *adminv1.Target_Document:
 		document, err := a.metadata.HeadDocument(adminDocumentIdentity(typed.Document))
@@ -900,7 +900,7 @@ func (a *Application) addScrubTarget(collector *documentCollector, target *admin
 	}
 }
 
-func (a *Application) addScrubTransactionTarget(collector *documentCollector, target *adminv1.TransactionTarget) error {
+func (a *OperationExecutor) addScrubTransactionTarget(collector *documentCollector, target *adminv1.TransactionTarget) error {
 	docs, err := a.metadata.FindDocuments(identity.Transaction{
 		TenantID:      target.GetTenantId(),
 		TransactionID: target.GetTransactionId(),
@@ -917,7 +917,7 @@ func (a *Application) addScrubTransactionTarget(collector *documentCollector, ta
 	return nil
 }
 
-func (a *Application) addScrubBlockTarget(collector *documentCollector, target *adminv1.BlockTarget) error {
+func (a *OperationExecutor) addScrubBlockTarget(collector *documentCollector, target *adminv1.BlockTarget) error {
 	if target.GetShardId() != "local" {
 		return metastore.ErrNotFound
 	}
@@ -934,14 +934,14 @@ func (a *Application) addScrubBlockTarget(collector *documentCollector, target *
 	return nil
 }
 
-func (a *Application) addLocalScrubScope(collector *documentCollector, shardOrMemberID string) error {
+func (a *OperationExecutor) addLocalScrubScope(collector *documentCollector, shardOrMemberID string) error {
 	if shardOrMemberID != "local" {
 		return metastore.ErrNotFound
 	}
 	return a.addAllDocuments(collector)
 }
 
-func (a *Application) applyRepairOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {
+func (a *OperationExecutor) applyRepairOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (int, error) {
 	if operation.GetDryRun() {
 		return len(operation.GetTargets()), nil
 	}
@@ -958,7 +958,7 @@ func (a *Application) applyRepairOperation(ctx context.Context, operation *admin
 	return len(repairs), nil
 }
 
-func (a *Application) applyDocumentRepair(ctx context.Context, repair metastore.RepairState, restoredBlocks map[string]bool, now time.Time) error {
+func (a *OperationExecutor) applyDocumentRepair(ctx context.Context, repair metastore.RepairState, restoredBlocks map[string]bool, now time.Time) error {
 	document, err := a.metadata.HeadDocument(repair.Identity)
 	if err != nil {
 		return err
@@ -969,7 +969,7 @@ func (a *Application) applyDocumentRepair(ctx context.Context, repair metastore.
 	return a.recordDocumentRepairState(ctx, document, repair.IncidentID, false, now)
 }
 
-func (a *Application) restoreRepairBlock(ctx context.Context, document metastore.Document, restoredBlocks map[string]bool, now time.Time) error {
+func (a *OperationExecutor) restoreRepairBlock(ctx context.Context, document metastore.Document, restoredBlocks map[string]bool, now time.Time) error {
 	blockID := document.Location.BlockID
 	if restoredBlocks[blockID] {
 		return nil
@@ -988,7 +988,7 @@ func (a *Application) restoreRepairBlock(ctx context.Context, document metastore
 	return nil
 }
 
-func (a *Application) repairTargets(operation *adminv1.Operation) ([]metastore.RepairState, error) {
+func (a *OperationExecutor) repairTargets(operation *adminv1.Operation) ([]metastore.RepairState, error) {
 	states, err := a.metadata.ListRepairStates()
 	if err != nil {
 		return nil, err
@@ -1026,7 +1026,7 @@ func (c *repairStateCollector) add(state metastore.RepairState) {
 	c.repairs = append(c.repairs, state)
 }
 
-func (a *Application) addRepairTarget(collector *repairStateCollector, states []metastore.RepairState, target *adminv1.Target) error {
+func (a *OperationExecutor) addRepairTarget(collector *repairStateCollector, states []metastore.RepairState, target *adminv1.Target) error {
 	switch typed := target.GetTarget().(type) {
 	case *adminv1.Target_Document:
 		addDocumentRepairStates(collector, states, adminDocumentIdentity(typed.Document))
@@ -1050,7 +1050,7 @@ func addDocumentRepairStates(collector *repairStateCollector, states []metastore
 	}
 }
 
-func (a *Application) addBlockRepairStates(collector *repairStateCollector, states []metastore.RepairState, target *adminv1.BlockTarget) error {
+func (a *OperationExecutor) addBlockRepairStates(collector *repairStateCollector, states []metastore.RepairState, target *adminv1.BlockTarget) error {
 	if target.GetShardId() != "local" {
 		return metastore.ErrNotFound
 	}
@@ -1083,7 +1083,7 @@ func isLocalRepairState(state metastore.RepairState) bool {
 	return strings.HasPrefix(state.PhysicalRef, "local/")
 }
 
-func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, document metastore.Document, now time.Time) (bool, error) {
+func (a *OperationExecutor) repairDocumentFromVerifiedPeer(ctx context.Context, document metastore.Document, now time.Time) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -1106,7 +1106,7 @@ func (a *Application) repairDocumentFromVerifiedPeer(ctx context.Context, docume
 	return false, nil
 }
 
-func (a *Application) repairDocumentFromReplica(
+func (a *OperationExecutor) repairDocumentFromReplica(
 	ctx context.Context,
 	document metastore.Document,
 	prepared replication.PreparedDocument,
@@ -1134,7 +1134,7 @@ func (a *Application) repairDocumentFromReplica(
 	return true, nil
 }
 
-func (a *Application) readVerifiedPeerReplica(
+func (a *OperationExecutor) readVerifiedPeerReplica(
 	ctx context.Context,
 	document metastore.Document,
 	prepared replication.PreparedDocument,
@@ -1165,7 +1165,7 @@ func (a *Application) readVerifiedPeerReplica(
 	return nil, nil
 }
 
-func (a *Application) peerRepairSourceQuarantined(document metastore.Document, replica blockstore.ReplicaRef) (bool, error) {
+func (a *OperationExecutor) peerRepairSourceQuarantined(document metastore.Document, replica blockstore.ReplicaRef) (bool, error) {
 	state, err := a.metadata.GetRepairState(document.Identity, peerIntegrityEvidenceID(document, replica))
 	if errors.Is(err, metastore.ErrNotFound) {
 		return false, nil
@@ -1180,7 +1180,7 @@ func isPeerIntegrityFailure(err error) bool {
 	return isIntegrityFailure(err) || errors.Is(err, replication.ErrTransferMismatch)
 }
 
-func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID string) error {
+func (a *OperationExecutor) replaceBlockFromBackend(ctx context.Context, blockID string) error {
 	if a.backendStore == nil {
 		return errors.New("localstorage: backend store is not configured")
 	}
@@ -1191,7 +1191,7 @@ func (a *Application) replaceBlockFromBackend(ctx context.Context, blockID strin
 	if intent.State != metastore.UploadStateUploaded {
 		return fmt.Errorf("localstorage: block %s is not uploaded", blockID)
 	}
-	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
+	if err := a.verifier.verifyBackendEnvelope(ctx, intent); err != nil {
 		return err
 	}
 	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
@@ -1224,7 +1224,7 @@ type restoreSummary struct {
 	DocumentsMarked int
 }
 
-func (a *Application) runRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
+func (a *OperationExecutor) runRestoreOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, error) {
 	running, now := a.beginOperationAttempt(operation, "running "+operation.GetOperationType()+" operation")
 	running.Metadata = restoreOperationMetadata(running)
 	if err := store.Put(running); err != nil {
@@ -1276,7 +1276,7 @@ func (a *Application) runRestoreOperation(ctx context.Context, store *operations
 	return true, nil
 }
 
-func (a *Application) applyRestoreOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (restoreSummary, error) {
+func (a *OperationExecutor) applyRestoreOperation(ctx context.Context, operation *adminv1.Operation, now time.Time) (restoreSummary, error) {
 	var summary restoreSummary
 	if operation.GetDryRun() {
 		summary.BlocksSkipped = len(operation.GetTargets())
@@ -1303,7 +1303,7 @@ func (a *Application) applyRestoreOperation(ctx context.Context, operation *admi
 	return summary, nil
 }
 
-func (a *Application) applyRestoreBlock(ctx context.Context, blockID string, summary *restoreSummary) error {
+func (a *OperationExecutor) applyRestoreBlock(ctx context.Context, blockID string, summary *restoreSummary) error {
 	restored, err := a.restoreBlockFromBackend(ctx, blockID)
 	if errors.Is(err, backend.ErrRestorePending) {
 		summary.BlocksPending++
@@ -1320,7 +1320,7 @@ func (a *Application) applyRestoreBlock(ctx context.Context, blockID string, sum
 	return nil
 }
 
-func (a *Application) markRestoreDocuments(
+func (a *OperationExecutor) markRestoreDocuments(
 	ctx context.Context,
 	operation *adminv1.Operation,
 	documents []identity.Document,
@@ -1341,7 +1341,7 @@ func (a *Application) markRestoreDocuments(
 	return nil
 }
 
-func (a *Application) restoreTargets(operation *adminv1.Operation) (map[string]bool, []identity.Document, error) {
+func (a *OperationExecutor) restoreTargets(operation *adminv1.Operation) (map[string]bool, []identity.Document, error) {
 	collector := restoreTargetCollector{
 		blockIDs:       make(map[string]bool),
 		documentsByKey: make(map[identity.Document]bool),
@@ -1361,7 +1361,7 @@ type restoreTargetCollector struct {
 	documents      []identity.Document
 }
 
-func (c *restoreTargetCollector) addTarget(a *Application, target *adminv1.Target, operationType string) error {
+func (c *restoreTargetCollector) addTarget(a *OperationExecutor, target *adminv1.Target, operationType string) error {
 	switch typed := target.GetTarget().(type) {
 	case *adminv1.Target_Document:
 		return c.addDocumentTarget(a, typed.Document)
@@ -1374,7 +1374,7 @@ func (c *restoreTargetCollector) addTarget(a *Application, target *adminv1.Targe
 	}
 }
 
-func (c *restoreTargetCollector) addDocumentTarget(a *Application, target *adminv1.DocumentTarget) error {
+func (c *restoreTargetCollector) addDocumentTarget(a *OperationExecutor, target *adminv1.DocumentTarget) error {
 	document, err := a.metadata.HeadDocument(adminDocumentIdentity(target))
 	if err != nil {
 		return err
@@ -1383,7 +1383,7 @@ func (c *restoreTargetCollector) addDocumentTarget(a *Application, target *admin
 	return nil
 }
 
-func (c *restoreTargetCollector) addTransactionTarget(a *Application, target *adminv1.TransactionTarget) error {
+func (c *restoreTargetCollector) addTransactionTarget(a *OperationExecutor, target *adminv1.TransactionTarget) error {
 	docs, err := a.metadata.FindDocuments(identity.Transaction{
 		TenantID:      target.GetTenantId(),
 		TransactionID: target.GetTransactionId(),
@@ -1394,7 +1394,7 @@ func (c *restoreTargetCollector) addTransactionTarget(a *Application, target *ad
 	return c.addDocuments(docs)
 }
 
-func (c *restoreTargetCollector) addBlockTarget(a *Application, target *adminv1.BlockTarget) error {
+func (c *restoreTargetCollector) addBlockTarget(a *OperationExecutor, target *adminv1.BlockTarget) error {
 	if target.GetShardId() != "local" {
 		return metastore.ErrNotFound
 	}
@@ -1424,7 +1424,7 @@ func (c *restoreTargetCollector) addDocument(document metastore.Document) {
 	c.documents = append(c.documents, document.Identity)
 }
 
-func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID string) (bool, error) {
+func (a *OperationExecutor) restoreBlockFromBackend(ctx context.Context, blockID string) (bool, error) {
 	if a.backendStore == nil {
 		return false, errors.New("localstorage: backend store is not configured")
 	}
@@ -1435,7 +1435,7 @@ func (a *Application) restoreBlockFromBackend(ctx context.Context, blockID strin
 	if intent.State != metastore.UploadStateUploaded {
 		return false, fmt.Errorf("localstorage: block %s is not uploaded", blockID)
 	}
-	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
+	if err := a.verifier.verifyBackendEnvelope(ctx, intent); err != nil {
 		return false, err
 	}
 	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
@@ -1599,7 +1599,7 @@ func operationErrorPrefix(operationType string) string {
 	}
 }
 
-func (a *Application) applyTombstoneOperation(ctx context.Context, operation *adminv1.Operation, tombstonedAt time.Time) error {
+func (a *OperationExecutor) applyTombstoneOperation(ctx context.Context, operation *adminv1.Operation, tombstonedAt time.Time) error {
 	if operation.GetDryRun() {
 		return nil
 	}
@@ -1611,7 +1611,7 @@ func (a *Application) applyTombstoneOperation(ctx context.Context, operation *ad
 	return nil
 }
 
-func (a *Application) applyTombstoneTarget(ctx context.Context, target *adminv1.Target, tombstonedAt time.Time, operationID string) error {
+func (a *OperationExecutor) applyTombstoneTarget(ctx context.Context, target *adminv1.Target, tombstonedAt time.Time, operationID string) error {
 	switch typed := target.GetTarget().(type) {
 	case *adminv1.Target_Document:
 		return a.tombstoneDocument(ctx, adminDocumentIdentity(typed.Document), tombstonedAt, operationID)
@@ -1622,7 +1622,7 @@ func (a *Application) applyTombstoneTarget(ctx context.Context, target *adminv1.
 	}
 }
 
-func (a *Application) tombstoneTransaction(ctx context.Context, transaction *adminv1.TransactionTarget, tombstonedAt time.Time, operationID string) error {
+func (a *OperationExecutor) tombstoneTransaction(ctx context.Context, transaction *adminv1.TransactionTarget, tombstonedAt time.Time, operationID string) error {
 	docs, err := a.metadata.FindDocuments(identity.Transaction{
 		TenantID:      transaction.GetTenantId(),
 		TransactionID: transaction.GetTransactionId(),
@@ -1641,7 +1641,7 @@ func (a *Application) tombstoneTransaction(ctx context.Context, transaction *adm
 	return nil
 }
 
-func (a *Application) tombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID string) error {
+func (a *OperationExecutor) tombstoneDocument(ctx context.Context, doc identity.Document, tombstonedAt time.Time, operationID string) error {
 	return a.authority.TombstoneDocument(
 		ctx,
 		doc,

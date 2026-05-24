@@ -100,7 +100,7 @@ type MetadataRestoreResult struct {
 }
 
 func (a *Application) RestorePublishedMetadataCheckpoint(ctx context.Context, apply bool) (MetadataRestoreResult, error) {
-	checkpoint, err := a.verifyCurrentCheckpoint(ctx)
+	checkpoint, err := a.operationExecutor.verifyCurrentCheckpoint(ctx)
 	if err != nil {
 		return MetadataRestoreResult{}, err
 	}
@@ -217,7 +217,7 @@ func (a *Application) restoreImportedBlocks(ctx context.Context, documents []met
 		blockIDs[document.Location.BlockID] = true
 	}
 	for blockID := range blockIDs {
-		if _, err := a.restoreBlockFromBackend(ctx, blockID); err != nil {
+		if _, err := a.operationExecutor.restoreBlockFromBackend(ctx, blockID); err != nil {
 			return 0, err
 		}
 	}

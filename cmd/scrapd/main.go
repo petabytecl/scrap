@@ -42,7 +42,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	logPrintf := logPrintfFunc(logger)
-	apps, uploadRunner, cleanup, err := buildApplications(cfg, logger, logPrintf)
+	apps, uploadRunner, operationExecutor, cleanup, err := buildApplications(cfg, logger, logPrintf)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func run(logger *slog.Logger) error {
 	logger.Info("admin grpc listening", "address", server.AdminAddress())
 	logger.Info("metrics http listening", "address", metricsEndpoint.Address())
 	go reloadAuthorizationPolicy(ctx, server, logger)
-	startBackgroundRunners(ctx, cfg, apps, uploadRunner, logger)
+	startBackgroundRunners(ctx, cfg, apps, uploadRunner, operationExecutor, logger)
 	if err := serveUntilStopped(ctx, server, metricsEndpoint); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
@@ -195,13 +195,17 @@ func serveUntilStopped(ctx context.Context, server *node.Server, metricsEndpoint
 	}
 }
 
-func buildApplications(cfg config.Config, logger *slog.Logger, logPrintf closeutil.Logger) (node.Applications, *backendupload.Runner, func(), error) {
+func buildApplications(
+	cfg config.Config,
+	logger *slog.Logger,
+	logPrintf closeutil.Logger,
+) (node.Applications, *backendupload.Runner, *localstorage.OperationExecutor, func(), error) {
 	if !cfg.EnableLocalNonProductionStorage {
-		return node.Applications{}, nil, func() {}, nil
+		return node.Applications{}, nil, nil, func() {}, nil
 	}
 	apps, localApp, operationStore, err := buildLocalApplications(cfg)
 	if err != nil {
-		return node.Applications{}, nil, nil, err
+		return node.Applications{}, nil, nil, nil, err
 	}
 	cleanup := func() {
 		closeutil.Log("operation store", logPrintf, operationStore)
@@ -213,10 +217,10 @@ func buildApplications(cfg config.Config, logger *slog.Logger, logPrintf closeut
 		uploadRunner, err = buildUploadRunner(cfg, localApp, logger)
 		if err != nil {
 			cleanup()
-			return node.Applications{}, nil, nil, err
+			return node.Applications{}, nil, nil, nil, err
 		}
 	}
-	return apps, uploadRunner, cleanup, nil
+	return apps, uploadRunner, localApp.OperationExecutor(), cleanup, nil
 }
 
 func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage.Application, *operations.Store, error) {
@@ -232,8 +236,8 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 	localApp.SetOperationStore(operationStore)
 	localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
 	return node.Applications{
-		Documents:    localApp,
-		Transactions: localApp,
+		Documents:    localApp.Documents(),
+		Transactions: localApp.Transactions(),
 		Inspect:      localApp,
 		Repair:       localApp,
 		Member:       localApp,
@@ -272,9 +276,16 @@ func logBackendUploadPublication(logger *slog.Logger, result localstorage.Backen
 	}
 }
 
-func startBackgroundRunners(ctx context.Context, cfg config.Config, apps node.Applications, uploadRunner *backendupload.Runner, logger *slog.Logger) {
+func startBackgroundRunners(
+	ctx context.Context,
+	cfg config.Config,
+	apps node.Applications,
+	uploadRunner *backendupload.Runner,
+	operationExecutor *localstorage.OperationExecutor,
+	logger *slog.Logger,
+) {
 	if cfg.EnableLocalNonProductionStorage {
-		go runOperationLoop(ctx, apps, cfg.OperationRunInterval, logger)
+		go runOperationLoop(ctx, apps, operationExecutor, cfg.OperationRunInterval, logger)
 	}
 	if uploadRunner != nil {
 		go func() {
@@ -309,23 +320,25 @@ func reloadAuthorizationPolicy(ctx context.Context, server *node.Server, logger 
 	}
 }
 
-func runOperationLoop(ctx context.Context, apps node.Applications, interval time.Duration, logger *slog.Logger) {
-	if apps.Operations == nil {
-		return
-	}
-	localApp, ok := apps.Documents.(*localstorage.Application)
-	if !ok || localApp == nil {
+func runOperationLoop(
+	ctx context.Context,
+	apps node.Applications,
+	operationExecutor *localstorage.OperationExecutor,
+	interval time.Duration,
+	logger *slog.Logger,
+) {
+	if apps.Operations == nil || operationExecutor == nil {
 		return
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	recovery, err := localApp.RecoverInterruptedOperations(ctx, apps.Operations)
+	recovery, err := operationExecutor.RecoverInterruptedOperations(ctx, apps.Operations)
 	logOperationRecoveryReport(logger, recovery, err)
 	if err != nil {
 		return
 	}
 	for {
-		result, err := localApp.RunQueuedOperationsOnce(ctx, apps.Operations)
+		result, err := operationExecutor.RunQueuedOperationsOnce(ctx, apps.Operations)
 		if err != nil && ctx.Err() != nil {
 			return
 		}
