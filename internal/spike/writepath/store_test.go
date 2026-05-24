@@ -13,6 +13,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestStoreWriteHeadReadRoundTrip(t *testing.T) {
@@ -32,9 +34,7 @@ func TestStoreWriteHeadReadRoundTrip(t *testing.T) {
 		ContentType:    "application/xml",
 		ExpectedLength: int64(len(data)),
 	}, chunkSource(chunks))
-	if err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "write document")
 
 	wantSHA := sha256Hex(data)
 	if result.ByteLength != int64(len(data)) {
@@ -49,9 +49,7 @@ func TestStoreWriteHeadReadRoundTrip(t *testing.T) {
 		TransactionID: "tx-001",
 		DocumentName:  "bill.xml",
 	})
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if head.Document.LogicalSHA256 != wantSHA {
 		t.Fatalf("head sha = %s, want %s", head.Document.LogicalSHA256, wantSHA)
 	}
@@ -73,9 +71,7 @@ func TestStoreWriteHeadReadRoundTrip(t *testing.T) {
 		_, err := got.Write(response.Chunk)
 		return err
 	})
-	if err != nil {
-		t.Fatalf("read document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read document")
 	if !sawMetadata {
 		t.Fatal("read did not send metadata before bytes")
 	}
@@ -173,9 +169,7 @@ func TestStoreTruncatedBlockReturnsDataLossWithoutBytes(t *testing.T) {
 
 	data := bytes.Repeat([]byte("durable bytes\n"), 128)
 	result := writeTestDocument(t, store, "tx-006", "truncated.xml", data)
-	if err := os.Truncate(filepath.Join(store.blocksDir, result.BlockID+".blk"), result.StoredOffset+result.StoredLength-1); err != nil {
-		t.Fatalf("truncate block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.Truncate(filepath.Join(store.blocksDir, result.BlockID+".blk"), result.StoredOffset+result.StoredLength-1), "truncate block")
 
 	assertReadDataLossWithoutBytes(t, store, "tenant-a", "tx-006", "truncated.xml")
 }
@@ -186,16 +180,12 @@ func TestStoreCorruptBlockReturnsDataLossWithoutBytes(t *testing.T) {
 	data := bytes.Repeat([]byte("verified bytes\n"), 128)
 	result := writeTestDocument(t, store, "tx-007", "corrupt.xml", data)
 	file, err := os.OpenFile(filepath.Join(store.blocksDir, result.BlockID+".blk"), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block for corruption: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open block for corruption")
 	if _, err := file.WriteAt([]byte{^data[0]}, result.StoredOffset); err != nil {
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close corrupted block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close corrupted block")
 
 	assertReadDataLossWithoutBytes(t, store, "tenant-a", "tx-007", "corrupt.xml")
 }
@@ -207,16 +197,12 @@ func TestStoreCorruptRangeReadReturnsDataLossWithoutBytes(t *testing.T) {
 	result := writeTestDocument(t, store, "tx-008", "corrupt-range.xml", data)
 	rangeOffset := int64(len(data) / 2)
 	file, err := os.OpenFile(filepath.Join(store.blocksDir, result.BlockID+".blk"), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block for corruption: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open block for corruption")
 	if _, err := file.WriteAt([]byte{^data[rangeOffset]}, result.StoredOffset+rangeOffset); err != nil {
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close corrupted block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close corrupted block")
 
 	assertReadDataLossWithoutBytesForRange(t, store, "tenant-a", "tx-008", "corrupt-range.xml", rangeOffset, 128)
 }
@@ -228,16 +214,12 @@ func TestStoreFrameChecksAllowCleanRangeBeforeLaterCorruption(t *testing.T) {
 	result := writeTestDocument(t, store, "tx-009", "multi-frame.xml", data)
 	corruptOffset := int64(defaultFrameSize + 128)
 	file, err := os.OpenFile(filepath.Join(store.blocksDir, result.BlockID+".blk"), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block for corruption: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open block for corruption")
 	if _, err := file.WriteAt([]byte{0x99}, result.StoredOffset+corruptOffset); err != nil {
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close corrupted block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close corrupted block")
 
 	assertReadDocumentRange(t, store, "tenant-a", "tx-009", "multi-frame.xml", 0, 512, data[:512])
 	assertReadDataLossWithoutBytes(t, store, "tenant-a", "tx-009", "multi-frame.xml")
@@ -312,9 +294,7 @@ func TestStorePostCommitFailureStillAcksAndSurvivesReopen(t *testing.T) {
 		DocumentName:   "after-commit.xml",
 		ExpectedLength: int64(len(data)),
 	}, chunkSource([][]byte{data}))
-	if err != nil {
-		t.Fatalf("post-commit failure should not fail ACK: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "post-commit failure should not fail ACK")
 	if result.LogicalSHA256 != sha256Hex(data) {
 		t.Fatalf("logical sha = %s, want %s", result.LogicalSHA256, sha256Hex(data))
 	}
@@ -427,9 +407,7 @@ func openStoreAtWithOptions(t *testing.T, dir string, options StoreOptions) *Sto
 	t.Helper()
 
 	store, err := OpenStoreWithOptions(dir, options)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open store")
 	t.Cleanup(func() {
 		if store.blockFile != nil || store.db != nil {
 			closeTestStore(t, store)
@@ -441,9 +419,7 @@ func openStoreAtWithOptions(t *testing.T, dir string, options StoreOptions) *Sto
 func closeTestStore(t *testing.T, store *Store) {
 	t.Helper()
 
-	if err := store.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Close(), "close store")
 }
 
 func writeTestDocument(t *testing.T, store *Store, transactionID, documentName string, data []byte) *WriteDocumentResult {
@@ -455,9 +431,7 @@ func writeTestDocument(t *testing.T, store *Store, transactionID, documentName s
 		DocumentName:   documentName,
 		ExpectedLength: int64(len(data)),
 	}, chunkSource([][]byte{data}))
-	if err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "write document")
 	return result
 }
 
@@ -496,9 +470,7 @@ func assertReadDocumentRange(t *testing.T, store *Store, tenantID, transactionID
 		_, err := got.Write(response.Chunk)
 		return err
 	})
-	if err != nil {
-		t.Fatalf("read document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read document")
 	if !bytes.Equal(got.Bytes(), want) {
 		t.Fatal("read bytes differ from written bytes")
 	}

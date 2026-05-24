@@ -83,29 +83,9 @@ type EnvelopeMaterial struct {
 }
 
 func CreateEnvelopeRecord(ctx context.Context, transit Transit, req EnvelopeRequest) (EnvelopeMaterial, error) {
-	if transit == nil {
-		return EnvelopeMaterial{}, fmt.Errorf("%w: transit client is required", ErrUnavailable)
-	}
-	if req.BlockID == "" {
-		return EnvelopeMaterial{}, fmt.Errorf("%w: block_id is required", ErrInvalidEnvelope)
-	}
-	if req.BlockObject.Key == "" {
-		return EnvelopeMaterial{}, fmt.Errorf("%w: block object is required", ErrInvalidEnvelope)
-	}
-	if req.KeyID == "" {
-		return EnvelopeMaterial{}, fmt.Errorf("%w: key_id is required", ErrInvalidEnvelope)
-	}
-	if req.CellID == "" {
-		req.CellID = "local"
-	}
-	if req.CreatedAt.IsZero() {
-		req.CreatedAt = time.Unix(0, 0).UTC()
-	}
-	if req.DEKAlgorithm == "" {
-		req.DEKAlgorithm = DefaultDEKAlgorithm
-	}
-	if req.AEADAlgorithm == "" {
-		req.AEADAlgorithm = DefaultAEADAlgorithm
+	req, err := validateEnvelopeRequest(transit, req)
+	if err != nil {
+		return EnvelopeMaterial{}, err
 	}
 	aad := EnvelopeAAD(req.CellID, req.BlockID, req.BlockObject)
 	dataKey, err := transit.GenerateDataKey(ctx, GenerateDataKeyRequest{
@@ -140,6 +120,38 @@ func CreateEnvelopeRecord(ctx context.Context, transit Transit, req EnvelopeRequ
 		Record:       record,
 		PlaintextDEK: append([]byte(nil), dataKey.PlaintextDEK...),
 	}, nil
+}
+
+func validateEnvelopeRequest(transit Transit, req EnvelopeRequest) (EnvelopeRequest, error) {
+	if transit == nil {
+		return EnvelopeRequest{}, fmt.Errorf("%w: transit client is required", ErrUnavailable)
+	}
+	if req.BlockID == "" {
+		return EnvelopeRequest{}, fmt.Errorf("%w: block_id is required", ErrInvalidEnvelope)
+	}
+	if req.BlockObject.Key == "" {
+		return EnvelopeRequest{}, fmt.Errorf("%w: block object is required", ErrInvalidEnvelope)
+	}
+	if req.KeyID == "" {
+		return EnvelopeRequest{}, fmt.Errorf("%w: key_id is required", ErrInvalidEnvelope)
+	}
+	return defaultEnvelopeRequest(req), nil
+}
+
+func defaultEnvelopeRequest(req EnvelopeRequest) EnvelopeRequest {
+	if req.CellID == "" {
+		req.CellID = "local"
+	}
+	if req.CreatedAt.IsZero() {
+		req.CreatedAt = time.Unix(0, 0).UTC()
+	}
+	if req.DEKAlgorithm == "" {
+		req.DEKAlgorithm = DefaultDEKAlgorithm
+	}
+	if req.AEADAlgorithm == "" {
+		req.AEADAlgorithm = DefaultAEADAlgorithm
+	}
+	return req
 }
 
 func ValidateEnvelopeRecordForRestore(ctx context.Context, transit Transit, record *storagev1.EnvelopeRecord) error {

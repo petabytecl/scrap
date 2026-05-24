@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestClassifyErrorNormalizesBackendErrors(t *testing.T) {
@@ -61,9 +63,7 @@ func TestClassifyErrorNormalizesBackendErrors(t *testing.T) {
 
 func TestProductionCapacityProfileValidation(t *testing.T) {
 	valid := testProductionCapacityProfile()
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("valid production profile rejected: %v", err)
-	}
+	testutil.RequireNoErrorf(t, valid.Validate(), "valid production profile rejected")
 
 	tests := map[string]struct {
 		mutate func(*CapacityProfile)
@@ -131,9 +131,7 @@ func TestProductionCapacityProfileValidation(t *testing.T) {
 
 func TestNonProductionFilesystemProfileIsExplicitAndFinite(t *testing.T) {
 	profile := NonProductionFilesystemProfile("local-dev", 4*1024*1024*1024)
-	if err := profile.Validate(); err != nil {
-		t.Fatalf("non-production filesystem profile rejected: %v", err)
-	}
+	testutil.RequireNoErrorf(t, profile.Validate(), "non-production filesystem profile rejected")
 	if profile.Mode != ProfileModeNonProduction || profile.Provider != ProviderFilesystem {
 		t.Fatalf("profile mode/provider = %s/%s, want explicit non-production filesystem", profile.Mode, profile.Provider)
 	}

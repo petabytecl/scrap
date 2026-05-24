@@ -9,32 +9,27 @@ import (
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPutHeadReadRangeRoundTrip(t *testing.T) {
 	store := openTestStore(t)
 	data := []byte("backend object bytes")
 	object, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("put object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "put object")
 	if object.Length != uint64(len(data)) {
 		t.Fatalf("object length = %d, want %d", object.Length, len(data))
 	}
 
 	head, err := store.HeadObject(context.Background(), "blocks/block-1")
-	if err != nil {
-		t.Fatalf("head object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head object")
 	if head != object {
 		t.Fatalf("head = %#v, want %#v", head, object)
 	}
 
 	length := uint64(6)
 	var got bytes.Buffer
-	if err := store.ReadObjectRange(context.Background(), "blocks/block-1", backend.Range{Offset: 8, Length: &length}, &got); err != nil {
-		t.Fatalf("read object range: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ReadObjectRange(context.Background(), "blocks/block-1", backend.Range{Offset: 8, Length: &length}, &got), "read object range")
 	if got.String() != "object" {
 		t.Fatalf("range = %q, want object", got.String())
 	}
@@ -43,13 +38,9 @@ func TestPutHeadReadRangeRoundTrip(t *testing.T) {
 func TestPutObjectIsIdempotentForSameBytes(t *testing.T) {
 	store := openTestStore(t)
 	first, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("same bytes")))
-	if err != nil {
-		t.Fatalf("put first object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "put first object")
 	second, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("same bytes")))
-	if err != nil {
-		t.Fatalf("put second object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "put second object")
 	if second != first {
 		t.Fatalf("second = %#v, want first %#v", second, first)
 	}
@@ -72,17 +63,13 @@ func TestPutMutableObjectReplacesExistingBytes(t *testing.T) {
 		t.Fatalf("put first pointer: %v", err)
 	}
 	object, err := store.PutMutableObject(context.Background(), "cells/local/metadata/v1/current.pointer", bytes.NewReader([]byte("pointer v2")))
-	if err != nil {
-		t.Fatalf("put mutable pointer: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "put mutable pointer")
 	if object.Length != uint64(len("pointer v2")) {
 		t.Fatalf("mutable object length = %d, want %d", object.Length, len("pointer v2"))
 	}
 
 	var got bytes.Buffer
-	if err := store.ReadObjectRange(context.Background(), "cells/local/metadata/v1/current.pointer", backend.Range{}, &got); err != nil {
-		t.Fatalf("read mutable pointer: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ReadObjectRange(context.Background(), "cells/local/metadata/v1/current.pointer", backend.Range{}, &got), "read mutable pointer")
 	if got.String() != "pointer v2" {
 		t.Fatalf("mutable pointer = %q, want pointer v2", got.String())
 	}
@@ -93,9 +80,7 @@ func TestPutObjectVerifiesExistingBytesBeforeIdempotentSuccess(t *testing.T) {
 	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes"))); err != nil {
 		t.Fatalf("put object: %v", err)
 	}
-	if err := os.WriteFile(store.objectPath("blocks/block-1", dataSuffix), []byte("corrupt bytes"), 0o600); err != nil {
-		t.Fatalf("corrupt object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.WriteFile(store.objectPath("blocks/block-1", dataSuffix), []byte("corrupt bytes"), 0o600), "corrupt object")
 	_, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes")))
 	if !errors.Is(err, backend.ErrChecksumMismatch) {
 		t.Fatalf("put error = %v, want %v", err, backend.ErrChecksumMismatch)
@@ -107,9 +92,7 @@ func TestReadObjectRangeDetectsCorruptionBeforeWritingBytes(t *testing.T) {
 	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("verified bytes"))); err != nil {
 		t.Fatalf("put object: %v", err)
 	}
-	if err := os.WriteFile(store.objectPath("blocks/block-1", dataSuffix), []byte("corrupt bytes"), 0o600); err != nil {
-		t.Fatalf("corrupt object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.WriteFile(store.objectPath("blocks/block-1", dataSuffix), []byte("corrupt bytes"), 0o600), "corrupt object")
 	var got bytes.Buffer
 	err := store.ReadObjectRange(context.Background(), "blocks/block-1", backend.Range{}, &got)
 	if !errors.Is(err, backend.ErrChecksumMismatch) {
@@ -135,21 +118,15 @@ func TestReadObjectRangeRejectsInvalidRange(t *testing.T) {
 func TestObjectSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open store")
 	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("persisted"))); err != nil {
 		t.Fatalf("put object: %v", err)
 	}
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "reopen store")
 	var got bytes.Buffer
-	if err := reopened.ReadObjectRange(context.Background(), "blocks/block-1", backend.Range{}, &got); err != nil {
-		t.Fatalf("read reopened object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, reopened.ReadObjectRange(context.Background(), "blocks/block-1", backend.Range{}, &got), "read reopened object")
 	if got.String() != "persisted" {
 		t.Fatalf("reopened bytes = %q, want persisted", got.String())
 	}
@@ -158,9 +135,7 @@ func TestObjectSurvivesReopen(t *testing.T) {
 func TestStoreExposesExplicitFilesystemCapacityProfile(t *testing.T) {
 	profile := backend.NonProductionFilesystemProfile("test-fs", 4*1024*1024*1024)
 	store, err := OpenWithCapacityProfile(t.TempDir(), profile)
-	if err != nil {
-		t.Fatalf("open store with profile: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open store with profile")
 	if store.Provider() != backend.ProviderFilesystem {
 		t.Fatalf("provider = %s, want filesystem", store.Provider())
 	}
@@ -186,8 +161,6 @@ func TestStoreRejectsNonFilesystemCapacityProfile(t *testing.T) {
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open store")
 	return store
 }

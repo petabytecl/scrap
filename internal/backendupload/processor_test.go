@@ -10,6 +10,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestProcessorUploadsPendingIntentAndRecordsUploaded(t *testing.T) {
@@ -17,12 +18,8 @@ func TestProcessorUploadsPendingIntentAndRecordsUploaded(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block bytes")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
-	if _, err := blocks.SealCurrent(ctx); err != nil {
-		t.Fatalf("seal block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
+	sealTestCurrentBlock(ctx, t, blocks)
 	intent := testUploadIntent(record.BlockID)
 	updater := &recordingIntentStateUpdater{}
 
@@ -32,23 +29,11 @@ func TestProcessorUploadsPendingIntentAndRecordsUploaded(t *testing.T) {
 		Updater:  updater,
 		Now:      fixedTime(time.Unix(500, 0).UTC()),
 	}.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run processor: %v", err)
-	}
-	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 || result.Skipped != 0 {
-		t.Fatalf("result = %#v, want one upload", result)
-	}
-	if len(updater.calls) != 1 ||
-		updater.calls[0].blockID != intent.BlockID ||
-		updater.calls[0].state != metastore.UploadStateUploaded ||
-		updater.calls[0].lastError != "" ||
-		updater.calls[0].commandID == "" ||
-		!updater.calls[0].proposedAt.Equal(time.Unix(500, 0).UTC()) {
-		t.Fatalf("state calls = %#v, want uploaded call", updater.calls)
-	}
-	if _, err := store.HeadObject(ctx, intent.BackendObjectKey); err != nil {
-		t.Fatalf("head uploaded object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run processor")
+	requireProcessorCounts(t, result, processorCounts{scanned: 1, uploaded: 1})
+	requireUploadedIntentCall(t, updater.calls, 0, intent.BlockID, time.Unix(500, 0).UTC())
+	_, err = store.HeadObject(ctx, intent.BackendObjectKey)
+	testutil.RequireNoErrorf(t, err, "head uploaded object")
 }
 
 func TestProcessorSkipsNonPendingIntents(t *testing.T) {
@@ -61,9 +46,7 @@ func TestProcessorSkipsNonPendingIntents(t *testing.T) {
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater:  updater,
 	}.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("run processor: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run processor")
 	if result.Scanned != 1 || result.Skipped != 1 || result.Uploaded != 0 || result.Failed != 0 {
 		t.Fatalf("result = %#v, want one skipped intent", result)
 	}
@@ -87,22 +70,11 @@ func TestProcessorRetriesFailedIntentAndRecordsUploaded(t *testing.T) {
 		Updater:  updater,
 		Now:      fixedTime(time.Unix(501, 0).UTC()),
 	}.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run processor: %v", err)
-	}
-	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 || result.Skipped != 0 {
-		t.Fatalf("result = %#v, want failed intent retried and uploaded", result)
-	}
-	if len(updater.calls) != 1 ||
-		updater.calls[0].blockID != intent.BlockID ||
-		updater.calls[0].state != metastore.UploadStateUploaded ||
-		updater.calls[0].lastError != "" ||
-		!updater.calls[0].proposedAt.Equal(time.Unix(501, 0).UTC()) {
-		t.Fatalf("state calls = %#v, want uploaded retry call", updater.calls)
-	}
-	if _, err := store.HeadObject(ctx, intent.BackendObjectKey); err != nil {
-		t.Fatalf("head uploaded object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run processor")
+	requireProcessorCounts(t, result, processorCounts{scanned: 1, uploaded: 1})
+	requireUploadedIntentCall(t, updater.calls, 0, intent.BlockID, time.Unix(501, 0).UTC())
+	_, err = store.HeadObject(ctx, intent.BackendObjectKey)
+	testutil.RequireNoErrorf(t, err, "head uploaded object")
 }
 
 func TestProcessorRetriesPartialObjectSetAndRecordsUploaded(t *testing.T) {
@@ -110,12 +82,8 @@ func TestProcessorRetriesPartialObjectSetAndRecordsUploaded(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("partial object set")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
-	if _, err := blocks.SealCurrent(ctx); err != nil {
-		t.Fatalf("seal block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
+	sealTestCurrentBlock(ctx, t, blocks)
 	intent := testUploadIntent(record.BlockID)
 	backendStore := &flakyHeadBackendStore{
 		Store: store,
@@ -136,20 +104,10 @@ func TestProcessorRetriesPartialObjectSetAndRecordsUploaded(t *testing.T) {
 	}
 
 	result, err := processor.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run first processor: %v", err)
-	}
-	if result.Scanned != 1 || result.Failed != 1 || result.Uploaded != 0 {
-		t.Fatalf("first result = %#v, want failed partial object set", result)
-	}
-	if result.Errors[backend.ErrorClassNotFound] != 1 {
-		t.Fatalf("first errors = %#v, want one not_found verification error", result.Errors)
-	}
-	if len(updater.calls) != 1 ||
-		updater.calls[0].state != metastore.UploadStateFailed ||
-		updater.calls[0].lastError == "" {
-		t.Fatalf("first state calls = %#v, want failed verification", updater.calls)
-	}
+	testutil.RequireNoErrorf(t, err, "run first processor")
+	requireProcessorCounts(t, result, processorCounts{scanned: 1, failed: 1})
+	testutil.RequireEqualf(t, result.Errors[backend.ErrorClassNotFound], 1, "first not_found error count")
+	requireFailedIntentCall(t, updater.calls, 0)
 
 	retry := intent
 	retry.State = metastore.UploadStateFailed
@@ -157,17 +115,43 @@ func TestProcessorRetriesPartialObjectSetAndRecordsUploaded(t *testing.T) {
 	retry.HasLastError = true
 	processor.Intents = staticIntentLister{intents: []metastore.UploadIntent{retry}}
 	result, err = processor.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run retry processor: %v", err)
-	}
-	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 {
-		t.Fatalf("retry result = %#v, want uploaded object set", result)
-	}
-	if len(updater.calls) != 2 ||
-		updater.calls[1].state != metastore.UploadStateUploaded ||
-		updater.calls[1].lastError != "" {
-		t.Fatalf("retry state calls = %#v, want uploaded retry", updater.calls)
-	}
+	testutil.RequireNoErrorf(t, err, "run retry processor")
+	requireProcessorCounts(t, result, processorCounts{scanned: 1, uploaded: 1})
+	requireUploadedIntentCall(t, updater.calls, 1, intent.BlockID, time.Unix(502, 0).UTC())
+}
+
+type processorCounts struct {
+	scanned  int
+	uploaded int
+	failed   int
+	skipped  int
+}
+
+func requireProcessorCounts(t *testing.T, result RunResult, want processorCounts) {
+	t.Helper()
+	testutil.RequireEqualf(t, result.Scanned, want.scanned, "processor scanned count")
+	testutil.RequireEqualf(t, result.Uploaded, want.uploaded, "processor uploaded count")
+	testutil.RequireEqualf(t, result.Failed, want.failed, "processor failed count")
+	testutil.RequireEqualf(t, result.Skipped, want.skipped, "processor skipped count")
+}
+
+func requireUploadedIntentCall(t *testing.T, calls []stateCall, index int, blockID string, proposedAt time.Time) {
+	t.Helper()
+	testutil.RequireTruef(t, len(calls) > index, "state calls = %#v, want index %d", calls, index)
+	call := calls[index]
+	testutil.RequireEqualf(t, call.blockID, blockID, "state call block id")
+	testutil.RequireEqualf(t, call.state, metastore.UploadStateUploaded, "state call state")
+	testutil.RequireEqualf(t, call.lastError, "", "state call last error")
+	testutil.RequireTruef(t, call.commandID != "", "state call command id is empty")
+	testutil.RequireTruef(t, call.proposedAt.Equal(proposedAt), "state call proposed_at = %s, want %s", call.proposedAt, proposedAt)
+}
+
+func requireFailedIntentCall(t *testing.T, calls []stateCall, index int) {
+	t.Helper()
+	testutil.RequireTruef(t, len(calls) > index, "state calls = %#v, want index %d", calls, index)
+	call := calls[index]
+	testutil.RequireEqualf(t, call.state, metastore.UploadStateFailed, "state call state")
+	testutil.RequireTruef(t, call.lastError != "", "state call last error is empty")
 }
 
 func TestProcessorRecoversDurableFailedIntentAfterRestart(t *testing.T) {
@@ -175,9 +159,7 @@ func TestProcessorRecoversDurableFailedIntentAfterRestart(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("durable partial object set")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -190,9 +172,7 @@ func TestProcessorRecoversDurableFailedIntentAfterRestart(t *testing.T) {
 	}
 	metadataDir := t.TempDir()
 	metadata := openMetastoreAt(t, metadataDir)
-	if err := metadata.RecordUploadIntent(intent); err != nil {
-		t.Fatalf("record upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, metadata.RecordUploadIntent(intent), "record upload intent")
 	processor := Processor{
 		Uploader: Uploader{
 			Backend: backendStore,
@@ -205,31 +185,23 @@ func TestProcessorRecoversDurableFailedIntentAfterRestart(t *testing.T) {
 	}
 
 	result, err := processor.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run first processor: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run first processor")
 	if result.Scanned != 1 || result.Failed != 1 || result.Uploaded != 0 {
 		t.Fatalf("first result = %#v, want failed partial object set", result)
 	}
-	if err := metadata.Close(); err != nil {
-		t.Fatalf("close metastore before restart: %v", err)
-	}
+	testutil.RequireNoErrorf(t, metadata.Close(), "close metastore before restart")
 	metadata = openMetastoreAt(t, metadataDir)
 	processor.Intents = metadata
 	processor.Updater = metastoreIntentStateUpdater{Store: metadata}
 	processor.Now = fixedTime(time.Unix(504, 0).UTC())
 
 	result, err = processor.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run restarted processor: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run restarted processor")
 	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 {
 		t.Fatalf("restart result = %#v, want uploaded object set", result)
 	}
 	got, err := metadata.GetUploadIntent(intent.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent after restart: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent after restart")
 	if got.State != metastore.UploadStateUploaded || got.HasLastError {
 		t.Fatalf("upload intent after restart = %#v, want uploaded without error", got)
 	}
@@ -239,9 +211,7 @@ func TestProcessorDefersOpenLocalBlockWithoutRecordingFailure(t *testing.T) {
 	ctx := context.Background()
 	blocks := openTestBlockStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("open block bytes")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	intent := testUploadIntent(record.BlockID)
 	updater := &recordingIntentStateUpdater{}
 
@@ -250,9 +220,7 @@ func TestProcessorDefersOpenLocalBlockWithoutRecordingFailure(t *testing.T) {
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater:  updater,
 	}.RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run processor: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run processor")
 	if result.Scanned != 1 || result.Deferred != 1 || result.Failed != 0 || result.Uploaded != 0 {
 		t.Fatalf("result = %#v, want one deferred open block", result)
 	}
@@ -278,9 +246,7 @@ func TestProcessorRecordsBackendErrorClass(t *testing.T) {
 		Intents: staticIntentLister{intents: []metastore.UploadIntent{intent}},
 		Updater: updater,
 	}.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("run processor: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run processor")
 	if result.Scanned != 1 || result.Failed != 1 || result.Uploaded != 0 {
 		t.Fatalf("result = %#v, want failed provider upload", result)
 	}
@@ -303,9 +269,7 @@ func TestProcessorRecordsFailedUploadAndContinues(t *testing.T) {
 		Intents:  staticIntentLister{intents: []metastore.UploadIntent{first, second}},
 		Updater:  updater,
 	}.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("run processor: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run processor")
 	if result.Scanned != 2 || result.Failed != 2 || result.Uploaded != 0 {
 		t.Fatalf("result = %#v, want two failed uploads", result)
 	}
@@ -327,9 +291,7 @@ func TestProcessorReturnsUpdaterErrorAfterUpload(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block bytes")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -416,9 +378,7 @@ func fixedTime(value time.Time) func() time.Time {
 func openMetastoreAt(t *testing.T, dir string) *metastore.Store {
 	t.Helper()
 	store, err := metastore.Open(dir)
-	if err != nil {
-		t.Fatalf("open metastore: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open metastore")
 	t.Cleanup(func() {
 		_ = store.Close()
 	})

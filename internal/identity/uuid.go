@@ -29,26 +29,24 @@ func IsUUIDv7(value string) bool {
 		return false
 	}
 	for i, r := range value {
-		switch i {
-		case 8, 13, 18, 23:
-			if r != '-' {
-				return false
-			}
-		case 14:
-			if r != '7' {
-				return false
-			}
-		case 19:
-			if !strings.ContainsRune("89abAB", r) {
-				return false
-			}
-		default:
-			if !isHex(r) {
-				return false
-			}
+		if !isUUIDv7Rune(i, r) {
+			return false
 		}
 	}
 	return true
+}
+
+func isUUIDv7Rune(index int, r rune) bool {
+	switch index {
+	case 8, 13, 18, 23:
+		return r == '-'
+	case 14:
+		return r == '7'
+	case 19:
+		return strings.ContainsRune("89abAB", r)
+	default:
+		return isHex(r)
+	}
 }
 
 func UUIDBytes(value string) ([16]byte, error) {

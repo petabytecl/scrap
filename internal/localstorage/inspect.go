@@ -207,23 +207,13 @@ func (a *Application) localDiskStats(ctx context.Context) (localDiskStats, error
 func directorySize(root string) (uint64, error) {
 	var total uint64
 	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		if entry.IsDir() {
+		size, err := entrySize(entry, err)
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		info, err := entry.Info()
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return fmt.Errorf("inspect local storage entry: %w", err)
+			return err
 		}
-		size := info.Size()
 		if size <= 0 {
 			return nil
 		}
@@ -238,6 +228,20 @@ func directorySize(root string) (uint64, error) {
 		return 0, fmt.Errorf("walk local storage directory: %w", err)
 	}
 	return total, nil
+}
+
+func entrySize(entry fs.DirEntry, entryErr error) (int64, error) {
+	if entryErr != nil {
+		return 0, entryErr
+	}
+	if entry.IsDir() {
+		return 0, nil
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return 0, fmt.Errorf("inspect local storage entry: %w", err)
+	}
+	return info.Size(), nil
 }
 
 func statfsBytes(blocks uint64, blockSize int64) uint64 {

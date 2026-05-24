@@ -746,26 +746,7 @@ func (s *AdminServer) StartDRDrill(_ context.Context, req *adminv1.StartDRDrillR
 }
 
 func (s *AdminServer) createOperationPlan(operationType string, req OperationPlanRequest) (*adminv1.OperationPlan, error) {
-	metadata := cloneTags(req.Metadata)
-	if metadata == nil {
-		metadata = make(map[string]string)
-	}
-	metadata[adminOperationTypeMetadata] = operationType
-	if req.DryRun {
-		metadata[adminDryRunMetadata] = "true"
-	} else {
-		metadata[adminDryRunMetadata] = "false"
-	}
-	if req.PinUntil != nil {
-		metadata["scrap.pin_until"] = req.PinUntil.Format(time.RFC3339Nano)
-	}
-	if metadata[adminOperationLaneMetadata] == "" {
-		metadata[adminOperationLaneMetadata] = defaultAdminOperationLane(operationType)
-	}
-	if metadata[adminBackendLaneMetadata] == "" && isBackendLaneOperation(operationType) {
-		metadata[adminBackendLaneMetadata] = defaultAdminBackendLane(operationType)
-	}
-
+	metadata := planMetadata(operationType, req)
 	planID, err := identity.NewUUIDv7()
 	if err != nil {
 		return nil, err
@@ -790,6 +771,32 @@ func (s *AdminServer) createOperationPlan(operationType string, req OperationPla
 		return nil, err
 	}
 	return plan, nil
+}
+
+func planMetadata(operationType string, req OperationPlanRequest) map[string]string {
+	metadata := cloneTags(req.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata[adminOperationTypeMetadata] = operationType
+	metadata[adminDryRunMetadata] = boolMetadata(req.DryRun)
+	if req.PinUntil != nil {
+		metadata["scrap.pin_until"] = req.PinUntil.Format(time.RFC3339Nano)
+	}
+	if metadata[adminOperationLaneMetadata] == "" {
+		metadata[adminOperationLaneMetadata] = defaultAdminOperationLane(operationType)
+	}
+	if metadata[adminBackendLaneMetadata] == "" && isBackendLaneOperation(operationType) {
+		metadata[adminBackendLaneMetadata] = defaultAdminBackendLane(operationType)
+	}
+	return metadata
+}
+
+func boolMetadata(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func defaultAdminOperationLane(operationType string) string {
@@ -841,37 +848,17 @@ func (s *AdminServer) startPlannedOperationFromPlan(planType, operationType stri
 	if err != nil {
 		return nil, err
 	}
-	if plan.GetPlanHash() != req.PlanHash {
-		return nil, status.Error(codes.FailedPrecondition, "plan hash does not match operation plan")
-	}
-	if plan.GetMetadata()[adminOperationTypeMetadata] != planType {
-		return nil, status.Error(codes.FailedPrecondition, "operation plan type does not match start request")
-	}
-	if plan.GetExpiresAt().AsTime().Before(s.now()) {
-		return nil, status.Error(codes.FailedPrecondition, "operation plan has expired")
-	}
-	if existing, err := s.operations.Get(req.OperationID); err == nil {
-		if isSameStartedOperation(existing, operationType, req) {
-			if err := s.auditOperationStarted(existing); err != nil {
-				return nil, err
-			}
-			return existing, nil
-		}
-		return nil, status.Error(codes.AlreadyExists, "operation id already exists with different metadata")
-	} else if !errors.Is(err, operations.ErrNotFound) {
+	if err := s.validateOperationPlan(plan, planType, req); err != nil {
 		return nil, err
 	}
 
-	metadata := cloneTags(plan.GetMetadata())
-	if metadata == nil {
-		metadata = make(map[string]string)
+	existing, found, err := s.existingStartedOperation(operationType, req)
+	if err != nil {
+		return nil, err
 	}
-	for key, value := range req.Metadata {
-		metadata[key] = value
+	if found {
+		return existing, nil
 	}
-	metadata[adminOperationPlanIDMetadata] = req.OperationPlanID
-	metadata[adminPlanHashMetadata] = req.PlanHash
-
 	operation := &adminv1.Operation{
 		OperationId:         req.OperationID,
 		OperationType:       operationType,
@@ -881,8 +868,25 @@ func (s *AdminServer) startPlannedOperationFromPlan(planType, operationType stri
 		DryRun:              plan.GetMetadata()[adminDryRunMetadata] == "true",
 		Targets:             cloneTargets(plan.GetTargets()),
 		Progress:            &adminv1.OperationProgress{Message: "queued"},
-		Metadata:            metadata,
+		Metadata:            startedOperationMetadata(plan.GetMetadata(), req),
 	}
+	return s.createStartedOperation(operation)
+}
+
+func startedOperationMetadata(planMetadata map[string]string, req OperationStartRequest) map[string]string {
+	metadata := cloneTags(planMetadata)
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	for key, value := range req.Metadata {
+		metadata[key] = value
+	}
+	metadata[adminOperationPlanIDMetadata] = req.OperationPlanID
+	metadata[adminPlanHashMetadata] = req.PlanHash
+	return metadata
+}
+
+func (s *AdminServer) createStartedOperation(operation *adminv1.Operation) (*adminv1.Operation, error) {
 	created, err := s.operations.Create(operation)
 	if errors.Is(err, operations.ErrConflict) {
 		return nil, status.Error(codes.AlreadyExists, "operation id already exists with different metadata")
@@ -894,6 +898,36 @@ func (s *AdminServer) startPlannedOperationFromPlan(planType, operationType stri
 		return nil, err
 	}
 	return created, nil
+}
+
+func (s *AdminServer) validateOperationPlan(plan *adminv1.OperationPlan, planType string, req OperationStartRequest) error {
+	if plan.GetPlanHash() != req.PlanHash {
+		return status.Error(codes.FailedPrecondition, "plan hash does not match operation plan")
+	}
+	if plan.GetMetadata()[adminOperationTypeMetadata] != planType {
+		return status.Error(codes.FailedPrecondition, "operation plan type does not match start request")
+	}
+	if plan.GetExpiresAt().AsTime().Before(s.now()) {
+		return status.Error(codes.FailedPrecondition, "operation plan has expired")
+	}
+	return nil
+}
+
+func (s *AdminServer) existingStartedOperation(operationType string, req OperationStartRequest) (*adminv1.Operation, bool, error) {
+	existing, err := s.operations.Get(req.OperationID)
+	if errors.Is(err, operations.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !isSameStartedOperation(existing, operationType, req) {
+		return nil, false, status.Error(codes.AlreadyExists, "operation id already exists with different metadata")
+	}
+	if err := s.auditOperationStarted(existing); err != nil {
+		return nil, false, err
+	}
+	return existing, true, nil
 }
 
 func (s *AdminServer) auditOperationStarted(operation *adminv1.Operation) error {
@@ -1012,45 +1046,57 @@ func isSameStartedOperation(operation *adminv1.Operation, operationType string, 
 func adminTargetsToProto(targets []AdminTarget) []*adminv1.Target {
 	out := make([]*adminv1.Target, 0, len(targets))
 	for _, target := range targets {
-		switch target.Kind {
-		case AdminTargetDocument:
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_Document{Document: &adminv1.DocumentTarget{
-				TenantId:      target.Document.TenantID,
-				TransactionId: target.Document.TransactionID,
-				DocumentName:  target.Document.DocumentName,
-			}}})
-		case AdminTargetTransaction:
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_Transaction{Transaction: &adminv1.TransactionTarget{
-				TenantId:      target.Transaction.TenantID,
-				TransactionId: target.Transaction.TransactionID,
-			}}})
-		case AdminTargetBlock:
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_Block{Block: &adminv1.BlockTarget{
-				ShardId: target.Block.ShardID,
-				BlockId: target.Block.BlockID,
-			}}})
-		case AdminTargetShard:
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_Shard{Shard: &adminv1.ShardTarget{ShardId: target.ShardID}}})
-		case AdminTargetStorageMember:
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: target.StorageMember}}})
-		case AdminTargetSnapshot:
-			snapshot := &adminv1.SnapshotTarget{SnapshotId: target.Snapshot.SnapshotID}
-			if target.Snapshot.ShardID != "" {
-				shardID := target.Snapshot.ShardID
-				snapshot.ShardId = &shardID
-			}
-			if target.Snapshot.CheckpointID != "" {
-				checkpointID := target.Snapshot.CheckpointID
-				snapshot.CheckpointId = &checkpointID
-			}
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: snapshot}})
-		case AdminTargetCapacityProfile:
-			out = append(out, &adminv1.Target{Target: &adminv1.Target_CapacityProfile{CapacityProfile: &adminv1.CapacityProfileTarget{
-				CapacityProfileId: target.CapacityProfile,
-			}}})
+		if protoTarget := adminTargetToProto(target); protoTarget != nil {
+			out = append(out, protoTarget)
 		}
 	}
 	return out
+}
+
+func adminTargetToProto(target AdminTarget) *adminv1.Target {
+	switch target.Kind {
+	case AdminTargetDocument:
+		return &adminv1.Target{Target: &adminv1.Target_Document{Document: &adminv1.DocumentTarget{
+			TenantId:      target.Document.TenantID,
+			TransactionId: target.Document.TransactionID,
+			DocumentName:  target.Document.DocumentName,
+		}}}
+	case AdminTargetTransaction:
+		return &adminv1.Target{Target: &adminv1.Target_Transaction{Transaction: &adminv1.TransactionTarget{
+			TenantId:      target.Transaction.TenantID,
+			TransactionId: target.Transaction.TransactionID,
+		}}}
+	case AdminTargetBlock:
+		return &adminv1.Target{Target: &adminv1.Target_Block{Block: &adminv1.BlockTarget{
+			ShardId: target.Block.ShardID,
+			BlockId: target.Block.BlockID,
+		}}}
+	case AdminTargetShard:
+		return &adminv1.Target{Target: &adminv1.Target_Shard{Shard: &adminv1.ShardTarget{ShardId: target.ShardID}}}
+	case AdminTargetStorageMember:
+		return &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: target.StorageMember}}}
+	case AdminTargetSnapshot:
+		return &adminv1.Target{Target: &adminv1.Target_Snapshot{Snapshot: snapshotTargetToProto(target.Snapshot)}}
+	case AdminTargetCapacityProfile:
+		return &adminv1.Target{Target: &adminv1.Target_CapacityProfile{CapacityProfile: &adminv1.CapacityProfileTarget{
+			CapacityProfileId: target.CapacityProfile,
+		}}}
+	default:
+		return nil
+	}
+}
+
+func snapshotTargetToProto(target SnapshotTarget) *adminv1.SnapshotTarget {
+	snapshot := &adminv1.SnapshotTarget{SnapshotId: target.SnapshotID}
+	if target.ShardID != "" {
+		shardID := target.ShardID
+		snapshot.ShardId = &shardID
+	}
+	if target.CheckpointID != "" {
+		checkpointID := target.CheckpointID
+		snapshot.CheckpointId = &checkpointID
+	}
+	return snapshot
 }
 
 func estimateOperationImpact(targets []AdminTarget) (*adminv1.OperationImpact, error) {

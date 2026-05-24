@@ -537,13 +537,7 @@ func ValidateOptions(opts Options) (Options, error) {
 	opts.OpenBaoSmokeReportPath = defaultText(opts.OpenBaoSmokeReportPath, DefaultOpenBaoReportPath)
 	opts.OperatorOwner = defaultText(opts.OperatorOwner, DefaultOperatorOwner)
 	opts.ApprovalState = defaultText(opts.ApprovalState, "approved-local-release-artifact-rehearsal")
-	if opts.DrillID == "" {
-		now := time.Now().UTC()
-		if opts.Now != nil {
-			now = opts.Now().UTC()
-		}
-		opts.DrillID = "local-dr-" + now.Format("20060102T150405Z")
-	}
+	opts.DrillID = defaultDrillID(opts)
 	opts.SnapshotTargetID = defaultText(opts.SnapshotTargetID, "latest-restorable-checkpoint")
 	if opts.Duration == 0 {
 		opts.Duration = DefaultDuration
@@ -570,6 +564,17 @@ func ValidateOptions(opts Options) (Options, error) {
 		return Options{}, fmt.Errorf("local DR drill fixture size must be no more than %d bytes", MaxFixtureSizeBytes)
 	}
 	return opts, nil
+}
+
+func defaultDrillID(opts Options) string {
+	if opts.DrillID != "" {
+		return opts.DrillID
+	}
+	now := time.Now().UTC()
+	if opts.Now != nil {
+		now = opts.Now().UTC()
+	}
+	return "local-dr-" + now.Format("20060102T150405Z")
 }
 
 func newReport(opts Options, generatedAt time.Time, backend BackendArtifactEvidence, openbao OpenBaoEvidence) Report {
@@ -1045,15 +1050,19 @@ func summarizeOpenBao(path string, report openbaosmoke.Report) OpenBaoEvidence {
 		PlaintextDEKRedacted:      report.Transit.PlaintextDEKRedacted,
 		WrappedDEKRedacted:        report.Transit.WrappedDEKRedacted,
 		CryptoUnavailableOutcomes: outcomes,
-		Passed: report.Status == StatusPassed &&
-			strings.HasPrefix(report.AuditDeviceStatus, "enabled:") &&
-			report.Transit.DataKeyVersion > 0 &&
-			report.Transit.UnwrapAADMatched &&
-			report.Transit.RewrapAADMatched &&
-			report.Transit.PlaintextDEKRedacted &&
-			report.Transit.WrappedDEKRedacted &&
-			passedOutcomes,
+		Passed:                    openBaoReportPassed(report, passedOutcomes),
 	}
+}
+
+func openBaoReportPassed(report openbaosmoke.Report, passedOutcomes bool) bool {
+	return report.Status == StatusPassed &&
+		strings.HasPrefix(report.AuditDeviceStatus, "enabled:") &&
+		report.Transit.DataKeyVersion > 0 &&
+		report.Transit.UnwrapAADMatched &&
+		report.Transit.RewrapAADMatched &&
+		report.Transit.PlaintextDEKRedacted &&
+		report.Transit.WrappedDEKRedacted &&
+		passedOutcomes
 }
 
 func checkpointEvidence(counters map[string]string) PublishedCheckpointEvidence {
@@ -1072,37 +1081,26 @@ func checkpointEvidence(counters map[string]string) PublishedCheckpointEvidence 
 }
 
 func mergeCheckpointEvidence(first, second PublishedCheckpointEvidence) PublishedCheckpointEvidence {
-	if second.ManifestID != "" {
-		first.ManifestID = second.ManifestID
-	}
-	if second.Generation != "" {
-		first.Generation = second.Generation
-	}
-	if second.VerifiedArtifacts != "" {
-		first.VerifiedArtifacts = second.VerifiedArtifacts
-	}
-	if second.VerifiedRequiredObjects != "" {
-		first.VerifiedRequiredObjects = second.VerifiedRequiredObjects
-	}
-	if second.VerifiedBlockObjects != "" {
-		first.VerifiedBlockObjects = second.VerifiedBlockObjects
-	}
-	if second.VerifiedIndexObjects != "" {
-		first.VerifiedIndexObjects = second.VerifiedIndexObjects
-	}
-	if second.VerifiedEnvelopeObjects != "" {
-		first.VerifiedEnvelopeObjects = second.VerifiedEnvelopeObjects
-	}
-	if second.BlocksRestored != "" {
-		first.BlocksRestored = second.BlocksRestored
-	}
-	if second.Documents != "" {
-		first.Documents = second.Documents
-	}
-	if second.UploadIntents != "" {
-		first.UploadIntents = second.UploadIntents
-	}
+	first.ManifestID = firstNonEmpty(second.ManifestID, first.ManifestID)
+	first.Generation = firstNonEmpty(second.Generation, first.Generation)
+	first.VerifiedArtifacts = firstNonEmpty(second.VerifiedArtifacts, first.VerifiedArtifacts)
+	first.VerifiedRequiredObjects = firstNonEmpty(second.VerifiedRequiredObjects, first.VerifiedRequiredObjects)
+	first.VerifiedBlockObjects = firstNonEmpty(second.VerifiedBlockObjects, first.VerifiedBlockObjects)
+	first.VerifiedIndexObjects = firstNonEmpty(second.VerifiedIndexObjects, first.VerifiedIndexObjects)
+	first.VerifiedEnvelopeObjects = firstNonEmpty(second.VerifiedEnvelopeObjects, first.VerifiedEnvelopeObjects)
+	first.BlocksRestored = firstNonEmpty(second.BlocksRestored, first.BlocksRestored)
+	first.Documents = firstNonEmpty(second.Documents, first.Documents)
+	first.UploadIntents = firstNonEmpty(second.UploadIntents, first.UploadIntents)
 	return first
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func failedFixtureWrite(evidence FixtureWriteEvidence, started time.Time, err error) (FixtureWriteEvidence, error) {
@@ -1120,22 +1118,26 @@ func classifyError(err error) string {
 		return "transient"
 	}
 	if st, ok := status.FromError(err); ok {
-		switch st.Code() {
-		case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.ResourceExhausted:
-			return "transient"
-		case codes.NotFound:
-			return "not_found"
-		case codes.Unauthenticated, codes.PermissionDenied:
-			return "auth"
-		case codes.AlreadyExists, codes.FailedPrecondition:
-			return "conflict"
-		case codes.InvalidArgument, codes.OutOfRange:
-			return "permanent"
-		default:
-			return strings.ToLower(st.Code().String())
-		}
+		return classifyStatusCode(st.Code())
 	}
 	return "permanent"
+}
+
+func classifyStatusCode(code codes.Code) string {
+	switch code {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.ResourceExhausted:
+		return "transient"
+	case codes.NotFound:
+		return "not_found"
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return "auth"
+	case codes.AlreadyExists, codes.FailedPrecondition:
+		return "conflict"
+	case codes.InvalidArgument, codes.OutOfRange:
+		return "permanent"
+	default:
+		return strings.ToLower(code.String())
+	}
 }
 
 func sampleBytes(size uint64) []byte {

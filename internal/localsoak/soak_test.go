@@ -22,6 +22,7 @@ import (
 	"github.com/petabytecl/scrap/internal/capacitysample"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestRunEmitsLocalRehearsalEvidence(t *testing.T) {
@@ -49,46 +50,32 @@ func TestRunEmitsLocalRehearsalEvidence(t *testing.T) {
 		Operations: fakeOperations{},
 		Repair:     fakeRepair{},
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "Run")
 
-	if report.Status != StatusPassed {
-		t.Fatalf("status = %q, want passed; violations=%#v", report.Status, report.ThresholdViolations)
-	}
-	if report.CampaignConfig.RepoOwnedReleaseBoundariesIssue != "#48" ||
-		report.CampaignConfig.LocalEnvironmentIssue != "#99" ||
-		report.CampaignConfig.AdvisoryThresholdIssue != "#100" {
-		t.Fatalf("campaign config missing issue references: %#v", report.CampaignConfig)
-	}
-	if report.Workload.DocumentSizeDistribution.TotalBytes != 384 {
-		t.Fatalf("document distribution = %#v, want total 384", report.Workload.DocumentSizeDistribution)
-	}
-	if report.Workload.ActiveAdminReads || !report.Workload.ActiveAdminObservations {
-		t.Fatalf("workload admin flags = %#v, want observations without admin document reads", report.Workload)
-	}
-	if got := len(report.Results.LocalWriteAdmission.Samples); got != 2 {
-		t.Fatalf("write samples = %d, want 2", got)
-	}
-	if report.Results.LocalReadBack.Summary.SuccessCount != 2 ||
-		!contains(report.Results.LocalReadBack.Sources, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL.String()) {
-		t.Fatalf("read-back result = %#v", report.Results.LocalReadBack)
-	}
-	if report.Results.BackendUploadLag.SuccessCount != 2 {
-		t.Fatalf("backend upload summary = %#v, want capacity report put samples", report.Results.BackendUploadLag)
-	}
-	if report.Results.OpenBao.SaturationBehavior.Classification != "within-advisory-threshold" {
-		t.Fatalf("openbao saturation = %#v", report.Results.OpenBao.SaturationBehavior)
-	}
-	if report.AdvisoryCapacitySample.ProposedCapacityProfile.ProfileID != "scrap-prod-v1-advisory" {
-		t.Fatalf("capacity summary = %#v", report.AdvisoryCapacitySample)
-	}
+	requireLocalSoakReport(t, report)
 	for _, limit := range report.EvidenceLimits {
 		if strings.Contains(limit, "not live production capacity approval") {
 			return
 		}
 	}
 	t.Fatalf("evidence limits = %#v, want production boundary", report.EvidenceLimits)
+}
+
+func requireLocalSoakReport(t *testing.T, report Report) {
+	t.Helper()
+	testutil.RequireEqualf(t, report.Status, StatusPassed, "status")
+	testutil.RequireEqualf(t, report.CampaignConfig.RepoOwnedReleaseBoundariesIssue, "#48", "repo-owned release boundaries issue")
+	testutil.RequireEqualf(t, report.CampaignConfig.LocalEnvironmentIssue, "#99", "local environment issue")
+	testutil.RequireEqualf(t, report.CampaignConfig.AdvisoryThresholdIssue, "#100", "advisory threshold issue")
+	testutil.RequireEqualf(t, report.Workload.DocumentSizeDistribution.TotalBytes, uint64(384), "document distribution total bytes")
+	testutil.RequireFalsef(t, report.Workload.ActiveAdminReads, "active admin reads = true")
+	testutil.RequireTruef(t, report.Workload.ActiveAdminObservations, "active admin observations = false")
+	testutil.RequireEqualf(t, len(report.Results.LocalWriteAdmission.Samples), 2, "write sample count")
+	testutil.RequireEqualf(t, report.Results.LocalReadBack.Summary.SuccessCount, 2, "read-back success count")
+	testutil.RequireTruef(t, contains(report.Results.LocalReadBack.Sources, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL.String()), "read-back sources = %#v", report.Results.LocalReadBack.Sources)
+	testutil.RequireEqualf(t, report.Results.BackendUploadLag.SuccessCount, 2, "backend upload success count")
+	testutil.RequireEqualf(t, report.Results.OpenBao.SaturationBehavior.Classification, "within-advisory-threshold", "openbao saturation classification")
+	testutil.RequireEqualf(t, report.AdvisoryCapacitySample.ProposedCapacityProfile.ProfileID, "scrap-prod-v1-advisory", "advisory capacity profile")
 }
 
 func TestRunFailsWhenAdvisoryThresholdsAreExceeded(t *testing.T) {
@@ -124,9 +111,7 @@ func TestRunFailsWhenAdvisoryThresholdsAreExceeded(t *testing.T) {
 		Operations: fakeOperations{},
 		Repair:     fakeRepair{},
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "Run")
 
 	if report.Status != StatusFailed {
 		t.Fatalf("status = %q, want failed", report.Status)
@@ -157,9 +142,7 @@ func TestRunFailsOnReadDigestMismatch(t *testing.T) {
 		Operations: fakeOperations{},
 		Repair:     fakeRepair{},
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "Run")
 	if report.Status != StatusFailed {
 		t.Fatalf("status = %q, want failed", report.Status)
 	}
@@ -220,9 +203,7 @@ func TestRunFallsBackToLocalRunwayProfile(t *testing.T) {
 		Operations: fakeOperations{},
 		Repair:     fakeRepair{},
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "Run")
 	if report.Status != StatusPassed {
 		t.Fatalf("status = %q, want passed; violations=%#v", report.Status, report.ThresholdViolations)
 	}
@@ -299,16 +280,11 @@ func sampleCapacityReport() capacitysample.Report {
 func writeCapacityReport(t *testing.T, report capacitysample.Report) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "capacity-sample-advisory.json")
+	// #nosec G304 -- the path is built under the test-owned temporary directory.
 	file, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create capacity report: %v", err)
-	}
-	if err := json.NewEncoder(file).Encode(report); err != nil {
-		t.Fatalf("encode capacity report: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close capacity report: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "create capacity report")
+	testutil.RequireNoErrorf(t, json.NewEncoder(file).Encode(report), "encode capacity report")
+	testutil.RequireNoErrorf(t, file.Close(), "close capacity report")
 	return path
 }
 

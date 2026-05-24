@@ -150,19 +150,9 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	if err != nil {
 		return result, err
 	}
-	documents, err := drillApp.metadata.ListDocuments(metastore.DocumentFilter{})
+	documents, err := verifyDRDrillMetadataCounts(drillApp, result)
 	if err != nil {
 		return result, err
-	}
-	if len(documents) != result.Documents {
-		return result, fmt.Errorf("localstorage: DR drill restored %d documents, expected %d", len(documents), result.Documents)
-	}
-	transactions, err := drillApp.metadata.ListTransactions()
-	if err != nil {
-		return result, err
-	}
-	if len(transactions) != result.Transactions {
-		return result, fmt.Errorf("localstorage: DR drill restored %d transactions, expected %d", len(transactions), result.Transactions)
 	}
 	restoredBlocks, err := drillApp.restoreImportedBlocks(ctx, documents, a.now())
 	if err != nil {
@@ -170,6 +160,24 @@ func (a *Application) RunDRDrill(ctx context.Context, execute bool) (MetadataRes
 	}
 	result.BlocksRestored = restoredBlocks
 	return result, nil
+}
+
+func verifyDRDrillMetadataCounts(drillApp *Application, result MetadataRestoreResult) ([]metastore.Document, error) {
+	documents, err := drillApp.metadata.ListDocuments(metastore.DocumentFilter{})
+	if err != nil {
+		return nil, err
+	}
+	if len(documents) != result.Documents {
+		return nil, fmt.Errorf("localstorage: DR drill restored %d documents, expected %d", len(documents), result.Documents)
+	}
+	transactions, err := drillApp.metadata.ListTransactions()
+	if err != nil {
+		return nil, err
+	}
+	if len(transactions) != result.Transactions {
+		return nil, fmt.Errorf("localstorage: DR drill restored %d transactions, expected %d", len(transactions), result.Transactions)
+	}
+	return documents, nil
 }
 
 func metadataRestoreResultFromCheckpoint(checkpoint published.CheckpointVerification) MetadataRestoreResult {

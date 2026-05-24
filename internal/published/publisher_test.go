@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"io"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPublishSnapshotWritesSnapshotManifestAndCurrentPointer(t *testing.T) {
@@ -23,15 +23,11 @@ func TestPublishSnapshotWritesSnapshotManifestAndCurrentPointer(t *testing.T) {
 	blockData := []byte("document bytes")
 	indexData := []byte("index bytes")
 	blockObject, err := store.PutObject(ctx, "objects/block-1.blk", bytes.NewReader(blockData))
-	if err != nil {
-		t.Fatalf("put block object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "put block object")
 	indexObject, err := store.PutObject(ctx, "objects/block-1.idx", bytes.NewReader(indexData))
-	if err != nil {
-		t.Fatalf("put index object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "put index object")
 	metadata := staticSnapshotMetadata{
-		documents: []metastore.Document{publishedTestDocument("block-1", blockData)},
+		documents: []metastore.Document{publishedTestDocument(blockData)},
 		transactions: []metastore.Transaction{
 			{
 				Identity: identity.Transaction{
@@ -56,64 +52,52 @@ func TestPublishSnapshotWritesSnapshotManifestAndCurrentPointer(t *testing.T) {
 		},
 	}
 
-	first := publishTestSnapshot(t, ctx, store, metadata, "snapshot-1", "manifest-1", 7, 42, time.Unix(100, 0).UTC())
-	if first.DocumentCount != 1 {
-		t.Fatalf("document count = %d, want 1", first.DocumentCount)
-	}
-	if first.TransactionCount != 1 {
-		t.Fatalf("transaction count = %d, want 1", first.TransactionCount)
-	}
+	first := publishTestSnapshot(ctx, t, store, metadata, "snapshot-1", "manifest-1", 7, 42, time.Unix(100, 0).UTC())
+	testutil.RequireEqualf(t, first.DocumentCount, 1, "document count")
+	testutil.RequireEqualf(t, first.TransactionCount, 1, "transaction count")
 
-	pointer := readCurrentPointerObject(t, ctx, store, first.PointerKey)
-	if pointer.GetManifestId() != "manifest-1" || pointer.GetGeneration() != 7 {
-		t.Fatalf("pointer = %#v, want manifest-1 generation 7", pointer)
-	}
-	manifest := readManifestObject(t, ctx, store, first.ManifestKey)
-	if manifest.GetSnapshots()[0].GetObjectKey() != first.SnapshotKey ||
-		manifest.GetSnapshots()[0].GetLength() != first.SnapshotObject.Length {
-		t.Fatalf("manifest snapshot = %#v, want exported snapshot object", manifest.GetSnapshots()[0])
-	}
-	if len(manifest.GetRequiredObjects()) != 2 ||
-		manifest.GetRequiredObjects()[0].GetObjectKey() != blockObject.Key ||
-		manifest.GetRequiredObjects()[0].GetKind() != publishedv1.ObjectKind_OBJECT_KIND_BLOCK ||
-		manifest.GetRequiredObjects()[1].GetObjectKey() != indexObject.Key ||
-		manifest.GetRequiredObjects()[1].GetKind() != publishedv1.ObjectKind_OBJECT_KIND_INDEX {
-		t.Fatalf("required objects = %#v, want verified block and index refs", manifest.GetRequiredObjects())
-	}
+	pointer := readCurrentPointerObject(ctx, t, store, first.PointerKey)
+	testutil.RequireEqualf(t, pointer.GetManifestId(), "manifest-1", "pointer manifest id")
+	testutil.RequireEqualf(t, pointer.GetGeneration(), uint64(7), "pointer generation")
+	manifest := readManifestObject(ctx, t, store, first.ManifestKey)
+	requirePublishedManifestObjects(t, manifest, first, blockObject.Key, indexObject.Key)
 
-	recordReader := bytes.NewReader(readObject(t, ctx, store, first.SnapshotKey))
+	recordReader := bytes.NewReader(readObject(ctx, t, store, first.SnapshotKey))
 	record, err := ReadSnapshotRecord(recordReader)
-	if err != nil {
-		t.Fatalf("read snapshot record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read snapshot record")
 	location := record.GetDocument().GetLocations()[0]
-	if location.GetBackendObjectKey() != blockObject.Key || location.GetIndexObjectKey() != indexObject.Key {
-		t.Fatalf("published location = %#v, want backend and index keys", location)
-	}
+	testutil.RequireEqualf(t, location.GetBackendObjectKey(), blockObject.Key, "published backend object key")
+	testutil.RequireEqualf(t, location.GetIndexObjectKey(), indexObject.Key, "published index object key")
 	transactionRecord, err := ReadSnapshotRecord(recordReader)
-	if err != nil {
-		t.Fatalf("read transaction record: %v", err)
-	}
-	if transactionRecord.GetTransaction().GetTransactionId() != "tx-a" ||
-		transactionRecord.GetTransaction().GetTags()["closed_by"] != "test" {
-		t.Fatalf("transaction record = %#v, want published transaction", transactionRecord.GetTransaction())
-	}
-	if _, err := ReadSnapshotRecord(recordReader); !errors.Is(err, io.EOF) {
-		t.Fatalf("next snapshot record error = %v, want EOF", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read transaction record")
+	testutil.RequireEqualf(t, transactionRecord.GetTransaction().GetTransactionId(), "tx-a", "transaction id")
+	testutil.RequireEqualf(t, transactionRecord.GetTransaction().GetTags()["closed_by"], "test", "transaction closed_by tag")
+	_, err = ReadSnapshotRecord(recordReader)
+	testutil.RequireEOFf(t, err, "next snapshot record")
 
-	second := publishTestSnapshot(t, ctx, store, metadata, "snapshot-2", "manifest-2", 8, 43, time.Unix(200, 0).UTC())
-	pointer = readCurrentPointerObject(t, ctx, store, second.PointerKey)
-	if pointer.GetManifestId() != "manifest-2" || pointer.GetGeneration() != 8 {
-		t.Fatalf("updated pointer = %#v, want manifest-2 generation 8", pointer)
-	}
+	second := publishTestSnapshot(ctx, t, store, metadata, "snapshot-2", "manifest-2", 8, 43, time.Unix(200, 0).UTC())
+	pointer = readCurrentPointerObject(ctx, t, store, second.PointerKey)
+	testutil.RequireEqualf(t, pointer.GetManifestId(), "manifest-2", "updated pointer manifest id")
+	testutil.RequireEqualf(t, pointer.GetGeneration(), uint64(8), "updated pointer generation")
+}
+
+func requirePublishedManifestObjects(t *testing.T, manifest *publishedv1.Manifest, publication SnapshotPublication, blockKey, indexKey string) {
+	t.Helper()
+	testutil.RequireEqualf(t, manifest.GetSnapshots()[0].GetObjectKey(), publication.SnapshotKey, "manifest snapshot object key")
+	testutil.RequireEqualf(t, manifest.GetSnapshots()[0].GetLength(), publication.SnapshotObject.Length, "manifest snapshot length")
+	required := manifest.GetRequiredObjects()
+	testutil.RequireEqualf(t, len(required), 2, "required object count")
+	testutil.RequireEqualf(t, required[0].GetObjectKey(), blockKey, "required block object key")
+	testutil.RequireEqualf(t, required[0].GetKind(), publishedv1.ObjectKind_OBJECT_KIND_BLOCK, "required block kind")
+	testutil.RequireEqualf(t, required[1].GetObjectKey(), indexKey, "required index object key")
+	testutil.RequireEqualf(t, required[1].GetKind(), publishedv1.ObjectKind_OBJECT_KIND_INDEX, "required index kind")
 }
 
 func TestPublishSnapshotRejectsUnuploadedBlock(t *testing.T) {
 	ctx := context.Background()
 	store := openPublisherBackend(t)
 	metadata := staticSnapshotMetadata{
-		documents: []metastore.Document{publishedTestDocument("block-1", []byte("document bytes"))},
+		documents: []metastore.Document{publishedTestDocument([]byte("document bytes"))},
 		intents: []metastore.UploadIntent{
 			{
 				BlockID:          "block-1",
@@ -139,15 +123,13 @@ func TestPublishSnapshotRejectsUnuploadedBlock(t *testing.T) {
 		t.Fatal("publish snapshot succeeded for unuploaded block")
 	}
 	pointerKey, err := CurrentPointerObjectKey("cell-a")
-	if err != nil {
-		t.Fatalf("pointer key: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "pointer key")
 	if _, err := store.HeadObject(ctx, pointerKey); !errors.Is(err, backend.ErrNotFound) {
 		t.Fatalf("pointer head error = %v, want not found", err)
 	}
 }
 
-func publishTestSnapshot(t *testing.T, ctx context.Context, store backend.MutableStore, metadata SnapshotMetadataSource, snapshotID, manifestID string, generation, highWatermark uint64, publishedAt time.Time) SnapshotPublication {
+func publishTestSnapshot(ctx context.Context, t *testing.T, store backend.MutableStore, metadata SnapshotMetadataSource, snapshotID, manifestID string, generation, highWatermark uint64, publishedAt time.Time) SnapshotPublication {
 	t.Helper()
 	publication, err := PublishSnapshot(ctx, SnapshotPublishOptions{
 		Backend:         store,
@@ -163,13 +145,11 @@ func publishTestSnapshot(t *testing.T, ctx context.Context, store backend.Mutabl
 		ProducerBuild:   "test",
 		ProducerSchema:  "test-schema",
 	})
-	if err != nil {
-		t.Fatalf("publish snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "publish snapshot")
 	return publication
 }
 
-func publishedTestDocument(blockID string, data []byte) metastore.Document {
+func publishedTestDocument(data []byte) metastore.Document {
 	sum := sha256.Sum256(data)
 	return metastore.Document{
 		Identity: identity.Document{
@@ -188,7 +168,7 @@ func publishedTestDocument(blockID string, data []byte) metastore.Document {
 		Availability:     metastore.AvailabilityHot,
 		LifecycleState:   metastore.LifecycleStateActive,
 		Location: blockstore.Record{
-			BlockID:       blockID,
+			BlockID:       "block-1",
 			StoredOffset:  0,
 			StoredLength:  uint64(len(data)),
 			LogicalSHA256: sum,
@@ -204,25 +184,21 @@ func publishedTestDocument(blockID string, data []byte) metastore.Document {
 	}
 }
 
-func readCurrentPointerObject(t *testing.T, ctx context.Context, store backend.Store, key string) *publishedv1.CurrentPointer {
+func readCurrentPointerObject(ctx context.Context, t *testing.T, store backend.Store, key string) *publishedv1.CurrentPointer {
 	t.Helper()
-	pointer, err := UnmarshalCurrentPointer(readObject(t, ctx, store, key))
-	if err != nil {
-		t.Fatalf("unmarshal current pointer: %v", err)
-	}
+	pointer, err := UnmarshalCurrentPointer(readObject(ctx, t, store, key))
+	testutil.RequireNoErrorf(t, err, "unmarshal current pointer")
 	return pointer
 }
 
-func readManifestObject(t *testing.T, ctx context.Context, store backend.Store, key string) *publishedv1.Manifest {
+func readManifestObject(ctx context.Context, t *testing.T, store backend.Store, key string) *publishedv1.Manifest {
 	t.Helper()
-	manifest, err := UnmarshalManifest(readObject(t, ctx, store, key))
-	if err != nil {
-		t.Fatalf("unmarshal manifest: %v", err)
-	}
+	manifest, err := UnmarshalManifest(readObject(ctx, t, store, key))
+	testutil.RequireNoErrorf(t, err, "unmarshal manifest")
 	return manifest
 }
 
-func readObject(t *testing.T, ctx context.Context, store backend.Store, key string) []byte {
+func readObject(ctx context.Context, t *testing.T, store backend.Store, key string) []byte {
 	t.Helper()
 	var got bytes.Buffer
 	if err := store.ReadObjectRange(ctx, key, backend.Range{}, &got); err != nil {
@@ -234,9 +210,7 @@ func readObject(t *testing.T, ctx context.Context, store backend.Store, key stri
 func openPublisherBackend(t *testing.T) *backendfs.Store {
 	t.Helper()
 	store, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend")
 	return store
 }
 

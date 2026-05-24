@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestStorageFormatSchemaShape(t *testing.T) {
@@ -95,13 +96,9 @@ func TestBlockIndexRoundTripPreservesContractFields(t *testing.T) {
 	index := blockIndexWithDigest(t)
 
 	data, err := MarshalBlockIndex(index)
-	if err != nil {
-		t.Fatalf("marshal index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal index")
 	decoded, err := UnmarshalBlockIndex(data)
-	if err != nil {
-		t.Fatalf("unmarshal index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal index")
 	if !proto.Equal(index, decoded) {
 		t.Fatalf("decoded index differs\n got: %v\nwant: %v", decoded, index)
 	}
@@ -112,13 +109,9 @@ func TestBlockIndexMarshalIsDeterministic(t *testing.T) {
 	second := blockIndexWithDigest(t)
 
 	firstData, err := MarshalBlockIndex(first)
-	if err != nil {
-		t.Fatalf("marshal first index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal first index")
 	secondData, err := MarshalBlockIndex(second)
-	if err != nil {
-		t.Fatalf("marshal second index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal second index")
 	if !bytes.Equal(firstData, secondData) {
 		t.Fatal("deterministic marshal produced different bytes for equivalent indexes")
 	}
@@ -128,13 +121,9 @@ func TestBackendObjectSetRoundTripPreservesProviderNeutralRefs(t *testing.T) {
 	set := sampleBackendObjectSet()
 
 	data, err := MarshalBackendObjectSet(set)
-	if err != nil {
-		t.Fatalf("marshal object set: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal object set")
 	decoded, err := UnmarshalBackendObjectSet(data)
-	if err != nil {
-		t.Fatalf("unmarshal object set: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal object set")
 	if !proto.Equal(set, decoded) {
 		t.Fatalf("decoded object set differs\n got: %v\nwant: %v", decoded, set)
 	}
@@ -149,9 +138,7 @@ func TestBlockIndexRejectsUnsupportedSchemaVersion(t *testing.T) {
 	index := sampleBlockIndex()
 	index.SchemaVersion = CurrentSchemaVersion + 1
 	data, err := proto.Marshal(index)
-	if err != nil {
-		t.Fatalf("marshal index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal index")
 
 	_, err = UnmarshalBlockIndex(data)
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
@@ -161,28 +148,20 @@ func TestBlockIndexRejectsUnsupportedSchemaVersion(t *testing.T) {
 
 func TestBlockIndexPreservesUnknownForwardFields(t *testing.T) {
 	data, err := MarshalBlockIndex(blockIndexWithDigest(t))
-	if err != nil {
-		t.Fatalf("marshal index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal index")
 	unknown := appendUnknownVarint(nil, 1000, 77)
 	data = append(data, unknown...)
 
 	decoded, err := UnmarshalBlockIndex(data)
-	if err != nil {
-		t.Fatalf("unmarshal index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal index")
 	if got := decoded.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("unknown fields = %x, want %x", got, unknown)
 	}
 
 	roundTrip, err := MarshalBlockIndex(decoded)
-	if err != nil {
-		t.Fatalf("marshal round trip: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal round trip")
 	var reparsed storagev1.BlockIndex
-	if err := proto.Unmarshal(roundTrip, &reparsed); err != nil {
-		t.Fatalf("reparse index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, proto.Unmarshal(roundTrip, &reparsed), "reparse index")
 	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
 	}
@@ -235,9 +214,7 @@ func TestBlockIndexRejectsInvalidRequiredFieldsAndChecksums(t *testing.T) {
 			}
 
 			data, err := proto.Marshal(index)
-			if err != nil {
-				t.Fatalf("raw proto marshal: %v", err)
-			}
+			testutil.RequireNoErrorf(t, err, "raw proto marshal")
 			if _, err := UnmarshalBlockIndex(data); !errors.Is(err, ErrInvalidRecord) {
 				t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
 			}
@@ -305,9 +282,7 @@ func TestHeaderAndEnvelopeValidateSchemaVersion(t *testing.T) {
 		FrameSize:     1024 * 1024,
 		CreatedAt:     timestamppb.New(time.Unix(100, 0).UTC()),
 	})
-	if err != nil {
-		t.Fatalf("marshal header: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal header")
 	if _, err := UnmarshalBlockHeader(headerData); err != nil {
 		t.Fatalf("unmarshal header: %v", err)
 	}
@@ -326,9 +301,7 @@ func TestHeaderAndEnvelopeValidateSchemaVersion(t *testing.T) {
 	}
 	envelope.EnvelopeSha256 = envelopeDigest(t, envelope)
 	envelopeData, err := MarshalEnvelopeRecord(envelope)
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal envelope")
 	if _, err := UnmarshalEnvelopeRecord(envelopeData); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
@@ -422,9 +395,7 @@ func blockIndexWithDigest(t *testing.T) *storagev1.BlockIndex {
 	t.Helper()
 	index := sampleBlockIndex()
 	digest, err := BlockIndexSHA256(index)
-	if err != nil {
-		t.Fatalf("compute block index digest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "compute block index digest")
 	index.IndexSha256 = digest
 	return index
 }
@@ -479,9 +450,7 @@ func sampleEnvelopeRecord(t *testing.T) *storagev1.EnvelopeRecord {
 func envelopeDigest(t *testing.T, record *storagev1.EnvelopeRecord) []byte {
 	t.Helper()
 	digest, err := EnvelopeRecordSHA256(record)
-	if err != nil {
-		t.Fatalf("compute envelope digest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "compute envelope digest")
 	return digest
 }
 

@@ -169,13 +169,9 @@ func writeLocalMemberState(dir string, state localMemberState) error {
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(dir, "local-member-state-*.tmp")
+	temp, tempPath, err := createLocalMemberStateTemp(dir)
 	if err != nil {
 		return err
-	}
-	tempPath, err := safepath.UnderDir(dir, temp.Name())
-	if err != nil {
-		return errors.Join(err, temp.Close(), removeLocalPath(dir, temp.Name()))
 	}
 	statePath, err := safepath.UnderDir(dir, filepath.Join(dir, localMemberStateFile))
 	if err != nil {
@@ -205,6 +201,18 @@ func writeLocalMemberState(dir string, state localMemberState) error {
 	}
 	committed = true
 	return nil
+}
+
+func createLocalMemberStateTemp(dir string) (*os.File, string, error) {
+	temp, err := os.CreateTemp(dir, "local-member-state-*.tmp")
+	if err != nil {
+		return nil, "", err
+	}
+	tempPath, err := safepath.UnderDir(dir, temp.Name())
+	if err != nil {
+		return nil, "", errors.Join(err, temp.Close(), removeLocalPath(dir, temp.Name()))
+	}
+	return temp, tempPath, nil
 }
 
 func syncLocalDir(path string) error {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestRunRecordsRedactedKubernetesTransitEvidence(t *testing.T) {
@@ -18,38 +20,30 @@ func TestRunRecordsRedactedKubernetesTransitEvidence(t *testing.T) {
 	t.Cleanup(outage.Close)
 
 	report, err := Run(context.Background(), testOptions(server.URL, outage.URL))
-	if err != nil {
-		t.Fatalf("run smoke: %v; report=%#v", err, report)
-	}
-	if report.Status != "passed" || report.AuditDeviceStatus != "enabled:file:/tmp/openbao-audit.log" {
-		t.Fatalf("report status/audit = %s/%s", report.Status, report.AuditDeviceStatus)
-	}
-	if report.KubernetesAuth.Role != DefaultKubernetesRole ||
-		report.KubernetesAuth.BroadKeyAdminPermissions ||
-		!report.KubernetesAuth.DataKeyRequestWithoutKeyAdmin {
-		t.Fatalf("kubernetes auth evidence = %#v", report.KubernetesAuth)
-	}
-	if report.Transit.KeyName != "scrap-backend" ||
-		report.Transit.KeyVersionBefore != 1 ||
-		report.Transit.DataKeyVersion != 1 ||
-		report.Transit.RewrapVersion != 2 ||
-		report.Transit.KeyVersionAfter != 2 ||
-		!report.Transit.UnwrapAADMatched ||
-		!report.Transit.RewrapAADMatched {
-		t.Fatalf("transit evidence = %#v", report.Transit)
-	}
-	if len(report.CryptoUnavailableOutcomes) != 2 {
-		t.Fatalf("crypto outcomes = %#v, want missing-version and outage", report.CryptoUnavailableOutcomes)
-	}
+	requireRunReport(t, report, err)
 	for _, outcome := range report.CryptoUnavailableOutcomes {
-		if outcome.Status != "crypto-unavailable" {
-			t.Fatalf("outcome = %#v, want crypto-unavailable", outcome)
-		}
+		testutil.RequireEqualf(t, outcome.Status, "crypto-unavailable", "crypto outcome status")
 	}
-	if len(report.RedactedRequestIDs) == 0 {
-		t.Fatal("report did not include redacted request ids")
-	}
+	testutil.RequireTruef(t, len(report.RedactedRequestIDs) > 0, "report did not include redacted request ids")
 	assertReportDoesNotLeak(t, report, "root-token", "kubernetes-jwt", "client-token", "vault:v1:secret-ciphertext", "plaintext-secret")
+}
+
+func requireRunReport(t *testing.T, report Report, err error) {
+	t.Helper()
+	testutil.RequireNoErrorf(t, err, "run smoke; report=%#v", report)
+	testutil.RequireEqualf(t, report.Status, "passed", "report status")
+	testutil.RequireEqualf(t, report.AuditDeviceStatus, "enabled:file:/tmp/openbao-audit.log", "audit device status")
+	testutil.RequireEqualf(t, report.KubernetesAuth.Role, DefaultKubernetesRole, "kubernetes role")
+	testutil.RequireFalsef(t, report.KubernetesAuth.BroadKeyAdminPermissions, "broad key admin permissions = true")
+	testutil.RequireTruef(t, report.KubernetesAuth.DataKeyRequestWithoutKeyAdmin, "data key request without key admin = false")
+	testutil.RequireEqualf(t, report.Transit.KeyName, "scrap-backend", "transit key name")
+	testutil.RequireEqualf(t, report.Transit.KeyVersionBefore, uint32(1), "transit key version before")
+	testutil.RequireEqualf(t, report.Transit.DataKeyVersion, uint32(1), "transit data key version")
+	testutil.RequireEqualf(t, report.Transit.RewrapVersion, uint32(2), "transit rewrap version")
+	testutil.RequireEqualf(t, report.Transit.KeyVersionAfter, uint32(2), "transit key version after")
+	testutil.RequireTruef(t, report.Transit.UnwrapAADMatched, "transit unwrap AAD did not match")
+	testutil.RequireTruef(t, report.Transit.RewrapAADMatched, "transit rewrap AAD did not match")
+	testutil.RequireEqualf(t, len(report.CryptoUnavailableOutcomes), 2, "crypto unavailable outcome count")
 }
 
 func TestRunFailsWhenKubernetesClientHasKeyAdminCapability(t *testing.T) {
@@ -135,69 +129,120 @@ func newFakeOpenBao(t *testing.T, broadKeyAdmin bool) *httptest.Server {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Vault-Request", "request-"+r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		token := r.Header.Get("X-Vault-Token")
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/sys/audit":
-			requireToken(t, token, "root-token")
-			writeJSON(t, w, map[string]any{"file/": map[string]string{"type": "file"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/transit/keys/scrap-backend":
-			requireToken(t, token, "root-token")
-			writeJSON(t, w, map[string]any{"data": map[string]uint32{"latest_version": version}})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/transit/keys/scrap-backend/rotate":
-			requireToken(t, token, "root-token")
-			version++
-			writeJSON(t, w, map[string]any{"data": map[string]any{}})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/kubernetes/login":
-			requireToken(t, token, "root-token")
-			var req map[string]string
-			decodeJSON(t, r, &req)
-			if req["role"] != DefaultKubernetesRole || req["jwt"] != "kubernetes-jwt" {
-				t.Fatalf("kubernetes login request = %#v", req)
-			}
-			writeJSON(t, w, map[string]any{"auth": map[string]any{
-				"client_token": "client-token",
-				"policies":     []string{"default", "scrap-transit-client"},
-			}})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/sys/capabilities-self":
-			requireToken(t, token, "client-token")
-			var req map[string]string
-			decodeJSON(t, r, &req)
-			caps := []string{"deny"}
-			if strings.Contains(req["path"], "datakey/plaintext") {
-				caps = []string{"update"}
-			}
-			if strings.Contains(req["path"], "keys/") && broadKeyAdmin {
-				caps = []string{"read", "update", "delete"}
-			}
-			writeJSON(t, w, map[string]any{"capabilities": caps})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/transit/datakey/plaintext/scrap-backend":
-			requireToken(t, token, "client-token")
-			writeJSON(t, w, map[string]any{"data": map[string]string{
-				"plaintext":  "plaintext-secret",
-				"ciphertext": "vault:v1:secret-ciphertext",
-			}})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/transit/decrypt/scrap-backend":
-			requireToken(t, token, "client-token")
-			var req map[string]string
-			decodeJSON(t, r, &req)
-			if strings.Contains(req["ciphertext"], "v4294967295") {
-				http.Error(w, "missing key version", http.StatusBadRequest)
-				return
-			}
-			if req["context"] == "" {
-				http.Error(w, "missing context", http.StatusBadRequest)
-				return
-			}
-			writeJSON(t, w, map[string]any{"data": map[string]string{"plaintext": "plaintext-secret"}})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/transit/rewrap/scrap-backend":
-			requireToken(t, token, "client-token")
-			writeJSON(t, w, map[string]any{"data": map[string]string{"ciphertext": "vault:v2:secret-ciphertext"}})
-		default:
-			http.NotFound(w, r)
-		}
+		handleFakeOpenBaoRequest(t, w, r, &version, broadKeyAdmin)
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func handleFakeOpenBaoRequest(t *testing.T, w http.ResponseWriter, r *http.Request, version *uint32, broadKeyAdmin bool) {
+	t.Helper()
+	switch r.URL.Path {
+	case "/v1/sys/audit":
+		handleFakeAuditStatus(t, w, r)
+	case "/v1/transit/keys/scrap-backend":
+		handleFakeTransitKeyStatus(t, w, r, version)
+	case "/v1/transit/keys/scrap-backend/rotate":
+		handleFakeTransitKeyRotate(t, w, r, version)
+	case "/v1/auth/kubernetes/login":
+		handleFakeKubernetesLogin(t, w, r)
+	case "/v1/sys/capabilities-self":
+		handleFakeCapabilities(t, w, r, broadKeyAdmin)
+	case "/v1/transit/datakey/plaintext/scrap-backend":
+		handleFakePlaintextDataKey(t, w, r)
+	case "/v1/transit/decrypt/scrap-backend":
+		handleFakeDecrypt(t, w, r)
+	case "/v1/transit/rewrap/scrap-backend":
+		handleFakeRewrap(t, w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func handleFakeAuditStatus(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	requireMethod(t, r, http.MethodGet)
+	requireToken(t, r.Header.Get("X-Vault-Token"), "root-token")
+	writeJSON(t, w, map[string]any{"file/": map[string]string{"type": "file"}})
+}
+
+func handleFakeTransitKeyStatus(t *testing.T, w http.ResponseWriter, r *http.Request, version *uint32) {
+	t.Helper()
+	requireMethod(t, r, http.MethodGet)
+	requireToken(t, r.Header.Get("X-Vault-Token"), "root-token")
+	writeJSON(t, w, map[string]any{"data": map[string]uint32{"latest_version": *version}})
+}
+
+func handleFakeTransitKeyRotate(t *testing.T, w http.ResponseWriter, r *http.Request, version *uint32) {
+	t.Helper()
+	requireMethod(t, r, http.MethodPost)
+	requireToken(t, r.Header.Get("X-Vault-Token"), "root-token")
+	(*version)++
+	writeJSON(t, w, map[string]any{"data": map[string]any{}})
+}
+
+func handleFakePlaintextDataKey(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	requireMethod(t, r, http.MethodPost)
+	requireToken(t, r.Header.Get("X-Vault-Token"), "client-token")
+	writeJSON(t, w, map[string]any{"data": map[string]string{
+		"plaintext":  "plaintext-secret",
+		"ciphertext": "vault:v1:secret-ciphertext",
+	}})
+}
+
+func handleFakeRewrap(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	requireMethod(t, r, http.MethodPost)
+	requireToken(t, r.Header.Get("X-Vault-Token"), "client-token")
+	writeJSON(t, w, map[string]any{"data": map[string]string{"ciphertext": "vault:v2:secret-ciphertext"}})
+}
+
+func handleFakeKubernetesLogin(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	requireToken(t, r.Header.Get("X-Vault-Token"), "root-token")
+	var req map[string]string
+	decodeJSON(t, r, &req)
+	testutil.RequireEqualf(t, req["role"], DefaultKubernetesRole, "kubernetes login role")
+	testutil.RequireEqualf(t, req["jwt"], "kubernetes-jwt", "kubernetes login jwt")
+	writeJSON(t, w, map[string]any{"auth": map[string]any{
+		"client_token": "client-token",
+		"policies":     []string{"default", "scrap-transit-client"},
+	}})
+}
+
+func handleFakeCapabilities(t *testing.T, w http.ResponseWriter, r *http.Request, broadKeyAdmin bool) {
+	t.Helper()
+	requireToken(t, r.Header.Get("X-Vault-Token"), "client-token")
+	var req map[string]string
+	decodeJSON(t, r, &req)
+	writeJSON(t, w, map[string]any{"capabilities": fakeCapabilities(req["path"], broadKeyAdmin)})
+}
+
+func fakeCapabilities(path string, broadKeyAdmin bool) []string {
+	if strings.Contains(path, "keys/") && broadKeyAdmin {
+		return []string{"read", "update", "delete"}
+	}
+	if strings.Contains(path, "datakey/plaintext") {
+		return []string{"update"}
+	}
+	return []string{"deny"}
+}
+
+func handleFakeDecrypt(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	requireToken(t, r.Header.Get("X-Vault-Token"), "client-token")
+	var req map[string]string
+	decodeJSON(t, r, &req)
+	if strings.Contains(req["ciphertext"], "v4294967295") {
+		http.Error(w, "missing key version", http.StatusBadRequest)
+		return
+	}
+	if req["context"] == "" {
+		http.Error(w, "missing context", http.StatusBadRequest)
+		return
+	}
+	writeJSON(t, w, map[string]any{"data": map[string]string{"plaintext": "plaintext-secret"}})
 }
 
 func testOptions(address, outageAddress string) Options {
@@ -220,26 +265,25 @@ func requireToken(t *testing.T, got, want string) {
 	}
 }
 
+func requireMethod(t *testing.T, r *http.Request, want string) {
+	t.Helper()
+	testutil.RequireEqualf(t, want, r.Method, "method for %s", r.URL.Path)
+}
+
 func decodeJSON(t *testing.T, r *http.Request, out any) {
 	t.Helper()
-	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
-		t.Fatalf("decode request JSON: %v", err)
-	}
+	testutil.RequireNoErrorf(t, json.NewDecoder(r.Body).Decode(out), "decode request JSON")
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		t.Fatalf("write response JSON: %v", err)
-	}
+	testutil.RequireNoErrorf(t, json.NewEncoder(w).Encode(value), "write response JSON")
 }
 
 func assertReportDoesNotLeak(t *testing.T, report Report, forbidden ...string) {
 	t.Helper()
 	encoded, err := json.Marshal(report)
-	if err != nil {
-		t.Fatalf("marshal report: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal report")
 	output := string(encoded)
 	for _, value := range forbidden {
 		if strings.Contains(output, value) {

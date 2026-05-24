@@ -32,31 +32,34 @@ func (s *Store) ApplyShardCommand(command *metastorev1.ShardCommand) error {
 	}
 	batch := s.db.NewBatch()
 	defer closeutil.Ignore(batch)
-	switch typed := command.GetCommand().(type) {
-	case *metastorev1.ShardCommand_CommitDocument:
-		err = s.applyCommitDocument(batch, typed.CommitDocument)
-	case *metastorev1.ShardCommand_CompleteTransaction:
-		err = s.applyCompleteTransaction(batch, typed.CompleteTransaction)
-	case *metastorev1.ShardCommand_RecordUploadIntent:
-		err = s.applyRecordUploadIntent(batch, typed.RecordUploadIntent, command.GetProposedAt())
-	case *metastorev1.ShardCommand_UpdateUploadIntentState:
-		err = s.applyUpdateUploadIntentState(batch, typed.UpdateUploadIntentState, command.GetProposedAt())
-	case *metastorev1.ShardCommand_UpdateRestoreState:
-		err = s.applyUpdateRestoreState(batch, typed.UpdateRestoreState)
-	case *metastorev1.ShardCommand_RecordRepairState:
-		err = s.applyRecordRepairState(batch, typed.RecordRepairState, command.GetProposedAt())
-	case *metastorev1.ShardCommand_TombstoneDocument:
-		err = s.applyTombstoneDocument(batch, typed.TombstoneDocument)
-	default:
-		return fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
-	}
-	if err != nil {
+	if err := s.applyShardCommandMutation(batch, command); err != nil {
 		return err
 	}
 	if err := s.recordCommandReceipt(batch, receipt); err != nil {
 		return err
 	}
 	return batch.Commit(pebble.Sync)
+}
+
+func (s *Store) applyShardCommandMutation(batch *pebble.Batch, command *metastorev1.ShardCommand) error {
+	switch typed := command.GetCommand().(type) {
+	case *metastorev1.ShardCommand_CommitDocument:
+		return s.applyCommitDocument(batch, typed.CommitDocument)
+	case *metastorev1.ShardCommand_CompleteTransaction:
+		return s.applyCompleteTransaction(batch, typed.CompleteTransaction)
+	case *metastorev1.ShardCommand_RecordUploadIntent:
+		return s.applyRecordUploadIntent(batch, typed.RecordUploadIntent, command.GetProposedAt())
+	case *metastorev1.ShardCommand_UpdateUploadIntentState:
+		return s.applyUpdateUploadIntentState(batch, typed.UpdateUploadIntentState, command.GetProposedAt())
+	case *metastorev1.ShardCommand_UpdateRestoreState:
+		return s.applyUpdateRestoreState(batch, typed.UpdateRestoreState)
+	case *metastorev1.ShardCommand_RecordRepairState:
+		return s.applyRecordRepairState(batch, typed.RecordRepairState, command.GetProposedAt())
+	case *metastorev1.ShardCommand_TombstoneDocument:
+		return s.applyTombstoneDocument(batch, typed.TombstoneDocument)
+	default:
+		return fmt.Errorf("metastore: unsupported shard command %T", command.GetCommand())
+	}
 }
 
 func commandReceipt(command *metastorev1.ShardCommand) (CommandReceipt, error) {

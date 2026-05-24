@@ -153,6 +153,10 @@ func applyTailImportRecord(contents *TailContents, record *publishedv1.TailRecor
 	if err := applyTailHeader(contents, record, options, first); err != nil {
 		return err
 	}
+	return applyTailMutation(contents, record)
+}
+
+func applyTailMutation(contents *TailContents, record *publishedv1.TailRecord) error {
 	switch typed := record.GetMutation().(type) {
 	case *publishedv1.TailRecord_FinalizedDocument:
 		document, intent, err := importDocument(typed.FinalizedDocument)
@@ -234,19 +238,10 @@ func applyTailHeader(contents *TailContents, record *publishedv1.TailRecord, opt
 	if record == nil {
 		return invalidArtifact("tail record is required")
 	}
-	if err := validateSourceOwnership("tail", record.GetSourceNamespace(), record.GetShardId(), options); err != nil {
+	if err := validateTailRecordHeader(record, options); err != nil {
 		return err
 	}
 	logIndex := record.GetLogIndex()
-	if logIndex == 0 {
-		return invalidArtifact("tail log index is required")
-	}
-	if (options.RequireLogRange || options.FirstLogIndex != 0) && logIndex < options.FirstLogIndex {
-		return invalidArtifact("tail log index %d is before expected first index %d", logIndex, options.FirstLogIndex)
-	}
-	if (options.RequireLogRange || options.LastLogIndex != 0) && logIndex > options.LastLogIndex {
-		return invalidArtifact("tail log index %d is after expected last index %d", logIndex, options.LastLogIndex)
-	}
 	if first {
 		contents.SourceNamespace = record.GetSourceNamespace()
 		contents.ShardID = record.GetShardId()
@@ -267,6 +262,23 @@ func applyTailHeader(contents *TailContents, record *publishedv1.TailRecord, opt
 		return invalidArtifact("tail log index %d is not after previous index %d", logIndex, contents.LastLogIndex)
 	}
 	contents.LastLogIndex = logIndex
+	return nil
+}
+
+func validateTailRecordHeader(record *publishedv1.TailRecord, options ImportOptions) error {
+	if err := validateSourceOwnership("tail", record.GetSourceNamespace(), record.GetShardId(), options); err != nil {
+		return err
+	}
+	logIndex := record.GetLogIndex()
+	if logIndex == 0 {
+		return invalidArtifact("tail log index is required")
+	}
+	if (options.RequireLogRange || options.FirstLogIndex != 0) && logIndex < options.FirstLogIndex {
+		return invalidArtifact("tail log index %d is before expected first index %d", logIndex, options.FirstLogIndex)
+	}
+	if (options.RequireLogRange || options.LastLogIndex != 0) && logIndex > options.LastLogIndex {
+		return invalidArtifact("tail log index %d is after expected last index %d", logIndex, options.LastLogIndex)
+	}
 	return nil
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/storageformat"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 type fixture struct {
@@ -28,6 +29,12 @@ type fixture struct {
 	path string
 	data func(*testing.T) []byte
 	read func([]byte) error
+}
+
+type forwardCompatibleUnknownFieldCase struct {
+	name      string
+	data      func(*testing.T) []byte
+	roundTrip func([]byte) (proto.Message, error)
 }
 
 func TestInitialV1FixturesAreReadable(t *testing.T) {
@@ -158,171 +165,166 @@ func TestUnknownRequiredVersionsFailClosed(t *testing.T) {
 }
 
 func TestForwardCompatibleUnknownFieldsArePreserved(t *testing.T) {
-	tests := []struct {
-		name      string
-		data      func(*testing.T) []byte
-		roundTrip func([]byte) (proto.Message, error)
-	}{
+	unknown := appendUnknownVarint(nil, 1000, 44)
+	for _, test := range forwardCompatibleUnknownFieldCases() {
+		t.Run(test.name, func(t *testing.T) {
+			data := append(test.data(t), unknown...)
+			roundTrip, err := test.roundTrip(data)
+			testutil.RequireNoErrorf(t, err, "round trip")
+			assertUnknownPreserved(t, roundTrip, unknown)
+		})
+	}
+}
+
+func forwardCompatibleUnknownFieldCases() []forwardCompatibleUnknownFieldCase {
+	return []forwardCompatibleUnknownFieldCase{
 		{
 			name: "published manifest",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleManifest())
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				record, err := published.UnmarshalManifest(data)
-				if err != nil {
-					return nil, err
-				}
-				roundTrip, err := published.MarshalManifest(record)
-				if err != nil {
-					return nil, err
-				}
-				var out publishedv1.Manifest
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripPublishedManifest,
 		},
 		{
 			name: "published snapshot",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleSnapshot())
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				record, err := published.UnmarshalSnapshotRecord(data)
-				if err != nil {
-					return nil, err
-				}
-				roundTrip, err := published.MarshalSnapshotRecord(record)
-				if err != nil {
-					return nil, err
-				}
-				var out publishedv1.SnapshotRecord
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripPublishedSnapshot,
 		},
 		{
 			name: "published tail",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleTail())
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				record, err := published.UnmarshalTailRecord(data)
-				if err != nil {
-					return nil, err
-				}
-				roundTrip, err := published.MarshalTailRecord(record)
-				if err != nil {
-					return nil, err
-				}
-				var out publishedv1.TailRecord
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripPublishedTail,
 		},
 		{
 			name: "block index",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleBlockIndex(t))
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				record, err := storageformat.UnmarshalBlockIndex(data)
-				if err != nil {
-					return nil, err
-				}
-				roundTrip, err := storageformat.MarshalBlockIndex(record)
-				if err != nil {
-					return nil, err
-				}
-				var out storagev1.BlockIndex
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripBlockIndex,
 		},
 		{
 			name: "backend object set",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleBackendObjectSet())
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				record, err := storageformat.UnmarshalBackendObjectSet(data)
-				if err != nil {
-					return nil, err
-				}
-				roundTrip, err := storageformat.MarshalBackendObjectSet(record)
-				if err != nil {
-					return nil, err
-				}
-				var out storagev1.BackendObjectSet
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripBackendObjectSet,
 		},
 		{
 			name: "envelope",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, sampleEnvelopeRecord(t))
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				record, err := storageformat.UnmarshalEnvelopeRecord(data)
-				if err != nil {
-					return nil, err
-				}
-				roundTrip, err := storageformat.MarshalEnvelopeRecord(record)
-				if err != nil {
-					return nil, err
-				}
-				var out storagev1.EnvelopeRecord
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripEnvelopeRecord,
 		},
 		{
 			name: "authoritative document protobuf",
 			data: func(t *testing.T) []byte {
 				return mustMarshal(t, metastore.DocumentRecord(sampleMetastoreDocument()))
 			},
-			roundTrip: func(data []byte) (proto.Message, error) {
-				var record metastorev1.DocumentRecord
-				if err := proto.Unmarshal(data, &record); err != nil {
-					return nil, err
-				}
-				roundTrip, err := proto.Marshal(&record)
-				if err != nil {
-					return nil, err
-				}
-				var out metastorev1.DocumentRecord
-				if err := proto.Unmarshal(roundTrip, &out); err != nil {
-					return nil, err
-				}
-				return &out, nil
-			},
+			roundTrip: roundTripAuthoritativeDocumentProtobuf,
 		},
 	}
+}
 
-	unknown := appendUnknownVarint(nil, 1000, 44)
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			data := append(test.data(t), unknown...)
-			roundTrip, err := test.roundTrip(data)
-			if err != nil {
-				t.Fatalf("round trip: %v", err)
-			}
-			assertUnknownPreserved(t, roundTrip, unknown)
-		})
+func roundTripPublishedManifest(data []byte) (proto.Message, error) {
+	return roundTripValidatedProto(
+		data,
+		published.UnmarshalManifest,
+		published.MarshalManifest,
+		func() *publishedv1.Manifest { return &publishedv1.Manifest{} },
+	)
+}
+
+func roundTripPublishedSnapshot(data []byte) (proto.Message, error) {
+	return roundTripValidatedProto(
+		data,
+		published.UnmarshalSnapshotRecord,
+		published.MarshalSnapshotRecord,
+		func() *publishedv1.SnapshotRecord { return &publishedv1.SnapshotRecord{} },
+	)
+}
+
+func roundTripPublishedTail(data []byte) (proto.Message, error) {
+	return roundTripValidatedProto(
+		data,
+		published.UnmarshalTailRecord,
+		published.MarshalTailRecord,
+		func() *publishedv1.TailRecord { return &publishedv1.TailRecord{} },
+	)
+}
+
+func roundTripBlockIndex(data []byte) (proto.Message, error) {
+	return roundTripValidatedProto(
+		data,
+		storageformat.UnmarshalBlockIndex,
+		storageformat.MarshalBlockIndex,
+		func() *storagev1.BlockIndex { return &storagev1.BlockIndex{} },
+	)
+}
+
+func roundTripBackendObjectSet(data []byte) (proto.Message, error) {
+	return roundTripValidatedProto(
+		data,
+		storageformat.UnmarshalBackendObjectSet,
+		storageformat.MarshalBackendObjectSet,
+		func() *storagev1.BackendObjectSet { return &storagev1.BackendObjectSet{} },
+	)
+}
+
+func roundTripEnvelopeRecord(data []byte) (proto.Message, error) {
+	return roundTripValidatedProto(
+		data,
+		storageformat.UnmarshalEnvelopeRecord,
+		storageformat.MarshalEnvelopeRecord,
+		func() *storagev1.EnvelopeRecord { return &storagev1.EnvelopeRecord{} },
+	)
+}
+
+func roundTripAuthoritativeDocumentProtobuf(data []byte) (proto.Message, error) {
+	return roundTripProtobuf(data, func() *metastorev1.DocumentRecord {
+		return &metastorev1.DocumentRecord{}
+	})
+}
+
+func roundTripValidatedProto[M proto.Message](
+	data []byte,
+	unmarshal func([]byte) (M, error),
+	marshal func(M) ([]byte, error),
+	newOutput func() M,
+) (proto.Message, error) {
+	record, err := unmarshal(data)
+	if err != nil {
+		return nil, err
 	}
+	roundTrip, err := marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalRoundTripProto(roundTrip, newOutput)
+}
+
+func roundTripProtobuf[M proto.Message](data []byte, newOutput func() M) (proto.Message, error) {
+	record := newOutput()
+	if err := proto.Unmarshal(data, record); err != nil {
+		return nil, err
+	}
+	roundTrip, err := proto.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalRoundTripProto(roundTrip, newOutput)
+}
+
+func unmarshalRoundTripProto[M proto.Message](data []byte, newOutput func() M) (proto.Message, error) {
+	out := newOutput()
+	if err := proto.Unmarshal(data, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func TestSchemaEvolutionExampleIsExecutable(t *testing.T) {
@@ -330,14 +332,10 @@ func TestSchemaEvolutionExampleIsExecutable(t *testing.T) {
 	locationUnknown := appendUnknownVarint(nil, 1001, 7)
 	locationData := append(mustMarshal(t, location), locationUnknown...)
 	var decodedLocation publishedv1.PublishedLocation
-	if err := proto.Unmarshal(locationData, &decodedLocation); err != nil {
-		t.Fatalf("unmarshal published location with additive field: %v", err)
-	}
+	testutil.RequireNoErrorf(t, proto.Unmarshal(locationData, &decodedLocation), "unmarshal published location with additive field")
 	locationRoundTrip := mustMarshal(t, &decodedLocation)
 	var reparsedLocation publishedv1.PublishedLocation
-	if err := proto.Unmarshal(locationRoundTrip, &reparsedLocation); err != nil {
-		t.Fatalf("reparse published location with additive field: %v", err)
-	}
+	testutil.RequireNoErrorf(t, proto.Unmarshal(locationRoundTrip, &reparsedLocation), "reparse published location with additive field")
 	assertUnknownPreserved(t, &reparsedLocation, locationUnknown)
 
 	additiveBlockIndex := append(mustMarshal(t, sampleBlockIndex(t)), appendUnknownVarint(nil, 1002, 9)...)
@@ -629,9 +627,7 @@ func sampleBlockIndex(t *testing.T) *storagev1.BlockIndex {
 		Frames: []*storagev1.FrameChecksumRecord{sampleFrameChecksum()},
 	}
 	digest, err := storageformat.BlockIndexSHA256(index)
-	if err != nil {
-		t.Fatalf("compute block index digest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "compute block index digest")
 	index.IndexSha256 = digest
 	return index
 }
@@ -683,9 +679,7 @@ func sampleEnvelopeRecord(t *testing.T) *storagev1.EnvelopeRecord {
 		CreatedAt:     timestamppb.New(time.Unix(100, 0).UTC()),
 	}
 	digest, err := storageformat.EnvelopeRecordSHA256(record)
-	if err != nil {
-		t.Fatalf("compute envelope digest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "compute envelope digest")
 	record.EnvelopeSha256 = digest
 	return record
 }
@@ -715,10 +709,8 @@ func readFixture(t *testing.T, name string) []byte {
 
 func writeFixture(t *testing.T, name string, data []byte) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
-		t.Fatalf("create fixture dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Clean(name), []byte(hex.EncodeToString(data)+"\n"), 0o644); err != nil {
+	testutil.RequireNoErrorf(t, os.MkdirAll(filepath.Dir(name), 0o750), "create fixture dir")
+	if err := os.WriteFile(filepath.Clean(name), []byte(hex.EncodeToString(data)+"\n"), 0o600); err != nil {
 		t.Fatalf("write fixture %s: %v", name, err)
 	}
 }
@@ -746,17 +738,13 @@ func appendUnknownVarint(data []byte, fieldNumber protowire.Number, value uint64
 
 func array32(value byte) [32]byte {
 	var out [32]byte
-	for i := range out {
-		out[i] = value
-	}
+	copy(out[:], bytes.Repeat([]byte{value}, len(out)))
 	return out
 }
 
 func array16(value byte) [16]byte {
 	var out [16]byte
-	for i := range out {
-		out[i] = value
-	}
+	copy(out[:], bytes.Repeat([]byte{value}, len(out)))
 	return out
 }
 

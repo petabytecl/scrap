@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPlanVotersSelectsFiveDistinctNodes(t *testing.T) {
 	plan, err := PlanVoters(testMembers(7), DefaultPolicy())
-	if err != nil {
-		t.Fatalf("plan voters: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "plan voters")
 	if !plan.ProductionHealthy {
 		t.Fatalf("production healthy = false, problems = %#v", plan.Problems)
 	}
@@ -64,9 +64,7 @@ func TestPlanVotersRejectsReducedFaultToleranceByDefault(t *testing.T) {
 
 func TestPlanVotersAllowsReducedFaultToleranceOnlyWithRiskMode(t *testing.T) {
 	plan, err := PlanVoters(testMembers(5), Policy{RiskMode: RiskModeReducedFaultTolerance})
-	if err != nil {
-		t.Fatalf("plan voters: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "plan voters")
 	if plan.ProductionHealthy {
 		t.Fatal("production healthy = true, want reduced-fault-tolerance risk")
 	}
@@ -92,9 +90,7 @@ func TestPlanVotersPrefersZoneSpread(t *testing.T) {
 		testMember("member-6", "node-6", "zone-c"),
 		testMember("member-7", "node-7", "zone-c"),
 	}, DefaultPolicy())
-	if err != nil {
-		t.Fatalf("plan voters: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "plan voters")
 	zoneCounts := map[string]int{}
 	for _, voter := range plan.Voters {
 		zoneCounts[voter.Zone]++
@@ -116,9 +112,7 @@ func TestPlanVotersExcludesUnavailableMembers(t *testing.T) {
 		Member{MemberID: "member-ineligible", KubernetesNode: "node-ineligible", Zone: "zone-c", Eligible: false, Online: true},
 	)
 	plan, err := PlanVoters(members, Policy{VoterCount: 5, MinProductionEligibleNodes: 5})
-	if err != nil {
-		t.Fatalf("plan voters: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "plan voters")
 	for _, voter := range plan.Voters {
 		if voter.MemberID == "member-offline" || voter.MemberID == "member-draining" || voter.MemberID == "member-ineligible" {
 			t.Fatalf("selected unavailable voter %#v", voter)
@@ -220,9 +214,7 @@ func TestPlanVotersAllowsSharedStoragePoolOnlyWithRiskMode(t *testing.T) {
 		MinProductionEligibleNodes: 5,
 		RiskMode:                   RiskModeSharedPool,
 	})
-	if err != nil {
-		t.Fatalf("plan voters: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "plan voters")
 	if plan.ProductionHealthy {
 		t.Fatal("production healthy = true, want shared-pool risk")
 	}

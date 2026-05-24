@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/blockstore"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
@@ -62,20 +63,7 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 }
 
 func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelopeObjectKey string, documents []metastore.Document) (*storagev1.BlockIndex, error) {
-	sort.Slice(documents, func(i, j int) bool {
-		left := documents[i]
-		right := documents[j]
-		if left.Location.StoredOffset != right.Location.StoredOffset {
-			return left.Location.StoredOffset < right.Location.StoredOffset
-		}
-		if left.Identity.TenantID != right.Identity.TenantID {
-			return left.Identity.TenantID < right.Identity.TenantID
-		}
-		if left.Identity.TransactionID != right.Identity.TransactionID {
-			return left.Identity.TransactionID < right.Identity.TransactionID
-		}
-		return left.Identity.DocumentName < right.Identity.DocumentName
-	})
+	sortBlockIndexDocuments(documents)
 
 	createdAt := documents[0].CreatedAt
 	index := &storagev1.BlockIndex{
@@ -98,21 +86,8 @@ func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelo
 			return nil, err
 		}
 		index.Documents = append(index.Documents, record)
-		for _, frame := range document.Location.Frames {
-			frameIndex, err := safeconv.IntToUint32("block index frame index", len(index.Frames))
-			if err != nil {
-				return nil, err
-			}
-			index.Frames = append(index.Frames, &storagev1.FrameChecksumRecord{
-				FrameIndex:      frameIndex,
-				PlaintextOffset: frame.SegmentOffset,
-				PlaintextLength: frame.SegmentLength,
-				StoredOffset:    frame.SegmentOffset,
-				StoredLength:    frame.SegmentLength,
-				PlaintextSha256: append([]byte(nil), frame.SHA256[:]...),
-				StoredSha256:    append([]byte(nil), frame.SHA256[:]...),
-				EncryptionMode:  storagev1.EncryptionMode_ENCRYPTION_MODE_NONE,
-			})
+		if err := appendIndexFrameRecords(index, document.Location.Frames); err != nil {
+			return nil, err
 		}
 	}
 	digest, err := storageformat.BlockIndexSHA256(index)
@@ -121,6 +96,45 @@ func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelo
 	}
 	index.IndexSha256 = digest
 	return index, nil
+}
+
+func sortBlockIndexDocuments(documents []metastore.Document) {
+	sort.Slice(documents, func(i, j int) bool {
+		return compareBlockIndexDocuments(documents[i], documents[j])
+	})
+}
+
+func compareBlockIndexDocuments(left, right metastore.Document) bool {
+	if left.Location.StoredOffset != right.Location.StoredOffset {
+		return left.Location.StoredOffset < right.Location.StoredOffset
+	}
+	if left.Identity.TenantID != right.Identity.TenantID {
+		return left.Identity.TenantID < right.Identity.TenantID
+	}
+	if left.Identity.TransactionID != right.Identity.TransactionID {
+		return left.Identity.TransactionID < right.Identity.TransactionID
+	}
+	return left.Identity.DocumentName < right.Identity.DocumentName
+}
+
+func appendIndexFrameRecords(index *storagev1.BlockIndex, frames []blockstore.FrameRecord) error {
+	for _, frame := range frames {
+		frameIndex, err := safeconv.IntToUint32("block index frame index", len(index.Frames))
+		if err != nil {
+			return err
+		}
+		index.Frames = append(index.Frames, &storagev1.FrameChecksumRecord{
+			FrameIndex:      frameIndex,
+			PlaintextOffset: frame.SegmentOffset,
+			PlaintextLength: frame.SegmentLength,
+			StoredOffset:    frame.SegmentOffset,
+			StoredLength:    frame.SegmentLength,
+			PlaintextSha256: append([]byte(nil), frame.SHA256[:]...),
+			StoredSha256:    append([]byte(nil), frame.SHA256[:]...),
+			EncryptionMode:  storagev1.EncryptionMode_ENCRYPTION_MODE_NONE,
+		})
+	}
+	return nil
 }
 
 func buildIndexDocumentRecord(document metastore.Document, firstFrame int) (*storagev1.IndexDocumentRecord, error) {

@@ -15,6 +15,7 @@ import (
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestAuthoritativeDocumentRecordSchemaShape(t *testing.T) {
@@ -95,13 +96,9 @@ func TestAuthoritativeDocumentRecordRoundTripPreservesContractFields(t *testing.
 	record := authoritativeDocumentRecordWithRefs()
 
 	data, err := marshalDocumentRecord(record)
-	if err != nil {
-		t.Fatalf("marshal record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal record")
 	decoded, err := unmarshalDocumentRecord(data)
-	if err != nil {
-		t.Fatalf("unmarshal record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal record")
 	if !proto.Equal(record, decoded) {
 		t.Fatalf("decoded record differs\n got: %v\nwant: %v", decoded, record)
 	}
@@ -114,13 +111,9 @@ func TestAuthoritativeDocumentRecordMarshalIsDeterministic(t *testing.T) {
 	second.Tags = map[string]string{"stage": "seal", "workflow": "billing"}
 
 	firstData, err := marshalDocumentRecord(first)
-	if err != nil {
-		t.Fatalf("marshal first record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal first record")
 	secondData, err := marshalDocumentRecord(second)
-	if err != nil {
-		t.Fatalf("marshal second record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal second record")
 	if !bytes.Equal(firstData, secondData) {
 		t.Fatal("deterministic marshal produced different bytes for equivalent records")
 	}
@@ -185,9 +178,7 @@ func TestAuthoritativeDocumentRecordRejectsMissingRequiredFields(t *testing.T) {
 			}
 
 			data, err := proto.Marshal(record)
-			if err != nil {
-				t.Fatalf("raw proto marshal: %v", err)
-			}
+			testutil.RequireNoErrorf(t, err, "raw proto marshal")
 			if _, err := unmarshalDocumentRecord(data); !errors.Is(err, ErrInvalidRecord) {
 				t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
 			}
@@ -197,13 +188,9 @@ func TestAuthoritativeDocumentRecordRejectsMissingRequiredFields(t *testing.T) {
 
 func TestAuthoritativeDocumentRecordReadsInitialV1Fixture(t *testing.T) {
 	data, err := hex.DecodeString("0a0674656e616e74120374786e1a0b696e766f6963652e786d6c20012802320f6170706c69636174696f6e2f786d6c382a422001020300000000000000000000000000000000000000000000000000000000004a2004050600000000000000000000000000000000000000000000000000000000005210000000000000000000000000000000005a0b62696c6c696e672d65746c62047365616c6a02080a7202080a78018001018a01130a08776f726b666c6f77120762696c6c696e679201540a2430313866366438362d376132322d376162632d386465662d3132333435363738396162631040182a222808401040182a22200708090000000000000000000000000000000000000000000000000000000000a00101c00101c80102")
-	if err != nil {
-		t.Fatalf("decode fixture: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "decode fixture")
 	document, err := UnmarshalDocument(data)
-	if err != nil {
-		t.Fatalf("unmarshal fixture: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal fixture")
 	if document.Identity.TenantID != "tenant" ||
 		document.Identity.TransactionID != "txn" ||
 		document.Identity.DocumentName != "invoice.xml" ||
@@ -216,9 +203,7 @@ func TestAuthoritativeDocumentRecordRejectsUnsupportedSchemaVersion(t *testing.T
 	record := documentToProto(sampleDocument("invoice.xml", DocumentClassPermanent))
 	record.SchemaVersion = CurrentSchemaVersion + 1
 	data, err := proto.Marshal(record)
-	if err != nil {
-		t.Fatalf("marshal record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal record")
 
 	_, err = unmarshalDocumentRecord(data)
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
@@ -246,9 +231,7 @@ func TestTransactionRecordRejectsInvalidState(t *testing.T) {
 				t.Fatalf("marshal error = %v, want %v", err, ErrInvalidRecord)
 			}
 			data, err := proto.Marshal(record)
-			if err != nil {
-				t.Fatalf("raw proto marshal: %v", err)
-			}
+			testutil.RequireNoErrorf(t, err, "raw proto marshal")
 			if _, err := unmarshalTransactionRecord(data); !errors.Is(err, ErrInvalidRecord) {
 				t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
 			}
@@ -259,28 +242,20 @@ func TestTransactionRecordRejectsInvalidState(t *testing.T) {
 func TestAuthoritativeDocumentRecordPreservesUnknownForwardFields(t *testing.T) {
 	record := documentToProto(sampleDocument("invoice.xml", DocumentClassPermanent))
 	data, err := marshalDocumentRecord(record)
-	if err != nil {
-		t.Fatalf("marshal record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal record")
 	unknown := appendUnknownVarint(nil, 1000, 99)
 	data = append(data, unknown...)
 
 	decoded, err := unmarshalDocumentRecord(data)
-	if err != nil {
-		t.Fatalf("unmarshal record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal record")
 	if got := decoded.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("unknown fields = %x, want %x", got, unknown)
 	}
 
 	roundTrip, err := marshalDocumentRecord(decoded)
-	if err != nil {
-		t.Fatalf("marshal round trip: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal round trip")
 	var reparsed metastorev1.DocumentRecord
-	if err := proto.Unmarshal(roundTrip, &reparsed); err != nil {
-		t.Fatalf("reparse record: %v", err)
-	}
+	testutil.RequireNoErrorf(t, proto.Unmarshal(roundTrip, &reparsed), "reparse record")
 	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
 	}
@@ -322,13 +297,9 @@ func TestShardCommandRoundTripsAllCommandTypes(t *testing.T) {
 	for _, test := range sampleShardCommands() {
 		t.Run(test.name, func(t *testing.T) {
 			data, err := MarshalShardCommand(test.command)
-			if err != nil {
-				t.Fatalf("marshal command: %v", err)
-			}
+			testutil.RequireNoErrorf(t, err, "marshal command")
 			decoded, err := UnmarshalShardCommand(data)
-			if err != nil {
-				t.Fatalf("unmarshal command: %v", err)
-			}
+			testutil.RequireNoErrorf(t, err, "unmarshal command")
 			if !proto.Equal(test.command, decoded) {
 				t.Fatalf("decoded command differs\n got: %v\nwant: %v", decoded, test.command)
 			}
@@ -343,13 +314,9 @@ func TestShardCommandMarshalIsDeterministic(t *testing.T) {
 	second.GetCompleteTransaction().Tags = map[string]string{"closed_by": "test", "workflow": "billing"}
 
 	firstData, err := MarshalShardCommand(first)
-	if err != nil {
-		t.Fatalf("marshal first command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal first command")
 	secondData, err := MarshalShardCommand(second)
-	if err != nil {
-		t.Fatalf("marshal second command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal second command")
 	if !bytes.Equal(firstData, secondData) {
 		t.Fatal("deterministic command marshal produced different bytes for equivalent maps")
 	}
@@ -359,9 +326,7 @@ func TestShardCommandRejectsUnsupportedSchemaVersion(t *testing.T) {
 	command := sampleShardCommand()
 	command.SchemaVersion = CurrentSchemaVersion + 1
 	data, err := proto.Marshal(command)
-	if err != nil {
-		t.Fatalf("marshal command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal command")
 
 	_, err = UnmarshalShardCommand(data)
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
@@ -398,9 +363,7 @@ func TestShardCommandRejectsZeroProposedAt(t *testing.T) {
 	}
 
 	data, err := proto.Marshal(command)
-	if err != nil {
-		t.Fatalf("raw proto marshal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "raw proto marshal")
 	if _, err := UnmarshalShardCommand(data); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("unmarshal error = %v, want %v", err, ErrInvalidRecord)
 	}
@@ -408,28 +371,20 @@ func TestShardCommandRejectsZeroProposedAt(t *testing.T) {
 
 func TestShardCommandPreservesUnknownForwardFields(t *testing.T) {
 	data, err := MarshalShardCommand(sampleShardCommand())
-	if err != nil {
-		t.Fatalf("marshal command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal command")
 	unknown := appendUnknownVarint(nil, 1000, 123)
 	data = append(data, unknown...)
 
 	decoded, err := UnmarshalShardCommand(data)
-	if err != nil {
-		t.Fatalf("unmarshal command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal command")
 	if got := decoded.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("unknown fields = %x, want %x", got, unknown)
 	}
 
 	roundTrip, err := MarshalShardCommand(decoded)
-	if err != nil {
-		t.Fatalf("marshal round trip: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal round trip")
 	var reparsed metastorev1.ShardCommand
-	if err := proto.Unmarshal(roundTrip, &reparsed); err != nil {
-		t.Fatalf("reparse command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, proto.Unmarshal(roundTrip, &reparsed), "reparse command")
 	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
 	}

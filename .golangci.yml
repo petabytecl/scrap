@@ -95,30 +95,22 @@ linters:
       # Production code paths remain covered by the lint baseline.
       - ^internal/spike/
     rules:
-      # Test cleanup and temporary-file probes are not release-safety signals.
-      - path: _test\.go
-        linters:
-          - errcheck
-          - gosec
-          - mnd
-          - revive
-          - unparam
       # The local filesystem backend package intentionally uses the domain name
       # "fs"; it is clearer than inventing a longer package alias.
       - path: ^internal/backend/fs/
         text: var-naming
         linters:
           - revive
-      # Existing scenario tests have high branch counts by design. Keep the
-      # initial complexity ratchet focused on production code.
-      - path: _test\.go
+      # The api package is the repository's public/application API boundary,
+      # not a dumping-ground utility package.
+      - path: ^internal/api/
+        text: var-naming
         linters:
-          - cyclop
-          - gocognit
+          - revive
 
   settings:
     cyclop:
-      max-complexity: 15
+      max-complexity: 10
       package-average: 0.0
     depguard:
       rules:
@@ -150,7 +142,7 @@ linters:
     gochecksumtype:
       default-signifies-exhaustive: false
     gocognit:
-      min-complexity: 20
+      min-complexity: 15
     gocritic:
       settings:
         captLocal:

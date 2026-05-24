@@ -13,15 +13,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestManifestRejectsUnsupportedSchemaVersion(t *testing.T) {
 	manifest := sampleManifest()
 	manifest.SchemaVersion = CurrentSchemaVersion + 1
 	data, err := proto.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal manifest")
 
 	_, err = UnmarshalManifest(data)
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
@@ -31,28 +30,20 @@ func TestManifestRejectsUnsupportedSchemaVersion(t *testing.T) {
 
 func TestManifestPreservesUnknownForwardFields(t *testing.T) {
 	data, err := MarshalManifest(sampleManifest())
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal manifest")
 	unknown := appendUnknownVarint(nil, 1000, 44)
 	data = append(data, unknown...)
 
 	decoded, err := UnmarshalManifest(data)
-	if err != nil {
-		t.Fatalf("unmarshal manifest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal manifest")
 	if got := decoded.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("unknown fields = %x, want %x", got, unknown)
 	}
 
 	roundTrip, err := MarshalManifest(decoded)
-	if err != nil {
-		t.Fatalf("marshal round trip: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal round trip")
 	var reparsed publishedv1.Manifest
-	if err := proto.Unmarshal(roundTrip, &reparsed); err != nil {
-		t.Fatalf("reparse manifest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, proto.Unmarshal(roundTrip, &reparsed), "reparse manifest")
 	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
 	}
@@ -68,9 +59,7 @@ func TestSnapshotAndTailRecordsValidateSchemaVersion(t *testing.T) {
 			Document: sampleDocument(),
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal snapshot")
 	if _, err := UnmarshalSnapshotRecord(snapshotData); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
@@ -84,9 +73,7 @@ func TestSnapshotAndTailRecordsValidateSchemaVersion(t *testing.T) {
 			FinalizedDocument: sampleDocument(),
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal tail: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal tail")
 	if _, err := UnmarshalTailRecord(tailData); err != nil {
 		t.Fatalf("unmarshal tail: %v", err)
 	}
@@ -102,9 +89,7 @@ func TestSnapshotAndTailRecordsRejectUnsupportedSchemaVersion(t *testing.T) {
 			Document: sampleDocument(),
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal snapshot")
 	if _, err := UnmarshalSnapshotRecord(snapshotData); !errors.Is(err, ErrUnsupportedSchemaVersion) {
 		t.Fatalf("snapshot error = %v, want %v", err, ErrUnsupportedSchemaVersion)
 	}
@@ -118,9 +103,7 @@ func TestSnapshotAndTailRecordsRejectUnsupportedSchemaVersion(t *testing.T) {
 			FinalizedDocument: sampleDocument(),
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal tail: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal tail")
 	if _, err := UnmarshalTailRecord(tailData); !errors.Is(err, ErrUnsupportedSchemaVersion) {
 		t.Fatalf("tail error = %v, want %v", err, ErrUnsupportedSchemaVersion)
 	}
@@ -140,24 +123,16 @@ func TestSnapshotArtifactRecordsRoundTripAndEOF(t *testing.T) {
 	second.HighWatermark = 11
 
 	var buf bytes.Buffer
-	if err := WriteSnapshotRecord(&buf, first); err != nil {
-		t.Fatalf("write first snapshot: %v", err)
-	}
-	if err := WriteSnapshotRecord(&buf, second); err != nil {
-		t.Fatalf("write second snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, WriteSnapshotRecord(&buf, first), "write first snapshot")
+	testutil.RequireNoErrorf(t, WriteSnapshotRecord(&buf, second), "write second snapshot")
 
 	gotFirst, err := ReadSnapshotRecord(&buf)
-	if err != nil {
-		t.Fatalf("read first snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read first snapshot")
 	if !proto.Equal(gotFirst, first) {
 		t.Fatalf("first snapshot = %#v, want %#v", gotFirst, first)
 	}
 	gotSecond, err := ReadSnapshotRecord(&buf)
-	if err != nil {
-		t.Fatalf("read second snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read second snapshot")
 	if !proto.Equal(gotSecond, second) {
 		t.Fatalf("second snapshot = %#v, want %#v", gotSecond, second)
 	}
@@ -177,9 +152,7 @@ func TestTailArtifactRecordRejectsChecksumMismatch(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	if err := WriteTailRecord(&buf, record); err != nil {
-		t.Fatalf("write tail: %v", err)
-	}
+	testutil.RequireNoErrorf(t, WriteTailRecord(&buf, record), "write tail")
 	data := buf.Bytes()
 	if len(data) < 6 {
 		t.Fatalf("framed data too short: %d", len(data))
@@ -203,9 +176,7 @@ func TestArtifactRecordRejectsTruncationAndOversize(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	if err := WriteTailRecord(&buf, record); err != nil {
-		t.Fatalf("write tail: %v", err)
-	}
+	testutil.RequireNoErrorf(t, WriteTailRecord(&buf, record), "write tail")
 	truncated := buf.Bytes()[:buf.Len()-1]
 	if _, err := ReadTailRecord(bytes.NewReader(truncated)); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("truncated read error = %v, want unexpected EOF", err)

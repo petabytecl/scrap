@@ -80,22 +80,39 @@ func ClassifyError(err error) ErrorClass {
 	if errors.As(err, &classified) && classified.Class.Valid() {
 		return classified.Class
 	}
+
+	if class := classifyKnownError(err); class != "" {
+		return class
+	}
+	return ErrorClassPermanent
+}
+
+func classifyKnownError(err error) ErrorClass {
 	switch {
 	case errors.Is(err, ErrThrottled):
 		return ErrorClassThrottled
-	case errors.Is(err, ErrTransient), errors.Is(err, ErrRestorePending), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case isAnyError(err, ErrTransient, ErrRestorePending, context.Canceled, context.DeadlineExceeded):
 		return ErrorClassTransient
-	case errors.Is(err, ErrAuth), errors.Is(err, os.ErrPermission):
+	case isAnyError(err, ErrAuth, os.ErrPermission):
 		return ErrorClassAuth
-	case errors.Is(err, ErrNotFound), errors.Is(err, os.ErrNotExist):
+	case isAnyError(err, ErrNotFound, os.ErrNotExist):
 		return ErrorClassNotFound
 	case errors.Is(err, ErrConflict):
 		return ErrorClassConflict
 	case errors.Is(err, ErrChecksumMismatch):
 		return ErrorClassCorrupt
 	default:
-		return ErrorClassPermanent
+		return ""
 	}
+}
+
+func isAnyError(err error, targets ...error) bool {
+	for _, target := range targets {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func IsErrorClass(err error, class ErrorClass) bool {

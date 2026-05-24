@@ -259,26 +259,21 @@ func buildInspectAction(args []string) (action, error) {
 	if len(args) == 0 {
 		return nil, usageError("inspect subject is required")
 	}
-	switch args[0] {
-	case "summary":
-		return buildInspectSummaryAction(args[1:])
-	case "shard":
-		return buildInspectShardAction(args[1:])
-	case "document":
-		return buildInspectDocumentAction(args[1:])
-	case "block":
-		return buildInspectBlockAction(args[1:])
-	case "member":
-		return buildInspectMemberAction(args[1:])
-	case "capacity-runway":
-		return buildInspectCapacityRunwayAction(args[1:])
-	case "repair-queue":
-		return buildInspectRepairQueueAction(args[1:])
-	case "recovery-readiness":
-		return buildInspectRecoveryReadinessAction(args[1:])
-	default:
+	builders := map[string]func([]string) (action, error){
+		"summary":            buildInspectSummaryAction,
+		"shard":              buildInspectShardAction,
+		"document":           buildInspectDocumentAction,
+		"block":              buildInspectBlockAction,
+		"member":             buildInspectMemberAction,
+		"capacity-runway":    buildInspectCapacityRunwayAction,
+		"repair-queue":       buildInspectRepairQueueAction,
+		"recovery-readiness": buildInspectRecoveryReadinessAction,
+	}
+	builder := builders[args[0]]
+	if builder == nil {
 		return nil, usageError(fmt.Sprintf("unknown inspect subject %q", args[0]))
 	}
+	return builder(args[1:])
 }
 
 func buildInspectSummaryAction(args []string) (action, error) {
@@ -431,28 +426,34 @@ func buildPlanAction(args []string) (action, error) {
 	if len(args) == 0 {
 		return nil, usageError("plan operation is required")
 	}
-	switch args[0] {
-	case "restore":
-		return buildTargetPlanAction("plan restore", args[1:], false, planRestore)
-	case "prewarm":
-		return buildTargetPlanAction("plan prewarm", args[1:], true, planPrewarm)
-	case "repair":
-		return buildTargetPlanAction("plan repair", args[1:], false, planRepair)
-	case "scrub":
-		return buildTargetPlanAction("plan scrub", args[1:], false, planScrub)
-	case "drain":
-		return buildPlanDrainAction(args[1:])
-	case "tombstone":
-		return buildTargetPlanAction("plan tombstone", args[1:], false, planTombstone)
-	case "key-rotation":
-		return buildPlanKeyRotationAction(args[1:])
-	case "capacity-override":
-		return buildPlanCapacityOverrideAction(args[1:])
-	case "recovery":
-		return buildTargetPlanAction("plan recovery", args[1:], false, planRecovery)
-	default:
+	builders := map[string]func([]string) (action, error){
+		"restore": func(args []string) (action, error) {
+			return buildTargetPlanAction("plan restore", args, false, planRestore)
+		},
+		"prewarm": func(args []string) (action, error) {
+			return buildTargetPlanAction("plan prewarm", args, true, planPrewarm)
+		},
+		"repair": func(args []string) (action, error) {
+			return buildTargetPlanAction("plan repair", args, false, planRepair)
+		},
+		"scrub": func(args []string) (action, error) {
+			return buildTargetPlanAction("plan scrub", args, false, planScrub)
+		},
+		"drain": buildPlanDrainAction,
+		"tombstone": func(args []string) (action, error) {
+			return buildTargetPlanAction("plan tombstone", args, false, planTombstone)
+		},
+		"key-rotation":      buildPlanKeyRotationAction,
+		"capacity-override": buildPlanCapacityOverrideAction,
+		"recovery": func(args []string) (action, error) {
+			return buildTargetPlanAction("plan recovery", args, false, planRecovery)
+		},
+	}
+	builder := builders[args[0]]
+	if builder == nil {
 		return nil, usageError(fmt.Sprintf("unknown plan operation %q", args[0]))
 	}
+	return builder(args[1:])
 }
 
 type targetPlanCall func(context.Context, clients, targetPlanOptions) (proto.Message, error)
@@ -647,32 +648,24 @@ func buildStartAction(args []string) (action, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch args[0] {
-	case "restore":
-		return buildStartOperationAction(opts, startRestore), nil
-	case "prewarm":
-		return buildStartOperationAction(opts, startPrewarm), nil
-	case "repair":
-		return buildStartOperationAction(opts, startRepair), nil
-	case "scrub":
-		return buildStartOperationAction(opts, startScrub), nil
-	case "drain":
-		return buildStartOperationAction(opts, startDrain), nil
-	case "tombstone":
-		return buildStartOperationAction(opts, startTombstone), nil
-	case "key-rotation":
-		return buildStartOperationAction(opts, startKeyRotation), nil
-	case "capacity-override":
-		return buildStartOperationAction(opts, startCapacityOverride), nil
-	case "metadata-restore":
-		return buildStartOperationAction(opts, startMetadataRestore), nil
-	case "copy-verify":
-		return buildStartOperationAction(opts, startCopyVerify), nil
-	case "dr-drill":
-		return buildStartOperationAction(opts, startDRDrill), nil
-	default:
+	calls := map[string]startOperationCall{
+		"restore":           startRestore,
+		"prewarm":           startPrewarm,
+		"repair":            startRepair,
+		"scrub":             startScrub,
+		"drain":             startDrain,
+		"tombstone":         startTombstone,
+		"key-rotation":      startKeyRotation,
+		"capacity-override": startCapacityOverride,
+		"metadata-restore":  startMetadataRestore,
+		"copy-verify":       startCopyVerify,
+		"dr-drill":          startDRDrill,
+	}
+	call := calls[args[0]]
+	if call == nil {
 		return nil, usageError(fmt.Sprintf("unknown start operation %q", args[0]))
 	}
+	return buildStartOperationAction(opts, call), nil
 }
 
 type startOperationCall func(context.Context, clients, startOptions) (*adminv1.Operation, error)
@@ -891,50 +884,58 @@ func buildOperationsAction(args []string) (action, error) {
 	case "watch":
 		return buildWatchAction(args[1:])
 	case "list":
-		fs := newFlagSet("operations list")
-		states := stateFlag{}
-		operationType := fs.String("type", "", "operation type")
-		pageSize := fs.Uint64("page-size", 0, "page size")
-		pageToken := fs.String("page-token", "", "page token")
-		fs.Var(&states, "state", "operation state; may be repeated")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		pageSizeValue, err := optionalPageSize(*pageSize, "operations list")
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.operations.ListOperations(ctx, &adminv1.ListOperationsRequest{
-				States:        states,
-				OperationType: optionalString(*operationType),
-				PageSize:      pageSizeValue.value,
-				PageToken:     *pageToken,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp)
-		}, nil
+		return buildOperationsListAction(args[1:])
 	case "cancel":
-		fs := newFlagSet("operations cancel")
-		operationID := fs.String("operation-id", "", "operation id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *operationID == "" {
-			return nil, usageError("operations cancel requires --operation-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.operations.CancelOperation(ctx, &adminv1.CancelOperationRequest{OperationId: *operationID})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildOperationsCancelAction(args[1:])
 	default:
 		return nil, usageError(fmt.Sprintf("unknown operations command %q", args[0]))
 	}
+}
+
+func buildOperationsListAction(args []string) (action, error) {
+	fs := newFlagSet("operations list")
+	states := stateFlag{}
+	operationType := fs.String("type", "", "operation type")
+	pageSize := fs.Uint64("page-size", 0, "page size")
+	pageToken := fs.String("page-token", "", "page token")
+	fs.Var(&states, "state", "operation state; may be repeated")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	pageSizeValue, err := optionalPageSize(*pageSize, "operations list")
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.operations.ListOperations(ctx, &adminv1.ListOperationsRequest{
+			States:        states,
+			OperationType: optionalString(*operationType),
+			PageSize:      pageSizeValue.value,
+			PageToken:     *pageToken,
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp)
+	}, nil
+}
+
+func buildOperationsCancelAction(args []string) (action, error) {
+	fs := newFlagSet("operations cancel")
+	operationID := fs.String("operation-id", "", "operation id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if *operationID == "" {
+		return nil, usageError("operations cancel requires --operation-id")
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.operations.CancelOperation(ctx, &adminv1.CancelOperationRequest{OperationId: *operationID})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetOperation())
+	}, nil
 }
 
 func buildMemberAction(args []string) (action, error) {

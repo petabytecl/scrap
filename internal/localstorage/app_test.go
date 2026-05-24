@@ -19,10 +19,12 @@ import (
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/backend"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
+	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
+	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -30,7 +32,9 @@ import (
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
+	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageformat"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
@@ -55,47 +59,23 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 			"workflow": "billing",
 		},
 	}, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	if result.DesiredReplicaCount != 1 || result.AchievedReplicaCount != 1 {
-		t.Fatalf("replica counts = %d/%d, want local non-production 1/1", result.DesiredReplicaCount, result.AchievedReplicaCount)
-	}
-	if result.Metadata.Length != expectedLength {
-		t.Fatalf("write length = %d, want %d", result.Metadata.Length, expectedLength)
-	}
-	if !bytes.Equal(result.Metadata.LogicalSHA256, sum[:]) {
-		t.Fatal("write logical sha was not returned")
-	}
+	testutil.RequireNoErrorf(t, err, "write document")
+	requireWriteResult(t, result, expectedLength, sum[:])
 	prepared, err := app.prepare.Recover()
-	if err != nil {
-		t.Fatalf("recover prepare log: %v", err)
-	}
-	if len(prepared) != 1 || prepared[0].Identity != doc {
-		t.Fatalf("prepare log records = %#v, want written document", prepared)
-	}
+	testutil.RequireNoErrorf(t, err, "recover prepare log")
+	testutil.RequireEqualf(t, len(prepared), 1, "prepare log record count")
+	testutil.RequireEqualf(t, prepared[0].Identity, doc, "prepare log identity")
 	storedDocument, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
-	if intent.State != metastore.UploadStatePending ||
-		intent.BackendObjectKey != "blocks/"+storedDocument.Location.BlockID+".blk" ||
-		intent.IndexObjectKey != "blocks/"+storedDocument.Location.BlockID+".idx" ||
-		intent.EnvelopeObjectKey != "blocks/"+storedDocument.Location.BlockID+".env" {
-		t.Fatalf("upload intent = %#v, want pending block/index/envelope upload", intent)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	requirePendingUploadIntent(t, intent, storedDocument.Location.BlockID)
 
 	head, err := app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
-	if head.Identity != doc || head.ContentType != "application/xml" || !head.HasContentType {
-		t.Fatalf("head metadata = %#v, want written document", head)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
+	testutil.RequireEqualf(t, head.Identity, doc, "head identity")
+	testutil.RequireEqualf(t, head.ContentType, "application/xml", "head content type")
+	testutil.RequireTruef(t, head.HasContentType, "head has_content_type = false")
 
 	readLength := uint64(4)
 	sender := &recordingReadSender{}
@@ -106,18 +86,10 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 			Length: &readLength,
 		},
 	}, sender)
-	if err != nil {
-		t.Fatalf("read document: %v", err)
-	}
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want local", sender.metadata.Source)
-	}
-	if sender.metadata.SelectedRange.Offset != 3 || sender.metadata.SelectedRange.Length == nil || *sender.metadata.SelectedRange.Length != 4 {
-		t.Fatalf("selected range = %#v, want offset 3 length 4", sender.metadata.SelectedRange)
-	}
-	if got := string(bytes.Join(sender.chunks, nil)); got != "3456" {
-		t.Fatalf("read bytes = %q, want 3456", got)
-	}
+	testutil.RequireNoErrorf(t, err, "read document")
+	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL)
+	requireSelectedRange(t, sender.metadata.SelectedRange, 3, 4)
+	requireReadBytes(t, sender, []byte("3456"))
 
 	found, err := app.FindDocuments(context.Background(), api.FindDocumentsRequest{
 		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
@@ -131,22 +103,16 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("find documents: %v", err)
-	}
-	if len(found.Documents) != 1 || found.Documents[0].Identity != doc {
-		t.Fatalf("found documents = %#v, want written document", found.Documents)
-	}
+	testutil.RequireNoErrorf(t, err, "find documents")
+	testutil.RequireEqualf(t, len(found.Documents), 1, "found document count")
+	testutil.RequireEqualf(t, found.Documents[0].Identity, doc, "found document identity")
 
 	transaction, err := app.GetTransaction(context.Background(), api.GetTransactionRequest{
 		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
 	})
-	if err != nil {
-		t.Fatalf("get transaction: %v", err)
-	}
-	if transaction.DocumentCount != 1 || transaction.PermanentDocumentCount != 1 {
-		t.Fatalf("transaction counts = %#v, want one permanent document", transaction)
-	}
+	testutil.RequireNoErrorf(t, err, "get transaction")
+	testutil.RequireEqualf(t, transaction.DocumentCount, uint32(1), "transaction document count")
+	testutil.RequireEqualf(t, transaction.PermanentDocumentCount, uint32(1), "transaction permanent document count")
 
 	completedAt := time.Unix(200, 0).UTC()
 	app.now = fixedClock(completedAt)
@@ -156,15 +122,66 @@ func TestWriteHeadReadFindAndCompleteTransaction(t *testing.T) {
 			"closed_by": "test",
 		},
 	})
-	if err != nil {
-		t.Fatalf("complete transaction: %v", err)
-	}
-	if transaction.State != scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED {
-		t.Fatalf("transaction state = %s, want completed", transaction.State)
-	}
-	if transaction.CompletedAt == nil || !transaction.CompletedAt.Equal(completedAt) {
-		t.Fatalf("completed_at = %v, want %v", transaction.CompletedAt, completedAt)
-	}
+	testutil.RequireNoErrorf(t, err, "complete transaction")
+	testutil.RequireEqualf(t, transaction.State, scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED, "transaction state")
+	testutil.RequireNotNilf(t, transaction.CompletedAt, "completed_at is nil")
+	testutil.RequireTruef(t, transaction.CompletedAt.Equal(completedAt), "completed_at = %v, want %v", transaction.CompletedAt, completedAt)
+}
+
+func requireWriteResult(t *testing.T, result api.WriteDocumentResult, expectedLength uint64, expectedSHA []byte) {
+	t.Helper()
+	testutil.RequireEqualf(t, result.DesiredReplicaCount, uint32(1), "desired replica count")
+	testutil.RequireEqualf(t, result.AchievedReplicaCount, uint32(1), "achieved replica count")
+	testutil.RequireEqualf(t, result.Metadata.Length, expectedLength, "write length")
+	testutil.RequireTruef(t, bytes.Equal(result.Metadata.LogicalSHA256, expectedSHA), "write logical sha was not returned")
+}
+
+func requirePendingUploadIntent(t *testing.T, intent metastore.UploadIntent, blockID string) {
+	t.Helper()
+	testutil.RequireEqualf(t, intent.State, metastore.UploadStatePending, "upload intent state")
+	testutil.RequireEqualf(t, intent.BackendObjectKey, "blocks/"+blockID+".blk", "backend object key")
+	testutil.RequireEqualf(t, intent.IndexObjectKey, "blocks/"+blockID+".idx", "index object key")
+	testutil.RequireEqualf(t, intent.EnvelopeObjectKey, "blocks/"+blockID+".env", "envelope object key")
+}
+
+func requireReadSource(t *testing.T, sender *recordingReadSender, source scrapv1.StorageSource) {
+	t.Helper()
+	testutil.RequireEqualf(t, sender.metadata.Source, source, "read source")
+}
+
+func requireSelectedRange(t *testing.T, readRange api.ReadRange, offset, length uint64) {
+	t.Helper()
+	testutil.RequireEqualf(t, readRange.Offset, offset, "selected range offset")
+	testutil.RequireNotNilf(t, readRange.Length, "selected range length")
+	testutil.RequireEqualf(t, *readRange.Length, length, "selected range length")
+}
+
+func requireReadBytes(t *testing.T, sender *recordingReadSender, want []byte) {
+	t.Helper()
+	got := bytes.Join(sender.chunks, nil)
+	testutil.RequireTruef(t, bytes.Equal(got, want), "read bytes = %q, want %q", got, want)
+}
+
+func requireOperationRunResult(t *testing.T, result OperationRunResult, scanned, succeeded, pending, failed int) {
+	t.Helper()
+	testutil.RequireEqualf(t, result.Scanned, scanned, "operation scanned count")
+	testutil.RequireEqualf(t, result.Succeeded, succeeded, "operation succeeded count")
+	testutil.RequireEqualf(t, result.Pending, pending, "operation pending count")
+	testutil.RequireEqualf(t, result.Failed, failed, "operation failed count")
+}
+
+func requireUploadRunResult(t *testing.T, result backendupload.RunResult, scanned, uploaded, failed, deferred int) {
+	t.Helper()
+	testutil.RequireEqualf(t, result.Scanned, scanned, "upload scanned count")
+	testutil.RequireEqualf(t, result.Uploaded, uploaded, "upload uploaded count")
+	testutil.RequireEqualf(t, result.Failed, failed, "upload failed count")
+	testutil.RequireEqualf(t, result.Deferred, deferred, "upload deferred count")
+}
+
+func requireBackendObject(ctx context.Context, t *testing.T, store backend.Store, key string) {
+	t.Helper()
+	_, err := store.HeadObject(ctx, key)
+	testutil.RequireNoErrorf(t, err, "head backend object %s", key)
 }
 
 func TestWriteDocumentPreparesPeersBeforeMetadataVisibility(t *testing.T) {
@@ -191,16 +208,12 @@ func TestWriteDocumentPreparesPeersBeforeMetadataVisibility(t *testing.T) {
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "write document")
 	if result.DesiredReplicaCount != 3 || result.AchievedReplicaCount != 3 {
 		t.Fatalf("replica counts = %d/%d, want 3/3", result.DesiredReplicaCount, result.AchievedReplicaCount)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	if len(stored.Location.Replicas) != 2 {
 		t.Fatalf("replicas = %#v, want two peer prepare receipts", stored.Location.Replicas)
 	}
@@ -299,9 +312,7 @@ func TestWriteDocumentFailsClosedWhenLeaderIsStale(t *testing.T) {
 func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
 	dir := t.TempDir()
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	doc := testDocumentIdentity()
 	badSHA := bytes.Repeat([]byte{9}, 32)
 
@@ -319,21 +330,15 @@ func TestExpectedChecksumMismatchLeavesDocumentInvisible(t *testing.T) {
 
 	_, err = app.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	requireCode(t, err, codes.NotFound)
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	_, err = reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	requireCode(t, err, codes.NotFound)
 	prepared, err := reopened.prepare.Recover()
-	if err != nil {
-		t.Fatalf("recover prepare log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "recover prepare log")
 	if len(prepared) != 0 {
 		t.Fatalf("prepare records = %#v, want no visible prepare for rejected write", prepared)
 	}
@@ -373,9 +378,7 @@ func TestCommittedWriteSurvivesReopen(t *testing.T) {
 	doc := testDocumentIdentity()
 	data := []byte("durable local bytes")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
@@ -384,26 +387,18 @@ func TestCommittedWriteSurvivesReopen(t *testing.T) {
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head after reopen: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head after reopen")
 	if head.Length != uint64(len(data)) {
 		t.Fatalf("head length after reopen = %d, want %d", head.Length, len(data))
 	}
 	sender := &recordingReadSender{}
-	if err := reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read after reopen: %v", err)
-	}
+	testutil.RequireNoErrorf(t, reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender), "read after reopen")
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read after reopen = %q, want %q", got, data)
 	}
@@ -415,9 +410,7 @@ func TestCrashAfterBlockSyncLeavesDocumentInvisible(t *testing.T) {
 	data := []byte("synced but unprepared bytes")
 	init := writeInitForCrashBoundary(doc, data, "crash-after-block-sync")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	app.writeFaults.afterBlockSync = func(record blockstore.Record) error {
 		if record.StoredLength != uint64(len(data)) {
 			t.Fatalf("stored length = %d, want %d", record.StoredLength, len(data))
@@ -429,21 +422,15 @@ func TestCrashAfterBlockSyncLeavesDocumentInvisible(t *testing.T) {
 	if !errors.Is(err, errSimulatedLocalCrash) {
 		t.Fatalf("write error = %v, want simulated crash", err)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close crashed app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close crashed app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	_, err = reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	requireCode(t, err, codes.NotFound)
 	prepared, err := reopened.prepare.Recover()
-	if err != nil {
-		t.Fatalf("recover prepare log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "recover prepare log")
 	if len(prepared) != 0 {
 		t.Fatalf("prepared documents = %#v, want none after block-only crash", prepared)
 	}
@@ -455,9 +442,7 @@ func TestCrashAfterPrepareSyncLeavesDocumentInvisible(t *testing.T) {
 	data := []byte("prepared but uncommitted bytes")
 	init := writeInitForCrashBoundary(doc, data, "crash-after-prepare-sync")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	app.writeFaults.afterPrepareSync = func(document metastore.Document) error {
 		if document.Identity != doc {
 			t.Fatalf("prepared document = %#v, want %v", document.Identity, doc)
@@ -469,28 +454,20 @@ func TestCrashAfterPrepareSyncLeavesDocumentInvisible(t *testing.T) {
 	if !errors.Is(err, errSimulatedLocalCrash) {
 		t.Fatalf("write error = %v, want simulated crash", err)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close crashed app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close crashed app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	_, err = reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
 	requireCode(t, err, codes.NotFound)
 	prepared, err := reopened.prepare.Recover()
-	if err != nil {
-		t.Fatalf("recover prepare log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "recover prepare log")
 	if len(prepared) != 1 || prepared[0].Identity != doc {
 		t.Fatalf("prepared documents = %#v, want prepared document invisible", prepared)
 	}
 	readLength := prepared[0].Length
-	if err := reopened.blocks.VerifyRange(prepared[0].Location, 0, &readLength); err != nil {
-		t.Fatalf("verify prepared local bytes: %v", err)
-	}
+	testutil.RequireNoErrorf(t, reopened.blocks.VerifyRange(prepared[0].Location, 0, &readLength), "verify prepared local bytes")
 }
 
 func TestCrashAfterMetadataApplyKeepsCommittedDocumentRetryable(t *testing.T) {
@@ -499,9 +476,7 @@ func TestCrashAfterMetadataApplyKeepsCommittedDocumentRetryable(t *testing.T) {
 	data := []byte("metadata committed before ack")
 	init := writeInitForCrashBoundary(doc, data, "crash-after-metadata-apply")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	app.writeFaults.afterMetadataApply = func(document metastore.Document) error {
 		if document.Identity != doc {
 			t.Fatalf("committed document = %#v, want %v", document.Identity, doc)
@@ -513,33 +488,23 @@ func TestCrashAfterMetadataApplyKeepsCommittedDocumentRetryable(t *testing.T) {
 	if !errors.Is(err, errSimulatedLocalCrash) {
 		t.Fatalf("write error = %v, want simulated crash", err)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close crashed app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close crashed app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head committed document after reopen: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head committed document after reopen")
 	if head.Length != uint64(len(data)) {
 		t.Fatalf("head length = %d, want %d", head.Length, len(data))
 	}
 	stored, err := reopened.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head committed document from metadata: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head committed document from metadata")
 	if _, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID); !errors.Is(err, metastore.ErrNotFound) {
 		t.Fatalf("upload intent before replay error = %v, want not found", err)
 	}
 	replayed, err := reopened.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("idempotent replay after metadata crash: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "idempotent replay after metadata crash")
 	if !replayed.IdempotentReplay {
 		t.Fatal("retry after metadata crash was not an idempotent replay")
 	}
@@ -554,9 +519,7 @@ func TestCrashBeforeACKKeepsCommittedDocumentRetryable(t *testing.T) {
 	data := []byte("fully committed before ack")
 	init := writeInitForCrashBoundary(doc, data, "crash-before-ack")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	app.writeFaults.beforeACK = func(document metastore.Document) error {
 		if document.Identity != doc {
 			t.Fatalf("acked document = %#v, want %v", document.Identity, doc)
@@ -568,30 +531,20 @@ func TestCrashBeforeACKKeepsCommittedDocumentRetryable(t *testing.T) {
 	if !errors.Is(err, errSimulatedLocalCrash) {
 		t.Fatalf("write error = %v, want simulated crash", err)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close crashed app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close crashed app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head committed document after reopen: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head committed document after reopen")
 	stored, err := reopened.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head committed document from metadata: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head committed document from metadata")
 	if _, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID); err != nil {
 		t.Fatalf("get upload intent after ack-boundary crash: %v", err)
 	}
 	replayed, err := reopened.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("idempotent replay after ack-boundary crash: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "idempotent replay after ack-boundary crash")
 	if !replayed.IdempotentReplay || replayed.Metadata.Identity != head.Identity {
 		t.Fatalf("replay = %#v, want idempotent committed document", replayed)
 	}
@@ -602,41 +555,27 @@ func TestPrepareLogRecoveryTruncatesCrashCutTail(t *testing.T) {
 	doc := testDocumentIdentity()
 	data := []byte("valid prepared record")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	if _, err := app.WriteDocument(context.Background(), writeInitForCrashBoundary(doc, data, "valid-prepare"), newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	appendPrepareLogTail(t, dir, []byte{0, 0, 0, 128, 'p', 'a', 'r'})
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app with crash-cut prepare log: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app with crash-cut prepare log")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	prepared, err := reopened.prepare.Recover()
-	if err != nil {
-		t.Fatalf("recover truncated prepare log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "recover truncated prepare log")
 	if len(prepared) != 1 || prepared[0].Identity != doc {
 		t.Fatalf("prepared documents = %#v, want valid committed document only", prepared)
 	}
 	payload, err := metastore.MarshalDocument(stored)
-	if err != nil {
-		t.Fatalf("marshal stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal stored document")
 	info, err := os.Stat(filepath.Join(dir, prepareLogName))
-	if err != nil {
-		t.Fatalf("stat prepare log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "stat prepare log")
 	wantSize := int64(prepareLogHeaderLen + len(payload) + prepareLogCRCLen)
 	if info.Size() != wantSize {
 		t.Fatalf("prepare log size = %d, want truncated size %d", info.Size(), wantSize)
@@ -648,9 +587,7 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	doc := testDocumentIdentity()
 	data := []byte("durable local bytes")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	app.now = fixedClock(time.Unix(100, 0).UTC())
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
@@ -670,31 +607,21 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("complete transaction: %v", err)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
-	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
-		t.Fatalf("remove metadata projection: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.RemoveAll(filepath.Join(dir, "metadata")), "remove metadata projection")
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head rebuilt document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head rebuilt document")
 	if head.Length != uint64(len(data)) {
 		t.Fatalf("rebuilt length = %d, want %d", head.Length, len(data))
 	}
 	transaction, err := reopened.GetTransaction(context.Background(), api.GetTransactionRequest{
 		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
 	})
-	if err != nil {
-		t.Fatalf("get rebuilt transaction: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get rebuilt transaction")
 	if transaction.CompletedAt == nil || !transaction.CompletedAt.Equal(completedAt) {
 		t.Fatalf("rebuilt completed_at = %v, want %v", transaction.CompletedAt, completedAt)
 	}
@@ -702,27 +629,19 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 		t.Fatalf("rebuilt transaction tags = %#v", transaction.Tags)
 	}
 	storedDocument, err := reopened.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head rebuilt document for upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head rebuilt document for upload intent")
 	intent, err := reopened.metadata.GetUploadIntent(storedDocument.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get rebuilt upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get rebuilt upload intent")
 	if intent.State != metastore.UploadStatePending {
 		t.Fatalf("rebuilt upload intent = %#v, want pending", intent)
 	}
 	sender := &recordingReadSender{}
-	if err := reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read rebuilt document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender), "read rebuilt document")
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read rebuilt document = %q, want %q", got, data)
 	}
 	queue, err := reopened.GetRepairQueue(context.Background(), "local")
-	if err != nil {
-		t.Fatalf("get repair queue after clean rebuild: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue after clean rebuild")
 	if len(queue) != 0 {
 		t.Fatalf("repair queue after clean rebuild = %#v, want empty", queue)
 	}
@@ -733,25 +652,15 @@ func TestMetadataProjectionRebuildQueuesRepairForMissingLocalRef(t *testing.T) {
 	doc := testDocumentIdentity()
 	data := []byte("missing after projection rebuild")
 	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove local block: %v", err)
-	}
-	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
-		t.Fatalf("remove metadata projection: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
+	testutil.RequireNoErrorf(t, os.RemoveAll(filepath.Join(dir, "metadata")), "remove metadata projection")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	head, err := reopened.HeadDocument(context.Background(), api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head rebuilt missing-ref document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head rebuilt missing-ref document")
 	if head.Length != uint64(len(data)) {
 		t.Fatalf("head length = %d, want %d", head.Length, len(data))
 	}
@@ -764,28 +673,18 @@ func TestMetadataProjectionRebuildQueuesRepairForCorruptLocalRef(t *testing.T) {
 	data := []byte("corrupt after projection rebuild")
 	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
 	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+	testutil.RequireNoErrorf(t, err, "open block")
+	if _, err := file.WriteAt([]byte("X"), testStoredOffset(t, stored.Location.StoredOffset)); err != nil {
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
-	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
-		t.Fatalf("remove metadata projection: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close block")
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
+	testutil.RequireNoErrorf(t, os.RemoveAll(filepath.Join(dir, "metadata")), "remove metadata projection")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
 }
 
@@ -795,25 +694,17 @@ func TestOpenVerifiesLocalRefsWhenProjectionExists(t *testing.T) {
 	data := []byte("corrupt without projection rebuild")
 	app, stored := writeDocumentForProjectionRebuild(t, dir, doc, data)
 	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+	testutil.RequireNoErrorf(t, err, "open block")
+	if _, err := file.WriteAt([]byte("X"), testStoredOffset(t, stored.Location.StoredOffset)); err != nil {
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close block")
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	assertUnreadableRepairRef(t, reopened, doc, stored.Location.BlockID)
 }
 
@@ -822,17 +713,13 @@ func TestByteServingReadinessVerificationIsCancelable(t *testing.T) {
 	doc := testDocumentIdentity()
 	data := []byte("cancel byte readiness")
 	app, _ := writeDocumentForProjectionRebuild(t, dir, doc, data)
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reopened, err := OpenWithContext(ctx, dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 
 	err = reopened.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	if !errors.Is(err, context.Canceled) {
@@ -846,69 +733,37 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	doc := testDocumentIdentity()
 	data := []byte("backend upload bytes")
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	testutil.RequireNoErrorf(t, err, "open app")
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	storedDocument, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if _, err := app.blocks.SealCurrent(ctx); err != nil {
-		t.Fatalf("seal current block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	_, err = app.blocks.SealCurrent(ctx)
+	testutil.RequireNoErrorf(t, err, "seal current block")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	result, err := app.BackendUploadProcessor(backendStore).RunOnce(ctx)
-	if err != nil {
-		t.Fatalf("run backend upload processor: %v", err)
-	}
-	if result.Scanned != 1 || result.Uploaded != 1 || result.Failed != 0 {
-		t.Fatalf("upload result = %#v, want one uploaded intent", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run backend upload processor")
+	requireUploadRunResult(t, result, 1, 1, 0, 0)
 	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
-	if intent.State != metastore.UploadStateUploaded {
-		t.Fatalf("upload intent = %#v, want uploaded", intent)
-	}
-	if _, err := backendStore.HeadObject(ctx, intent.BackendObjectKey); err != nil {
-		t.Fatalf("head backend object: %v", err)
-	}
-	if _, err := backendStore.HeadObject(ctx, intent.IndexObjectKey); err != nil {
-		t.Fatalf("head backend index object: %v", err)
-	}
-	if _, err := backendStore.HeadObject(ctx, intent.EnvelopeObjectKey); err != nil {
-		t.Fatalf("head backend envelope object: %v", err)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
-	if err := os.RemoveAll(filepath.Join(dir, "metadata")); err != nil {
-		t.Fatalf("remove metadata projection: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	testutil.RequireEqualf(t, intent.State, metastore.UploadStateUploaded, "upload intent state")
+	requireBackendObject(ctx, t, backendStore, intent.BackendObjectKey)
+	requireBackendObject(ctx, t, backendStore, intent.IndexObjectKey)
+	requireBackendObject(ctx, t, backendStore, intent.EnvelopeObjectKey)
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
+	testutil.RequireNoErrorf(t, os.RemoveAll(filepath.Join(dir, "metadata")), "remove metadata projection")
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	intent, err = reopened.metadata.GetUploadIntent(storedDocument.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get rebuilt upload intent: %v", err)
-	}
-	if intent.State != metastore.UploadStateUploaded {
-		t.Fatalf("rebuilt upload intent = %#v, want uploaded", intent)
-	}
+	testutil.RequireNoErrorf(t, err, "get rebuilt upload intent")
+	testutil.RequireEqualf(t, intent.State, metastore.UploadStateUploaded, "rebuilt upload intent state")
 }
 
 func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
@@ -917,52 +772,32 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	data := []byte("seal and upload")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	storedDocument, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 
 	result, err := app.RunBackendUploadOnce(ctx, backendStore)
-	if err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
-	if !result.Sealed || result.SealedBlockID != storedDocument.Location.BlockID {
-		t.Fatalf("seal result = %#v, want sealed block %q", result, storedDocument.Location.BlockID)
-	}
-	if result.Upload.Scanned != 1 || result.Upload.Uploaded != 1 || result.Upload.Failed != 0 || result.Upload.Deferred != 0 {
-		t.Fatalf("upload result = %#v, want one uploaded sealed block", result.Upload)
-	}
-	if !result.MetadataPublished || result.MetadataPublication == nil {
-		t.Fatalf("metadata publication = %#v, want upload-triggered checkpoint", result.MetadataPublication)
-	}
-	if _, err := published.UnmarshalCurrentPointer(readBackendObject(t, ctx, backendStore, result.MetadataPublication.PointerKey)); err != nil {
-		t.Fatalf("read published current pointer: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
+	testutil.RequireTruef(t, result.Sealed, "backend upload result did not seal")
+	testutil.RequireEqualf(t, result.SealedBlockID, storedDocument.Location.BlockID, "sealed block id")
+	requireUploadRunResult(t, result.Upload, 1, 1, 0, 0)
+	testutil.RequireTruef(t, result.MetadataPublished, "metadata was not published")
+	testutil.RequireNotNilf(t, result.MetadataPublication, "metadata publication")
+	_, err = published.UnmarshalCurrentPointer(readBackendObject(ctx, t, backendStore, result.MetadataPublication.PointerKey))
+	testutil.RequireNoErrorf(t, err, "read published current pointer")
 	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
-	if intent.State != metastore.UploadStateUploaded {
-		t.Fatalf("upload intent = %#v, want uploaded", intent)
-	}
-	if _, err := backendStore.HeadObject(ctx, intent.IndexObjectKey); err != nil {
-		t.Fatalf("head backend index object: %v", err)
-	}
-	if _, err := backendStore.HeadObject(ctx, intent.EnvelopeObjectKey); err != nil {
-		t.Fatalf("head backend envelope object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	testutil.RequireEqualf(t, intent.State, metastore.UploadStateUploaded, "upload intent state")
+	requireBackendObject(ctx, t, backendStore, intent.IndexObjectKey)
+	requireBackendObject(ctx, t, backendStore, intent.EnvelopeObjectKey)
 }
 
 func TestRunBackendUploadOnceDoesNotPublishDeferredOpenBlock(t *testing.T) {
@@ -979,14 +814,10 @@ func TestRunBackendUploadOnceDoesNotPublishDeferredOpenBlock(t *testing.T) {
 		t.Fatalf("write document: %v", err)
 	}
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 
 	result, err := app.RunBackendUploadOnce(ctx, backendStore)
-	if err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	if result.Sealed || result.Upload.Scanned != 1 || result.Upload.Deferred != 1 || result.Upload.Uploaded != 0 {
 		t.Fatalf("upload result = %#v, want one deferred open block", result)
 	}
@@ -1002,9 +833,7 @@ func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T
 	ctx := context.Background()
 	dir := t.TempDir()
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	data := []byte("recovered pending upload block")
 	doc := testDocumentIdentity()
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
@@ -1016,26 +845,16 @@ func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 
 	result, err := reopened.RunBackendUploadOnce(ctx, backendStore)
-	if err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	if result.Sealed || result.Upload.Uploaded != 1 || result.Upload.Deferred != 0 || !result.MetadataPublished {
 		t.Fatalf("backend upload result = %#v, want recovered block upload and checkpoint", result)
 	}
@@ -1043,9 +862,7 @@ func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T
 		t.Fatalf("sealed block ids = %#v, want recovered block %q", result.SealedBlockIDs, stored.Location.BlockID)
 	}
 	intent, err := reopened.metadata.GetUploadIntent(stored.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if intent.State != metastore.UploadStateUploaded {
 		t.Fatalf("upload intent = %#v, want uploaded", intent)
 	}
@@ -1057,22 +874,17 @@ func TestRunBackendUploadOnceRepublishesMissingCurrentPointerAfterUploadedIntent
 	data := []byte("uploaded intent missing pointer")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	first, err := app.RunBackendUploadOnce(ctx, backendStore)
-	if err != nil {
-		t.Fatalf("run initial backend upload once: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run initial backend upload once")
 	if !first.MetadataPublished || first.MetadataPublication == nil {
 		t.Fatalf("initial metadata publication = %#v, want published", first.MetadataPublication)
 	}
@@ -1082,9 +894,7 @@ func TestRunBackendUploadOnceRepublishesMissingCurrentPointerAfterUploadedIntent
 	}
 
 	second, err := app.RunBackendUploadOnce(ctx, missingPointer)
-	if err != nil {
-		t.Fatalf("rerun backend upload once: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "rerun backend upload once")
 	if second.Upload.Uploaded != 0 || second.Upload.Deferred != 0 || !second.MetadataPublished {
 		t.Fatalf("rerun result = %#v, want pointer republished without uploading", second)
 	}
@@ -1100,41 +910,29 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	data := []byte("backend fallback bytes")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+	testutil.RequireNoErrorf(t, err, "open block")
+	if _, err := file.WriteAt([]byte("X"), testStoredOffset(t, stored.Location.StoredOffset)); err != nil {
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close block")
 
 	sender := &recordingReadSender{}
-	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read document")
 	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_BACKEND {
 		t.Fatalf("read source = %s, want backend", sender.metadata.Source)
 	}
@@ -1142,9 +940,7 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 		t.Fatalf("read bytes = %q, want %q", got, data)
 	}
 	queue, err := app.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 1 ||
 		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
 		queue[0].GetReason() == "" ||
@@ -1162,26 +958,20 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
 	app.SetEnvelopeTransit(transit, "transit/backend")
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	corruptStoredByte(t, app, stored.Location, 0)
 	transit.SetUnavailable(true)
 
@@ -1189,14 +979,8 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
 	requireCode(t, err, codes.Unavailable)
 	detail := requireCryptoUnavailableDetail(t, err)
-	if detail.GetIdentity().GetDocumentName() != doc.DocumentName ||
-		detail.GetKeyScope() != "backend" ||
-		!detail.GetRetryHint().GetRetryable() {
-		t.Fatalf("crypto detail = %#v, want crypto-unavailable backend detail", detail)
-	}
-	if sender.sentMetadata || len(sender.chunks) != 0 {
-		t.Fatalf("sent metadata=%v chunks=%d before crypto-unavailable error", sender.sentMetadata, len(sender.chunks))
-	}
+	requireCryptoUnavailableBackendDetail(t, detail, doc.DocumentName)
+	requireNoReadDataSent(t, sender)
 
 	transit.SetUnavailable(false)
 	transit.SetMissingKey("transit/backend", true)
@@ -1204,21 +988,26 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
 	requireCode(t, err, codes.Unavailable)
 	requireCryptoUnavailableDetail(t, err)
-	if sender.sentMetadata || len(sender.chunks) != 0 {
-		t.Fatalf("sent metadata=%v chunks=%d before missing-key error", sender.sentMetadata, len(sender.chunks))
-	}
+	requireNoReadDataSent(t, sender)
 
 	transit.SetMissingKey("transit/backend", false)
 	sender = &recordingReadSender{}
-	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read document with key material restored: %v", err)
-	}
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_BACKEND {
-		t.Fatalf("read source = %s, want backend", sender.metadata.Source)
-	}
-	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
-		t.Fatalf("read bytes = %q, want %q", got, data)
-	}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read document with key material restored")
+	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_BACKEND)
+	requireReadBytes(t, sender, data)
+}
+
+func requireCryptoUnavailableBackendDetail(t *testing.T, detail *scrapv1.CryptoUnavailableDetail, documentName string) {
+	t.Helper()
+	testutil.RequireEqualf(t, detail.GetIdentity().GetDocumentName(), documentName, "crypto detail document name")
+	testutil.RequireEqualf(t, detail.GetKeyScope(), "backend", "crypto detail key scope")
+	testutil.RequireTruef(t, detail.GetRetryHint().GetRetryable(), "crypto detail retryable = false")
+}
+
+func requireNoReadDataSent(t *testing.T, sender *recordingReadSender) {
+	t.Helper()
+	testutil.RequireFalsef(t, sender.sentMetadata, "metadata was sent before read error")
+	testutil.RequireEqualf(t, len(sender.chunks), 0, "chunk count before read error")
 }
 
 func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
@@ -1233,34 +1022,24 @@ func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
 		"transit/backend-v2": 2,
 	})
 	app.SetEnvelopeTransit(transit, "transit/backend-v1")
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
-	before, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
-	if err != nil {
-		t.Fatalf("unmarshal before envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	before, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(ctx, t, backendStore, intent.EnvelopeObjectKey))
+	testutil.RequireNoErrorf(t, err, "unmarshal before envelope")
 	operation := queuedOperation("rewrap-op-1", "rewrap", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Block{
@@ -1269,71 +1048,54 @@ func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
 		},
 	})
 	operation.Metadata = map[string]string{"scrap.destination_key_id": "transit/backend-v2"}
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one rewrap success", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["envelopes_rewrapped"] != "1" {
-		t.Fatalf("finished operation = %#v, want one rewrapped envelope", finished)
-	}
-	after, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
-	if err != nil {
-		t.Fatalf("unmarshal after envelope: %v", err)
-	}
-	if after.GetKeyId() != "transit/backend-v2" ||
-		after.GetKeyVersion() != 2 ||
-		bytes.Equal(after.GetWrappedDek(), before.GetWrappedDek()) {
-		t.Fatalf("after envelope = %#v, want rewrapped key material", after)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	testutil.RequireEqualf(t, finished.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "rewrap operation state")
+	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["envelopes_rewrapped"], "1", "rewrap counter")
+	after, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(ctx, t, backendStore, intent.EnvelopeObjectKey))
+	testutil.RequireNoErrorf(t, err, "unmarshal after envelope")
+	requireRewrappedEnvelope(t, after, before)
 	events, err := store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
-	if len(events) != 1 ||
-		events[0].GetEventType() != "rewrap_completed" ||
-		events[0].GetOperationType() != "rewrap" ||
-		events[0].GetActorIdentity() != "test" {
-		t.Fatalf("audit events = %#v, want rewrap completion event", events)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
+	requireRewrapAuditEvent(t, events)
 
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put duplicate operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put duplicate operation")
 	result, err = app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run duplicate queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("duplicate operation result = %#v, want idempotent success", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run duplicate queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	duplicateFinished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get duplicate operation: %v", err)
-	}
-	if duplicateFinished.GetProgress().GetCounters()["envelopes_rewrapped"] != "0" ||
-		duplicateFinished.GetProgress().GetCounters()["envelopes_skipped"] != "1" {
-		t.Fatalf("duplicate finished operation = %#v, want skipped no-op rewrap", duplicateFinished)
-	}
-	duplicate, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(t, ctx, backendStore, intent.EnvelopeObjectKey))
-	if err != nil {
-		t.Fatalf("unmarshal duplicate envelope: %v", err)
-	}
-	if !bytes.Equal(duplicate.GetWrappedDek(), after.GetWrappedDek()) ||
-		!bytes.Equal(duplicate.GetEnvelopeSha256(), after.GetEnvelopeSha256()) {
-		t.Fatalf("duplicate envelope = %#v, want unchanged %#v", duplicate, after)
-	}
+	testutil.RequireNoErrorf(t, err, "get duplicate operation")
+	testutil.RequireEqualf(t, duplicateFinished.GetProgress().GetCounters()["envelopes_rewrapped"], "0", "duplicate rewrap counter")
+	testutil.RequireEqualf(t, duplicateFinished.GetProgress().GetCounters()["envelopes_skipped"], "1", "duplicate skipped counter")
+	duplicate, err := storageformat.UnmarshalEnvelopeRecord(readBackendObject(ctx, t, backendStore, intent.EnvelopeObjectKey))
+	testutil.RequireNoErrorf(t, err, "unmarshal duplicate envelope")
+	requireEnvelopeUnchanged(t, duplicate, after)
+}
+
+func requireRewrappedEnvelope(t *testing.T, after, before *storagev1.EnvelopeRecord) {
+	t.Helper()
+	testutil.RequireEqualf(t, after.GetKeyId(), "transit/backend-v2", "rewrapped key id")
+	testutil.RequireEqualf(t, after.GetKeyVersion(), uint32(2), "rewrapped key version")
+	testutil.RequireFalsef(t, bytes.Equal(after.GetWrappedDek(), before.GetWrappedDek()), "wrapped DEK did not change")
+}
+
+func requireRewrapAuditEvent(t *testing.T, events []*adminv1.AuditEvent) {
+	t.Helper()
+	testutil.RequireEqualf(t, len(events), 1, "rewrap audit event count")
+	testutil.RequireEqualf(t, events[0].GetEventType(), "rewrap_completed", "rewrap audit event type")
+	testutil.RequireEqualf(t, events[0].GetOperationType(), "rewrap", "rewrap audit operation type")
+	testutil.RequireEqualf(t, events[0].GetActorIdentity(), "test", "rewrap audit actor")
+}
+
+func requireEnvelopeUnchanged(t *testing.T, got, want *storagev1.EnvelopeRecord) {
+	t.Helper()
+	testutil.RequireTruef(t, bytes.Equal(got.GetWrappedDek(), want.GetWrappedDek()), "wrapped DEK changed")
+	testutil.RequireTruef(t, bytes.Equal(got.GetEnvelopeSha256(), want.GetEnvelopeSha256()), "envelope checksum changed")
 }
 
 func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
@@ -1352,26 +1114,16 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 		t.Fatalf("write document: %v", err)
 	}
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
 	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "restore-cold-1", time.Unix(200, 0).UTC()); err != nil {
-		t.Fatalf("mark cold: %v", err)
-	}
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove local block: %v", err)
-	}
-	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("remove local seal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "restore-cold-1", time.Unix(200, 0).UTC()), "mark cold")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
+	removeLocalSealIfPresent(t, app, stored.Location.BlockID)
 	operation := queuedOperation("restore-op-1", "restore", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Document{
@@ -1383,42 +1135,32 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one restore success", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetWorkUnitsCompleted() != 1 {
-		t.Fatalf("finished operation = %#v, want succeeded restore", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	testutil.RequireEqualf(t, finished.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "finished operation state")
+	testutil.RequireEqualf(t, finished.GetProgress().GetWorkUnitsCompleted(), uint64(1), "finished work units completed")
 	restored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head restored document: %v", err)
-	}
-	if restored.RestoreState != metastore.RestoreStateHot || restored.Availability != metastore.AvailabilityHot {
-		t.Fatalf("restore state = %d/%d, want hot", restored.RestoreState, restored.Availability)
-	}
+	testutil.RequireNoErrorf(t, err, "head restored document")
+	testutil.RequireEqualf(t, restored.RestoreState, metastore.RestoreStateHot, "restore state")
+	testutil.RequireEqualf(t, restored.Availability, metastore.AvailabilityHot, "availability")
 	sender := &recordingReadSender{}
-	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read restored document: %v", err)
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
+	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL)
+	requireReadBytes(t, sender, data)
+}
+
+func removeLocalSealIfPresent(t *testing.T, app *Application, blockID string) {
+	t.Helper()
+	err := os.Remove(app.blocks.SealPath(blockID))
+	if errors.Is(err, os.ErrNotExist) {
+		return
 	}
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want restored local", sender.metadata.Source)
-	}
-	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
-		t.Fatalf("restored bytes = %q, want %q", got, data)
-	}
+	testutil.RequireNoErrorf(t, err, "remove local seal")
 }
 
 func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
@@ -1436,31 +1178,21 @@ func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
 		t.Fatalf("write document: %v", err)
 	}
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
 	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "head-cold-1", time.Unix(210, 0).UTC()); err != nil {
-		t.Fatalf("mark cold: %v", err)
-	}
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove local block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "head-cold-1", time.Unix(210, 0).UTC()), "mark cold")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
 	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("remove local seal: %v", err)
 	}
 
 	metadata, err := app.HeadDocument(ctx, api.HeadDocumentRequest{Identity: doc})
-	if err != nil {
-		t.Fatalf("head cold document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head cold document")
 	if metadata.Availability != scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_COLD ||
 		metadata.Length != uint64(len(data)) ||
 		metadata.Identity != doc {
@@ -1472,13 +1204,9 @@ func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T)
 	ctx := context.Background()
 	dir := t.TempDir()
 	app, err := OpenWithContext(ctx, dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	store, err := operations.Open(dir)
-	if err != nil {
-		t.Fatalf("open operation store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open operation store")
 	data := []byte("restore queued by read")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
@@ -1491,94 +1219,66 @@ func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T)
 		t.Fatalf("write document: %v", err)
 	}
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
 	app.SetOperationStore(store)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "read-cold-1", time.Unix(220, 0).UTC()); err != nil {
-		t.Fatalf("mark cold: %v", err)
-	}
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove local block: %v", err)
-	}
-	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("remove local seal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "read-cold-1", time.Unix(220, 0).UTC()), "mark cold")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
+	removeLocalSealIfPresent(t, app, stored.Location.BlockID)
 
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)
 	detail := requireRestorePendingDetail(t, err)
-	if !detail.GetRestoreQueued() || detail.GetRestoreState() != "restore_pending" {
-		t.Fatalf("restore detail = %#v, want queued restore pending", detail)
-	}
+	testutil.RequireTruef(t, detail.GetRestoreQueued(), "restore detail = %#v, want queued", detail)
+	testutil.RequireEqualf(t, detail.GetRestoreState(), "restore_pending", "restore detail state")
 	operationID := restoreOnReadOperationID(stored)
 	queued, err := store.Get(operationID)
-	if err != nil {
-		t.Fatalf("get queued restore-on-read operation: %v", err)
-	}
-	if queued.GetOperationType() != "restore" ||
-		queued.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
-		queued.GetMetadata()[operationLaneMetadata] != operationLaneInteractive ||
-		queued.GetMetadata()[backendLaneMetadata] != string(backend.LaneRestore) {
-		t.Fatalf("queued operation = %#v, want restore-on-read lane metadata", queued)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close operation store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get queued restore-on-read operation")
+	requireRestoreOnReadOperation(t, queued)
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
+	testutil.RequireNoErrorf(t, store.Close(), "close operation store")
 
 	reopened, err := OpenWithContext(ctx, dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	reopened.SetBackendStore(backendStore)
 	reopenedStore, err := operations.Open(dir)
-	if err != nil {
-		t.Fatalf("reopen operation store: %v", err)
-	}
-	defer reopenedStore.Close()
+	testutil.RequireNoErrorf(t, err, "reopen operation store")
+	defer func() { testutil.RequireNoErrorf(t, reopenedStore.Close(), "close reopened store") }()
 	reopened.SetOperationStore(reopenedStore)
 	result, err := reopened.RunQueuedOperationsOnce(ctx, reopenedStore)
-	if err != nil {
-		t.Fatalf("run queued restore after restart: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Pending != 0 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want retry restore success after restart", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued restore after restart")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	events, err := reopenedStore.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
+	requireRestoreQueuedAndCompletedEvents(t, events)
+	sender := &recordingReadSender{}
+	testutil.RequireNoErrorf(t, reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
+	requireReadSource(t, sender, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL)
+	requireReadBytes(t, sender, data)
+}
+
+func requireRestoreOnReadOperation(t *testing.T, operation *adminv1.Operation) {
+	t.Helper()
+	testutil.RequireEqualf(t, operation.GetOperationType(), "restore", "restore-on-read operation type")
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_QUEUED, "restore-on-read state")
+	testutil.RequireEqualf(t, operation.GetMetadata()[operationLaneMetadata], operationLaneInteractive, "restore-on-read operation lane")
+	testutil.RequireEqualf(t, operation.GetMetadata()[backendLaneMetadata], string(backend.LaneRestore), "restore-on-read backend lane")
+}
+
+func requireRestoreQueuedAndCompletedEvents(t *testing.T, events []*adminv1.AuditEvent) {
+	t.Helper()
 	eventTypes := make(map[string]bool, len(events))
 	for _, event := range events {
 		eventTypes[event.GetEventType()] = true
 	}
-	if len(events) != 2 ||
-		!eventTypes[operationEventRestoreQueued] ||
-		!eventTypes[operationEventRestoreComplete] {
-		t.Fatalf("audit events = %#v, want queued and completed restore events", events)
-	}
-	sender := &recordingReadSender{}
-	if err := reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read restored document: %v", err)
-	}
-	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("read source = %s, want restored local", sender.metadata.Source)
-	}
-	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
-		t.Fatalf("restored bytes = %q, want %q", got, data)
-	}
+	testutil.RequireEqualf(t, len(events), 2, "restore audit event count")
+	testutil.RequireTruef(t, eventTypes[operationEventRestoreQueued], "restore queued event missing")
+	testutil.RequireTruef(t, eventTypes[operationEventRestoreComplete], "restore complete event missing")
 }
 
 func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
@@ -1596,20 +1296,14 @@ func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "terminal-cold-1", time.Unix(225, 0).UTC()); err != nil {
-		t.Fatalf("mark cold: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "terminal-cold-1", time.Unix(225, 0).UTC()), "mark cold")
 	operationID := restoreOnReadOperationID(stored)
 	terminal := queuedOperation(operationID, "restore", []*adminv1.Target{documentTarget(doc)})
 	terminal.State = adminv1.OperationState_OPERATION_STATE_FAILED
 	terminal.FinishedAt = timestamppb.New(time.Unix(226, 0).UTC())
 	terminal.LastError = &adminv1.OperationError{Code: "SCRAP_RESTORE_FAILED", Message: "previous restore failed"}
-	if err := store.Put(terminal); err != nil {
-		t.Fatalf("put terminal operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(terminal), "put terminal operation")
 
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)
@@ -1618,9 +1312,7 @@ func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
 		t.Fatalf("restore detail = %#v, want queued retry", detail)
 	}
 	requeued, err := store.Get(operationID)
-	if err != nil {
-		t.Fatalf("get requeued operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get requeued operation")
 	if requeued.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
 		requeued.GetFinishedAt() != nil ||
 		requeued.GetLastError() != nil ||
@@ -1628,9 +1320,7 @@ func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
 		t.Fatalf("requeued operation = %#v, want queued clean retry", requeued)
 	}
 	events, err := store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
 	if len(events) != 1 || events[0].GetEventType() != operationEventRestoreQueued {
 		t.Fatalf("audit events = %#v, want queued audit backfill", events)
 	}
@@ -1643,76 +1333,46 @@ func TestRunQueuedOperationsOnceKeepsArchiveRestorePendingAndRetries(t *testing.
 	data := []byte("archive restore pending")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "archive-cold-1", time.Unix(230, 0).UTC()); err != nil {
-		t.Fatalf("mark cold: %v", err)
-	}
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove local block: %v", err)
-	}
-	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("remove local seal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "archive-cold-1", time.Unix(230, 0).UTC()), "mark cold")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
+	removeLocalSealIfPresent(t, app, stored.Location.BlockID)
 	archive := &archivePendingBackend{Store: backendStore, pending: true}
 	app.SetBackendStore(archive)
 	operation := queuedOperation("archive-restore-op-1", "restore", []*adminv1.Target{documentTarget(doc)})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run archive-pending restore: %v", err)
-	}
-	if result.Scanned != 1 || result.Pending != 1 || result.Succeeded != 0 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want queued pending restore", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run archive-pending restore")
+	requireOperationRunResult(t, result, 1, 0, 1, 0)
 	pending, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get pending operation: %v", err)
-	}
-	if pending.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
-		pending.GetProgress().GetCounters()["blocks_pending"] != "1" {
-		t.Fatalf("pending operation = %#v, want queued archive pending", pending)
-	}
+	testutil.RequireNoErrorf(t, err, "get pending operation")
+	testutil.RequireEqualf(t, pending.GetState(), adminv1.OperationState_OPERATION_STATE_QUEUED, "pending operation state")
+	testutil.RequireEqualf(t, pending.GetProgress().GetCounters()["blocks_pending"], "1", "pending block counter")
 	cold, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head pending document: %v", err)
-	}
-	if cold.RestoreState != metastore.RestoreStateRestorePending ||
-		cold.Availability != metastore.AvailabilityRestorePending {
-		t.Fatalf("restore state = %d/%d, want restore pending", cold.RestoreState, cold.Availability)
-	}
+	testutil.RequireNoErrorf(t, err, "head pending document")
+	testutil.RequireEqualf(t, cold.RestoreState, metastore.RestoreStateRestorePending, "restore state")
+	testutil.RequireEqualf(t, cold.Availability, metastore.AvailabilityRestorePending, "availability")
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)
 	requireRestorePendingDetail(t, err)
 
 	archive.pending = false
 	result, err = app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("retry archive restore: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Pending != 0 || result.Failed != 0 {
-		t.Fatalf("retry result = %#v, want restore success", result)
-	}
+	testutil.RequireNoErrorf(t, err, "retry archive restore")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 }
 
 func TestRunQueuedOperationsOncePrewarmsDocumentFromBackendAndAudits(t *testing.T) {
@@ -1722,65 +1382,39 @@ func TestRunQueuedOperationsOncePrewarmsDocumentFromBackendAndAudits(t *testing.
 	data := []byte("prewarm me from backend")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "prewarm-cold-1", time.Unix(240, 0).UTC()); err != nil {
-		t.Fatalf("mark cold: %v", err)
-	}
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove local block: %v", err)
-	}
-	if err := os.Remove(app.blocks.SealPath(stored.Location.BlockID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("remove local seal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "prewarm-cold-1", time.Unix(240, 0).UTC()), "mark cold")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
+	removeLocalSealIfPresent(t, app, stored.Location.BlockID)
 	operation := queuedOperation("prewarm-op-1", "prewarm", []*adminv1.Target{documentTarget(doc)})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued prewarm: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one prewarm success", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued prewarm")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetProgress().GetCounters()["blocks_restored"] != "1" ||
-		finished.GetProgress().GetCounters()["operation_lane"] != operationLanePlannedPrewarm ||
-		finished.GetProgress().GetCounters()["backend_lane"] != string(backend.LaneRestore) {
-		t.Fatalf("finished operation = %#v, want prewarm restore counters", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["blocks_restored"], "1", "prewarm restored block count")
+	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["operation_lane"], operationLanePlannedPrewarm, "prewarm operation lane")
+	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["backend_lane"], string(backend.LaneRestore), "prewarm backend lane")
 	events, err := store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
-	if len(events) != 1 ||
-		events[0].GetEventType() != operationEventPrewarmComplete ||
-		events[0].GetOperationType() != "prewarm" {
-		t.Fatalf("audit events = %#v, want prewarm completed event", events)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
+	testutil.RequireEqualf(t, len(events), 1, "prewarm audit event count")
+	testutil.RequireEqualf(t, events[0].GetEventType(), operationEventPrewarmComplete, "prewarm audit event type")
+	testutil.RequireEqualf(t, events[0].GetOperationType(), "prewarm", "prewarm audit operation type")
 }
 
 func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
@@ -1799,30 +1433,20 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 		t.Fatalf("write document: %v", err)
 	}
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
 	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
+	testutil.RequireNoErrorf(t, err, "open block")
+	if _, err := file.WriteAt([]byte("X"), testStoredOffset(t, stored.Location.StoredOffset)); err != nil {
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
-	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{}); err != nil {
-		t.Fatalf("read with backend fallback: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close block")
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{}), "read with backend fallback")
 	operation := queuedOperation("repair-op-1", "repair", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Document{
@@ -1834,28 +1458,20 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want one repair success", result)
 	}
 	queue, err := app.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 0 {
 		t.Fatalf("repair queue = %#v, want resolved repair", queue)
 	}
 	sender := &recordingReadSender{}
-	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read repaired document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read repaired document")
 	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
 		t.Fatalf("read source = %s, want repaired local", sender.metadata.Source)
 	}
@@ -1884,22 +1500,14 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	corruptStoredByte(t, app, stored.Location, 0)
-	if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(270, 0).UTC()); err != nil {
-		t.Fatalf("record local repair state: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(270, 0).UTC()), "record local repair state")
 	operation := queuedOperation("peer-repair-op-1", "repair", []*adminv1.Target{documentTarget(doc)})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want one peer repair success", result)
 	}
@@ -1907,16 +1515,12 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.
 		t.Fatalf("peer repair reads = %d, want 1", peer.repairReadCount)
 	}
 	queue, err := app.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 0 {
 		t.Fatalf("repair queue = %#v, want resolved repair", queue)
 	}
 	sender := &recordingReadSender{}
-	if err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read repaired document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read repaired document")
 	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
 		t.Fatalf("read source = %s, want repaired local", sender.metadata.Source)
 	}
@@ -1945,24 +1549,16 @@ func TestRunQueuedOperationsOnceQuarantinesCorruptPeerAndFailsWithoutVerifiedSou
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	peer.repairBytes = append([]byte(nil), peer.preparedBytes...)
 	peer.repairBytes[0] ^= 0xff
 	corruptStoredByte(t, app, stored.Location, 0)
-	if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(280, 0).UTC()); err != nil {
-		t.Fatalf("record local repair state: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(280, 0).UTC()), "record local repair state")
 	operation := queuedOperation("peer-repair-op-2", "repair", []*adminv1.Target{documentTarget(doc)})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("operation result = %#v, want one failed repair", result)
 	}
@@ -1970,9 +1566,7 @@ func TestRunQueuedOperationsOnceQuarantinesCorruptPeerAndFailsWithoutVerifiedSou
 		t.Fatalf("peer repair reads = %d, want 1", peer.repairReadCount)
 	}
 	queue, err := app.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 2 ||
 		!repairQueueReasonContains(queue, "local/"+stored.Location.BlockID) ||
 		!repairQueueReasonContains(queue, "peer/member-1/"+stored.Location.BlockID) {
@@ -1986,9 +1580,7 @@ func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	store := openTestOperationStore(t)
 	data := []byte("retry repair after restart")
 	doc := testDocumentIdentity()
@@ -1996,50 +1588,31 @@ func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
 	peer := newRecordingPreparePeer("member-1")
 	app.peerPreparePolicy = replication.Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
 	app.peerPrepareTargets = []replication.Target{{MemberID: "member-1", Preparer: peer}}
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		_ = app.Close()
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	requireNoErrorBeforeClosef(t, app, err, "write document")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		_ = app.Close()
-		t.Fatalf("head stored document: %v", err)
-	}
+	requireNoErrorBeforeClosef(t, app, err, "head stored document")
 	corruptStoredByte(t, app, stored.Location, 0)
-	if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(290, 0).UTC()); err != nil {
-		_ = app.Close()
-		t.Fatalf("record local repair state: %v", err)
-	}
+	err = app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(290, 0).UTC())
+	requireNoErrorBeforeClosef(t, app, err, "record local repair state")
 	first := queuedOperation("restart-peer-repair-op-1", "repair", []*adminv1.Target{documentTarget(doc)})
-	if err := store.Put(first); err != nil {
-		_ = app.Close()
-		t.Fatalf("put first operation: %v", err)
-	}
+	err = store.Put(first)
+	requireNoErrorBeforeClosef(t, app, err, "put first operation")
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		_ = app.Close()
-		t.Fatalf("run first queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
-		_ = app.Close()
-		t.Fatalf("first operation result = %#v, want failed repair", result)
-	}
+	requireNoErrorBeforeClosef(t, app, err, "run first queued operations")
+	requireOperationRunResultBeforeClose(t, app, result, 1, 0, 0, 1)
 	peerBytes := append([]byte(nil), peer.preparedBytes...)
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
-	reopened.SetPeerRepairSource("member-1", PeerRepairSourceFunc(func(ctx context.Context, replica blockstore.ReplicaRef, writer io.Writer) error {
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
+	reopened.SetPeerRepairSource("member-1", PeerRepairSourceFunc(func(ctx context.Context, _ blockstore.ReplicaRef, writer io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -2047,31 +1620,36 @@ func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
 		return err
 	}))
 	second := queuedOperation("restart-peer-repair-op-2", "repair", []*adminv1.Target{documentTarget(doc)})
-	if err := store.Put(second); err != nil {
-		t.Fatalf("put second operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(second), "put second operation")
 
 	result, err = reopened.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run second queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("second operation result = %#v, want successful retry", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run second queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	queue, err := reopened.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
-	if len(queue) != 0 {
-		t.Fatalf("repair queue = %#v, want resolved retry", queue)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
+	testutil.RequireEqualf(t, len(queue), 0, "repair queue length")
 	sender := &recordingReadSender{}
-	if err := reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read repaired document: %v", err)
+	testutil.RequireNoErrorf(t, reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read repaired document")
+	requireReadBytes(t, sender, data)
+}
+
+func requireNoErrorBeforeClosef(t *testing.T, app *Application, err error, format string) {
+	t.Helper()
+	if err == nil {
+		return
 	}
-	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
-		t.Fatalf("repaired bytes = %q, want %q", got, data)
-	}
+	_ = app.Close()
+	testutil.RequireNoErrorf(t, err, format)
+}
+
+func requireOperationRunResultBeforeClose(t *testing.T, app *Application, result OperationRunResult, scanned, succeeded, pending, failed int) {
+	t.Helper()
+	defer func() {
+		if t.Failed() {
+			_ = app.Close()
+		}
+	}()
+	requireOperationRunResult(t, result, scanned, succeeded, pending, failed)
 }
 
 func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
@@ -2084,53 +1662,24 @@ func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
 	second.DocumentName = "second-backend-dedupe.xml"
 	firstData := []byte("first repair from backend")
 	secondData := []byte("second repair from backend")
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
-		Identity:         first,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
-		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{firstData})); err != nil {
-		t.Fatalf("write first document: %v", err)
-	}
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
-		Identity:         second,
-		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
-		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
-		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{secondData})); err != nil {
-		t.Fatalf("write second document: %v", err)
-	}
+	writeBackendDedupeDocument(ctx, t, app, first, firstData, "first")
+	writeBackendDedupeDocument(ctx, t, app, second, secondData, "second")
 	firstStored, err := app.metadata.HeadDocument(first)
-	if err != nil {
-		t.Fatalf("head first document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head first document")
 	secondStored, err := app.metadata.HeadDocument(second)
-	if err != nil {
-		t.Fatalf("head second document: %v", err)
-	}
-	if firstStored.Location.BlockID != secondStored.Location.BlockID {
-		t.Fatalf("documents landed in blocks %s/%s, want same block", firstStored.Location.BlockID, secondStored.Location.BlockID)
-	}
+	testutil.RequireNoErrorf(t, err, "head second document")
+	testutil.RequireEqualf(t, firstStored.Location.BlockID, secondStored.Location.BlockID, "backend dedupe block id")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.sealBlockAtBytes = app.blocks.CurrentBlockLength()
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	intent, err := app.metadata.GetUploadIntent(firstStored.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	countingBackend := &readCountingBackendStore{Store: backendStore}
 	app.SetBackendStore(countingBackend)
 	corruptStoredByte(t, app, firstStored.Location, 0)
-	for _, stored := range []metastore.Document{firstStored, secondStored} {
-		if err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(300, 0).UTC()); err != nil {
-			t.Fatalf("record local repair state for %s: %v", stored.Identity.DocumentName, err)
-		}
-	}
+	recordBackendDedupeRepairStates(ctx, t, app, firstStored, secondStored)
 	operation := queuedOperation("backend-dedupe-repair-op", "repair", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Block{
@@ -2141,27 +1690,44 @@ func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one repair success", result)
-	}
-	if countingBackend.readObjectRangeCount(intent.BackendObjectKey) != 1 {
-		t.Fatalf("block backend reads = %d, want one block restore", countingBackend.readObjectRangeCount(intent.BackendObjectKey))
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireBackendDedupeRepairResult(t, result, countingBackend, intent.BackendObjectKey)
 	queue, err := app.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
+	testutil.RequireNoErrorf(t, err, "get repair queue")
+	testutil.RequireEqualf(t, len(queue), 0, "repair queue length")
+}
+
+func writeBackendDedupeDocument(ctx context.Context, t *testing.T, app *Application, doc identity.Document, data []byte, label string) {
+	t.Helper()
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
+		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write %s document", label)
+}
+
+func recordBackendDedupeRepairStates(ctx context.Context, t *testing.T, app *Application, documents ...metastore.Document) {
+	t.Helper()
+	for _, stored := range documents {
+		err := app.recordDocumentRepairState(ctx, stored, integrityEvidenceID(stored), true, time.Unix(300, 0).UTC())
+		testutil.RequireNoErrorf(t, err, "record local repair state for %s", stored.Identity.DocumentName)
 	}
-	if len(queue) != 0 {
-		t.Fatalf("repair queue = %#v, want resolved repairs", queue)
-	}
+}
+
+func requireBackendDedupeRepairResult(
+	t *testing.T,
+	result OperationRunResult,
+	countingBackend *readCountingBackendStore,
+	backendObjectKey string,
+) {
+	t.Helper()
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
+	testutil.RequireEqualf(t, countingBackend.readObjectRangeCount(backendObjectKey), 1, "block backend read count")
 }
 
 func TestRepairDocumentFromVerifiedPeerPropagatesContextCancellation(t *testing.T) {
@@ -2182,9 +1748,7 @@ func TestRepairDocumentFromVerifiedPeerPropagatesContextCancellation(t *testing.
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	app.SetPeerRepairSource("member-1", PeerRepairSourceFunc(func(context.Context, blockstore.ReplicaRef, io.Writer) error {
 		return context.Canceled
 	}))
@@ -2202,28 +1766,20 @@ func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing
 	store := openTestOperationStore(t)
 	data := []byte("scrub detects corruption")
 	doc := testDocumentIdentity()
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	file, err := os.OpenFile(app.blocks.BlockPath(stored.Location.BlockID), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	if _, err := file.WriteAt([]byte("X"), int64(stored.Location.StoredOffset)); err != nil {
-		t.Fatalf("corrupt block: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open block")
+	_, err = file.WriteAt([]byte("X"), testStoredOffset(t, stored.Location.StoredOffset))
+	testutil.RequireNoErrorf(t, err, "corrupt block")
+	testutil.RequireNoErrorf(t, file.Close(), "close block")
 	operation := queuedOperation("scrub-op-1", "scrub", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_Shard{
@@ -2231,35 +1787,21 @@ func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one successful scrub", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["documents_scanned"] != "1" ||
-		finished.GetProgress().GetCounters()["repair_queued"] != "1" {
-		t.Fatalf("finished operation = %#v, want scrub repair counter", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	testutil.RequireEqualf(t, finished.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "scrub operation state")
+	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["documents_scanned"], "1", "scrub documents scanned")
+	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["repair_queued"], "1", "scrub repair queued")
 	queue, err := app.GetRepairQueue(ctx, "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
-	if len(queue) != 1 ||
-		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
-		queue[0].GetDetectedAt().AsTime() != time.Unix(260, 0).UTC() {
-		t.Fatalf("repair queue = %#v, want scrub-queued repair", queue)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
+	testutil.RequireEqualf(t, len(queue), 1, "repair queue length")
+	testutil.RequireEqualf(t, queue[0].GetTarget().GetDocument().GetDocumentName(), doc.DocumentName, "repair queue document")
+	testutil.RequireEqualf(t, queue[0].GetDetectedAt().AsTime(), time.Unix(260, 0).UTC(), "repair queue detected_at")
 }
 
 func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
@@ -2274,9 +1816,7 @@ func TestReadDocumentReturnsRestorePendingDetail(t *testing.T) {
 	}, newChunkReader([][]byte{[]byte("cold bytes")})); err != nil {
 		t.Fatalf("write document: %v", err)
 	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateRestorePending, "restore requested", "restore-state-1", time.Unix(200, 0).UTC()); err != nil {
-		t.Fatalf("update restore state: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateRestorePending, "restore requested", "restore-state-1", time.Unix(200, 0).UTC()), "update restore state")
 
 	sender := &recordingReadSender{}
 	err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
@@ -2306,9 +1846,7 @@ func TestReadDocumentReturnsCryptoUnavailableDetail(t *testing.T) {
 	}, newChunkReader([][]byte{[]byte("encrypted bytes")})); err != nil {
 		t.Fatalf("write document: %v", err)
 	}
-	if err := app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCryptoUnavailable, "key unavailable", "crypto-state-1", time.Unix(201, 0).UTC()); err != nil {
-		t.Fatalf("update restore state: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCryptoUnavailable, "key unavailable", "crypto-state-1", time.Unix(201, 0).UTC()), "update restore state")
 
 	sender := &recordingReadSender{}
 	err := app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
@@ -2356,9 +1894,7 @@ func TestCleanFullReadReturnsVerifiedLocalBytes(t *testing.T) {
 	writeLocalReadVerificationDocument(t, app, doc, data)
 
 	sender := &recordingReadSender{}
-	if err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender); err != nil {
-		t.Fatalf("read document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender), "read document")
 	if !sender.sentMetadata {
 		t.Fatal("read did not send metadata")
 	}
@@ -2392,9 +1928,7 @@ func TestRangedReadVerifiesEveryTouchedFrameBeforeStreaming(t *testing.T) {
 			Length: &readLength,
 		},
 	}, sender)
-	if err != nil {
-		t.Fatalf("read ranged document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read ranged document")
 	if sender.metadata.Source != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
 		t.Fatalf("read source = %s, want local", sender.metadata.Source)
 	}
@@ -2429,9 +1963,7 @@ func TestMissingLocalBytesFailsBeforeSendingMetadata(t *testing.T) {
 	doc := testDocumentIdentity()
 	data := []byte("missing local read bytes")
 	stored := writeLocalReadVerificationDocument(t, app, doc, data)
-	if err := os.Remove(app.blocks.BlockPath(stored.Location.BlockID)); err != nil {
-		t.Fatalf("remove block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove block")
 
 	sender := &recordingReadSender{}
 	err := app.ReadDocument(context.Background(), api.ReadDocumentRequest{Identity: doc}, sender)
@@ -2464,14 +1996,10 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	}
 
 	first, err := app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("first write: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "first write")
 	appliedIndex := app.authority.AppliedIndex()
 	second, err := app.WriteDocument(context.Background(), init, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("replay write: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "replay write")
 	if !second.IdempotentReplay {
 		t.Fatal("second write was not marked as idempotent replay")
 	}
@@ -2485,9 +2013,7 @@ func TestIdempotentReplayReturnsExistingDocumentWithoutAppending(t *testing.T) {
 	transaction, err := app.GetTransaction(context.Background(), api.GetTransactionRequest{
 		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
 	})
-	if err != nil {
-		t.Fatalf("get transaction: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get transaction")
 	if transaction.DocumentCount != 1 {
 		t.Fatalf("document count = %d, want replay to count once", transaction.DocumentCount)
 	}
@@ -2534,30 +2060,22 @@ func TestRunQueuedOperationsOnceAppliesDocumentTombstone(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want one success", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetFinishedAt() == nil ||
 		finished.GetProgress().GetWorkUnitsCompleted() != 1 {
 		t.Fatalf("finished operation = %#v, want succeeded", finished)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if stored.LifecycleState != metastore.LifecycleStateTombstoned ||
 		stored.TombstoneOperationID != operation.GetOperationId() {
 		t.Fatalf("stored document = %#v, want tombstoned by operation", stored)
@@ -2570,137 +2088,128 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 	app.now = fixedClock(time.Unix(200, 0).UTC())
 	doc := testDocumentIdentity()
 	data := []byte("inspect me")
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{data})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 
 	adminDoc, err := app.GetAdminDocument(ctx, doc)
-	if err != nil {
-		t.Fatalf("get admin document: %v", err)
-	}
-	if adminDoc.GetShardId() != "local" ||
-		adminDoc.GetLength() != uint64(len(data)) ||
-		!bytes.Equal(adminDoc.GetLogicalSha256(), stored.LogicalSHA256[:]) ||
-		adminDoc.GetDocument().GetTenantId() != doc.TenantID ||
-		adminDoc.GetDocument().GetTransactionId() != doc.TransactionID ||
-		adminDoc.GetDocument().GetDocumentName() != doc.DocumentName ||
-		len(adminDoc.GetBlockIds()) != 1 ||
-		adminDoc.GetBlockIds()[0] != stored.Location.BlockID ||
-		adminDoc.GetRepairRequired() {
-		t.Fatalf("admin document = %#v, want stored physical metadata", adminDoc)
-	}
+	testutil.RequireNoErrorf(t, err, "get admin document")
+	requireAdminDocument(t, adminDoc, doc, stored, data)
 
 	adminBlock, err := app.GetAdminBlock(ctx, api.BlockTarget{ShardID: "local", BlockID: stored.Location.BlockID})
-	if err != nil {
-		t.Fatalf("get admin block: %v", err)
-	}
-	if adminBlock.GetShardId() != "local" ||
-		adminBlock.GetBlockId() != stored.Location.BlockID ||
-		adminBlock.GetLength() != blockstore.HeaderLength+uint64(len(data)) ||
-		len(adminBlock.GetChecksum()) != sha256.Size ||
-		len(adminBlock.GetReplicaMemberIds()) != 1 ||
-		adminBlock.GetReplicaMemberIds()[0] != "local" ||
-		adminBlock.GetBackendObjectKey() != "blocks/"+stored.Location.BlockID+".blk" {
-		t.Fatalf("admin block = %#v, want local block metadata", adminBlock)
-	}
+	testutil.RequireNoErrorf(t, err, "get admin block")
+	requireAdminBlock(t, adminBlock, stored.Location.BlockID, data)
 
 	shard, err := app.GetAdminShard(ctx, "local")
-	if err != nil {
-		t.Fatalf("get admin shard: %v", err)
-	}
-	if shard.GetShardId() != "local" ||
-		shard.GetLeaderMemberId() != "local" ||
-		len(shard.GetVoterMemberIds()) != 1 ||
-		shard.GetVoterMemberIds()[0] != "local" ||
-		shard.GetCommittedIndex() == 0 ||
-		shard.GetAppliedIndex() != shard.GetCommittedIndex() {
-		t.Fatalf("admin shard = %#v, want local shard metadata", shard)
-	}
+	testutil.RequireNoErrorf(t, err, "get admin shard")
+	requireAdminShard(t, shard)
 
 	member, err := app.GetAdminMember(ctx, "local")
-	if err != nil {
-		t.Fatalf("get admin member: %v", err)
-	}
-	if member.GetStorageMemberId() != "local" ||
-		member.GetCellId() != "local" ||
-		member.GetState() != adminv1.MemberState_MEMBER_STATE_ONLINE ||
-		member.GetBytesUsed() == 0 ||
-		member.GetBytesCapacity() == 0 ||
-		member.GetLastSeenAt().AsTime() != time.Unix(200, 0).UTC() {
-		t.Fatalf("admin member = %#v, want local member metadata", member)
-	}
+	testutil.RequireNoErrorf(t, err, "get admin member")
+	requireAdminMember(t, member, time.Unix(200, 0).UTC())
 
 	summary, err := app.GetAdminClusterSummary(ctx)
-	if err != nil {
-		t.Fatalf("get admin cluster summary: %v", err)
-	}
-	if summary.GetShardCount() != 1 ||
-		summary.GetStorageMemberCount() != 1 ||
-		summary.GetLocalBytesUsed() == 0 ||
-		summary.GetLocalBytesCapacity() == 0 {
-		t.Fatalf("cluster summary = %#v, want local single-member summary", summary)
-	}
+	testutil.RequireNoErrorf(t, err, "get admin cluster summary")
+	requireAdminClusterSummary(t, summary)
 
 	runway, err := app.GetAdminCapacityRunway(ctx, "")
-	if err != nil {
-		t.Fatalf("get admin capacity runway: %v", err)
-	}
-	if runway.GetCapacityProfileId() != "local-non-production" ||
-		runway.GetUsableBytesRemaining() == 0 ||
-		runway.GetEstimatedBytesPerDay() != 0 ||
-		runway.GetRunwayDays() != 0 ||
-		len(runway.GetWarnings()) == 0 {
-		t.Fatalf("capacity runway = %#v, want non-production capacity warning", runway)
-	}
+	testutil.RequireNoErrorf(t, err, "get admin capacity runway")
+	requireAdminCapacityRunway(t, runway)
+}
+
+func requireAdminDocument(t *testing.T, adminDoc *adminv1.AdminDocument, doc identity.Document, stored metastore.Document, data []byte) {
+	t.Helper()
+	testutil.RequireEqualf(t, adminDoc.GetShardId(), "local", "admin document shard")
+	testutil.RequireEqualf(t, adminDoc.GetLength(), uint64(len(data)), "admin document length")
+	testutil.RequireTruef(t, bytes.Equal(adminDoc.GetLogicalSha256(), stored.LogicalSHA256[:]), "admin document checksum")
+	testutil.RequireEqualf(t, adminDoc.GetDocument().GetTenantId(), doc.TenantID, "admin document tenant")
+	testutil.RequireEqualf(t, adminDoc.GetDocument().GetTransactionId(), doc.TransactionID, "admin document transaction")
+	testutil.RequireEqualf(t, adminDoc.GetDocument().GetDocumentName(), doc.DocumentName, "admin document name")
+	testutil.RequireEqualf(t, len(adminDoc.GetBlockIds()), 1, "admin document block count")
+	testutil.RequireEqualf(t, adminDoc.GetBlockIds()[0], stored.Location.BlockID, "admin document block id")
+	testutil.RequireFalsef(t, adminDoc.GetRepairRequired(), "admin document repair required")
+}
+
+func requireAdminBlock(t *testing.T, block *adminv1.Block, blockID string, data []byte) {
+	t.Helper()
+	testutil.RequireEqualf(t, block.GetShardId(), "local", "admin block shard")
+	testutil.RequireEqualf(t, block.GetBlockId(), blockID, "admin block id")
+	testutil.RequireEqualf(t, block.GetLength(), blockstore.HeaderLength+uint64(len(data)), "admin block length")
+	testutil.RequireEqualf(t, len(block.GetChecksum()), sha256.Size, "admin block checksum length")
+	testutil.RequireEqualf(t, len(block.GetReplicaMemberIds()), 1, "admin block replica count")
+	testutil.RequireEqualf(t, block.GetReplicaMemberIds()[0], "local", "admin block replica")
+	testutil.RequireEqualf(t, block.GetBackendObjectKey(), "blocks/"+blockID+".blk", "admin block backend key")
+}
+
+func requireAdminShard(t *testing.T, shard *adminv1.Shard) {
+	t.Helper()
+	testutil.RequireEqualf(t, shard.GetShardId(), "local", "admin shard id")
+	testutil.RequireEqualf(t, shard.GetLeaderMemberId(), "local", "admin shard leader")
+	testutil.RequireEqualf(t, len(shard.GetVoterMemberIds()), 1, "admin shard voter count")
+	testutil.RequireEqualf(t, shard.GetVoterMemberIds()[0], "local", "admin shard voter")
+	testutil.RequireTruef(t, shard.GetCommittedIndex() != 0, "admin shard committed index is zero")
+	testutil.RequireEqualf(t, shard.GetAppliedIndex(), shard.GetCommittedIndex(), "admin shard applied index")
+}
+
+func requireAdminMember(t *testing.T, member *adminv1.StorageMember, lastSeen time.Time) {
+	t.Helper()
+	testutil.RequireEqualf(t, member.GetStorageMemberId(), "local", "member id")
+	testutil.RequireEqualf(t, member.GetCellId(), "local", "member cell")
+	testutil.RequireEqualf(t, member.GetState(), adminv1.MemberState_MEMBER_STATE_ONLINE, "member state")
+	testutil.RequireTruef(t, member.GetBytesUsed() != 0, "member bytes used is zero")
+	testutil.RequireTruef(t, member.GetBytesCapacity() != 0, "member bytes capacity is zero")
+	testutil.RequireEqualf(t, member.GetLastSeenAt().AsTime(), lastSeen, "member last seen")
+}
+
+func requireAdminClusterSummary(t *testing.T, summary *adminv1.ClusterSummary) {
+	t.Helper()
+	testutil.RequireEqualf(t, summary.GetShardCount(), uint32(1), "summary shard count")
+	testutil.RequireEqualf(t, summary.GetStorageMemberCount(), uint32(1), "summary member count")
+	testutil.RequireTruef(t, summary.GetLocalBytesUsed() != 0, "summary bytes used is zero")
+	testutil.RequireTruef(t, summary.GetLocalBytesCapacity() != 0, "summary bytes capacity is zero")
+}
+
+func requireAdminCapacityRunway(t *testing.T, runway *adminv1.CapacityRunway) {
+	t.Helper()
+	testutil.RequireEqualf(t, runway.GetCapacityProfileId(), "local-non-production", "capacity profile id")
+	testutil.RequireTruef(t, runway.GetUsableBytesRemaining() != 0, "capacity usable bytes remaining is zero")
+	testutil.RequireEqualf(t, runway.GetEstimatedBytesPerDay(), uint64(0), "capacity estimated bytes per day")
+	testutil.RequireEqualf(t, runway.GetRunwayDays(), uint32(0), "capacity runway days")
+	testutil.RequireTruef(t, len(runway.GetWarnings()) != 0, "capacity warnings missing")
 }
 
 func TestLocalMemberCordonStatePersists(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	member, err := app.CordonMember(ctx, api.MemberMutationRequest{
 		OperationID:   "cordon-1",
 		StorageMember: "local",
 		Reason:        "maintenance",
 	})
-	if err != nil {
-		t.Fatalf("cordon member: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "cordon member")
 	if !member.GetCordoned() {
 		t.Fatalf("member = %#v, want cordoned", member)
 	}
-	if err := app.Close(); err != nil {
-		t.Fatalf("close app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.Close(), "close app")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen app: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen app")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	member, err = reopened.GetAdminMember(ctx, "local")
-	if err != nil {
-		t.Fatalf("get reopened member: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get reopened member")
 	if !member.GetCordoned() {
 		t.Fatalf("reopened member = %#v, want persisted cordon", member)
 	}
 	safety, err := reopened.GetEvictionSafety(ctx, "local")
-	if err != nil {
-		t.Fatalf("get eviction safety: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get eviction safety")
 	if safety.GetSafeToEvict() || len(safety.GetWarnings()) == 0 {
 		t.Fatalf("eviction safety = %#v, want unsafe single-member warning", safety)
 	}
@@ -2708,9 +2217,7 @@ func TestLocalMemberCordonStatePersists(t *testing.T) {
 		OperationID:   "uncordon-1",
 		StorageMember: "local",
 	})
-	if err != nil {
-		t.Fatalf("uncordon member: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "uncordon member")
 	if member.GetCordoned() {
 		t.Fatalf("member = %#v, want uncordoned", member)
 	}
@@ -2749,9 +2256,7 @@ func TestCordonedLocalMemberRejectsNewWritesButAllowsReplay(t *testing.T) {
 	requireCode(t, err, codes.FailedPrecondition)
 
 	replayed, err := app.WriteDocument(ctx, init, newChunkReader([][]byte{data}))
-	if err != nil {
-		t.Fatalf("replay existing document while cordoned: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "replay existing document while cordoned")
 	if !replayed.IdempotentReplay {
 		t.Fatalf("replay = %#v, want idempotent replay", replayed)
 	}
@@ -2761,9 +2266,7 @@ func TestLocalRecoveryReadinessFailsClosedWithoutPublishedMetadata(t *testing.T)
 	ctx := context.Background()
 	app := openTestApplication(t)
 	readiness, err := app.GetRecoveryReadiness(ctx)
-	if err != nil {
-		t.Fatalf("get recovery readiness: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get recovery readiness")
 	if readiness.GetReady() || len(readiness.GetWarnings()) < 2 {
 		t.Fatalf("readiness = %#v, want not ready with missing metadata/backend warnings", readiness)
 	}
@@ -2775,62 +2278,59 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	app.now = fixedClock(time.Unix(500, 0).UTC())
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("published metadata bytes"))
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{[]byte("published metadata bytes")})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	}, newChunkReader([][]byte{[]byte("published metadata bytes")}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(testDocumentIdentity())
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 
 	publication, err := app.PublishMetadataSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("publish metadata snapshot: %v", err)
-	}
-	if publication.DocumentCount != 1 || publication.PointerKey == "" || publication.ManifestKey == "" || publication.SnapshotKey == "" {
-		t.Fatalf("publication = %#v, want one-document publication with object keys", publication)
-	}
-	pointer, err := published.UnmarshalCurrentPointer(readBackendObject(t, ctx, backendStore, publication.PointerKey))
-	if err != nil {
-		t.Fatalf("unmarshal current pointer: %v", err)
-	}
-	if pointer.GetManifestId() != publication.Manifest.GetManifestId() ||
-		pointer.GetPublishedAt().AsTime() != app.now() {
-		t.Fatalf("pointer = %#v, want published manifest and timestamp", pointer)
-	}
+	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
+	requireSnapshotPublication(t, publication)
+	pointer, err := published.UnmarshalCurrentPointer(readBackendObject(ctx, t, backendStore, publication.PointerKey))
+	testutil.RequireNoErrorf(t, err, "unmarshal current pointer")
+	testutil.RequireEqualf(t, pointer.GetManifestId(), publication.Manifest.GetManifestId(), "published pointer manifest id")
+	testutil.RequireEqualf(t, pointer.GetPublishedAt().AsTime(), app.now(), "published pointer timestamp")
 	required := publication.Manifest.GetRequiredObjects()
-	if !hasRequiredObject(required, intent.BackendObjectKey) ||
-		!hasRequiredObject(required, intent.IndexObjectKey) ||
-		!hasRequiredObject(required, intent.EnvelopeObjectKey) {
-		t.Fatalf("required objects = %#v, want block/index/envelope refs", required)
-	}
+	requirePublishedRequiredObjects(t, required, intent)
 
 	readiness, err := app.GetRecoveryReadiness(ctx)
-	if err != nil {
-		t.Fatalf("get recovery readiness: %v", err)
-	}
-	if !readiness.GetReady() || readiness.GetLatestRestorableCheckpointAt().AsTime() != app.now() ||
-		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_NON_PRODUCTION_MODE") ||
-		!hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_MEASURED_EVIDENCE_ONLY") ||
-		hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_METADATA_EXPORT_MISSING") {
-		t.Fatalf("readiness = %#v, want non-production-ready checkpoint timestamp", readiness)
-	}
+	testutil.RequireNoErrorf(t, err, "get recovery readiness")
+	requireRecoveryReadinessReady(t, readiness, app.now())
+}
+
+func requireSnapshotPublication(t *testing.T, publication published.SnapshotPublication) {
+	t.Helper()
+	testutil.RequireEqualf(t, publication.DocumentCount, 1, "publication document count")
+	testutil.RequireTruef(t, publication.PointerKey != "", "publication pointer key is empty")
+	testutil.RequireTruef(t, publication.ManifestKey != "", "publication manifest key is empty")
+	testutil.RequireTruef(t, publication.SnapshotKey != "", "publication snapshot key is empty")
+}
+
+func requirePublishedRequiredObjects(t *testing.T, required []*publishedv1.ObjectRef, intent metastore.UploadIntent) {
+	t.Helper()
+	testutil.RequireTruef(t, hasRequiredObject(required, intent.BackendObjectKey), "required block object missing")
+	testutil.RequireTruef(t, hasRequiredObject(required, intent.IndexObjectKey), "required index object missing")
+	testutil.RequireTruef(t, hasRequiredObject(required, intent.EnvelopeObjectKey), "required envelope object missing")
+}
+
+func requireRecoveryReadinessReady(t *testing.T, readiness *adminv1.RecoveryReadiness, expectedCheckpoint time.Time) {
+	t.Helper()
+	testutil.RequireTruef(t, readiness.GetReady(), "readiness ready = false")
+	testutil.RequireEqualf(t, readiness.GetLatestRestorableCheckpointAt().AsTime(), expectedCheckpoint, "latest restorable checkpoint")
+	testutil.RequireTruef(t, hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_NON_PRODUCTION_MODE"), "non-production warning missing")
+	testutil.RequireTruef(t, hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_MEASURED_EVIDENCE_ONLY"), "measured evidence warning missing")
+	testutil.RequireFalsef(t, hasWarningCode(readiness.GetWarnings(), "SCRAP_DR_METADATA_EXPORT_MISSING"), "metadata export missing warning present")
 }
 
 func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *testing.T) {
@@ -2839,25 +2339,19 @@ func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *tes
 	app.now = fixedClock(time.Unix(600, 0).UTC())
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("copy verify bytes"))
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{[]byte("copy verify bytes")})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	}, newChunkReader([][]byte{[]byte("copy verify bytes")}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := app.PublishMetadataSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("publish metadata snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
 
 	store := openTestOperationStore(t)
 	operation := queuedOperation("copy-verify-op-1", "copy-verify", []*adminv1.Target{
@@ -2867,32 +2361,28 @@ func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *tes
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one successful copy verification", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["manifest_id"] != publication.Manifest.GetManifestId() ||
-		finished.GetProgress().GetCounters()["verified_objects"] == "" ||
-		finished.GetProgress().GetCounters()["verified_block_objects"] != "1" ||
-		finished.GetProgress().GetCounters()["verified_index_objects"] != "1" ||
-		finished.GetProgress().GetCounters()["verified_envelope_objects"] != "1" ||
-		finished.GetProgress().GetCounters()["recovery_report_kind"] != recoveryEvidenceReportKind ||
-		finished.GetProgress().GetCounters()["rto_promise"] != recoveryNoFormalPromise ||
-		finished.GetProgress().GetCounters()["rpo_promise"] != recoveryNoFormalPromise {
-		t.Fatalf("finished operation = %#v, want successful verified checkpoint", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	requireVerifiedCheckpointOperation(t, finished, publication.Manifest.GetManifestId())
+}
+
+func requireVerifiedCheckpointOperation(t *testing.T, operation *adminv1.Operation, manifestID string) {
+	t.Helper()
+	counters := operation.GetProgress().GetCounters()
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "operation state")
+	testutil.RequireEqualf(t, counters["manifest_id"], manifestID, "manifest id counter")
+	testutil.RequireTruef(t, counters["verified_objects"] != "", "verified objects counter is empty")
+	testutil.RequireEqualf(t, counters["verified_block_objects"], "1", "verified block objects")
+	testutil.RequireEqualf(t, counters["verified_index_objects"], "1", "verified index objects")
+	testutil.RequireEqualf(t, counters["verified_envelope_objects"], "1", "verified envelope objects")
+	testutil.RequireEqualf(t, counters["recovery_report_kind"], recoveryEvidenceReportKind, "recovery report kind")
+	testutil.RequireEqualf(t, counters["rto_promise"], recoveryNoFormalPromise, "RTO promise")
+	testutil.RequireEqualf(t, counters["rpo_promise"], recoveryNoFormalPromise, "RPO promise")
 }
 
 func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T) {
@@ -2901,34 +2391,27 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 	source.now = fixedClock(time.Unix(700, 0).UTC())
 	source.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("metadata restore bytes"))
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	source.SetBackendStore(backendStore)
 	doc := testDocumentIdentity()
-	if _, err := source.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err = source.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{[]byte("metadata restore bytes")})); err != nil {
-		t.Fatalf("write source document: %v", err)
-	}
+	}, newChunkReader([][]byte{[]byte("metadata restore bytes")}))
+	testutil.RequireNoErrorf(t, err, "write source document")
 	completedAt := time.Unix(710, 0).UTC()
 	source.now = fixedClock(completedAt)
-	if _, err := source.CompleteTransaction(ctx, api.CompleteTransactionRequest{
+	_, err = source.CompleteTransaction(ctx, api.CompleteTransactionRequest{
 		Transaction: identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID},
 		Tags:        map[string]string{"closed_by": "metadata-restore-test"},
-	}); err != nil {
-		t.Fatalf("complete source transaction: %v", err)
-	}
-	if _, err := source.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	})
+	testutil.RequireNoErrorf(t, err, "complete source transaction")
+	_, err = source.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := source.PublishMetadataSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("publish metadata snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
 
 	restoredApp := openTestApplication(t)
 	restoredApp.now = fixedClock(time.Unix(701, 0).UTC())
@@ -2941,63 +2424,60 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := restoredApp.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one successful metadata restore", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["documents"] != "1" ||
-		finished.GetProgress().GetCounters()["transactions"] != "1" ||
-		finished.GetProgress().GetCounters()["upload_intents"] != "1" {
-		t.Fatalf("finished operation = %#v, want imported document, transaction, and upload intent", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	requireMetadataRestoreFinished(t, finished)
 
 	restored, err := restoredApp.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head restored document: %v", err)
-	}
-	if restored.Availability != metastore.AvailabilityCold ||
-		restored.RestoreState != metastore.RestoreStateCold ||
-		restored.UploadState != metastore.UploadStateUploaded {
-		t.Fatalf("restored document state = %#v, want cold uploaded metadata", restored)
-	}
+	testutil.RequireNoErrorf(t, err, "head restored document")
+	requireColdUploadedDocument(t, restored)
 	intent, err := restoredApp.metadata.GetUploadIntent(restored.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get restored upload intent: %v", err)
-	}
-	if intent.State != metastore.UploadStateUploaded ||
-		intent.BackendObjectKey == "" ||
-		intent.IndexObjectKey == "" ||
-		intent.EnvelopeObjectKey == "" {
-		t.Fatalf("restored intent = %#v, want uploaded backend/index/envelope objects", intent)
-	}
+	testutil.RequireNoErrorf(t, err, "get restored upload intent")
+	requireUploadedIntentObjects(t, intent)
 	transaction, err := restoredApp.metadata.GetTransaction(identity.Transaction{TenantID: doc.TenantID, TransactionID: doc.TransactionID})
-	if err != nil {
-		t.Fatalf("get restored transaction: %v", err)
-	}
-	if transaction.State != metastore.TransactionStateCompleted ||
-		transaction.CompletedAt == nil ||
-		!transaction.CompletedAt.Equal(completedAt) ||
-		transaction.Tags["closed_by"] != "metadata-restore-test" {
-		t.Fatalf("restored transaction = %#v, want completed transaction state", transaction)
-	}
+	testutil.RequireNoErrorf(t, err, "get restored transaction")
+	requireRestoredTransaction(t, transaction, completedAt)
 	err = restoredApp.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)
 	detail := requireRestorePendingDetail(t, err)
-	if detail.GetRestoreState() != "cold" {
-		t.Fatalf("restore detail = %#v, want cold restore state", detail)
-	}
+	testutil.RequireEqualf(t, detail.GetRestoreState(), "cold", "restore detail state")
+}
+
+func requireMetadataRestoreFinished(t *testing.T, operation *adminv1.Operation) {
+	t.Helper()
+	counters := operation.GetProgress().GetCounters()
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "metadata restore state")
+	testutil.RequireEqualf(t, counters["documents"], "1", "metadata restore document count")
+	testutil.RequireEqualf(t, counters["transactions"], "1", "metadata restore transaction count")
+	testutil.RequireEqualf(t, counters["upload_intents"], "1", "metadata restore upload intent count")
+}
+
+func requireColdUploadedDocument(t *testing.T, document metastore.Document) {
+	t.Helper()
+	testutil.RequireEqualf(t, document.Availability, metastore.AvailabilityCold, "document availability")
+	testutil.RequireEqualf(t, document.RestoreState, metastore.RestoreStateCold, "document restore state")
+	testutil.RequireEqualf(t, document.UploadState, metastore.UploadStateUploaded, "document upload state")
+}
+
+func requireUploadedIntentObjects(t *testing.T, intent metastore.UploadIntent) {
+	t.Helper()
+	testutil.RequireEqualf(t, intent.State, metastore.UploadStateUploaded, "upload intent state")
+	testutil.RequireTruef(t, intent.BackendObjectKey != "", "backend object key is empty")
+	testutil.RequireTruef(t, intent.IndexObjectKey != "", "index object key is empty")
+	testutil.RequireTruef(t, intent.EnvelopeObjectKey != "", "envelope object key is empty")
+}
+
+func requireRestoredTransaction(t *testing.T, transaction metastore.Transaction, completedAt time.Time) {
+	t.Helper()
+	testutil.RequireEqualf(t, transaction.State, metastore.TransactionStateCompleted, "transaction state")
+	testutil.RequireNotNilf(t, transaction.CompletedAt, "transaction completed_at")
+	testutil.RequireTruef(t, transaction.CompletedAt.Equal(completedAt), "completed_at = %v, want %v", transaction.CompletedAt, completedAt)
+	testutil.RequireEqualf(t, transaction.Tags["closed_by"], "metadata-restore-test", "transaction closed_by tag")
 }
 
 func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
@@ -3011,21 +2491,15 @@ func TestRunQueuedOperationsOnceFailsNotReadyDROperation(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("operation result = %#v, want one failed DR operation", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
 		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" {
 		t.Fatalf("finished operation = %#v, want DR drill failure", finished)
@@ -3038,25 +2512,19 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 	app.now = fixedClock(time.Unix(800, 0).UTC())
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("dry-run drill bytes"))
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{[]byte("dry-run drill bytes")})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	}, newChunkReader([][]byte{[]byte("dry-run drill bytes")}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := app.PublishMetadataSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("publish metadata snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
 	store := openTestOperationStore(t)
 	operation := queuedOperation("dr-drill-dry-run-1", "dr-drill", []*adminv1.Target{
 		{
@@ -3066,28 +2534,24 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 		},
 	})
 	operation.DryRun = true
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one dry-run success", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["documents"] != "1" ||
-		finished.GetProgress().GetCounters()["upload_intents"] != "1" ||
-		finished.GetProgress().GetCounters()["blocks_restored"] != "0" ||
-		finished.GetProgress().GetCounters()["recovery_report_kind"] != recoveryEvidenceReportKind {
-		t.Fatalf("finished operation = %#v, want dry-run checkpoint verification", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	requireDryRunDRFinished(t, finished)
+}
+
+func requireDryRunDRFinished(t *testing.T, operation *adminv1.Operation) {
+	t.Helper()
+	counters := operation.GetProgress().GetCounters()
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "dry-run DR state")
+	testutil.RequireEqualf(t, counters["documents"], "1", "dry-run DR document count")
+	testutil.RequireEqualf(t, counters["upload_intents"], "1", "dry-run DR upload intent count")
+	testutil.RequireEqualf(t, counters["blocks_restored"], "0", "dry-run DR restored blocks")
+	testutil.RequireEqualf(t, counters["recovery_report_kind"], recoveryEvidenceReportKind, "dry-run DR report kind")
 }
 
 func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
@@ -3097,25 +2561,19 @@ func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 	app.now = fixedClock(time.Unix(801, 0).UTC())
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len("scratch drill bytes"))
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
 		Identity:         testDocumentIdentity(),
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 		PriorityClass:    scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 		CreatedByService: "billing-etl",
-	}, newChunkReader([][]byte{[]byte("scratch drill bytes")})); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
-		t.Fatalf("run backend upload once: %v", err)
-	}
+	}, newChunkReader([][]byte{[]byte("scratch drill bytes")}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := app.PublishMetadataSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("publish metadata snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
 	store := openTestOperationStore(t)
 	operation := queuedOperation("dr-drill-op-2", "dr-drill", []*adminv1.Target{
 		{
@@ -3124,33 +2582,29 @@ func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one successful DR drill", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["documents"] != "1" ||
-		finished.GetProgress().GetCounters()["upload_intents"] != "1" ||
-		finished.GetProgress().GetCounters()["blocks_restored"] != "1" ||
-		finished.GetProgress().GetCounters()["verified_block_objects"] != "1" ||
-		finished.GetProgress().GetCounters()["verified_index_objects"] != "1" ||
-		finished.GetProgress().GetCounters()["verified_envelope_objects"] != "1" ||
-		finished.GetProgress().GetCounters()["recovery_report_kind"] != recoveryEvidenceReportKind ||
-		finished.GetProgress().GetCounters()["rto_promise"] != recoveryNoFormalPromise ||
-		finished.GetProgress().GetCounters()["rpo_promise"] != recoveryNoFormalPromise {
-		t.Fatalf("finished operation = %#v, want scratch drill restore counters", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	requireDRDrillFinished(t, finished)
+}
+
+func requireDRDrillFinished(t *testing.T, operation *adminv1.Operation) {
+	t.Helper()
+	counters := operation.GetProgress().GetCounters()
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "DR drill state")
+	testutil.RequireEqualf(t, counters["documents"], "1", "DR drill document count")
+	testutil.RequireEqualf(t, counters["upload_intents"], "1", "DR drill upload intent count")
+	testutil.RequireEqualf(t, counters["blocks_restored"], "1", "DR drill restored blocks")
+	testutil.RequireEqualf(t, counters["verified_block_objects"], "1", "DR drill verified block objects")
+	testutil.RequireEqualf(t, counters["verified_index_objects"], "1", "DR drill verified index objects")
+	testutil.RequireEqualf(t, counters["verified_envelope_objects"], "1", "DR drill verified envelope objects")
+	testutil.RequireEqualf(t, counters["recovery_report_kind"], recoveryEvidenceReportKind, "DR drill report kind")
+	testutil.RequireEqualf(t, counters["rto_promise"], recoveryNoFormalPromise, "DR drill RTO promise")
+	testutil.RequireEqualf(t, counters["rpo_promise"], recoveryNoFormalPromise, "DR drill RPO promise")
 }
 
 func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactMissing(t *testing.T) {
@@ -3158,10 +2612,8 @@ func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactMissing(t *testi
 	app := openTestApplication(t)
 	app.now = fixedClock(time.Unix(802, 0).UTC())
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
-	publication, _, intent := publishDRDrillTestDocument(t, ctx, app, backendStore, []byte("missing artifact drill bytes"))
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	publication, intent := publishDRDrillTestDocument(ctx, t, app, backendStore, []byte("missing artifact drill bytes"))
 	app.SetBackendStore(&faultingBackendStore{
 		Store:       backendStore,
 		missingHead: map[string]bool{intent.EnvelopeObjectKey: true},
@@ -3175,21 +2627,15 @@ func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactMissing(t *testi
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("operation result = %#v, want one failed DR drill", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
 		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" ||
 		!strings.Contains(finished.GetLastError().GetMessage(), backend.ErrNotFound.Error()) {
@@ -3202,10 +2648,8 @@ func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactCorrupt(t *testi
 	app := openTestApplication(t)
 	app.now = fixedClock(time.Unix(803, 0).UTC())
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
-	publication, _, intent := publishDRDrillTestDocument(t, ctx, app, backendStore, []byte("corrupt artifact drill bytes"))
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	publication, intent := publishDRDrillTestDocument(ctx, t, app, backendStore, []byte("corrupt artifact drill bytes"))
 	app.SetBackendStore(&faultingBackendStore{
 		Store:      backendStore,
 		readErrors: map[string]error{intent.IndexObjectKey: backend.ErrChecksumMismatch},
@@ -3219,21 +2663,15 @@ func TestRunQueuedOperationsOnceDRDrillFailsWhenRequiredArtifactCorrupt(t *testi
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("operation result = %#v, want one failed DR drill", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
 		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" ||
 		!strings.Contains(finished.GetLastError().GetMessage(), backend.ErrChecksumMismatch.Error()) {
@@ -3248,10 +2686,8 @@ func TestRunQueuedOperationsOnceDRDrillFailsWhenKeyMaterialMissing(t *testing.T)
 	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
 	app.SetEnvelopeTransit(transit, "transit/backend")
 	backendStore, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
-	publication, _, _ := publishDRDrillTestDocument(t, ctx, app, backendStore, []byte("missing key material drill bytes"))
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	publication, _ := publishDRDrillTestDocument(ctx, t, app, backendStore, []byte("missing key material drill bytes"))
 	transit.SetMissingKey("transit/backend", true)
 
 	store := openTestOperationStore(t)
@@ -3262,21 +2698,15 @@ func TestRunQueuedOperationsOnceDRDrillFailsWhenKeyMaterialMissing(t *testing.T)
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("operation result = %#v, want one failed DR drill", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
 		finished.GetLastError().GetCode() != "SCRAP_DR_DRILL_FAILED" ||
 		!strings.Contains(finished.GetLastError().GetMessage(), cryptoenv.ErrKeyMaterialUnavailable.Error()) {
@@ -3295,30 +2725,22 @@ func TestRunQueuedOperationsOnceFailsUnsafeDrainInSingleMemberMode(t *testing.T)
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 0 || result.Failed != 1 {
 		t.Fatalf("operation result = %#v, want one failed drain", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
 		finished.GetLastError().GetCode() != "SCRAP_DRAIN_UNSAFE" ||
 		len(finished.GetWarnings()) == 0 {
 		t.Fatalf("finished operation = %#v, want unsafe drain failure with warnings", finished)
 	}
 	member, err := app.GetAdminMember(ctx, "local")
-	if err != nil {
-		t.Fatalf("get member: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get member")
 	if member.GetState() == adminv1.MemberState_MEMBER_STATE_DRAINING || member.GetCordoned() {
 		t.Fatalf("member = %#v, want failed drain to leave local member online and uncordoned", member)
 	}
@@ -3336,30 +2758,22 @@ func TestRunQueuedOperationsOnceDryRunDrainDoesNotMutateMember(t *testing.T) {
 		},
 	})
 	operation.DryRun = true
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want dry-run success", result)
 	}
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
 	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
 		finished.GetProgress().GetWorkUnitsCompleted() != 1 ||
 		len(finished.GetWarnings()) == 0 {
 		t.Fatalf("finished operation = %#v, want dry-run success with safety warning", finished)
 	}
 	member, err := app.GetAdminMember(ctx, "local")
-	if err != nil {
-		t.Fatalf("get member: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get member")
 	if member.GetState() == adminv1.MemberState_MEMBER_STATE_DRAINING || member.GetCordoned() {
 		t.Fatalf("member = %#v, want dry-run drain to leave local member online and uncordoned", member)
 	}
@@ -3382,38 +2796,34 @@ func TestRunQueuedOperationsOnceCapacityOverrideRecordsBoundedEvidence(t *testin
 		"scrap.capacity_override_expires_at": "2026-05-23T13:00:00Z",
 		"scrap.capacity_override_reason":     "incident INC-42",
 	}
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want one successful capacity override dry-run", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := store.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get operation: %v", err)
-	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetLastError() != nil ||
-		finished.GetProgress().GetCounters()["capacity_profile_id"] != "production-a" ||
-		finished.GetProgress().GetCounters()["reason"] != "incident INC-42" ||
-		!hasWarningCode(finished.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY") {
-		t.Fatalf("finished operation = %#v, want recorded bounded capacity override evidence", finished)
-	}
+	testutil.RequireNoErrorf(t, err, "get operation")
+	requireCapacityOverrideFinished(t, finished)
 	events, err := store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
-	if len(events) != 1 ||
-		events[0].GetEventType() != "capacity_override_completed" ||
-		events[0].GetOperationType() != "capacity-override" ||
-		events[0].GetMetadata()["scrap.capacity_override_reason"] != "incident INC-42" {
-		t.Fatalf("audit events = %#v, want capacity override completion evidence", events)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
+	requireCapacityOverrideAudit(t, events)
+}
+
+func requireCapacityOverrideFinished(t *testing.T, operation *adminv1.Operation) {
+	t.Helper()
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "capacity operation state")
+	testutil.RequireNilf(t, operation.GetLastError(), "capacity operation last error")
+	testutil.RequireEqualf(t, operation.GetProgress().GetCounters()["capacity_profile_id"], "production-a", "capacity profile counter")
+	testutil.RequireEqualf(t, operation.GetProgress().GetCounters()["reason"], "incident INC-42", "capacity reason counter")
+	testutil.RequireTruef(t, hasWarningCode(operation.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY"), "capacity warning missing")
+}
+
+func requireCapacityOverrideAudit(t *testing.T, events []*adminv1.AuditEvent) {
+	t.Helper()
+	testutil.RequireEqualf(t, len(events), 1, "capacity audit event count")
+	testutil.RequireEqualf(t, events[0].GetEventType(), "capacity_override_completed", "capacity audit event type")
+	testutil.RequireEqualf(t, events[0].GetOperationType(), "capacity-override", "capacity audit operation type")
+	testutil.RequireEqualf(t, events[0].GetMetadata()["scrap.capacity_override_reason"], "incident INC-42", "capacity audit reason")
 }
 
 func TestRecoverInterruptedOperationsRequeuesRunningCapacityOverrideAfterRestart(t *testing.T) {
@@ -3422,9 +2832,7 @@ func TestRecoverInterruptedOperationsRequeuesRunningCapacityOverrideAfterRestart
 	app.now = fixedClock(time.Unix(500, 0).UTC())
 	storeDir := t.TempDir()
 	store, err := operations.Open(storeDir)
-	if err != nil {
-		t.Fatalf("open operation store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open operation store")
 	operation := queuedOperation("capacity-override-restart-op-1", "capacity-override", []*adminv1.Target{
 		{
 			Target: &adminv1.Target_CapacityProfile{
@@ -3451,56 +2859,47 @@ func TestRecoverInterruptedOperationsRequeuesRunningCapacityOverrideAfterRestart
 		{Code: "SCRAP_CAPACITY_OVERRIDE_RETRY", Message: "previous attempt was interrupted"},
 	}
 	operation.LastError = &adminv1.OperationError{Code: "SCRAP_CAPACITY_OVERRIDE_RETRYABLE", Message: "process stopped"}
-	if err := store.Put(operation); err != nil {
-		_ = store.Close()
-		t.Fatalf("put operation: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close operation store: %v", err)
-	}
+	err = store.Put(operation)
+	requireNoStoreErrorBeforeClosef(t, store, err, "put operation")
+	testutil.RequireNoErrorf(t, store.Close(), "close operation store")
 
 	reopenedStore, err := operations.Open(storeDir)
-	if err != nil {
-		t.Fatalf("reopen operation store: %v", err)
-	}
-	defer reopenedStore.Close()
+	testutil.RequireNoErrorf(t, err, "reopen operation store")
+	defer func() { testutil.RequireNoErrorf(t, reopenedStore.Close(), "close reopened store") }()
 	recovery, err := app.RecoverInterruptedOperations(ctx, reopenedStore)
-	if err != nil {
-		t.Fatalf("recover interrupted operations: %v", err)
-	}
-	if recovery.Scanned != 1 || recovery.Requeued != 1 || recovery.FailedUnsupported != 0 {
-		t.Fatalf("recovery result = %#v, want one requeued running operation", recovery)
-	}
+	testutil.RequireNoErrorf(t, err, "recover interrupted operations")
+	testutil.RequireEqualf(t, recovery.Scanned, 1, "recovery scanned count")
+	testutil.RequireEqualf(t, recovery.Requeued, 1, "recovery requeued count")
+	testutil.RequireEqualf(t, recovery.FailedUnsupported, 0, "recovery failed unsupported count")
 	recovered, err := reopenedStore.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get recovered operation: %v", err)
-	}
-	if recovered.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
-		recovered.GetProgress().GetCounters()["retry_attempt"] != "2" ||
-		recovered.GetLastError().GetCode() != "SCRAP_CAPACITY_OVERRIDE_RETRYABLE" ||
-		recovered.GetMetadata()["audit_correlation_id"] != "audit-1" ||
-		!hasWarningCode(recovered.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RETRY") ||
-		!hasWarningCode(recovered.GetWarnings(), "SCRAP_OPERATION_RESTART_REQUEUED") {
-		t.Fatalf("recovered operation = %#v, want queued retry with restart evidence preserved", recovered)
-	}
+	testutil.RequireNoErrorf(t, err, "get recovered operation")
+	requireRecoveredCapacityOverride(t, recovered)
 
 	result, err := app.RunQueuedOperationsOnce(ctx, reopenedStore)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
-	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
-		t.Fatalf("operation result = %#v, want recovered capacity override to succeed", result)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	finished, err := reopenedStore.Get(operation.GetOperationId())
-	if err != nil {
-		t.Fatalf("get finished operation: %v", err)
+	testutil.RequireNoErrorf(t, err, "get finished operation")
+	requireCapacityOverrideFinished(t, finished)
+}
+
+func requireNoStoreErrorBeforeClosef(t *testing.T, store *operations.Store, err error, format string) {
+	t.Helper()
+	if err == nil {
+		return
 	}
-	if finished.GetState() != adminv1.OperationState_OPERATION_STATE_SUCCEEDED ||
-		finished.GetProgress().GetCounters()["capacity_profile_id"] != "production-a" ||
-		finished.GetProgress().GetCounters()["reason"] != "incident INC-42" ||
-		!hasWarningCode(finished.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RECORDED_ONLY") {
-		t.Fatalf("finished operation = %#v, want recovered capacity override evidence recorded", finished)
-	}
+	_ = store.Close()
+	testutil.RequireNoErrorf(t, err, format)
+}
+
+func requireRecoveredCapacityOverride(t *testing.T, operation *adminv1.Operation) {
+	t.Helper()
+	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_QUEUED, "recovered operation state")
+	testutil.RequireEqualf(t, operation.GetProgress().GetCounters()["retry_attempt"], "2", "recovered retry counter")
+	testutil.RequireEqualf(t, operation.GetLastError().GetCode(), "SCRAP_CAPACITY_OVERRIDE_RETRYABLE", "recovered last error")
+	testutil.RequireEqualf(t, operation.GetMetadata()["audit_correlation_id"], "audit-1", "recovered audit correlation id")
+	testutil.RequireTruef(t, hasWarningCode(operation.GetWarnings(), "SCRAP_CAPACITY_OVERRIDE_RETRY"), "capacity retry warning missing")
+	testutil.RequireTruef(t, hasWarningCode(operation.GetWarnings(), "SCRAP_OPERATION_RESTART_REQUEUED"), "restart requeued warning missing")
 }
 
 func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
@@ -3529,14 +2928,10 @@ func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 			},
 		},
 	})
-	if err := store.Put(operation); err != nil {
-		t.Fatalf("put operation: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
 
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
-	if err != nil {
-		t.Fatalf("run queued operations: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run queued operations")
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want one success", result)
 	}
@@ -3555,13 +2950,9 @@ func TestRunQueuedOperationsOnceAppliesTransactionTombstone(t *testing.T) {
 func openTestApplication(t *testing.T) *Application {
 	t.Helper()
 	app, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	t.Cleanup(func() {
-		if err := app.Close(); err != nil {
-			t.Fatalf("close app: %v", err)
-		}
+		testutil.RequireNoErrorf(t, app.Close(), "close app")
 	})
 	return app
 }
@@ -3569,13 +2960,9 @@ func openTestApplication(t *testing.T) *Application {
 func openTestOperationStore(t *testing.T) *operations.Store {
 	t.Helper()
 	store, err := operations.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open operation store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open operation store")
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close operation store: %v", err)
-		}
+		testutil.RequireNoErrorf(t, store.Close(), "close operation store")
 	})
 	return store
 }
@@ -3684,10 +3071,9 @@ func writeInitForCrashBoundary(doc identity.Document, data []byte, idempotencyKe
 
 func appendPrepareLogTail(t *testing.T, dir string, data []byte) {
 	t.Helper()
+	// #nosec G304 -- the path is built under the test-owned application directory.
 	file, err := os.OpenFile(filepath.Join(dir, prepareLogName), os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		t.Fatalf("open prepare log for tail append: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open prepare log for tail append")
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
 		t.Fatalf("append prepare log tail: %v", err)
@@ -3696,9 +3082,7 @@ func appendPrepareLogTail(t *testing.T, dir string, data []byte) {
 		_ = file.Close()
 		t.Fatalf("sync prepare log tail: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close prepare log tail: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close prepare log tail")
 }
 
 func writeLocalReadVerificationDocument(t *testing.T, app *Application, doc identity.Document, data []byte) metastore.Document {
@@ -3712,19 +3096,15 @@ func writeLocalReadVerificationDocument(t *testing.T, app *Application, doc iden
 		t.Fatalf("write document: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	return stored
 }
 
 func corruptStoredByte(t *testing.T, app *Application, record blockstore.Record, offset uint64) {
 	t.Helper()
 	file, err := os.OpenFile(app.blocks.BlockPath(record.BlockID), os.O_RDWR, 0)
-	if err != nil {
-		t.Fatalf("open block: %v", err)
-	}
-	storedOffset := int64(record.StoredOffset + offset)
+	testutil.RequireNoErrorf(t, err, "open block")
+	storedOffset := testStoredOffset(t, record.StoredOffset+offset)
 	buf := []byte{0}
 	if _, err := file.ReadAt(buf, storedOffset); err != nil {
 		_ = file.Close()
@@ -3735,17 +3115,20 @@ func corruptStoredByte(t *testing.T, app *Application, record blockstore.Record,
 		_ = file.Close()
 		t.Fatalf("corrupt block: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close block")
+}
+
+func testStoredOffset(t *testing.T, offset uint64) int64 {
+	t.Helper()
+	got, err := safeconv.Uint64ToInt64("stored offset", offset)
+	testutil.RequireNoErrorf(t, err, "convert stored offset")
+	return got
 }
 
 func writeDocumentForProjectionRebuild(t *testing.T, dir string, doc identity.Document, data []byte) (*Application, metastore.Document) {
 	t.Helper()
 	app, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open app")
 	if _, err := app.WriteDocument(context.Background(), api.WriteDocumentInit{
 		Identity:         doc,
 		DocumentClass:    scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
@@ -3772,9 +3155,7 @@ func assertUnreadableRepairRef(t *testing.T, app *Application, doc identity.Docu
 		t.Fatalf("sent metadata=%v chunks=%d for unreadable repair ref", sender.sentMetadata, len(sender.chunks))
 	}
 	queue, err := app.GetRepairQueue(context.Background(), "local")
-	if err != nil {
-		t.Fatalf("get repair queue: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 1 ||
 		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
 		!strings.Contains(queue[0].GetReason(), blockID) {
@@ -3851,7 +3232,7 @@ func (p *recordingPreparePeer) PrepareDocument(ctx context.Context, request repl
 	return replication.ReceiptFromPreparedDocument(p.memberID, request.Document), nil
 }
 
-func (p *recordingPreparePeer) ReadReplica(ctx context.Context, replica blockstore.ReplicaRef, writer io.Writer) error {
+func (p *recordingPreparePeer) ReadReplica(ctx context.Context, _ blockstore.ReplicaRef, writer io.Writer) error {
 	p.repairReadCount++
 	if err := ctx.Err(); err != nil {
 		return err
@@ -3907,15 +3288,11 @@ func (c staticFreshnessChecker) RequireReadIndex(ctx context.Context, _ raftmeta
 
 func replaceAuthorityFreshness(t *testing.T, app *Application, checker raftmeta.FreshnessChecker) {
 	t.Helper()
-	if err := app.authority.Close(); err != nil {
-		t.Fatalf("close authority: %v", err)
-	}
+	testutil.RequireNoErrorf(t, app.authority.Close(), "close authority")
 	authority, err := raftmeta.OpenAuthorityWithOptions(filepath.Join(app.dir, "raftmeta"), "local", app.metadata, raftmeta.AuthorityOptions{
 		FreshnessChecker: checker,
 	})
-	if err != nil {
-		t.Fatalf("reopen authority with freshness checker: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "reopen authority with freshness checker")
 	app.authority = authority
 }
 
@@ -3957,7 +3334,7 @@ func (s *readCountingBackendStore) readObjectRangeCount(key string) int {
 	return s.readObjectRangeCounts[key]
 }
 
-func publishDRDrillTestDocument(t *testing.T, ctx context.Context, app *Application, backendStore backend.MutableStore, data []byte) (published.SnapshotPublication, metastore.Document, metastore.UploadIntent) {
+func publishDRDrillTestDocument(ctx context.Context, t *testing.T, app *Application, backendStore backend.MutableStore, data []byte) (published.SnapshotPublication, metastore.UploadIntent) {
 	t.Helper()
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
@@ -3974,21 +3351,15 @@ func publishDRDrillTestDocument(t *testing.T, ctx context.Context, app *Applicat
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	publication, err := app.PublishMetadataSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("publish metadata snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
 	stored, err := app.metadata.HeadDocument(doc)
-	if err != nil {
-		t.Fatalf("head stored document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head stored document")
 	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
-	return publication, stored, intent
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	return publication, intent
 }
 
-func readBackendObject(t *testing.T, ctx context.Context, store backend.Store, key string) []byte {
+func readBackendObject(ctx context.Context, t *testing.T, store backend.Store, key string) []byte {
 	t.Helper()
 	var got bytes.Buffer
 	if err := store.ReadObjectRange(ctx, key, backend.Range{}, &got); err != nil {

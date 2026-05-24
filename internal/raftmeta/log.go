@@ -146,12 +146,7 @@ func (l *Log) Compact(throughIndex uint64) error {
 	if err != nil {
 		return err
 	}
-	tail := entries[:0]
-	for _, entry := range entries {
-		if entry.Index > throughIndex {
-			tail = append(tail, entry)
-		}
-	}
+	tail := compactedTail(entries, throughIndex)
 	dir := filepath.Dir(l.path)
 	tempPath, err := safepath.UnderDir(dir, l.path+".compact")
 	if err != nil {
@@ -160,22 +155,9 @@ func (l *Log) Compact(throughIndex uint64) error {
 	if err := writeEntries(tempPath, tail); err != nil {
 		return err
 	}
-	if err := l.file.Close(); err != nil {
+	if err := l.replaceWithCompactedLog(tempPath); err != nil {
 		return err
 	}
-	l.file = nil
-	// #nosec G703 -- source and destination are validated under the configured raft directory.
-	if err := os.Rename(tempPath, l.path); err != nil {
-		if file, openErr := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND); openErr == nil {
-			l.file = file
-		}
-		return err
-	}
-	file, err := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND)
-	if err != nil {
-		return err
-	}
-	l.file = file
 	if err := syncDir(dir); err != nil {
 		return err
 	}
@@ -185,6 +167,41 @@ func (l *Log) Compact(throughIndex uint64) error {
 		l.nextIndex = throughIndex + 1
 	}
 	return nil
+}
+
+func compactedTail(entries []Entry, throughIndex uint64) []Entry {
+	tail := entries[:0]
+	for _, entry := range entries {
+		if entry.Index > throughIndex {
+			tail = append(tail, entry)
+		}
+	}
+	return tail
+}
+
+func (l *Log) replaceWithCompactedLog(tempPath string) error {
+	if err := l.file.Close(); err != nil {
+		return err
+	}
+	l.file = nil
+	// #nosec G703 -- source and destination are validated under the configured raft directory.
+	if err := os.Rename(tempPath, l.path); err != nil {
+		l.reopenLogAfterFailedCompaction()
+		return err
+	}
+	file, err := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND)
+	if err != nil {
+		return err
+	}
+	l.file = file
+	return nil
+}
+
+func (l *Log) reopenLogAfterFailedCompaction() {
+	file, err := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND)
+	if err == nil {
+		l.file = file
+	}
 }
 
 func readEntries(path string) ([]Entry, error) {

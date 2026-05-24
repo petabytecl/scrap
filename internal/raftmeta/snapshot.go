@@ -51,23 +51,10 @@ func snapshotPath(dir string) string {
 }
 
 func writeSnapshotFile(dir string, snapshot *metastorev1.ShardSnapshot) error {
-	payload, err := metastore.MarshalShardSnapshot(snapshot)
+	frame, err := marshalSnapshotFrame(snapshot)
 	if err != nil {
 		return err
 	}
-	if len(payload) > MaxSnapshotBytes {
-		return fmt.Errorf("raftmeta: snapshot is %d bytes; maximum is %d", len(payload), MaxSnapshotBytes)
-	}
-	payloadLen, err := safeconv.IntToUint32("raft snapshot payload length", len(payload))
-	if err != nil {
-		return err
-	}
-	frame := make([]byte, snapshotHeaderLen+len(payload)+snapshotCRCLen)
-	binary.BigEndian.PutUint32(frame[:snapshotHeaderLen], payloadLen)
-	copy(frame[snapshotHeaderLen:], payload)
-	crc := checksumFrame(frame[:snapshotHeaderLen], payload)
-	binary.BigEndian.PutUint32(frame[len(frame)-snapshotCRCLen:], crc)
-
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -101,6 +88,26 @@ func writeSnapshotFile(dir string, snapshot *metastorev1.ShardSnapshot) error {
 	return syncDir(dir)
 }
 
+func marshalSnapshotFrame(snapshot *metastorev1.ShardSnapshot) ([]byte, error) {
+	payload, err := metastore.MarshalShardSnapshot(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > MaxSnapshotBytes {
+		return nil, fmt.Errorf("raftmeta: snapshot is %d bytes; maximum is %d", len(payload), MaxSnapshotBytes)
+	}
+	payloadLen, err := safeconv.IntToUint32("raft snapshot payload length", len(payload))
+	if err != nil {
+		return nil, err
+	}
+	frame := make([]byte, snapshotHeaderLen+len(payload)+snapshotCRCLen)
+	binary.BigEndian.PutUint32(frame[:snapshotHeaderLen], payloadLen)
+	copy(frame[snapshotHeaderLen:], payload)
+	crc := checksumFrame(frame[:snapshotHeaderLen], payload)
+	binary.BigEndian.PutUint32(frame[len(frame)-snapshotCRCLen:], crc)
+	return frame, nil
+}
+
 func openSnapshotFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 	// #nosec G304 G703 -- callers validate paths under the configured raft directory.
 	return os.OpenFile(path, flag, perm)
@@ -124,12 +131,30 @@ func readSnapshotFile(dir string) (*metastorev1.ShardSnapshot, error) {
 		return nil, err
 	}
 	defer closeutil.Ignore(file)
+	payload, err := readSnapshotPayload(file)
+	if err != nil {
+		return nil, err
+	}
+	return metastore.UnmarshalShardSnapshot(payload)
+}
 
+func readSnapshotPayload(file *os.File) ([]byte, error) {
 	var header [snapshotHeaderLen]byte
 	if _, err := io.ReadFull(file, header[:]); err != nil {
 		return nil, err
 	}
-	length := binary.BigEndian.Uint32(header[:])
+	payload, err := readSnapshotPayloadBytes(file, header[:])
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyNoSnapshotTrailingData(file); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func readSnapshotPayloadBytes(file *os.File, header []byte) ([]byte, error) {
+	length := binary.BigEndian.Uint32(header)
 	if length > MaxSnapshotBytes {
 		return nil, fmt.Errorf("raftmeta: snapshot length %d exceeds maximum %d", length, MaxSnapshotBytes)
 	}
@@ -142,16 +167,20 @@ func readSnapshotFile(dir string) (*metastorev1.ShardSnapshot, error) {
 		return nil, err
 	}
 	want := binary.BigEndian.Uint32(checksum[:])
-	if got := checksumFrame(header[:], payload); got != want {
+	if got := checksumFrame(header, payload); got != want {
 		return nil, errors.New("raftmeta: snapshot checksum mismatch")
 	}
+	return payload, nil
+}
+
+func verifyNoSnapshotTrailingData(file *os.File) error {
 	var extra [1]byte
 	if n, err := file.Read(extra[:]); err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+		return err
 	} else if n != 0 {
-		return nil, errors.New("raftmeta: snapshot has trailing data")
+		return errors.New("raftmeta: snapshot has trailing data")
 	}
-	return metastore.UnmarshalShardSnapshot(payload)
+	return nil
 }
 
 func snapshotInfo(dir string, snapshot *metastorev1.ShardSnapshot) SnapshotInfo {

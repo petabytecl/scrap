@@ -111,12 +111,8 @@ func (c Config) Validate() error {
 	if err := c.validateProductionWriteACKGate(); err != nil {
 		return err
 	}
-	if c.EnableLocalNonProductionStorage {
-		if strings.TrimSpace(c.LocalDataDir) == "" {
-			return errors.New("local_data_dir is required when local non-production storage is enabled")
-		}
-	} else if strings.TrimSpace(c.LocalDataDir) != "" {
-		return errors.New("local_data_dir requires local non-production storage to be explicitly enabled")
+	if err := c.validateLocalStorage(); err != nil {
+		return err
 	}
 	if c.BackendUploadInterval <= 0 {
 		return errors.New("backend_upload_interval must be positive")
@@ -127,6 +123,23 @@ func (c Config) Validate() error {
 	if c.LocalSealBlockAtBytes == 0 {
 		return errors.New("local_seal_block_at_bytes must be positive")
 	}
+	return c.validateLocalFilesystemBackend()
+}
+
+func (c Config) validateLocalStorage() error {
+	if c.EnableLocalNonProductionStorage {
+		if strings.TrimSpace(c.LocalDataDir) == "" {
+			return errors.New("local_data_dir is required when local non-production storage is enabled")
+		}
+		return nil
+	}
+	if strings.TrimSpace(c.LocalDataDir) != "" {
+		return errors.New("local_data_dir requires local non-production storage to be explicitly enabled")
+	}
+	return nil
+}
+
+func (c Config) validateLocalFilesystemBackend() error {
 	if c.EnableLocalFilesystemBackend {
 		if !c.EnableLocalNonProductionStorage {
 			return errors.New("local filesystem backend requires local non-production storage to be enabled")

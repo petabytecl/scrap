@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/petabytecl/scrap/internal/capacitysample"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/openbaosmoke"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestRunRecordsRunbookCommandsAndEvidence(t *testing.T) {
@@ -50,12 +50,9 @@ func TestRunRecordsRunbookCommandsAndEvidence(t *testing.T) {
 		DR:            dr,
 		Operations:    ops,
 	})
-	if err != nil {
-		t.Fatalf("run drill: %v", err)
-	}
-	if report.Status != StatusPassed || report.ReportKind != ReportKind {
-		t.Fatalf("report status/kind = %s/%s", report.Status, report.ReportKind)
-	}
+	testutil.RequireNoErrorf(t, err, "run drill")
+	testutil.RequireEqualf(t, report.Status, StatusPassed, "report status")
+	testutil.RequireEqualf(t, report.ReportKind, ReportKind, "report kind")
 	gotSteps := make([]string, 0, len(report.Commands))
 	for _, command := range report.Commands {
 		gotSteps = append(gotSteps, command.Step)
@@ -72,29 +69,25 @@ func TestRunRecordsRunbookCommandsAndEvidence(t *testing.T) {
 		"start dr-drill",
 		"watch dr-drill",
 	}
-	if !reflect.DeepEqual(gotSteps, wantSteps) {
-		t.Fatalf("command steps = %#v, want %#v", gotSteps, wantSteps)
-	}
-	if report.Recovery.LatestRestorableCheckpointAt == "" ||
-		report.Recovery.OperationIDs["metadata_restore"] == "" ||
-		report.Recovery.OperationIDs["copy_verify"] == "" ||
-		report.Recovery.OperationIDs["dr_drill"] == "" {
-		t.Fatalf("recovery evidence = %#v", report.Recovery)
-	}
-	if !report.BackendArtifacts.LocalStackProbe.Passed ||
-		report.BackendArtifacts.LocalStackProbe.OperationCounts["PUT"] != 1 ||
-		report.BackendArtifacts.PublishedCheckpoint.VerifiedEnvelopeObjects != "1" ||
-		report.BackendArtifacts.PublishedCheckpoint.BlocksRestored != "1" {
-		t.Fatalf("backend evidence = %#v", report.BackendArtifacts)
-	}
-	if !report.OpenBao.Passed || len(report.OpenBao.CryptoUnavailableOutcomes) != 2 {
-		t.Fatalf("openbao evidence = %#v", report.OpenBao)
-	}
-	if !report.Recovery.NoFormalRTOPromise ||
-		!report.Recovery.NoFormalRPOPromise ||
-		report.Recovery.DownstreamDeploymentApproval {
-		t.Fatalf("recovery limits = %#v", report.Recovery)
-	}
+	testutil.RequireDeepEqualf(t, gotSteps, wantSteps, "command steps")
+	requireLocalDrillEvidence(t, report)
+}
+
+func requireLocalDrillEvidence(t *testing.T, report Report) {
+	t.Helper()
+	testutil.RequireTruef(t, report.Recovery.LatestRestorableCheckpointAt != "", "recovery checkpoint evidence is empty")
+	testutil.RequireTruef(t, report.Recovery.OperationIDs["metadata_restore"] != "", "metadata restore operation id is empty")
+	testutil.RequireTruef(t, report.Recovery.OperationIDs["copy_verify"] != "", "copy verify operation id is empty")
+	testutil.RequireTruef(t, report.Recovery.OperationIDs["dr_drill"] != "", "dr drill operation id is empty")
+	testutil.RequireTruef(t, report.BackendArtifacts.LocalStackProbe.Passed, "local stack probe did not pass")
+	testutil.RequireEqualf(t, report.BackendArtifacts.LocalStackProbe.OperationCounts["PUT"], 1, "local stack PUT count")
+	testutil.RequireEqualf(t, report.BackendArtifacts.PublishedCheckpoint.VerifiedEnvelopeObjects, "1", "verified envelope object count")
+	testutil.RequireEqualf(t, report.BackendArtifacts.PublishedCheckpoint.BlocksRestored, "1", "blocks restored count")
+	testutil.RequireTruef(t, report.OpenBao.Passed, "openbao evidence did not pass")
+	testutil.RequireEqualf(t, len(report.OpenBao.CryptoUnavailableOutcomes), 2, "openbao crypto unavailable outcome count")
+	testutil.RequireTruef(t, report.Recovery.NoFormalRTOPromise, "RTO disclaimer missing")
+	testutil.RequireTruef(t, report.Recovery.NoFormalRPOPromise, "RPO disclaimer missing")
+	testutil.RequireFalsef(t, report.Recovery.DownstreamDeploymentApproval, "downstream deployment approval = true")
 }
 
 func TestRunFailsWhenEvidenceInputsDoNotProveRequiredBackends(t *testing.T) {
@@ -286,6 +279,7 @@ func writeOpenBaoReport(t *testing.T, dir string, passing bool) string {
 func writeJSON(t *testing.T, dir, name string, value any) string {
 	t.Helper()
 	path := dir + string(os.PathSeparator) + name
+	// #nosec G304 -- the path is built under the test-owned temporary directory.
 	file, err := os.Create(path)
 	if err != nil {
 		t.Fatalf("create %s: %v", name, err)

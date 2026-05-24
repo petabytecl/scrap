@@ -104,35 +104,49 @@ func normalizeDocumentPath(value string, allowTrailingSlash bool) (string, *Prob
 	}
 
 	normalized := strings.ReplaceAll(value, "\\", "/")
+	if problem := validateNormalizedDocumentPath(normalized, allowTrailingSlash); problem != nil {
+		return "", problem
+	}
+	if problem := validateDocumentPathSegments(normalized, allowTrailingSlash); problem != nil {
+		return "", problem
+	}
+	return normalized, nil
+}
+
+func validateNormalizedDocumentPath(normalized string, allowTrailingSlash bool) *Problem {
 	switch {
 	case len(normalized) > MaxDocumentNameBytes:
-		return "", &Problem{Field: "document_name", Reason: ReasonTooLong, Description: "document_name exceeds maximum byte length"}
+		return &Problem{Field: "document_name", Reason: ReasonTooLong, Description: "document_name exceeds maximum byte length"}
 	case containsControl(normalized):
-		return "", &Problem{Field: "document_name", Reason: ReasonControlChar, Description: "document_name must not contain control characters"}
+		return &Problem{Field: "document_name", Reason: ReasonControlChar, Description: "document_name must not contain control characters"}
 	case strings.HasPrefix(normalized, "/"):
-		return "", &Problem{Field: "document_name", Reason: ReasonAbsolutePath, Description: "document_name must be relative"}
+		return &Problem{Field: "document_name", Reason: ReasonAbsolutePath, Description: "document_name must be relative"}
 	case strings.Contains(normalized, "//"):
-		return "", &Problem{Field: "document_name", Reason: ReasonDuplicateSlash, Description: "document_name must not contain duplicate slashes"}
+		return &Problem{Field: "document_name", Reason: ReasonDuplicateSlash, Description: "document_name must not contain duplicate slashes"}
 	case strings.HasSuffix(normalized, "/") && !allowTrailingSlash:
-		return "", &Problem{Field: "document_name", Reason: ReasonTrailingSlash, Description: "document_name must not end with a slash"}
+		return &Problem{Field: "document_name", Reason: ReasonTrailingSlash, Description: "document_name must not end with a slash"}
+	default:
+		return nil
 	}
+}
 
+func validateDocumentPathSegments(normalized string, allowTrailingSlash bool) *Problem {
 	segments := strings.Split(normalized, "/")
 	for i, segment := range segments {
 		if segment == "" {
 			if allowTrailingSlash && i == len(segments)-1 {
 				continue
 			}
-			return "", &Problem{Field: "document_name", Reason: ReasonEmptySegment, Description: "document_name must not contain empty path segments"}
+			return &Problem{Field: "document_name", Reason: ReasonEmptySegment, Description: "document_name must not contain empty path segments"}
 		}
 		switch segment {
 		case ".":
-			return "", &Problem{Field: "document_name", Reason: ReasonCurrentSegment, Description: "document_name must not contain current-directory segments"}
+			return &Problem{Field: "document_name", Reason: ReasonCurrentSegment, Description: "document_name must not contain current-directory segments"}
 		case "..":
-			return "", &Problem{Field: "document_name", Reason: ReasonParentSegment, Description: "document_name must not contain parent-directory segments"}
+			return &Problem{Field: "document_name", Reason: ReasonParentSegment, Description: "document_name must not contain parent-directory segments"}
 		}
 	}
-	return normalized, nil
+	return nil
 }
 
 func containsControl(value string) bool {

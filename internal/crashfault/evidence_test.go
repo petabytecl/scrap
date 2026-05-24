@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/config"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 type recordingRunner struct {
@@ -25,9 +26,7 @@ func (r *recordingRunner) Run(_ context.Context, invocation CommandInvocation) C
 
 func TestCatalogDeclaresRequiredCoverage(t *testing.T) {
 	scenarios := Catalog()
-	if err := ValidateCatalog(scenarios); err != nil {
-		t.Fatalf("catalog invalid: %v", err)
-	}
+	testutil.RequireNoErrorf(t, ValidateCatalog(scenarios), "catalog invalid")
 	gates := ReleaseGateIDs(scenarios)
 	for _, gate := range []string{"backend-restore", "crash-fault", "peer-byte-durability"} {
 		if !slices.Contains(gates, gate) {
@@ -76,29 +75,26 @@ func TestRunBuildsPassingReportAndReleaseEvidence(t *testing.T) {
 		DirtyTree:         false,
 		Runner:            runner,
 	})
-	if err != nil {
-		t.Fatalf("run evidence: %v", err)
-	}
-	if !report.Ready || report.Summary.Failed != 0 || report.Summary.Passed != len(Catalog()) {
-		t.Fatalf("report summary = %#v ready=%t, want all scenarios passed", report.Summary, report.Ready)
-	}
-	if report.CommitSHA != "abc123" || report.DirtyTree || report.Runner.Profile != "dedicated-linux" ||
-		report.Runner.FilesystemProfile != "ext4-local-pv" || report.Config.GoTestCount != 2 {
-		t.Fatalf("report metadata = %#v", report)
-	}
-	if len(report.ReleaseGateEvidence) != 3 {
-		t.Fatalf("release evidence = %#v, want three gate entries", report.ReleaseGateEvidence)
-	}
-	if len(runner.commands) == 0 || !slices.Contains(runner.commands[0].Args, "-count=2") {
-		t.Fatalf("commands = %#v, want go test count flag", runner.commands)
-	}
+	testutil.RequireNoErrorf(t, err, "run evidence")
+	requirePassingReportAndEvidence(t, report, runner)
 	data, err := MarshalReport(report)
-	if err != nil {
-		t.Fatalf("marshal report: %v", err)
-	}
-	if !strings.Contains(string(data), `"schema_version": "scrap.crashfault.v1"`) {
-		t.Fatalf("report json = %s", data)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal report")
+	testutil.RequireTruef(t, strings.Contains(string(data), `"schema_version": "scrap.crashfault.v1"`), "report json = %s", data)
+}
+
+func requirePassingReportAndEvidence(t *testing.T, report Report, runner *recordingRunner) {
+	t.Helper()
+	testutil.RequireTruef(t, report.Ready, "report ready = false")
+	testutil.RequireEqualf(t, report.Summary.Failed, 0, "failed scenario count")
+	testutil.RequireEqualf(t, report.Summary.Passed, len(Catalog()), "passed scenario count")
+	testutil.RequireEqualf(t, report.CommitSHA, "abc123", "commit sha")
+	testutil.RequireFalsef(t, report.DirtyTree, "dirty tree = true")
+	testutil.RequireEqualf(t, report.Runner.Profile, "dedicated-linux", "runner profile")
+	testutil.RequireEqualf(t, report.Runner.FilesystemProfile, "ext4-local-pv", "filesystem profile")
+	testutil.RequireEqualf(t, report.Config.GoTestCount, 2, "go test count")
+	testutil.RequireEqualf(t, len(report.ReleaseGateEvidence), 3, "release evidence count")
+	testutil.RequireTruef(t, len(runner.commands) > 0, "commands = %#v, want commands", runner.commands)
+	testutil.RequireTruef(t, slices.Contains(runner.commands[0].Args, "-count=2"), "commands = %#v, want go test count flag", runner.commands)
 }
 
 func TestRunRequiresArtifactURIForReleaseEvidence(t *testing.T) {
@@ -107,9 +103,7 @@ func TestRunRequiresArtifactURIForReleaseEvidence(t *testing.T) {
 		CommitSHA:   "abc123",
 		Runner:      &recordingRunner{},
 	})
-	if err != nil {
-		t.Fatalf("run evidence: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run evidence")
 	if !report.Ready {
 		t.Fatalf("report = %#v, want ready", report)
 	}
@@ -124,9 +118,7 @@ func TestRunMarksFailuresAndSuppressesReleaseEvidence(t *testing.T) {
 		CommitSHA:   "abc123",
 		Runner:      &recordingRunner{failPackage: "./internal/backendupload"},
 	})
-	if err != nil {
-		t.Fatalf("run evidence: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run evidence")
 	if report.Ready || report.Summary.Failed == 0 || len(report.ReleaseGateEvidence) != 0 {
 		t.Fatalf("report = %#v, want failed report without release evidence", report)
 	}
@@ -149,9 +141,7 @@ func TestRunMarksFailuresAndSuppressesReleaseEvidence(t *testing.T) {
 func TestLimitedOutputBoundsCapture(t *testing.T) {
 	output := newLimitedOutput(5)
 	written, err := output.Write([]byte("123456789"))
-	if err != nil {
-		t.Fatalf("write output: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "write output")
 	if written != 9 {
 		t.Fatalf("written = %d, want caller byte count", written)
 	}

@@ -359,16 +359,26 @@ func validateFrameChecksumRecord(frame *storagev1.FrameChecksumRecord, index int
 	if frame.GetStoredLength() == 0 {
 		return invalidRecord(recordKind, "stored_length is required")
 	}
-	if frame.GetStoredOffset()+frame.GetStoredLength() < frame.GetStoredOffset() ||
-		frame.GetStoredOffset()+frame.GetStoredLength() > blockLength {
+	if !validStoredFrameRange(frame, blockLength) {
 		return invalidRecord(recordKind, "stored range exceeds block length")
 	}
+	if err := validateFrameHashes(recordKind, frame); err != nil {
+		return err
+	}
+	return validateFrameEncryption(recordKind, frame)
+}
+
+func validateFrameHashes(recordKind string, frame *storagev1.FrameChecksumRecord) error {
 	if len(frame.GetPlaintextSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "plaintext_sha256 must be 32 bytes")
 	}
 	if len(frame.GetStoredSha256()) != sha256.Size {
 		return invalidRecord(recordKind, "stored_sha256 must be 32 bytes")
 	}
+	return nil
+}
+
+func validateFrameEncryption(recordKind string, frame *storagev1.FrameChecksumRecord) error {
 	if frame.GetEncryptionMode() == storagev1.EncryptionMode_ENCRYPTION_MODE_UNSPECIFIED {
 		return invalidRecord(recordKind, "encryption_mode is required")
 	}
@@ -379,6 +389,11 @@ func validateFrameChecksumRecord(frame *storagev1.FrameChecksumRecord, index int
 		return invalidRecord(recordKind, "auth_tag is required for encrypted frames")
 	}
 	return nil
+}
+
+func validStoredFrameRange(frame *storagev1.FrameChecksumRecord, blockLength uint64) bool {
+	storedEnd := frame.GetStoredOffset() + frame.GetStoredLength()
+	return storedEnd >= frame.GetStoredOffset() && storedEnd <= blockLength
 }
 
 func validateEnvelopeRecord(record *storagev1.EnvelopeRecord, requireDigest bool) error {
@@ -414,17 +429,22 @@ func validateEnvelopeRecord(record *storagev1.EnvelopeRecord, requireDigest bool
 	if err := validateTimestamp("envelope", record.GetCreatedAt()); err != nil {
 		return err
 	}
-	if requireDigest {
-		if len(record.GetEnvelopeSha256()) != sha256.Size {
-			return invalidRecord("envelope", "envelope_sha256 must be 32 bytes")
-		}
-		digest, err := envelopeRecordDigest(record)
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(record.GetEnvelopeSha256(), digest) {
-			return invalidRecord("envelope", "envelope_sha256 does not match record payload")
-		}
+	return validateEnvelopeRecordDigest(record, requireDigest)
+}
+
+func validateEnvelopeRecordDigest(record *storagev1.EnvelopeRecord, requireDigest bool) error {
+	if !requireDigest {
+		return nil
+	}
+	if len(record.GetEnvelopeSha256()) != sha256.Size {
+		return invalidRecord("envelope", "envelope_sha256 must be 32 bytes")
+	}
+	digest, err := envelopeRecordDigest(record)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(record.GetEnvelopeSha256(), digest) {
+		return invalidRecord("envelope", "envelope_sha256 does not match record payload")
 	}
 	return nil
 }
@@ -445,6 +465,13 @@ func validateBackendObjectSet(set *storagev1.BackendObjectSet) error {
 	if err := validateBackendObjectRef("backend object set index_object", set.GetIndexObject(), storagev1.BackendObjectKind_BACKEND_OBJECT_KIND_INDEX); err != nil {
 		return err
 	}
+	if err := validateBackendObjectSetEnvelope(set); err != nil {
+		return err
+	}
+	return validateTimestamp("backend object set", set.GetCreatedAt())
+}
+
+func validateBackendObjectSetEnvelope(set *storagev1.BackendObjectSet) error {
 	if set.EnvelopeObject != nil {
 		if err := validateBackendObjectRef("backend object set envelope_object", set.GetEnvelopeObject(), storagev1.BackendObjectKind_BACKEND_OBJECT_KIND_ENVELOPE); err != nil {
 			return err
@@ -461,7 +488,7 @@ func validateBackendObjectSet(set *storagev1.BackendObjectSet) error {
 			return invalidRecord("backend object set", "envelope_object is required when envelope_ref is present")
 		}
 	}
-	return validateTimestamp("backend object set", set.GetCreatedAt())
+	return nil
 }
 
 func validateEnvelopeReference(recordKind string, ref *storagev1.EnvelopeReference) error {

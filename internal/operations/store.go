@@ -215,46 +215,9 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 	var candidates []recoveryUpdate
 	for _, operation := range all {
 		result.Scanned++
-		switch operation.GetState() {
-		case adminv1.OperationState_OPERATION_STATE_QUEUED:
-			result.Queued++
-		case adminv1.OperationState_OPERATION_STATE_RUNNING:
-			recovered := cloneOperation(operation)
-			if supportedTypes[recovered.GetOperationType()] {
-				recovered.State = adminv1.OperationState_OPERATION_STATE_QUEUED
-				recovered.FinishedAt = nil
-				appendRecoveryWarning(recovered, &adminv1.OperationWarning{
-					Code:    "SCRAP_OPERATION_RESTART_REQUEUED",
-					Message: "operation was running during process restart and was requeued for idempotent retry",
-				})
-				candidates = append(candidates, recoveryUpdate{
-					expected:  operation,
-					recovered: recovered,
-					kind:      recoveryUpdateRequeued,
-				})
-				continue
-			}
-			recovered.State = adminv1.OperationState_OPERATION_STATE_FAILED
-			recovered.FinishedAt = timestamppb.New(now)
-			appendRecoveryWarning(recovered, &adminv1.OperationWarning{
-				Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
-				Message: "operation was running during process restart but this binary cannot resume its type",
-			})
-			recovered.LastError = &adminv1.OperationError{
-				Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
-				Message: fmt.Sprintf("operation type %q cannot be resumed after restart", recovered.GetOperationType()),
-			}
-			candidates = append(candidates, recoveryUpdate{
-				expected:  operation,
-				recovered: recovered,
-				kind:      recoveryUpdateFailedUnsupported,
-			})
-		default:
-			if isTerminal(operation.GetState()) {
-				result.Terminal++
-				continue
-			}
-			result.Ignored++
+		update, ok := recoveryUpdateForOperation(operation, now, supportedTypes, &result)
+		if ok {
+			candidates = append(candidates, update)
 		}
 	}
 	verified, skipped, err := s.verifyRecoveryUpdates(candidates)
@@ -276,6 +239,50 @@ func (s *Store) RecoverInterrupted(now time.Time, supportedTypes map[string]bool
 		return result, err
 	}
 	return result, nil
+}
+
+func recoveryUpdateForOperation(operation *adminv1.Operation, now time.Time, supportedTypes map[string]bool, result *RecoveryResult) (recoveryUpdate, bool) {
+	switch operation.GetState() {
+	case adminv1.OperationState_OPERATION_STATE_QUEUED:
+		result.Queued++
+	case adminv1.OperationState_OPERATION_STATE_RUNNING:
+		return runningOperationRecoveryUpdate(operation, now, supportedTypes), true
+	default:
+		recordInactiveRecoveryState(operation, result)
+	}
+	return recoveryUpdate{}, false
+}
+
+func runningOperationRecoveryUpdate(operation *adminv1.Operation, now time.Time, supportedTypes map[string]bool) recoveryUpdate {
+	recovered := cloneOperation(operation)
+	if supportedTypes[recovered.GetOperationType()] {
+		recovered.State = adminv1.OperationState_OPERATION_STATE_QUEUED
+		recovered.FinishedAt = nil
+		appendRecoveryWarning(recovered, &adminv1.OperationWarning{
+			Code:    "SCRAP_OPERATION_RESTART_REQUEUED",
+			Message: "operation was running during process restart and was requeued for idempotent retry",
+		})
+		return recoveryUpdate{expected: operation, recovered: recovered, kind: recoveryUpdateRequeued}
+	}
+	recovered.State = adminv1.OperationState_OPERATION_STATE_FAILED
+	recovered.FinishedAt = timestamppb.New(now)
+	appendRecoveryWarning(recovered, &adminv1.OperationWarning{
+		Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
+		Message: "operation was running during process restart but this binary cannot resume its type",
+	})
+	recovered.LastError = &adminv1.OperationError{
+		Code:    "SCRAP_OPERATION_RECOVERY_UNSUPPORTED",
+		Message: fmt.Sprintf("operation type %q cannot be resumed after restart", recovered.GetOperationType()),
+	}
+	return recoveryUpdate{expected: operation, recovered: recovered, kind: recoveryUpdateFailedUnsupported}
+}
+
+func recordInactiveRecoveryState(operation *adminv1.Operation, result *RecoveryResult) {
+	if isTerminal(operation.GetState()) {
+		result.Terminal++
+		return
+	}
+	result.Ignored++
 }
 
 func (s *Store) AppendAuditEvent(event *adminv1.AuditEvent) error {

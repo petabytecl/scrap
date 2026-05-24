@@ -23,6 +23,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/authz"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestRunRejectsMissingPlanTargetsBeforeDial(t *testing.T) {
@@ -76,9 +77,7 @@ func TestPlanRestoreCallsGeneratedAdminClient(t *testing.T) {
 		"--dry-run",
 		"--metadata", "ticket=INC-1",
 	}, &out)
-	if err != nil {
-		t.Fatalf("run plan restore: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run plan restore")
 	if restore.planRestoreReq == nil {
 		t.Fatal("PlanRestore was not called")
 	}
@@ -109,9 +108,7 @@ func TestStatusPrintsOperationWarningsAndTypedFailure(t *testing.T) {
 		"status",
 		"--operation-id", "op-1",
 	}, &out)
-	if err != nil {
-		t.Fatalf("run status: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run status")
 	if operations.gotOperationID != "op-1" {
 		t.Fatalf("operation id = %q, want op-1", operations.gotOperationID)
 	}
@@ -154,9 +151,7 @@ func TestWatchPrintsStreamedOperationEvents(t *testing.T) {
 		"--operation-id", "op-1",
 		"--after-sequence", "1",
 	}, &out)
-	if err != nil {
-		t.Fatalf("run watch: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run watch")
 	if operations.watchOperationID != "op-1" || operations.afterSequence == nil || *operations.afterSequence != 1 {
 		t.Fatalf("watch request id=%q after=%v, want op-1 after 1", operations.watchOperationID, operations.afterSequence)
 	}
@@ -173,9 +168,7 @@ func TestFailureFromGRPCBadRequestExposesViolations(t *testing.T) {
 		{Field: "operation_id", Reason: "SCRAP_INVALID_UUIDV7", Description: "operation_id must be a UUIDv7"},
 	}}
 	st, err := status.New(codes.InvalidArgument, "invalid request").WithDetails(badRequest)
-	if err != nil {
-		t.Fatalf("build status: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "build status")
 	payload := failureFromError(st.Err())
 	if payload.Code != "InvalidArgument" || len(payload.Violations) != 1 {
 		t.Fatalf("payload = %#v, want invalid argument with one violation", payload)
@@ -196,9 +189,7 @@ func TestRunAttachesWorkloadIdentityMetadata(t *testing.T) {
 		"--workload-identity", "local-operator",
 		"inspect", "summary",
 	}, bytes.NewBuffer(nil))
-	if err != nil {
-		t.Fatalf("run inspect summary: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run inspect summary")
 	if inspect.workloadIdentity != "local-operator" {
 		t.Fatalf("workload identity = %q, want local-operator", inspect.workloadIdentity)
 	}
@@ -229,9 +220,7 @@ func TestRunComposesWorkloadIdentityWithExistingInterceptors(t *testing.T) {
 		"--workload-identity", "local-operator",
 		"inspect", "summary",
 	}, bytes.NewBuffer(nil))
-	if err != nil {
-		t.Fatalf("run inspect summary: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run inspect summary")
 	if inspect.workloadIdentity != "local-operator" {
 		t.Fatalf("workload identity = %q, want local-operator", inspect.workloadIdentity)
 	}
@@ -265,35 +254,9 @@ func TestCapacitySampleRejectsUnboundedWorkloadBeforeDial(t *testing.T) {
 }
 
 func TestCapacitySampleWritesAdvisoryReport(t *testing.T) {
-	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Amz-Request-Id", "backend-request")
-		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") {
-			t.Errorf("missing SigV4 authorization header")
-		}
-		switch r.Method {
-		case http.MethodPut:
-			_, _ = io.Copy(io.Discard, r.Body)
-		case http.MethodGet:
-			_, _ = w.Write([]byte("sample"))
-		case http.MethodHead:
-		default:
-			t.Errorf("unexpected backend method %s", r.Method)
-		}
-	}))
+	backendServer := newCapacitySampleBackendServer(t)
 	t.Cleanup(backendServer.Close)
-	openbaoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Vault-Token") != "local-root" {
-			http.Error(w, "denied", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("X-Vault-Request", "openbao-request")
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "/datakey/plaintext/") {
-			_, _ = w.Write([]byte(`{"data":{"ciphertext":"vault:v1:wrapped"}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"data":{}}`))
-	}))
+	openbaoServer := newCapacitySampleOpenBaoServer()
 	t.Cleanup(openbaoServer.Close)
 
 	inspect := &fakeInspectServer{}
@@ -316,17 +279,57 @@ func TestCapacitySampleWritesAdvisoryReport(t *testing.T) {
 		"--document-size", "64",
 		"--duration", "1s",
 	}, &out)
-	if err != nil {
-		t.Fatalf("run capacity sample: %v", err)
+	testutil.RequireNoErrorf(t, err, "run capacity sample")
+	testutil.RequireEqualf(t, inspect.capacityProfileID, "scrap-prod-v1", "capacity profile id")
+	requireCapacitySampleAdvisoryOutput(t, out.String())
+}
+
+func newCapacitySampleBackendServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleCapacitySampleBackend(t, w, r)
+	}))
+}
+
+func handleCapacitySampleBackend(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	w.Header().Set("X-Amz-Request-Id", "backend-request")
+	if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") {
+		t.Errorf("missing SigV4 authorization header")
 	}
-	if inspect.capacityProfileID != "scrap-prod-v1" {
-		t.Fatalf("capacity profile id = %q, want scrap-prod-v1", inspect.capacityProfileID)
+	switch r.Method {
+	case http.MethodPut:
+		_, _ = io.Copy(io.Discard, r.Body)
+	case http.MethodGet:
+		_, _ = w.Write([]byte("sample"))
+	case http.MethodHead:
+	default:
+		t.Errorf("unexpected backend method %s", r.Method)
 	}
-	output := out.String()
+}
+
+func newCapacitySampleOpenBaoServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(handleCapacitySampleOpenBao))
+}
+
+func handleCapacitySampleOpenBao(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Vault-Token") != "local-root" {
+		http.Error(w, "denied", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("X-Vault-Request", "openbao-request")
+	w.Header().Set("Content-Type", "application/json")
+	if strings.Contains(r.URL.Path, "/datakey/plaintext/") {
+		_, _ = w.Write([]byte(`{"data":{"ciphertext":"vault:v1:wrapped"}}`))
+		return
+	}
+	_, _ = w.Write([]byte(`{"data":{}}`))
+}
+
+func requireCapacitySampleAdvisoryOutput(t *testing.T, output string) {
+	t.Helper()
 	for _, want := range []string{"capacity-sample-advisory", `"advisory_only": true`, `"proposed_capacity_profile"`} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("output = %s, missing %s", output, want)
-		}
+		testutil.RequireTruef(t, strings.Contains(output, want), "output = %s, missing %s", output, want)
 	}
 }
 
