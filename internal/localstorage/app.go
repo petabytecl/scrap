@@ -267,7 +267,7 @@ func (a *Application) shouldPublishMetadataCheckpoint(ctx context.Context, store
 	if upload.Uploaded > 0 {
 		return true
 	}
-	if upload.Scanned == 0 || upload.Deferred > 0 || upload.Failed > 0 {
+	if upload.Deferred > 0 || upload.Failed > 0 {
 		return false
 	}
 	if _, err := published.VerifyCurrentCheckpoint(ctx, store, localPublishedCellID); errors.Is(err, published.ErrCurrentPointerNotFound) {
@@ -1164,6 +1164,7 @@ var grpcErrorMappings = []struct {
 }{
 	{target: metastore.ErrNotFound, code: codes.NotFound, message: "document or transaction not found"},
 	{target: metastore.ErrConflict, code: codes.AlreadyExists, message: "document already exists"},
+	{target: metastore.ErrTransactionClosed, code: codes.FailedPrecondition, message: "transaction is closed"},
 	{target: blockstore.ErrInvalidRange, code: codes.InvalidArgument, message: "read range is outside document bounds"},
 	{target: blockstore.ErrChecksumMismatch, code: codes.DataLoss, message: "stored document bytes failed checksum verification"},
 	{target: backend.ErrChecksumMismatch, code: codes.DataLoss, message: "backend document bytes failed checksum verification"},

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -72,6 +73,53 @@ func TestPrepareCriticalWriteCanDegradeToQuorumWhenPolicyAllows(t *testing.T) {
 	}
 	if !result.RepairRequired || !result.Degraded {
 		t.Fatalf("repair/degraded = %v/%v, want true/true", result.RepairRequired, result.Degraded)
+	}
+}
+
+func TestPreparePeerPreparesUseConfiguredConcurrency(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	done := make(chan prepareResult, 1)
+	go func() {
+		result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
+			blockingSuccessTarget("member-1", document, started, release),
+			blockingSuccessTarget("member-2", document, started, release),
+		}, Policy{
+			TargetReplicaCount:    3,
+			QuorumReplicaCount:    3,
+			PrepareTimeout:        time.Second,
+			MaxConcurrentPrepares: 2,
+		})
+		done <- prepareResult{result: result, err: err}
+	}()
+
+	requireStartedMembers(t, started, "member-1", "member-2")
+	close(release)
+	outcome := requirePrepareResult(t, done)
+	testutil.RequireNoErrorf(t, outcome.err, "prepare document")
+	if outcome.result.AchievedReplicaCount != 3 {
+		t.Fatalf("achieved replicas = %d, want 3", outcome.result.AchievedReplicaCount)
+	}
+}
+
+func TestPreparePeerTimeoutDoesNotStallQuorum(t *testing.T) {
+	document := testPreparedDocument(metastore.PriorityClassNormal)
+	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
+		hangingTarget("member-1"),
+		successTarget("member-2", document),
+	}, Policy{
+		TargetReplicaCount:    3,
+		QuorumReplicaCount:    2,
+		PrepareTimeout:        50 * time.Millisecond,
+		MaxConcurrentPrepares: 2,
+	})
+	testutil.RequireNoErrorf(t, err, "prepare document")
+	if result.AchievedReplicaCount != 2 || !result.RepairRequired {
+		t.Fatalf("result = %#v, want quorum with repair required", result)
+	}
+	if len(result.PeerErrors) != 1 || !errors.Is(result.PeerErrors[0].Err, context.DeadlineExceeded) {
+		t.Fatalf("peer errors = %#v, want one deadline exceeded error", result.PeerErrors)
 	}
 }
 
@@ -235,6 +283,76 @@ func failingTarget(memberID string, err error) Target {
 		Preparer: PreparerFunc(func(context.Context, PrepareRequest) (Receipt, error) {
 			return Receipt{}, err
 		}),
+	}
+}
+
+func blockingSuccessTarget(memberID string, document PreparedDocument, started chan<- string, release <-chan struct{}) Target {
+	return Target{
+		MemberID: memberID,
+		Preparer: PreparerFunc(func(ctx context.Context, request PrepareRequest) (Receipt, error) {
+			select {
+			case started <- memberID:
+			case <-ctx.Done():
+				return Receipt{}, ctx.Err()
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return Receipt{}, ctx.Err()
+			}
+			var buf bytes.Buffer
+			if err := request.WriteBytes(ctx, &buf); err != nil {
+				return Receipt{}, err
+			}
+			if err := ValidatePreparedBytes(request.Document, buf.Bytes()); err != nil {
+				return Receipt{}, err
+			}
+			return ReceiptFromPreparedDocument(memberID, document), nil
+		}),
+	}
+}
+
+func hangingTarget(memberID string) Target {
+	return Target{
+		MemberID: memberID,
+		Preparer: PreparerFunc(func(ctx context.Context, _ PrepareRequest) (Receipt, error) {
+			<-ctx.Done()
+			return Receipt{}, ctx.Err()
+		}),
+	}
+}
+
+type prepareResult struct {
+	result Result
+	err    error
+}
+
+func requireStartedMembers(t *testing.T, started <-chan string, members ...string) {
+	t.Helper()
+	seen := make(map[string]bool, len(members))
+	for range members {
+		select {
+		case memberID := <-started:
+			seen[memberID] = true
+		case <-time.After(time.Second):
+			t.Fatalf("started members = %#v, want %v", seen, members)
+		}
+	}
+	for _, memberID := range members {
+		if !seen[memberID] {
+			t.Fatalf("started members = %#v, missing %s", seen, memberID)
+		}
+	}
+}
+
+func requirePrepareResult(t *testing.T, done <-chan prepareResult) prepareResult {
+	t.Helper()
+	select {
+	case result := <-done:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("prepare document did not finish")
+		return prepareResult{}
 	}
 }
 

@@ -120,6 +120,24 @@ func TestProcessorRetriesPartialObjectSetAndRecordsUploaded(t *testing.T) {
 	requireUploadedIntentCall(t, updater.calls, 1, intent.BlockID, time.Unix(502, 0).UTC())
 }
 
+func TestProcessorRequestsBoundedPendingIntentBatch(t *testing.T) {
+	first := testUploadIntent("block-1")
+	second := testUploadIntent("block-2")
+	lister := &recordingIntentLister{intents: []metastore.UploadIntent{first, second}}
+	updater := &recordingIntentStateUpdater{}
+
+	result, err := Processor{
+		Uploader:  Uploader{Backend: openTestBackendStore(t), Source: staticBlockSource{body: []byte("block")}, Index: staticBlockIndexSource{body: []byte("index")}},
+		Intents:   lister,
+		Updater:   updater,
+		BatchSize: 1,
+	}.RunOnce(context.Background())
+	testutil.RequireNoErrorf(t, err, "run processor")
+	requireProcessorCounts(t, result, processorCounts{scanned: 1, uploaded: 1})
+	testutil.RequireEqualf(t, lister.limit, 1, "requested upload intent batch size")
+	testutil.RequireEqualf(t, updater.calls[0].blockID, first.BlockID, "updated block id")
+}
+
 type processorCounts struct {
 	scanned  int
 	uploaded int
@@ -319,9 +337,25 @@ type staticIntentLister struct {
 	err     error
 }
 
-func (l staticIntentLister) ListUploadIntents() ([]metastore.UploadIntent, error) {
+func (l staticIntentLister) ListPendingUploadIntents(limit int) ([]metastore.UploadIntent, error) {
 	if l.err != nil {
 		return nil, l.err
+	}
+	if limit > 0 && len(l.intents) > limit {
+		return append([]metastore.UploadIntent(nil), l.intents[:limit]...), nil
+	}
+	return append([]metastore.UploadIntent(nil), l.intents...), nil
+}
+
+type recordingIntentLister struct {
+	intents []metastore.UploadIntent
+	limit   int
+}
+
+func (l *recordingIntentLister) ListPendingUploadIntents(limit int) ([]metastore.UploadIntent, error) {
+	l.limit = limit
+	if limit > 0 && len(l.intents) > limit {
+		return append([]metastore.UploadIntent(nil), l.intents[:limit]...), nil
 	}
 	return append([]metastore.UploadIntent(nil), l.intents...), nil
 }

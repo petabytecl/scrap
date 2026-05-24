@@ -19,6 +19,7 @@ var (
 	ErrNotFound                 = errors.New("metastore: not found")
 	ErrConflict                 = errors.New("metastore: conflict")
 	ErrInvalidRecord            = errors.New("metastore: invalid record")
+	ErrTransactionClosed        = errors.New("metastore: transaction is closed")
 	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
 )
 
@@ -67,6 +68,9 @@ func (s *Store) putDocument(batch *pebble.Batch, document Document) error {
 	transaction, err := s.transactionForDocument(document)
 	if err != nil {
 		return err
+	}
+	if transaction.State != TransactionStateOpen {
+		return fmt.Errorf("%w: transaction %s/%s is not open", ErrTransactionClosed, transaction.Identity.TenantID, transaction.Identity.TransactionID)
 	}
 	transaction = incrementTransactionDocumentCount(transaction, document.DocumentClass)
 	transactionValue, err := marshalTransaction(transaction)
@@ -668,6 +672,17 @@ func (s *Store) GetUploadIntent(blockID string) (UploadIntent, error) {
 }
 
 func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
+	return s.listUploadIntents(0, nil)
+}
+
+func (s *Store) ListPendingUploadIntents(limit int) ([]UploadIntent, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("%w: pending upload intent limit must be positive", ErrInvalidRecord)
+	}
+	return s.listUploadIntents(limit, shouldProcessUploadIntent)
+}
+
+func (s *Store) listUploadIntents(limit int, include func(UploadIntent) bool) ([]UploadIntent, error) {
 	prefix := uploadIntentPrefix()
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -684,12 +699,22 @@ func (s *Store) ListUploadIntents() ([]UploadIntent, error) {
 		if err != nil {
 			return nil, err
 		}
+		if include != nil && !include(intent) {
+			continue
+		}
 		intents = append(intents, intent)
+		if limit > 0 && len(intents) >= limit {
+			break
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
 	return intents, nil
+}
+
+func shouldProcessUploadIntent(intent UploadIntent) bool {
+	return intent.State == UploadStatePending || intent.State == UploadStateFailed
 }
 
 func (s *Store) ListBlockDocuments(blockID string) ([]Document, error) {

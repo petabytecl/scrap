@@ -116,6 +116,28 @@ func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestPutDocumentRejectsNewDocumentAfterTransactionCompleted(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "idempotent replay before complete")
+	_, err := store.CompleteTransaction(identity.Transaction{
+		TenantID:      doc.Identity.TenantID,
+		TransactionID: doc.Identity.TransactionID,
+	}, doc.CreatedAt.Add(time.Minute), nil)
+	testutil.RequireNoErrorf(t, err, "complete transaction")
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "idempotent replay after complete")
+
+	late := sampleDocument("late.xml", DocumentClassEphemeral)
+	err = store.PutDocument(late)
+	if !errors.Is(err, ErrTransactionClosed) {
+		t.Fatalf("late put error = %v, want %v", err, ErrTransactionClosed)
+	}
+	if _, err := store.HeadDocument(late.Identity); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("late document lookup error = %v, want %v", err, ErrNotFound)
+	}
+}
+
 func TestListTransactionsReturnsCommittedTransactions(t *testing.T) {
 	store := openTestStore(t)
 	first := sampleDocument("a.xml", DocumentClassPermanent)
@@ -149,6 +171,25 @@ func TestRecordUploadIntentPersistsAndLists(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "list upload intents")
 	if len(intents) != 2 || intents[0].BlockID != "block-1" || intents[1].BlockID != "block-2" {
 		t.Fatalf("upload intents = %#v, want block-1 then block-2", intents)
+	}
+}
+
+func TestListPendingUploadIntentsFiltersAndLimits(t *testing.T) {
+	store := openTestStore(t)
+	uploaded := sampleUploadIntent("block-1")
+	uploaded.State = UploadStateUploaded
+	pending := sampleUploadIntent("block-2")
+	failed := sampleUploadIntent("block-3")
+	failed.State = UploadStateFailed
+	laterPending := sampleUploadIntent("block-4")
+	for _, intent := range []UploadIntent{uploaded, pending, failed, laterPending} {
+		testutil.RequireNoErrorf(t, store.RecordUploadIntent(intent), "record upload intent %s", intent.BlockID)
+	}
+
+	intents, err := store.ListPendingUploadIntents(2)
+	testutil.RequireNoErrorf(t, err, "list pending upload intents")
+	if len(intents) != 2 || intents[0].BlockID != "block-2" || intents[1].BlockID != "block-3" {
+		t.Fatalf("pending intents = %#v, want block-2 then block-3", intents)
 	}
 }
 

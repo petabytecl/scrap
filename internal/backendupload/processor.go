@@ -13,8 +13,10 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 )
 
+const defaultRunOnceBatchSize = 100
+
 type IntentLister interface {
-	ListUploadIntents() ([]metastore.UploadIntent, error)
+	ListPendingUploadIntents(limit int) ([]metastore.UploadIntent, error)
 }
 
 type IntentStateUpdater interface {
@@ -22,10 +24,11 @@ type IntentStateUpdater interface {
 }
 
 type Processor struct {
-	Uploader Uploader
-	Intents  IntentLister
-	Updater  IntentStateUpdater
-	Now      func() time.Time
+	Uploader  Uploader
+	Intents   IntentLister
+	Updater   IntentStateUpdater
+	Now       func() time.Time
+	BatchSize int
 }
 
 type RunResult struct {
@@ -42,7 +45,7 @@ func (p Processor) RunOnce(ctx context.Context) (RunResult, error) {
 	if err := p.validate(); err != nil {
 		return result, err
 	}
-	intents, err := p.Intents.ListUploadIntents()
+	intents, err := p.Intents.ListPendingUploadIntents(p.batchSize())
 	if err != nil {
 		return result, err
 	}
@@ -62,6 +65,13 @@ func (p Processor) validate() error {
 		return errNotConfigured("upload intent state updater")
 	}
 	return nil
+}
+
+func (p Processor) batchSize() int {
+	if p.BatchSize > 0 {
+		return p.BatchSize
+	}
+	return defaultRunOnceBatchSize
 }
 
 func (p Processor) processIntent(ctx context.Context, intent metastore.UploadIntent, result *RunResult) error {
