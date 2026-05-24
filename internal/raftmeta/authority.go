@@ -180,6 +180,9 @@ func (a *Authority) CreateSnapshot(ctx context.Context) (SnapshotInfo, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.requireCleanApplyStateLocked("create snapshot"); err != nil {
+		return SnapshotInfo{}, err
+	}
 	snapshot, err := a.buildSnapshotLocked(a.appliedIndex)
 	if err != nil {
 		return SnapshotInfo{}, err
@@ -197,6 +200,9 @@ func (a *Authority) CompactLog(ctx context.Context, throughIndex uint64) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.requireCleanApplyStateLocked("compact log"); err != nil {
+		return err
+	}
 	if throughIndex == 0 {
 		return nil
 	}
@@ -884,6 +890,13 @@ func (a *Authority) recordFailureLocked(err error) error {
 		a.failureErr = err
 	}
 	return a.failureErr
+}
+
+func (a *Authority) requireCleanApplyStateLocked(operation string) error {
+	if a.failureErr == nil {
+		return nil
+	}
+	return fmt.Errorf("raftmeta: authority is fail-closed; %s refused; restart required: %w", operation, a.failureErr)
 }
 
 // These errors are deterministic no-op command outcomes, not local durability failures.
