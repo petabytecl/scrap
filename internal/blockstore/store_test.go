@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/testutil"
@@ -207,6 +209,75 @@ func TestInstallSealedBlockRestoresVerifiedBlockFile(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "read restored block")
 	if !bytes.Equal(got, data) {
 		t.Fatal("restored block bytes differ from source")
+	}
+}
+
+func TestReplaceSealedBlockInstallsVerifiedReplacement(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	record, err := store.Append(ctx, bytes.NewReader([]byte("stale block bytes")))
+	testutil.RequireNoErrorf(t, err, "append stale block")
+	_, err = store.SealCurrent(ctx)
+	testutil.RequireNoErrorf(t, err, "seal stale block")
+	replacement := []byte("replacement block bytes")
+	replacementSHA := sha256.Sum256(replacement)
+
+	err = store.ReplaceSealedBlock(ctx, record.BlockID, uint64(len(replacement)), replacementSHA, bytes.NewReader(replacement))
+	testutil.RequireNoErrorf(t, err, "replace sealed block")
+	sealed, err := store.IsSealed(record.BlockID)
+	testutil.RequireNoErrorf(t, err, "is sealed")
+	if !sealed {
+		t.Fatalf("replacement block %q is not sealed", record.BlockID)
+	}
+	got, err := os.ReadFile(store.BlockPath(record.BlockID))
+	testutil.RequireNoErrorf(t, err, "read replaced block")
+	if !bytes.Equal(got, replacement) {
+		t.Fatalf("replaced block = %q, want %q", got, replacement)
+	}
+}
+
+func TestReplaceSealedBlockPreservesOriginalOnReaderFailure(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	record, err := store.Append(ctx, bytes.NewReader([]byte("original block bytes")))
+	testutil.RequireNoErrorf(t, err, "append original block")
+	_, err = store.SealCurrent(ctx)
+	testutil.RequireNoErrorf(t, err, "seal original block")
+	original, err := os.ReadFile(store.BlockPath(record.BlockID))
+	testutil.RequireNoErrorf(t, err, "read original block")
+	replacement := []byte("replacement block bytes")
+	replacementSHA := sha256.Sum256(replacement)
+
+	err = store.ReplaceSealedBlock(ctx, record.BlockID, uint64(len(replacement)), replacementSHA, iotest.ErrReader(io.ErrUnexpectedEOF))
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("replace error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+	after, err := os.ReadFile(store.BlockPath(record.BlockID))
+	testutil.RequireNoErrorf(t, err, "read original block after failed replace")
+	if !bytes.Equal(after, original) {
+		t.Fatalf("original block changed after failed replace")
+	}
+	sealed, err := store.IsSealed(record.BlockID)
+	testutil.RequireNoErrorf(t, err, "is sealed")
+	if !sealed {
+		t.Fatalf("original block %q is not sealed after failed replace", record.BlockID)
+	}
+}
+
+func TestReplaceSealedBlockValidatesContextAndReader(t *testing.T) {
+	store := openTestStore(t)
+	replacement := []byte("replacement block bytes")
+	replacementSHA := sha256.Sum256(replacement)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := store.ReplaceSealedBlock(cancelled, "block-id", uint64(len(replacement)), replacementSHA, bytes.NewReader(replacement))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled replace error = %v, want %v", err, context.Canceled)
+	}
+	err = store.ReplaceSealedBlock(context.Background(), "block-id", uint64(len(replacement)), replacementSHA, nil)
+	if err == nil || !strings.Contains(err.Error(), "replacement block reader is required") {
+		t.Fatalf("nil reader error = %v, want replacement reader validation", err)
 	}
 }
 
