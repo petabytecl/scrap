@@ -38,54 +38,44 @@ reject() {
 	fi
 }
 
+extract_first_kind() {
+	kind=$1
+	file=$2
+
+	awk -v target_kind="$kind" '
+		function matches_target_kind(value) {
+			return value ~ "(^|\n)kind:[[:space:]]*" target_kind "[[:space:]]*(\n|$)"
+		}
+		/^---$/ {
+			if (matches_target_kind(doc)) {
+				printf "%s", doc
+				found = 1
+				exit
+			}
+			doc = ""
+			next
+		}
+		{
+			doc = doc $0 ORS
+		}
+		END {
+			if (!found && matches_target_kind(doc)) {
+				printf "%s", doc
+			}
+		}
+	' "$file"
+}
+
 render deploy/kustomize/base > "$base_render"
 render "$LOCAL_KIND_OVERLAY" > "$local_kind_render"
 
 test -s "$base_render"
 test -s "$local_kind_render"
 
-awk '
-	/^---$/ {
-		if (doc ~ /(^|\n)kind:[[:space:]]*NetworkPolicy[[:space:]]*(\n|$)/) {
-			printf "%s", doc
-			found = 1
-			exit
-		}
-		doc = ""
-		next
-	}
-	{
-		doc = doc $0 ORS
-	}
-	END {
-		if (!found && doc ~ /(^|\n)kind:[[:space:]]*NetworkPolicy[[:space:]]*(\n|$)/) {
-			printf "%s", doc
-		}
-	}
-' "$base_render" > "$network_policy_render"
-
+extract_first_kind NetworkPolicy "$base_render" > "$network_policy_render"
 test -s "$network_policy_render"
 
-awk '
-	/^---$/ {
-		if (doc ~ /(^|\n)kind:[[:space:]]*StatefulSet[[:space:]]*(\n|$)/) {
-			printf "%s", doc
-			found = 1
-			exit
-		}
-		doc = ""
-		next
-	}
-	{
-		doc = doc $0 ORS
-	}
-	END {
-		if (!found && doc ~ /(^|\n)kind:[[:space:]]*StatefulSet[[:space:]]*(\n|$)/) {
-			printf "%s", doc
-		}
-	}
-' "$base_render" > "$statefulset_render"
-
+extract_first_kind StatefulSet "$base_render" > "$statefulset_render"
 test -s "$statefulset_render"
 
 reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "NodePort service in base render"
