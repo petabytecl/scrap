@@ -84,3 +84,22 @@ func TestRegisterFlagSetParsesGRPCServerLimits(t *testing.T) {
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveTime, 30*time.Second, "keepalive time")
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveTimeout, 4*time.Second, "keepalive timeout")
 }
+
+func TestRegisterFlagSetParsesGRPCTLSConfig(t *testing.T) {
+	cfg := config.Default()
+	flags := flag.NewFlagSet("scrapd-test", flag.ContinueOnError)
+	registerFlagSet(flags, &cfg)
+
+	err := flags.Parse([]string{
+		"-grpc-tls-enabled=true",
+		"-grpc-tls-cert-file=server.pem",
+		"-grpc-tls-key-file=server-key.pem",
+		"-grpc-tls-ca-cert-file=ca.pem",
+	})
+	testutil.RequireNoErrorf(t, err, "parse grpc TLS flags")
+
+	testutil.RequireTruef(t, cfg.TLSEnabled, "grpc TLS enabled")
+	testutil.RequireEqualf(t, cfg.TLSCertFile, "server.pem", "grpc TLS cert file")
+	testutil.RequireEqualf(t, cfg.TLSKeyFile, "server-key.pem", "grpc TLS key file")
+	testutil.RequireEqualf(t, cfg.TLSCACertFile, "ca.pem", "grpc TLS CA cert file")
+}

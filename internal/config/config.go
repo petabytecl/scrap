@@ -54,6 +54,10 @@ type Config struct {
 	AdminListenAddress              string
 	MetricsListenAddress            string
 	AuthorizationPolicyPath         string
+	TLSEnabled                      bool
+	TLSCertFile                     string
+	TLSKeyFile                      string
+	TLSCACertFile                   string
 	LocalDataDir                    string
 	EnableLocalNonProductionStorage bool
 	EnableLocalFilesystemBackend    bool
@@ -145,6 +149,9 @@ func (c Config) Validate() error {
 	if err := c.validateListenAddresses(); err != nil {
 		return err
 	}
+	if err := c.validateGRPCTLS(); err != nil {
+		return err
+	}
 	if err := c.validateProductionWriteACKGate(); err != nil {
 		return err
 	}
@@ -211,6 +218,24 @@ func firstValidationError(errs ...error) error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c Config) validateGRPCTLS() error {
+	if !c.TLSEnabled {
+		return nil
+	}
+	return firstValidationError(
+		validateRequiredGRPCTLSFile("tls_cert_file", c.TLSCertFile),
+		validateRequiredGRPCTLSFile("tls_key_file", c.TLSKeyFile),
+		validateRequiredGRPCTLSFile("tls_ca_cert_file", c.TLSCACertFile),
+	)
+}
+
+func validateRequiredGRPCTLSFile(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required when grpc TLS is enabled", field)
 	}
 	return nil
 }
