@@ -85,6 +85,22 @@ func (l *Log) Close() error {
 	return err
 }
 
+// CheckHealth reports fail-closed command-log state without retrying ambiguous fsync failures.
+func (l *Log) CheckHealth() error {
+	if l == nil {
+		return errors.New("raftmeta: command log is closed")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return errors.New("raftmeta: command log is closed")
+	}
+	if l.failureErr != nil {
+		return fmt.Errorf("raftmeta: command log is fail-closed; restart required: %w", l.failureErr)
+	}
+	return nil
+}
+
 func (l *Log) Append(command *metastorev1.ShardCommand) (Entry, error) {
 	entries, err := l.AppendBatch([]*metastorev1.ShardCommand{command})
 	if err != nil {

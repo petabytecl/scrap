@@ -145,6 +145,23 @@ func (a *Authority) AppliedIndex() uint64 {
 	return a.appliedIndex
 }
 
+// CheckHealth reports fail-closed authority state that requires operator restart.
+func (a *Authority) CheckHealth() error {
+	if a == nil {
+		return errors.New("raftmeta: authority is closed")
+	}
+	a.mu.Lock()
+	failure := a.failureErr
+	a.mu.Unlock()
+	if failure != nil {
+		return fmt.Errorf("raftmeta: authority is fail-closed; restart required: %w", failure)
+	}
+	if a.log == nil {
+		return errors.New("raftmeta: command log is closed")
+	}
+	return a.log.CheckHealth()
+}
+
 func (a *Authority) EnsureWriteReady(ctx context.Context) error {
 	return a.requireWriteQuorum(ctx)
 }

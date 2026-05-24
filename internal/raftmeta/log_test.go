@@ -112,6 +112,25 @@ func TestLogAppendBatchSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("append after sync failure error = %v, want %v", err, syncErr)
 	}
+	healthErr := log.CheckHealth()
+	if !errors.Is(healthErr, syncErr) || !strings.Contains(healthErr.Error(), "restart required") {
+		t.Fatalf("log health error = %v, want restart-required sync failure", healthErr)
+	}
+}
+
+func TestLogCheckHealthReportsHealthyAndClosedStates(t *testing.T) {
+	log, err := OpenLog(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open log")
+
+	testutil.RequireNoErrorf(t, log.CheckHealth(), "healthy log")
+	testutil.RequireNoErrorf(t, log.Close(), "close log")
+	if err := log.CheckHealth(); err == nil || !strings.Contains(err.Error(), "command log is closed") {
+		t.Fatalf("closed log health error = %v, want command log closed", err)
+	}
+	var nilLog *Log
+	if err := nilLog.CheckHealth(); err == nil || !strings.Contains(err.Error(), "command log is closed") {
+		t.Fatalf("nil log health error = %v, want command log closed", err)
+	}
 }
 
 func TestLogAppendBatchIndexAdvanceFailureUsesDistinctStage(t *testing.T) {
