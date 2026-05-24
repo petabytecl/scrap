@@ -70,11 +70,21 @@ func Listen(cfg config.Config, apps Applications) (*Server, error) {
 		return nil, fmt.Errorf("listen admin grpc: %w", err)
 	}
 
-	return newServerWithConfig(cfg, publicListener, adminListener, apps, authorization, cfg.AuthorizationPolicyPath), nil
+	server, err := newServerWithConfig(cfg, publicListener, adminListener, apps, authorization, cfg.AuthorizationPolicyPath)
+	if err != nil {
+		_ = adminListener.Close()
+		_ = publicListener.Close()
+		return nil, err
+	}
+	return server, nil
 }
 
 func newServer(publicListener, adminListener net.Listener, apps Applications, authorization *authz.Manager, policyPath string) *Server {
-	return newServerWithConfig(config.Default(), publicListener, adminListener, apps, authorization, policyPath)
+	server, err := newServerWithConfig(config.Default(), publicListener, adminListener, apps, authorization, policyPath)
+	if err != nil {
+		panic(err)
+	}
+	return server
 }
 
 func newServerWithConfig(
@@ -84,15 +94,19 @@ func newServerWithConfig(
 	apps Applications,
 	authorization *authz.Manager,
 	policyPath string,
-) *Server {
+) (*Server, error) {
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
-	publicOptions := append(grpcServerLimitOptions(cfg),
+	limitOptions, err := grpcServerLimitOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	publicOptions := combineServerOptions(limitOptions,
 		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
 		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
 	)
 	publicGRPC := grpc.NewServer(publicOptions...)
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions, api.WithPublicAuditStore(apps.Operations)))
-	adminOptions := append(grpcServerLimitOptions(cfg),
+	adminOptions := combineServerOptions(limitOptions,
 		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
 		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
 	)
@@ -113,14 +127,21 @@ func newServerWithConfig(
 		authorization:  authorization,
 		policyPath:     policyPath,
 		auditEvents:    auditEventAppenderFromStore(apps.Operations),
-	}
+	}, nil
 }
 
-func grpcServerLimitOptions(cfg config.Config) []grpc.ServerOption {
+func combineServerOptions(base []grpc.ServerOption, options ...grpc.ServerOption) []grpc.ServerOption {
+	combined := make([]grpc.ServerOption, 0, len(base)+len(options))
+	combined = append(combined, base...)
+	combined = append(combined, options...)
+	return combined
+}
+
+func grpcServerLimitOptions(cfg config.Config) ([]grpc.ServerOption, error) {
 	limits := cfg.GRPCServerLimits
 	maxConcurrentStreams, err := safeconv.Uint64ToUint32("grpc_max_concurrent_streams", limits.MaxConcurrentStreams)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return []grpc.ServerOption{
 		grpc.MaxConcurrentStreams(maxConcurrentStreams),
@@ -137,7 +158,7 @@ func grpcServerLimitOptions(cfg config.Config) []grpc.ServerOption {
 			Time:                  limits.KeepaliveTime,
 			Timeout:               limits.KeepaliveTimeout,
 		}),
-	}
+	}, nil
 }
 
 func auditEventAppenderFromStore(store *operations.Store) auditEventAppender {

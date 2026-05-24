@@ -106,9 +106,9 @@ func TestServerRejectsOversizedReceivedMessages(t *testing.T) {
 	cfg.GRPCServerLimits.MaxRecvMsgSizeBytes = 1024
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
-	server := newServerWithConfig(cfg, publicListener, adminListener, Applications{
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{
 		Documents: readAllDocuments{},
-	}, testAuthorizationManager(t), "")
+	}, testAuthorizationManager(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
@@ -145,7 +145,7 @@ func TestServerRejectsOversizedAdminMessages(t *testing.T) {
 	cfg.GRPCServerLimits.MaxRecvMsgSizeBytes = 1024
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
-	server := newServerWithConfig(cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
@@ -175,9 +175,9 @@ func TestServerRejectsOversizedSentMessages(t *testing.T) {
 	cfg.GRPCServerLimits.MaxSendMsgSizeBytes = 1024
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
-	server := newServerWithConfig(cfg, publicListener, adminListener, Applications{
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{
 		Documents: largeReadDocuments{data: bytes.Repeat([]byte("x"), 2*1024)},
-	}, testAuthorizationManager(t), "")
+	}, testAuthorizationManager(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
@@ -206,9 +206,9 @@ func TestServerConcurrentStreamLimitAppliesToPublicServer(t *testing.T) {
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
 	documents := newBlockingReadDocuments()
-	server := newServerWithConfig(cfg, publicListener, adminListener, Applications{
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{
 		Documents: documents,
-	}, testAuthorizationManager(t), "")
+	}, testAuthorizationManager(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
@@ -228,7 +228,8 @@ func TestServerConcurrentStreamLimitAppliesToPublicServer(t *testing.T) {
 	secondCtx, secondCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer secondCancel()
 	_, err = client.ReadDocument(secondCtx, validReadRequest("second.xml"))
-	requireCode(t, err, codes.DeadlineExceeded)
+	requireStreamLimitRejection(t, err)
+	testutil.RequireEqualf(t, documents.callCount(), 1, "read handler call count")
 
 	close(documents.release)
 	_, err = first.Recv()
@@ -236,6 +237,21 @@ func TestServerConcurrentStreamLimitAppliesToPublicServer(t *testing.T) {
 	_ = publicConn.Close()
 	cancel()
 	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func TestServerRejectsInvalidGRPCLimitConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.GRPCServerLimits.MaxConcurrentStreams = 1 << 32
+	publicListener := bufconn.Listen(1024 * 1024)
+	defer func() { testutil.RequireNoErrorf(t, publicListener.Close(), "close public listener") }()
+	adminListener := bufconn.Listen(1024 * 1024)
+	defer func() { testutil.RequireNoErrorf(t, adminListener.Close(), "close admin listener") }()
+
+	_, err := newServerWithConfig(cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
+
+	if err == nil {
+		t.Fatal("invalid grpc max concurrent streams error = nil, want error")
+	}
 }
 
 func TestServerHealthReadinessReflectsReadFreshFailure(t *testing.T) {
@@ -921,6 +937,30 @@ func testAuthorizationManager(t *testing.T) *authz.Manager {
 	return manager
 }
 
+func requireNewServerWithConfig(
+	t *testing.T,
+	cfg config.Config,
+	publicListener,
+	adminListener net.Listener,
+	apps Applications,
+	authorization *authz.Manager,
+) *Server {
+	t.Helper()
+	server, err := newServerWithConfig(cfg, publicListener, adminListener, apps, authorization, "")
+	testutil.RequireNoErrorf(t, err, "new server with config")
+	return server
+}
+
+func requireStreamLimitRejection(t *testing.T, err error) {
+	t.Helper()
+	switch status.Code(err) {
+	case codes.DeadlineExceeded, codes.ResourceExhausted, codes.Unavailable:
+		return
+	default:
+		t.Fatalf("stream limit error code = %s, want DeadlineExceeded, ResourceExhausted, or Unavailable; err = %v", status.Code(err), err)
+	}
+}
+
 func requireCode(t *testing.T, err error, code codes.Code) {
 	t.Helper()
 	st, ok := status.FromError(err)
@@ -1001,6 +1041,8 @@ type blockingReadDocuments struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+	mu      sync.Mutex
+	calls   int
 }
 
 type largeReadDocuments struct {
@@ -1028,6 +1070,9 @@ func (d *blockingReadDocuments) ReadDocument(
 	_ storageapp.ReadDocumentRequest,
 	_ storageapp.ReadDocumentSender,
 ) error {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
 	d.once.Do(func() {
 		close(d.started)
 	})
@@ -1037,6 +1082,12 @@ func (d *blockingReadDocuments) ReadDocument(
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (d *blockingReadDocuments) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
 }
 
 func validWriteInit(documentName string) *scrapv1.WriteDocumentInit {
