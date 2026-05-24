@@ -1019,7 +1019,7 @@ func TestVerificationWindowRejectsWindowStartingAfterSelection(t *testing.T) {
 		StoredOffset: 0,
 		StoredLength: 1024,
 		Frames: []blockstore.FrameRecord{
-			{SegmentOffset: 512, SegmentLength: 512},
+			{SegmentOffset: 256, SegmentLength: 512},
 		},
 	}, 0, 512)
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
