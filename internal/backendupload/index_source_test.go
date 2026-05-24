@@ -34,7 +34,7 @@ func TestUploadBlockStoresReadableIndexFromMetastore(t *testing.T) {
 		PriorityClass:    metastore.PriorityClassNormal,
 		Length:           record.StoredLength,
 		LogicalSHA256:    record.LogicalSHA256,
-		StoredSHA256:     record.LogicalSHA256,
+		StoredSHA256:     record.StoredSHA256,
 		CreatedByService: "billing-etl",
 		CreatedAt:        time.Unix(100, 0).UTC(),
 		FinalizedAt:      time.Unix(100, 0).UTC(),

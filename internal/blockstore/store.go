@@ -50,6 +50,7 @@ type Record struct {
 	StoredOffset  uint64
 	StoredLength  uint64
 	LogicalSHA256 [32]byte
+	StoredSHA256  [32]byte
 	Frames        []FrameRecord
 	Replicas      []ReplicaRef
 }
@@ -547,6 +548,7 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 		Frames:       appended.frames,
 	}
 	record.LogicalSHA256 = appended.logicalSHA256
+	record.StoredSHA256 = appended.storedSHA256
 	if validate != nil {
 		if err := validate(record); err != nil {
 			return Record{}, err
@@ -564,13 +566,15 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 type appendResult struct {
 	storedLength  uint64
 	logicalSHA256 [32]byte
+	storedSHA256  [32]byte
 	frames        []FrameRecord
 }
 
 func (s *Store) appendReader(ctx context.Context, reader io.Reader, startOffset uint64) (appendResult, error) {
 	accumulator := blockAppendAccumulator{
 		file:        s.blockFile,
-		hasher:      sha256.New(),
+		logicalHash: sha256.New(),
+		storedHash:  sha256.New(),
 		frames:      newFrameAccumulator(s.frameSize),
 		startOffset: startOffset,
 	}
@@ -596,7 +600,8 @@ func (s *Store) appendReader(ctx context.Context, reader io.Reader, startOffset 
 
 type blockAppendAccumulator struct {
 	file         *os.File
-	hasher       hash.Hash
+	logicalHash  hash.Hash
+	storedHash   hash.Hash
 	frames       *frameAccumulator
 	startOffset  uint64
 	storedLength uint64
@@ -610,7 +615,10 @@ func (a *blockAppendAccumulator) write(chunk []byte) error {
 	if written != len(chunk) {
 		return io.ErrShortWrite
 	}
-	if _, err := a.hasher.Write(chunk); err != nil {
+	if _, err := a.logicalHash.Write(chunk); err != nil {
+		return err
+	}
+	if _, err := a.storedHash.Write(chunk); err != nil {
 		return err
 	}
 	chunkLength, err := safeconv.IntToUint64("append chunk length", len(chunk))
@@ -629,11 +637,14 @@ func (a *blockAppendAccumulator) write(chunk []byte) error {
 }
 
 func (a *blockAppendAccumulator) result() appendResult {
-	var sum [32]byte
-	copy(sum[:], a.hasher.Sum(nil))
+	var logicalSum [32]byte
+	copy(logicalSum[:], a.logicalHash.Sum(nil))
+	var storedSum [32]byte
+	copy(storedSum[:], a.storedHash.Sum(nil))
 	return appendResult{
 		storedLength:  a.storedLength,
-		logicalSHA256: sum,
+		logicalSHA256: logicalSum,
+		storedSHA256:  storedSum,
 		frames:        a.frames.Records(),
 	}
 }
@@ -859,7 +870,7 @@ func verifyWholeRecord(file *os.File, record Record) error {
 	}
 	var got [32]byte
 	copy(got[:], hasher.Sum(nil))
-	if got != record.LogicalSHA256 {
+	if got != record.StoredSHA256 {
 		return ErrChecksumMismatch
 	}
 	return nil

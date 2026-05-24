@@ -480,7 +480,7 @@ func newDocument(init storageapp.WriteDocumentInit, record blockstore.Record, no
 		HasContentType:              init.ContentType != "",
 		Length:                      record.StoredLength,
 		LogicalSHA256:               record.LogicalSHA256,
-		StoredSHA256:                record.LogicalSHA256,
+		StoredSHA256:                record.StoredSHA256,
 		DocumentIdentityFingerprint: documentIdentityFingerprint(init.Identity.TenantID, init.Identity.TransactionID, init.Identity.DocumentName),
 		CreatedByService:            init.CreatedByService,
 		WorkflowStage:               init.WorkflowStage,
@@ -564,6 +564,7 @@ func (a *Application) preparePeerReplicas(ctx context.Context, document metastor
 			StoredOffset:  requested.StoredOffset,
 			StoredLength:  requested.StoredLength,
 			LogicalSHA256: requested.LogicalSHA256,
+			StoredSHA256:  requested.StoredSHA256,
 			Frames:        append([]blockstore.FrameRecord(nil), requested.Frames...),
 		}
 		return a.blocks.ReadRange(ctx, record, 0, nil, writer)
