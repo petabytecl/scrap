@@ -3312,7 +3312,7 @@ func requireCode(t *testing.T, err error, code codes.Code) {
 	if errors.Is(err, io.EOF) {
 		t.Fatalf("error = EOF, want status code %s", code)
 	}
-	if got := status.Code(err); got != code {
+	if got := status.Code(api.ToGRPCError(err)); got != code {
 		t.Fatalf("code = %s, want %s; err = %v", got, code, err)
 	}
 }
@@ -3397,7 +3397,7 @@ func stringSliceContains(values []string, want string) bool {
 
 func requireIntegrityDetail(t *testing.T, err error) *scrapv1.IntegrityFailureDetail {
 	t.Helper()
-	st, ok := status.FromError(err)
+	st, ok := status.FromError(api.ToGRPCError(err))
 	if !ok {
 		t.Fatalf("error is not a status error: %v", err)
 	}
@@ -3412,7 +3412,7 @@ func requireIntegrityDetail(t *testing.T, err error) *scrapv1.IntegrityFailureDe
 
 func requireRestorePendingDetail(t *testing.T, err error) *scrapv1.RestorePendingDetail {
 	t.Helper()
-	st, ok := status.FromError(err)
+	st, ok := status.FromError(api.ToGRPCError(err))
 	if !ok {
 		t.Fatalf("error is not a status error: %v", err)
 	}
@@ -3427,7 +3427,7 @@ func requireRestorePendingDetail(t *testing.T, err error) *scrapv1.RestorePendin
 
 func requireCryptoUnavailableDetail(t *testing.T, err error) *scrapv1.CryptoUnavailableDetail {
 	t.Helper()
-	st, ok := status.FromError(err)
+	st, ok := status.FromError(api.ToGRPCError(err))
 	if !ok {
 		t.Fatalf("error is not a status error: %v", err)
 	}
@@ -3442,7 +3442,7 @@ func requireCryptoUnavailableDetail(t *testing.T, err error) *scrapv1.CryptoUnav
 
 func requireUnsafeCapacityDetail(t *testing.T, err error) *scrapv1.UnsafeCapacityDetail {
 	t.Helper()
-	st, ok := status.FromError(err)
+	st, ok := status.FromError(api.ToGRPCError(err))
 	if !ok {
 		t.Fatalf("error is not a status error: %v", err)
 	}

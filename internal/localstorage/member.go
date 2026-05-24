@@ -7,10 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/appstatus"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -77,10 +75,10 @@ func (a *Application) GetEvictionSafety(ctx context.Context, memberID string) (*
 func (a *Application) requireWriteAdmission(ctx context.Context, expectedLength *uint64) error {
 	state := a.currentLocalMemberState()
 	if state.Draining {
-		return status.Error(codes.FailedPrecondition, "local storage member is draining and cannot accept new writes")
+		return appstatus.New(appstatus.CodeFailedPrecondition, "local storage member is draining and cannot accept new writes")
 	}
 	if state.Cordoned {
-		return status.Error(codes.FailedPrecondition, "local storage member is cordoned and cannot accept new writes")
+		return appstatus.New(appstatus.CodeFailedPrecondition, "local storage member is cordoned and cannot accept new writes")
 	}
 	return a.requireCapacityAdmission(ctx, expectedLength)
 }
@@ -107,17 +105,12 @@ func (a *Application) requireCapacityAdmission(ctx context.Context, expectedLeng
 }
 
 func unsafeCapacityError(requiredBytes, availableBytes uint64, warnings []string) error {
-	st := status.New(codes.ResourceExhausted, "local capacity profile cannot admit write")
-	withDetails, err := st.WithDetails(&scrapv1.UnsafeCapacityDetail{
+	return appstatus.New(appstatus.CodeResourceExhausted, "local capacity profile cannot admit write", appstatus.WithDetails(&scrapv1.UnsafeCapacityDetail{
 		CapacityProfileId: localCapacityProfileID,
 		RequiredBytes:     requiredBytes,
 		AvailableBytes:    availableBytes,
 		Warnings:          append([]string(nil), warnings...),
-	})
-	if err != nil {
-		return st.Err()
-	}
-	return withDetails.Err()
+	}))
 }
 
 func saturatingAddUint64(left, right uint64) uint64 {
