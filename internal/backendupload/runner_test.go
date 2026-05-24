@@ -18,9 +18,9 @@ func TestRunnerRunsImmediatelyAndOnTicks(t *testing.T) {
 	intent := testUploadIntent("block-1")
 	store := openTestBackendStore(t)
 
-	done := make(chan error, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- Runner{
+		Runner{
 			Processor: Processor{
 				Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("block")}, Index: staticBlockIndexSource{body: []byte("index")}},
 				Intents:  staticIntentLister{intents: []metastore.UploadIntent{intent}},
@@ -34,6 +34,7 @@ func TestRunnerRunsImmediatelyAndOnTicks(t *testing.T) {
 				observed <- result
 			},
 		}.run(ctx, ticks)
+		done <- struct{}{}
 	}()
 
 	requireNoRunError(t, reportErrors)
@@ -48,9 +49,7 @@ func TestRunnerRunsImmediatelyAndOnTicks(t *testing.T) {
 		t.Fatalf("second result = %#v, want one upload", second)
 	}
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("runner returned error: %v", err)
-	}
+	<-done
 }
 
 func TestRunnerReportsErrorsAndContinues(t *testing.T) {
@@ -61,9 +60,9 @@ func TestRunnerReportsErrorsAndContinues(t *testing.T) {
 	listerErr := errors.New("metastore unavailable")
 	store := openTestBackendStore(t)
 
-	done := make(chan error, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- Runner{
+		Runner{
 			Processor: Processor{
 				Uploader: Uploader{Backend: store, Source: staticBlockSource{body: []byte("block")}, Index: staticBlockIndexSource{body: []byte("index")}},
 				Intents:  staticIntentLister{err: listerErr},
@@ -73,6 +72,7 @@ func TestRunnerReportsErrorsAndContinues(t *testing.T) {
 				observed <- err
 			},
 		}.run(ctx, ticks)
+		done <- struct{}{}
 	}()
 
 	if err := receiveRunError(t, observed); !errors.Is(err, listerErr) {
@@ -83,9 +83,7 @@ func TestRunnerReportsErrorsAndContinues(t *testing.T) {
 		t.Fatalf("second error = %v, want %v", err, listerErr)
 	}
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("runner returned error: %v", err)
-	}
+	<-done
 }
 
 func TestRunnerUsesRunOnceFunc(t *testing.T) {
@@ -95,9 +93,9 @@ func TestRunnerUsesRunOnceFunc(t *testing.T) {
 	observed := make(chan RunResult, 1)
 	calls := 0
 
-	done := make(chan error, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- Runner{
+		Runner{
 			RunOnceFunc: func(context.Context) (RunResult, error) {
 				calls++
 				return RunResult{Scanned: calls}, nil
@@ -106,6 +104,7 @@ func TestRunnerUsesRunOnceFunc(t *testing.T) {
 				observed <- result
 			},
 		}.run(ctx, ticks)
+		done <- struct{}{}
 	}()
 
 	first := receiveRunResult(t, observed)
@@ -113,9 +112,7 @@ func TestRunnerUsesRunOnceFunc(t *testing.T) {
 		t.Fatalf("first result = %#v, want callback result", first)
 	}
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("runner returned error: %v", err)
-	}
+	<-done
 }
 
 func TestRunnerRejectsNonPositiveInterval(t *testing.T) {

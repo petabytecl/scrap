@@ -22,6 +22,7 @@ const (
 	commandLogHeaderLen = 12
 	commandLogCRCLen    = 4
 	MaxCommandBytes     = 16 * 1024 * 1024
+	commandLogFilePerm  = 0o600
 )
 
 var commandLogCRCTable = crc32.MakeTable(crc32.Castagnoli)
@@ -50,7 +51,7 @@ func OpenLog(dir string) (*Log, error) {
 	if err != nil {
 		return nil, err
 	}
-	file, err := openLogFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := openLogFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND)
 	if err != nil {
 		return nil, err
 	}
@@ -165,12 +166,12 @@ func (l *Log) Compact(throughIndex uint64) error {
 	l.file = nil
 	// #nosec G703 -- source and destination are validated under the configured raft directory.
 	if err := os.Rename(tempPath, l.path); err != nil {
-		if file, openErr := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600); openErr == nil {
+		if file, openErr := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND); openErr == nil {
 			l.file = file
 		}
 		return err
 	}
-	file, err := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := openLogFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND)
 	if err != nil {
 		return err
 	}
@@ -242,7 +243,7 @@ func readEntries(path string) ([]Entry, error) {
 }
 
 func writeEntries(path string, entries []Entry) error {
-	file, err := openLogFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := openLogFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	if err != nil {
 		return err
 	}
@@ -307,7 +308,7 @@ func openLogReadFile(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func openLogFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+func openLogFile(path string, flag int) (*os.File, error) {
 	// #nosec G304 G703 -- raft metadata log paths are validated under the configured raft directory.
-	return os.OpenFile(path, flag, perm)
+	return os.OpenFile(path, flag, commandLogFilePerm)
 }

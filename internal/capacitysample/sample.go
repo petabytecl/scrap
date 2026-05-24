@@ -50,6 +50,10 @@ const (
 	MaxSampleCount       = 32
 	MaxDocumentSizeBytes = 8 * 1024 * 1024
 	MaxDuration          = 5 * time.Minute
+
+	openBaoKeysPathParts  = 3
+	openBaoMountPathParts = 2
+	sampleByteCycle       = 251
 )
 
 type AdminClient interface {
@@ -834,12 +838,12 @@ func proposeRequestBudget(samples []RequestSample, duration time.Duration) Propo
 
 func proposeLaneBudgets(bytesPerSecond, requestsPerSecond uint64) []ProposedLaneBudget {
 	return []ProposedLaneBudget{
-		proposedLane(backend.LaneIngestUpload, bytesPerSecond, requestsPerSecond, 60, 1, 2),
-		proposedLane(backend.LaneRepair, bytesPerSecond, requestsPerSecond, 20, 1, 2),
-		proposedLane(backend.LaneRestore, bytesPerSecond, requestsPerSecond, 20, 1, 2),
-		proposedLane(backend.LaneDRCopy, bytesPerSecond, requestsPerSecond, 10, 1, 1),
-		proposedLane(backend.LaneRewrap, bytesPerSecond, requestsPerSecond, 10, 1, 1),
-		proposedLane(backend.LaneScrub, bytesPerSecond, requestsPerSecond, 5, 1, 1),
+		proposedLane(backend.LaneIngestUpload, bytesPerSecond, requestsPerSecond, 60, 2),
+		proposedLane(backend.LaneRepair, bytesPerSecond, requestsPerSecond, 20, 2),
+		proposedLane(backend.LaneRestore, bytesPerSecond, requestsPerSecond, 20, 2),
+		proposedLane(backend.LaneDRCopy, bytesPerSecond, requestsPerSecond, 10, 1),
+		proposedLane(backend.LaneRewrap, bytesPerSecond, requestsPerSecond, 10, 1),
+		proposedLane(backend.LaneScrub, bytesPerSecond, requestsPerSecond, 5, 1),
 	}
 }
 
@@ -848,12 +852,11 @@ func proposedLane(
 	bytesPerSecond uint64,
 	requestsPerSecond uint64,
 	percent uint64,
-	reservedWorkers uint32,
 	maxWorkers uint32,
 ) ProposedLaneBudget {
 	return ProposedLaneBudget{
 		Lane:              string(lane),
-		ReservedWorkers:   reservedWorkers,
+		ReservedWorkers:   1,
 		MaxWorkers:        maxWorkers,
 		BytesPerSecond:    maxUint64(1, bytesPerSecond*percent/100),
 		RequestsPerSecond: maxUint64(1, requestsPerSecond*percent/100),
@@ -1012,7 +1015,7 @@ func validateHTTPURL(name, raw string) error {
 func backendObjectURL(baseURL, key string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse backend object base URL: %w", err)
 	}
 	basePath := strings.TrimRight(parsed.Path, "/")
 	if basePath == "" {
@@ -1038,14 +1041,14 @@ func splitOpenBaoTransitKeyPath(value string) (string, string, error) {
 		return "", "", errors.New("capacity sample requires openbao transit key path")
 	}
 	parts := strings.Split(cleaned, "/")
-	if len(parts) >= 3 && parts[1] == "keys" {
+	if len(parts) >= openBaoKeysPathParts && parts[1] == "keys" {
 		keyName := strings.Join(parts[2:], "/")
 		if keyName == "" {
 			return "", "", errors.New("capacity sample openbao transit key path requires a key name")
 		}
 		return parts[0], keyName, nil
 	}
-	if len(parts) >= 2 {
+	if len(parts) >= openBaoMountPathParts {
 		return parts[0], strings.Join(parts[1:], "/"), nil
 	}
 	return "transit", cleaned, nil
@@ -1054,7 +1057,7 @@ func splitOpenBaoTransitKeyPath(value string) (string, string, error) {
 func sampleBytes(size uint64, seed byte) []byte {
 	body := make([]byte, size)
 	for i := range body {
-		body[i] = seed + byte(i%251)
+		body[i] = seed + byte(i%sampleByteCycle)
 	}
 	return body
 }

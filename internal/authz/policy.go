@@ -32,7 +32,10 @@ const (
 	ReasonPolicyReloadRejected    = "SCRAP_AUTHZ_POLICY_RELOAD_REJECTED"
 )
 
-const maxReloadAlerts = 32
+const (
+	maxIdentifierBytes = 128
+	maxReloadAlerts    = 32
+)
 
 var ErrInvalidPolicy = errors.New("invalid authorization policy")
 
@@ -349,8 +352,8 @@ func validateIdentifier(label, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%w: %s is required", ErrInvalidPolicy, label)
 	}
-	if len(value) > 128 {
-		return fmt.Errorf("%w: %s exceeds 128 bytes", ErrInvalidPolicy, label)
+	if len(value) > maxIdentifierBytes {
+		return fmt.Errorf("%w: %s exceeds %d bytes", ErrInvalidPolicy, label, maxIdentifierBytes)
 	}
 	for _, r := range value {
 		if r > unicode.MaxASCII || unicode.IsControl(r) {

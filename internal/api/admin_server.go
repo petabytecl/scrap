@@ -1066,6 +1066,7 @@ func estimateOperationImpact(targets []AdminTarget) (*adminv1.OperationImpact, e
 			shards[target.Block.ShardID] = true
 		case AdminTargetShard:
 			shards[target.ShardID] = true
+		case AdminTargetStorageMember, AdminTargetSnapshot, AdminTargetCapacityProfile:
 		}
 	}
 	shardCount, err := safeconv.IntToUint32("affected shard count", len(shards))

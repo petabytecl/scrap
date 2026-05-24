@@ -30,6 +30,10 @@ const (
 	DefaultTransitKeyPath   = "transit/keys/scrap-backend"
 	DefaultAuditDevice      = "file:/tmp/openbao-audit.log"
 	DefaultKubernetesClient = "openbao-transit-smoke"
+
+	httpClientErrorStatus = 400
+	transitKeyPathParts   = 2
+	transitKeysPathParts  = 3
 )
 
 var ErrSmokeFailed = errors.New("openbao transit smoke failed")
@@ -481,7 +485,7 @@ func (c openBaoClient) do(ctx context.Context, method, apiPath string, payload, 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("build openbao request: %w", err)
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -500,7 +504,7 @@ func (c openBaoClient) do(ctx context.Context, method, apiPath string, payload, 
 		return requestID, readErr
 	}
 	requestID = redactedRequestID(resp.Header, responseBody)
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= httpClientErrorStatus {
 		return requestID, fmt.Errorf("openbao %s %s failed with HTTP %d", method, apiPath, resp.StatusCode)
 	}
 	if out == nil {
@@ -515,10 +519,10 @@ func (c openBaoClient) do(ctx context.Context, method, apiPath string, payload, 
 func splitTransitKeyPath(value string) (string, string, error) {
 	cleaned := strings.Trim(strings.TrimSpace(value), "/")
 	parts := strings.Split(cleaned, "/")
-	if len(parts) >= 3 && parts[1] == "keys" {
+	if len(parts) >= transitKeysPathParts && parts[1] == "keys" {
 		return parts[0], strings.Join(parts[2:], "/"), nil
 	}
-	if len(parts) >= 2 {
+	if len(parts) >= transitKeyPathParts {
 		return parts[0], strings.Join(parts[1:], "/"), nil
 	}
 	return "", "", fmt.Errorf("transit key path %q must include mount and key name", value)
@@ -526,12 +530,12 @@ func splitTransitKeyPath(value string) (string, string, error) {
 
 func ciphertextVersion(ciphertext string) (uint32, error) {
 	parts := strings.Split(ciphertext, ":")
-	if len(parts) < 3 || !strings.HasPrefix(parts[1], "v") {
+	if len(parts) < transitKeysPathParts || !strings.HasPrefix(parts[1], "v") {
 		return 0, errors.New("unexpected Transit ciphertext shape")
 	}
 	var version uint64
 	if _, err := fmt.Sscanf(parts[1], "v%d", &version); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("parse transit ciphertext version: %w", err)
 	}
 	if version > uint64(^uint32(0)) {
 		return 0, fmt.Errorf("transit key version %d exceeds uint32", version)
@@ -540,8 +544,8 @@ func ciphertextVersion(ciphertext string) (uint32, error) {
 }
 
 func replaceCiphertextVersion(ciphertext, version string) string {
-	parts := strings.SplitN(ciphertext, ":", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(ciphertext, ":", transitKeysPathParts)
+	if len(parts) != transitKeysPathParts {
 		return "vault:v" + version + ":redacted"
 	}
 	return parts[0] + ":v" + version + ":" + parts[2]
@@ -624,7 +628,7 @@ func validateHTTPURL(name, raw string) error {
 func joinURL(base, apiPath string) (string, error) {
 	parsed, err := url.Parse(base)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse openbao base URL: %w", err)
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/" + strings.TrimLeft(apiPath, "/")
 	return parsed.String(), nil

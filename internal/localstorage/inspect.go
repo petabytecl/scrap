@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"math"
@@ -194,7 +195,7 @@ func (a *Application) localDiskStats(ctx context.Context) (localDiskStats, error
 	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(a.dir, &stat); err != nil {
-		return localDiskStats{}, err
+		return localDiskStats{}, fmt.Errorf("stat local storage filesystem: %w", err)
 	}
 	return localDiskStats{
 		bytesUsed:            used,
@@ -220,7 +221,7 @@ func directorySize(root string) (uint64, error) {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
 			}
-			return err
+			return fmt.Errorf("inspect local storage entry: %w", err)
 		}
 		size := info.Size()
 		if size <= 0 {
@@ -233,7 +234,10 @@ func directorySize(root string) (uint64, error) {
 		total += uint64(size)
 		return nil
 	})
-	return total, err
+	if err != nil {
+		return 0, fmt.Errorf("walk local storage directory: %w", err)
+	}
+	return total, nil
 }
 
 func statfsBytes(blocks uint64, blockSize int64) uint64 {

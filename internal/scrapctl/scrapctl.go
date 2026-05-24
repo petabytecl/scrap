@@ -261,138 +261,170 @@ func buildInspectAction(args []string) (action, error) {
 	}
 	switch args[0] {
 	case "summary":
-		fs := newFlagSet("inspect summary")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.inspect.GetClusterSummary(ctx, &adminv1.GetClusterSummaryRequest{})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetSummary())
-		}, nil
+		return buildInspectSummaryAction(args[1:])
 	case "shard":
-		fs := newFlagSet("inspect shard")
-		shardID := fs.String("shard-id", "", "shard id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *shardID == "" {
-			return nil, usageError("inspect shard requires --shard-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.inspect.GetShard(ctx, &adminv1.GetShardRequest{ShardId: *shardID})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetShard())
-		}, nil
+		return buildInspectShardAction(args[1:])
 	case "document":
-		fs := newFlagSet("inspect document")
-		doc := documentFlags(fs)
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		target, err := doc.target()
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.inspect.GetDocument(ctx, &adminv1.GetDocumentRequest{Document: target})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetDocument())
-		}, nil
+		return buildInspectDocumentAction(args[1:])
 	case "block":
-		fs := newFlagSet("inspect block")
-		block := blockFlags(fs)
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		target, err := block.target()
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.inspect.GetBlock(ctx, &adminv1.GetBlockRequest{Block: target})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetBlock())
-		}, nil
+		return buildInspectBlockAction(args[1:])
 	case "member":
-		fs := newFlagSet("inspect member")
-		memberID := fs.String("member-id", "", "storage member id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *memberID == "" {
-			return nil, usageError("inspect member requires --member-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.inspect.GetMember(ctx, &adminv1.GetMemberRequest{
-				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetStorageMember())
-		}, nil
+		return buildInspectMemberAction(args[1:])
 	case "capacity-runway":
-		fs := newFlagSet("inspect capacity-runway")
-		profileID := fs.String("capacity-profile-id", "", "capacity profile id")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.inspect.GetCapacityRunway(ctx, &adminv1.GetCapacityRunwayRequest{
-				CapacityProfileId: optionalString(*profileID),
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetRunway())
-		}, nil
+		return buildInspectCapacityRunwayAction(args[1:])
 	case "repair-queue":
-		fs := newFlagSet("inspect repair-queue")
-		shardID := fs.String("shard-id", "", "shard id")
-		pageSize := fs.Uint64("page-size", 0, "page size")
-		pageToken := fs.String("page-token", "", "page token")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		pageSizeValue, err := optionalPageSize(*pageSize, "inspect repair-queue")
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.repair.GetRepairQueue(ctx, &adminv1.GetRepairQueueRequest{
-				ShardId:   optionalString(*shardID),
-				PageSize:  pageSizeValue.value,
-				PageToken: *pageToken,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp)
-		}, nil
+		return buildInspectRepairQueueAction(args[1:])
 	case "recovery-readiness":
-		fs := newFlagSet("inspect recovery-readiness")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.dr.GetRecoveryReadiness(ctx, &adminv1.GetRecoveryReadinessRequest{})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetReadiness())
-		}, nil
+		return buildInspectRecoveryReadinessAction(args[1:])
 	default:
 		return nil, usageError(fmt.Sprintf("unknown inspect subject %q", args[0]))
 	}
+}
+
+func buildInspectSummaryAction(args []string) (action, error) {
+	fs := newFlagSet("inspect summary")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.inspect.GetClusterSummary(ctx, &adminv1.GetClusterSummaryRequest{})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetSummary())
+	}, nil
+}
+
+func buildInspectShardAction(args []string) (action, error) {
+	fs := newFlagSet("inspect shard")
+	shardID := fs.String("shard-id", "", "shard id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if *shardID == "" {
+		return nil, usageError("inspect shard requires --shard-id")
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.inspect.GetShard(ctx, &adminv1.GetShardRequest{ShardId: *shardID})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetShard())
+	}, nil
+}
+
+func buildInspectDocumentAction(args []string) (action, error) {
+	fs := newFlagSet("inspect document")
+	doc := documentFlags(fs)
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	target, err := doc.target()
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.inspect.GetDocument(ctx, &adminv1.GetDocumentRequest{Document: target})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetDocument())
+	}, nil
+}
+
+func buildInspectBlockAction(args []string) (action, error) {
+	fs := newFlagSet("inspect block")
+	block := blockFlags(fs)
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	target, err := block.target()
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.inspect.GetBlock(ctx, &adminv1.GetBlockRequest{Block: target})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetBlock())
+	}, nil
+}
+
+func buildInspectMemberAction(args []string) (action, error) {
+	fs := newFlagSet("inspect member")
+	memberID := fs.String("member-id", "", "storage member id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if *memberID == "" {
+		return nil, usageError("inspect member requires --member-id")
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.inspect.GetMember(ctx, &adminv1.GetMemberRequest{
+			StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetStorageMember())
+	}, nil
+}
+
+func buildInspectCapacityRunwayAction(args []string) (action, error) {
+	fs := newFlagSet("inspect capacity-runway")
+	profileID := fs.String("capacity-profile-id", "", "capacity profile id")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.inspect.GetCapacityRunway(ctx, &adminv1.GetCapacityRunwayRequest{
+			CapacityProfileId: optionalString(*profileID),
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetRunway())
+	}, nil
+}
+
+func buildInspectRepairQueueAction(args []string) (action, error) {
+	fs := newFlagSet("inspect repair-queue")
+	shardID := fs.String("shard-id", "", "shard id")
+	pageSize := fs.Uint64("page-size", 0, "page size")
+	pageToken := fs.String("page-token", "", "page token")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	pageSizeValue, err := optionalPageSize(*pageSize, "inspect repair-queue")
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.repair.GetRepairQueue(ctx, &adminv1.GetRepairQueueRequest{
+			ShardId:   optionalString(*shardID),
+			PageSize:  pageSizeValue.value,
+			PageToken: *pageToken,
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp)
+	}, nil
+}
+
+func buildInspectRecoveryReadinessAction(args []string) (action, error) {
+	fs := newFlagSet("inspect recovery-readiness")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.dr.GetRecoveryReadiness(ctx, &adminv1.GetRecoveryReadinessRequest{})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetReadiness())
+	}, nil
 }
 
 func buildPlanAction(args []string) (action, error) {
@@ -401,194 +433,210 @@ func buildPlanAction(args []string) (action, error) {
 	}
 	switch args[0] {
 	case "restore":
-		opts, err := parseTargetPlan("plan restore", args[1:], false)
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.restore.PlanRestore(ctx, &adminv1.PlanRestoreRequest{
-				Targets:  opts.targets,
-				DryRun:   opts.dryRun,
-				Metadata: opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildTargetPlanAction("plan restore", args[1:], false, planRestore)
 	case "prewarm":
-		opts, err := parseTargetPlan("plan prewarm", args[1:], true)
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.restore.PlanPrewarm(ctx, &adminv1.PlanPrewarmRequest{
-				Targets:  opts.targets,
-				PinUntil: opts.pinUntil,
-				DryRun:   opts.dryRun,
-				Metadata: opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildTargetPlanAction("plan prewarm", args[1:], true, planPrewarm)
 	case "repair":
-		opts, err := parseTargetPlan("plan repair", args[1:], false)
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.repair.PlanRepair(ctx, &adminv1.PlanRepairRequest{
-				Targets:  opts.targets,
-				DryRun:   opts.dryRun,
-				Metadata: opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildTargetPlanAction("plan repair", args[1:], false, planRepair)
 	case "scrub":
-		opts, err := parseTargetPlan("plan scrub", args[1:], false)
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.repair.PlanScrub(ctx, &adminv1.PlanScrubRequest{
-				Targets:  opts.targets,
-				DryRun:   opts.dryRun,
-				Metadata: opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildTargetPlanAction("plan scrub", args[1:], false, planScrub)
 	case "drain":
-		fs := newFlagSet("plan drain")
-		memberID := fs.String("member-id", "", "storage member id")
-		dryRun := fs.Bool("dry-run", false, "request a dry-run plan")
-		metadata := metadataFlag{}
-		fs.Var(&metadata, "metadata", "metadata key=value; may be repeated")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *memberID == "" {
-			return nil, usageError("plan drain requires --member-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.member.PlanDrain(ctx, &adminv1.PlanDrainRequest{
-				StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
-				DryRun:        *dryRun,
-				Metadata:      metadata.mapValue(),
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildPlanDrainAction(args[1:])
 	case "tombstone":
-		opts, err := parseTargetPlan("plan tombstone", args[1:], false)
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.lifecycle.PlanTombstone(ctx, &adminv1.PlanTombstoneRequest{
-				Targets:  opts.targets,
-				DryRun:   opts.dryRun,
-				Metadata: opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildTargetPlanAction("plan tombstone", args[1:], false, planTombstone)
 	case "key-rotation":
-		fs := newFlagSet("plan key-rotation")
-		targets := targetFlag{}
-		metadata := metadataFlag{}
-		destinationKeyID := fs.String("destination-key-id", "", "destination key id")
-		dryRun := fs.Bool("dry-run", false, "request a dry-run plan")
-		fs.Var(&targets, "target", "target kind:value; may be repeated")
-		fs.Var(&metadata, "metadata", "metadata key=value; may be repeated")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if len(targets) == 0 {
-			return nil, usageError("plan key-rotation requires at least one --target")
-		}
-		if *destinationKeyID == "" {
-			return nil, usageError("plan key-rotation requires --destination-key-id")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.key.PlanKeyRotation(ctx, &adminv1.PlanKeyRotationRequest{
-				Targets:          targets,
-				DestinationKeyId: *destinationKeyID,
-				DryRun:           *dryRun,
-				Metadata:         metadata.mapValue(),
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildPlanKeyRotationAction(args[1:])
 	case "capacity-override":
-		fs := newFlagSet("plan capacity-override")
-		profileID := fs.String("capacity-profile-id", "", "capacity profile id")
-		expiresAt := fs.String("expires-at", "", "RFC3339 expiration timestamp")
-		reason := fs.String("reason", "", "operator reason")
-		dryRun := fs.Bool("dry-run", false, "request a dry-run plan")
-		metadata := metadataFlag{}
-		fs.Var(&metadata, "metadata", "metadata key=value; may be repeated")
-		if err := parseExact(fs, args[1:]); err != nil {
-			return nil, err
-		}
-		if *profileID == "" {
-			return nil, usageError("plan capacity-override requires --capacity-profile-id")
-		}
-		if *expiresAt == "" {
-			return nil, usageError("plan capacity-override requires --expires-at")
-		}
-		parsedExpiresAt, err := parseTimestamp(*expiresAt)
-		if err != nil {
-			return nil, usageError("plan capacity-override --expires-at must be RFC3339")
-		}
-		if *reason == "" {
-			return nil, usageError("plan capacity-override requires --reason")
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.capacity.PlanCapacityOverride(ctx, &adminv1.PlanCapacityOverrideRequest{
-				CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: *profileID},
-				ExpiresAt:       timestamppb.New(parsedExpiresAt),
-				Reason:          *reason,
-				DryRun:          *dryRun,
-				Metadata:        metadata.mapValue(),
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildPlanCapacityOverrideAction(args[1:])
 	case "recovery":
-		opts, err := parseTargetPlan("plan recovery", args[1:], false)
-		if err != nil {
-			return nil, err
-		}
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.dr.PlanRecovery(ctx, &adminv1.PlanRecoveryRequest{
-				Targets:  opts.targets,
-				DryRun:   opts.dryRun,
-				Metadata: opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetPlan())
-		}, nil
+		return buildTargetPlanAction("plan recovery", args[1:], false, planRecovery)
 	default:
 		return nil, usageError(fmt.Sprintf("unknown plan operation %q", args[0]))
 	}
+}
+
+type targetPlanCall func(context.Context, clients, targetPlanOptions) (proto.Message, error)
+
+func buildTargetPlanAction(name string, args []string, allowPinUntil bool, call targetPlanCall) (action, error) {
+	opts, err := parseTargetPlan(name, args, allowPinUntil)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		msg, err := call(ctx, c, opts)
+		if err != nil {
+			return err
+		}
+		return writeProto(out, msg)
+	}, nil
+}
+
+func planRestore(ctx context.Context, c clients, opts targetPlanOptions) (proto.Message, error) {
+	resp, err := c.restore.PlanRestore(ctx, &adminv1.PlanRestoreRequest{
+		Targets:  opts.targets,
+		DryRun:   opts.dryRun,
+		Metadata: opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPlan(), nil
+}
+
+func planPrewarm(ctx context.Context, c clients, opts targetPlanOptions) (proto.Message, error) {
+	resp, err := c.restore.PlanPrewarm(ctx, &adminv1.PlanPrewarmRequest{
+		Targets:  opts.targets,
+		PinUntil: opts.pinUntil,
+		DryRun:   opts.dryRun,
+		Metadata: opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPlan(), nil
+}
+
+func planRepair(ctx context.Context, c clients, opts targetPlanOptions) (proto.Message, error) {
+	resp, err := c.repair.PlanRepair(ctx, &adminv1.PlanRepairRequest{
+		Targets:  opts.targets,
+		DryRun:   opts.dryRun,
+		Metadata: opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPlan(), nil
+}
+
+func planScrub(ctx context.Context, c clients, opts targetPlanOptions) (proto.Message, error) {
+	resp, err := c.repair.PlanScrub(ctx, &adminv1.PlanScrubRequest{
+		Targets:  opts.targets,
+		DryRun:   opts.dryRun,
+		Metadata: opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPlan(), nil
+}
+
+func planTombstone(ctx context.Context, c clients, opts targetPlanOptions) (proto.Message, error) {
+	resp, err := c.lifecycle.PlanTombstone(ctx, &adminv1.PlanTombstoneRequest{
+		Targets:  opts.targets,
+		DryRun:   opts.dryRun,
+		Metadata: opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPlan(), nil
+}
+
+func planRecovery(ctx context.Context, c clients, opts targetPlanOptions) (proto.Message, error) {
+	resp, err := c.dr.PlanRecovery(ctx, &adminv1.PlanRecoveryRequest{
+		Targets:  opts.targets,
+		DryRun:   opts.dryRun,
+		Metadata: opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPlan(), nil
+}
+
+func buildPlanDrainAction(args []string) (action, error) {
+	fs := newFlagSet("plan drain")
+	memberID := fs.String("member-id", "", "storage member id")
+	dryRun := fs.Bool("dry-run", false, "request a dry-run plan")
+	metadata := metadataFlag{}
+	fs.Var(&metadata, "metadata", "metadata key=value; may be repeated")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if *memberID == "" {
+		return nil, usageError("plan drain requires --member-id")
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.member.PlanDrain(ctx, &adminv1.PlanDrainRequest{
+			StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: *memberID},
+			DryRun:        *dryRun,
+			Metadata:      metadata.mapValue(),
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetPlan())
+	}, nil
+}
+
+func buildPlanKeyRotationAction(args []string) (action, error) {
+	fs := newFlagSet("plan key-rotation")
+	targets := targetFlag{}
+	metadata := metadataFlag{}
+	destinationKeyID := fs.String("destination-key-id", "", "destination key id")
+	dryRun := fs.Bool("dry-run", false, "request a dry-run plan")
+	fs.Var(&targets, "target", "target kind:value; may be repeated")
+	fs.Var(&metadata, "metadata", "metadata key=value; may be repeated")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if len(targets) == 0 {
+		return nil, usageError("plan key-rotation requires at least one --target")
+	}
+	if *destinationKeyID == "" {
+		return nil, usageError("plan key-rotation requires --destination-key-id")
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.key.PlanKeyRotation(ctx, &adminv1.PlanKeyRotationRequest{
+			Targets:          targets,
+			DestinationKeyId: *destinationKeyID,
+			DryRun:           *dryRun,
+			Metadata:         metadata.mapValue(),
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetPlan())
+	}, nil
+}
+
+func buildPlanCapacityOverrideAction(args []string) (action, error) {
+	fs := newFlagSet("plan capacity-override")
+	profileID := fs.String("capacity-profile-id", "", "capacity profile id")
+	expiresAt := fs.String("expires-at", "", "RFC3339 expiration timestamp")
+	reason := fs.String("reason", "", "operator reason")
+	dryRun := fs.Bool("dry-run", false, "request a dry-run plan")
+	metadata := metadataFlag{}
+	fs.Var(&metadata, "metadata", "metadata key=value; may be repeated")
+	if err := parseExact(fs, args); err != nil {
+		return nil, err
+	}
+	if *profileID == "" {
+		return nil, usageError("plan capacity-override requires --capacity-profile-id")
+	}
+	if *expiresAt == "" {
+		return nil, usageError("plan capacity-override requires --expires-at")
+	}
+	parsedExpiresAt, err := parseTimestamp(*expiresAt)
+	if err != nil {
+		return nil, usageError("plan capacity-override --expires-at must be RFC3339")
+	}
+	if *reason == "" {
+		return nil, usageError("plan capacity-override requires --reason")
+	}
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		resp, err := c.capacity.PlanCapacityOverride(ctx, &adminv1.PlanCapacityOverrideRequest{
+			CapacityProfile: &adminv1.CapacityProfileTarget{CapacityProfileId: *profileID},
+			ExpiresAt:       timestamppb.New(parsedExpiresAt),
+			Reason:          *reason,
+			DryRun:          *dryRun,
+			Metadata:        metadata.mapValue(),
+		})
+		if err != nil {
+			return err
+		}
+		return writeProto(out, resp.GetPlan())
+	}, nil
 }
 
 func buildStartAction(args []string) (action, error) {
@@ -601,151 +649,185 @@ func buildStartAction(args []string) (action, error) {
 	}
 	switch args[0] {
 	case "restore":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.restore.StartRestore(ctx, &adminv1.StartRestoreRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startRestore), nil
 	case "prewarm":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.restore.StartPrewarm(ctx, &adminv1.StartPrewarmRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startPrewarm), nil
 	case "repair":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.repair.StartRepair(ctx, &adminv1.StartRepairRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startRepair), nil
 	case "scrub":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.repair.StartScrub(ctx, &adminv1.StartScrubRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startScrub), nil
 	case "drain":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.member.StartDrain(ctx, &adminv1.StartDrainRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startDrain), nil
 	case "tombstone":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.lifecycle.StartTombstone(ctx, &adminv1.StartTombstoneRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startTombstone), nil
 	case "key-rotation":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.key.StartKeyRotation(ctx, &adminv1.StartKeyRotationRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startKeyRotation), nil
 	case "capacity-override":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.capacity.StartCapacityOverride(ctx, &adminv1.StartCapacityOverrideRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startCapacityOverride), nil
 	case "metadata-restore":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.dr.StartMetadataRestore(ctx, &adminv1.StartMetadataRestoreRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startMetadataRestore), nil
 	case "copy-verify":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.dr.StartCopyVerify(ctx, &adminv1.StartCopyVerifyRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startCopyVerify), nil
 	case "dr-drill":
-		return func(ctx context.Context, c clients, out io.Writer) error {
-			resp, err := c.dr.StartDRDrill(ctx, &adminv1.StartDRDrillRequest{
-				OperationPlanId: opts.planID,
-				PlanHash:        opts.planHash,
-				OperationId:     opts.operationID,
-				Metadata:        opts.metadata,
-			})
-			if err != nil {
-				return err
-			}
-			return writeProto(out, resp.GetOperation())
-		}, nil
+		return buildStartOperationAction(opts, startDRDrill), nil
 	default:
 		return nil, usageError(fmt.Sprintf("unknown start operation %q", args[0]))
 	}
+}
+
+type startOperationCall func(context.Context, clients, startOptions) (*adminv1.Operation, error)
+
+func buildStartOperationAction(opts startOptions, call startOperationCall) action {
+	return func(ctx context.Context, c clients, out io.Writer) error {
+		operation, err := call(ctx, c, opts)
+		if err != nil {
+			return err
+		}
+		return writeProto(out, operation)
+	}
+}
+
+func startRestore(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.restore.StartRestore(ctx, &adminv1.StartRestoreRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startPrewarm(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.restore.StartPrewarm(ctx, &adminv1.StartPrewarmRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startRepair(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.repair.StartRepair(ctx, &adminv1.StartRepairRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startScrub(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.repair.StartScrub(ctx, &adminv1.StartScrubRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startDrain(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.member.StartDrain(ctx, &adminv1.StartDrainRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startTombstone(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.lifecycle.StartTombstone(ctx, &adminv1.StartTombstoneRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startKeyRotation(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.key.StartKeyRotation(ctx, &adminv1.StartKeyRotationRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startCapacityOverride(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.capacity.StartCapacityOverride(ctx, &adminv1.StartCapacityOverrideRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startMetadataRestore(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.dr.StartMetadataRestore(ctx, &adminv1.StartMetadataRestoreRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startCopyVerify(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.dr.StartCopyVerify(ctx, &adminv1.StartCopyVerifyRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
+}
+
+func startDRDrill(ctx context.Context, c clients, opts startOptions) (*adminv1.Operation, error) {
+	resp, err := c.dr.StartDRDrill(ctx, &adminv1.StartDRDrillRequest{
+		OperationPlanId: opts.planID,
+		PlanHash:        opts.planHash,
+		OperationId:     opts.operationID,
+		Metadata:        opts.metadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOperation(), nil
 }
 
 func buildStatusAction(args []string) (action, error) {
@@ -1239,7 +1321,7 @@ func parseState(value string) (adminv1.OperationState, error) {
 func parseTimestamp(value string) (time.Time, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("parse RFC3339 timestamp: %w", err)
 	}
 	return parsed.UTC(), nil
 }
@@ -1348,8 +1430,10 @@ func writeProto(out io.Writer, msg proto.Message) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(out, string(encoded))
-	return err
+	if _, err := fmt.Fprintln(out, string(encoded)); err != nil {
+		return fmt.Errorf("write proto JSON: %w", err)
+	}
+	return nil
 }
 
 type failurePayload struct {

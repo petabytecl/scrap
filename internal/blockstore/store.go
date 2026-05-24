@@ -24,6 +24,7 @@ const (
 	formatMajor       = 0
 	formatMinor       = 1
 	defaultReadBuffer = 1024 * 1024
+	blockFilePerm     = 0o600
 )
 
 var (
@@ -124,13 +125,14 @@ func (s *Store) isSealedLocked(blockID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err := os.Stat(sealPath); err == nil {
+	_, statErr := os.Stat(sealPath)
+	if statErr == nil {
 		return true, nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else {
-		return false, err
 	}
+	if errors.Is(statErr, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, statErr
 }
 
 func (s *Store) CurrentBlockLength() uint64 {
@@ -358,9 +360,9 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 	if err != nil {
 		return err
 	}
-	target, err := openValidatedFileWithFlags(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	target, err := openValidatedFileWithFlags(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR)
 	if errors.Is(err, os.ErrExist) {
-		target, err = openValidatedFileWithFlags(blockPath, os.O_RDWR, 0o600)
+		target, err = openValidatedFileWithFlags(blockPath, os.O_RDWR)
 	} else if err == nil {
 		if err := writeHeader(target, record.BlockID, s.frameSize); err != nil {
 			return errors.Join(err, target.Close())
@@ -415,9 +417,11 @@ func (s *Store) EnsureSealedBlock(ctx context.Context, blockID string, expectedL
 		}
 		return false, err
 	}
-	if _, err := os.Stat(sealPath); err == nil {
+	_, statErr := os.Stat(sealPath)
+	if statErr == nil {
 		return true, nil
-	} else if errors.Is(err, os.ErrNotExist) {
+	}
+	if errors.Is(statErr, os.ErrNotExist) {
 		if err := writeSealMarker(sealPath); err != nil && !errors.Is(err, os.ErrExist) {
 			return false, err
 		}
@@ -425,9 +429,8 @@ func (s *Store) EnsureSealedBlock(ctx context.Context, blockID string, expectedL
 			return false, err
 		}
 		return true, nil
-	} else {
-		return false, err
 	}
+	return false, statErr
 }
 
 func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
@@ -815,7 +818,7 @@ func createBlockFile(blocksDir string, frameSize uint64) (string, string, *os.Fi
 	if err != nil {
 		return "", "", nil, err
 	}
-	blockFile, err := openValidatedFileWithFlags(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	blockFile, err := openValidatedFileWithFlags(blockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -854,7 +857,7 @@ func writeHeader(blockFile *os.File, blockID string, frameSize uint64) error {
 }
 
 func writeSealMarker(path string) error {
-	file, err := openValidatedFileWithFlags(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	file, err := openValidatedFileWithFlags(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 	if errors.Is(err, os.ErrExist) {
 		return nil
 	}
@@ -986,9 +989,9 @@ func openValidatedFile(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func openValidatedFileWithFlags(path string, flag int, perm os.FileMode) (*os.File, error) {
+func openValidatedFileWithFlags(path string, flag int) (*os.File, error) {
 	// #nosec G304 G703 -- callers validate paths under the configured storage directory.
-	return os.OpenFile(path, flag, perm)
+	return os.OpenFile(path, flag, blockFilePerm)
 }
 
 func (s *Store) removeBlockStorePath(path string) error {

@@ -1,6 +1,7 @@
 package metastore
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -218,7 +219,7 @@ func validateCommandReceiptRecord(record *metastorev1.CommandReceiptRecord) erro
 	if record.GetCommandId() == "" {
 		return invalidRecord("command receipt", "command_id is required")
 	}
-	if len(record.GetCommandSha256()) != 32 {
+	if len(record.GetCommandSha256()) != sha256.Size {
 		return invalidRecord("command receipt", "command_sha256 must be 32 bytes")
 	}
 	return nil
@@ -350,7 +351,7 @@ func validateLocation(location *metastorev1.Location) error {
 		if frame.GetSegmentLength() == 0 {
 			return invalidRecord("document.location", "frame %d segment_length is required", i)
 		}
-		if len(frame.GetSha256()) != 32 {
+		if len(frame.GetSha256()) != sha256.Size {
 			return invalidRecord("document.location", "frame %d sha256 must be 32 bytes", i)
 		}
 	}
@@ -361,7 +362,7 @@ func validateLocation(location *metastorev1.Location) error {
 		if replica.GetBlockId() == "" {
 			return invalidRecord("document.location", "replica %d block_id is required", i)
 		}
-		if len(replica.GetStoredSha256()) != 32 {
+		if len(replica.GetStoredSha256()) != sha256.Size {
 			return invalidRecord("document.location", "replica %d stored_sha256 must be 32 bytes", i)
 		}
 	}
@@ -386,7 +387,7 @@ func validateEnvelopeRef(ref *metastorev1.EnvelopeRef) error {
 	if ref.GetKeyVersion() == 0 {
 		return invalidRecord("document.envelope_ref", "key_version is required")
 	}
-	if len(ref.GetEnvelopeSha256()) != 32 {
+	if len(ref.GetEnvelopeSha256()) != sha256.Size {
 		return invalidRecord("document.envelope_ref", "envelope_sha256 must be 32 bytes")
 	}
 	return nil

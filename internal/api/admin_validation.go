@@ -74,36 +74,33 @@ type MemberTargetRequest struct {
 	StorageMember string
 }
 
-var restoreTargetKinds = map[AdminTargetKind]bool{
-	AdminTargetDocument:    true,
-	AdminTargetTransaction: true,
-	AdminTargetBlock:       true,
-}
+var restoreTargetKinds = targetKindSet(AdminTargetDocument, AdminTargetTransaction, AdminTargetBlock)
 
-var repairTargetKinds = map[AdminTargetKind]bool{
-	AdminTargetDocument:      true,
-	AdminTargetBlock:         true,
-	AdminTargetShard:         true,
-	AdminTargetStorageMember: true,
-}
+var repairTargetKinds = targetKindSet(
+	AdminTargetDocument,
+	AdminTargetBlock,
+	AdminTargetShard,
+	AdminTargetStorageMember,
+)
 
-var scrubTargetKinds = map[AdminTargetKind]bool{
-	AdminTargetDocument:      true,
-	AdminTargetTransaction:   true,
-	AdminTargetBlock:         true,
-	AdminTargetShard:         true,
-	AdminTargetStorageMember: true,
-}
+var scrubTargetKinds = targetKindSet(
+	AdminTargetDocument,
+	AdminTargetTransaction,
+	AdminTargetBlock,
+	AdminTargetShard,
+	AdminTargetStorageMember,
+)
 
-var tombstoneTargetKinds = map[AdminTargetKind]bool{
-	AdminTargetDocument:    true,
-	AdminTargetTransaction: true,
-}
+var tombstoneTargetKinds = targetKindSet(AdminTargetDocument, AdminTargetTransaction)
 
-var keyRotationTargetKinds = map[AdminTargetKind]bool{
-	AdminTargetDocument:    true,
-	AdminTargetTransaction: true,
-	AdminTargetBlock:       true,
+var keyRotationTargetKinds = targetKindSet(AdminTargetDocument, AdminTargetTransaction, AdminTargetBlock)
+
+func targetKindSet(kinds ...AdminTargetKind) map[AdminTargetKind]bool {
+	out := make(map[AdminTargetKind]bool, len(kinds))
+	for _, kind := range kinds {
+		out[kind] = true
+	}
+	return out
 }
 
 func ValidateAdminTarget(target *adminv1.Target) (AdminTarget, error) {
@@ -119,42 +116,42 @@ func ValidatePlanRestoreRequest(req *adminv1.PlanRestoreRequest) (OperationPlanR
 	if req == nil {
 		return missingPlanRequest()
 	}
-	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, restoreTargetKinds)
+	return validateTargetPlanRequest(req.Targets, req.DryRun, nil, req.Metadata, restoreTargetKinds)
 }
 
 func ValidatePlanPrewarmRequest(req *adminv1.PlanPrewarmRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
 	}
-	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, req.PinUntil, req.Metadata, restoreTargetKinds)
+	return validateTargetPlanRequest(req.Targets, req.DryRun, req.PinUntil, req.Metadata, restoreTargetKinds)
 }
 
 func ValidatePlanRepairRequest(req *adminv1.PlanRepairRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
 	}
-	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, repairTargetKinds)
+	return validateTargetPlanRequest(req.Targets, req.DryRun, nil, req.Metadata, repairTargetKinds)
 }
 
 func ValidatePlanScrubRequest(req *adminv1.PlanScrubRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
 	}
-	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, scrubTargetKinds)
+	return validateTargetPlanRequest(req.Targets, req.DryRun, nil, req.Metadata, scrubTargetKinds)
 }
 
 func ValidatePlanTombstoneRequest(req *adminv1.PlanTombstoneRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
 	}
-	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, tombstoneTargetKinds)
+	return validateTargetPlanRequest(req.Targets, req.DryRun, nil, req.Metadata, tombstoneTargetKinds)
 }
 
 func ValidatePlanKeyRotationRequest(req *adminv1.PlanKeyRotationRequest) (OperationPlanRequest, error) {
 	if req == nil {
 		return missingPlanRequest()
 	}
-	planReq, err := validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, keyRotationTargetKinds)
+	planReq, err := validateTargetPlanRequest(req.Targets, req.DryRun, nil, req.Metadata, keyRotationTargetKinds)
 	if err != nil {
 		return OperationPlanRequest{}, err
 	}
@@ -181,7 +178,7 @@ func ValidatePlanCapacityOverrideRequest(req *adminv1.PlanCapacityOverrideReques
 	expiresAt := validateRequiredAdminTime("expires_at", req.ExpiresAt, &problems)
 	validateRequiredText("reason", req.Reason, &problems)
 	validateText("reason", req.Reason, &problems)
-	validateMetadata("metadata", req.Metadata, &problems)
+	validateMetadata(req.Metadata, &problems)
 	if err := problems.err(); err != nil {
 		return OperationPlanRequest{}, err
 	}
@@ -212,7 +209,7 @@ func ValidatePlanRecoveryRequest(req *adminv1.PlanRecoveryRequest) (OperationPla
 	if req == nil {
 		return missingPlanRequest()
 	}
-	return validateTargetPlanRequest("targets", req.Targets, req.DryRun, nil, req.Metadata, nil)
+	return validateTargetPlanRequest(req.Targets, req.DryRun, nil, req.Metadata, nil)
 }
 
 func ValidateStartRestoreRequest(req *adminv1.StartRestoreRequest) (OperationStartRequest, error) {
@@ -345,7 +342,7 @@ func ValidatePlanDrainRequest(req *adminv1.PlanDrainRequest) (OperationPlanReque
 		return OperationPlanRequest{}, problems.err()
 	}
 	member := validateStorageMemberTarget("storage_member", req.StorageMember, &problems)
-	validateMetadata("metadata", req.Metadata, &problems)
+	validateMetadata(req.Metadata, &problems)
 	if err := problems.err(); err != nil {
 		return OperationPlanRequest{}, err
 	}
@@ -360,7 +357,6 @@ func ValidatePlanDrainRequest(req *adminv1.PlanDrainRequest) (OperationPlanReque
 }
 
 func validateTargetPlanRequest(
-	field string,
 	targets []*adminv1.Target,
 	dryRun bool,
 	pinUntil *timestamppb.Timestamp,
@@ -369,7 +365,7 @@ func validateTargetPlanRequest(
 ) (OperationPlanRequest, error) {
 	var problems violations
 	if len(targets) == 0 {
-		problems.add(field, identity.ReasonRequired, "at least one target is required")
+		problems.add("targets", identity.ReasonRequired, "at least one target is required")
 	}
 	out := OperationPlanRequest{
 		Targets:  make([]AdminTarget, 0, len(targets)),
@@ -377,10 +373,10 @@ func validateTargetPlanRequest(
 		Metadata: cloneTags(metadata),
 	}
 	for i, target := range targets {
-		out.Targets = append(out.Targets, validateAdminTarget(fmt.Sprintf("%s[%d]", field, i), target, allowed, &problems))
+		out.Targets = append(out.Targets, validateAdminTarget(fmt.Sprintf("targets[%d]", i), target, allowed, &problems))
 	}
 	out.PinUntil = validateOptionalAdminTime("pin_until", pinUntil, &problems)
-	validateMetadata("metadata", metadata, &problems)
+	validateMetadata(metadata, &problems)
 	if err := problems.err(); err != nil {
 		return OperationPlanRequest{}, err
 	}
@@ -392,7 +388,7 @@ func validateStartRequest(operationID, operationPlanID, planHash string, metadat
 	validateUUIDv7("operation_id", operationID, &problems)
 	validateRequiredText("operation_plan_id", operationPlanID, &problems)
 	validateRequiredText("plan_hash", planHash, &problems)
-	validateMetadata("metadata", metadata, &problems)
+	validateMetadata(metadata, &problems)
 	if err := problems.err(); err != nil {
 		return OperationStartRequest{}, err
 	}
@@ -561,10 +557,10 @@ func validateRequiredAdminTime(field string, value *timestamppb.Timestamp, probl
 	return *parsed
 }
 
-func validateMetadata(field string, metadata map[string]string, problems *violations) {
-	validateTags(field, metadata, problems)
+func validateMetadata(metadata map[string]string, problems *violations) {
+	validateTags("metadata", metadata, problems)
 	if size := tagsSize(metadata); size > MaxMetadataBytes {
-		problems.add(field, reasonMetadataTooLarge, fmt.Sprintf("metadata is %d bytes; maximum is %d bytes", size, MaxMetadataBytes))
+		problems.add("metadata", reasonMetadataTooLarge, fmt.Sprintf("metadata is %d bytes; maximum is %d bytes", size, MaxMetadataBytes))
 	}
 }
 
