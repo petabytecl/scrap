@@ -440,6 +440,55 @@ func TestApplyShardCommandDuplicateRequestIDIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestApplyCompleteTransactionCommandReturnsApplyResult(t *testing.T) {
+	store := openTestStore(t)
+	document := sampleDocument("invoice.xml", DocumentClassPermanent)
+	testutil.RequireNoErrorf(t, store.PutDocument(document), "put document")
+	completedAt := time.Unix(200, 0).UTC()
+	tags := map[string]string{"closed_by": "test"}
+	command := &metastorev1.ShardCommand{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		CommandId:     "complete-1",
+		ProposedAt:    timestamppb.New(completedAt),
+		Command: &metastorev1.ShardCommand_CompleteTransaction{
+			CompleteTransaction: &metastorev1.CompleteTransactionCommand{
+				TenantId:      document.Identity.TenantID,
+				TransactionId: document.Identity.TransactionID,
+				CompletedAt:   timestamppb.New(completedAt),
+				Tags:          tags,
+			},
+		},
+	}
+
+	result, err := store.ApplyShardCommandWithResult(command)
+	testutil.RequireNoErrorf(t, err, "apply complete transaction command")
+	completed, ok := result.Value.(Transaction)
+	if !ok {
+		t.Fatalf("apply result = %T, want Transaction", result.Value)
+	}
+	if completed.State != TransactionStateCompleted ||
+		completed.CompletedAt == nil ||
+		!completed.CompletedAt.Equal(completedAt) ||
+		completed.DocumentCount != 1 ||
+		completed.PermanentDocumentCount != 1 {
+		t.Fatalf("completed transaction = %#v, want completed transaction with one permanent document", completed)
+	}
+	testutil.RequireDeepEqualf(t, completed.Tags, tags, "completed transaction tags")
+
+	stored, err := store.GetTransaction(identity.Transaction{
+		TenantID:      document.Identity.TenantID,
+		TransactionID: document.Identity.TransactionID,
+	})
+	testutil.RequireNoErrorf(t, err, "get completed transaction")
+	testutil.RequireEqualf(t, stored.State, TransactionStateCompleted, "stored transaction state")
+	duplicate, err := store.ApplyShardCommandWithResult(command)
+	testutil.RequireNoErrorf(t, err, "reapply duplicate complete transaction command")
+	if duplicate.Value != nil {
+		t.Fatalf("duplicate apply result = %#v, want no new apply result", duplicate.Value)
+	}
+}
+
 func TestApplyUpdateUploadIntentStateCommand(t *testing.T) {
 	store := openTestStore(t)
 	testutil.RequireNoErrorf(t, store.RecordUploadIntent(sampleUploadIntent("block-1")), "record upload intent")

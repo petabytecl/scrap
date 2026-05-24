@@ -25,7 +25,8 @@ const (
 	BatchComponentBlockstore = "blockstore"
 	BatchComponentRaftMeta   = "raftmeta"
 
-	BatchStageSync = "sync"
+	BatchStageSync          = "sync"
+	BatchStagePostApplyRead = "post_apply_read"
 )
 
 var defaultMetrics = newMetrics()
@@ -197,6 +198,7 @@ func (m *metrics) initializeZeroValueSeries() {
 	for _, component := range []string{BatchComponentBlockstore, BatchComponentRaftMeta} {
 		m.batchFailure.WithLabelValues(component, BatchStageSync)
 	}
+	m.batchFailure.WithLabelValues(BatchComponentRaftMeta, BatchStagePostApplyRead)
 }
 
 func Handler() http.Handler {
@@ -324,8 +326,12 @@ func normalizeBatchComponent(component string) string {
 }
 
 func normalizeBatchStage(stage string) string {
-	if stage == BatchStageSync {
+	switch stage {
+	case BatchStageSync:
 		return BatchStageSync
+	case BatchStagePostApplyRead:
+		return BatchStagePostApplyRead
+	default:
+		return "unknown"
 	}
-	return "unknown"
 }

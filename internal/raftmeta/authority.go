@@ -282,10 +282,8 @@ func (a *Authority) CompleteTransaction(ctx context.Context, transaction identit
 		if current.State != metastore.TransactionStateOpen {
 			return preparedAuthorityCommand{}, fmt.Errorf("%w: transaction %s/%s is not open", metastore.ErrTransactionClosed, transaction.TenantID, transaction.TransactionID)
 		}
-		completed := completedTransactionResult(current, completedAt, tags)
 		return preparedAuthorityCommand{
 			command: command,
-			result:  completed,
 			after: func() (any, error) {
 				return a.store.GetTransaction(transaction)
 			},
@@ -864,7 +862,8 @@ func (a *Authority) prepareProposalBatch(batch []*authorityProposal) []preparedA
 
 func (a *Authority) applyPreparedEntries(prepared []preparedAuthorityCommand, entries []Entry) {
 	for index, entry := range entries {
-		if err := a.store.ApplyShardCommand(entry.Command); err != nil {
+		appliedResult, err := a.store.ApplyShardCommandWithResult(entry.Command)
+		if err != nil {
 			if isDeterministicCommandRejection(err) {
 				a.appliedIndex = entry.Index
 				prepared[index].proposal.reply(nil, err)
@@ -875,28 +874,24 @@ func (a *Authority) applyPreparedEntries(prepared []preparedAuthorityCommand, en
 			return
 		}
 		a.appliedIndex = entry.Index
-		value, err := prepared[index].afterApply()
+		value, err := prepared[index].afterApply(appliedResult.Value)
 		prepared[index].proposal.reply(value, err)
 	}
 }
 
-func (command preparedAuthorityCommand) afterApply() (any, error) {
+func (command preparedAuthorityCommand) afterApply(appliedResult any) (any, error) {
 	if command.after == nil {
+		if appliedResult != nil {
+			return appliedResult, nil
+		}
 		return command.result, nil
 	}
 	value, err := command.after()
-	if err != nil && command.result != nil {
-		return command.result, nil
+	if err != nil && appliedResult != nil {
+		observe.RecordBatchFailure(observe.BatchComponentRaftMeta, observe.BatchStagePostApplyRead)
+		return appliedResult, nil
 	}
 	return value, err
-}
-
-func completedTransactionResult(current metastore.Transaction, completedAt time.Time, tags map[string]string) metastore.Transaction {
-	completedAtCopy := completedAt
-	current.State = metastore.TransactionStateCompleted
-	current.CompletedAt = &completedAtCopy
-	current.Tags = cloneTags(tags)
-	return current
 }
 
 func (a *Authority) recordFailureLocked(err error) error {
