@@ -455,6 +455,23 @@ func TestAuthoritySyncErrorFailsBatchAndSubsequentCommands(t *testing.T) {
 	}
 }
 
+func TestAuthorityCheckHealthReportsHealthyClosedAndNilStates(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+
+	testutil.RequireNoErrorf(t, authority.CheckHealth(), "healthy authority")
+	testutil.RequireNoErrorf(t, authority.log.Close(), "close command log")
+	if err := authority.CheckHealth(); err == nil || !strings.Contains(err.Error(), "command log is closed") {
+		t.Fatalf("closed command log health error = %v, want command log closed", err)
+	}
+	var nilAuthority *Authority
+	if err := nilAuthority.CheckHealth(); err == nil || !strings.Contains(err.Error(), "authority is closed") {
+		t.Fatalf("nil authority health error = %v, want authority closed", err)
+	}
+}
+
 func TestAuthorityProposalWorkerPanicFailsInFlightAndFutureProposals(t *testing.T) {
 	dir := t.TempDir()
 	metadata := openTestMetadata(t, dir)

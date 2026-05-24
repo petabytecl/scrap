@@ -118,6 +118,21 @@ func TestLogAppendBatchSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
 	}
 }
 
+func TestLogCheckHealthReportsHealthyAndClosedStates(t *testing.T) {
+	log, err := OpenLog(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open log")
+
+	testutil.RequireNoErrorf(t, log.CheckHealth(), "healthy log")
+	testutil.RequireNoErrorf(t, log.Close(), "close log")
+	if err := log.CheckHealth(); err == nil || !strings.Contains(err.Error(), "command log is closed") {
+		t.Fatalf("closed log health error = %v, want command log closed", err)
+	}
+	var nilLog *Log
+	if err := nilLog.CheckHealth(); err == nil || !strings.Contains(err.Error(), "command log is closed") {
+		t.Fatalf("nil log health error = %v, want command log closed", err)
+	}
+}
+
 func TestLogAppendBatchIndexAdvanceFailureUsesDistinctStage(t *testing.T) {
 	log, err := OpenLog(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open log")
