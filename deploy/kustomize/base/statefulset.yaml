@@ -26,6 +26,7 @@ spec:
           args:
             - --public-listen=0.0.0.0:18080
             - --admin-listen=0.0.0.0:18081
+            - --metrics-listen=0.0.0.0:18082
             - --authorization-policy=/etc/scrap/authz-policy.json
             - --enable-local-non-production-storage
             - --local-data-dir=/var/lib/scrap/local
@@ -39,6 +40,8 @@ spec:
               containerPort: 18080
             - name: admin-grpc
               containerPort: 18081
+            - name: metrics
+              containerPort: 18082
           readinessProbe:
             tcpSocket:
               port: admin-grpc

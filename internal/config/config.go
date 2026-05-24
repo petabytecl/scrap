@@ -11,6 +11,7 @@ import (
 const (
 	DefaultPublicListenAddress   = "127.0.0.1:18080"
 	DefaultAdminListenAddress    = "127.0.0.1:18081"
+	DefaultMetricsListenAddress  = "127.0.0.1:18082"
 	DefaultBackendUploadInterval = 30 * time.Second
 	DefaultOperationRunInterval  = 5 * time.Second
 	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
@@ -37,6 +38,7 @@ var ErrProductionWriteACKReadinessGate = errors.New("production write ACK readin
 type Config struct {
 	PublicListenAddress             string
 	AdminListenAddress              string
+	MetricsListenAddress            string
 	AuthorizationPolicyPath         string
 	LocalDataDir                    string
 	EnableLocalNonProductionStorage bool
@@ -92,6 +94,7 @@ func Default() Config {
 	return Config{
 		PublicListenAddress:   DefaultPublicListenAddress,
 		AdminListenAddress:    DefaultAdminListenAddress,
+		MetricsListenAddress:  DefaultMetricsListenAddress,
 		BackendUploadInterval: DefaultBackendUploadInterval,
 		OperationRunInterval:  DefaultOperationRunInterval,
 		LocalSealBlockAtBytes: DefaultLocalSealBlockAtBytes,
@@ -99,14 +102,8 @@ func Default() Config {
 }
 
 func (c Config) Validate() error {
-	if err := validateListenAddress("public_listen_address", c.PublicListenAddress); err != nil {
+	if err := c.validateListenAddresses(); err != nil {
 		return err
-	}
-	if err := validateListenAddress("admin_listen_address", c.AdminListenAddress); err != nil {
-		return err
-	}
-	if c.PublicListenAddress == c.AdminListenAddress {
-		return errors.New("public and admin listen addresses must be distinct")
 	}
 	if err := c.validateProductionWriteACKGate(); err != nil {
 		return err
@@ -124,6 +121,30 @@ func (c Config) Validate() error {
 		return errors.New("local_seal_block_at_bytes must be positive")
 	}
 	return c.validateLocalFilesystemBackend()
+}
+
+func (c Config) validateListenAddresses() error {
+	addresses := []listenAddress{
+		{field: "public_listen_address", value: c.PublicListenAddress},
+		{field: "admin_listen_address", value: c.AdminListenAddress},
+		{field: "metrics_listen_address", value: c.MetricsListenAddress},
+	}
+	seen := make(map[string]string, len(addresses))
+	for _, address := range addresses {
+		if err := validateListenAddress(address.field, address.value); err != nil {
+			return err
+		}
+		if otherField, exists := seen[address.value]; exists {
+			return fmt.Errorf("%s and %s listen addresses must be distinct", otherField, address.field)
+		}
+		seen[address.value] = address.field
+	}
+	return nil
+}
+
+type listenAddress struct {
+	field string
+	value string
 }
 
 func (c Config) validateLocalStorage() error {

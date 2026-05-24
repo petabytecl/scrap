@@ -13,6 +13,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/closeutil"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/safepath"
 )
@@ -159,7 +160,17 @@ func (s *Store) commitObjectTemps(tempDataPath, objectPath, tempMetaPath, metaPa
 	return syncDir(s.objectsDir)
 }
 
-func (s *Store) HeadObject(ctx context.Context, key string) (backend.Object, error) {
+func (s *Store) HeadObject(ctx context.Context, key string) (object backend.Object, err error) {
+	defer func() {
+		outcome := observe.OutcomeSuccess
+		if errors.Is(err, backend.ErrNotFound) {
+			outcome = observe.OutcomeNotFound
+		} else if err != nil {
+			outcome = observe.OutcomeError
+		}
+		observe.RecordBackendProbe(observe.BackendOperationHead, outcome)
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return backend.Object{}, err
 	}

@@ -26,6 +26,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
@@ -991,7 +992,11 @@ func includeVerificationFrame(frame blockstore.FrameRecord, selectedStart, selec
 	return window, nil
 }
 
-func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verifyStart uint64, data []byte) error {
+func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verifyStart uint64, data []byte) (err error) {
+	defer func() {
+		observe.RecordVerification(verificationOutcome(err))
+	}()
+
 	if len(record.Frames) == 0 {
 		if uint64(len(data)) != record.StoredLength {
 			return io.ErrUnexpectedEOF
@@ -1021,6 +1026,18 @@ func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verify
 		}
 	}
 	return nil
+}
+
+func verificationOutcome(err error) string {
+	if err == nil {
+		return observe.VerificationOutcomeMatch
+	}
+	if errors.Is(err, blockstore.ErrChecksumMismatch) ||
+		errors.Is(err, blockstore.ErrInvalidRange) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
+		return observe.VerificationOutcomeMismatch
+	}
+	return observe.VerificationOutcomeSkipped
 }
 
 func (a *Application) FindDocuments(ctx context.Context, req storageapp.FindDocumentsRequest) (storageapp.FindDocumentsResult, error) {

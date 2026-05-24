@@ -121,6 +121,7 @@ linters:
             - $gostd
             - github.com/petabytecl/scrap
             - github.com/cockroachdb/pebble
+            - github.com/prometheus/client_golang
             - go.etcd.io/raft/v3
             - google.golang.org/genproto
             - google.golang.org/grpc

@@ -14,26 +14,59 @@ func TestDefaultConfigValidates(t *testing.T) {
 }
 
 func TestConfigRejectsMissingAndDuplicateAddresses(t *testing.T) {
-	tests := map[string]Config{
+	tests := map[string]struct {
+		cfg     Config
+		wantErr string
+	}{
 		"missing public": {
-			PublicListenAddress: "",
-			AdminListenAddress:  DefaultAdminListenAddress,
+			cfg: Config{
+				PublicListenAddress:  "",
+				AdminListenAddress:   DefaultAdminListenAddress,
+				MetricsListenAddress: DefaultMetricsListenAddress,
+			},
+			wantErr: "public_listen_address is required",
 		},
 		"missing admin": {
-			PublicListenAddress: DefaultPublicListenAddress,
-			AdminListenAddress:  "",
+			cfg: Config{
+				PublicListenAddress:  DefaultPublicListenAddress,
+				AdminListenAddress:   "",
+				MetricsListenAddress: DefaultMetricsListenAddress,
+			},
+			wantErr: "admin_listen_address is required",
+		},
+		"missing metrics": {
+			cfg: Config{
+				PublicListenAddress:  DefaultPublicListenAddress,
+				AdminListenAddress:   DefaultAdminListenAddress,
+				MetricsListenAddress: "",
+			},
+			wantErr: "metrics_listen_address is required",
 		},
 		"duplicate": {
-			PublicListenAddress: "127.0.0.1:1",
-			AdminListenAddress:  "127.0.0.1:1",
+			cfg: Config{
+				PublicListenAddress:  "127.0.0.1:1",
+				AdminListenAddress:   "127.0.0.1:1",
+				MetricsListenAddress: "127.0.0.1:2",
+			},
+			wantErr: "public_listen_address and admin_listen_address listen addresses must be distinct",
+		},
+		"duplicate metrics": {
+			cfg: Config{
+				PublicListenAddress:  "127.0.0.1:1",
+				AdminListenAddress:   "127.0.0.1:2",
+				MetricsListenAddress: "127.0.0.1:2",
+			},
+			wantErr: "admin_listen_address and metrics_listen_address listen addresses must be distinct",
 		},
 	}
 
-	for name, cfg := range tests {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			if err := cfg.Validate(); err == nil {
+			err := tt.cfg.Validate()
+			if err == nil {
 				t.Fatal("expected validation error")
 			}
+			testutil.RequireEqualf(t, err.Error(), tt.wantErr, "validation error")
 		})
 	}
 }

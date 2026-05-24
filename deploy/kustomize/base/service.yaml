@@ -2,6 +2,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: scrapd
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "18082"
+    prometheus.io/scrape: "true"
 spec:
   clusterIP: None
   selector:
@@ -13,6 +17,9 @@ spec:
     - name: admin-grpc
       port: 18081
       targetPort: admin-grpc
+    - name: metrics
+      port: 18082
+      targetPort: metrics
 ---
 apiVersion: v1
 kind: Service
