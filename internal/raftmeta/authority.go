@@ -677,7 +677,7 @@ func (a *Authority) submitProposal(ctx context.Context, prepare func() (prepared
 	case <-ctx.Done():
 		enqueueErr = ctx.Err()
 	case <-a.stopProposals:
-		enqueueErr = errors.New("raftmeta: authority is closed")
+		enqueueErr = a.proposalClosedError()
 	case a.proposals <- proposal:
 		sent = true
 	}

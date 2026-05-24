@@ -532,6 +532,24 @@ func requireCommitAfterWorkerPanicFails(t *testing.T, authority *Authority, docu
 	}
 }
 
+func TestAuthoritySubmitProposalStopPathReturnsStoredFailure(t *testing.T) {
+	storedErr := errors.New("stored authority failure")
+	authority := &Authority{
+		proposals:     make(chan *authorityProposal),
+		stopProposals: make(chan struct{}),
+	}
+	authority.failureErr = storedErr
+	close(authority.stopProposals)
+
+	_, err := authority.submitProposal(context.Background(), func() (preparedAuthorityCommand, error) {
+		t.Fatal("prepare should not run after proposal worker stop")
+		return preparedAuthorityCommand{}, nil
+	})
+	if !errors.Is(err, storedErr) {
+		t.Fatalf("submit proposal stop error = %v, want %v", err, storedErr)
+	}
+}
+
 func waitForProposalResults(t *testing.T, wg *sync.WaitGroup) {
 	t.Helper()
 	done := make(chan struct{})
