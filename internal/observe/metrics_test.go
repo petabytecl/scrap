@@ -25,6 +25,11 @@ func TestMetricsHandlerExposesCriticalSignalsAtStartup(t *testing.T) {
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"not_found\"} 0",
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"error\"} 0",
 		"scrap_raft_queue_depth 0",
+		"scrap_block_append_queue_depth 0",
+		"scrap_block_sync_batch_size_count 0",
+		"scrap_block_sync_latency_seconds_count{outcome=\"success\"} 0",
+		"scrap_block_sync_latency_seconds_count{outcome=\"error\"} 0",
+		"scrap_batch_failures_total{component=\"blockstore\",stage=\"sync\"} 0",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
@@ -43,6 +48,10 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 	IncrementRaftQueueDepth()
 	IncrementRaftQueueDepth()
 	IncrementRaftQueueDepth()
+	SetBlockAppendQueueDepth(4)
+	RecordBlockSyncBatchSize(4)
+	RecordBlockSyncLatency(OutcomeSuccess, 3*time.Millisecond)
+	RecordBatchFailure(BatchComponentBlockstore, BatchStageSync)
 
 	body := scrapeMetrics(t)
 	for _, want := range []string{
@@ -52,6 +61,11 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 		"scrap_verification_total{outcome=\"error\"} 1",
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"not_found\"} 1",
 		"scrap_raft_queue_depth 3",
+		"scrap_block_append_queue_depth 4",
+		"scrap_block_sync_batch_size_count 1",
+		"scrap_block_sync_batch_size_sum 4",
+		"scrap_block_sync_latency_seconds_count{outcome=\"success\"} 1",
+		"scrap_batch_failures_total{component=\"blockstore\",stage=\"sync\"} 1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
