@@ -675,6 +675,64 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 	requireSnapshotAndTailRebuilt(t, rebuiltMetadata, head, document, tailDocument)
 }
 
+func TestAuthorityRejectsSnapshotAndCompactionAfterApplyFailure(t *testing.T) {
+	dir := t.TempDir()
+	raftDir := filepath.Join(dir, "raftmeta")
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, raftDir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	document := authorityTestDocument("invoice.xml", []byte{1})
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()), "commit document")
+	info, err := authority.CreateSnapshot(context.Background())
+	testutil.RequireNoErrorf(t, err, "create clean snapshot")
+	testutil.RequireEqualf(t, uint64(1), info.LastIndex, "clean snapshot last index")
+
+	failure := induceInvalidRestoreApplyFailure(t, authority, document.Identity, "cmd-apply-failure")
+	testutil.RequireEqualf(t, uint64(1), authority.AppliedIndex(), "applied index after failed apply")
+	testutil.RequireEqualf(t, uint64(2), authority.log.LastIndex(), "log last index after failed apply")
+
+	_, err = authority.CreateSnapshot(context.Background())
+	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "fail-closed") {
+		t.Fatalf("snapshot after apply failure error = %v, want fail-closed apply failure", err)
+	}
+	if err := authority.CompactLog(context.Background(), info.LastIndex); !errors.Is(err, failure) || !strings.Contains(err.Error(), "fail-closed") {
+		t.Fatalf("compact after apply failure error = %v, want fail-closed apply failure", err)
+	}
+	entries, err := authority.log.Replay()
+	testutil.RequireNoErrorf(t, err, "replay log after rejected compaction")
+	testutil.RequireEqualf(t, 2, len(entries), "log entry count after rejected compaction")
+}
+
+func induceInvalidRestoreApplyFailure(t *testing.T, authority *Authority, document identity.Document, commandID string) error {
+	t.Helper()
+	documentName := document.DocumentName
+	command := sampleCommand(commandID, "invalid-restore.xml")
+	command.Command = &metastorev1.ShardCommand_UpdateRestoreState{
+		UpdateRestoreState: &metastorev1.UpdateRestoreStateCommand{
+			TenantId:      document.TenantID,
+			TransactionId: document.TransactionID,
+			DocumentName:  &documentName,
+			RestoreState:  metastorev1.RestoreState_RESTORE_STATE_UNSPECIFIED,
+			Reason:        "invalid state should fail apply after durable append",
+		},
+	}
+	entries, err := authority.log.AppendBatch([]*metastorev1.ShardCommand{command})
+	testutil.RequireNoErrorf(t, err, "append invalid restore command")
+	proposal := &authorityProposal{done: make(chan authorityProposalResult, 1)}
+	authority.mu.Lock()
+	authority.applyPreparedEntries([]preparedAuthorityCommand{{proposal: proposal, command: command}}, entries)
+	failure := authority.failureErr
+	authority.mu.Unlock()
+	result := <-proposal.done
+	if result.err == nil {
+		t.Fatal("invalid restore command did not fail apply")
+	}
+	if failure == nil || !errors.Is(result.err, failure) {
+		t.Fatalf("authority failure = %v, proposal error = %v, want same failure", failure, result.err)
+	}
+	return result.err
+}
+
 func requireRebuiltDocument(t *testing.T, got, want metastore.Document, tombstonedAt time.Time) {
 	t.Helper()
 	testutil.RequireEqualf(t, want.Identity, got.Identity, "rebuilt document identity")
