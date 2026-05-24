@@ -280,7 +280,7 @@ func TestCapacitySampleWritesAdvisoryReport(t *testing.T) {
 		"--duration", "1s",
 	}, &out)
 	testutil.RequireNoErrorf(t, err, "run capacity sample")
-	testutil.RequireEqualf(t, "scrap-prod-v1", inspect.capacityProfileID, "capacity profile id")
+	testutil.RequireEqualf(t, inspect.capacityProfileID, "scrap-prod-v1", "capacity profile id")
 	requireCapacitySampleAdvisoryOutput(t, out.String())
 }
 
