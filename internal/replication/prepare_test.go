@@ -98,8 +98,8 @@ func TestPreparePeerPreparesUseConfiguredConcurrency(t *testing.T) {
 	close(release)
 	outcome := requirePrepareResult(t, done)
 	testutil.RequireNoErrorf(t, outcome.err, "prepare document")
-	if outcome.result.AchievedReplicaCount != 3 {
-		t.Fatalf("achieved replicas = %d, want 3", outcome.result.AchievedReplicaCount)
+	if outcome.result.AchievedReplicaCount != 3 || outcome.result.RepairRequired {
+		t.Fatalf("result achieved/repair = %d/%v, want 3/false", outcome.result.AchievedReplicaCount, outcome.result.RepairRequired)
 	}
 }
 
