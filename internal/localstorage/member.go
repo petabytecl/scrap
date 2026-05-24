@@ -133,8 +133,8 @@ func (a *Application) updateLocalMemberState(mutator func(*localMemberState)) er
 }
 
 func (a *Application) currentLocalMemberState() localMemberState {
-	a.memberMu.Lock()
-	defer a.memberMu.Unlock()
+	a.memberMu.RLock()
+	defer a.memberMu.RUnlock()
 	return a.memberState
 }
 
