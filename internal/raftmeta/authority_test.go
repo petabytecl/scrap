@@ -257,6 +257,70 @@ func TestAuthorityConcurrentCommitsShareCommandLogSync(t *testing.T) {
 	}
 }
 
+func TestAuthorityConcurrentConflictingCommitsDoNotPoisonShard(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	authority.metadataBatchWait = 200 * time.Millisecond
+	authority.metadataBatchMax = 16
+	var syncCalls atomic.Int32
+	authority.log.syncLogFile = func() error {
+		syncCalls.Add(1)
+		return authority.log.file.Sync()
+	}
+
+	first := authorityTestDocument("invoice.xml", []byte{1})
+	first.Location.BlockID = "block-conflict-first"
+	second := authorityTestDocument("invoice.xml", []byte{2})
+	second.Location.BlockID = "block-conflict-second"
+	documents := []metastore.Document{first, second}
+	commandIDs := []string{"cmd-conflict-first", "cmd-conflict-second"}
+	start := make(chan struct{})
+	errs := make([]error, len(documents))
+	var wg sync.WaitGroup
+	wg.Add(len(documents))
+	for index, document := range documents {
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[index] = authority.CommitDocument(context.Background(), document, commandIDs[index], time.Unix(100, 0).UTC())
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	successes := 0
+	conflicts := 0
+	for index, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, metastore.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("commit %d error = %v, want nil or %v", index, err, metastore.ErrConflict)
+		}
+	}
+	testutil.RequireEqualf(t, 1, successes, "successful conflicting commit count")
+	testutil.RequireEqualf(t, 1, conflicts, "rejected conflicting commit count")
+	testutil.RequireEqualf(t, int32(1), syncCalls.Load(), "conflicting commit batch sync count")
+	head, err := metadata.HeadDocument(first.Identity)
+	testutil.RequireNoErrorf(t, err, "head winning conflicting document")
+	if head.LogicalSHA256 != first.LogicalSHA256 && head.LogicalSHA256 != second.LogicalSHA256 {
+		t.Fatalf("winning document hash = %x, want one proposed document", head.LogicalSHA256)
+	}
+
+	recovered := authorityTestDocument("after-batch-conflict.xml", []byte{3})
+	recovered.Location.BlockID = "block-after-batch-conflict"
+	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), recovered, "cmd-after-batch-conflict", time.Unix(200, 0).UTC()), "commit after batch conflict")
+	entries, err := authority.log.Replay()
+	testutil.RequireNoErrorf(t, err, "replay log")
+	if len(entries) < 2 || entries[len(entries)-1].Command.GetCommandId() != "cmd-after-batch-conflict" {
+		t.Fatalf("entries = %#v, want recovered command after conflicting batch", entries)
+	}
+}
+
 func TestAuthorityDoesNotExposeMetadataBeforeCommandSync(t *testing.T) {
 	observe.SetRaftQueueDepth(0)
 	dir := t.TempDir()
