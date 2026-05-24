@@ -45,3 +45,6 @@ release-evidence.json
 
 # Logs
 *.log
+
+# AEGIS audit state (generated)
+.aegis/
