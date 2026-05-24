@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	HeaderLength      = 64
-	DefaultFrameSize  = 1024 * 1024
-	formatMajor       = 0
-	formatMinor       = 1
-	defaultReadBuffer = 1024 * 1024
-	blockFilePerm     = 0o600
+	HeaderLength         = 64
+	DefaultFrameSize     = 1024 * 1024
+	formatMajor          = 0
+	formatMinor          = 1
+	defaultReadBuffer    = 1024 * 1024
+	blockFilePerm        = 0o600
+	defaultSyncBatchWait = 2 * time.Millisecond
 )
 
 var (
@@ -46,6 +47,22 @@ type Store struct {
 	blockFile   *os.File
 	blockOffset uint64
 	frameSize   uint64
+
+	syncMu         sync.Mutex
+	syncCond       *sync.Cond
+	syncBatchWait  time.Duration
+	syncBlockFile  func() error
+	syncBatches    []*durableSyncBatch
+	syncRunning    bool
+	syncFailureErr error
+	syncQueueDepth int
+}
+
+type durableSyncBatch struct {
+	accepting bool
+	waiters   int
+	done      chan struct{}
+	err       error
 }
 
 type Record struct {
@@ -84,14 +101,17 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{
-		dir:         dir,
-		blocksDir:   blocksDir,
-		blockID:     blockID,
-		blockPath:   blockPath,
-		blockFile:   blockFile,
-		blockOffset: HeaderLength,
-		frameSize:   DefaultFrameSize,
+		dir:           dir,
+		blocksDir:     blocksDir,
+		blockID:       blockID,
+		blockPath:     blockPath,
+		blockFile:     blockFile,
+		blockOffset:   HeaderLength,
+		frameSize:     DefaultFrameSize,
+		syncBatchWait: defaultSyncBatchWait,
 	}
+	store.syncCond = sync.NewCond(&store.syncMu)
+	store.syncBlockFile = store.defaultSyncBlockFile
 	if err := syncDir(blocksDir); err != nil {
 		_ = blockFile.Close()
 		return nil, err
@@ -105,9 +125,10 @@ func (s *Store) Close() error {
 	if s.blockFile == nil {
 		return nil
 	}
+	syncErr := s.waitForPendingSyncLocked()
 	err := s.blockFile.Close()
 	s.blockFile = nil
-	return err
+	return errors.Join(syncErr, err)
 }
 
 func (s *Store) CheckOpen(ctx context.Context) error {
@@ -121,6 +142,9 @@ func (s *Store) CheckOpen(ctx context.Context) error {
 	defer s.mu.Unlock()
 	if s.blockFile == nil {
 		return ErrClosed
+	}
+	if err := s.currentSyncFailure(); err != nil {
+		return err
 	}
 	_, err := s.blockFile.Stat()
 	return err
@@ -181,7 +205,10 @@ func (s *Store) SealCurrent(ctx context.Context) (string, error) {
 		return "", ErrEmptyBlock
 	}
 	sealedBlockID := s.blockID
-	if err := s.blockFile.Sync(); err != nil {
+	if err := s.waitForPendingSyncLocked(); err != nil {
+		return "", err
+	}
+	if err := s.syncCurrentBlockLocked(); err != nil {
 		return "", err
 	}
 	if err := s.sealBlockFileLocked(sealedBlockID); err != nil {
@@ -219,6 +246,9 @@ func (s *Store) SealBlock(ctx context.Context, blockID string) (bool, error) {
 	defer s.mu.Unlock()
 	if s.blockFile == nil {
 		return false, errors.New("blockstore: store is closed")
+	}
+	if err := s.waitForPendingSyncLocked(); err != nil {
+		return false, err
 	}
 	if done, err := s.validateSealBlockLocked(blockID); done || err != nil {
 		return false, err
@@ -272,6 +302,9 @@ func (s *Store) InstallSealedBlock(ctx context.Context, blockID string, expected
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.waitForPendingSyncLocked(); err != nil {
+		return err
+	}
 
 	blockPath, err := s.validatedBlockPath(blockID)
 	if err != nil {
@@ -299,6 +332,9 @@ func (s *Store) ReplaceSealedBlock(ctx context.Context, blockID string, expected
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.waitForPendingSyncLocked(); err != nil {
+		return err
+	}
 
 	blockPath, err := s.validatedBlockPath(blockID)
 	if err != nil {
@@ -375,6 +411,9 @@ func (s *Store) InstallVerifiedRange(ctx context.Context, record Record, expecte
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.waitForPendingSyncLocked(); err != nil {
+		return err
+	}
 
 	tempPath, err := s.writeVerifiedTempRange(ctx, record, expectedSHA256, reader)
 	if err != nil {
@@ -493,6 +532,9 @@ func (s *Store) EnsureSealedBlock(ctx context.Context, blockID string, expectedL
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.waitForPendingSyncLocked(); err != nil {
+		return false, err
+	}
 	blockPath, err := s.validatedBlockPath(blockID)
 	if err != nil {
 		return false, err
@@ -532,38 +574,79 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 	start := time.Now()
 	defer recordAppendLatency(start, &err)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.blockFile == nil {
-		return Record{}, errors.New("blockstore: store is closed")
-	}
-	startOffset := s.blockOffset
-	startOffsetInt, err := safeconv.Uint64ToInt64("start offset", startOffset)
+	syncBatch, record, err := s.appendAndEnqueueDurableSync(ctx, reader, validate)
 	if err != nil {
 		return Record{}, err
 	}
-	if _, err := s.blockFile.Seek(startOffsetInt, io.SeekStart); err != nil {
+	if err := s.waitDurableSync(syncBatch); err != nil {
 		return Record{}, err
+	}
+	return record, nil
+}
+
+func (s *Store) appendAndEnqueueDurableSync(ctx context.Context, reader io.Reader, validate func(Record) error) (*durableSyncBatch, Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	startOffset, startOffsetInt, err := s.prepareAppendLocked()
+	if err != nil {
+		return nil, Record{}, err
 	}
 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = s.blockFile.Truncate(startOffsetInt)
-			_, _ = s.blockFile.Seek(startOffsetInt, io.SeekStart)
+			s.truncateFailedAppendLocked(startOffsetInt)
 		}
 	}()
 
 	appended, err := s.appendReader(ctx, reader, startOffset)
 	if err != nil {
-		return Record{}, err
-	}
-	if err := s.blockFile.Sync(); err != nil {
-		return Record{}, err
+		return nil, Record{}, err
 	}
 
-	record = Record{
+	record, err := s.validateAppendedRecordLocked(appended, startOffset, validate)
+	if err != nil {
+		return nil, Record{}, err
+	}
+	nextOffset, err := addUint64("block offset", startOffset, appended.storedLength)
+	if err != nil {
+		return nil, Record{}, err
+	}
+	s.blockOffset = nextOffset
+	syncBatch, err := s.enqueueDurableSyncLocked()
+	if err != nil {
+		return nil, Record{}, err
+	}
+	committed = true
+	return syncBatch, record, nil
+}
+
+func (s *Store) prepareAppendLocked() (uint64, int64, error) {
+	if s.blockFile == nil {
+		return 0, 0, errors.New("blockstore: store is closed")
+	}
+	if err := s.currentSyncFailure(); err != nil {
+		return 0, 0, err
+	}
+	startOffset := s.blockOffset
+	startOffsetInt, err := safeconv.Uint64ToInt64("start offset", startOffset)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := s.blockFile.Seek(startOffsetInt, io.SeekStart); err != nil {
+		return 0, 0, err
+	}
+	return startOffset, startOffsetInt, nil
+}
+
+func (s *Store) truncateFailedAppendLocked(startOffset int64) {
+	_ = s.blockFile.Truncate(startOffset)
+	_, _ = s.blockFile.Seek(startOffset, io.SeekStart)
+}
+
+func (s *Store) validateAppendedRecordLocked(appended appendResult, startOffset uint64, validate func(Record) error) (Record, error) {
+	record := Record{
 		BlockID:      s.blockID,
 		StoredOffset: startOffset,
 		StoredLength: appended.storedLength,
@@ -576,12 +659,6 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 			return Record{}, err
 		}
 	}
-	nextOffset, err := addUint64("block offset", startOffset, appended.storedLength)
-	if err != nil {
-		return Record{}, err
-	}
-	s.blockOffset = nextOffset
-	committed = true
 	return record, nil
 }
 
@@ -591,6 +668,199 @@ func recordAppendLatency(start time.Time, err *error) {
 		outcome = observe.OutcomeError
 	}
 	observe.RecordWriteLatency(outcome, time.Since(start))
+}
+
+func (s *Store) enqueueDurableSyncLocked() (*durableSyncBatch, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	if s.syncFailureErr != nil {
+		return nil, s.syncFailureErr
+	}
+	batch := s.acceptingSyncBatchLocked()
+	if batch == nil {
+		batch = s.newSyncBatchLocked()
+		s.syncBatches = append(s.syncBatches, batch)
+		if !s.syncRunning {
+			s.syncRunning = true
+			go s.runDurableSyncBatches()
+		}
+	}
+	batch.waiters++
+	s.syncQueueDepth++
+	observe.SetBlockAppendQueueDepth(s.syncQueueDepth)
+	return batch, nil
+}
+
+func (s *Store) acceptingSyncBatchLocked() *durableSyncBatch {
+	if len(s.syncBatches) == 0 {
+		return nil
+	}
+	batch := s.syncBatches[len(s.syncBatches)-1]
+	if !batch.accepting {
+		return nil
+	}
+	return batch
+}
+
+func (s *Store) newSyncBatchLocked() *durableSyncBatch {
+	return &durableSyncBatch{
+		accepting: true,
+		done:      make(chan struct{}),
+	}
+}
+
+func (s *Store) runDurableSyncBatches() {
+	for {
+		batch := s.nextDurableSyncBatch()
+		if batch == nil {
+			return
+		}
+		wait := s.currentSyncBatchWait()
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+		s.closeDurableSyncBatch(batch)
+
+		start := time.Now()
+		err := s.syncBlockFile()
+		outcome := observe.OutcomeSuccess
+		if err != nil {
+			outcome = observe.OutcomeError
+		}
+		observe.RecordBlockSyncLatency(outcome, time.Since(start))
+		if err != nil {
+			observe.RecordBatchFailure(observe.BatchComponentBlockstore, observe.BatchStageSync)
+			s.failDurableSyncBatches(err)
+			return
+		}
+		s.completeDurableSyncBatch(batch)
+	}
+}
+
+func (s *Store) nextDurableSyncBatch() *durableSyncBatch {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	if len(s.syncBatches) == 0 {
+		s.syncRunning = false
+		s.syncCond.Broadcast()
+		return nil
+	}
+	return s.syncBatches[0]
+}
+
+func (s *Store) currentSyncBatchWait() time.Duration {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	return s.syncBatchWait
+}
+
+func (s *Store) closeDurableSyncBatch(batch *durableSyncBatch) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if batch != nil {
+		batch.accepting = false
+	}
+}
+
+func (s *Store) completeDurableSyncBatch(batch *durableSyncBatch) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	s.removeDurableSyncBatchLocked(batch)
+	s.syncQueueDepth -= batch.waiters
+	if s.syncQueueDepth < 0 {
+		s.syncQueueDepth = 0
+	}
+	observe.SetBlockAppendQueueDepth(s.syncQueueDepth)
+	observe.RecordBlockSyncBatchSize(batch.waiters)
+	close(batch.done)
+	if len(s.syncBatches) == 0 {
+		s.syncRunning = false
+	}
+	s.syncCond.Broadcast()
+}
+
+func (s *Store) removeDurableSyncBatchLocked(batch *durableSyncBatch) {
+	if len(s.syncBatches) > 0 && s.syncBatches[0] == batch {
+		s.syncBatches = s.syncBatches[1:]
+		return
+	}
+	for index, queued := range s.syncBatches {
+		if queued == batch {
+			s.syncBatches = append(s.syncBatches[:index], s.syncBatches[index+1:]...)
+			return
+		}
+	}
+}
+
+func (s *Store) failDurableSyncBatches(err error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	failure := s.syncFailureLocked(err)
+	for _, batch := range s.syncBatches {
+		batch.err = failure
+		close(batch.done)
+	}
+	s.syncBatches = nil
+	s.syncQueueDepth = 0
+	s.syncRunning = false
+	observe.SetBlockAppendQueueDepth(0)
+	s.syncCond.Broadcast()
+}
+
+func (s *Store) syncFailureLocked(err error) error {
+	if s.syncFailureErr == nil {
+		s.syncFailureErr = fmt.Errorf("blockstore: durable sync failed: %w", err)
+	}
+	return s.syncFailureErr
+}
+
+func (s *Store) waitDurableSync(batch *durableSyncBatch) error {
+	<-batch.done
+	return batch.err
+}
+
+func (s *Store) waitForPendingSyncLocked() error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	for s.syncRunning || len(s.syncBatches) > 0 {
+		s.syncCond.Wait()
+	}
+	return s.syncFailureErr
+}
+
+func (s *Store) currentSyncFailure() error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	return s.syncFailureErr
+}
+
+func (s *Store) syncCurrentBlockLocked() error {
+	start := time.Now()
+	err := s.syncBlockFile()
+	outcome := observe.OutcomeSuccess
+	if err != nil {
+		outcome = observe.OutcomeError
+	}
+	observe.RecordBlockSyncLatency(outcome, time.Since(start))
+	if err == nil {
+		return nil
+	}
+	observe.RecordBatchFailure(observe.BatchComponentBlockstore, observe.BatchStageSync)
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	return s.syncFailureLocked(err)
+}
+
+func (s *Store) defaultSyncBlockFile() error {
+	if s.blockFile == nil {
+		return ErrClosed
+	}
+	return s.blockFile.Sync()
 }
 
 type appendResult struct {

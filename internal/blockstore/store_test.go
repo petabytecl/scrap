@@ -7,9 +7,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/testutil"
@@ -142,6 +146,160 @@ func TestValidatedAppendErrorIsTruncated(t *testing.T) {
 	}
 }
 
+func TestConcurrentAppendsShareDurableSync(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.syncBatchWait = 50 * time.Millisecond
+	var syncCalls atomic.Int32
+	store.syncBlockFile = func() error {
+		syncCalls.Add(1)
+		return nil
+	}
+
+	const appendCount = 8
+	start := make(chan struct{})
+	records := make([]Record, appendCount)
+	errs := make([]error, appendCount)
+	var wg sync.WaitGroup
+	wg.Add(appendCount)
+	for index := range appendCount {
+		go func() {
+			defer wg.Done()
+			<-start
+			record, err := store.Append(ctx, bytes.NewReader([]byte("x")))
+			errs[index] = err
+			records[index] = record
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for index, err := range errs {
+		testutil.RequireNoErrorf(t, err, "append %d", index)
+	}
+
+	if got := syncCalls.Load(); got != 1 {
+		t.Fatalf("sync calls = %d, want 1", got)
+	}
+	requireNoOverlappingRecords(t, records)
+}
+
+func TestSyncErrorFailsBatchAndSubsequentAppends(t *testing.T) {
+	ctx := context.Background()
+	syncErr := errors.New("sync failed")
+	store, err := Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open store")
+	t.Cleanup(func() {
+		closeErr := store.Close()
+		if closeErr != nil && !errors.Is(closeErr, syncErr) {
+			t.Fatalf("close store: %v", closeErr)
+		}
+	})
+	store.syncBatchWait = time.Millisecond
+	store.syncBlockFile = func() error {
+		return syncErr
+	}
+
+	const appendCount = 2
+	start := make(chan struct{})
+	errs := make([]error, appendCount)
+	var wg sync.WaitGroup
+	wg.Add(appendCount)
+	for index := range appendCount {
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[index] = store.Append(ctx, bytes.NewReader([]byte("x")))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for index, err := range errs {
+		if !errors.Is(err, syncErr) {
+			t.Fatalf("append %d error = %v, want %v", index, err, syncErr)
+		}
+	}
+
+	_, err = store.Append(ctx, bytes.NewReader([]byte("after failure")))
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("append after sync failure error = %v, want %v", err, syncErr)
+	}
+}
+
+func TestCloseWaitsForPendingAppendSync(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.syncBatchWait = 0
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	store.syncBlockFile = func() error {
+		close(syncStarted)
+		<-releaseSync
+		return store.blockFile.Sync()
+	}
+
+	appendDone := make(chan error, 1)
+	go func() {
+		_, err := store.Append(ctx, bytes.NewReader([]byte("pending close")))
+		appendDone <- err
+	}()
+	<-syncStarted
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before pending sync completed: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(releaseSync)
+	testutil.RequireNoErrorf(t, <-appendDone, "append")
+	testutil.RequireNoErrorf(t, <-closeDone, "close")
+}
+
+func TestSealCurrentWaitsForPendingAppendSync(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.syncBatchWait = 0
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	var syncCalls atomic.Int32
+	store.syncBlockFile = func() error {
+		if syncCalls.Add(1) == 1 {
+			close(syncStarted)
+			<-releaseSync
+		}
+		return store.blockFile.Sync()
+	}
+
+	appendDone := make(chan appendOutcome, 1)
+	go func() {
+		record, err := store.Append(ctx, bytes.NewReader([]byte("pending seal")))
+		appendDone <- appendOutcome{record: record, err: err}
+	}()
+	<-syncStarted
+
+	sealDone := make(chan sealOutcome, 1)
+	go func() {
+		blockID, err := store.SealCurrent(ctx)
+		sealDone <- sealOutcome{blockID: blockID, err: err}
+	}()
+	select {
+	case outcome := <-sealDone:
+		t.Fatalf("SealCurrent returned before pending sync completed: %#v", outcome)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(releaseSync)
+	appendResult := <-appendDone
+	testutil.RequireNoErrorf(t, appendResult.err, "append")
+	sealResult := <-sealDone
+	testutil.RequireNoErrorf(t, sealResult.err, "seal")
+	if sealResult.blockID != appendResult.record.BlockID {
+		t.Fatalf("sealed block = %q, want appended block %q", sealResult.blockID, appendResult.record.BlockID)
+	}
+}
+
 func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -173,6 +331,33 @@ func TestSealCurrentMarksBlockSealedAndRotates(t *testing.T) {
 	if got, want := store.CurrentBlockLength(), HeaderLength+second.StoredLength; got != want {
 		t.Fatalf("rotated block length = %d, want %d", got, want)
 	}
+}
+
+func requireNoOverlappingRecords(t *testing.T, records []Record) {
+	t.Helper()
+	sorted := append([]Record(nil), records...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].StoredOffset < sorted[j].StoredOffset
+	})
+	nextOffset := uint64(HeaderLength)
+	for index, record := range sorted {
+		if record.StoredOffset != nextOffset {
+			t.Fatalf("record %d offset = %d, want %d", index, record.StoredOffset, nextOffset)
+		}
+		var err error
+		nextOffset, err = addUint64("test offset", nextOffset, record.StoredLength)
+		testutil.RequireNoErrorf(t, err, "advance test offset")
+	}
+}
+
+type appendOutcome struct {
+	record Record
+	err    error
+}
+
+type sealOutcome struct {
+	blockID string
+	err     error
 }
 
 func TestSealBlockMarksRecoveredNonCurrentBlockSealed(t *testing.T) {

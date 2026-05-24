@@ -284,8 +284,18 @@ func componentSignals() []ComponentSignal {
 	return []ComponentSignal{
 		{
 			Name:        "block_append_sync_latency",
-			Status:      "not_available",
-			Observation: "current production code exposes aggregate write latency, not a split block sync latency signal",
+			Status:      "available-via-metrics",
+			Observation: "scrap_block_sync_latency_seconds exposes the block durable sync boundary; this local in-process harness does not scrape Prometheus",
+		},
+		{
+			Name:        "block_append_queue_depth",
+			Status:      "available-via-metrics",
+			Observation: "scrap_block_append_queue_depth exposes append callers waiting for durable sync",
+		},
+		{
+			Name:        "block_sync_batch_size",
+			Status:      "available-via-metrics",
+			Observation: "scrap_block_sync_batch_size exposes append waiters completed by one durable sync",
 		},
 		{
 			Name:        "metadata_commit_latency",
