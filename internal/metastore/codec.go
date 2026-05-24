@@ -16,6 +16,9 @@ import (
 
 var protoMarshal = proto.MarshalOptions{Deterministic: true}
 
+// CurrentSchemaVersion is the authoritative metadata protobuf schema version.
+// Additive fields keep the current value; required semantic changes must bump
+// it and update the schema evolution changelog.
 const CurrentSchemaVersion uint32 = 1
 
 func marshalDocument(document Document) ([]byte, error) {

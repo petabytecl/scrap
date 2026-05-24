@@ -14,7 +14,12 @@ import (
 )
 
 const (
-	CurrentSchemaVersion         uint32 = 1
+	// CurrentSchemaVersion is the published metadata protobuf schema version.
+	// Additive fields keep the current value; required semantic changes must
+	// bump it and update the schema evolution changelog.
+	CurrentSchemaVersion uint32 = 1
+	// CurrentLocationFormatVersion is the per-location physical reference
+	// format version inside published metadata.
 	CurrentLocationFormatVersion uint32 = 1
 	maxArtifactRecordPayload            = 64 * 1024 * 1024
 )

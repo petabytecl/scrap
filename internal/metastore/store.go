@@ -2,7 +2,6 @@ package metastore
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -23,11 +22,6 @@ var (
 	ErrTransactionClosed        = errors.New("metastore: transaction is closed")
 	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
 	ErrClosed                   = errors.New("metastore: store is closed")
-)
-
-const (
-	maxKeyByte          = 0xff
-	unixNanoSortSignBit = uint64(1) << 63
 )
 
 type Store struct {
@@ -944,94 +938,6 @@ func matchesTagFilter(document Document, filter DocumentFilter) bool {
 	return true
 }
 
-func documentKey(doc identity.Document) []byte {
-	return []byte("document\x00" + doc.TenantID + "\x00" + doc.TransactionID + "\x00" + doc.DocumentName)
-}
-
-func documentPrefix() []byte {
-	return []byte("document\x00")
-}
-
-func transactionPrefix() []byte {
-	return []byte("transaction\x00")
-}
-
-func transactionKey(transaction identity.Transaction) []byte {
-	return append(transactionPrefix(), []byte(transaction.TenantID+"\x00"+transaction.TransactionID)...)
-}
-
-func transactionDocumentsPrefix(transaction identity.Transaction) []byte {
-	return []byte("document_by_transaction\x00" + transaction.TenantID + "\x00" + transaction.TransactionID + "\x00")
-}
-
-func transactionDocumentsRootPrefix() []byte {
-	return []byte("document_by_transaction\x00")
-}
-
-func transactionDocumentKey(doc identity.Document) []byte {
-	return append(transactionDocumentsPrefix(identity.Transaction{
-		TenantID:      doc.TenantID,
-		TransactionID: doc.TransactionID,
-	}), []byte(doc.DocumentName)...)
-}
-
-func blockDocumentsPrefix(blockID string) []byte {
-	return []byte("document_by_block\x00" + blockID + "\x00")
-}
-
-func blockDocumentsRootPrefix() []byte {
-	return []byte("document_by_block\x00")
-}
-
-func blockDocumentKey(blockID string, doc identity.Document) []byte {
-	return append(blockDocumentsPrefix(blockID), []byte(doc.TenantID+"\x00"+doc.TransactionID+"\x00"+doc.DocumentName)...)
-}
-
-func uploadIntentPrefix() []byte {
-	return []byte("upload_intent\x00")
-}
-
-func uploadIntentKey(blockID string) []byte {
-	return append(uploadIntentPrefix(), []byte(blockID)...)
-}
-
-func processableUploadIntentPrefix() []byte {
-	return []byte("upload_intent_processable\x00")
-}
-
-func processableUploadIntentKey(intent UploadIntent) []byte {
-	prefix := processableUploadIntentPrefix()
-	key := make([]byte, 0, len(prefix)+len(intent.BlockID)+9)
-	key = append(key, prefix...)
-	key = binary.BigEndian.AppendUint64(key, uploadIntentUpdatedAtSortKey(intent.UpdatedAt))
-	key = append(key, 0)
-	return append(key, []byte(intent.BlockID)...)
-}
-
-func uploadIntentUpdatedAtSortKey(updatedAt time.Time) uint64 {
-	return uint64(updatedAt.UTC().UnixNano()) ^ unixNanoSortSignBit
-}
-
-func repairStatesPrefix() []byte {
-	return []byte("repair_state\x00")
-}
-
-func repairStatePrefix(doc identity.Document) []byte {
-	return append(repairStatesPrefix(), []byte(doc.TenantID+"\x00"+doc.TransactionID+"\x00"+doc.DocumentName+"\x00")...)
-}
-
-func repairStateKey(doc identity.Document, incidentID string) []byte {
-	return append(repairStatePrefix(doc), []byte(incidentID)...)
-}
-
-func commandReceiptPrefix() []byte {
-	return []byte("command_receipt\x00")
-}
-
-func commandReceiptKey(commandID string) []byte {
-	return append(commandReceiptPrefix(), []byte(commandID)...)
-}
-
 func validateUploadIntentState(state UploadState) error {
 	switch state {
 	case UploadStatePending, UploadStateUploaded, UploadStateFailed:
@@ -1061,15 +967,4 @@ func availabilityFromRestoreState(state RestoreState) (Availability, error) {
 	default:
 		return 0, fmt.Errorf("metastore: unsupported restore state %d", state)
 	}
-}
-
-func prefixUpperBound(prefix []byte) []byte {
-	out := append([]byte(nil), prefix...)
-	for i := len(out) - 1; i >= 0; i-- {
-		if out[i] != maxKeyByte {
-			out[i]++
-			return out[:i+1]
-		}
-	}
-	return nil
 }
