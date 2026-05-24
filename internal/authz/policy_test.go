@@ -2,13 +2,19 @@ package authz
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/petabytecl/scrap/internal/testutil"
@@ -50,6 +56,69 @@ func TestManagerRejectsMissingWorkloadIdentity(t *testing.T) {
 	decision := manager.Authorize(context.Background(), capHead)
 	if decision.Allowed || decision.Reason != ReasonMissingWorkloadIdentity {
 		t.Fatalf("decision = %#v, want missing workload identity denial", decision)
+	}
+}
+
+func TestWorkloadIdentityFromContextPrefersCertificateIdentity(t *testing.T) {
+	ctx := ContextWithWorkloadIdentity(context.Background(), "operator")
+	ctx = contextWithPeerCertificate(ctx, &x509.Certificate{
+		Subject: pkix.Name{CommonName: "billing-etl"},
+	})
+
+	workload, ok := WorkloadIdentityFromContext(ctx)
+	testutil.RequireTruef(t, ok, "workload identity resolved")
+	testutil.RequireEqualf(t, workload, "billing-etl", "certificate workload identity")
+}
+
+func TestWorkloadIdentityFromContextUsesSPIFFEURI(t *testing.T) {
+	spiffeID, err := url.Parse("spiffe://scrap.local/ns/billing/sa/etl")
+	testutil.RequireNoErrorf(t, err, "parse SPIFFE ID")
+	ctx := contextWithPeerCertificate(context.Background(), &x509.Certificate{
+		Subject: pkix.Name{CommonName: "billing-etl"},
+		URIs:    []*url.URL{spiffeID},
+	})
+
+	workload, ok := WorkloadIdentityFromContext(ctx)
+	testutil.RequireTruef(t, ok, "workload identity resolved")
+	testutil.RequireEqualf(t, workload, spiffeID.String(), "SPIFFE workload identity")
+}
+
+func TestWorkloadIdentityFromContextRequiresCertificateWhenConfigured(t *testing.T) {
+	ctx := ContextWithWorkloadIdentity(context.Background(), "billing-etl")
+
+	_, ok := WorkloadIdentityFromContextWithOptions(ctx, WorkloadIdentityOptions{
+		RequireCertificateIdentity: true,
+	})
+	testutil.RequireFalsef(t, ok, "metadata identity should not satisfy certificate requirement")
+}
+
+func TestUnaryInterceptorRequiresCertificateIdentityWhenConfigured(t *testing.T) {
+	manager := newTestManager(t, Policy{
+		Version: "policy-v1",
+		Workloads: map[string]WorkloadPolicy{
+			"billing-etl": {Capabilities: []Capability{capHead}},
+		},
+	})
+	interceptor := UnaryServerInterceptorWithOptions(
+		manager,
+		map[string]Capability{"/scrap.DocumentService/HeadDocument": capHead},
+		InterceptorOptions{RequireCertificateIdentity: true},
+	)
+
+	_, err := interceptor(
+		ContextWithWorkloadIdentity(context.Background(), "billing-etl"),
+		nil,
+		&grpc.UnaryServerInfo{FullMethod: "/scrap.DocumentService/HeadDocument"},
+		func(context.Context, any) (any, error) {
+			t.Fatal("handler ran without certificate identity")
+			return nil, errors.New("unreachable")
+		},
+	)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %s for error %v, want Unauthenticated", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), ReasonMissingCertificateIdentity) {
+		t.Fatalf("error = %v, want certificate identity reason", err)
 	}
 }
 
@@ -201,6 +270,16 @@ func TestGoodReloadReplacesPolicy(t *testing.T) {
 	if !manager.Authorize(ContextWithWorkloadIdentity(context.Background(), "billing-etl"), capHead).Allowed {
 		t.Fatal("new policy did not allow billing-etl head")
 	}
+}
+
+func contextWithPeerCertificate(ctx context.Context, cert *x509.Certificate) context.Context {
+	return grpcpeer.NewContext(ctx, &grpcpeer.Peer{
+		AuthInfo: credentials.TLSInfo{
+			State: tls.ConnectionState{
+				PeerCertificates: []*x509.Certificate{cert},
+			},
+		},
+	})
 }
 
 func newTestManager(t *testing.T, policy Policy) *Manager {

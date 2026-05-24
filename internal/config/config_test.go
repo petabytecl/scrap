@@ -288,6 +288,17 @@ func TestGRPCTLSConfigValidatesWhenEnabled(t *testing.T) {
 	testutil.RequireNoErrorf(t, cfg.Validate(), "enabled grpc TLS config")
 }
 
+func TestRequireCertificateIdentityRequiresGRPCTLS(t *testing.T) {
+	cfg := Default()
+	cfg.RequireCertificateIdentity = true
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	testutil.RequireEqualf(t, err.Error(), "require_certificate_identity requires grpc TLS to be enabled", "validation error")
+}
+
 func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T) {
 	cfg := Default()
 	cfg.EnableProductionWriteACK = true

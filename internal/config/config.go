@@ -58,6 +58,7 @@ type Config struct {
 	TLSCertFile                     string
 	TLSKeyFile                      string
 	TLSCACertFile                   string
+	RequireCertificateIdentity      bool
 	LocalDataDir                    string
 	EnableLocalNonProductionStorage bool
 	EnableLocalFilesystemBackend    bool
@@ -223,6 +224,9 @@ func firstValidationError(errs ...error) error {
 }
 
 func (c Config) validateGRPCTLS() error {
+	if c.RequireCertificateIdentity && !c.TLSEnabled {
+		return errors.New("require_certificate_identity requires grpc TLS to be enabled")
+	}
 	if !c.TLSEnabled {
 		return nil
 	}

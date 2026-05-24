@@ -95,6 +95,7 @@ func TestRegisterFlagSetParsesGRPCTLSConfig(t *testing.T) {
 		"-grpc-tls-cert-file=server.pem",
 		"-grpc-tls-key-file=server-key.pem",
 		"-grpc-tls-ca-cert-file=ca.pem",
+		"-require-certificate-identity=true",
 	})
 	testutil.RequireNoErrorf(t, err, "parse grpc TLS flags")
 
@@ -102,4 +103,5 @@ func TestRegisterFlagSetParsesGRPCTLSConfig(t *testing.T) {
 	testutil.RequireEqualf(t, cfg.TLSCertFile, "server.pem", "grpc TLS cert file")
 	testutil.RequireEqualf(t, cfg.TLSKeyFile, "server-key.pem", "grpc TLS key file")
 	testutil.RequireEqualf(t, cfg.TLSCACertFile, "ca.pem", "grpc TLS CA cert file")
+	testutil.RequireTruef(t, cfg.RequireCertificateIdentity, "require certificate identity")
 }

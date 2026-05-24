@@ -102,20 +102,27 @@ func newServerWithConfig(
 	authorization *authz.Manager,
 	policyPath string,
 ) (*Server, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
+	authorizationOptions := authz.InterceptorOptions{
+		DeniedAuditSink:            auditSink,
+		RequireCertificateIdentity: cfg.RequireCertificateIdentity,
+	}
 	baseOptions, err := grpcServerBaseOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
 	publicOptions := combineServerOptions(baseOptions,
-		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
-		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
+		grpc.UnaryInterceptor(authz.UnaryServerInterceptorWithOptions(authorization, publicMethodCapabilities(), authorizationOptions)),
+		grpc.StreamInterceptor(authz.StreamServerInterceptorWithOptions(authorization, publicMethodCapabilities(), authorizationOptions)),
 	)
 	publicGRPC := grpc.NewServer(publicOptions...)
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions, api.WithPublicAuditStore(apps.Operations)))
 	adminOptions := combineServerOptions(baseOptions,
-		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
-		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
+		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptorWithOptions(authorization, adminMethodCapabilities(), authorizationOptions))),
+		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptorWithOptions(authorization, adminMethodCapabilities(), authorizationOptions))),
 	)
 	adminGRPC := grpc.NewServer(adminOptions...)
 	api.RegisterAdminServer(adminGRPC, api.NewAdminServer(
