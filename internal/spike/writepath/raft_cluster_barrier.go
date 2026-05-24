@@ -27,6 +27,12 @@ type raftClusterCommitRequest struct {
 	result   chan error
 }
 
+type raftClusterPendingProposal struct {
+	command      []byte
+	lastLeaderID uint64
+	lastTerm     uint64
+}
+
 type raftClusterCancelRequest struct {
 	id uint64
 }
@@ -368,6 +374,7 @@ func (b *RaftClusterCommitBarrier) run(cluster *raftCluster) {
 	defer close(b.done)
 
 	for {
+		cluster.proposePending()
 		if cluster.pump() {
 			continue
 		}
@@ -412,6 +419,7 @@ type raftCluster struct {
 	appliedOn   map[uint64]int
 	committed   map[uint64]struct{}
 	records     map[string]DocumentRecord
+	pending     map[uint64]raftClusterPendingProposal
 	err         error
 }
 
@@ -448,6 +456,7 @@ func newRaftCluster(ids []uint64) (*raftCluster, error) {
 		appliedOn:   make(map[uint64]int),
 		committed:   make(map[uint64]struct{}),
 		records:     make(map[string]DocumentRecord),
+		pending:     make(map[uint64]raftClusterPendingProposal),
 	}
 
 	for _, id := range ids {
@@ -511,13 +520,38 @@ func (c *raftCluster) handleCommit(request raftClusterCommitRequest) {
 		return
 	}
 
-	leaderID := c.leaderID()
-	if leaderID == 0 {
-		c.complete(id, errors.New("raft cluster has no current leader"))
+	c.pending[id] = raftClusterPendingProposal{command: command}
+	c.proposePending()
+}
+
+func (c *raftCluster) proposePending() {
+	if c.err != nil || len(c.pending) == 0 {
 		return
 	}
-	if err := c.nodes[leaderID].raw.Propose(command); err != nil {
-		c.complete(id, err)
+
+	leaderID, term := c.leaderStatus()
+	if leaderID == 0 {
+		return
+	}
+
+	for id, pending := range c.pending {
+		if pending.lastLeaderID == leaderID && pending.lastTerm == term {
+			continue
+		}
+		if err := c.nodes[leaderID].raw.Propose(pending.command); err != nil {
+			if errors.Is(err, raft.ErrProposalDropped) {
+				// A leader can step down between Status and Propose; retry on the next leader term.
+				pending.lastLeaderID = leaderID
+				pending.lastTerm = term
+				c.pending[id] = pending
+				continue
+			}
+			c.complete(id, err)
+			continue
+		}
+		pending.lastLeaderID = leaderID
+		pending.lastTerm = term
+		c.pending[id] = pending
 	}
 }
 
@@ -704,6 +738,11 @@ func (c *raftCluster) campaign(nodeID uint64) error {
 }
 
 func (c *raftCluster) leaderID() uint64 {
+	leaderID, _ := c.leaderStatus()
+	return leaderID
+}
+
+func (c *raftCluster) leaderStatus() (uint64, uint64) {
 	var leaderID uint64
 	var leaderTerm uint64
 	for _, id := range c.ids {
@@ -719,7 +758,7 @@ func (c *raftCluster) leaderID() uint64 {
 			leaderTerm = status.Term
 		}
 	}
-	return leaderID
+	return leaderID, leaderTerm
 }
 
 func (c *raftCluster) quorumSize() int {
@@ -739,10 +778,12 @@ func (c *raftCluster) complete(id uint64, err error) {
 	waiter <- err
 	close(waiter)
 	delete(c.waiters, id)
+	delete(c.pending, id)
 }
 
 func (c *raftCluster) cancel(id uint64) {
 	delete(c.waiters, id)
+	delete(c.pending, id)
 }
 
 func (c *raftCluster) cancelRead(id uint64) {
@@ -772,6 +813,7 @@ func (c *raftCluster) closeWithError(err error) {
 		waiter <- err
 		close(waiter)
 		delete(c.waiters, id)
+		delete(c.pending, id)
 	}
 	for id, waiter := range c.readWaiters {
 		waiter <- err
