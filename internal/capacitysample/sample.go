@@ -1097,16 +1097,9 @@ func sanitizePathPart(value string) string {
 	value = strings.TrimSpace(value)
 	var builder strings.Builder
 	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
+		if safePathPartRune(r) {
 			builder.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			builder.WriteRune(r)
-		case r >= '0' && r <= '9':
-			builder.WriteRune(r)
-		case r == '-' || r == '_':
-			builder.WriteRune(r)
-		default:
+		} else {
 			builder.WriteByte('-')
 		}
 	}
@@ -1115,6 +1108,14 @@ func sanitizePathPart(value string) string {
 		return "profile"
 	}
 	return cleaned
+}
+
+func safePathPartRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '-' ||
+		r == '_'
 }
 
 func defaultText(value, fallback string) string {

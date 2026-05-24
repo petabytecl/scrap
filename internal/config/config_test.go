@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestDefaultConfigValidates(t *testing.T) {
-	if err := Default().Validate(); err != nil {
-		t.Fatalf("default config did not validate: %v", err)
-	}
+	testutil.RequireNoErrorf(t, Default().Validate(), "default config did not validate")
 }
 
 func TestConfigRejectsMissingAndDuplicateAddresses(t *testing.T) {
@@ -63,9 +63,7 @@ func TestLocalNonProductionStorageRequiresExplicitEnableAndDataDir(t *testing.T)
 	cfg := Default()
 	cfg.EnableLocalNonProductionStorage = true
 	cfg.LocalDataDir = t.TempDir()
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("local non-production config did not validate: %v", err)
-	}
+	testutil.RequireNoErrorf(t, cfg.Validate(), "local non-production config did not validate")
 }
 
 func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testing.T) {
@@ -129,9 +127,7 @@ func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testin
 	cfg.EnableLocalFilesystemBackend = true
 	cfg.LocalBackendDataDir = t.TempDir()
 	cfg.BackendUploadInterval = 10 * time.Millisecond
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("local filesystem backend config did not validate: %v", err)
-	}
+	testutil.RequireNoErrorf(t, cfg.Validate(), "local filesystem backend config did not validate")
 }
 
 func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T) {
@@ -139,27 +135,31 @@ func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T)
 	cfg.EnableProductionWriteACK = true
 
 	err := cfg.Validate()
-	if !errors.Is(err, ErrProductionWriteACKReadinessGate) {
-		t.Fatalf("error = %v, want %v", err, ErrProductionWriteACKReadinessGate)
-	}
-	if strings.Contains(err.Error(), "%!") {
-		t.Fatalf("error contains fmt artifact: %q", err)
-	}
+	testutil.RequireErrorIsf(t, err, ErrProductionWriteACKReadinessGate, "production write ACK readiness gate")
+	testutil.RequireFalsef(t, strings.Contains(err.Error(), "%!"), "error contains fmt artifact: %q", err)
 	gateErr := requireProductionGateError(t, err)
-	openbaoMissing, ok := missingReadiness(gateErr.Missing, ReadinessGateOpenBaoEnvelopeWorkflow)
-	if !ok {
-		t.Fatalf("missing gates = %#v, want %s", gateErr.Missing, ReadinessGateOpenBaoEnvelopeWorkflow)
-	}
-	if openbaoMissing.ReleaseArtifact != "openbao-envelope-release-evidence" || !intSliceContains(openbaoMissing.BlockingIssues, 86) {
-		t.Fatalf("openbao missing gate = %#v, want artifact and #86 blocker", openbaoMissing)
-	}
-	downstreamMissing, ok := missingReadiness(gateErr.Missing, ReadinessGateDownstreamDeployment)
-	if !ok {
-		t.Fatalf("missing gates = %#v, want %s", gateErr.Missing, ReadinessGateDownstreamDeployment)
-	}
-	if downstreamMissing.ReleaseArtifact != "downstream-deployment-approval" {
-		t.Fatalf("downstream missing gate = %#v, want release artifact", downstreamMissing)
-	}
+	requireOpenBaoReadinessMissing(t, gateErr.Missing)
+	requireDownstreamReadinessMissing(t, gateErr.Missing)
+	requireProductionGateErrorText(t, err)
+}
+
+func requireOpenBaoReadinessMissing(t *testing.T, missing []ProductionReadinessMissing) {
+	t.Helper()
+	openbaoMissing, ok := missingReadiness(missing, ReadinessGateOpenBaoEnvelopeWorkflow)
+	testutil.RequireTruef(t, ok, "missing gates = %#v, want %s", missing, ReadinessGateOpenBaoEnvelopeWorkflow)
+	testutil.RequireEqualf(t, openbaoMissing.ReleaseArtifact, "openbao-envelope-release-evidence", "openbao missing release artifact")
+	testutil.RequireTruef(t, intSliceContains(openbaoMissing.BlockingIssues, 86), "openbao missing gate = %#v, want #86 blocker", openbaoMissing)
+}
+
+func requireDownstreamReadinessMissing(t *testing.T, missing []ProductionReadinessMissing) {
+	t.Helper()
+	downstreamMissing, ok := missingReadiness(missing, ReadinessGateDownstreamDeployment)
+	testutil.RequireTruef(t, ok, "missing gates = %#v, want %s", missing, ReadinessGateDownstreamDeployment)
+	testutil.RequireEqualf(t, downstreamMissing.ReleaseArtifact, "downstream-deployment-approval", "downstream release artifact")
+}
+
+func requireProductionGateErrorText(t *testing.T, err error) {
+	t.Helper()
 	for _, gate := range []string{
 		ProductionWriteACKReadinessGate,
 		ReadinessGateReleaseProfile,
@@ -174,9 +174,7 @@ func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T)
 		ReadinessGateReleaseOwnerSignoff,
 		ReadinessGateDownstreamDeployment,
 	} {
-		if !strings.Contains(err.Error(), gate) {
-			t.Fatalf("error %q does not name missing gate %s", err, gate)
-		}
+		testutil.RequireTruef(t, strings.Contains(err.Error(), gate), "error %q does not name missing gate %s", err, gate)
 	}
 	for _, detail := range []string{
 		"target-release-profile",
@@ -188,9 +186,7 @@ func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T)
 		"#86",
 		"#88",
 	} {
-		if !strings.Contains(err.Error(), detail) {
-			t.Fatalf("error %q does not name missing detail %s", err, detail)
-		}
+		testutil.RequireTruef(t, strings.Contains(err.Error(), detail), "error %q does not name missing detail %s", err, detail)
 	}
 }
 
@@ -297,9 +293,7 @@ func TestProductionWriteACKGateRejectsLocalRehearsalWithoutDownstreamApproval(t 
 func TestProductionWriteACKGateAcceptsFullySatisfiedProfile(t *testing.T) {
 	cfg := productionWriteACKReadyConfig()
 
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("fully satisfied production write ACK config did not validate: %v", err)
-	}
+	testutil.RequireNoErrorf(t, cfg.Validate(), "fully satisfied production write ACK config did not validate")
 }
 
 func productionWriteACKReadyConfig() Config {

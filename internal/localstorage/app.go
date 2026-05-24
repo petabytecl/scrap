@@ -367,29 +367,42 @@ func (a *Application) verifyLocalRefsAndQueueRepairs(ctx context.Context) error 
 		return err
 	}
 	for _, document := range documents {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if document.RestoreState != metastore.RestoreStateHot || document.Availability != metastore.AvailabilityHot {
-			continue
-		}
-		length := document.Length
-		if err := a.blocks.VerifyRange(document.Location, 0, &length); err == nil {
-			continue
-		} else if !isIntegrityFailure(err) {
-			return err
-		}
-		incidentID := integrityEvidenceID(document)
-		if state, err := a.metadata.GetRepairState(document.Identity, incidentID); err == nil && state.Quarantined {
-			continue
-		} else if err != nil && !errors.Is(err, metastore.ErrNotFound) {
-			return err
-		}
-		if err := a.recordDocumentRepairState(ctx, document, incidentID, true, a.now()); err != nil {
+		if err := a.verifyLocalDocumentRefAndQueueRepair(ctx, document); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (a *Application) verifyLocalDocumentRefAndQueueRepair(ctx context.Context, document metastore.Document) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if document.RestoreState != metastore.RestoreStateHot || document.Availability != metastore.AvailabilityHot {
+		return nil
+	}
+	length := document.Length
+	if err := a.blocks.VerifyRange(document.Location, 0, &length); err == nil {
+		return nil
+	} else if !isIntegrityFailure(err) {
+		return err
+	}
+	incidentID := integrityEvidenceID(document)
+	if quarantined, err := a.repairStateIsQuarantined(document, incidentID); err != nil || quarantined {
+		return err
+	}
+	return a.recordDocumentRepairState(ctx, document, incidentID, true, a.now())
+}
+
+func (a *Application) repairStateIsQuarantined(document metastore.Document, incidentID string) (bool, error) {
+	state, err := a.metadata.GetRepairState(document.Identity, incidentID)
+	if errors.Is(err, metastore.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return state.Quarantined, nil
 }
 
 func (a *Application) WriteDocument(ctx context.Context, init api.WriteDocumentInit, chunks api.ChunkReader) (api.WriteDocumentResult, error) {
@@ -488,10 +501,8 @@ func (a *Application) commitDocumentWrite(ctx context.Context, document metastor
 	if err := a.prepare.Append(document); err != nil {
 		return metastore.Document{}, replication.Result{}, err
 	}
-	if a.writeFaults.afterPrepareSync != nil {
-		if err := a.writeFaults.afterPrepareSync(document); err != nil {
-			return metastore.Document{}, replication.Result{}, err
-		}
+	if err := runDocumentWriteFault(a.writeFaults.afterPrepareSync, document); err != nil {
+		return metastore.Document{}, replication.Result{}, err
 	}
 	replicationResult, err := a.preparePeerReplicas(ctx, document)
 	if err != nil {
@@ -501,21 +512,24 @@ func (a *Application) commitDocumentWrite(ctx context.Context, document metastor
 	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
 		return metastore.Document{}, replication.Result{}, mapError(err)
 	}
-	if a.writeFaults.afterMetadataApply != nil {
-		if err := a.writeFaults.afterMetadataApply(document); err != nil {
-			return metastore.Document{}, replication.Result{}, err
-		}
+	if err := runDocumentWriteFault(a.writeFaults.afterMetadataApply, document); err != nil {
+		return metastore.Document{}, replication.Result{}, err
 	}
 	uploadIntent := uploadIntentForDocument(document)
 	if err := a.authority.RecordUploadIntent(ctx, uploadIntent, recordUploadIntentCommandID(uploadIntent), now); err != nil {
 		return metastore.Document{}, replication.Result{}, mapError(err)
 	}
-	if a.writeFaults.beforeACK != nil {
-		if err := a.writeFaults.beforeACK(document); err != nil {
-			return metastore.Document{}, replication.Result{}, err
-		}
+	if err := runDocumentWriteFault(a.writeFaults.beforeACK, document); err != nil {
+		return metastore.Document{}, replication.Result{}, err
 	}
 	return document, replicationResult, nil
+}
+
+func runDocumentWriteFault(fault func(metastore.Document) error, document metastore.Document) error {
+	if fault == nil {
+		return nil
+	}
+	return fault(document)
 }
 
 func writeDocumentResult(document metastore.Document, replicationResult replication.Result) (api.WriteDocumentResult, error) {
@@ -570,41 +584,19 @@ func (a *Application) HeadDocument(ctx context.Context, req api.HeadDocumentRequ
 }
 
 func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequest, sender api.ReadDocumentSender) error {
-	if err := a.authority.ReadFresh(ctx); err != nil {
-		return mapError(err)
-	}
-	if err := a.waitByteServingReady(ctx); err != nil {
-		return mapError(err)
-	}
-	document, err := a.metadata.HeadDocument(req.Identity)
+	document, err := a.readableDocument(ctx, req.Identity)
 	if err != nil {
 		return mapError(err)
-	}
-	if document.Availability == metastore.AvailabilityCold {
-		document, err = a.queueRestoreOnColdRead(ctx, document)
-		if err != nil {
-			return mapError(err)
-		}
 	}
 	if err := unavailableReadStateError(document); err != nil {
 		return err
 	}
-	offset := uint64(0)
-	if req.Range != nil {
-		offset = req.Range.Offset
-	}
-	if offset > document.Length {
+	selectedRange, err := selectedDocumentRange(document.Length, req.Range)
+	if err != nil {
 		return mapError(blockstore.ErrInvalidRange)
 	}
-	readLength := document.Length - offset
-	if req.Range != nil && req.Range.Length != nil {
-		if *req.Range.Length > document.Length-offset {
-			return mapError(blockstore.ErrInvalidRange)
-		}
-		readLength = *req.Range.Length
-	}
-	selectedRange := api.ReadRange{Offset: offset, Length: &readLength}
-	if err := a.blocks.VerifyRange(document.Location, offset, &readLength); err != nil {
+	readLength := *selectedRange.Length
+	if err := a.blocks.VerifyRange(document.Location, selectedRange.Offset, &readLength); err != nil {
 		return a.readDocumentFromBackend(ctx, document, selectedRange, sender, err)
 	}
 	if err := sender.SendMetadata(api.ReadDocumentMetadata{
@@ -614,34 +606,51 @@ func (a *Application) ReadDocument(ctx context.Context, req api.ReadDocumentRequ
 	}); err != nil {
 		return err
 	}
-	return mapError(a.blocks.ReadRange(ctx, document.Location, offset, &readLength, senderWriter{sender: sender}))
+	return mapError(a.blocks.ReadRange(ctx, document.Location, selectedRange.Offset, &readLength, senderWriter{sender: sender}))
+}
+
+func (a *Application) readableDocument(ctx context.Context, documentIdentity identity.Document) (metastore.Document, error) {
+	if err := a.authority.ReadFresh(ctx); err != nil {
+		return metastore.Document{}, err
+	}
+	if err := a.waitByteServingReady(ctx); err != nil {
+		return metastore.Document{}, err
+	}
+	document, err := a.metadata.HeadDocument(documentIdentity)
+	if err != nil {
+		return metastore.Document{}, err
+	}
+	if document.Availability != metastore.AvailabilityCold {
+		return document, nil
+	}
+	return a.queueRestoreOnColdRead(ctx, document)
+}
+
+func selectedDocumentRange(documentLength uint64, requested *api.ReadRange) (api.ReadRange, error) {
+	offset := uint64(0)
+	if requested != nil {
+		offset = requested.Offset
+	}
+	if offset > documentLength {
+		return api.ReadRange{}, blockstore.ErrInvalidRange
+	}
+	readLength := documentLength - offset
+	if requested != nil && requested.Length != nil {
+		if *requested.Length > documentLength-offset {
+			return api.ReadRange{}, blockstore.ErrInvalidRange
+		}
+		readLength = *requested.Length
+	}
+	return api.ReadRange{Offset: offset, Length: &readLength}, nil
 }
 
 func (a *Application) readDocumentFromBackend(ctx context.Context, document metastore.Document, selectedRange api.ReadRange, sender api.ReadDocumentSender, localErr error) error {
-	if a.backendStore == nil {
-		return readIntegrityError(document, []string{"local"}, localErr)
-	}
-	intent, err := a.metadata.GetUploadIntent(document.Location.BlockID)
-	if err != nil || intent.State != metastore.UploadStateUploaded {
-		return readIntegrityError(document, []string{"local"}, localErr)
-	}
-	data, err := a.readVerifiedBackendRange(ctx, document, intent, selectedRange)
+	data, err := a.backendReadFallbackData(ctx, document, selectedRange, localErr)
 	if err != nil {
-		if errors.Is(err, backend.ErrRestorePending) {
-			return restorePendingError(document)
-		}
-		if cryptoenv.IsUnavailable(err) {
-			return cryptoUnavailableError(document)
-		}
-		if isIntegrityFailure(err) {
-			return readIntegrityError(document, []string{"local", "backend"}, err)
-		}
-		return mapError(err)
+		return err
 	}
-	if isIntegrityFailure(localErr) {
-		if err := a.recordDocumentRepairState(ctx, document, integrityEvidenceID(document), true, a.now()); err != nil {
-			return err
-		}
+	if err := a.recordBackendFallbackRepair(ctx, document, localErr); err != nil {
+		return err
 	}
 	if err := sender.SendMetadata(api.ReadDocumentMetadata{
 		Metadata:      documentToAPI(document),
@@ -650,6 +659,45 @@ func (a *Application) readDocumentFromBackend(ctx context.Context, document meta
 	}); err != nil {
 		return err
 	}
+	return sendReadChunks(sender, data)
+}
+
+func (a *Application) backendReadFallbackData(ctx context.Context, document metastore.Document, selectedRange api.ReadRange, localErr error) ([]byte, error) {
+	if a.backendStore == nil {
+		return nil, readIntegrityError(document, []string{"local"}, localErr)
+	}
+	intent, err := a.metadata.GetUploadIntent(document.Location.BlockID)
+	if err != nil || intent.State != metastore.UploadStateUploaded {
+		return nil, readIntegrityError(document, []string{"local"}, localErr)
+	}
+	data, err := a.readVerifiedBackendRange(ctx, document, intent, selectedRange)
+	if err != nil {
+		return nil, backendReadFallbackError(document, err)
+	}
+	return data, nil
+}
+
+func backendReadFallbackError(document metastore.Document, err error) error {
+	if errors.Is(err, backend.ErrRestorePending) {
+		return restorePendingError(document)
+	}
+	if cryptoenv.IsUnavailable(err) {
+		return cryptoUnavailableError(document)
+	}
+	if isIntegrityFailure(err) {
+		return readIntegrityError(document, []string{"local", "backend"}, err)
+	}
+	return mapError(err)
+}
+
+func (a *Application) recordBackendFallbackRepair(ctx context.Context, document metastore.Document, localErr error) error {
+	if !isIntegrityFailure(localErr) {
+		return nil
+	}
+	return a.recordDocumentRepairState(ctx, document, integrityEvidenceID(document), true, a.now())
+}
+
+func sendReadChunks(sender api.ReadDocumentSender, data []byte) error {
 	for len(data) > 0 {
 		n := backendReadChunkSize
 		if n > len(data) {
@@ -907,22 +955,27 @@ func verificationWindow(record blockstore.Record, offset, length uint64) (uint64
 	var verifyStart uint64
 	var verifyEnd uint64
 	for _, frame := range record.Frames {
-		frameStart := frame.SegmentOffset
-		frameEnd := frame.SegmentOffset + frame.SegmentLength
-		if frameEnd <= selectedStart || frameStart >= selectedEnd {
-			continue
-		}
-		if verifyStart == 0 || frameStart < verifyStart {
-			verifyStart = frameStart
-		}
-		if frameEnd > verifyEnd {
-			verifyEnd = frameEnd
-		}
+		verifyStart, verifyEnd = includeVerificationFrame(frame, selectedStart, selectedEnd, verifyStart, verifyEnd)
 	}
 	if verifyStart == 0 || verifyEnd < selectedEnd {
 		return 0, 0, io.ErrUnexpectedEOF
 	}
 	return verifyStart, verifyEnd, nil
+}
+
+func includeVerificationFrame(frame blockstore.FrameRecord, selectedStart, selectedEnd, verifyStart, verifyEnd uint64) (uint64, uint64) {
+	frameStart := frame.SegmentOffset
+	frameEnd := frame.SegmentOffset + frame.SegmentLength
+	if frameEnd <= selectedStart || frameStart >= selectedEnd {
+		return verifyStart, verifyEnd
+	}
+	if verifyStart == 0 || frameStart < verifyStart {
+		verifyStart = frameStart
+	}
+	if frameEnd > verifyEnd {
+		verifyEnd = frameEnd
+	}
+	return verifyStart, verifyEnd
 }
 
 func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verifyStart uint64, data []byte) error {
@@ -995,24 +1048,11 @@ func (a *Application) GetTransaction(ctx context.Context, req api.GetTransaction
 }
 
 func (a *Application) replayExisting(ctx context.Context, init api.WriteDocumentInit, existing metastore.Document, body drainedBody) (api.WriteDocumentResult, error) {
-	if !existing.HasClientIdempotencyKey || existing.ClientIdempotencyKey == "" || existing.ClientIdempotencyKey != init.ClientIdempotencyKey {
-		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
-	}
-	if body.length != existing.Length || body.sha256 != existing.LogicalSHA256 {
-		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
-	}
-	if init.ExpectedLength != nil && *init.ExpectedLength != existing.Length {
-		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
-	}
-	if len(init.ExpectedSHA256) > 0 && !bytes.Equal(init.ExpectedSHA256, existing.LogicalSHA256[:]) {
+	if !validExistingReplay(init, existing, body) {
 		return api.WriteDocumentResult{}, mapError(metastore.ErrConflict)
 	}
 	intent := uploadIntentForDocument(existing)
-	if _, err := a.metadata.GetUploadIntent(intent.BlockID); errors.Is(err, metastore.ErrNotFound) {
-		if err := a.authority.RecordUploadIntent(ctx, intent, recordUploadIntentCommandID(intent), a.now()); err != nil {
-			return api.WriteDocumentResult{}, mapError(err)
-		}
-	} else if err != nil {
+	if err := a.ensureReplayUploadIntent(ctx, intent); err != nil {
 		return api.WriteDocumentResult{}, mapError(err)
 	}
 	return api.WriteDocumentResult{
@@ -1021,6 +1061,28 @@ func (a *Application) replayExisting(ctx context.Context, init api.WriteDocument
 		AchievedReplicaCount: 1,
 		IdempotentReplay:     true,
 	}, nil
+}
+
+func validExistingReplay(init api.WriteDocumentInit, existing metastore.Document, body drainedBody) bool {
+	if !existing.HasClientIdempotencyKey || existing.ClientIdempotencyKey == "" || existing.ClientIdempotencyKey != init.ClientIdempotencyKey {
+		return false
+	}
+	if body.length != existing.Length || body.sha256 != existing.LogicalSHA256 {
+		return false
+	}
+	if init.ExpectedLength != nil && *init.ExpectedLength != existing.Length {
+		return false
+	}
+	return len(init.ExpectedSHA256) == 0 || bytes.Equal(init.ExpectedSHA256, existing.LogicalSHA256[:])
+}
+
+func (a *Application) ensureReplayUploadIntent(ctx context.Context, intent metastore.UploadIntent) error {
+	if _, err := a.metadata.GetUploadIntent(intent.BlockID); errors.Is(err, metastore.ErrNotFound) {
+		return a.authority.RecordUploadIntent(ctx, intent, recordUploadIntentCommandID(intent), a.now())
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 type chunkReader struct {

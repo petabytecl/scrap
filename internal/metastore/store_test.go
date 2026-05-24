@@ -10,20 +10,17 @@ import (
 	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPutHeadFindDocument(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
 
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 
 	got, err := store.HeadDocument(doc.Identity)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if got.Identity.DocumentName != doc.Identity.DocumentName {
 		t.Fatalf("document name = %q, want %q", got.Identity.DocumentName, doc.Identity.DocumentName)
 	}
@@ -49,9 +46,7 @@ func TestPutHeadFindDocument(t *testing.T) {
 			"workflow": "billing",
 		},
 	})
-	if err != nil {
-		t.Fatalf("find documents: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "find documents")
 	if len(found) != 1 {
 		t.Fatalf("found %d documents, want 1", len(found))
 	}
@@ -61,20 +56,14 @@ func TestPutDocumentIsIdempotentAndCountsOnce(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
 
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("idempotent put: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "idempotent put")
 
 	transaction, err := store.GetTransaction(identity.Transaction{
 		TenantID:      doc.Identity.TenantID,
 		TransactionID: doc.Identity.TransactionID,
 	})
-	if err != nil {
-		t.Fatalf("get transaction: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get transaction")
 	if transaction.DocumentCount != 1 || transaction.PermanentDocumentCount != 1 {
 		t.Fatalf("counts = %#v, want one permanent document", transaction)
 	}
@@ -83,9 +72,7 @@ func TestPutDocumentIsIdempotentAndCountsOnce(t *testing.T) {
 func TestPutDocumentRejectsConflictingReplay(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 
 	conflict := doc
 	conflict.Length++
@@ -98,13 +85,9 @@ func TestPutDocumentRejectsConflictingReplay(t *testing.T) {
 func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open store")
 	doc := sampleDocument("invoice.xml", DocumentClassEphemeral)
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 	completedAt := doc.CreatedAt.Add(time.Minute)
 	if _, err := store.CompleteTransaction(identity.Transaction{
 		TenantID:      doc.Identity.TenantID,
@@ -112,22 +95,16 @@ func TestCompleteTransactionPersistsAcrossReopen(t *testing.T) {
 	}, completedAt, map[string]string{"closed_by": "test"}); err != nil {
 		t.Fatalf("complete transaction: %v", err)
 	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.Close(), "close store")
 
 	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen store")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	transaction, err := reopened.GetTransaction(identity.Transaction{
 		TenantID:      doc.Identity.TenantID,
 		TransactionID: doc.Identity.TransactionID,
 	})
-	if err != nil {
-		t.Fatalf("get transaction: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get transaction")
 	if transaction.State != TransactionStateCompleted {
 		t.Fatalf("state = %d, want completed", transaction.State)
 	}
@@ -144,17 +121,11 @@ func TestListTransactionsReturnsCommittedTransactions(t *testing.T) {
 	first := sampleDocument("a.xml", DocumentClassPermanent)
 	second := sampleDocument("b.xml", DocumentClassEphemeral)
 	second.Identity.TransactionID = "txn-b"
-	if err := store.PutDocument(second); err != nil {
-		t.Fatalf("put second document: %v", err)
-	}
-	if err := store.PutDocument(first); err != nil {
-		t.Fatalf("put first document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(second), "put second document")
+	testutil.RequireNoErrorf(t, store.PutDocument(first), "put first document")
 
 	transactions, err := store.ListTransactions()
-	if err != nil {
-		t.Fatalf("list transactions: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list transactions")
 	if len(transactions) != 2 ||
 		transactions[0].Identity.TransactionID != "txn" ||
 		transactions[1].Identity.TransactionID != "txn-b" {
@@ -166,24 +137,16 @@ func TestRecordUploadIntentPersistsAndLists(t *testing.T) {
 	store := openTestStore(t)
 	first := sampleUploadIntent("block-1")
 	second := sampleUploadIntent("block-2")
-	if err := store.RecordUploadIntent(first); err != nil {
-		t.Fatalf("record first upload intent: %v", err)
-	}
-	if err := store.RecordUploadIntent(second); err != nil {
-		t.Fatalf("record second upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(first), "record first upload intent")
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(second), "record second upload intent")
 
 	got, err := store.GetUploadIntent(first.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if got != first {
 		t.Fatalf("upload intent = %#v, want %#v", got, first)
 	}
 	intents, err := store.ListUploadIntents()
-	if err != nil {
-		t.Fatalf("list upload intents: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list upload intents")
 	if len(intents) != 2 || intents[0].BlockID != "block-1" || intents[1].BlockID != "block-2" {
 		t.Fatalf("upload intents = %#v, want block-1 then block-2", intents)
 	}
@@ -203,9 +166,7 @@ func TestListBlockDocuments(t *testing.T) {
 	}
 
 	documents, err := store.ListBlockDocuments(first.Location.BlockID)
-	if err != nil {
-		t.Fatalf("list block documents: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list block documents")
 	if len(documents) != 2 ||
 		documents[0].Identity.DocumentName != "invoice.xml" ||
 		documents[1].Identity.DocumentName != "summary.pdf" {
@@ -230,9 +191,7 @@ func TestListDocumentsFiltersAndOrdersByIdentity(t *testing.T) {
 		DocumentClass:    DocumentClassPermanent,
 		HasDocumentClass: true,
 	})
-	if err != nil {
-		t.Fatalf("list documents: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list documents")
 	if len(documents) != 3 ||
 		documents[0].Identity.DocumentName != "invoice.xml" ||
 		documents[1].Identity.DocumentName != "summary.pdf" ||
@@ -245,18 +204,12 @@ func TestListDocumentsFiltersAndOrdersByIdentity(t *testing.T) {
 func TestRecordUploadIntentIsIdempotentAndConflictsOnDifferentKeys(t *testing.T) {
 	store := openTestStore(t)
 	intent := sampleUploadIntent("block-1")
-	if err := store.RecordUploadIntent(intent); err != nil {
-		t.Fatalf("record upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(intent), "record upload intent")
 	replayed := intent
 	replayed.UpdatedAt = replayed.UpdatedAt.Add(time.Minute)
-	if err := store.RecordUploadIntent(replayed); err != nil {
-		t.Fatalf("idempotent upload intent replay: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(replayed), "idempotent upload intent replay")
 	got, err := store.GetUploadIntent(intent.BlockID)
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if !got.UpdatedAt.Equal(intent.UpdatedAt) {
 		t.Fatalf("updated_at = %v, want original %v", got.UpdatedAt, intent.UpdatedAt)
 	}
@@ -293,13 +246,9 @@ func TestApplyRecordUploadIntentCommand(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply upload intent command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply upload intent command")
 	intent, err := store.GetUploadIntent("block-1")
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if intent.State != UploadStatePending || !intent.UpdatedAt.Equal(proposedAt) {
 		t.Fatalf("intent state/updated_at = %d/%v, want pending/%v", intent.State, intent.UpdatedAt, proposedAt)
 	}
@@ -308,28 +257,18 @@ func TestApplyRecordUploadIntentCommand(t *testing.T) {
 func TestApplyShardCommandDuplicateRequestIDIsIdempotent(t *testing.T) {
 	store := openTestStore(t)
 	command := sampleShardCommand()
-	if err := store.ApplyShardCommand(command); err != nil {
-		t.Fatalf("apply command: %v", err)
-	}
-	if err := store.ApplyShardCommand(command); err != nil {
-		t.Fatalf("reapply duplicate command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ApplyShardCommand(command), "apply command")
+	testutil.RequireNoErrorf(t, store.ApplyShardCommand(command), "reapply duplicate command")
 	reproposed := sampleShardCommand()
 	reproposed.ProposedAt = timestamppb.New(time.Unix(101, 0).UTC())
-	if err := store.ApplyShardCommand(reproposed); err != nil {
-		t.Fatalf("reapply duplicate command with new proposal time: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ApplyShardCommand(reproposed), "reapply duplicate command with new proposal time")
 	transaction, err := store.GetTransaction(identity.Transaction{TenantID: "tenant", TransactionID: "txn"})
-	if err != nil {
-		t.Fatalf("get transaction: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get transaction")
 	if transaction.DocumentCount != 1 {
 		t.Fatalf("document count after duplicate command = %d, want 1", transaction.DocumentCount)
 	}
 	receipts, err := store.ListCommandReceipts()
-	if err != nil {
-		t.Fatalf("list command receipts: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list command receipts")
 	if len(receipts) != 1 || receipts[0].CommandID != command.GetCommandId() {
 		t.Fatalf("receipts = %#v, want one receipt for duplicate command", receipts)
 	}
@@ -343,9 +282,7 @@ func TestApplyShardCommandDuplicateRequestIDIsIdempotent(t *testing.T) {
 
 func TestApplyUpdateUploadIntentStateCommand(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {
-		t.Fatalf("record upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(sampleUploadIntent("block-1")), "record upload intent")
 	proposedAt := time.Unix(31, 0).UTC()
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
@@ -359,13 +296,9 @@ func TestApplyUpdateUploadIntentStateCommand(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply upload intent state command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply upload intent state command")
 	intent, err := store.GetUploadIntent("block-1")
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if intent.State != UploadStateUploaded || intent.HasLastError || !intent.UpdatedAt.Equal(proposedAt) {
 		t.Fatalf("intent = %#v, want uploaded without last error at %v", intent, proposedAt)
 	}
@@ -373,9 +306,7 @@ func TestApplyUpdateUploadIntentStateCommand(t *testing.T) {
 
 func TestApplyUpdateUploadIntentStateCommandRecordsFailure(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {
-		t.Fatalf("record upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(sampleUploadIntent("block-1")), "record upload intent")
 	lastError := "backend throttled"
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
@@ -390,13 +321,9 @@ func TestApplyUpdateUploadIntentStateCommandRecordsFailure(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply upload intent failed command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply upload intent failed command")
 	intent, err := store.GetUploadIntent("block-1")
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if intent.State != UploadStateFailed || !intent.HasLastError || intent.LastError != lastError {
 		t.Fatalf("intent = %#v, want failed with last error", intent)
 	}
@@ -404,9 +331,7 @@ func TestApplyUpdateUploadIntentStateCommandRecordsFailure(t *testing.T) {
 
 func TestApplyUpdateUploadIntentStateRejectsInvalidState(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.RecordUploadIntent(sampleUploadIntent("block-1")); err != nil {
-		t.Fatalf("record upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(sampleUploadIntent("block-1")), "record upload intent")
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
 		ShardId:       "tenant-txn",
@@ -423,9 +348,7 @@ func TestApplyUpdateUploadIntentStateRejectsInvalidState(t *testing.T) {
 		t.Fatal("invalid upload intent state succeeded")
 	}
 	intent, err := store.GetUploadIntent("block-1")
-	if err != nil {
-		t.Fatalf("get upload intent: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get upload intent")
 	if intent.State != UploadStatePending {
 		t.Fatalf("intent state = %d, want pending after rejected transition", intent.State)
 	}
@@ -434,9 +357,7 @@ func TestApplyUpdateUploadIntentStateRejectsInvalidState(t *testing.T) {
 func TestApplyUpdateRestoreStateCommandForDocument(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 	documentName := doc.Identity.DocumentName
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
@@ -453,13 +374,9 @@ func TestApplyUpdateRestoreStateCommandForDocument(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply restore state command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply restore state command")
 	got, err := store.HeadDocument(doc.Identity)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if got.RestoreState != RestoreStateRestorePending || got.Availability != AvailabilityRestorePending {
 		t.Fatalf("restore/availability = %d/%d, want restore pending", got.RestoreState, got.Availability)
 	}
@@ -469,12 +386,8 @@ func TestApplyUpdateRestoreStateCommandForTransaction(t *testing.T) {
 	store := openTestStore(t)
 	first := sampleDocument("invoice.xml", DocumentClassPermanent)
 	second := sampleDocument("summary.pdf", DocumentClassPermanent)
-	if err := store.PutDocument(first); err != nil {
-		t.Fatalf("put first document: %v", err)
-	}
-	if err := store.PutDocument(second); err != nil {
-		t.Fatalf("put second document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(first), "put first document")
+	testutil.RequireNoErrorf(t, store.PutDocument(second), "put second document")
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
 		ShardId:       "tenant-txn",
@@ -489,13 +402,9 @@ func TestApplyUpdateRestoreStateCommandForTransaction(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply transaction restore state command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply transaction restore state command")
 	found, err := store.FindDocuments(identity.Transaction{TenantID: "tenant", TransactionID: "txn"}, DocumentFilter{})
-	if err != nil {
-		t.Fatalf("find documents: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "find documents")
 	if len(found) != 2 {
 		t.Fatalf("found %d documents, want 2", len(found))
 	}
@@ -509,9 +418,7 @@ func TestApplyUpdateRestoreStateCommandForTransaction(t *testing.T) {
 func TestApplyUpdateRestoreStateRejectsUnspecifiedState(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 	documentName := doc.Identity.DocumentName
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
@@ -532,9 +439,7 @@ func TestApplyUpdateRestoreStateRejectsUnspecifiedState(t *testing.T) {
 		t.Fatal("apply invalid restore state succeeded")
 	}
 	got, err := store.HeadDocument(doc.Identity)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if got.RestoreState != RestoreStateHot || got.Availability != AvailabilityHot {
 		t.Fatalf("restore/availability mutated to %d/%d, want hot", got.RestoreState, got.Availability)
 	}
@@ -559,20 +464,14 @@ func TestApplyRecordRepairStateCommand(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply repair state command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply repair state command")
 	state, err := store.GetRepairState(identity.Document{TenantID: "tenant", TransactionID: "txn", DocumentName: "invoice.xml"}, "incident-1")
-	if err != nil {
-		t.Fatalf("get repair state: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "get repair state")
 	if !state.Quarantined || state.PhysicalRef != "member-a/block-1/64" || !state.UpdatedAt.Equal(proposedAt) {
 		t.Fatalf("repair state = %#v, want quarantined physical ref at proposed time", state)
 	}
 	states, err := store.ListRepairStates()
-	if err != nil {
-		t.Fatalf("list repair states: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list repair states")
 	if len(states) != 1 || states[0].IncidentID != "incident-1" {
 		t.Fatalf("repair states = %#v, want recorded incident", states)
 	}
@@ -581,9 +480,7 @@ func TestApplyRecordRepairStateCommand(t *testing.T) {
 func TestApplyTombstoneDocumentCommand(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 	tombstonedAt := time.Unix(50, 0).UTC()
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
@@ -600,13 +497,9 @@ func TestApplyTombstoneDocumentCommand(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("apply tombstone command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "apply tombstone command")
 	got, err := store.HeadDocument(doc.Identity)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if got.LifecycleState != LifecycleStateTombstoned ||
 		got.TombstonedAt == nil ||
 		!got.TombstonedAt.Equal(tombstonedAt) ||
@@ -618,9 +511,7 @@ func TestApplyTombstoneDocumentCommand(t *testing.T) {
 func TestApplyTombstoneDocumentRequiresOperationMetadata(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
-	if err := store.PutDocument(doc); err != nil {
-		t.Fatalf("put document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
 	err := store.ApplyShardCommand(&metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
 		ShardId:       "tenant-txn",
@@ -656,9 +547,7 @@ func TestApplyTombstoneDocumentRequiresOperationMetadata(t *testing.T) {
 		t.Fatal("tombstone without operation id succeeded")
 	}
 	got, err := store.HeadDocument(doc.Identity)
-	if err != nil {
-		t.Fatalf("head document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "head document")
 	if got.LifecycleState != LifecycleStateActive || got.TombstonedAt != nil || got.HasTombstoneOperationID {
 		t.Fatalf("document mutated after rejected tombstone = %#v", got)
 	}
@@ -666,20 +555,14 @@ func TestApplyTombstoneDocumentRequiresOperationMetadata(t *testing.T) {
 
 func TestFindDocumentsFilters(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.PutDocument(sampleDocument("invoice.xml", DocumentClassPermanent)); err != nil {
-		t.Fatalf("put invoice: %v", err)
-	}
-	if err := store.PutDocument(sampleDocument("scratch.tmp", DocumentClassEphemeral)); err != nil {
-		t.Fatalf("put scratch: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.PutDocument(sampleDocument("invoice.xml", DocumentClassPermanent)), "put invoice")
+	testutil.RequireNoErrorf(t, store.PutDocument(sampleDocument("scratch.tmp", DocumentClassEphemeral)), "put scratch")
 
 	found, err := store.FindDocuments(identity.Transaction{TenantID: "tenant", TransactionID: "txn"}, DocumentFilter{
 		DocumentClass:    DocumentClassEphemeral,
 		HasDocumentClass: true,
 	})
-	if err != nil {
-		t.Fatalf("find documents: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "find documents")
 	if len(found) != 1 || found[0].Identity.DocumentName != "scratch.tmp" {
 		t.Fatalf("found = %#v, want only scratch.tmp", found)
 	}
@@ -688,13 +571,9 @@ func TestFindDocumentsFilters(t *testing.T) {
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open store")
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close store: %v", err)
-		}
+		testutil.RequireNoErrorf(t, store.Close(), "close store")
 	})
 	return store
 }

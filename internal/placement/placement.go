@@ -189,24 +189,7 @@ func selectVoters(candidates []Member, voterCount int, enforceDistinctStoragePoo
 	usedStoragePools := make(map[string]struct{}, voterCount)
 	zoneCounts := make(map[string]int)
 	for len(voters) < voterCount {
-		best := -1
-		bestZoneCount := 0
-		for i, candidate := range candidates {
-			if _, ok := usedNodes[candidate.KubernetesNode]; ok {
-				continue
-			}
-			if enforceDistinctStoragePools {
-				if _, ok := usedStoragePools[storagePoolKey(candidate)]; ok {
-					continue
-				}
-			}
-			zone := zoneKey(candidate.Zone)
-			count := zoneCounts[zone]
-			if best == -1 || count < bestZoneCount || (count == bestZoneCount && candidate.MemberID < candidates[best].MemberID) {
-				best = i
-				bestZoneCount = count
-			}
-		}
+		best := bestVoterCandidate(candidates, usedNodes, usedStoragePools, zoneCounts, enforceDistinctStoragePools)
 		if best == -1 {
 			return voters
 		}
@@ -217,6 +200,44 @@ func selectVoters(candidates []Member, voterCount int, enforceDistinctStoragePoo
 		zoneCounts[zoneKey(selected.Zone)]++
 	}
 	return voters
+}
+
+func bestVoterCandidate(
+	candidates []Member,
+	usedNodes map[string]struct{},
+	usedStoragePools map[string]struct{},
+	zoneCounts map[string]int,
+	enforceDistinctStoragePools bool,
+) int {
+	best := -1
+	bestZoneCount := 0
+	for i, candidate := range candidates {
+		if !voterCandidateAvailable(candidate, usedNodes, usedStoragePools, enforceDistinctStoragePools) {
+			continue
+		}
+		count := zoneCounts[zoneKey(candidate.Zone)]
+		if best == -1 || count < bestZoneCount || (count == bestZoneCount && candidate.MemberID < candidates[best].MemberID) {
+			best = i
+			bestZoneCount = count
+		}
+	}
+	return best
+}
+
+func voterCandidateAvailable(
+	candidate Member,
+	usedNodes map[string]struct{},
+	usedStoragePools map[string]struct{},
+	enforceDistinctStoragePools bool,
+) bool {
+	if _, ok := usedNodes[candidate.KubernetesNode]; ok {
+		return false
+	}
+	if !enforceDistinctStoragePools {
+		return true
+	}
+	_, ok := usedStoragePools[storagePoolKey(candidate)]
+	return !ok
 }
 
 func validateVoters(voters []Member, policy Policy) []Problem {
@@ -230,36 +251,39 @@ func validateVoters(voters []Member, policy Policy) []Problem {
 	seenNodes := make(map[string]string, len(voters))
 	seenStoragePools := make(map[string]string, len(voters))
 	for _, voter := range voters {
-		if voter.MemberID == "" || voter.KubernetesNode == "" || !voter.Eligible || !voter.Online || voter.Draining {
-			problems = append(problems, Problem{
-				Reason: ReasonSelectedIneligibleNode,
-				Detail: fmt.Sprintf("member %q on node %q is not eligible for voting placement", voter.MemberID, voter.KubernetesNode),
-			})
-			continue
-		}
-		if problem, ok := nodeLabelProblem(voter, policy.RequiredNodeLabels); ok {
+		if problem, ok := voterProblem(voter, policy, seenNodes, seenStoragePools); ok {
 			problems = append(problems, problem)
-			continue
 		}
-		if existing, ok := seenNodes[voter.KubernetesNode]; ok {
-			problems = append(problems, Problem{
-				Reason: ReasonSelectedDuplicateNode,
-				Detail: fmt.Sprintf("members %q and %q share node %q", existing, voter.MemberID, voter.KubernetesNode),
-			})
-			continue
-		}
-		seenNodes[voter.KubernetesNode] = voter.MemberID
-		pool := storagePoolKey(voter)
-		if existing, ok := seenStoragePools[pool]; ok {
-			problems = append(problems, Problem{
-				Reason: ReasonSelectedSharedPool,
-				Detail: fmt.Sprintf("members %q and %q share storage pool %q", existing, voter.MemberID, pool),
-			})
-			continue
-		}
-		seenStoragePools[pool] = voter.MemberID
 	}
 	return problems
+}
+
+func voterProblem(voter Member, policy Policy, seenNodes, seenStoragePools map[string]string) (Problem, bool) {
+	if voter.MemberID == "" || voter.KubernetesNode == "" || !voter.Eligible || !voter.Online || voter.Draining {
+		return Problem{
+			Reason: ReasonSelectedIneligibleNode,
+			Detail: fmt.Sprintf("member %q on node %q is not eligible for voting placement", voter.MemberID, voter.KubernetesNode),
+		}, true
+	}
+	if problem, ok := nodeLabelProblem(voter, policy.RequiredNodeLabels); ok {
+		return problem, true
+	}
+	if existing, ok := seenNodes[voter.KubernetesNode]; ok {
+		return Problem{
+			Reason: ReasonSelectedDuplicateNode,
+			Detail: fmt.Sprintf("members %q and %q share node %q", existing, voter.MemberID, voter.KubernetesNode),
+		}, true
+	}
+	seenNodes[voter.KubernetesNode] = voter.MemberID
+	pool := storagePoolKey(voter)
+	if existing, ok := seenStoragePools[pool]; ok {
+		return Problem{
+			Reason: ReasonSelectedSharedPool,
+			Detail: fmt.Sprintf("members %q and %q share storage pool %q", existing, voter.MemberID, pool),
+		}, true
+	}
+	seenStoragePools[pool] = voter.MemberID
+	return Problem{}, false
 }
 
 func finishPlan(plan Plan, policy Policy) (Plan, error) {

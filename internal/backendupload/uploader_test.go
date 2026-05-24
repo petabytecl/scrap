@@ -15,6 +15,7 @@ import (
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/storageformat"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
@@ -23,9 +24,7 @@ func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
 	store := openTestBackendStore(t)
 	data := []byte("document bytes inside a block")
 	record, err := blocks.Append(ctx, bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -36,9 +35,7 @@ func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
 		Source:  LocalBlockSource{Blocks: blocks},
 		Index:   staticBlockIndexSource{body: []byte("index bytes")},
 	}.UploadBlock(ctx, intent)
-	if err != nil {
-		t.Fatalf("upload block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "upload block")
 	object := result.Block
 	if object.Key != intent.BackendObjectKey || object.Length <= record.StoredLength {
 		t.Fatalf("uploaded object = %#v, want key %q and full block length", object, intent.BackendObjectKey)
@@ -49,16 +46,12 @@ func TestUploadBlockStoresReadableBlockObject(t *testing.T) {
 
 	var got bytes.Buffer
 	length := record.StoredLength
-	if err := store.ReadObjectRange(ctx, intent.BackendObjectKey, backend.Range{Offset: record.StoredOffset, Length: &length}, &got); err != nil {
-		t.Fatalf("read uploaded document range: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ReadObjectRange(ctx, intent.BackendObjectKey, backend.Range{Offset: record.StoredOffset, Length: &length}, &got), "read uploaded document range")
 	if !bytes.Equal(got.Bytes(), data) {
 		t.Fatalf("uploaded document bytes = %q, want %q", got.Bytes(), data)
 	}
 	got.Reset()
-	if err := store.ReadObjectRange(ctx, intent.IndexObjectKey, backend.Range{}, &got); err != nil {
-		t.Fatalf("read uploaded index: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ReadObjectRange(ctx, intent.IndexObjectKey, backend.Range{}, &got), "read uploaded index")
 	if got.String() != "index bytes" {
 		t.Fatalf("uploaded index = %q, want index bytes", got.String())
 	}
@@ -69,9 +62,7 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("same block")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -83,13 +74,9 @@ func TestUploadBlockIsIdempotent(t *testing.T) {
 	intent := testUploadIntent(record.BlockID)
 
 	first, err := uploader.UploadBlock(ctx, intent)
-	if err != nil {
-		t.Fatalf("first upload: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "first upload")
 	second, err := uploader.UploadBlock(ctx, intent)
-	if err != nil {
-		t.Fatalf("second upload: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "second upload")
 	if second.Block != first.Block ||
 		second.Index == nil ||
 		first.Index == nil ||
@@ -103,9 +90,7 @@ func TestUploadBlockVerifiesCompleteObjectSetBeforeSuccess(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("verify object set")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -141,9 +126,7 @@ func TestUploadBlockReportsVerificationMismatchDetails(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("mismatch object set")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -171,9 +154,7 @@ func TestUploadBlockStoresEnvelopeWhenConfigured(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block with envelope")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -186,21 +167,15 @@ func TestUploadBlockStoresEnvelopeWhenConfigured(t *testing.T) {
 		Index:    staticBlockIndexSource{body: []byte("index bytes")},
 		Envelope: LocalBlockEnvelopeSource{CellID: "cell-a"},
 	}.UploadBlock(ctx, intent)
-	if err != nil {
-		t.Fatalf("upload block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "upload block")
 	if result.Envelope == nil || result.Envelope.Key != intent.EnvelopeObjectKey {
 		t.Fatalf("envelope result = %#v, want key %q", result.Envelope, intent.EnvelopeObjectKey)
 	}
 
 	var got bytes.Buffer
-	if err := store.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &got); err != nil {
-		t.Fatalf("read uploaded envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &got), "read uploaded envelope")
 	envelope, err := storageformat.UnmarshalEnvelopeRecord(got.Bytes())
-	if err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal envelope")
 	if envelope.GetBlockId() != record.BlockID ||
 		envelope.GetKeyId() != localNoopEnvelopeKeyID ||
 		envelope.GetAeadAlgorithm() != "none" ||
@@ -213,9 +188,7 @@ func TestUploadBlockRequiresIndexSourceWhenIndexObjectKeyIsSet(t *testing.T) {
 	ctx := context.Background()
 	blocks := openTestBlockStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block with index")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -233,9 +206,7 @@ func TestUploadBlockRequiresEnvelopeSourceWhenEnvelopeObjectKeyIsSet(t *testing.
 	ctx := context.Background()
 	blocks := openTestBlockStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("block with envelope")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -266,9 +237,7 @@ func TestUploadBlockRequiresSealedLocalBlock(t *testing.T) {
 	ctx := context.Background()
 	blocks := openTestBlockStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("open block")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 
 	_, err = Uploader{
 		Backend: openTestBackendStore(t),
@@ -293,23 +262,23 @@ func TestUploadBlockPropagatesSourceError(t *testing.T) {
 func openTestBlockStore(t *testing.T) *blockstore.Store {
 	t.Helper()
 	store, err := blockstore.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open block store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open block store")
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close block store: %v", err)
-		}
+		testutil.RequireNoErrorf(t, store.Close(), "close block store")
 	})
 	return store
+}
+
+func sealTestCurrentBlock(ctx context.Context, t *testing.T, store *blockstore.Store) {
+	t.Helper()
+	_, err := store.SealCurrent(ctx)
+	testutil.RequireNoErrorf(t, err, "seal block")
 }
 
 func openTestBackendStore(t *testing.T) *backendfs.Store {
 	t.Helper()
 	store, err := backendfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backend store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open backend store")
 	return store
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestValidateOptionsBoundsWorkload(t *testing.T) {
@@ -80,41 +81,34 @@ func TestRunEmitsAdvisoryReportAndSamplesTargets(t *testing.T) {
 		},
 	}}
 	report, err := Run(context.Background(), opts, admin)
-	if err != nil {
-		t.Fatalf("run capacity sample: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run capacity sample")
 
-	if admin.profileID != "scrap-prod-v1" {
-		t.Fatalf("admin profile id = %q, want scrap-prod-v1", admin.profileID)
-	}
-	if report.ReportKind != ReportKind || !report.AdvisoryOnly || !report.DoesNotSatisfyProductionReadinessGates {
-		t.Fatalf("report advisory fields = %#v", report)
-	}
-	if !report.Workload.Bounded || !report.Workload.ActiveProbe || !report.Workload.NonProductionOnly {
-		t.Fatalf("workload = %#v, want bounded non-production active probe", report.Workload)
-	}
-	if len(report.Backend) != 6 {
-		t.Fatalf("backend samples = %d, want 6", len(report.Backend))
-	}
-	if len(report.OpenBao) != 6 {
-		t.Fatalf("openbao samples = %d, want 6", len(report.OpenBao))
-	}
-	if len(report.RedactedRequestIDs) == 0 {
-		t.Fatal("report did not record redacted request ids")
-	}
-	if err := report.ProposedProfile.Validate(); err != nil {
-		t.Fatalf("proposed profile rejected: %v", err)
-	}
+	requireCapacitySampleReport(t, report, admin.profileID)
+	testutil.RequireNoErrorf(t, report.ProposedProfile.Validate(), "proposed profile rejected")
 
 	encoded, err := json.Marshal(report)
-	if err != nil {
-		t.Fatalf("marshal report: %v", err)
-	}
-	output := string(encoded)
+	testutil.RequireNoErrorf(t, err, "marshal report")
+	requireCapacitySampleJSON(t, string(encoded))
+}
+
+func requireCapacitySampleReport(t *testing.T, report Report, profileID string) {
+	t.Helper()
+	testutil.RequireEqualf(t, profileID, "scrap-prod-v1", "admin profile id")
+	testutil.RequireEqualf(t, report.ReportKind, ReportKind, "report kind")
+	testutil.RequireTruef(t, report.AdvisoryOnly, "report advisory_only = false")
+	testutil.RequireTruef(t, report.DoesNotSatisfyProductionReadinessGates, "report readiness gate disclaimer = false")
+	testutil.RequireTruef(t, report.Workload.Bounded, "workload bounded = false")
+	testutil.RequireTruef(t, report.Workload.ActiveProbe, "workload active_probe = false")
+	testutil.RequireTruef(t, report.Workload.NonProductionOnly, "workload non_production_only = false")
+	testutil.RequireEqualf(t, len(report.Backend), 6, "backend sample count")
+	testutil.RequireEqualf(t, len(report.OpenBao), 6, "openbao sample count")
+	testutil.RequireTruef(t, len(report.RedactedRequestIDs) > 0, "report did not record redacted request ids")
+}
+
+func requireCapacitySampleJSON(t *testing.T, output string) {
+	t.Helper()
 	for _, forbidden := range []string{"local-root", "ciphertext", "plaintext"} {
-		if strings.Contains(output, forbidden) {
-			t.Fatalf("report leaked %q: %s", forbidden, output)
-		}
+		testutil.RequireFalsef(t, strings.Contains(output, forbidden), "report leaked %q: %s", forbidden, output)
 	}
 	for _, want := range []string{
 		`"advisory_only":true`,
@@ -122,9 +116,7 @@ func TestRunEmitsAdvisoryReportAndSamplesTargets(t *testing.T) {
 		`"proposed_capacity_profile"`,
 		`"backend_request_latency_samples"`,
 	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("report JSON missing %s: %s", want, output)
-		}
+		testutil.RequireTruef(t, strings.Contains(output, want), "report JSON missing %s: %s", want, output)
 	}
 }
 
@@ -134,9 +126,7 @@ func TestRunRecordsBackendErrorClassesWithoutWritingProductionState(t *testing.T
 	opts := validOptions(t, backendServer, openbaoServer)
 
 	report, err := Run(context.Background(), opts, &fakeAdmin{runway: &adminv1.CapacityRunway{CapacityProfileId: "scrap-prod-v1"}})
-	if err != nil {
-		t.Fatalf("run capacity sample: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "run capacity sample")
 	if !contains(report.ErrorClasses, string(backend.ErrorClassThrottled)) {
 		t.Fatalf("error classes = %#v, want throttled", report.ErrorClasses)
 	}
@@ -151,9 +141,7 @@ func TestRunRecordsBackendErrorClassesWithoutWritingProductionState(t *testing.T
 func TestBackendObjectURLKeepsCapacitySamplePrefix(t *testing.T) {
 	profile := sanitizePathPart("../prod/../../escape")
 	target, err := backendObjectURL("http://backend.local/scrap-local", "capacity-sample/"+profile+"/0")
-	if err != nil {
-		t.Fatalf("backend object URL: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "backend object URL")
 	if strings.Contains(target, "..") ||
 		strings.Contains(profile, ".") ||
 		strings.Contains(profile, "/") ||
@@ -253,9 +241,7 @@ func newOpenBaoProbeServer(t *testing.T) *httptest.Server {
 
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		t.Fatalf("write JSON: %v", err)
-	}
+	testutil.RequireNoErrorf(t, json.NewEncoder(w).Encode(value), "write JSON")
 }
 
 type fakeAdmin struct {

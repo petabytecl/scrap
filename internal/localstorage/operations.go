@@ -82,30 +82,24 @@ func (a *Application) RunQueuedOperationsOnce(ctx context.Context, store *operat
 }
 
 func (a *Application) runQueuedOperation(ctx context.Context, store *operations.Store, operation *adminv1.Operation) (bool, bool, error) {
-	switch operation.GetOperationType() {
-	case "tombstone":
-		return runSupportedOperation(a.runTombstoneOperation(ctx, store, operation))
-	case "restore", "prewarm":
-		return runSupportedOperation(a.runRestoreOperation(ctx, store, operation))
-	case "rewrap":
-		return runSupportedOperation(a.runRewrapOperation(ctx, store, operation))
-	case "repair":
-		return runSupportedOperation(a.runRepairOperation(ctx, store, operation))
-	case "scrub":
-		return runSupportedOperation(a.runScrubOperation(ctx, store, operation))
-	case "drain":
-		return runSupportedOperation(a.runDrainOperation(ctx, store, operation))
-	case "capacity-override":
-		return runSupportedOperation(a.runCapacityOverrideOperation(ctx, store, operation))
-	case "metadata-restore":
-		return runSupportedOperation(a.runMetadataRestoreOperation(ctx, store, operation))
-	case "copy-verify":
-		return runSupportedOperation(a.runCopyVerifyOperation(ctx, store, operation))
-	case "dr-drill":
-		return runSupportedOperation(a.runDRDrillOperation(ctx, store, operation))
-	default:
+	runners := map[string]func() (bool, error){
+		"tombstone":         func() (bool, error) { return a.runTombstoneOperation(ctx, store, operation) },
+		"restore":           func() (bool, error) { return a.runRestoreOperation(ctx, store, operation) },
+		"prewarm":           func() (bool, error) { return a.runRestoreOperation(ctx, store, operation) },
+		"rewrap":            func() (bool, error) { return a.runRewrapOperation(ctx, store, operation) },
+		"repair":            func() (bool, error) { return a.runRepairOperation(ctx, store, operation) },
+		"scrub":             func() (bool, error) { return a.runScrubOperation(ctx, store, operation) },
+		"drain":             func() (bool, error) { return a.runDrainOperation(ctx, store, operation) },
+		"capacity-override": func() (bool, error) { return a.runCapacityOverrideOperation(ctx, store, operation) },
+		"metadata-restore":  func() (bool, error) { return a.runMetadataRestoreOperation(ctx, store, operation) },
+		"copy-verify":       func() (bool, error) { return a.runCopyVerifyOperation(ctx, store, operation) },
+		"dr-drill":          func() (bool, error) { return a.runDRDrillOperation(ctx, store, operation) },
+	}
+	runner := runners[operation.GetOperationType()]
+	if runner == nil {
 		return false, false, nil
 	}
+	return runSupportedOperation(runner())
 }
 
 func runSupportedOperation(succeeded bool, err error) (bool, bool, error) {
@@ -321,35 +315,59 @@ func (a *Application) applyRewrapOperation(ctx context.Context, operation *admin
 	if operation.GetDryRun() {
 		return len(operation.GetTargets()), 0, nil
 	}
+	config, err := a.rewrapOperationConfig(operation)
+	if err != nil {
+		return 0, 0, err
+	}
+	return a.rewrapBlocks(ctx, config)
+}
+
+type rewrapOperationConfig struct {
+	store            backend.MutableStore
+	destinationKeyID string
+	blockIDs         map[string]bool
+	rewrappedAt      time.Time
+}
+
+func (a *Application) rewrapOperationConfig(operation *adminv1.Operation) (rewrapOperationConfig, error) {
 	if a.backendStore == nil {
-		return 0, 0, errors.New("localstorage: backend store is not configured")
+		return rewrapOperationConfig{}, errors.New("localstorage: backend store is not configured")
 	}
 	mutable, ok := a.backendStore.(backend.MutableStore)
 	if !ok {
-		return 0, 0, errors.New("localstorage: backend store does not support mutable envelope objects")
+		return rewrapOperationConfig{}, errors.New("localstorage: backend store does not support mutable envelope objects")
 	}
 	if a.envelopeTransit == nil {
-		return 0, 0, fmt.Errorf("%w: transit client is required for rewrap", cryptoenv.ErrUnavailable)
+		return rewrapOperationConfig{}, fmt.Errorf("%w: transit client is required for rewrap", cryptoenv.ErrUnavailable)
 	}
 	destinationKeyID := operation.GetMetadata()["scrap.destination_key_id"]
 	if destinationKeyID == "" {
 		destinationKeyID = operation.GetMetadata()["destination_key_id"]
 	}
 	if destinationKeyID == "" {
-		return 0, 0, errors.New("localstorage: rewrap destination key id is required")
+		return rewrapOperationConfig{}, errors.New("localstorage: rewrap destination key id is required")
 	}
 	blockIDs, _, err := a.restoreTargets(operation)
 	if err != nil {
-		return 0, 0, err
+		return rewrapOperationConfig{}, err
 	}
+	config := rewrapOperationConfig{
+		store:            mutable,
+		destinationKeyID: destinationKeyID,
+		blockIDs:         blockIDs,
+		rewrappedAt:      operation.GetRequestedAt().AsTime(),
+	}
+	if config.rewrappedAt.IsZero() {
+		config.rewrappedAt = a.now()
+	}
+	return config, nil
+}
+
+func (a *Application) rewrapBlocks(ctx context.Context, config rewrapOperationConfig) (int, int, error) {
 	rewrapped := 0
 	skipped := 0
-	rewrappedAt := operation.GetRequestedAt().AsTime()
-	if rewrappedAt.IsZero() {
-		rewrappedAt = a.now()
-	}
-	for blockID := range blockIDs {
-		changed, err := a.rewrapBlockEnvelope(ctx, mutable, blockID, destinationKeyID, rewrappedAt)
+	for blockID := range config.blockIDs {
+		changed, err := a.rewrapBlockEnvelope(ctx, config.store, blockID, config.destinationKeyID, config.rewrappedAt)
 		if err != nil {
 			return rewrapped, skipped, err
 		}
@@ -934,27 +952,41 @@ func (a *Application) applyRepairOperation(ctx context.Context, operation *admin
 	}
 	restoredBlocks := make(map[string]bool)
 	for _, repair := range repairs {
-		document, err := a.metadata.HeadDocument(repair.Identity)
-		if err != nil {
-			return 0, err
-		}
-		if !restoredBlocks[document.Location.BlockID] {
-			repairedFromPeer, err := a.repairDocumentFromVerifiedPeer(ctx, document, now)
-			if err != nil {
-				return 0, err
-			}
-			if !repairedFromPeer {
-				if err := a.replaceBlockFromBackend(ctx, document.Location.BlockID); err != nil {
-					return 0, err
-				}
-				restoredBlocks[document.Location.BlockID] = true
-			}
-		}
-		if err := a.recordDocumentRepairState(ctx, document, repair.IncidentID, false, now); err != nil {
+		if err := a.applyDocumentRepair(ctx, repair, restoredBlocks, now); err != nil {
 			return 0, err
 		}
 	}
 	return len(repairs), nil
+}
+
+func (a *Application) applyDocumentRepair(ctx context.Context, repair metastore.RepairState, restoredBlocks map[string]bool, now time.Time) error {
+	document, err := a.metadata.HeadDocument(repair.Identity)
+	if err != nil {
+		return err
+	}
+	if err := a.restoreRepairBlock(ctx, document, restoredBlocks, now); err != nil {
+		return err
+	}
+	return a.recordDocumentRepairState(ctx, document, repair.IncidentID, false, now)
+}
+
+func (a *Application) restoreRepairBlock(ctx context.Context, document metastore.Document, restoredBlocks map[string]bool, now time.Time) error {
+	blockID := document.Location.BlockID
+	if restoredBlocks[blockID] {
+		return nil
+	}
+	repairedFromPeer, err := a.repairDocumentFromVerifiedPeer(ctx, document, now)
+	if err != nil {
+		return err
+	}
+	if repairedFromPeer {
+		return nil
+	}
+	if err := a.replaceBlockFromBackend(ctx, blockID); err != nil {
+		return err
+	}
+	restoredBlocks[blockID] = true
+	return nil
 }
 
 func (a *Application) repairTargets(operation *adminv1.Operation) ([]metastore.RepairState, error) {
@@ -1243,50 +1275,58 @@ func (a *Application) applyRestoreOperation(ctx context.Context, operation *admi
 		return summary, err
 	}
 	for blockID := range blockIDs {
-		restored, err := a.restoreBlockFromBackend(ctx, blockID)
-		if errors.Is(err, backend.ErrRestorePending) {
-			summary.BlocksPending++
-			continue
-		}
-		if err != nil {
+		if err := a.applyRestoreBlock(ctx, blockID, &summary); err != nil {
 			return summary, err
-		}
-		if restored {
-			summary.BlocksRestored++
-		} else {
-			summary.BlocksSkipped++
 		}
 	}
 	if summary.BlocksPending > 0 {
-		for _, doc := range documents {
-			if err := a.authority.UpdateDocumentRestoreState(
-				ctx,
-				doc,
-				metastore.RestoreStateRestorePending,
-				operation.GetOperationType()+" operation waiting on backend restore",
-				stableCommandID(operation.GetOperationType()+"-pending-operation", operation.GetOperationId(), doc.TenantID, doc.TransactionID, doc.DocumentName),
-				now,
-			); err != nil {
-				return summary, err
-			}
-			summary.DocumentsMarked++
+		if err := a.markRestoreDocuments(ctx, operation, documents, metastore.RestoreStateRestorePending, " operation waiting on backend restore", "-pending-operation", now, &summary); err != nil {
+			return summary, err
 		}
 		return summary, backend.ErrRestorePending
 	}
+	if err := a.markRestoreDocuments(ctx, operation, documents, metastore.RestoreStateHot, " operation restored local bytes", "-operation", now, &summary); err != nil {
+		return summary, err
+	}
+	return summary, nil
+}
+
+func (a *Application) applyRestoreBlock(ctx context.Context, blockID string, summary *restoreSummary) error {
+	restored, err := a.restoreBlockFromBackend(ctx, blockID)
+	if errors.Is(err, backend.ErrRestorePending) {
+		summary.BlocksPending++
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if restored {
+		summary.BlocksRestored++
+	} else {
+		summary.BlocksSkipped++
+	}
+	return nil
+}
+
+func (a *Application) markRestoreDocuments(
+	ctx context.Context,
+	operation *adminv1.Operation,
+	documents []identity.Document,
+	state metastore.RestoreState,
+	messageSuffix string,
+	commandSuffix string,
+	now time.Time,
+	summary *restoreSummary,
+) error {
+	operationType := operation.GetOperationType()
 	for _, doc := range documents {
-		if err := a.authority.UpdateDocumentRestoreState(
-			ctx,
-			doc,
-			metastore.RestoreStateHot,
-			operation.GetOperationType()+" operation restored local bytes",
-			stableCommandID(operation.GetOperationType()+"-operation", operation.GetOperationId(), doc.TenantID, doc.TransactionID, doc.DocumentName),
-			now,
-		); err != nil {
-			return summary, err
+		commandID := stableCommandID(operationType+commandSuffix, operation.GetOperationId(), doc.TenantID, doc.TransactionID, doc.DocumentName)
+		if err := a.authority.UpdateDocumentRestoreState(ctx, doc, state, operationType+messageSuffix, commandID, now); err != nil {
+			return err
 		}
 		summary.DocumentsMarked++
 	}
-	return summary, nil
+	return nil
 }
 
 func (a *Application) restoreTargets(operation *adminv1.Operation) (map[string]bool, []identity.Document, error) {
@@ -1552,29 +1592,38 @@ func (a *Application) applyTombstoneOperation(ctx context.Context, operation *ad
 		return nil
 	}
 	for _, target := range operation.GetTargets() {
-		switch typed := target.GetTarget().(type) {
-		case *adminv1.Target_Document:
-			if err := a.tombstoneDocument(ctx, adminDocumentIdentity(typed.Document), tombstonedAt, operation.GetOperationId()); err != nil {
-				return err
-			}
-		case *adminv1.Target_Transaction:
-			docs, err := a.metadata.FindDocuments(identity.Transaction{
-				TenantID:      typed.Transaction.GetTenantId(),
-				TransactionID: typed.Transaction.GetTransactionId(),
-			}, metastore.DocumentFilter{})
-			if err != nil {
-				return err
-			}
-			if len(docs) == 0 {
-				return metastore.ErrNotFound
-			}
-			for _, doc := range docs {
-				if err := a.tombstoneDocument(ctx, doc.Identity, tombstonedAt, operation.GetOperationId()); err != nil {
-					return err
-				}
-			}
-		default:
-			return fmt.Errorf("localstorage: unsupported tombstone target %T", target.GetTarget())
+		if err := a.applyTombstoneTarget(ctx, target, tombstonedAt, operation.GetOperationId()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Application) applyTombstoneTarget(ctx context.Context, target *adminv1.Target, tombstonedAt time.Time, operationID string) error {
+	switch typed := target.GetTarget().(type) {
+	case *adminv1.Target_Document:
+		return a.tombstoneDocument(ctx, adminDocumentIdentity(typed.Document), tombstonedAt, operationID)
+	case *adminv1.Target_Transaction:
+		return a.tombstoneTransaction(ctx, typed.Transaction, tombstonedAt, operationID)
+	default:
+		return fmt.Errorf("localstorage: unsupported tombstone target %T", target.GetTarget())
+	}
+}
+
+func (a *Application) tombstoneTransaction(ctx context.Context, transaction *adminv1.TransactionTarget, tombstonedAt time.Time, operationID string) error {
+	docs, err := a.metadata.FindDocuments(identity.Transaction{
+		TenantID:      transaction.GetTenantId(),
+		TransactionID: transaction.GetTransactionId(),
+	}, metastore.DocumentFilter{})
+	if err != nil {
+		return err
+	}
+	if len(docs) == 0 {
+		return metastore.ErrNotFound
+	}
+	for _, doc := range docs {
+		if err := a.tombstoneDocument(ctx, doc.Identity, tombstonedAt, operationID); err != nil {
+			return err
 		}
 	}
 	return nil

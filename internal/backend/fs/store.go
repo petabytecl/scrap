@@ -112,11 +112,7 @@ func (s *Store) writeObject(ctx context.Context, key string, reader io.Reader) (
 		return backend.Object{}, errors.Join(err, tempData.Close(), s.removeObjectStorePath(tempData.Name()))
 	}
 	committed := false
-	defer func() {
-		if !committed {
-			_ = s.removeObjectStorePath(tempDataPath)
-		}
-	}()
+	defer s.removeObjectStorePathUnlessCommitted(tempDataPath, &committed)
 
 	written, err := readAndHash(ctx, reader, tempData)
 	if closeErr := tempData.Close(); err == nil {
@@ -137,24 +133,30 @@ func (s *Store) writeObject(ctx context.Context, key string, reader io.Reader) (
 	if err != nil {
 		return backend.Object{}, err
 	}
-	defer func() {
-		if !committed {
-			_ = s.removeObjectStorePath(tempMetaPath)
-		}
-	}()
-	// #nosec G703 -- source and destination are validated under objectsDir.
-	if err := os.Rename(tempDataPath, objectPath); err != nil {
-		return backend.Object{}, err
-	}
-	// #nosec G703 -- source and destination are validated under objectsDir.
-	if err := os.Rename(tempMetaPath, metaPath); err != nil {
-		return backend.Object{}, err
-	}
-	if err := syncDir(s.objectsDir); err != nil {
+	defer s.removeObjectStorePathUnlessCommitted(tempMetaPath, &committed)
+	if err := s.commitObjectTemps(tempDataPath, objectPath, tempMetaPath, metaPath); err != nil {
 		return backend.Object{}, err
 	}
 	committed = true
 	return backend.Object{Key: key, Length: written.Length, SHA256: written.SHA256}, nil
+}
+
+func (s *Store) removeObjectStorePathUnlessCommitted(path string, committed *bool) {
+	if !*committed {
+		_ = s.removeObjectStorePath(path)
+	}
+}
+
+func (s *Store) commitObjectTemps(tempDataPath, objectPath, tempMetaPath, metaPath string) error {
+	// #nosec G703 -- source and destination are validated under objectsDir.
+	if err := os.Rename(tempDataPath, objectPath); err != nil {
+		return err
+	}
+	// #nosec G703 -- source and destination are validated under objectsDir.
+	if err := os.Rename(tempMetaPath, metaPath); err != nil {
+		return err
+	}
+	return syncDir(s.objectsDir)
 }
 
 func (s *Store) HeadObject(ctx context.Context, key string) (backend.Object, error) {
@@ -173,19 +175,31 @@ func (s *Store) ReadObjectRange(ctx context.Context, key string, selected backen
 	if err != nil {
 		return err
 	}
-	if selected.Offset > object.Length {
-		return backend.ErrInvalidRange
-	}
-	readLength := object.Length - selected.Offset
-	if selected.Length != nil {
-		if *selected.Length > object.Length-selected.Offset {
-			return backend.ErrInvalidRange
-		}
-		readLength = *selected.Length
+	readLength, err := normalizeObjectReadLength(object.Length, selected)
+	if err != nil {
+		return err
 	}
 	if err := s.verifyObject(ctx, object); err != nil {
 		return err
 	}
+	return s.copyObjectRange(ctx, key, selected.Offset, readLength, writer)
+}
+
+func normalizeObjectReadLength(objectLength uint64, selected backend.Range) (uint64, error) {
+	if selected.Offset > objectLength {
+		return 0, backend.ErrInvalidRange
+	}
+	readLength := objectLength - selected.Offset
+	if selected.Length == nil {
+		return readLength, nil
+	}
+	if *selected.Length > objectLength-selected.Offset {
+		return 0, backend.ErrInvalidRange
+	}
+	return *selected.Length, nil
+}
+
+func (s *Store) copyObjectRange(ctx context.Context, key string, offset, readLength uint64, writer io.Writer) error {
 	if readLength == 0 {
 		return nil
 	}
@@ -197,7 +211,7 @@ func (s *Store) ReadObjectRange(ctx context.Context, key string, selected backen
 		return err
 	}
 	defer closeutil.Ignore(file)
-	readOffset, err := safeconv.Uint64ToInt64("read range offset", selected.Offset)
+	readOffset, err := safeconv.Uint64ToInt64("read range offset", offset)
 	if err != nil {
 		return backend.ErrInvalidRange
 	}

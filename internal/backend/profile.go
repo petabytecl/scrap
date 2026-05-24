@@ -280,33 +280,40 @@ func validateLaneBudgets(profileID string, lanes []LaneBudget) error {
 	}
 	seen := make(map[Lane]bool, len(lanes))
 	for _, lane := range lanes {
-		if lane.Lane == "" {
-			return fmt.Errorf("backend capacity profile %s: lane name is required", profileID)
-		}
-		if seen[lane.Lane] {
-			return fmt.Errorf("backend capacity profile %s: duplicate lane budget %s", profileID, lane.Lane)
+		if err := validateLaneBudget(profileID, lane, seen); err != nil {
+			return err
 		}
 		seen[lane.Lane] = true
 		if _, ok := required[lane.Lane]; ok {
 			required[lane.Lane] = true
-		}
-		if lane.ReservedWorkers == 0 {
-			return fmt.Errorf("backend capacity profile %s: lane %s reserved workers must be positive", profileID, lane.Lane)
-		}
-		if lane.MaxWorkers < lane.ReservedWorkers {
-			return fmt.Errorf("backend capacity profile %s: lane %s max workers must cover reserved workers", profileID, lane.Lane)
-		}
-		if err := validateFinitePositive(profileID, string(lane.Lane)+" bytes/sec", lane.BytesPerSecond); err != nil {
-			return err
-		}
-		if err := validateFinitePositive(profileID, string(lane.Lane)+" requests/sec", lane.RequestsPerSecond); err != nil {
-			return err
 		}
 	}
 	for lane, present := range required {
 		if !present {
 			return fmt.Errorf("backend capacity profile %s: missing required lane budget %s", profileID, lane)
 		}
+	}
+	return nil
+}
+
+func validateLaneBudget(profileID string, lane LaneBudget, seen map[Lane]bool) error {
+	if lane.Lane == "" {
+		return fmt.Errorf("backend capacity profile %s: lane name is required", profileID)
+	}
+	if seen[lane.Lane] {
+		return fmt.Errorf("backend capacity profile %s: duplicate lane budget %s", profileID, lane.Lane)
+	}
+	if lane.ReservedWorkers == 0 {
+		return fmt.Errorf("backend capacity profile %s: lane %s reserved workers must be positive", profileID, lane.Lane)
+	}
+	if lane.MaxWorkers < lane.ReservedWorkers {
+		return fmt.Errorf("backend capacity profile %s: lane %s max workers must cover reserved workers", profileID, lane.Lane)
+	}
+	if err := validateFinitePositive(profileID, string(lane.Lane)+" bytes/sec", lane.BytesPerSecond); err != nil {
+		return err
+	}
+	if err := validateFinitePositive(profileID, string(lane.Lane)+" requests/sec", lane.RequestsPerSecond); err != nil {
+		return err
 	}
 	return nil
 }

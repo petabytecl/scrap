@@ -39,6 +39,13 @@ func WriteMetadataSnapshotRecords(writer io.Writer, options SnapshotOptions, doc
 	if options.ShardID == "" {
 		return errors.New("published metadata: shard id is required")
 	}
+	if err := writeDocumentSnapshotRecords(writer, options, documents); err != nil {
+		return err
+	}
+	return writeTransactionSnapshotRecords(writer, options, transactions)
+}
+
+func writeDocumentSnapshotRecords(writer io.Writer, options SnapshotOptions, documents []metastore.Document) error {
 	ordered := append([]metastore.Document(nil), documents...)
 	sort.Slice(ordered, func(i, j int) bool {
 		left := ordered[i].Identity
@@ -57,6 +64,10 @@ func WriteMetadataSnapshotRecords(writer io.Writer, options SnapshotOptions, doc
 			return err
 		}
 	}
+	return nil
+}
+
+func writeTransactionSnapshotRecords(writer io.Writer, options SnapshotOptions, transactions []metastore.Transaction) error {
 	orderedTransactions := append([]metastore.Transaction(nil), transactions...)
 	sort.Slice(orderedTransactions, func(i, j int) bool {
 		left := orderedTransactions[i].Identity

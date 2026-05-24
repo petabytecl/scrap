@@ -19,6 +19,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPublicServerWriteDocumentStreamsValidatedChunks(t *testing.T) {
@@ -27,9 +28,7 @@ func TestPublicServerWriteDocumentStreamsValidatedChunks(t *testing.T) {
 	defer cleanup()
 
 	stream, err := client.WriteDocument(context.Background())
-	if err != nil {
-		t.Fatalf("WriteDocument: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "WriteDocument")
 	init := validWriteInit()
 	init.Identity.DocumentName = `billing\invoice.xml`
 	if err := stream.Send(&scrapv1.WriteDocumentRequest{
@@ -43,9 +42,7 @@ func TestPublicServerWriteDocumentStreamsValidatedChunks(t *testing.T) {
 		t.Fatalf("send chunk: %v", err)
 	}
 	response, err := stream.CloseAndRecv()
-	if err != nil {
-		t.Fatalf("CloseAndRecv: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "CloseAndRecv")
 
 	documents.mu.Lock()
 	defer documents.mu.Unlock()
@@ -65,9 +62,7 @@ func TestPublicServerWriteDocumentRejectsBadStreamOrder(t *testing.T) {
 	defer cleanup()
 
 	stream, err := client.WriteDocument(context.Background())
-	if err != nil {
-		t.Fatalf("WriteDocument: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "WriteDocument")
 	err = stream.Send(&scrapv1.WriteDocumentRequest{
 		Message: &scrapv1.WriteDocumentRequest_Chunk{Chunk: &scrapv1.WriteDocumentChunk{Data: []byte("abc")}},
 	})
@@ -90,9 +85,7 @@ func TestPublicServerHeadDocumentValidatesAndMapsMetadata(t *testing.T) {
 			DocumentName:  `folder\invoice.xml`,
 		},
 	})
-	if err != nil {
-		t.Fatalf("HeadDocument: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "HeadDocument")
 
 	documents.mu.Lock()
 	defer documents.mu.Unlock()
@@ -115,20 +108,14 @@ func TestPublicServerReadDocumentStreamsMetadataThenBytes(t *testing.T) {
 	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
 		Identity: validDocumentIdentity(),
 	})
-	if err != nil {
-		t.Fatalf("ReadDocument: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "ReadDocument")
 	first, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("recv metadata: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "recv metadata")
 	if first.GetMetadata() == nil {
 		t.Fatalf("first response = %#v, want metadata", first)
 	}
 	second, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("recv chunk: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "recv chunk")
 	if got := string(second.GetChunk().GetData()); got != "abc" {
 		t.Fatalf("chunk = %q, want abc", got)
 	}
@@ -144,9 +131,7 @@ func TestPublicServerCompleteTransactionValidatesAndMapsState(t *testing.T) {
 	response, err := transactions.CompleteTransaction(context.Background(), &scrapv1.CompleteTransactionRequest{
 		Transaction: validTransactionIdentity(),
 	})
-	if err != nil {
-		t.Fatalf("CompleteTransaction: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "CompleteTransaction")
 	if response.GetTransaction().GetState() != scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED {
 		t.Fatalf("state = %s, want completed", response.GetTransaction().GetState())
 	}
@@ -160,16 +145,11 @@ func TestPublicServerAuditsCriticalAndEphemeralWritesOnly(t *testing.T) {
 
 	normal := validWriteInit()
 	normal.Identity.DocumentName = "normal.xml"
-	if _, err := writeDocumentForAudit(t, client, context.Background(), normal); err != nil {
-		t.Fatalf("normal write: %v", err)
-	}
+	err := writeDocumentForAudit(context.Background(), t, client, normal)
+	testutil.RequireNoErrorf(t, err, "normal write")
 	events, err := store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("audit events = %#v, want no ordinary write audit event", events)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
+	testutil.RequireEqualf(t, len(events), 0, "ordinary write audit event count")
 
 	critical := validWriteInit()
 	critical.Identity.DocumentName = "critical.xml"
@@ -181,42 +161,37 @@ func TestPublicServerAuditsCriticalAndEphemeralWritesOnly(t *testing.T) {
 		"x-request-id", "req-critical",
 		"x-correlation-id", "corr-critical",
 	))
-	if _, err := writeDocumentForAudit(t, client, ctx, critical); err != nil {
-		t.Fatalf("critical write: %v", err)
-	}
+	err = writeDocumentForAudit(ctx, t, client, critical)
+	testutil.RequireNoErrorf(t, err, "critical write")
 
 	ephemeral := validWriteInit()
 	ephemeral.Identity.DocumentName = "ephemeral.xml"
 	ephemeral.DocumentClass = scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
-	if _, err := writeDocumentForAudit(t, client, context.Background(), ephemeral); err != nil {
-		t.Fatalf("ephemeral write: %v", err)
-	}
+	err = writeDocumentForAudit(context.Background(), t, client, ephemeral)
+	testutil.RequireNoErrorf(t, err, "ephemeral write")
 
 	events, err = store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("audit events = %#v, want critical and ephemeral write events only", events)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
+	requireCriticalAndEphemeralWriteAuditEvents(t, events)
+}
+
+func requireCriticalAndEphemeralWriteAuditEvents(t *testing.T, events []*adminv1.AuditEvent) {
+	t.Helper()
+	testutil.RequireEqualf(t, len(events), 2, "critical and ephemeral audit event count")
 	byType := make(map[string]*adminv1.AuditEvent, len(events))
 	for _, event := range events {
 		byType[event.GetEventType()] = event
 	}
 	criticalEvent := byType["document_write_critical"]
-	if criticalEvent.GetActorIdentity() != "billing-etl" ||
-		criticalEvent.GetMetadata()["correlation_id"] != "corr-critical" ||
-		criticalEvent.GetMetadata()["priority_class"] != scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST.String() ||
-		criticalEvent.GetMetadata()["plaintext_secret"] != "" ||
-		len(criticalEvent.GetTargets()) != 1 ||
-		criticalEvent.GetTargets()[0].GetDocument().GetDocumentName() != "critical.xml" {
-		t.Fatalf("critical audit event = %#v, want sanitized critical write evidence", criticalEvent)
-	}
+	testutil.RequireEqualf(t, criticalEvent.GetActorIdentity(), "billing-etl", "critical audit actor")
+	testutil.RequireEqualf(t, criticalEvent.GetMetadata()["correlation_id"], "corr-critical", "critical audit correlation id")
+	testutil.RequireEqualf(t, criticalEvent.GetMetadata()["priority_class"], scrapv1.PriorityClass_PRIORITY_CLASS_CRITICAL_INGEST.String(), "critical audit priority")
+	testutil.RequireEqualf(t, criticalEvent.GetMetadata()["plaintext_secret"], "", "critical audit sanitized secret")
+	testutil.RequireEqualf(t, len(criticalEvent.GetTargets()), 1, "critical audit target count")
+	testutil.RequireEqualf(t, criticalEvent.GetTargets()[0].GetDocument().GetDocumentName(), "critical.xml", "critical audit document")
 	ephemeralEvent := byType["document_write_ephemeral"]
-	if ephemeralEvent.GetMetadata()["document_class"] != scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL.String() ||
-		ephemeralEvent.GetActorIdentity() != "billing-etl" {
-		t.Fatalf("ephemeral audit event = %#v, want ephemeral write evidence", ephemeralEvent)
-	}
+	testutil.RequireEqualf(t, ephemeralEvent.GetMetadata()["document_class"], scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL.String(), "ephemeral audit class")
+	testutil.RequireEqualf(t, ephemeralEvent.GetActorIdentity(), "billing-etl", "ephemeral audit actor")
 }
 
 func newPublicTestClients(
@@ -241,9 +216,7 @@ func newPublicTestClients(
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "grpc.NewClient")
 	cleanup := func() {
 		_ = conn.Close()
 		server.Stop()
@@ -275,9 +248,7 @@ func newPublicTestClientsWithAuditStore(
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "grpc.NewClient")
 	cleanup := func() {
 		_ = conn.Close()
 		server.Stop()
@@ -289,39 +260,36 @@ func newPublicTestClientsWithAuditStore(
 func openPublicTestOperationStore(t *testing.T) *operations.Store {
 	t.Helper()
 	store, err := operations.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open operation store: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open operation store")
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close operation store: %v", err)
-		}
+		testutil.RequireNoErrorf(t, store.Close(), "close operation store")
 	})
 	return store
 }
 
 func writeDocumentForAudit(
+	ctx context.Context,
 	t *testing.T,
 	client scrapv1.DocumentServiceClient,
-	ctx context.Context,
 	init *scrapv1.WriteDocumentInit,
-) (*scrapv1.WriteDocumentResponse, error) {
+) error {
 	t.Helper()
 	stream, err := client.WriteDocument(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := stream.Send(&scrapv1.WriteDocumentRequest{
 		Message: &scrapv1.WriteDocumentRequest_Init{Init: init},
 	}); err != nil {
-		return nil, err
+		return err
 	}
 	if err := stream.Send(&scrapv1.WriteDocumentRequest{
 		Message: &scrapv1.WriteDocumentRequest_Chunk{Chunk: &scrapv1.WriteDocumentChunk{Data: []byte("abc")}},
 	}); err != nil {
-		return nil, err
+		return err
 	}
-	return stream.CloseAndRecv()
+	_, err = stream.CloseAndRecv()
+	return err
 }
 
 type fakeDocuments struct {

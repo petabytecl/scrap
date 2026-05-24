@@ -358,7 +358,14 @@ func validateLocation(location *metastorev1.Location) error {
 	if location.GetStoredLength() > 0 && len(location.GetFrames()) == 0 {
 		return invalidRecord("document.location", "frames are required for stored bytes")
 	}
-	for i, frame := range location.GetFrames() {
+	if err := validateLocationFrames(location.GetFrames()); err != nil {
+		return err
+	}
+	return validateLocationReplicas(location.GetReplicas())
+}
+
+func validateLocationFrames(frames []*metastorev1.FrameRecord) error {
+	for i, frame := range frames {
 		if frame.GetSegmentLength() == 0 {
 			return invalidRecord("document.location", "frame %d segment_length is required", i)
 		}
@@ -366,7 +373,11 @@ func validateLocation(location *metastorev1.Location) error {
 			return invalidRecord("document.location", "frame %d sha256 must be 32 bytes", i)
 		}
 	}
-	for i, replica := range location.GetReplicas() {
+	return nil
+}
+
+func validateLocationReplicas(replicas []*metastorev1.ReplicaRef) error {
+	for i, replica := range replicas {
 		if replica.GetMemberId() == "" {
 			return invalidRecord("document.location", "replica %d member_id is required", i)
 		}

@@ -11,45 +11,32 @@ import (
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestLogAppendReplayAndContinueAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenLog(dir)
-	if err != nil {
-		t.Fatalf("open log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open log")
 	first, err := log.Append(sampleCommand("cmd-1", "invoice-1.xml"))
-	if err != nil {
-		t.Fatalf("append first: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append first")
 	second, err := log.Append(sampleCommand("cmd-2", "invoice-2.xml"))
-	if err != nil {
-		t.Fatalf("append second: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append second")
 	if first.Index != 1 || second.Index != 2 {
 		t.Fatalf("indexes = %d, %d, want 1, 2", first.Index, second.Index)
 	}
-	if err := log.Close(); err != nil {
-		t.Fatalf("close log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, log.Close(), "close log")
 
 	reopened, err := OpenLog(dir)
-	if err != nil {
-		t.Fatalf("reopen log: %v", err)
-	}
-	defer reopened.Close()
+	testutil.RequireNoErrorf(t, err, "reopen log")
+	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
 	entries, err := reopened.Replay()
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "replay")
 	if len(entries) != 2 || entries[0].Command.GetCommandId() != "cmd-1" || entries[1].Command.GetCommandId() != "cmd-2" {
 		t.Fatalf("entries = %#v, want two replayed commands", entries)
 	}
 	third, err := reopened.Append(sampleCommand("cmd-3", "invoice-3.xml"))
-	if err != nil {
-		t.Fatalf("append third: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append third")
 	if third.Index != 3 {
 		t.Fatalf("third index = %d, want 3", third.Index)
 	}
@@ -57,10 +44,8 @@ func TestLogAppendReplayAndContinueAfterReopen(t *testing.T) {
 
 func TestLogRejectsUnsupportedCommandVersion(t *testing.T) {
 	log, err := OpenLog(t.TempDir())
-	if err != nil {
-		t.Fatalf("open log: %v", err)
-	}
-	defer log.Close()
+	testutil.RequireNoErrorf(t, err, "open log")
+	defer func() { testutil.RequireNoErrorf(t, log.Close(), "close log") }()
 
 	command := sampleCommand("cmd-1", "invoice.xml")
 	command.SchemaVersion = metastore.CurrentSchemaVersion + 1
@@ -68,9 +53,7 @@ func TestLogRejectsUnsupportedCommandVersion(t *testing.T) {
 		t.Fatal("expected unsupported command version error")
 	}
 	entries, err := log.Replay()
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "replay")
 	if len(entries) != 0 {
 		t.Fatalf("entries = %#v, want no append after rejected command", entries)
 	}
@@ -79,26 +62,19 @@ func TestLogRejectsUnsupportedCommandVersion(t *testing.T) {
 func TestLogRejectsCorruptRecord(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenLog(dir)
-	if err != nil {
-		t.Fatalf("open log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "open log")
 	if _, err := log.Append(sampleCommand("cmd-1", "invoice.xml")); err != nil {
 		t.Fatalf("append command: %v", err)
 	}
-	if err := log.Close(); err != nil {
-		t.Fatalf("close log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, log.Close(), "close log")
 
 	path := filepath.Join(dir, commandLogName)
+	// #nosec G304 -- the path is built under the test-owned temporary directory.
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read log")
 	corrupted := bytes.Clone(data)
 	corrupted[len(corrupted)-1] ^= 0xff
-	if err := os.WriteFile(path, corrupted, 0o600); err != nil {
-		t.Fatalf("write corrupt log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.WriteFile(path, corrupted, 0o600), "write corrupt log")
 	if _, err := OpenLog(dir); err == nil {
 		t.Fatal("opened corrupt command log")
 	}

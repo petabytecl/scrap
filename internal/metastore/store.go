@@ -61,41 +61,33 @@ func (s *Store) putDocument(batch *pebble.Batch, document Document) error {
 		return err
 	}
 	docKey := documentKey(document.Identity)
-	if existingValue, ok, err := s.get(docKey); err != nil {
+	if stored, err := s.documentAlreadyStored(docKey, value); err != nil || stored {
 		return err
-	} else if ok {
-		if bytes.Equal(existingValue, value) {
-			return nil
-		}
-		return fmt.Errorf("%w: document already exists with different metadata", ErrConflict)
 	}
-
-	transaction, existed, err := s.getTransaction(document.Identity.TenantID, document.Identity.TransactionID)
+	transaction, err := s.transactionForDocument(document)
 	if err != nil {
 		return err
 	}
-	if !existed {
-		transaction = Transaction{
-			Identity: identity.Transaction{
-				TenantID:      document.Identity.TenantID,
-				TransactionID: document.Identity.TransactionID,
-			},
-			State:     TransactionStateOpen,
-			CreatedAt: document.CreatedAt,
-		}
+	transaction = incrementTransactionDocumentCount(transaction, document.DocumentClass)
+	transactionValue, err := marshalTransaction(transaction)
+	if err != nil {
+		return err
 	}
+	return s.putDocumentIndexes(batch, document, docKey, value, transactionValue, transaction)
+}
+
+func incrementTransactionDocumentCount(transaction Transaction, class DocumentClass) Transaction {
 	transaction.DocumentCount++
-	switch document.DocumentClass {
+	switch class {
 	case DocumentClassPermanent:
 		transaction.PermanentDocumentCount++
 	case DocumentClassEphemeral:
 		transaction.EphemeralDocumentCount++
 	}
+	return transaction
+}
 
-	transactionValue, err := marshalTransaction(transaction)
-	if err != nil {
-		return err
-	}
+func (s *Store) putDocumentIndexes(batch *pebble.Batch, document Document, docKey, value, transactionValue []byte, transaction Transaction) error {
 	if err := batch.Set(docKey, value, nil); err != nil {
 		return err
 	}
@@ -109,6 +101,35 @@ func (s *Store) putDocument(batch *pebble.Batch, document Document) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) documentAlreadyStored(docKey, value []byte) (bool, error) {
+	existingValue, ok, err := s.get(docKey)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if bytes.Equal(existingValue, value) {
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: document already exists with different metadata", ErrConflict)
+}
+
+func (s *Store) transactionForDocument(document Document) (Transaction, error) {
+	transaction, existed, err := s.getTransaction(document.Identity.TenantID, document.Identity.TransactionID)
+	if err != nil || existed {
+		return transaction, err
+	}
+	return Transaction{
+		Identity: identity.Transaction{
+			TenantID:      document.Identity.TenantID,
+			TransactionID: document.Identity.TransactionID,
+		},
+		State:     TransactionStateOpen,
+		CreatedAt: document.CreatedAt,
+	}, nil
 }
 
 func (s *Store) HeadDocument(doc identity.Document) (Document, error) {
@@ -792,16 +813,20 @@ func matchesAttributeFilter(document Document, filter DocumentFilter) bool {
 	if filter.HasDocumentClass && document.DocumentClass != filter.DocumentClass {
 		return false
 	}
-	if filter.HasContentType && (!document.HasContentType || document.ContentType != filter.ContentType) {
+	if !matchesOptionalString(document.HasContentType, document.ContentType, filter.HasContentType, filter.ContentType) {
 		return false
 	}
-	if filter.HasWorkflowStage && (!document.HasWorkflowStage || document.WorkflowStage != filter.WorkflowStage) {
+	if !matchesOptionalString(document.HasWorkflowStage, document.WorkflowStage, filter.HasWorkflowStage, filter.WorkflowStage) {
 		return false
 	}
 	if filter.HasCreatedByService && document.CreatedByService != filter.CreatedByService {
 		return false
 	}
 	return true
+}
+
+func matchesOptionalString(hasValue bool, value string, hasFilter bool, filter string) bool {
+	return !hasFilter || (hasValue && value == filter)
 }
 
 func matchesTimeFilter(document Document, filter DocumentFilter) bool {

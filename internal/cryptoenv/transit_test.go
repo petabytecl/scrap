@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestCreateEnvelopeRecordUsesTransitWrappedDEK(t *testing.T) {
@@ -22,9 +23,7 @@ func TestCreateEnvelopeRecordUsesTransitWrappedDEK(t *testing.T) {
 		KeyID:       "transit/backend",
 		CreatedAt:   time.Unix(100, 0).UTC(),
 	})
-	if err != nil {
-		t.Fatalf("create envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "create envelope")
 	record := material.Record
 	if record.GetEnvelopeId() != "openbao-transit:block-1" ||
 		record.GetKeyId() != "transit/backend" ||
@@ -40,9 +39,7 @@ func TestCreateEnvelopeRecordUsesTransitWrappedDEK(t *testing.T) {
 	if bytes.Equal(record.GetWrappedDek(), material.PlaintextDEK) {
 		t.Fatal("envelope record stored plaintext DEK")
 	}
-	if err := ValidateEnvelopeRecordForRestore(ctx, transit, record); err != nil {
-		t.Fatalf("validate restore material: %v", err)
-	}
+	testutil.RequireNoErrorf(t, ValidateEnvelopeRecordForRestore(ctx, transit, record), "validate restore material")
 }
 
 func TestValidateEnvelopeRecordForRestoreClassifiesUnavailableTransit(t *testing.T) {
@@ -54,9 +51,7 @@ func TestValidateEnvelopeRecordForRestoreClassifiesUnavailableTransit(t *testing
 		KeyID:       "transit/backend",
 		CreatedAt:   time.Unix(100, 0).UTC(),
 	})
-	if err != nil {
-		t.Fatalf("create envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "create envelope")
 	transit.SetUnavailable(true)
 
 	err = ValidateEnvelopeRecordForRestore(ctx, transit, material.Record)
@@ -78,18 +73,12 @@ func TestRewrapEnvelopeRecordIsDeterministicAndPreservesAAD(t *testing.T) {
 		KeyID:       "transit/backend-v1",
 		CreatedAt:   time.Unix(100, 0).UTC(),
 	})
-	if err != nil {
-		t.Fatalf("create envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "create envelope")
 
 	first, err := RewrapEnvelopeRecord(ctx, transit, material.Record, "transit/backend-v2", time.Unix(200, 0).UTC())
-	if err != nil {
-		t.Fatalf("rewrap first envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "rewrap first envelope")
 	second, err := RewrapEnvelopeRecord(ctx, transit, material.Record, "transit/backend-v2", time.Unix(200, 0).UTC())
-	if err != nil {
-		t.Fatalf("rewrap second envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "rewrap second envelope")
 	if first.GetEnvelopeId() != material.Record.GetEnvelopeId() ||
 		first.GetKeyId() != "transit/backend-v2" ||
 		first.GetKeyVersion() != 2 ||
@@ -101,14 +90,10 @@ func TestRewrapEnvelopeRecordIsDeterministicAndPreservesAAD(t *testing.T) {
 	if bytes.Equal(first.GetWrappedDek(), material.Record.GetWrappedDek()) {
 		t.Fatal("rewrap did not change wrapped DEK")
 	}
-	if err := ValidateEnvelopeRecordForRestore(ctx, transit, first); err != nil {
-		t.Fatalf("validate rewrapped material: %v", err)
-	}
+	testutil.RequireNoErrorf(t, ValidateEnvelopeRecordForRestore(ctx, transit, first), "validate rewrapped material")
 
 	keyless, err := RewrapEnvelopeRecord(ctx, keylessRewrapTransit{Transit: transit}, material.Record, "transit/backend-v2", time.Unix(200, 0).UTC())
-	if err != nil {
-		t.Fatalf("rewrap with keyless adapter response: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "rewrap with keyless adapter response")
 	if keyless.GetKeyId() != "transit/backend-v2" {
 		t.Fatalf("keyless adapter rewrap key_id = %q, want destination fallback", keyless.GetKeyId())
 	}
@@ -127,9 +112,7 @@ func TestFakeTransitRejectsAADOrAlgorithmMismatch(t *testing.T) {
 		KeyID:       "transit/backend-v1",
 		CreatedAt:   time.Unix(100, 0).UTC(),
 	})
-	if err != nil {
-		t.Fatalf("create envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "create envelope")
 	_, err = transit.UnwrapDataKey(ctx, UnwrapDataKeyRequest{
 		KeyID:      material.Record.GetKeyId(),
 		KeyVersion: material.Record.GetKeyVersion(),

@@ -24,6 +24,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/localstorage"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestServerServesPublicAndAdminAPIs(t *testing.T) {
@@ -32,7 +33,7 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	server := newServer(publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer server.Close()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
 
 	done := make(chan error, 1)
 	go func() {
@@ -40,7 +41,7 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	}()
 
 	publicConn := dialAuthorizedTestServer(t, publicListener)
-	defer publicConn.Close()
+	defer func() { _ = publicConn.Close() }()
 	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
 	_, err := publicClient.HeadDocument(context.Background(), &scrapv1.HeadDocumentRequest{
 		Identity: &scrapv1.DocumentIdentity{
@@ -52,7 +53,7 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	requireCode(t, err, codes.Unimplemented)
 
 	adminConn := dialAuthorizedTestServer(t, adminListener)
-	defer adminConn.Close()
+	defer func() { _ = adminConn.Close() }()
 	adminClient := adminv1.NewRestoreServiceClient(adminConn)
 	_, err = adminClient.StartRestore(context.Background(), &adminv1.StartRestoreRequest{
 		OperationId:     "018f6d86-7a22-7abc-8def-123456789abc",
@@ -64,23 +65,17 @@ func TestServerServesPublicAndAdminAPIs(t *testing.T) {
 	_ = publicConn.Close()
 	_ = adminConn.Close()
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Serve returned error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
 func TestServerServesLocalStorageApplications(t *testing.T) {
 	dir := t.TempDir()
 	app, err := localstorage.Open(dir)
-	if err != nil {
-		t.Fatalf("open local storage: %v", err)
-	}
-	defer app.Close()
+	testutil.RequireNoErrorf(t, err, "open local storage")
+	defer func() { testutil.RequireNoErrorf(t, app.Close(), "close app") }()
 	operationStore, err := operations.Open(dir)
-	if err != nil {
-		t.Fatalf("open operation store: %v", err)
-	}
-	defer operationStore.Close()
+	testutil.RequireNoErrorf(t, err, "open operation store")
+	defer func() { testutil.RequireNoErrorf(t, operationStore.Close(), "close operation store") }()
 
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
@@ -95,7 +90,7 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	}, testAuthorizationManager(t), "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer server.Close()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
 
 	done := make(chan error, 1)
 	go func() {
@@ -103,18 +98,57 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	}()
 
 	publicConn := dialAuthorizedTestServer(t, publicListener)
-	defer publicConn.Close()
+	defer func() { _ = publicConn.Close() }()
 	documents := scrapv1.NewDocumentServiceClient(publicConn)
 	transactions := scrapv1.NewTransactionServiceClient(publicConn)
 
 	data := []byte("invoice bytes")
 	sum := sha256.Sum256(data)
 	expectedLength := uint64(len(data))
+	writeResp := writeLocalStorageDocument(t, documents, data, sum[:], expectedLength)
+	requireLocalStorageHead(t, documents, writeResp.GetMetadata().GetIdentity(), expectedLength)
+	requireLocalStorageRead(t, documents, writeResp.GetMetadata().GetIdentity(), data)
+	requireLocalStorageTransaction(t, transactions)
+
+	adminConn := dialAuthorizedTestServer(t, adminListener)
+	defer func() { _ = adminConn.Close() }()
+	inspectClient := adminv1.NewInspectServiceClient(adminConn)
+	inspected := requireLocalStorageInspectDocument(t, inspectClient, expectedLength, sum[:])
+	blockID := inspected.GetBlockIds()[0]
+	requireLocalStorageInspectBlock(t, inspectClient, blockID, expectedLength)
+	requireLocalStorageClusterSummary(t, inspectClient)
+	requireLocalStorageShard(t, inspectClient)
+	requireLocalStorageMember(t, inspectClient)
+	requireLocalStorageRunway(t, inspectClient)
+
+	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
+	repairClient := adminv1.NewRepairServiceClient(adminConn)
+	requireLocalStorageRepairQueueEmpty(t, repairClient)
+	memberClient := adminv1.NewMemberServiceClient(adminConn)
+	requireLocalStorageCordon(t, memberClient)
+	requireLocalStorageEvictionSafetyWarning(t, memberClient)
+	drClient := adminv1.NewDisasterRecoveryServiceClient(adminConn)
+	requireLocalStorageRecoveryReadinessWarning(t, drClient)
+
+	requireLocalStorageRestorePlanStored(t, restoreClient, operationStore)
+
+	_ = publicConn.Close()
+	_ = adminConn.Close()
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
+func writeLocalStorageDocument(
+	t *testing.T,
+	documents scrapv1.DocumentServiceClient,
+	data []byte,
+	sum []byte,
+	expectedLength uint64,
+) *scrapv1.WriteDocumentResponse {
+	t.Helper()
 	write, err := documents.WriteDocument(context.Background())
-	if err != nil {
-		t.Fatalf("WriteDocument: %v", err)
-	}
-	if err := write.Send(&scrapv1.WriteDocumentRequest{
+	testutil.RequireNoErrorf(t, err, "WriteDocument")
+	testutil.RequireNoErrorf(t, write.Send(&scrapv1.WriteDocumentRequest{
 		Message: &scrapv1.WriteDocumentRequest_Init{Init: &scrapv1.WriteDocumentInit{
 			Identity: &scrapv1.DocumentIdentity{
 				TenantId:      "tenant",
@@ -124,77 +158,69 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 			DocumentClass:        scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT,
 			PriorityClass:        scrapv1.PriorityClass_PRIORITY_CLASS_NORMAL,
 			ExpectedLength:       &expectedLength,
-			ExpectedSha256:       sum[:],
+			ExpectedSha256:       sum,
 			ClientIdempotencyKey: stringPtr("write-1"),
 			CreatedByService:     "billing-etl",
 		}},
-	}); err != nil {
-		t.Fatalf("send init: %v", err)
-	}
-	if err := write.Send(&scrapv1.WriteDocumentRequest{
+	}), "send init")
+	testutil.RequireNoErrorf(t, write.Send(&scrapv1.WriteDocumentRequest{
 		Message: &scrapv1.WriteDocumentRequest_Chunk{Chunk: &scrapv1.WriteDocumentChunk{Data: data}},
-	}); err != nil {
-		t.Fatalf("send chunk: %v", err)
-	}
+	}), "send chunk")
 	writeResp, err := write.CloseAndRecv()
-	if err != nil {
-		t.Fatalf("close write: %v", err)
-	}
-	if writeResp.GetAchievedReplicaCount() != 1 || writeResp.GetMetadata().GetLength() != expectedLength {
-		t.Fatalf("write response = %#v, want local 1/1 write metadata", writeResp)
-	}
+	testutil.RequireNoErrorf(t, err, "close write")
+	testutil.RequireEqualf(t, uint32(1), writeResp.GetAchievedReplicaCount(), "write achieved replica count")
+	testutil.RequireEqualf(t, expectedLength, writeResp.GetMetadata().GetLength(), "write metadata length")
+	return writeResp
+}
 
-	headResp, err := documents.HeadDocument(context.Background(), &scrapv1.HeadDocumentRequest{
-		Identity: writeResp.GetMetadata().GetIdentity(),
-	})
-	if err != nil {
-		t.Fatalf("HeadDocument: %v", err)
-	}
-	if headResp.GetMetadata().GetLength() != expectedLength {
-		t.Fatalf("head length = %d, want %d", headResp.GetMetadata().GetLength(), expectedLength)
-	}
+func requireLocalStorageHead(t *testing.T, documents scrapv1.DocumentServiceClient, identity *scrapv1.DocumentIdentity, expectedLength uint64) {
+	t.Helper()
+	headResp, err := documents.HeadDocument(context.Background(), &scrapv1.HeadDocumentRequest{Identity: identity})
+	testutil.RequireNoErrorf(t, err, "HeadDocument")
+	testutil.RequireEqualf(t, expectedLength, headResp.GetMetadata().GetLength(), "head document length")
+}
 
-	read, err := documents.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
-		Identity: writeResp.GetMetadata().GetIdentity(),
-	})
-	if err != nil {
-		t.Fatalf("ReadDocument: %v", err)
-	}
+func requireLocalStorageRead(t *testing.T, documents scrapv1.DocumentServiceClient, identity *scrapv1.DocumentIdentity, data []byte) {
+	t.Helper()
+	read, err := documents.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{Identity: identity})
+	testutil.RequireNoErrorf(t, err, "ReadDocument")
 	first, err := read.Recv()
-	if err != nil {
-		t.Fatalf("recv metadata: %v", err)
-	}
-	if first.GetMetadata() == nil || first.GetMetadata().GetSource() != scrapv1.StorageSource_STORAGE_SOURCE_LOCAL {
-		t.Fatalf("first read response = %#v, want local metadata", first)
-	}
+	testutil.RequireNoErrorf(t, err, "recv metadata")
+	testutil.RequireNotNilf(t, first.GetMetadata(), "first read response metadata")
+	testutil.RequireEqualf(t, scrapv1.StorageSource_STORAGE_SOURCE_LOCAL, first.GetMetadata().GetSource(), "first read source")
+	got := readLocalStorageChunks(t, read)
+	testutil.RequireTruef(t, bytes.Equal(got, data), "read bytes = %q, want %q", got, data)
+}
+
+func readLocalStorageChunks(t *testing.T, read grpc.ServerStreamingClient[scrapv1.ReadDocumentResponse]) []byte {
+	t.Helper()
 	var got bytes.Buffer
 	for {
 		msg, err := read.Recv()
 		if errors.Is(err, io.EOF) {
-			break
+			return got.Bytes()
 		}
-		if err != nil {
-			t.Fatalf("recv chunk: %v", err)
-		}
+		testutil.RequireNoErrorf(t, err, "recv chunk")
 		got.Write(msg.GetChunk().GetData())
 	}
-	if !bytes.Equal(got.Bytes(), data) {
-		t.Fatalf("read bytes = %q, want %q", got.Bytes(), data)
-	}
+}
 
+func requireLocalStorageTransaction(t *testing.T, transactions scrapv1.TransactionServiceClient) {
+	t.Helper()
 	transactionResp, err := transactions.GetTransaction(context.Background(), &scrapv1.GetTransactionRequest{
 		Transaction: &scrapv1.TransactionIdentity{TenantId: "tenant", TransactionId: "txn"},
 	})
-	if err != nil {
-		t.Fatalf("GetTransaction: %v", err)
-	}
-	if transactionResp.GetTransaction().GetDocumentCount() != 1 {
-		t.Fatalf("transaction = %#v, want one document", transactionResp.GetTransaction())
-	}
+	testutil.RequireNoErrorf(t, err, "GetTransaction")
+	testutil.RequireEqualf(t, uint32(1), transactionResp.GetTransaction().GetDocumentCount(), "transaction document count")
+}
 
-	adminConn := dialAuthorizedTestServer(t, adminListener)
-	defer adminConn.Close()
-	inspectClient := adminv1.NewInspectServiceClient(adminConn)
+func requireLocalStorageInspectDocument(
+	t *testing.T,
+	inspectClient adminv1.InspectServiceClient,
+	expectedLength uint64,
+	sum []byte,
+) *adminv1.AdminDocument {
+	t.Helper()
 	inspectResp, err := inspectClient.GetDocument(context.Background(), &adminv1.GetDocumentRequest{
 		Document: &adminv1.DocumentTarget{
 			TenantId:      "tenant",
@@ -202,113 +228,122 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 			DocumentName:  "invoice.xml",
 		},
 	})
-	if err != nil {
-		t.Fatalf("GetDocument: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "GetDocument")
 	inspected := inspectResp.GetDocument()
-	if inspected.GetShardId() != "local" ||
-		inspected.GetLength() != expectedLength ||
-		!bytes.Equal(inspected.GetLogicalSha256(), sum[:]) ||
-		len(inspected.GetBlockIds()) != 1 ||
-		inspected.GetBlockIds()[0] == "" ||
-		inspected.GetRepairRequired() {
-		t.Fatalf("inspect document = %#v, want local physical metadata", inspected)
-	}
-	blockID := inspected.GetBlockIds()[0]
+	testutil.RequireEqualf(t, "local", inspected.GetShardId(), "inspect document shard")
+	testutil.RequireEqualf(t, expectedLength, inspected.GetLength(), "inspect document length")
+	testutil.RequireTruef(t, bytes.Equal(inspected.GetLogicalSha256(), sum), "inspect logical sha")
+	testutil.RequireEqualf(t, 1, len(inspected.GetBlockIds()), "inspect document block count")
+	testutil.RequireTruef(t, inspected.GetBlockIds()[0] != "", "inspect document block id")
+	testutil.RequireFalsef(t, inspected.GetRepairRequired(), "inspect document repair required")
+	return inspected
+}
+
+func requireLocalStorageInspectBlock(
+	t *testing.T,
+	inspectClient adminv1.InspectServiceClient,
+	blockID string,
+	expectedLength uint64,
+) {
+	t.Helper()
 	blockResp, err := inspectClient.GetBlock(context.Background(), &adminv1.GetBlockRequest{
 		Block: &adminv1.BlockTarget{ShardId: "local", BlockId: blockID},
 	})
-	if err != nil {
-		t.Fatalf("GetBlock: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "GetBlock")
 	block := blockResp.GetBlock()
-	if block.GetShardId() != "local" ||
-		block.GetBlockId() != blockID ||
-		block.GetLength() <= expectedLength ||
-		len(block.GetChecksum()) != sha256.Size ||
-		len(block.GetReplicaMemberIds()) != 1 ||
-		block.GetReplicaMemberIds()[0] != "local" ||
-		block.GetBackendObjectKey() != "blocks/"+blockID+".blk" {
-		t.Fatalf("inspect block = %#v, want local block metadata", block)
-	}
+	testutil.RequireEqualf(t, "local", block.GetShardId(), "inspect block shard")
+	testutil.RequireEqualf(t, blockID, block.GetBlockId(), "inspect block id")
+	testutil.RequireTruef(t, block.GetLength() > expectedLength, "inspect block length = %d, want > %d", block.GetLength(), expectedLength)
+	testutil.RequireEqualf(t, sha256.Size, len(block.GetChecksum()), "inspect block checksum size")
+	testutil.RequireEqualf(t, 1, len(block.GetReplicaMemberIds()), "inspect block replica count")
+	testutil.RequireEqualf(t, "local", block.GetReplicaMemberIds()[0], "inspect block replica member")
+	testutil.RequireEqualf(t, "blocks/"+blockID+".blk", block.GetBackendObjectKey(), "inspect block backend object key")
+}
+
+func requireLocalStorageClusterSummary(t *testing.T, inspectClient adminv1.InspectServiceClient) {
+	t.Helper()
 	summaryResp, err := inspectClient.GetClusterSummary(context.Background(), &adminv1.GetClusterSummaryRequest{})
-	if err != nil {
-		t.Fatalf("GetClusterSummary: %v", err)
-	}
-	if summaryResp.GetSummary().GetShardCount() != 1 ||
-		summaryResp.GetSummary().GetStorageMemberCount() != 1 ||
-		summaryResp.GetSummary().GetLocalBytesUsed() == 0 ||
-		summaryResp.GetSummary().GetLocalBytesCapacity() == 0 {
-		t.Fatalf("cluster summary = %#v, want local single-member summary", summaryResp.GetSummary())
-	}
+	testutil.RequireNoErrorf(t, err, "GetClusterSummary")
+	summary := summaryResp.GetSummary()
+	testutil.RequireEqualf(t, uint32(1), summary.GetShardCount(), "cluster summary shard count")
+	testutil.RequireEqualf(t, uint32(1), summary.GetStorageMemberCount(), "cluster summary member count")
+	testutil.RequireTruef(t, summary.GetLocalBytesUsed() > 0, "cluster summary local bytes used")
+	testutil.RequireTruef(t, summary.GetLocalBytesCapacity() > 0, "cluster summary local bytes capacity")
+}
+
+func requireLocalStorageShard(t *testing.T, inspectClient adminv1.InspectServiceClient) {
+	t.Helper()
 	shardResp, err := inspectClient.GetShard(context.Background(), &adminv1.GetShardRequest{ShardId: "local"})
-	if err != nil {
-		t.Fatalf("GetShard: %v", err)
-	}
-	if shardResp.GetShard().GetLeaderMemberId() != "local" ||
-		len(shardResp.GetShard().GetVoterMemberIds()) != 1 ||
-		shardResp.GetShard().GetAppliedIndex() == 0 {
-		t.Fatalf("shard = %#v, want local shard metadata", shardResp.GetShard())
-	}
+	testutil.RequireNoErrorf(t, err, "GetShard")
+	shard := shardResp.GetShard()
+	testutil.RequireEqualf(t, "local", shard.GetLeaderMemberId(), "shard leader")
+	testutil.RequireEqualf(t, 1, len(shard.GetVoterMemberIds()), "shard voter count")
+	testutil.RequireTruef(t, shard.GetAppliedIndex() > 0, "shard applied index")
+}
+
+func requireLocalStorageMember(t *testing.T, inspectClient adminv1.InspectServiceClient) {
+	t.Helper()
 	memberResp, err := inspectClient.GetMember(context.Background(), &adminv1.GetMemberRequest{
 		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
 	})
-	if err != nil {
-		t.Fatalf("GetMember: %v", err)
-	}
-	if memberResp.GetStorageMember().GetState() != adminv1.MemberState_MEMBER_STATE_ONLINE ||
-		memberResp.GetStorageMember().GetBytesCapacity() == 0 {
-		t.Fatalf("member = %#v, want online local member", memberResp.GetStorageMember())
-	}
-	runwayResp, err := inspectClient.GetCapacityRunway(context.Background(), &adminv1.GetCapacityRunwayRequest{})
-	if err != nil {
-		t.Fatalf("GetCapacityRunway: %v", err)
-	}
-	if runwayResp.GetRunway().GetCapacityProfileId() != "local-non-production" ||
-		runwayResp.GetRunway().GetUsableBytesRemaining() == 0 ||
-		len(runwayResp.GetRunway().GetWarnings()) == 0 {
-		t.Fatalf("runway = %#v, want local non-production runway", runwayResp.GetRunway())
-	}
+	testutil.RequireNoErrorf(t, err, "GetMember")
+	member := memberResp.GetStorageMember()
+	testutil.RequireEqualf(t, adminv1.MemberState_MEMBER_STATE_ONLINE, member.GetState(), "member state")
+	testutil.RequireTruef(t, member.GetBytesCapacity() > 0, "member bytes capacity")
+}
 
-	restoreClient := adminv1.NewRestoreServiceClient(adminConn)
-	repairClient := adminv1.NewRepairServiceClient(adminConn)
+func requireLocalStorageRunway(t *testing.T, inspectClient adminv1.InspectServiceClient) {
+	t.Helper()
+	runwayResp, err := inspectClient.GetCapacityRunway(context.Background(), &adminv1.GetCapacityRunwayRequest{})
+	testutil.RequireNoErrorf(t, err, "GetCapacityRunway")
+	runway := runwayResp.GetRunway()
+	testutil.RequireEqualf(t, "local-non-production", runway.GetCapacityProfileId(), "runway capacity profile")
+	testutil.RequireTruef(t, runway.GetUsableBytesRemaining() > 0, "runway usable bytes")
+	testutil.RequireTruef(t, len(runway.GetWarnings()) > 0, "runway warnings")
+}
+
+func requireLocalStorageRepairQueueEmpty(t *testing.T, repairClient adminv1.RepairServiceClient) {
+	t.Helper()
 	repairQueue, err := repairClient.GetRepairQueue(context.Background(), &adminv1.GetRepairQueueRequest{ShardId: stringPtr("local")})
-	if err != nil {
-		t.Fatalf("GetRepairQueue: %v", err)
-	}
-	if len(repairQueue.GetItems()) != 0 {
-		t.Fatalf("repair queue = %#v, want empty queue", repairQueue.GetItems())
-	}
-	memberClient := adminv1.NewMemberServiceClient(adminConn)
+	testutil.RequireNoErrorf(t, err, "GetRepairQueue")
+	testutil.RequireEqualf(t, 0, len(repairQueue.GetItems()), "repair queue item count")
+}
+
+func requireLocalStorageCordon(t *testing.T, memberClient adminv1.MemberServiceClient) {
+	t.Helper()
 	cordonResp, err := memberClient.CordonMember(context.Background(), &adminv1.CordonMemberRequest{
 		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
 		Reason:        "maintenance",
 		OperationId:   "018f6d86-7a22-7abc-8def-123456789abc",
 	})
-	if err != nil {
-		t.Fatalf("CordonMember: %v", err)
-	}
-	if !cordonResp.GetStorageMember().GetCordoned() {
-		t.Fatalf("cordon response = %#v, want cordoned", cordonResp.GetStorageMember())
-	}
+	testutil.RequireNoErrorf(t, err, "CordonMember")
+	testutil.RequireTruef(t, cordonResp.GetStorageMember().GetCordoned(), "cordon response should be cordoned")
+}
+
+func requireLocalStorageEvictionSafetyWarning(t *testing.T, memberClient adminv1.MemberServiceClient) {
+	t.Helper()
 	safetyResp, err := memberClient.GetEvictionSafety(context.Background(), &adminv1.GetEvictionSafetyRequest{
 		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
 	})
-	if err != nil {
-		t.Fatalf("GetEvictionSafety: %v", err)
-	}
-	if safetyResp.GetSafety().GetSafeToEvict() || len(safetyResp.GetSafety().GetWarnings()) == 0 {
-		t.Fatalf("eviction safety = %#v, want unsafe warning", safetyResp.GetSafety())
-	}
-	drClient := adminv1.NewDisasterRecoveryServiceClient(adminConn)
-	readinessResp, err := drClient.GetRecoveryReadiness(context.Background(), &adminv1.GetRecoveryReadinessRequest{})
-	if err != nil {
-		t.Fatalf("GetRecoveryReadiness: %v", err)
-	}
-	if readinessResp.GetReadiness().GetReady() || len(readinessResp.GetReadiness().GetWarnings()) == 0 {
-		t.Fatalf("recovery readiness = %#v, want not ready warnings", readinessResp.GetReadiness())
-	}
+	testutil.RequireNoErrorf(t, err, "GetEvictionSafety")
+	testutil.RequireFalsef(t, safetyResp.GetSafety().GetSafeToEvict(), "eviction should not be safe")
+	testutil.RequireTruef(t, len(safetyResp.GetSafety().GetWarnings()) > 0, "eviction warning")
+}
 
+func requireLocalStorageRecoveryReadinessWarning(t *testing.T, drClient adminv1.DisasterRecoveryServiceClient) {
+	t.Helper()
+	readinessResp, err := drClient.GetRecoveryReadiness(context.Background(), &adminv1.GetRecoveryReadinessRequest{})
+	testutil.RequireNoErrorf(t, err, "GetRecoveryReadiness")
+	testutil.RequireFalsef(t, readinessResp.GetReadiness().GetReady(), "recovery readiness should not be ready")
+	testutil.RequireTruef(t, len(readinessResp.GetReadiness().GetWarnings()) > 0, "recovery readiness warnings")
+}
+
+func requireLocalStorageRestorePlanStored(
+	t *testing.T,
+	restoreClient adminv1.RestoreServiceClient,
+	operationStore *operations.Store,
+) {
+	t.Helper()
 	planResp, err := restoreClient.PlanRestore(context.Background(), &adminv1.PlanRestoreRequest{
 		Targets: []*adminv1.Target{
 			{
@@ -322,19 +357,9 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("PlanRestore: %v", err)
-	}
-	if _, err := operationStore.GetPlan(planResp.GetPlan().GetOperationPlanId()); err != nil {
-		t.Fatalf("get stored operation plan: %v", err)
-	}
-
-	_ = publicConn.Close()
-	_ = adminConn.Close()
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Serve returned error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "PlanRestore")
+	_, err = operationStore.GetPlan(planResp.GetPlan().GetOperationPlanId())
+	testutil.RequireNoErrorf(t, err, "get stored operation plan")
 }
 
 func TestListenRejectsProductionWriteACKWithoutReadinessGate(t *testing.T) {
@@ -345,7 +370,7 @@ func TestListenRejectsProductionWriteACKWithoutReadinessGate(t *testing.T) {
 
 	server, err := Listen(cfg, Applications{})
 	if server != nil {
-		server.Close()
+		testutil.RequireNoErrorf(t, server.Close(), "close server")
 	}
 	if !errors.Is(err, config.ErrProductionWriteACKReadinessGate) {
 		t.Fatalf("Listen error = %v, want %v", err, config.ErrProductionWriteACKReadinessGate)
@@ -373,7 +398,7 @@ func TestListenFailsClosedWithoutAuthorizationPolicy(t *testing.T) {
 
 	server, err := Listen(cfg, Applications{})
 	if server != nil {
-		server.Close()
+		testutil.RequireNoErrorf(t, server.Close(), "close server")
 	}
 	if err == nil || !strings.Contains(err.Error(), "authorization policy path is required") {
 		t.Fatalf("Listen error = %v, want missing authorization policy", err)
@@ -389,16 +414,14 @@ func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
   }
 }`)
 	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
-	if err != nil {
-		t.Fatalf("load authorization policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load authorization policy")
 
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
 	server := newServer(publicListener, adminListener, Applications{}, manager, policyPath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer server.Close()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
 
 	done := make(chan error, 1)
 	go func() {
@@ -406,7 +429,7 @@ func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
 	}()
 
 	publicConn := dialTestServer(t, publicListener)
-	defer publicConn.Close()
+	defer func() { _ = publicConn.Close() }()
 	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
 	headReq := &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
 		TenantId:      "tenant",
@@ -421,7 +444,7 @@ func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
 	requireCode(t, err, codes.Unimplemented)
 
 	adminConn := dialTestServer(t, adminListener)
-	defer adminConn.Close()
+	defer func() { _ = adminConn.Close() }()
 	adminClient := adminv1.NewInspectServiceClient(adminConn)
 	_, err = adminClient.GetClusterSummary(workloadContext("billing-etl"), &adminv1.GetClusterSummaryRequest{})
 	requireCode(t, err, codes.PermissionDenied)
@@ -431,9 +454,7 @@ func TestServerAuthorizesPublicAndAdminCapabilities(t *testing.T) {
 	_ = publicConn.Close()
 	_ = adminConn.Close()
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Serve returned error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
 func TestServerAuditsDeniedRequests(t *testing.T) {
@@ -444,21 +465,17 @@ func TestServerAuditsDeniedRequests(t *testing.T) {
   }
 }`)
 	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
-	if err != nil {
-		t.Fatalf("load authorization policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load authorization policy")
 	store, err := operations.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open operation store: %v", err)
-	}
-	defer store.Close()
+	testutil.RequireNoErrorf(t, err, "open operation store")
+	defer func() { testutil.RequireNoErrorf(t, store.Close(), "close store") }()
 
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
 	server := newServer(publicListener, adminListener, Applications{Operations: store}, manager, policyPath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer server.Close()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
 
 	done := make(chan error, 1)
 	go func() {
@@ -466,7 +483,7 @@ func TestServerAuditsDeniedRequests(t *testing.T) {
 	}()
 
 	publicConn := dialTestServer(t, publicListener)
-	defer publicConn.Close()
+	defer func() { _ = publicConn.Close() }()
 	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
 	headReq := &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
 		TenantId:      "tenant",
@@ -482,9 +499,7 @@ func TestServerAuditsDeniedRequests(t *testing.T) {
 	requireCode(t, err, codes.PermissionDenied)
 
 	events, err := store.ListAuditEvents()
-	if err != nil {
-		t.Fatalf("list audit events: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "list audit events")
 	if len(events) != 1 {
 		t.Fatalf("audit events = %#v, want one denied request event", events)
 	}
@@ -502,9 +517,7 @@ func TestServerAuditsDeniedRequests(t *testing.T) {
 
 	_ = publicConn.Close()
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Serve returned error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
 func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *testing.T) {
@@ -515,16 +528,14 @@ func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *tes
   }
 }`)
 	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
-	if err != nil {
-		t.Fatalf("load authorization policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load authorization policy")
 
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
 	server := newServer(publicListener, adminListener, Applications{}, manager, policyPath)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer server.Close()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
 
 	done := make(chan error, 1)
 	go func() {
@@ -532,7 +543,7 @@ func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *tes
 	}()
 
 	publicConn := dialTestServer(t, publicListener)
-	defer publicConn.Close()
+	defer func() { _ = publicConn.Close() }()
 	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
 	headReq := &scrapv1.HeadDocumentRequest{Identity: &scrapv1.DocumentIdentity{
 		TenantId:      "tenant",
@@ -542,9 +553,7 @@ func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *tes
 	_, err = publicClient.HeadDocument(workloadContext("billing-etl"), headReq)
 	requireCode(t, err, codes.Unimplemented)
 
-	if err := os.WriteFile(policyPath, []byte(`{"version":"policy-v2","workloads":{"billing-etl":{"capabilities":["public"]}}}`), 0o600); err != nil {
-		t.Fatalf("write invalid policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.WriteFile(policyPath, []byte(`{"version":"policy-v2","workloads":{"billing-etl":{"capabilities":["public"]}}}`), 0o600), "write invalid policy")
 	if err := server.ReloadAuthorizationPolicy(); err == nil {
 		t.Fatal("reload invalid policy succeeded")
 	}
@@ -557,9 +566,7 @@ func TestAuthorizationPolicyReloadRejectsBadPolicyAndKeepsLastValidPolicy(t *tes
 
 	_ = publicConn.Close()
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Serve returned error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
 func TestAuthorizationPolicyReloadReturnsReloadAndAuditErrors(t *testing.T) {
@@ -570,12 +577,8 @@ func TestAuthorizationPolicyReloadReturnsReloadAndAuditErrors(t *testing.T) {
   }
 }`)
 	manager, err := authz.LoadManagerFromFile(policyPath, authorizationCapabilities())
-	if err != nil {
-		t.Fatalf("load authorization policy: %v", err)
-	}
-	if err := os.WriteFile(policyPath, []byte(`{"version":"policy-v2","workloads":{"billing-etl":{"capabilities":["public"]}}}`), 0o600); err != nil {
-		t.Fatalf("write invalid policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load authorization policy")
+	testutil.RequireNoErrorf(t, os.WriteFile(policyPath, []byte(`{"version":"policy-v2","workloads":{"billing-etl":{"capabilities":["public"]}}}`), 0o600), "write invalid policy")
 	auditErr := errors.New("audit append failed")
 	server := &Server{
 		authorization: manager,
@@ -617,9 +620,7 @@ func dialTestServerWithWorkload(t *testing.T, listener *bufconn.Listener, worklo
 		"passthrough:///bufnet",
 		options...,
 	)
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "grpc.NewClient")
 	return conn
 }
 
@@ -650,9 +651,7 @@ func workloadContextWithBase(ctx context.Context, workload string) context.Conte
 func writeAuthorizationPolicy(t *testing.T, body string) string {
 	t.Helper()
 	path := t.TempDir() + "/authz-policy.json"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write authorization policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.WriteFile(path, []byte(body), 0o600), "write authorization policy")
 	return path
 }
 
@@ -665,9 +664,7 @@ func testAuthorizationManager(t *testing.T) *authz.Manager {
 			"test-workload": {Capabilities: capabilities},
 		},
 	}, capabilities)
-	if err != nil {
-		t.Fatalf("new test authorization manager: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new test authorization manager")
 	return manager
 }
 

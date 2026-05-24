@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,11 +11,40 @@ import (
 	"github.com/petabytecl/scrap/internal/crashfault"
 )
 
+var errParseFlags = errors.New("parse flags")
+
 func main() {
 	os.Exit(run(os.Args))
 }
 
 func run(args []string) int {
+	options, outPath, err := parseOptions(args)
+	if err != nil {
+		if errors.Is(err, errParseFlags) {
+			return 2
+		}
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+	report, err := crashfault.Run(context.Background(), options)
+	if err != nil {
+		return fail("run crash/fault evidence", err)
+	}
+	data, err := crashfault.MarshalReport(report)
+	if err != nil {
+		return fail("marshal crash/fault evidence", err)
+	}
+	if err := writeReport(outPath, data); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+	if !report.Ready {
+		return 1
+	}
+	return 0
+}
+
+func parseOptions(args []string) (crashfault.Options, string, error) {
 	fs := flag.NewFlagSet("scrap-crash-fault-evidence", flag.ContinueOnError)
 	outPath := fs.String("out", "", "write JSON evidence report to this path; defaults to stdout")
 	runnerProfile := fs.String("runner-profile", "", "runner profile recorded in evidence")
@@ -24,51 +54,54 @@ func run(args []string) int {
 	count := fs.Int("count", 1, "go test -count value for each scenario command")
 	race := fs.Bool("race", false, "run scenario tests with go test -race")
 	if err := fs.Parse(args[1:]); err != nil {
-		return 2
+		return crashfault.Options{}, "", fmt.Errorf("%w: %w", errParseFlags, err)
 	}
 	workDir, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "get working directory: %v\n", err)
-		return 2
+		return crashfault.Options{}, "", fmt.Errorf("get working directory: %w", err)
 	}
-	if *artifactURI == "" && *outPath != "" {
-		abs, err := filepath.Abs(*outPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "resolve evidence report path: %v\n", err)
-			return 2
-		}
-		*artifactURI = "file://" + abs
+	uri, err := artifactURIForOutput(*artifactURI, *outPath)
+	if err != nil {
+		return crashfault.Options{}, "", err
 	}
-	report, err := crashfault.Run(context.Background(), crashfault.Options{
+	return crashfault.Options{
 		WorkDir:           workDir,
 		Count:             *count,
 		Race:              *race,
 		RunnerProfile:     *runnerProfile,
 		FilesystemProfile: *filesystemProfile,
 		Seed:              *seed,
-		ArtifactURI:       *artifactURI,
+		ArtifactURI:       uri,
 		CommandLine:       append([]string(nil), args...),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "run crash/fault evidence: %v\n", err)
-		return 2
+	}, *outPath, nil
+}
+
+func artifactURIForOutput(artifactURI, outPath string) (string, error) {
+	if artifactURI != "" || outPath == "" {
+		return artifactURI, nil
 	}
-	data, err := crashfault.MarshalReport(report)
+	abs, err := filepath.Abs(outPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "marshal crash/fault evidence: %v\n", err)
-		return 2
+		return "", fmt.Errorf("resolve evidence report path: %w", err)
 	}
-	if *outPath == "" {
+	return "file://" + abs, nil
+}
+
+func writeReport(outPath string, data []byte) error {
+	if outPath == "" {
 		if _, err := os.Stdout.Write(data); err != nil {
-			fmt.Fprintf(os.Stderr, "write crash/fault evidence: %v\n", err)
-			return 2
+			return fmt.Errorf("write crash/fault evidence: %w", err)
 		}
-	} else if err := os.WriteFile(*outPath, data, 0o600); err != nil {
-		fmt.Fprintf(os.Stderr, "write crash/fault evidence: %v\n", err)
-		return 2
+		return nil
 	}
-	if !report.Ready {
-		return 1
+	// #nosec G304,G703 -- the report path is an explicit CLI destination.
+	if err := os.WriteFile(outPath, data, 0o600); err != nil {
+		return fmt.Errorf("write crash/fault evidence: %w", err)
 	}
-	return 0
+	return nil
+}
+
+func fail(operation string, err error) int {
+	fmt.Fprintf(os.Stderr, "%s: %v\n", operation, err)
+	return 2
 }

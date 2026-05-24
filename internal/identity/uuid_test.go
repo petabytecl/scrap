@@ -1,12 +1,14 @@
 package identity
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/petabytecl/scrap/internal/testutil"
+)
 
 func TestNewUUIDv7GeneratesValidUUIDv7(t *testing.T) {
 	id, err := NewUUIDv7()
-	if err != nil {
-		t.Fatalf("NewUUIDv7: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "NewUUIDv7")
 	if !IsUUIDv7(id) {
 		t.Fatalf("generated id %q is not UUIDv7", id)
 	}

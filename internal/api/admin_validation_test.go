@@ -9,6 +9,7 @@ import (
 
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestValidateAdminTargetDocumentNormalizesIdentity(t *testing.T) {
@@ -21,9 +22,7 @@ func TestValidateAdminTargetDocumentNormalizesIdentity(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if target.Kind != AdminTargetDocument {
 		t.Fatalf("kind = %s, want document", target.Kind)
 	}
@@ -80,9 +79,7 @@ func TestValidatePlanKeyRotationRequestRequiresDestinationKey(t *testing.T) {
 		Targets:          []*adminv1.Target{blockAdminTarget()},
 		DestinationKeyId: "transit/backend-v2",
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if valid.Metadata[adminDestinationKeyIDMetadata] != "transit/backend-v2" {
 		t.Fatalf("metadata = %#v, want destination key id", valid.Metadata)
 	}
@@ -102,9 +99,7 @@ func TestValidatePlanCapacityOverrideRequestRequiresBoundedReason(t *testing.T) 
 		ExpiresAt:       expiresAt,
 		Reason:          "incident INC-42",
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if valid.Metadata[adminCapacityProfileIDMetadata] != "production-a" ||
 		valid.Metadata[adminCapacityOverrideReasonMetadata] != "incident INC-42" ||
 		valid.Metadata[adminCapacityOverrideExpiresAtMetadata] != expiresAt.AsTime().Format(time.RFC3339Nano) ||
@@ -127,9 +122,7 @@ func TestValidateStartRestoreRequestRequiresUUIDv7AndPlanToken(t *testing.T) {
 		OperationPlanId: "plan-1",
 		PlanHash:        "hash-1",
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if valid.OperationID != validUUIDv7() {
 		t.Fatalf("operation id = %q, want %q", valid.OperationID, validUUIDv7())
 	}
@@ -148,9 +141,7 @@ func TestValidateCordonMemberRequestRequiresOperationAndReason(t *testing.T) {
 		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "member-a"},
 		Reason:        "node maintenance",
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if valid.StorageMember != "member-a" {
 		t.Fatalf("storage member = %q, want member-a", valid.StorageMember)
 	}

@@ -8,18 +8,16 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestStoreRaftCommitBarrierControlsMetadataVisibility(t *testing.T) {
 	dir := t.TempDir()
 	barrier, err := NewRaftCommitBarrier()
-	if err != nil {
-		t.Fatalf("new raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new raft barrier")
 	t.Cleanup(func() {
-		if err := barrier.Close(); err != nil {
-			t.Fatalf("close raft barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, barrier.Close(), "close raft barrier")
 	})
 
 	store := openStoreAtWithOptions(t, dir, StoreOptions{
@@ -46,12 +44,8 @@ func TestStoreRaftCommitBarrierControlsMetadataVisibility(t *testing.T) {
 func TestStoreClosedRaftCommitBarrierLeavesDocumentInvisibleAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	barrier, err := NewRaftCommitBarrier()
-	if err != nil {
-		t.Fatalf("new raft barrier: %v", err)
-	}
-	if err := barrier.Close(); err != nil {
-		t.Fatalf("close raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new raft barrier")
+	testutil.RequireNoErrorf(t, barrier.Close(), "close raft barrier")
 
 	store := openStoreAtWithOptions(t, dir, StoreOptions{
 		MetadataCommitBarrier: barrier,
@@ -78,9 +72,7 @@ func TestDurableRaftCommitBarrierReplaysCommittedRecordsAndContinuesWrites(t *te
 	storeDir := filepath.Join(dir, "store")
 
 	barrier, err := NewDurableRaftCommitBarrier(raftDir)
-	if err != nil {
-		t.Fatalf("new durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new durable raft barrier")
 	store := openStoreAtWithOptions(t, storeDir, StoreOptions{
 		MetadataCommitBarrier: barrier,
 	})
@@ -88,18 +80,12 @@ func TestDurableRaftCommitBarrierReplaysCommittedRecordsAndContinuesWrites(t *te
 	firstData := []byte("durable raft replay record")
 	first := writeTestDocument(t, store, "tx-017", "durable-first.xml", firstData)
 	closeTestStore(t, store)
-	if err := barrier.Close(); err != nil {
-		t.Fatalf("close durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.Close(), "close durable raft barrier")
 
 	replayed, err := NewDurableRaftCommitBarrier(raftDir)
-	if err != nil {
-		t.Fatalf("reopen durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "reopen durable raft barrier")
 	t.Cleanup(func() {
-		if err := replayed.Close(); err != nil {
-			t.Fatalf("close replayed durable raft barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, replayed.Close(), "close replayed durable raft barrier")
 	})
 
 	committed, ok := replayed.CommittedDocument("tenant-a", "tx-017", "durable-first.xml")
@@ -131,9 +117,7 @@ func TestStoreProjectionCanRebuildFromDurableRaftLogAfterPebbleLoss(t *testing.T
 	storeDir := filepath.Join(dir, "store")
 
 	barrier, err := NewDurableRaftCommitBarrier(raftDir)
-	if err != nil {
-		t.Fatalf("new durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new durable raft barrier")
 	store := openStoreAtWithOptions(t, storeDir, StoreOptions{
 		MetadataCommitBarrier: barrier,
 	})
@@ -141,30 +125,20 @@ func TestStoreProjectionCanRebuildFromDurableRaftLogAfterPebbleLoss(t *testing.T
 	data := []byte("rebuild visible projection from raft")
 	writeTestDocument(t, store, "tx-018", "projection-rebuild.xml", data)
 	closeTestStore(t, store)
-	if err := barrier.Close(); err != nil {
-		t.Fatalf("close durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.Close(), "close durable raft barrier")
 
-	if err := os.RemoveAll(filepath.Join(storeDir, "metadata")); err != nil {
-		t.Fatalf("remove pebble metadata projection: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.RemoveAll(filepath.Join(storeDir, "metadata")), "remove pebble metadata projection")
 
 	replayed, err := NewDurableRaftCommitBarrier(raftDir)
-	if err != nil {
-		t.Fatalf("reopen durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "reopen durable raft barrier")
 	t.Cleanup(func() {
-		if err := replayed.Close(); err != nil {
-			t.Fatalf("close replayed durable raft barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, replayed.Close(), "close replayed durable raft barrier")
 	})
 
 	rebuildingStore := openStoreAtWithOptions(t, storeDir, StoreOptions{
 		MetadataCommitBarrier: replayed,
 	})
-	if err := rebuildingStore.RebuildMetadataProjection(replayed.CommittedDocuments()); err != nil {
-		t.Fatalf("rebuild metadata projection: %v", err)
-	}
+	testutil.RequireNoErrorf(t, rebuildingStore.RebuildMetadataProjection(replayed.CommittedDocuments()), "rebuild metadata projection")
 	assertReadDocument(t, rebuildingStore, "tenant-a", "tx-018", "projection-rebuild.xml", data)
 }
 
@@ -174,30 +148,22 @@ func TestDurableRaftCommitBarrierRejectsCorruptLogRecord(t *testing.T) {
 	storeDir := filepath.Join(dir, "store")
 
 	barrier, err := NewDurableRaftCommitBarrier(raftDir)
-	if err != nil {
-		t.Fatalf("new durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new durable raft barrier")
 	store := openStoreAtWithOptions(t, storeDir, StoreOptions{
 		MetadataCommitBarrier: barrier,
 	})
 	writeTestDocument(t, store, "tx-019", "corrupt-raft-log.xml", []byte("log checksum detects corruption"))
 	closeTestStore(t, store)
-	if err := barrier.Close(); err != nil {
-		t.Fatalf("close durable raft barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.Close(), "close durable raft barrier")
 
 	path := filepath.Join(raftDir, raftDiskLogFile)
 	logBytes, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read raft log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "read raft log")
 	corrupted := bytes.Replace(logBytes, []byte(`"crc32c":"`), []byte(`"crc32c":"00000000`), 1)
 	if bytes.Equal(corrupted, logBytes) {
 		t.Fatal("test did not corrupt raft log checksum")
 	}
-	if err := os.WriteFile(path, corrupted, 0o600); err != nil {
-		t.Fatalf("write corrupted raft log: %v", err)
-	}
+	testutil.RequireNoErrorf(t, os.WriteFile(path, corrupted, 0o600), "write corrupted raft log")
 
 	if _, err := NewDurableRaftCommitBarrier(raftDir); err == nil {
 		t.Fatal("opened durable raft barrier with corrupted log record")
@@ -207,13 +173,9 @@ func TestDurableRaftCommitBarrierRejectsCorruptLogRecord(t *testing.T) {
 func TestStoreRaftClusterBarrierKeepsDocumentInvisibleUntilQuorum(t *testing.T) {
 	dir := t.TempDir()
 	barrier, err := NewRaftClusterCommitBarrier()
-	if err != nil {
-		t.Fatalf("new raft cluster barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new raft cluster barrier")
 	t.Cleanup(func() {
-		if err := barrier.Close(); err != nil {
-			t.Fatalf("close raft cluster barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, barrier.Close(), "close raft cluster barrier")
 	})
 
 	leader := barrier.LeaderID()
@@ -270,9 +232,7 @@ func TestStoreRaftClusterBarrierKeepsDocumentInvisibleUntilQuorum(t *testing.T) 
 	}
 	select {
 	case err := <-writeResult:
-		if err != nil {
-			t.Fatalf("write after quorum restored: %v", err)
-		}
+		testutil.RequireNoErrorf(t, err, "write after quorum restored")
 	case <-time.After(raftCommitTimeout):
 		t.Fatal("write did not complete after quorum was restored")
 	}
@@ -282,20 +242,14 @@ func TestStoreRaftClusterBarrierKeepsDocumentInvisibleUntilQuorum(t *testing.T) 
 func TestStoreRaftClusterBarrierCommitsWithOneDroppedFollowerLink(t *testing.T) {
 	dir := t.TempDir()
 	barrier, err := NewRaftClusterCommitBarrier()
-	if err != nil {
-		t.Fatalf("new raft cluster barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new raft cluster barrier")
 	t.Cleanup(func() {
-		if err := barrier.Close(); err != nil {
-			t.Fatalf("close raft cluster barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, barrier.Close(), "close raft cluster barrier")
 	})
 
 	leader := barrier.LeaderID()
 	droppedFollower := clusterFollowers(leader)[0]
-	if err := barrier.DropMessagesBetween(leader, droppedFollower); err != nil {
-		t.Fatalf("drop leader/follower messages: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.DropMessagesBetween(leader, droppedFollower), "drop leader/follower messages")
 
 	store := openStoreAtWithOptions(t, dir, StoreOptions{
 		MetadataCommitBarrier: barrier,
@@ -316,24 +270,16 @@ func TestStoreRaftClusterBarrierCommitsWithOneDroppedFollowerLink(t *testing.T) 
 	}
 	assertReadDocument(t, store, "tenant-a", "tx-018", "cluster-dropped-follower.xml", data)
 
-	if err := barrier.AllowMessagesBetween(leader, droppedFollower); err != nil {
-		t.Fatalf("allow leader/follower messages: %v", err)
-	}
-	if err := barrier.WaitForAppliedOn(droppedFollower, 1); err != nil {
-		t.Fatalf("dropped follower did not catch up after heal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.AllowMessagesBetween(leader, droppedFollower), "allow leader/follower messages")
+	testutil.RequireNoErrorf(t, barrier.WaitForAppliedOn(droppedFollower, 1), "dropped follower did not catch up after heal")
 }
 
 func TestStoreRaftClusterBarrierCommitsAfterLeaderChange(t *testing.T) {
 	dir := t.TempDir()
 	barrier, err := NewRaftClusterCommitBarrier()
-	if err != nil {
-		t.Fatalf("new raft cluster barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new raft cluster barrier")
 	t.Cleanup(func() {
-		if err := barrier.Close(); err != nil {
-			t.Fatalf("close raft cluster barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, barrier.Close(), "close raft cluster barrier")
 	})
 
 	oldLeader := barrier.LeaderID()
@@ -359,25 +305,17 @@ func TestStoreRaftClusterBarrierCommitsAfterLeaderChange(t *testing.T) {
 	if err := barrier.HealNode(oldLeader); err != nil {
 		t.Fatalf("heal old leader %d: %v", oldLeader, err)
 	}
-	if err := barrier.WaitForAppliedOn(oldLeader, 1); err != nil {
-		t.Fatalf("old leader did not catch up after heal: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.WaitForAppliedOn(oldLeader, 1), "old leader did not catch up after heal")
 }
 
 func TestRaftClusterReadIndexRequiresCurrentQuorum(t *testing.T) {
 	barrier, err := NewRaftClusterCommitBarrier()
-	if err != nil {
-		t.Fatalf("new raft cluster barrier: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new raft cluster barrier")
 	t.Cleanup(func() {
-		if err := barrier.Close(); err != nil {
-			t.Fatalf("close raft cluster barrier: %v", err)
-		}
+		testutil.RequireNoErrorf(t, barrier.Close(), "close raft cluster barrier")
 	})
 
-	if err := barrier.ReadFresh(context.Background()); err != nil {
-		t.Fatalf("read index with healthy quorum: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.ReadFresh(context.Background()), "read index with healthy quorum")
 
 	leader := barrier.LeaderID()
 	for _, follower := range clusterFollowers(leader) {
@@ -392,12 +330,8 @@ func TestRaftClusterReadIndexRequiresCurrentQuorum(t *testing.T) {
 		t.Fatal("read index succeeded without quorum")
 	}
 
-	if err := barrier.HealNode(clusterFollowers(leader)[0]); err != nil {
-		t.Fatalf("heal one follower: %v", err)
-	}
-	if err := barrier.ReadFresh(context.Background()); err != nil {
-		t.Fatalf("read index after quorum restored: %v", err)
-	}
+	testutil.RequireNoErrorf(t, barrier.HealNode(clusterFollowers(leader)[0]), "heal one follower")
+	testutil.RequireNoErrorf(t, barrier.ReadFresh(context.Background()), "read index after quorum restored")
 }
 
 func clusterFollowers(leader uint64) []uint64 {

@@ -8,6 +8,7 @@ import (
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	"github.com/petabytecl/scrap/internal/storageformat"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestTransitBlockEnvelopeSourceStoresWrappedKeyMaterial(t *testing.T) {
@@ -15,9 +16,7 @@ func TestTransitBlockEnvelopeSourceStoresWrappedKeyMaterial(t *testing.T) {
 	blocks := openTestBlockStore(t)
 	store := openTestBackendStore(t)
 	record, err := blocks.Append(ctx, bytes.NewReader([]byte("transit envelope bytes")))
-	if err != nil {
-		t.Fatalf("append block: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "append block")
 	if _, err := blocks.SealCurrent(ctx); err != nil {
 		t.Fatalf("seal block: %v", err)
 	}
@@ -39,13 +38,9 @@ func TestTransitBlockEnvelopeSourceStoresWrappedKeyMaterial(t *testing.T) {
 	}
 
 	var got bytes.Buffer
-	if err := store.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &got); err != nil {
-		t.Fatalf("read envelope object: %v", err)
-	}
+	testutil.RequireNoErrorf(t, store.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &got), "read envelope object")
 	envelope, err := storageformat.UnmarshalEnvelopeRecord(got.Bytes())
-	if err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unmarshal envelope")
 	key, err := transit.UnwrapDataKey(ctx, cryptoenv.UnwrapDataKeyRequest{
 		KeyID:      envelope.GetKeyId(),
 		KeyVersion: envelope.GetKeyVersion(),
@@ -53,9 +48,7 @@ func TestTransitBlockEnvelopeSourceStoresWrappedKeyMaterial(t *testing.T) {
 		AAD:        envelope.GetAadContext(),
 		Algorithm:  envelope.GetDekAlgorithm(),
 	})
-	if err != nil {
-		t.Fatalf("unwrap envelope: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unwrap envelope")
 	if bytes.Equal(envelope.GetWrappedDek(), key.PlaintextDEK) {
 		t.Fatal("envelope object stored plaintext DEK")
 	}

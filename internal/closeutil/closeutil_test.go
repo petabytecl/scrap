@@ -28,7 +28,7 @@ func TestIgnoreClosesAndSuppressesError(t *testing.T) {
 	}
 }
 
-func TestIgnoreSkipsTypedNilCloser(t *testing.T) {
+func TestIgnoreSkipsTypedNilCloser(_ *testing.T) {
 	var closer *typedNilCloser
 	Ignore(closer)
 }

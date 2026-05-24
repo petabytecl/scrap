@@ -131,41 +131,18 @@ func PrepareDocument(ctx context.Context, document PreparedDocument, source Byte
 		RequiredReplicaCount: required,
 		AchievedReplicaCount: 1,
 	}
-	if len(targets)+1 < required {
-		result.RepairRequired = true
-		return result, ErrInsufficientReplicas
-	}
-	if len(targets) > 0 && source == nil {
-		result.RepairRequired = true
-		return result, ErrMissingByteSource
+	if err := validatePrepareInputs(targets, source, required, &result); err != nil {
+		return result, err
 	}
 
 	for _, target := range targets {
 		if result.AchievedReplicaCount >= policy.TargetReplicaCount {
 			break
 		}
-		if target.MemberID == "" || target.Preparer == nil {
-			result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: ErrReceiptMismatch})
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
+		stop := prepareTargetReplica(ctx, document, source, target, &result)
+		if stop {
 			break
 		}
-		receipt, err := target.Preparer.PrepareDocument(ctx, PrepareRequest{
-			Document: document,
-			Source:   source,
-		})
-		if err != nil {
-			result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
-			continue
-		}
-		if err := validateReceipt(document, target.MemberID, receipt); err != nil {
-			result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
-			continue
-		}
-		result.Receipts = append(result.Receipts, receipt)
-		result.AchievedReplicaCount++
 	}
 
 	if result.AchievedReplicaCount < policy.TargetReplicaCount {
@@ -176,6 +153,46 @@ func PrepareDocument(ctx context.Context, document PreparedDocument, source Byte
 	}
 	result.Degraded = result.RepairRequired && document.PriorityClass == metastore.PriorityClassCriticalIngest && policy.AllowCriticalQuorumDegrade
 	return result, nil
+}
+
+func prepareTargetReplica(ctx context.Context, document PreparedDocument, source ByteSource, target Target, result *Result) bool {
+	receipt, err := preparePeerDocument(ctx, document, source, target)
+	if err != nil {
+		result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
+		return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	}
+	if err := validateReceipt(document, target.MemberID, receipt); err != nil {
+		result.PeerErrors = append(result.PeerErrors, PeerError{MemberID: target.MemberID, Err: err})
+		return false
+	}
+	result.Receipts = append(result.Receipts, receipt)
+	result.AchievedReplicaCount++
+	return false
+}
+
+func validatePrepareInputs(targets []Target, source ByteSource, required int, result *Result) error {
+	if len(targets)+1 < required {
+		result.RepairRequired = true
+		return ErrInsufficientReplicas
+	}
+	if len(targets) > 0 && source == nil {
+		result.RepairRequired = true
+		return ErrMissingByteSource
+	}
+	return nil
+}
+
+func preparePeerDocument(ctx context.Context, document PreparedDocument, source ByteSource, target Target) (Receipt, error) {
+	if target.MemberID == "" || target.Preparer == nil {
+		return Receipt{}, ErrReceiptMismatch
+	}
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, err
+	}
+	return target.Preparer.PrepareDocument(ctx, PrepareRequest{
+		Document: document,
+		Source:   source,
+	})
 }
 
 func ValidatePreparedBytes(document PreparedDocument, data []byte) error {

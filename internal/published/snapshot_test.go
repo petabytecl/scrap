@@ -11,6 +11,7 @@ import (
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestWriteDocumentSnapshotRecordsOrdersAndMapsLocationObjects(t *testing.T) {
@@ -39,44 +40,47 @@ func TestWriteDocumentSnapshotRecordsOrdersAndMapsLocationObjects(t *testing.T) 
 			},
 		},
 	}, []metastore.Document{otherTenant, second, first})
-	if err != nil {
-		t.Fatalf("write snapshot records: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "write snapshot records")
 
 	records := readSnapshotRecords(t, &buf)
-	if len(records) != 3 {
-		t.Fatalf("records = %#v, want 3", records)
-	}
+	testutil.RequireEqualf(t, len(records), 3, "snapshot record count")
 	names := []string{
 		records[0].GetDocument().GetDocumentName(),
 		records[1].GetDocument().GetDocumentName(),
 		records[2].GetDocument().GetDocumentName(),
 	}
-	if names[0] != "invoice.xml" || names[1] != "summary.pdf" || names[2] != "adjustment.xml" {
-		t.Fatalf("record names = %#v, want deterministic identity order", names)
-	}
+	testutil.RequireDeepEqualf(t, names, []string{"invoice.xml", "summary.pdf", "adjustment.xml"}, "record names")
 	firstDoc := records[0].GetDocument()
-	if firstDoc.GetTenantId() != first.Identity.TenantID ||
-		firstDoc.GetLength() != first.Length ||
-		!bytes.Equal(firstDoc.GetLogicalSha256(), first.LogicalSHA256[:]) ||
-		len(firstDoc.GetLocations()) != 1 {
-		t.Fatalf("first document = %#v, want projected metastore document", firstDoc)
-	}
+	requireSnapshotDocument(t, firstDoc, first)
 	location := firstDoc.GetLocations()[0]
-	if location.GetBackendObjectKey() != "blocks/block-1.blk" ||
-		location.GetIndexObjectKey() != "blocks/block-1.idx" ||
-		location.GetEnvelopeObjectKey() != "blocks/block-1.env" ||
-		len(location.GetFrames()) != 1 ||
-		!bytes.Equal(location.GetFrames()[0].GetSha256(), first.Location.Frames[0].SHA256[:]) {
-		t.Fatalf("location = %#v, want backend object keys and frame checksum", location)
-	}
+	requireSnapshotLocation(t, location, first)
 	for _, record := range records {
-		if record.GetSourceNamespace() != "billing-prod" ||
-			record.GetShardId() != "local" ||
-			record.GetHighWatermark() != 42 {
-			t.Fatalf("record header = %#v, want shared snapshot metadata", record)
-		}
+		requireSnapshotRecordHeader(t, record)
 	}
+}
+
+func requireSnapshotDocument(t *testing.T, document *publishedv1.PublishedDocument, want metastore.Document) {
+	t.Helper()
+	testutil.RequireEqualf(t, document.GetTenantId(), want.Identity.TenantID, "snapshot document tenant")
+	testutil.RequireEqualf(t, document.GetLength(), want.Length, "snapshot document length")
+	testutil.RequireTruef(t, bytes.Equal(document.GetLogicalSha256(), want.LogicalSHA256[:]), "snapshot document sha")
+	testutil.RequireEqualf(t, len(document.GetLocations()), 1, "snapshot document location count")
+}
+
+func requireSnapshotLocation(t *testing.T, location *publishedv1.PublishedLocation, want metastore.Document) {
+	t.Helper()
+	testutil.RequireEqualf(t, location.GetBackendObjectKey(), "blocks/block-1.blk", "snapshot backend object key")
+	testutil.RequireEqualf(t, location.GetIndexObjectKey(), "blocks/block-1.idx", "snapshot index object key")
+	testutil.RequireEqualf(t, location.GetEnvelopeObjectKey(), "blocks/block-1.env", "snapshot envelope object key")
+	testutil.RequireEqualf(t, len(location.GetFrames()), 1, "snapshot frame count")
+	testutil.RequireTruef(t, bytes.Equal(location.GetFrames()[0].GetSha256(), want.Location.Frames[0].SHA256[:]), "snapshot frame sha")
+}
+
+func requireSnapshotRecordHeader(t *testing.T, record *publishedv1.SnapshotRecord) {
+	t.Helper()
+	testutil.RequireEqualf(t, record.GetSourceNamespace(), "billing-prod", "snapshot source namespace")
+	testutil.RequireEqualf(t, record.GetShardId(), "local", "snapshot shard id")
+	testutil.RequireEqualf(t, record.GetHighWatermark(), uint64(42), "snapshot high watermark")
 }
 
 func TestWriteDocumentSnapshotRecordsProjectsTombstones(t *testing.T) {
@@ -161,9 +165,7 @@ func readSnapshotRecords(t *testing.T, reader io.Reader) []*publishedv1.Snapshot
 		if errors.Is(err, io.EOF) {
 			return records
 		}
-		if err != nil {
-			t.Fatalf("read snapshot record: %v", err)
-		}
+		testutil.RequireNoErrorf(t, err, "read snapshot record")
 		records = append(records, record)
 	}
 }

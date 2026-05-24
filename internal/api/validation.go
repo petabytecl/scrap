@@ -354,21 +354,30 @@ func validateTimeRange(field string, value *scrapv1.TimeRange, problems *violati
 	}
 	validateTimestamp(field+".start_time", value.StartTime, problems)
 	validateTimestamp(field+".end_time", value.EndTime, problems)
-	if value.StartTime != nil && value.EndTime != nil &&
-		value.StartTime.CheckValid() == nil && value.EndTime.CheckValid() == nil &&
-		value.EndTime.AsTime().Before(value.StartTime.AsTime()) {
+	if invalidTimeRange(value) {
 		problems.add(field, reasonInvalidTimeRange, "end_time must not be before start_time")
 	}
 	out := &TimeRange{}
-	if value.StartTime != nil && value.StartTime.CheckValid() == nil {
+	if validTimestamp(value.StartTime) {
 		start := value.StartTime.AsTime()
 		out.StartTime = &start
 	}
-	if value.EndTime != nil && value.EndTime.CheckValid() == nil {
+	if validTimestamp(value.EndTime) {
 		end := value.EndTime.AsTime()
 		out.EndTime = &end
 	}
 	return out
+}
+
+func invalidTimeRange(value *scrapv1.TimeRange) bool {
+	if !validTimestamp(value.StartTime) || !validTimestamp(value.EndTime) {
+		return false
+	}
+	return value.EndTime.AsTime().Before(value.StartTime.AsTime())
+}
+
+func validTimestamp(value *timestamppb.Timestamp) bool {
+	return value != nil && value.CheckValid() == nil
 }
 
 func validateTimestamp(field string, value *timestamppb.Timestamp, problems *violations) {

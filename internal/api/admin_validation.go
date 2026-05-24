@@ -401,12 +401,12 @@ func validateStartRequest(operationID, operationPlanID, planHash string, metadat
 }
 
 func validateAdminTarget(field string, target *adminv1.Target, allowed map[AdminTargetKind]bool, problems *violations) AdminTarget {
-	if target == nil || target.GetTarget() == nil {
-		problems.add(field, identity.ReasonRequired, "target is required")
+	typed := requireAdminTarget(field, target, problems)
+	if typed == nil {
 		return AdminTarget{}
 	}
 
-	switch typed := target.GetTarget().(type) {
+	switch typed := typed.(type) {
 	case *adminv1.Target_Document:
 		doc := validateAdminDocumentTarget(field+".document", typed.Document, problems)
 		return validateAllowedTarget(field, AdminTarget{Kind: AdminTargetDocument, Document: doc}, allowed, problems)
@@ -432,6 +432,14 @@ func validateAdminTarget(field string, target *adminv1.Target, allowed map[Admin
 		problems.add(field, reasonInvalidTargetKind, "target kind is not recognized")
 		return AdminTarget{}
 	}
+}
+
+func requireAdminTarget(field string, target *adminv1.Target, problems *violations) any {
+	if target == nil || target.GetTarget() == nil {
+		problems.add(field, identity.ReasonRequired, "target is required")
+		return nil
+	}
+	return target.GetTarget()
 }
 
 func validateAllowedTarget(field string, target AdminTarget, allowed map[AdminTargetKind]bool, problems *violations) AdminTarget {

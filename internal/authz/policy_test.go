@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 const (
@@ -121,9 +123,7 @@ func TestBadReloadKeepsLastValidPolicyAndAlerts(t *testing.T) {
   }
 }`)
 	manager, err := LoadManagerFromFile(validPath, []Capability{capDrain})
-	if err != nil {
-		t.Fatalf("load manager: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load manager")
 	if !manager.Authorize(ContextWithWorkloadIdentity(context.Background(), "operator"), capDrain).Allowed {
 		t.Fatal("initial policy did not allow operator drain")
 	}
@@ -157,9 +157,7 @@ func TestReloadAlertsAreBounded(t *testing.T) {
   }
 }`)
 	manager, err := LoadManagerFromFile(validPath, []Capability{capDrain})
-	if err != nil {
-		t.Fatalf("load manager: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load manager")
 	badPath := writePolicy(t, `{
   "version": "policy-v2",
   "workloads": {
@@ -186,18 +184,14 @@ func TestGoodReloadReplacesPolicy(t *testing.T) {
   }
 }`)
 	manager, err := LoadManagerFromFile(firstPath, []Capability{capDrain, capHead})
-	if err != nil {
-		t.Fatalf("load manager: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "load manager")
 	secondPath := writePolicy(t, `{
   "version": "policy-v2",
   "workloads": {
     "billing-etl": { "capabilities": ["public.document.head"] }
   }
 }`)
-	if err := manager.ReloadFile(secondPath); err != nil {
-		t.Fatalf("reload valid policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, manager.ReloadFile(secondPath), "reload valid policy")
 	if manager.PolicyVersion() != "policy-v2" || manager.Generation() != 2 {
 		t.Fatalf("active policy = version %s generation %d, want policy-v2 generation 2", manager.PolicyVersion(), manager.Generation())
 	}
@@ -212,9 +206,7 @@ func TestGoodReloadReplacesPolicy(t *testing.T) {
 func newTestManager(t *testing.T, policy Policy) *Manager {
 	t.Helper()
 	manager, err := NewManager(policy, []Capability{capHead, capWrite, capDrain})
-	if err != nil {
-		t.Fatalf("new manager: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "new manager")
 	return manager
 }
 
@@ -229,14 +221,10 @@ func (s failingDeniedAuditSink) RecordDeniedRequest(context.Context, string, Dec
 func writePolicy(t *testing.T, body string) string {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "policy-*.json")
-	if err != nil {
-		t.Fatalf("create policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "create policy")
 	if _, err := file.WriteString(body); err != nil {
 		t.Fatalf("write policy: %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close policy: %v", err)
-	}
+	testutil.RequireNoErrorf(t, file.Close(), "close policy")
 	return file.Name()
 }

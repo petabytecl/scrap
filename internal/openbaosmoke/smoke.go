@@ -492,27 +492,10 @@ func outageOutcome(ctx context.Context, opts Options, httpClient *http.Client, m
 }
 
 func (c openBaoClient) do(ctx context.Context, method, apiPath string, payload, out any) (string, error) {
-	var body io.Reader
-	if payload != nil {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return "", err
-		}
-		body = bytes.NewReader(encoded)
-	}
-	target, err := joinURL(c.baseURL, apiPath)
+	req, err := c.newRequest(ctx, method, apiPath, payload)
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
-	if err != nil {
-		return "", fmt.Errorf("build openbao request: %w", err)
-	}
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("X-Vault-Token", c.token)
-	req.Header.Set("X-Bao-Token", c.token)
 	// #nosec G704 -- smoke probes operator-configured local OpenBao rehearsal endpoints.
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -525,16 +508,49 @@ func (c openBaoClient) do(ctx context.Context, method, apiPath string, payload, 
 		return requestID, readErr
 	}
 	requestID = redactedRequestID(resp.Header, responseBody)
-	if resp.StatusCode >= httpClientErrorStatus {
-		return requestID, fmt.Errorf("openbao %s %s failed with HTTP %d", method, apiPath, resp.StatusCode)
+	return requestID, decodeOpenBaoResponse(resp.StatusCode, method, apiPath, responseBody, out)
+}
+
+func (c openBaoClient) newRequest(ctx context.Context, method, apiPath string, payload any) (*http.Request, error) {
+	body, err := encodeOpenBaoPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	target, err := joinURL(c.baseURL, apiPath)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, fmt.Errorf("build openbao request: %w", err)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-Vault-Token", c.token)
+	req.Header.Set("X-Bao-Token", c.token)
+	return req, nil
+}
+
+func encodeOpenBaoPayload(payload any) (io.Reader, error) {
+	if payload == nil {
+		return http.NoBody, nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(encoded), nil
+}
+
+func decodeOpenBaoResponse(status int, method, apiPath string, responseBody []byte, out any) error {
+	if status >= httpClientErrorStatus {
+		return fmt.Errorf("openbao %s %s failed with HTTP %d", method, apiPath, status)
 	}
 	if out == nil {
-		return requestID, nil
+		return nil
 	}
-	if err := json.Unmarshal(responseBody, out); err != nil {
-		return requestID, err
-	}
-	return requestID, nil
+	return json.Unmarshal(responseBody, out)
 }
 
 func splitTransitKeyPath(value string) (string, string, error) {

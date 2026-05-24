@@ -558,20 +558,27 @@ func firstNonEmpty(values ...string) string {
 func ValidateCatalog(scenarios []Scenario) error {
 	seen := make(map[string]bool, len(scenarios))
 	for _, scenario := range scenarios {
-		if scenario.ID == "" || scenario.Name == "" || len(scenario.Commands) == 0 {
-			return fmt.Errorf("scenario %#v must have id, name, and commands", scenario)
-		}
 		if seen[scenario.ID] {
 			return fmt.Errorf("duplicate scenario id %q", scenario.ID)
 		}
 		seen[scenario.ID] = true
-		if len(scenario.Invariants) == 0 || len(scenario.ReadinessGates) == 0 || len(scenario.ReleaseGateIDs) == 0 {
-			return fmt.Errorf("scenario %s must declare invariants and gates", scenario.ID)
+		if err := validateScenario(scenario); err != nil {
+			return err
 		}
-		for _, command := range scenario.Commands {
-			if command.Package == "" || command.Pattern == "" {
-				return fmt.Errorf("scenario %s has incomplete command %#v", scenario.ID, command)
-			}
+	}
+	return nil
+}
+
+func validateScenario(scenario Scenario) error {
+	if scenario.ID == "" || scenario.Name == "" || len(scenario.Commands) == 0 {
+		return fmt.Errorf("scenario %#v must have id, name, and commands", scenario)
+	}
+	if len(scenario.Invariants) == 0 || len(scenario.ReadinessGates) == 0 || len(scenario.ReleaseGateIDs) == 0 {
+		return fmt.Errorf("scenario %s must declare invariants and gates", scenario.ID)
+	}
+	for _, command := range scenario.Commands {
+		if command.Package == "" || command.Pattern == "" {
+			return fmt.Errorf("scenario %s has incomplete command %#v", scenario.ID, command)
 		}
 	}
 	return nil

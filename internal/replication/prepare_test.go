@@ -11,6 +11,7 @@ import (
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPrepareNormalWriteSucceedsWithQuorumAndMarksRepairRequired(t *testing.T) {
@@ -23,9 +24,7 @@ func TestPrepareNormalWriteSucceedsWithQuorumAndMarksRepairRequired(t *testing.T
 		successTarget("member-3", document),
 		failingTarget("member-4", peerErr),
 	}, DefaultPolicy())
-	if err != nil {
-		t.Fatalf("prepare document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "prepare document")
 	if result.DesiredReplicaCount != 5 || result.RequiredReplicaCount != 3 || result.AchievedReplicaCount != 3 {
 		t.Fatalf("replica counts = desired %d required %d achieved %d, want 5/3/3", result.DesiredReplicaCount, result.RequiredReplicaCount, result.AchievedReplicaCount)
 	}
@@ -67,9 +66,7 @@ func TestPrepareCriticalWriteCanDegradeToQuorumWhenPolicyAllows(t *testing.T) {
 		successTarget("member-3", document),
 		failingTarget("member-4", errors.New("peer unavailable")),
 	}, Policy{TargetReplicaCount: 5, QuorumReplicaCount: 3, AllowCriticalQuorumDegrade: true})
-	if err != nil {
-		t.Fatalf("prepare document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "prepare document")
 	if result.RequiredReplicaCount != 3 || result.AchievedReplicaCount != 3 {
 		t.Fatalf("replica counts = required %d achieved %d, want 3/3", result.RequiredReplicaCount, result.AchievedReplicaCount)
 	}
@@ -116,9 +113,7 @@ func TestPrepareTransfersRangeAndChecksumEvidence(t *testing.T) {
 	result, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
 		{MemberID: "member-1", Preparer: peer},
 	}, Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2})
-	if err != nil {
-		t.Fatalf("prepare document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "prepare document")
 	if result.DesiredReplicaCount != 2 || result.RequiredReplicaCount != 2 || result.AchievedReplicaCount != 2 {
 		t.Fatalf("replica counts = desired %d required %d achieved %d, want 2/2/2", result.DesiredReplicaCount, result.RequiredReplicaCount, result.AchievedReplicaCount)
 	}
@@ -147,9 +142,7 @@ func TestPrepareCanRetryAfterPeerFailure(t *testing.T) {
 	result, err = PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), []Target{
 		{MemberID: "member-1", Preparer: flaky},
 	}, Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2})
-	if err != nil {
-		t.Fatalf("retry prepare document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "retry prepare document")
 	if result.AchievedReplicaCount != 2 {
 		t.Fatalf("retry achieved replicas = %d, want 2", result.AchievedReplicaCount)
 	}
@@ -161,13 +154,9 @@ func TestPrepareDuplicateIsIdempotent(t *testing.T) {
 	targets := []Target{{MemberID: "member-1", Preparer: peer}}
 	policy := Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2}
 	first, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), targets, policy)
-	if err != nil {
-		t.Fatalf("first prepare document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "first prepare document")
 	second, err := PrepareDocument(context.Background(), document, testByteSource(testPreparedBytes), targets, policy)
-	if err != nil {
-		t.Fatalf("duplicate prepare document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "duplicate prepare document")
 	if len(first.Receipts) != 1 || len(second.Receipts) != 1 || first.Receipts[0] != second.Receipts[0] {
 		t.Fatalf("duplicate receipts = %#v then %#v, want same receipt", first.Receipts, second.Receipts)
 	}
@@ -192,9 +181,7 @@ func TestPrepareRejectsCorruptTransfer(t *testing.T) {
 func TestValidatePreparedBytesAllowsStoredHashDifferentFromLogicalHash(t *testing.T) {
 	document := testPreparedDocument(metastore.PriorityClassNormal)
 	document.LogicalSHA256 = [32]byte{9, 8, 7}
-	if err := ValidatePreparedBytes(document, testPreparedBytes); err != nil {
-		t.Fatalf("validate prepared bytes with different logical hash: %v", err)
-	}
+	testutil.RequireNoErrorf(t, ValidatePreparedBytes(document, testPreparedBytes), "validate prepared bytes with different logical hash")
 }
 
 var testPreparedBytes = []byte("replicated document bytes")

@@ -7,25 +7,18 @@ import (
 	"time"
 
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestPublishedMetadataObjectKeysFollowLayout(t *testing.T) {
 	pointerKey, err := CurrentPointerObjectKey("cell-a")
-	if err != nil {
-		t.Fatalf("current pointer key: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "current pointer key")
 	manifestKey, err := ManifestObjectKey("cell-a", "manifest-1")
-	if err != nil {
-		t.Fatalf("manifest key: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "manifest key")
 	snapshotKey, err := SnapshotObjectKey("cell-a", "local", "snapshot-1")
-	if err != nil {
-		t.Fatalf("snapshot key: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "snapshot key")
 	tailKey, err := TailObjectKey("cell-a", "local", 7, 12)
-	if err != nil {
-		t.Fatalf("tail key: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "tail key")
 	if pointerKey != "cells/cell-a/metadata/v1/current.pointer" ||
 		manifestKey != "cells/cell-a/metadata/v1/manifests/manifest-1.manifest" ||
 		snapshotKey != "cells/cell-a/metadata/v1/snapshots/shard=local/snapshot-1.snap" ||
@@ -63,35 +56,25 @@ func TestBuildManifestClonesInputsAndBuildsPointerChecksum(t *testing.T) {
 		ProducerBuild:   "test-build",
 		ProducerSchema:  "published.v1",
 	})
-	if err != nil {
-		t.Fatalf("build manifest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "build manifest")
 	snapshot.ObjectKey = "mutated"
 	required.ObjectKey = "mutated"
-	if manifest.GetSchemaVersion() != CurrentSchemaVersion ||
-		manifest.GetCellId() != "cell-a" ||
-		manifest.GetSourceNamespace() != "billing-prod" ||
-		manifest.GetGeneration() != 2 ||
-		manifest.GetSnapshots()[0].GetObjectKey() == "mutated" ||
-		manifest.GetRequiredObjects()[0].GetObjectKey() == "mutated" {
-		t.Fatalf("manifest = %#v, want independent manifest", manifest)
-	}
+	testutil.RequireEqualf(t, manifest.GetSchemaVersion(), CurrentSchemaVersion, "manifest schema version")
+	testutil.RequireEqualf(t, manifest.GetCellId(), "cell-a", "manifest cell id")
+	testutil.RequireEqualf(t, manifest.GetSourceNamespace(), "billing-prod", "manifest source namespace")
+	testutil.RequireEqualf(t, manifest.GetGeneration(), uint64(2), "manifest generation")
+	testutil.RequireFalsef(t, manifest.GetSnapshots()[0].GetObjectKey() == "mutated", "manifest snapshot object key was mutated")
+	testutil.RequireFalsef(t, manifest.GetRequiredObjects()[0].GetObjectKey() == "mutated", "manifest required object key was mutated")
 
 	data, err := MarshalManifest(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal manifest")
 	pointer, err := BuildCurrentPointer(manifest, data)
-	if err != nil {
-		t.Fatalf("build pointer: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "build pointer")
 	sum := sha256.Sum256(data)
-	if pointer.GetManifestId() != manifest.GetManifestId() ||
-		pointer.GetGeneration() != manifest.GetGeneration() ||
-		!bytes.Equal(pointer.GetManifestSha256(), sum[:]) ||
-		!pointer.GetPublishedAt().AsTime().Equal(publishedAt) {
-		t.Fatalf("pointer = %#v, want manifest checksum pointer", pointer)
-	}
+	testutil.RequireEqualf(t, pointer.GetManifestId(), manifest.GetManifestId(), "pointer manifest id")
+	testutil.RequireEqualf(t, pointer.GetGeneration(), manifest.GetGeneration(), "pointer generation")
+	testutil.RequireTruef(t, bytes.Equal(pointer.GetManifestSha256(), sum[:]), "pointer manifest checksum")
+	testutil.RequireTruef(t, pointer.GetPublishedAt().AsTime().Equal(publishedAt), "pointer published_at = %s, want %s", pointer.GetPublishedAt().AsTime(), publishedAt)
 }
 
 func TestBuildManifestValidatesRequiredFields(t *testing.T) {

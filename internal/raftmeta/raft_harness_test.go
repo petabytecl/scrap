@@ -9,6 +9,8 @@ import (
 
 	"go.etcd.io/raft/v3"
 	pb "go.etcd.io/raft/v3/raftpb"
+
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestRaftFaultHarnessTransportRestartAndReadIndex(t *testing.T) {
@@ -26,9 +28,7 @@ func TestRaftFaultHarnessTransportRestartAndReadIndex(t *testing.T) {
 	h.flushDelayedReverse(t)
 	h.waitAppliedOn(t, 2, 3)
 
-	if err := h.readIndex(); err != nil {
-		t.Fatalf("read index with quorum: %v", err)
-	}
+	testutil.RequireNoErrorf(t, h.readIndex(), "read index with quorum")
 	h.isolate(leader)
 	h.dropBetween(2, 3)
 	h.tickN(20)
@@ -38,9 +38,7 @@ func TestRaftFaultHarnessTransportRestartAndReadIndex(t *testing.T) {
 	h.heal(leader)
 	h.allowBetween(2, 3)
 	h.waitAnyLeader(t)
-	if err := h.readIndex(); err != nil {
-		t.Fatalf("read index after healed leader change: %v", err)
-	}
+	testutil.RequireNoErrorf(t, h.readIndex(), "read index after healed leader change")
 }
 
 func TestRaftFaultHarnessJointConsensusMembershipChange(t *testing.T) {
@@ -172,16 +170,12 @@ func (h *raftFaultHarness) newNode(t *testing.T, id uint64) *raftHarnessNode {
 func (h *raftFaultHarness) proposeDocument(t *testing.T, document harnessDocument) {
 	t.Helper()
 	data, err := json.Marshal(document)
-	if err != nil {
-		t.Fatalf("marshal document command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal document command")
 	leader := h.leaderID()
 	if leader == 0 {
 		t.Fatal("no raft leader")
 	}
-	if err := h.nodes[leader].raw.Propose(data); err != nil {
-		t.Fatalf("propose document: %v", err)
-	}
+	testutil.RequireNoErrorf(t, h.nodes[leader].raw.Propose(data), "propose document")
 	h.pumpUntil(t, func() bool {
 		applied := 0
 		for _, node := range h.nodes {
@@ -238,9 +232,7 @@ func (h *raftFaultHarness) proposeConfChange(t *testing.T, change pb.ConfChangeV
 	if leader == 0 {
 		t.Fatal("no raft leader")
 	}
-	if err := h.nodes[leader].raw.ProposeConfChange(change); err != nil {
-		t.Fatalf("propose conf change: %v", err)
-	}
+	testutil.RequireNoErrorf(t, h.nodes[leader].raw.ProposeConfChange(change), "propose conf change")
 	h.pumpUntil(t, func() bool {
 		return done(h.nodes[leader].confState)
 	})
@@ -254,18 +246,14 @@ func (h *raftFaultHarness) installSnapshot(t *testing.T, sourceID, targetID uint
 		t.Fatalf("snapshot install source=%d target=%d must exist", sourceID, targetID)
 	}
 	payload, err := json.Marshal(harnessSnapshot{Documents: sortedHarnessDocuments(source.documents)})
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "marshal snapshot")
 	snapshot, err := source.storage.CreateSnapshot(source.appliedIndex, &source.confState, payload)
-	if err != nil {
-		t.Fatalf("create snapshot: %v", err)
-	}
-	if err := target.storage.ApplySnapshot(snapshot); errors.Is(err, raft.ErrSnapOutOfDate) {
+	testutil.RequireNoErrorf(t, err, "create snapshot")
+	err = target.storage.ApplySnapshot(snapshot)
+	if errors.Is(err, raft.ErrSnapOutOfDate) {
 		return
-	} else if err != nil {
-		t.Fatalf("apply snapshot: %v", err)
 	}
+	testutil.RequireNoErrorf(t, err, "apply snapshot")
 	target.applySnapshot(t, snapshot)
 }
 
@@ -404,49 +392,84 @@ func (h *raftFaultHarness) pump(readDone func(raft.ReadState) bool) bool {
 }
 
 func (h *raftFaultHarness) processReady(node *raftHarnessNode, ready raft.Ready, readDone func(raft.ReadState) bool) bool {
-	if !raft.IsEmptySnap(ready.Snapshot) {
-		if err := node.storage.ApplySnapshot(ready.Snapshot); err != nil {
+	h.applyReadySnapshot(node, ready.Snapshot)
+	h.applyReadyHardState(node, ready.HardState)
+	h.appendReadyEntries(node, ready.Entries)
+	h.applyCommittedEntries(node, ready.CommittedEntries)
+	h.deliverReadyMessages(ready.Messages)
+	return readStateMatched(ready.ReadStates, readDone)
+}
+
+func (h *raftFaultHarness) applyReadySnapshot(node *raftHarnessNode, snapshot pb.Snapshot) {
+	if !raft.IsEmptySnap(snapshot) {
+		if err := node.storage.ApplySnapshot(snapshot); err != nil {
 			h.t.Fatalf("apply ready snapshot on %d: %v", node.id, err)
 		}
-		node.applySnapshot(h.t, ready.Snapshot)
+		node.applySnapshot(h.t, snapshot)
 	}
-	if !raft.IsEmptyHardState(ready.HardState) {
-		if err := node.storage.SetHardState(ready.HardState); err != nil {
+}
+
+func (h *raftFaultHarness) applyReadyHardState(node *raftHarnessNode, hardState pb.HardState) {
+	if !raft.IsEmptyHardState(hardState) {
+		if err := node.storage.SetHardState(hardState); err != nil {
 			h.t.Fatalf("set hard state on %d: %v", node.id, err)
 		}
 	}
-	if err := node.storage.Append(ready.Entries); err != nil {
+}
+
+func (h *raftFaultHarness) appendReadyEntries(node *raftHarnessNode, entries []pb.Entry) {
+	if err := node.storage.Append(entries); err != nil {
 		h.t.Fatalf("append entries on %d: %v", node.id, err)
 	}
-	for _, entry := range ready.CommittedEntries {
-		node.appliedIndex = entry.Index
-		switch entry.Type {
-		case pb.EntryNormal:
-			node.applyDocument(h.t, entry)
-		case pb.EntryConfChangeV2:
-			var change pb.ConfChangeV2
-			if err := change.Unmarshal(entry.Data); err != nil {
-				h.t.Fatalf("unmarshal conf change v2: %v", err)
-			}
-			node.confState = *node.raw.ApplyConfChange(change)
-		case pb.EntryConfChange:
-			var change pb.ConfChange
-			if err := change.Unmarshal(entry.Data); err != nil {
-				h.t.Fatalf("unmarshal conf change: %v", err)
-			}
-			node.confState = *node.raw.ApplyConfChange(change)
-		}
+}
+
+func (h *raftFaultHarness) applyCommittedEntries(node *raftHarnessNode, entries []pb.Entry) {
+	for _, entry := range entries {
+		h.applyCommittedEntry(node, entry)
 	}
-	for _, message := range ready.Messages {
+}
+
+func (h *raftFaultHarness) applyCommittedEntry(node *raftHarnessNode, entry pb.Entry) {
+	node.appliedIndex = entry.Index
+	switch entry.Type {
+	case pb.EntryNormal:
+		node.applyDocument(h.t, entry)
+	case pb.EntryConfChangeV2:
+		h.applyConfChangeV2(node, entry)
+	case pb.EntryConfChange:
+		h.applyConfChange(node, entry)
+	}
+}
+
+func (h *raftFaultHarness) applyConfChangeV2(node *raftHarnessNode, entry pb.Entry) {
+	var change pb.ConfChangeV2
+	if err := change.Unmarshal(entry.Data); err != nil {
+		h.t.Fatalf("unmarshal conf change v2: %v", err)
+	}
+	node.confState = *node.raw.ApplyConfChange(change)
+}
+
+func (h *raftFaultHarness) applyConfChange(node *raftHarnessNode, entry pb.Entry) {
+	var change pb.ConfChange
+	if err := change.Unmarshal(entry.Data); err != nil {
+		h.t.Fatalf("unmarshal conf change: %v", err)
+	}
+	node.confState = *node.raw.ApplyConfChange(change)
+}
+
+func (h *raftFaultHarness) deliverReadyMessages(messages []pb.Message) {
+	for _, message := range messages {
 		h.deliver(message)
 	}
-	readMatched := false
-	for _, readState := range ready.ReadStates {
+}
+
+func readStateMatched(readStates []raft.ReadState, readDone func(raft.ReadState) bool) bool {
+	for _, readState := range readStates {
 		if readDone != nil && readDone(readState) {
-			readMatched = true
+			return true
 		}
 	}
-	return readMatched
+	return false
 }
 
 func (h *raftFaultHarness) deliver(message pb.Message) {
@@ -537,9 +560,7 @@ func (n *raftHarnessNode) applyDocument(t *testing.T, entry pb.Entry) {
 		return
 	}
 	var document harnessDocument
-	if err := json.Unmarshal(entry.Data, &document); err != nil {
-		t.Fatalf("unmarshal document command: %v", err)
-	}
+	testutil.RequireNoErrorf(t, json.Unmarshal(entry.Data, &document), "unmarshal document command")
 	n.documents[document.DocumentID] = document
 	n.recheckByteEligibility()
 }
@@ -547,9 +568,7 @@ func (n *raftHarnessNode) applyDocument(t *testing.T, entry pb.Entry) {
 func (n *raftHarnessNode) applySnapshot(t *testing.T, snapshot pb.Snapshot) {
 	t.Helper()
 	var payload harnessSnapshot
-	if err := json.Unmarshal(snapshot.Data, &payload); err != nil {
-		t.Fatalf("unmarshal snapshot payload: %v", err)
-	}
+	testutil.RequireNoErrorf(t, json.Unmarshal(snapshot.Data, &payload), "unmarshal snapshot payload")
 	n.documents = make(map[string]harnessDocument, len(payload.Documents))
 	n.eligible = make(map[string]bool, len(payload.Documents))
 	for _, document := range payload.Documents {

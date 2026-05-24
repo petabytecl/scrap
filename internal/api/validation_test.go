@@ -12,6 +12,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestValidateWriteDocumentInitAcceptsValidRequest(t *testing.T) {
@@ -28,9 +29,7 @@ func TestValidateWriteDocumentInitAcceptsValidRequest(t *testing.T) {
 	init.Identity.DocumentName = `billing\invoice.pdf`
 
 	validated, err := ValidateWriteDocumentInit(init)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if validated.Identity.DocumentName != "billing/invoice.pdf" {
 		t.Fatalf("document name = %q, want normalized path", validated.Identity.DocumentName)
 	}
@@ -76,9 +75,7 @@ func TestValidateReadDocumentRequestNormalizesChunkHintAndRejectsOverflow(t *tes
 		Identity:      validDocumentIdentity(),
 		ChunkSizeHint: &tinyHint,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if valid.ChunkSize != MinChunkSizeHint {
 		t.Fatalf("chunk size = %d, want %d", valid.ChunkSize, MinChunkSizeHint)
 	}

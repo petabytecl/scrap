@@ -409,6 +409,14 @@ func ValidateOptions(opts Options) (Options, error) {
 	opts.PublicWorkloadIdentity = defaultText(opts.PublicWorkloadIdentity, DefaultPublicWorkloadIdentity)
 	opts.AdminWorkloadIdentity = defaultText(opts.AdminWorkloadIdentity, DefaultAdminWorkloadIdentity)
 	opts.CapacitySampleReportPath = defaultText(opts.CapacitySampleReportPath, DefaultCapacitySampleReportPath)
+	opts = defaultSoakSampleOptions(opts)
+	if err := validateSoakOptions(opts); err != nil {
+		return Options{}, err
+	}
+	return opts, nil
+}
+
+func defaultSoakSampleOptions(opts Options) Options {
 	if opts.SampleCount == 0 {
 		opts.SampleCount = DefaultSampleCount
 	}
@@ -418,24 +426,28 @@ func ValidateOptions(opts Options) (Options, error) {
 	if opts.Duration == 0 {
 		opts.Duration = DefaultDuration
 	}
+	return opts
+}
+
+func validateSoakOptions(opts Options) error {
 	if opts.SampleCount < 1 || opts.SampleCount > MaxSampleCount {
-		return Options{}, fmt.Errorf("local soak --samples must be 1..%d", MaxSampleCount)
+		return fmt.Errorf("local soak --samples must be 1..%d", MaxSampleCount)
 	}
 	if opts.Duration <= 0 || opts.Duration > MaxDuration {
-		return Options{}, fmt.Errorf("local soak --duration must be positive and no more than %s", MaxDuration)
+		return fmt.Errorf("local soak --duration must be positive and no more than %s", MaxDuration)
 	}
 	for _, size := range opts.DocumentSizesBytes {
 		if size == 0 || size > MaxDocumentSizeBytes {
-			return Options{}, fmt.Errorf("local soak --document-size must be 1..%d bytes", MaxDocumentSizeBytes)
+			return fmt.Errorf("local soak --document-size must be 1..%d bytes", MaxDocumentSizeBytes)
 		}
 	}
 	if strings.TrimSpace(opts.PublicWorkloadIdentity) == "" {
-		return Options{}, errors.New("local soak requires public workload identity")
+		return errors.New("local soak requires public workload identity")
 	}
 	if strings.TrimSpace(opts.AdminWorkloadIdentity) == "" {
-		return Options{}, errors.New("local soak requires admin workload identity")
+		return errors.New("local soak requires admin workload identity")
 	}
-	return opts, nil
+	return nil
 }
 
 func loadCapacitySampleReport(path string) (capacitysample.Report, error) {
@@ -633,42 +645,54 @@ func readOneDocument(ctx context.Context, client DocumentClient, doc DocumentIde
 	if err != nil {
 		return failedReadSample(doc, started, err)
 	}
-	var source string
-	var bytesRead uint64
-	hasher := sha256.New()
-	for {
-		msg, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return failedReadSample(doc, started, err)
-		}
-		if metadata := msg.GetMetadata(); metadata != nil {
-			source = metadata.GetSource().String()
-			continue
-		}
-		chunk := msg.GetChunk()
-		if chunk == nil {
-			return failedReadSample(doc, started, errors.New("read stream returned response without metadata or chunk"))
-		}
-		data := chunk.GetData()
-		bytesRead += uint64(len(data))
-		_, _ = hasher.Write(data)
+	read, err := collectReadStream(stream)
+	if err != nil {
+		return failedReadSample(doc, started, err)
 	}
-	if bytesRead != expectedBytes {
-		return failedReadSample(doc, started, fmt.Errorf("read bytes = %d, want %d", bytesRead, expectedBytes))
+	if read.bytes != expectedBytes {
+		return failedReadSample(doc, started, fmt.Errorf("read bytes = %d, want %d", read.bytes, expectedBytes))
 	}
-	actualDigest := hasher.Sum(nil)
-	if len(expectedDigest) > 0 && !bytes.Equal(actualDigest, expectedDigest) {
+	if len(expectedDigest) > 0 && !bytes.Equal(read.digest, expectedDigest) {
 		return failedReadSample(doc, started, errors.New("read content sha256 does not match document metadata"))
 	}
 	return ReadSample{
 		Document:            doc,
-		Bytes:               bytesRead,
+		Bytes:               read.bytes,
 		LatencyMillis:       durationMillis(time.Since(started)),
-		Source:              source,
-		LogicalSHA256Digest: hexDigest(actualDigest),
+		Source:              read.source,
+		LogicalSHA256Digest: hexDigest(read.digest),
+	}
+}
+
+type readStreamResult struct {
+	source string
+	bytes  uint64
+	digest []byte
+}
+
+func collectReadStream(stream grpc.ServerStreamingClient[scrapv1.ReadDocumentResponse]) (readStreamResult, error) {
+	result := readStreamResult{}
+	hasher := sha256.New()
+	for {
+		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			result.digest = hasher.Sum(nil)
+			return result, nil
+		}
+		if err != nil {
+			return readStreamResult{}, err
+		}
+		if metadata := msg.GetMetadata(); metadata != nil {
+			result.source = metadata.GetSource().String()
+			continue
+		}
+		chunk := msg.GetChunk()
+		if chunk == nil {
+			return readStreamResult{}, errors.New("read stream returned response without metadata or chunk")
+		}
+		data := chunk.GetData()
+		result.bytes += uint64(len(data))
+		_, _ = hasher.Write(data)
 	}
 }
 
@@ -804,6 +828,20 @@ func summarizeOpenBao(report capacitysample.Report) OpenBaoObservation {
 }
 
 func summarizeSaturation(samples []capacitysample.RequestSample, breaker capacitysample.ProposedCircuitBreaker) SaturationBehavior {
+	failures, maxConsecutive := countSaturationFailures(samples)
+	rate := saturationErrorRate(failures, len(samples))
+	classification := classifySaturation(samples, breaker, rate, maxConsecutive)
+	return SaturationBehavior{
+		ObservedSamples:       len(samples),
+		ObservedFailures:      failures,
+		ErrorRatePermille:     rate,
+		ConsecutiveFailures:   maxConsecutive,
+		Classification:        classification,
+		AdvisoryThresholdOnly: true,
+	}
+}
+
+func countSaturationFailures(samples []capacitysample.RequestSample) (int, uint32) {
 	failures := 0
 	consecutive := uint32(0)
 	maxConsecutive := uint32(0)
@@ -818,28 +856,31 @@ func summarizeSaturation(samples []capacitysample.RequestSample, breaker capacit
 			maxConsecutive = consecutive
 		}
 	}
-	rate := uint32(0)
-	if len(samples) > 0 {
-		converted, err := safeconv.IntToUint32("OpenBao error rate permille", failures*1000/len(samples))
-		if err == nil {
-			rate = converted
-		}
+	return failures, maxConsecutive
+}
+
+func saturationErrorRate(failures, samples int) uint32 {
+	if samples == 0 {
+		return 0
 	}
-	classification := "within-advisory-threshold"
-	if breaker.MinimumSamples > 0 &&
-		len(samples) >= int(breaker.MinimumSamples) &&
-		((breaker.ErrorRatePermille > 0 && rate >= breaker.ErrorRatePermille) ||
-			(breaker.ConsecutiveFailures > 0 && maxConsecutive >= breaker.ConsecutiveFailures)) {
-		classification = "exceeds-advisory-threshold"
+	converted, err := safeconv.IntToUint32("OpenBao error rate permille", failures*1000/samples)
+	if err != nil {
+		return 0
 	}
-	return SaturationBehavior{
-		ObservedSamples:       len(samples),
-		ObservedFailures:      failures,
-		ErrorRatePermille:     rate,
-		ConsecutiveFailures:   maxConsecutive,
-		Classification:        classification,
-		AdvisoryThresholdOnly: true,
+	return converted
+}
+
+func classifySaturation(samples []capacitysample.RequestSample, breaker capacitysample.ProposedCircuitBreaker, rate, maxConsecutive uint32) string {
+	if breaker.MinimumSamples == 0 || len(samples) < int(breaker.MinimumSamples) {
+		return "within-advisory-threshold"
 	}
+	if breaker.ErrorRatePermille > 0 && rate >= breaker.ErrorRatePermille {
+		return "exceeds-advisory-threshold"
+	}
+	if breaker.ConsecutiveFailures > 0 && maxConsecutive >= breaker.ConsecutiveFailures {
+		return "exceeds-advisory-threshold"
+	}
+	return "within-advisory-threshold"
 }
 
 func summarizeCapacityLatency(source, operation string, samples []capacitysample.RequestSample, sampleOperation string) LatencySummary {
