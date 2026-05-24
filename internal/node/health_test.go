@@ -3,12 +3,14 @@ package node
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
@@ -41,6 +43,28 @@ func TestHealthServerListReportsIndependentStatuses(t *testing.T) {
 
 	testutil.RequireEqualf(t, resp.GetStatuses()[""].GetStatus(), healthv1.HealthCheckResponse_SERVING, "liveness status")
 	testutil.RequireEqualf(t, resp.GetStatuses()[adminReadinessHealthService].GetStatus(), healthv1.HealthCheckResponse_NOT_SERVING, "readiness status")
+	testutil.RequireEqualf(t, resp.GetStatuses()[adminv1.InspectService_ServiceDesc.ServiceName].GetStatus(), healthv1.HealthCheckResponse_NOT_SERVING, "inspect service status")
+}
+
+func TestHealthServerTreatsAdminServicesAsReadinessChecks(t *testing.T) {
+	server := healthServer{app: fakeHealthApplication{
+		readinessErr: errors.New("read index unavailable"),
+	}}
+
+	resp, err := server.Check(context.Background(), &healthv1.HealthCheckRequest{
+		Service: adminv1.InspectService_ServiceDesc.ServiceName,
+	})
+	testutil.RequireNoErrorf(t, err, "inspect readiness check")
+
+	testutil.RequireEqualf(t, resp.GetStatus(), healthv1.HealthCheckResponse_NOT_SERVING, "inspect readiness status")
+}
+
+func TestHealthServerUnknownServiceErrorIncludesRequestedService(t *testing.T) {
+	server := healthServer{app: fakeHealthApplication{}}
+
+	_, err := server.Check(context.Background(), &healthv1.HealthCheckRequest{Service: "scrap.unknown.v1.Service"})
+	requireCode(t, err, codes.NotFound)
+	testutil.RequireTruef(t, strings.Contains(err.Error(), "scrap.unknown.v1.Service"), "unknown service error = %v", err)
 }
 
 func TestBypassHealthUnaryInterceptorSkipsNextForHealthMethods(t *testing.T) {

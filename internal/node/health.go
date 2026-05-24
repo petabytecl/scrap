@@ -9,9 +9,24 @@ import (
 	"google.golang.org/grpc/codes"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+
+	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 )
 
-const adminReadinessHealthService = "scrap.admin.v1.AdminService"
+const adminReadinessHealthService = "scrap.admin.v1-readiness"
+
+var adminReadinessHealthServices = []string{
+	adminReadinessHealthService,
+	adminv1.InspectService_ServiceDesc.ServiceName,
+	adminv1.OperationService_ServiceDesc.ServiceName,
+	adminv1.RestoreService_ServiceDesc.ServiceName,
+	adminv1.RepairService_ServiceDesc.ServiceName,
+	adminv1.MemberService_ServiceDesc.ServiceName,
+	adminv1.LifecycleService_ServiceDesc.ServiceName,
+	adminv1.KeyService_ServiceDesc.ServiceName,
+	adminv1.CapacityService_ServiceDesc.ServiceName,
+	adminv1.DisasterRecoveryService_ServiceDesc.ServiceName,
+}
 
 type HealthApplication interface {
 	CheckReadiness(context.Context) error
@@ -35,25 +50,37 @@ func (s healthServer) Check(ctx context.Context, req *healthv1.HealthCheckReques
 	switch req.GetService() {
 	case "":
 		err = s.checkLiveness(ctx)
-	case adminReadinessHealthService:
-		err = s.checkReadiness(ctx)
 	default:
-		return nil, status.Error(codes.NotFound, "unknown health service")
+		if !isAdminReadinessHealthService(req.GetService()) {
+			return nil, status.Errorf(codes.NotFound, "unknown health service %q", req.GetService())
+		}
+		err = s.checkReadiness(ctx)
 	}
 	return &healthv1.HealthCheckResponse{Status: servingStatus(err)}, nil
 }
 
 func (s healthServer) List(ctx context.Context, _ *healthv1.HealthListRequest) (*healthv1.HealthListResponse, error) {
-	return &healthv1.HealthListResponse{
-		Statuses: map[string]*healthv1.HealthCheckResponse{
-			"": {
-				Status: servingStatus(s.checkLiveness(ctx)),
-			},
-			adminReadinessHealthService: {
-				Status: servingStatus(s.checkReadiness(ctx)),
-			},
+	readinessStatus := servingStatus(s.checkReadiness(ctx))
+	statuses := map[string]*healthv1.HealthCheckResponse{
+		"": {
+			Status: servingStatus(s.checkLiveness(ctx)),
 		},
+	}
+	for _, service := range adminReadinessHealthServices {
+		statuses[service] = &healthv1.HealthCheckResponse{Status: readinessStatus}
+	}
+	return &healthv1.HealthListResponse{
+		Statuses: statuses,
 	}, nil
+}
+
+func isAdminReadinessHealthService(service string) bool {
+	for _, readinessService := range adminReadinessHealthServices {
+		if service == readinessService {
+			return true
+		}
+	}
+	return false
 }
 
 func (s healthServer) checkReadiness(ctx context.Context) error {

@@ -45,7 +45,7 @@ spec:
           readinessProbe:
             grpc:
               port: 18081
-              service: scrap.admin.v1.AdminService
+              service: scrap.admin.v1-readiness
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
