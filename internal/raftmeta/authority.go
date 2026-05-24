@@ -32,6 +32,7 @@ type Authority struct {
 	proposals         chan *authorityProposal
 	proposalsMu       sync.Mutex
 	proposalsClosed   bool
+	proposalsStopped  bool
 	proposalSenders   sync.WaitGroup
 	stopProposals     chan struct{}
 	proposalsDone     chan struct{}
@@ -57,6 +58,7 @@ type authorityProposal struct {
 	ctx     context.Context
 	prepare func() (preparedAuthorityCommand, error)
 	done    chan authorityProposalResult
+	once    sync.Once
 }
 
 type preparedAuthorityCommand struct {
@@ -125,8 +127,7 @@ func (a *Authority) Close() error {
 	}
 	a.closeOnce.Do(func() {
 		a.proposalsMu.Lock()
-		a.proposalsClosed = true
-		close(a.stopProposals)
+		a.closeProposalsLocked()
 		a.proposalsMu.Unlock()
 		a.proposalSenders.Wait()
 		<-a.proposalsDone
@@ -665,7 +666,7 @@ func (a *Authority) submitProposal(ctx context.Context, prepare func() (prepared
 	a.proposalsMu.Lock()
 	if a.proposalsClosed {
 		a.proposalsMu.Unlock()
-		return nil, errors.New("raftmeta: authority is closed")
+		return nil, a.proposalClosedError()
 	}
 	a.proposalSenders.Add(1)
 	a.proposalsMu.Unlock()
@@ -693,15 +694,55 @@ func (a *Authority) submitProposal(ctx context.Context, prepare func() (prepared
 }
 
 func (a *Authority) runProposalWorker() {
+	var active []*authorityProposal
 	defer close(a.proposalsDone)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			a.failProposalWorkerPanic(active, recovered)
+		}
+	}()
 	for {
 		proposal, ok := a.receiveProposal()
 		if !ok {
 			a.failPendingProposals(errors.New("raftmeta: authority is closed"))
 			return
 		}
-		a.processProposalBatch(a.collectProposalBatch(proposal))
+		active = a.collectProposalBatch(proposal)
+		a.processProposalBatch(active)
+		active = nil
 	}
+}
+
+func (a *Authority) closeProposalsLocked() {
+	a.proposalsClosed = true
+	if !a.proposalsStopped {
+		close(a.stopProposals)
+		a.proposalsStopped = true
+	}
+}
+
+func (a *Authority) failProposalWorkerPanic(active []*authorityProposal, recovered any) {
+	err := fmt.Errorf("raftmeta: proposal worker panic: %v", recovered)
+	a.mu.Lock()
+	failure := a.recordFailureLocked(err)
+	a.mu.Unlock()
+
+	a.proposalsMu.Lock()
+	a.closeProposalsLocked()
+	a.proposalsMu.Unlock()
+	a.proposalSenders.Wait()
+
+	replyProposalBatch(active, nil, failure)
+	a.failPendingProposals(failure)
+}
+
+func (a *Authority) proposalClosedError() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failureErr != nil {
+		return a.failureErr
+	}
+	return errors.New("raftmeta: authority is closed")
 }
 
 func (a *Authority) receiveProposal() (*authorityProposal, bool) {
@@ -859,7 +900,9 @@ func (a *Authority) failPendingProposals(err error) {
 }
 
 func (p *authorityProposal) reply(value any, err error) {
-	p.done <- authorityProposalResult{value: value, err: err}
+	p.once.Do(func() {
+		p.done <- authorityProposalResult{value: value, err: err}
+	})
 }
 
 func (a *Authority) requireWriteQuorum(ctx context.Context) error {

@@ -451,6 +451,101 @@ func TestAuthoritySyncErrorFailsBatchAndSubsequentCommands(t *testing.T) {
 	}
 }
 
+func TestAuthorityProposalWorkerPanicFailsInFlightAndFutureProposals(t *testing.T) {
+	dir := t.TempDir()
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, dir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	authority.metadataBatchWait = 50 * time.Millisecond
+	authority.metadataBatchMax = 16
+	panicValue := "metadata sync panic"
+	authority.log.syncLogFile = func() error {
+		panic(panicValue)
+	}
+
+	documents := []metastore.Document{
+		authorityTestDocument("panic-1.xml", []byte{1}),
+		authorityTestDocument("panic-2.xml", []byte{2}),
+	}
+	for index := range documents {
+		documents[index].Location.BlockID = "block-panic-" + documents[index].Identity.DocumentName
+	}
+	errs := commitDocumentsConcurrently(t, authority, documents, "cmd-panic-", time.Unix(100, 0).UTC())
+	requireProposalWorkerPanicErrors(t, errs, panicValue)
+
+	afterPanic := authorityTestDocument("after-panic.xml", []byte{3})
+	afterPanic.Location.BlockID = "block-after-panic"
+	requireCommitAfterWorkerPanicFails(t, authority, afterPanic, panicValue)
+}
+
+func commitDocumentsConcurrently(
+	t *testing.T,
+	authority *Authority,
+	documents []metastore.Document,
+	commandPrefix string,
+	committedAt time.Time,
+) []error {
+	t.Helper()
+	start := make(chan struct{})
+	errs := make([]error, len(documents))
+	var wg sync.WaitGroup
+	wg.Add(len(documents))
+	for index, document := range documents {
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[index] = authority.CommitDocument(context.Background(), document, commandPrefix+document.Identity.DocumentName, committedAt)
+		}()
+	}
+	close(start)
+	waitForProposalResults(t, &wg)
+	return errs
+}
+
+func requireProposalWorkerPanicErrors(t *testing.T, errs []error, panicValue string) {
+	t.Helper()
+	for index, err := range errs {
+		if err == nil ||
+			!strings.Contains(err.Error(), "proposal worker panic") ||
+			!strings.Contains(err.Error(), panicValue) {
+			t.Fatalf("commit %d error = %v, want proposal worker panic containing %q", index, err, panicValue)
+		}
+	}
+}
+
+func requireCommitAfterWorkerPanicFails(t *testing.T, authority *Authority, document metastore.Document, panicValue string) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.CommitDocument(context.Background(), document, "cmd-after-panic", time.Unix(200, 0).UTC())
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil ||
+			!strings.Contains(err.Error(), "proposal worker panic") ||
+			!strings.Contains(err.Error(), panicValue) {
+			t.Fatalf("commit after worker panic error = %v, want stored proposal worker panic", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("commit after worker panic did not return")
+	}
+}
+
+func waitForProposalResults(t *testing.T, wg *sync.WaitGroup) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("proposals did not receive results")
+	}
+}
+
 func TestAuthorityRejectsProposalAfterClose(t *testing.T) {
 	dir := t.TempDir()
 	metadata := openTestMetadata(t, dir)
