@@ -5,7 +5,7 @@
 .PHONY: fmt fmt-check lint vuln
 .PHONY: test test-compat test-crashfault-catalog test-race test-junit cover build check
 .PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
-.PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence local-dr-drill-evidence
+.PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence local-dr-drill-evidence write-pipeline-evidence
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
 
 GO ?= go
@@ -29,7 +29,7 @@ GOLANGCI_LINT ?= $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lin
 GOVULNCHECK_VERSION ?= v1.3.0
 PROTO_BREAKING_REF ?= main
 PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
-SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence ./cmd/scrap-openbao-smoke ./cmd/scrap-local-soak-evidence ./cmd/scrap-local-dr-drill-evidence
+SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence ./cmd/scrap-openbao-smoke ./cmd/scrap-local-soak-evidence ./cmd/scrap-local-dr-drill-evidence ./cmd/scrap-write-pipeline-evidence
 RELEASE_SHA ?= $(shell git rev-parse HEAD)
 RELEASE_VERSION ?= dev
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -61,6 +61,14 @@ LOCAL_DR_DRILL_REPORT ?= local-dr-drill-evidence.json
 LOCAL_DR_DRILL_RUNNER ?= local-kind
 LOCAL_DR_DRILL_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 LOCAL_DR_DRILL_OPERATOR_OWNER ?= @cotocisternas
+WRITE_PIPELINE_REPORT ?= write-pipeline-performance-evidence.json
+WRITE_PIPELINE_RUNNER ?= local-application
+WRITE_PIPELINE_SAMPLES ?= 128
+WRITE_PIPELINE_CONCURRENCY ?= 8
+WRITE_PIPELINE_DOCUMENT_SIZE ?= 4096
+WRITE_PIPELINE_DURATION ?= 30s
+WRITE_PIPELINE_MIN_WRITES_PER_SECOND ?= 0
+WRITE_PIPELINE_MAX_P99_ACK_LATENCY ?= 0s
 
 help: ## Show this help.
 	@awk 'BEGIN { FS = ":.*##"; printf "\n\033[1mUsage:\033[0m\n  make \033[36m<target>\033[0m\n" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  \033[36m%-34s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
@@ -229,6 +237,19 @@ local-dr-drill-evidence: capacity-sample openbao-smoke-evidence ## Emit local re
 		--capacity-sample-report "$(CAPACITY_SAMPLE_REPORT)" \
 		--openbao-smoke-report "$(OPENBAO_SMOKE_REPORT)" \
 		--operator-owner "$(LOCAL_DR_DRILL_OPERATOR_OWNER)"
+
+write-pipeline-evidence: ## Emit local write-pipeline performance-smoke evidence.
+	$(GO) run ./cmd/scrap-write-pipeline-evidence \
+		--out "$(WRITE_PIPELINE_REPORT)" \
+		--release-sha "$(RELEASE_SHA)" \
+		--dirty-tree "$(DIRTY_TREE)" \
+		--runner-id "$(WRITE_PIPELINE_RUNNER)" \
+		--samples "$(WRITE_PIPELINE_SAMPLES)" \
+		--concurrency "$(WRITE_PIPELINE_CONCURRENCY)" \
+		--document-size "$(WRITE_PIPELINE_DOCUMENT_SIZE)" \
+		--duration "$(WRITE_PIPELINE_DURATION)" \
+		--min-writes-per-second "$(WRITE_PIPELINE_MIN_WRITES_PER_SECOND)" \
+		--max-p99-ack-latency "$(WRITE_PIPELINE_MAX_P99_ACK_LATENCY)"
 
 ##@ Spikes
 
