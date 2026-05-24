@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 	"github.com/petabytecl/scrap/internal/config"
 	"github.com/petabytecl/scrap/internal/localstorage"
 	"github.com/petabytecl/scrap/internal/node"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/operations"
 )
 
@@ -48,15 +53,21 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("start listeners: %w", err)
 	}
 	defer closeutil.Log("server", logPrintf, server)
+	metricsEndpoint, err := listenMetricsEndpoint(cfg.MetricsListenAddress)
+	if err != nil {
+		return fmt.Errorf("start metrics listener: %w", err)
+	}
+	defer closeutil.Log("metrics endpoint", logPrintf, metricsEndpoint)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	logger.Info("public grpc listening", "address", server.PublicAddress())
 	logger.Info("admin grpc listening", "address", server.AdminAddress())
+	logger.Info("metrics http listening", "address", metricsEndpoint.Address())
 	go reloadAuthorizationPolicy(ctx, server, logger)
 	startBackgroundRunners(ctx, cfg, apps, uploadRunner, logger)
-	if err := server.Serve(ctx); err != nil {
+	if err := serveUntilStopped(ctx, server, metricsEndpoint); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
@@ -65,6 +76,7 @@ func run(logger *slog.Logger) error {
 func registerFlags(cfg *config.Config) {
 	flag.StringVar(&cfg.PublicListenAddress, "public-listen", cfg.PublicListenAddress, "public gRPC listen address")
 	flag.StringVar(&cfg.AdminListenAddress, "admin-listen", cfg.AdminListenAddress, "admin gRPC listen address")
+	flag.StringVar(&cfg.MetricsListenAddress, "metrics-listen", cfg.MetricsListenAddress, "metrics HTTP listen address")
 	flag.StringVar(&cfg.AuthorizationPolicyPath, "authorization-policy", cfg.AuthorizationPolicyPath, "authorization policy JSON path; required for public and admin APIs")
 	flag.StringVar(&cfg.LocalDataDir, "local-data-dir", cfg.LocalDataDir, "local data directory for explicitly enabled non-production storage")
 	flag.BoolVar(&cfg.EnableLocalNonProductionStorage, "enable-local-non-production-storage", cfg.EnableLocalNonProductionStorage, "enable single-member local storage; not a production durability mode")
@@ -96,6 +108,77 @@ func registerFlags(cfg *config.Config) {
 	flag.BoolVar(&cfg.ProductionReadinessEvidence.DownstreamDeploymentApproval, "production-readiness-downstream-deployment", cfg.ProductionReadinessEvidence.DownstreamDeploymentApproval, "readiness evidence: downstream deployment owner approved live production deployment-specific requirements")
 	flag.StringVar(&cfg.ProductionReadinessEvidence.DownstreamDeploymentArtifact, "production-readiness-downstream-deployment-artifact", cfg.ProductionReadinessEvidence.DownstreamDeploymentArtifact, "release artifact URI for downstream deployment approval evidence")
 	flag.StringVar(&cfg.ProductionReadinessEvidence.DownstreamDeploymentDeferral, "production-readiness-downstream-deployment-deferral", cfg.ProductionReadinessEvidence.DownstreamDeploymentDeferral, "optional downstream deployment deferral reason to report when approval is missing")
+}
+
+type metricsEndpoint struct {
+	listener net.Listener
+	server   *http.Server
+	once     sync.Once
+	closeErr error
+}
+
+func listenMetricsEndpoint(address string) (*metricsEndpoint, error) {
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("listen metrics http: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", observe.Handler())
+	return &metricsEndpoint{
+		listener: listener,
+		server: &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		},
+	}, nil
+}
+
+func (e *metricsEndpoint) Address() string {
+	return e.listener.Addr().String()
+}
+
+func (e *metricsEndpoint) Serve() <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		err := e.server.Serve(e.listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		errCh <- err
+	}()
+	return errCh
+}
+
+func (e *metricsEndpoint) Close() error {
+	e.once.Do(func() {
+		err := e.server.Close()
+		if closeErr := e.listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			err = errors.Join(err, closeErr)
+		}
+		e.closeErr = err
+	})
+	return e.closeErr
+}
+
+func serveUntilStopped(ctx context.Context, server *node.Server, metricsEndpoint *metricsEndpoint) error {
+	metricsErrCh := metricsEndpoint.Serve()
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- server.Serve(ctx)
+	}()
+
+	select {
+	case err := <-serverErrCh:
+		closeErr := metricsEndpoint.Close()
+		return errors.Join(err, closeErr)
+	case err := <-metricsErrCh:
+		server.Stop()
+		if err != nil {
+			return fmt.Errorf("metrics http: %w", err)
+		}
+		return <-serverErrCh
+	}
 }
 
 func buildApplications(cfg config.Config, logger *slog.Logger, logPrintf closeutil.Logger) (node.Applications, *backendupload.Runner, func(), error) {

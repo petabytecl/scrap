@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/safepath"
 )
@@ -509,7 +511,10 @@ func (s *Store) Append(ctx context.Context, reader io.Reader) (Record, error) {
 	return s.AppendValidated(ctx, reader, nil)
 }
 
-func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate func(Record) error) (Record, error) {
+func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate func(Record) error) (record Record, err error) {
+	start := time.Now()
+	defer recordAppendLatency(start, &err)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -541,7 +546,7 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 		return Record{}, err
 	}
 
-	record := Record{
+	record = Record{
 		BlockID:      s.blockID,
 		StoredOffset: startOffset,
 		StoredLength: appended.storedLength,
@@ -561,6 +566,14 @@ func (s *Store) AppendValidated(ctx context.Context, reader io.Reader, validate 
 	s.blockOffset = nextOffset
 	committed = true
 	return record, nil
+}
+
+func recordAppendLatency(start time.Time, err *error) {
+	outcome := observe.OutcomeSuccess
+	if *err != nil {
+		outcome = observe.OutcomeError
+	}
+	observe.RecordWriteLatency(outcome, time.Since(start))
 }
 
 type appendResult struct {

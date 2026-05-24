@@ -14,6 +14,7 @@ import (
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/observe"
 )
 
 type Authority struct {
@@ -575,6 +576,9 @@ func (a *Authority) ensureNoConflictingDocument(document metastore.Document) err
 }
 
 func (a *Authority) appendAndApplyLocked(command *metastorev1.ShardCommand) error {
+	observe.SetRaftQueueDepth(1)
+	defer observe.SetRaftQueueDepth(0)
+
 	entry, err := a.log.Append(command)
 	if err != nil {
 		return err

@@ -16,16 +16,29 @@ func TestDefaultConfigValidates(t *testing.T) {
 func TestConfigRejectsMissingAndDuplicateAddresses(t *testing.T) {
 	tests := map[string]Config{
 		"missing public": {
-			PublicListenAddress: "",
-			AdminListenAddress:  DefaultAdminListenAddress,
+			PublicListenAddress:  "",
+			AdminListenAddress:   DefaultAdminListenAddress,
+			MetricsListenAddress: DefaultMetricsListenAddress,
 		},
 		"missing admin": {
-			PublicListenAddress: DefaultPublicListenAddress,
-			AdminListenAddress:  "",
+			PublicListenAddress:  DefaultPublicListenAddress,
+			AdminListenAddress:   "",
+			MetricsListenAddress: DefaultMetricsListenAddress,
+		},
+		"missing metrics": {
+			PublicListenAddress:  DefaultPublicListenAddress,
+			AdminListenAddress:   DefaultAdminListenAddress,
+			MetricsListenAddress: "",
 		},
 		"duplicate": {
-			PublicListenAddress: "127.0.0.1:1",
-			AdminListenAddress:  "127.0.0.1:1",
+			PublicListenAddress:  "127.0.0.1:1",
+			AdminListenAddress:   "127.0.0.1:1",
+			MetricsListenAddress: "127.0.0.1:2",
+		},
+		"duplicate metrics": {
+			PublicListenAddress:  "127.0.0.1:1",
+			AdminListenAddress:   "127.0.0.1:2",
+			MetricsListenAddress: "127.0.0.1:2",
 		},
 	}
 
