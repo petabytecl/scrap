@@ -998,6 +998,35 @@ func TestVerificationWindowAcceptsFrameAtSegmentOffsetZero(t *testing.T) {
 	testutil.RequireEqualf(t, end, uint64(4), "verification end")
 }
 
+func TestVerificationWindowKeepsOffsetZeroStartAcrossFrames(t *testing.T) {
+	start, end, err := verificationWindow(blockstore.Record{
+		StoredOffset:  0,
+		StoredLength:  1536,
+		LogicalSHA256: sha256.Sum256([]byte("unused")),
+		Frames: []blockstore.FrameRecord{
+			{SegmentOffset: 0, SegmentLength: 512},
+			{SegmentOffset: 512, SegmentLength: 512},
+			{SegmentOffset: 1024, SegmentLength: 512},
+		},
+	}, 0, 1536)
+	testutil.RequireNoErrorf(t, err, "verification window")
+	testutil.RequireEqualf(t, start, uint64(0), "verification start")
+	testutil.RequireEqualf(t, end, uint64(1536), "verification end")
+}
+
+func TestVerificationWindowRejectsWindowStartingAfterSelection(t *testing.T) {
+	_, _, err := verificationWindow(blockstore.Record{
+		StoredOffset: 0,
+		StoredLength: 1024,
+		Frames: []blockstore.FrameRecord{
+			{SegmentOffset: 256, SegmentLength: 512},
+		},
+	}, 0, 512)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("verification window error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
 func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
