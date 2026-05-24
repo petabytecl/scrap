@@ -58,6 +58,7 @@ type Config struct {
 	TLSCertFile                     string
 	TLSKeyFile                      string
 	TLSCACertFile                   string
+	RequireCertificateIdentity      bool
 	LocalDataDir                    string
 	EnableLocalNonProductionStorage bool
 	EnableLocalFilesystemBackend    bool

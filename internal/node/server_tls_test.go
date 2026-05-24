@@ -19,8 +19,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/petabytecl/scrap/internal/authz"
 	"github.com/petabytecl/scrap/internal/config"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/testutil"
@@ -145,6 +147,46 @@ func TestServerMTLSRequiresClientCertificateOnBothListeners(t *testing.T) {
 	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
 }
 
+func TestServerAuthorizesCertificateIdentityWithoutMetadataHeader(t *testing.T) {
+	certs := writeMTLSTestFiles(t)
+	cfg := config.Default()
+	cfg.TLSEnabled = true
+	cfg.TLSCertFile = certs.serverCertFile
+	cfg.TLSKeyFile = certs.serverKeyFile
+	cfg.TLSCACertFile = certs.caCertFile
+	cfg.RequireCertificateIdentity = true
+	publicListener := bufconn.Listen(1024 * 1024)
+	adminListener := bufconn.Listen(1024 * 1024)
+	server := requireNewServerWithConfig(t, cfg, publicListener, adminListener, Applications{}, testAuthorizationManager(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() { testutil.RequireNoErrorf(t, server.Close(), "close server") }()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(ctx)
+	}()
+
+	publicConn := dialMTLSTestServer(t, publicListener, certs.clientTLSConfig(t, true))
+	publicClient := scrapv1.NewDocumentServiceClient(publicConn)
+	requestCtx, requestCancel := context.WithTimeout(context.Background(), time.Second)
+	defer requestCancel()
+	_, err := publicClient.HeadDocument(requestCtx, mtlsHeadRequest())
+	requireCode(t, err, codes.Unimplemented)
+
+	spoofedCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+		authz.WorkloadIdentityMetadataKey, "operator",
+	))
+	spoofedCtx, spoofedCancel := context.WithTimeout(spoofedCtx, time.Second)
+	defer spoofedCancel()
+	_, err = publicClient.HeadDocument(spoofedCtx, mtlsHeadRequest())
+	requireCode(t, err, codes.Unimplemented)
+	testutil.RequireNoErrorf(t, publicConn.Close(), "close public client")
+
+	cancel()
+	testutil.RequireNoErrorf(t, <-done, "Serve returned error")
+}
+
 func mtlsHeadRequest() *scrapv1.HeadDocumentRequest {
 	return &scrapv1.HeadDocumentRequest{
 		Identity: &scrapv1.DocumentIdentity{
@@ -203,7 +245,7 @@ func writeMTLSTestFiles(t *testing.T) mtlsTestFiles {
 	dir := t.TempDir()
 	caCertPEM, caKey, caCert := newCertificateAuthority(t)
 	serverCertPEM, serverKeyPEM := newLeafCertificate(t, caCert, caKey, 2, "scrap-server", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
-	clientCertPEM, clientKeyPEM := newLeafCertificate(t, caCert, caKey, 3, "scrap-client", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	clientCertPEM, clientKeyPEM := newLeafCertificate(t, caCert, caKey, 3, "test-workload", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
 	files := mtlsTestFiles{
 		caCertFile:     dir + "/ca.pem",
 		serverCertFile: dir + "/server.pem",

@@ -86,6 +86,7 @@ func registerFlagSet(flags *flag.FlagSet, cfg *config.Config) {
 	flags.StringVar(&cfg.TLSCertFile, "grpc-tls-cert-file", cfg.TLSCertFile, "server TLS certificate PEM path for public and admin gRPC listeners")
 	flags.StringVar(&cfg.TLSKeyFile, "grpc-tls-key-file", cfg.TLSKeyFile, "server TLS private key PEM path for public and admin gRPC listeners")
 	flags.StringVar(&cfg.TLSCACertFile, "grpc-tls-ca-cert-file", cfg.TLSCACertFile, "client CA certificate PEM path for mutual TLS client verification")
+	flags.BoolVar(&cfg.RequireCertificateIdentity, "require-certificate-identity", cfg.RequireCertificateIdentity, "require workload identity to come from the mTLS client certificate instead of request metadata")
 	flags.StringVar(&cfg.LocalDataDir, "local-data-dir", cfg.LocalDataDir, "local data directory for explicitly enabled non-production storage")
 	flags.BoolVar(&cfg.EnableLocalNonProductionStorage, "enable-local-non-production-storage", cfg.EnableLocalNonProductionStorage, "enable single-member local storage; not a production durability mode")
 	flags.BoolVar(&cfg.EnableLocalFilesystemBackend, "enable-local-filesystem-backend", cfg.EnableLocalFilesystemBackend, "enable local filesystem backend upload for non-production storage")

@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/petabytecl/scrap/internal/closeutil"
@@ -25,11 +28,12 @@ import (
 const (
 	WorkloadIdentityMetadataKey = "x-scrap-workload-identity"
 
-	ReasonPolicyRequired          = "SCRAP_AUTHZ_POLICY_REQUIRED"
-	ReasonMissingWorkloadIdentity = "SCRAP_AUTHZ_WORKLOAD_IDENTITY_REQUIRED"
-	ReasonCapabilityDenied        = "SCRAP_AUTHZ_CAPABILITY_DENIED"
-	ReasonCapabilityUnmapped      = "SCRAP_AUTHZ_CAPABILITY_UNMAPPED"
-	ReasonPolicyReloadRejected    = "SCRAP_AUTHZ_POLICY_RELOAD_REJECTED"
+	ReasonPolicyRequired             = "SCRAP_AUTHZ_POLICY_REQUIRED"
+	ReasonMissingWorkloadIdentity    = "SCRAP_AUTHZ_WORKLOAD_IDENTITY_REQUIRED"
+	ReasonMissingCertificateIdentity = "SCRAP_AUTHZ_CERTIFICATE_IDENTITY_REQUIRED"
+	ReasonCapabilityDenied           = "SCRAP_AUTHZ_CAPABILITY_DENIED"
+	ReasonCapabilityUnmapped         = "SCRAP_AUTHZ_CAPABILITY_UNMAPPED"
+	ReasonPolicyReloadRejected       = "SCRAP_AUTHZ_POLICY_RELOAD_REJECTED"
 )
 
 const (
@@ -62,6 +66,15 @@ type Decision struct {
 
 type DeniedAuditSink interface {
 	RecordDeniedRequest(ctx context.Context, method string, decision Decision) error
+}
+
+type WorkloadIdentityOptions struct {
+	RequireCertificateIdentity bool
+}
+
+type InterceptorOptions struct {
+	DeniedAuditSink            DeniedAuditSink
+	RequireCertificateIdentity bool
 }
 
 type ReloadAlert struct {
@@ -154,6 +167,10 @@ func (m *Manager) ReloadFile(path string) error {
 }
 
 func (m *Manager) Authorize(ctx context.Context, capability Capability) Decision {
+	return m.AuthorizeWithOptions(ctx, capability, WorkloadIdentityOptions{})
+}
+
+func (m *Manager) AuthorizeWithOptions(ctx context.Context, capability Capability, options WorkloadIdentityOptions) Decision {
 	if m == nil {
 		return Decision{
 			Capability:        capability,
@@ -161,12 +178,18 @@ func (m *Manager) Authorize(ctx context.Context, capability Capability) Decision
 			ReasonDescription: "authorization policy is not loaded",
 		}
 	}
-	workload, ok := WorkloadIdentityFromContext(ctx)
+	workload, ok := WorkloadIdentityFromContextWithOptions(ctx, options)
 	if !ok {
+		reason := ReasonMissingWorkloadIdentity
+		description := "workload identity metadata or mTLS certificate identity is required"
+		if options.RequireCertificateIdentity {
+			reason = ReasonMissingCertificateIdentity
+			description = "mTLS client certificate identity is required"
+		}
 		return Decision{
 			Capability:        capability,
-			Reason:            ReasonMissingWorkloadIdentity,
-			ReasonDescription: "workload identity metadata is required",
+			Reason:            reason,
+			ReasonDescription: description,
 		}
 	}
 
@@ -221,12 +244,17 @@ func (m *Manager) ReloadAlerts() []ReloadAlert {
 }
 
 func UnaryServerInterceptor(manager *Manager, capabilities map[string]Capability, auditSinks ...DeniedAuditSink) grpc.UnaryServerInterceptor {
+	return UnaryServerInterceptorWithOptions(manager, capabilities, InterceptorOptions{
+		DeniedAuditSink: firstDeniedAuditSink(auditSinks),
+	})
+}
+
+func UnaryServerInterceptorWithOptions(manager *Manager, capabilities map[string]Capability, options InterceptorOptions) grpc.UnaryServerInterceptor {
 	capabilities = cloneCapabilityMap(capabilities)
-	auditSink := firstDeniedAuditSink(auditSinks)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		decision, err := requireCapability(ctx, manager, capabilities, info.FullMethod)
+		decision, err := requireCapability(ctx, manager, capabilities, info.FullMethod, options)
 		if err != nil {
-			recordDeniedRequest(ctx, auditSink, info.FullMethod, decision)
+			recordDeniedRequest(ctx, options.DeniedAuditSink, info.FullMethod, decision)
 			return nil, err
 		}
 		return handler(ctx, req)
@@ -234,12 +262,17 @@ func UnaryServerInterceptor(manager *Manager, capabilities map[string]Capability
 }
 
 func StreamServerInterceptor(manager *Manager, capabilities map[string]Capability, auditSinks ...DeniedAuditSink) grpc.StreamServerInterceptor {
+	return StreamServerInterceptorWithOptions(manager, capabilities, InterceptorOptions{
+		DeniedAuditSink: firstDeniedAuditSink(auditSinks),
+	})
+}
+
+func StreamServerInterceptorWithOptions(manager *Manager, capabilities map[string]Capability, options InterceptorOptions) grpc.StreamServerInterceptor {
 	capabilities = cloneCapabilityMap(capabilities)
-	auditSink := firstDeniedAuditSink(auditSinks)
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		decision, err := requireCapability(stream.Context(), manager, capabilities, info.FullMethod)
+		decision, err := requireCapability(stream.Context(), manager, capabilities, info.FullMethod, options)
 		if err != nil {
-			recordDeniedRequest(stream.Context(), auditSink, info.FullMethod, decision)
+			recordDeniedRequest(stream.Context(), options.DeniedAuditSink, info.FullMethod, decision)
 			return err
 		}
 		return handler(srv, stream)
@@ -251,6 +284,68 @@ func ContextWithWorkloadIdentity(ctx context.Context, workloadIdentity string) c
 }
 
 func WorkloadIdentityFromContext(ctx context.Context) (string, bool) {
+	return WorkloadIdentityFromContextWithOptions(ctx, WorkloadIdentityOptions{})
+}
+
+func WorkloadIdentityFromContextWithOptions(ctx context.Context, options WorkloadIdentityOptions) (string, bool) {
+	if value, ok := certificateWorkloadIdentityFromContext(ctx); ok {
+		return value, true
+	}
+	if options.RequireCertificateIdentity {
+		return "", false
+	}
+	return metadataWorkloadIdentityFromContext(ctx)
+}
+
+func certificateWorkloadIdentityFromContext(ctx context.Context) (string, bool) {
+	peer, ok := grpcpeer.FromContext(ctx)
+	if !ok || peer.AuthInfo == nil {
+		return "", false
+	}
+	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return "", false
+	}
+	if tlsInfo.SPIFFEID != nil {
+		if value := strings.TrimSpace(tlsInfo.SPIFFEID.String()); value != "" {
+			return value, true
+		}
+	}
+	if len(tlsInfo.State.PeerCertificates) == 0 {
+		return "", false
+	}
+	return workloadIdentityFromCertificate(tlsInfo.State.PeerCertificates[0])
+}
+
+func workloadIdentityFromCertificate(cert *x509.Certificate) (string, bool) {
+	if cert == nil {
+		return "", false
+	}
+	for _, uri := range cert.URIs {
+		if uri == nil {
+			continue
+		}
+		if value := strings.TrimSpace(uri.String()); value != "" {
+			return value, true
+		}
+	}
+	if value := strings.TrimSpace(cert.Subject.CommonName); value != "" {
+		return value, true
+	}
+	for _, dnsName := range cert.DNSNames {
+		if value := strings.TrimSpace(dnsName); value != "" {
+			return value, true
+		}
+	}
+	for _, emailAddress := range cert.EmailAddresses {
+		if value := strings.TrimSpace(emailAddress); value != "" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func metadataWorkloadIdentityFromContext(ctx context.Context) (string, bool) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return "", false
@@ -266,7 +361,7 @@ func WorkloadIdentityFromContext(ctx context.Context) (string, bool) {
 	return value, true
 }
 
-func requireCapability(ctx context.Context, manager *Manager, capabilities map[string]Capability, method string) (Decision, error) {
+func requireCapability(ctx context.Context, manager *Manager, capabilities map[string]Capability, method string, options InterceptorOptions) (Decision, error) {
 	capability, ok := capabilities[method]
 	if !ok {
 		decision := Decision{
@@ -275,12 +370,16 @@ func requireCapability(ctx context.Context, manager *Manager, capabilities map[s
 		}
 		return decision, status.Error(codes.PermissionDenied, ReasonCapabilityUnmapped+": RPC method is not mapped to an authorization capability")
 	}
-	decision := manager.Authorize(ctx, capability)
+	decision := manager.AuthorizeWithOptions(ctx, capability, WorkloadIdentityOptions{
+		RequireCertificateIdentity: options.RequireCertificateIdentity,
+	})
 	if decision.Allowed {
 		return decision, nil
 	}
 	code := codes.PermissionDenied
-	if decision.Reason == ReasonMissingWorkloadIdentity || decision.Reason == ReasonPolicyRequired {
+	if decision.Reason == ReasonMissingWorkloadIdentity ||
+		decision.Reason == ReasonMissingCertificateIdentity ||
+		decision.Reason == ReasonPolicyRequired {
 		code = codes.Unauthenticated
 	}
 	return decision, status.Error(code, fmt.Sprintf("%s: %s requires %s", decision.Reason, method, capability))
