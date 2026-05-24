@@ -3,17 +3,17 @@
 .PHONY: help
 .PHONY: proto proto-check
 .PHONY: fmt fmt-check lint vuln
-.PHONY: test test-compat test-crashfault-catalog test-race test-junit cover build check
+.PHONY: test test-compat test-crashfault-catalog test-race test-junit test-cover-junit cover build check
 .PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
 .PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence local-dr-drill-evidence write-pipeline-evidence
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
 
 GO ?= go
-BUF ?= buf
+BUF ?= $(GO) tool buf
 DOCKER ?= docker
 KIND ?= kind
 KUBECTL ?= kubectl
-KUSTOMIZE ?= go run sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
+KUSTOMIZE ?= $(GO) tool kustomize
 TEST_PACKAGES ?= ./...
 COMPAT_PACKAGES ?= ./internal/compat ./internal/metastore
 COVER_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
@@ -21,12 +21,10 @@ COVERPROFILE ?= coverage.out
 COVERMODE ?= atomic
 TEST_RESULTS_DIR ?= test-results
 JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
-GOTESTSUM_VERSION ?= v1.13.0
-GOTESTSUM ?= $(GO) run gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
+GOTESTSUM ?= $(GO) tool gotestsum
 LINT_TIMEOUT ?= 5m
-GOLANGCI_LINT_VERSION ?= v2.10.1
-GOLANGCI_LINT ?= $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-GOVULNCHECK_VERSION ?= v1.3.0
+GOLANGCI_LINT ?= $(GO) tool golangci-lint
+GOVULNCHECK ?= $(GO) tool govulncheck
 PROTO_BREAKING_REF ?= main
 PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence ./cmd/scrap-openbao-smoke ./cmd/scrap-local-soak-evidence ./cmd/scrap-local-dr-drill-evidence ./cmd/scrap-write-pipeline-evidence
@@ -100,7 +98,7 @@ lint: ## Run the golangci-lint baseline.
 	$(GOLANGCI_LINT) run --timeout=$(LINT_TIMEOUT)
 
 vuln: ## Run govulncheck against the module graph.
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	$(GOVULNCHECK) ./...
 
 test: ## Run package tests.
 	$(GO) test $(TEST_PACKAGES)
@@ -117,6 +115,11 @@ test-race: ## Run package tests with the Go race detector.
 test-junit: ## Run package tests and write a JUnit XML report.
 	mkdir -p "$(TEST_RESULTS_DIR)"
 	$(GOTESTSUM) --junitfile "$(JUNIT_REPORT)" --format testname -- $(TEST_PACKAGES)
+
+test-cover-junit: ## Run package tests once, writing coverage and JUnit reports.
+	mkdir -p "$(TEST_RESULTS_DIR)"
+	$(GOTESTSUM) --junitfile "$(JUNIT_REPORT)" --format testname -- -covermode=$(COVERMODE) -coverprofile=$(COVERPROFILE) $(COVER_PACKAGES)
+	$(GO) tool cover -func="$(COVERPROFILE)" | tail -n 1
 
 cover: ## Run package tests and write a coverage profile.
 	$(GO) test -covermode=$(COVERMODE) -coverprofile=$(COVERPROFILE) $(COVER_PACKAGES)
