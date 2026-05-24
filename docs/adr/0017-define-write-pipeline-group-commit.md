@@ -45,10 +45,17 @@ log syncs:
 - flush immediately when known encoded payload bytes reach 8 MiB, while allowing
   a single operation that is valid under its existing per-operation size limit to
   form a one-item batch;
-- flush explicitly on `Close`, block seal, repair/range installation, snapshot,
-  compaction, and any shutdown path that can otherwise strand waiters;
 - keep queue depth bounded by an implementation constant until benchmark
   evidence justifies exposing a deployment setting.
+
+Component-specific lifecycle flushes are required:
+
+- block append batching must flush or fail pending waiters on `Close`, block
+  seal, repair, range installation, and any blockstore shutdown path that can
+  otherwise strand waiters;
+- metadata command-log batching must flush or fail pending waiters on
+  `Authority.Close`, snapshot creation, log compaction, and any raftmeta
+  shutdown path that can otherwise strand waiters.
 
 These limits are starting points, not product SLOs. Issue #177 must capture
 before/after evidence and should be used to tune the constants before #148 is
