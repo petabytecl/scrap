@@ -453,6 +453,15 @@ func authorizationError(method string, decision Decision) (Decision, error) {
 		decision.Reason == ReasonPolicyRequired {
 		code = codes.Unauthenticated
 	}
+	if decision.Reason == ReasonTenantDenied {
+		return decision, status.Error(code, fmt.Sprintf(
+			"%s: %s denied tenant %q for %s",
+			decision.Reason,
+			method,
+			decision.TenantID,
+			decision.Capability,
+		))
+	}
 	return decision, status.Error(code, fmt.Sprintf("%s: %s requires %s", decision.Reason, method, decision.Capability))
 }
 
@@ -476,6 +485,10 @@ func (s tenantAuthorizingServerStream) RecvMsg(req any) error {
 		return err
 	}
 	tenantID, ok := s.extractor(req)
+	if !ok {
+		return nil
+	}
+	tenantID, ok = normalizeTenantID(tenantID)
 	if !ok {
 		return nil
 	}
@@ -664,11 +677,12 @@ func tenantFromRequest(extractors map[string]TenantExtractor, method string, req
 	if !ok {
 		return "", false
 	}
+	return normalizeTenantID(tenantID)
+}
+
+func normalizeTenantID(tenantID string) (string, bool) {
 	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		return "", false
-	}
-	return tenantID, true
+	return tenantID, tenantID != ""
 }
 
 func SortedCapabilities(capabilities []Capability) []Capability {

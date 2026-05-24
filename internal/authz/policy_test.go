@@ -158,6 +158,9 @@ func TestUnaryInterceptorRejectsTenantOutsideWorkloadPolicy(t *testing.T) {
 	if !strings.Contains(err.Error(), ReasonTenantDenied) {
 		t.Fatalf("error = %v, want tenant denied reason", err)
 	}
+	if strings.Contains(err.Error(), "requires") {
+		t.Fatalf("error = %v, want tenant-specific denial message", err)
+	}
 }
 
 func TestStreamInterceptorRejectsTenantOutsideWorkloadPolicy(t *testing.T) {
@@ -198,6 +201,44 @@ func TestStreamInterceptorRejectsTenantOutsideWorkloadPolicy(t *testing.T) {
 	if !strings.Contains(err.Error(), ReasonTenantDenied) {
 		t.Fatalf("error = %v, want tenant denied reason", err)
 	}
+	if strings.Contains(err.Error(), "requires") {
+		t.Fatalf("error = %v, want tenant-specific denial message", err)
+	}
+}
+
+func TestStreamInterceptorNormalizesTenantBeforeAuthorization(t *testing.T) {
+	manager := newTestManager(t, Policy{
+		Version: "policy-v1",
+		Workloads: map[string]WorkloadPolicy{
+			"billing-etl": {
+				Capabilities:   []Capability{capWrite},
+				AllowedTenants: []string{"tenant-a"},
+			},
+		},
+	})
+	interceptor := StreamServerInterceptorWithOptions(
+		manager,
+		map[string]Capability{"/scrap.DocumentService/WriteDocument": capWrite},
+		InterceptorOptions{
+			TenantExtractors: map[string]TenantExtractor{
+				"/scrap.DocumentService/WriteDocument": tenantFromTestRequest,
+			},
+		},
+	)
+
+	err := interceptor(
+		nil,
+		&testServerStream{
+			ctx:      ContextWithWorkloadIdentity(context.Background(), "billing-etl"),
+			messages: []testTenantRequest{{tenantID: "tenant-a "}},
+		},
+		&grpc.StreamServerInfo{FullMethod: "/scrap.DocumentService/WriteDocument"},
+		func(_ any, stream grpc.ServerStream) error {
+			var req testTenantRequest
+			return stream.RecvMsg(&req)
+		},
+	)
+	testutil.RequireNoErrorf(t, err, "stream tenant authorization")
 }
 
 func TestManagerAllowsAnyTenantWhenAllowedTenantsMissing(t *testing.T) {
