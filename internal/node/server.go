@@ -3,15 +3,19 @@ package node
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -52,6 +56,9 @@ type auditEventAppender interface {
 
 func Listen(cfg config.Config, apps Applications) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if err := requireGRPCMTLSConfig(cfg); err != nil {
 		return nil, err
 	}
 	authorization, err := authz.LoadManagerFromFile(cfg.AuthorizationPolicyPath, authorizationCapabilities())
@@ -96,17 +103,17 @@ func newServerWithConfig(
 	policyPath string,
 ) (*Server, error) {
 	auditSink := authorizationAuditSink{store: apps.Operations, now: func() time.Time { return time.Now().UTC() }}
-	limitOptions, err := grpcServerLimitOptions(cfg)
+	baseOptions, err := grpcServerBaseOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
-	publicOptions := combineServerOptions(limitOptions,
+	publicOptions := combineServerOptions(baseOptions,
 		grpc.UnaryInterceptor(authz.UnaryServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
 		grpc.StreamInterceptor(authz.StreamServerInterceptor(authorization, publicMethodCapabilities(), auditSink)),
 	)
 	publicGRPC := grpc.NewServer(publicOptions...)
 	api.RegisterPublicServer(publicGRPC, api.NewPublicServer(apps.Documents, apps.Transactions, api.WithPublicAuditStore(apps.Operations)))
-	adminOptions := combineServerOptions(limitOptions,
+	adminOptions := combineServerOptions(baseOptions,
 		grpc.UnaryInterceptor(bypassHealthUnaryInterceptor(authz.UnaryServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
 		grpc.StreamInterceptor(bypassHealthStreamInterceptor(authz.StreamServerInterceptor(authorization, adminMethodCapabilities(), auditSink))),
 	)
@@ -137,6 +144,28 @@ func combineServerOptions(base []grpc.ServerOption, options ...grpc.ServerOption
 	return combined
 }
 
+func requireGRPCMTLSConfig(cfg config.Config) error {
+	if cfg.TLSEnabled || cfg.EnableLocalNonProductionStorage {
+		return nil
+	}
+	return errors.New("grpc TLS must be enabled unless local non-production storage is enabled")
+}
+
+func grpcServerBaseOptions(cfg config.Config) ([]grpc.ServerOption, error) {
+	limitOptions, err := grpcServerLimitOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	tlsOptions, err := grpcServerTLSOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	options := make([]grpc.ServerOption, 0, len(limitOptions)+len(tlsOptions))
+	options = append(options, limitOptions...)
+	options = append(options, tlsOptions...)
+	return options, nil
+}
+
 func grpcServerLimitOptions(cfg config.Config) ([]grpc.ServerOption, error) {
 	limits := cfg.GRPCServerLimits
 	maxConcurrentStreams, err := safeconv.Uint64ToUint32("grpc_max_concurrent_streams", limits.MaxConcurrentStreams)
@@ -159,6 +188,32 @@ func grpcServerLimitOptions(cfg config.Config) ([]grpc.ServerOption, error) {
 			Timeout:               limits.KeepaliveTimeout,
 		}),
 	}, nil
+}
+
+func grpcServerTLSOptions(cfg config.Config) ([]grpc.ServerOption, error) {
+	if !cfg.TLSEnabled {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load grpc TLS certificate pair: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.TLSCACertFile)
+	if err != nil {
+		return nil, fmt.Errorf("read grpc TLS client CA certificate: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caPEM) {
+		return nil, errors.New("grpc TLS client CA certificate file contains no PEM certificates")
+	}
+	tlsConfig := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"h2"},
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    clientCAs,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}
+	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsConfig))}, nil
 }
 
 func auditEventAppenderFromStore(store *operations.Store) auditEventAppender {

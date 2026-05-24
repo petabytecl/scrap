@@ -236,6 +236,58 @@ func TestGRPCServerLimitsRejectUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestGRPCTLSConfigValidatesWhenEnabled(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*Config)
+		wantErr string
+	}{
+		"missing cert": {
+			mutate: func(cfg *Config) {
+				cfg.TLSEnabled = true
+				cfg.TLSKeyFile = "server-key.pem"
+				cfg.TLSCACertFile = "ca.pem"
+			},
+			wantErr: "tls_cert_file is required when grpc TLS is enabled",
+		},
+		"missing key": {
+			mutate: func(cfg *Config) {
+				cfg.TLSEnabled = true
+				cfg.TLSCertFile = "server.pem"
+				cfg.TLSCACertFile = "ca.pem"
+			},
+			wantErr: "tls_key_file is required when grpc TLS is enabled",
+		},
+		"missing ca": {
+			mutate: func(cfg *Config) {
+				cfg.TLSEnabled = true
+				cfg.TLSCertFile = "server.pem"
+				cfg.TLSKeyFile = "server-key.pem"
+			},
+			wantErr: "tls_ca_cert_file is required when grpc TLS is enabled",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			tt.mutate(&cfg)
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			testutil.RequireEqualf(t, err.Error(), tt.wantErr, "validation error")
+		})
+	}
+
+	cfg := Default()
+	cfg.TLSEnabled = true
+	cfg.TLSCertFile = "server.pem"
+	cfg.TLSKeyFile = "server-key.pem"
+	cfg.TLSCACertFile = "ca.pem"
+	testutil.RequireNoErrorf(t, cfg.Validate(), "enabled grpc TLS config")
+}
+
 func TestProductionWriteACKGateFailsClosedWithoutReadinessEvidence(t *testing.T) {
 	cfg := Default()
 	cfg.EnableProductionWriteACK = true
