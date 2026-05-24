@@ -21,6 +21,7 @@ var (
 	ErrInvalidRecord            = errors.New("metastore: invalid record")
 	ErrTransactionClosed        = errors.New("metastore: transaction is closed")
 	ErrUnsupportedSchemaVersion = errors.New("metastore: unsupported schema version")
+	ErrLegacyPebbleKeySchema    = errors.New("metastore: legacy unversioned pebble key schema detected")
 	ErrClosed                   = errors.New("metastore: store is closed")
 )
 
@@ -33,7 +34,46 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectLegacyPebbleKeySchema(db); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+func rejectLegacyPebbleKeySchema(db *pebble.DB) error {
+	for _, prefix := range legacyPebbleKeyPrefixes() {
+		hasLegacyKey, err := pebbleHasKeyWithPrefix(db, prefix)
+		if err != nil {
+			return err
+		}
+		if hasLegacyKey {
+			return fmt.Errorf("%w: prefix %q requires rebuild or explicit migration", ErrLegacyPebbleKeySchema, prefix)
+		}
+	}
+	return nil
+}
+
+func pebbleHasKeyWithPrefix(db *pebble.DB, prefix []byte) (bool, error) {
+	iter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return false, err
+	}
+	hasKey := iter.First()
+	iterErr := iter.Error()
+	closeErr := iter.Close()
+	if iterErr != nil {
+		return false, iterErr
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	return hasKey, nil
 }
 
 func (s *Store) Close() error {

@@ -69,7 +69,9 @@ though local projections are rebuildable. Metastore Pebble keys use
 `PebbleKeySchemaV1 = 0x01` followed by the logical key bytes. Future key-schema
 versions must coexist with V1 during migration; deleting or rewriting V1 keys
 is allowed only after authoritative metadata has been verified or rebuilt from
-Raft/published sources.
+Raft/published sources. Software that opens a database containing legacy
+unversioned metastore keys must fail with an operator-visible error instead of
+silently treating the old state as empty.
 
 ## Consequences
 

@@ -15,7 +15,7 @@ The durable version numbers are intentionally small and explicit:
 | Surface | Current version | Owner | Changelog |
 | --- | --- | --- | --- |
 | Authoritative metadata protobuf records | `metastore.CurrentSchemaVersion = 1` | `internal/metastore` | V1 is the initial authoritative document, transaction, upload intent, repair state, command receipt, Raft command, and Raft snapshot schema. |
-| Metastore Pebble key schema | `metastore.PebbleKeySchemaV1 = 0x01` | `internal/metastore` | V1 prefixes every logical Pebble key with one schema byte before the existing logical key bytes. |
+| Metastore Pebble key schema | `metastore.PebbleKeySchemaV1 = 0x01` | `internal/metastore` | V1 prefixes every logical Pebble key with one schema byte before the existing logical key bytes. Opening legacy unversioned keys fails fast and requires rebuild or explicit migration. |
 | Block, index, backend object, and envelope protobuf records | `storageformat.CurrentSchemaVersion = 1` | `internal/storageformat` | V1 is the initial durable block metadata and backend object schema. |
 | Published metadata protobuf records | `published.CurrentSchemaVersion = 1` | `internal/published` | V1 is the initial current pointer, manifest, snapshot record, and tail record schema. |
 | Published document location format | `published.CurrentLocationFormatVersion = 1` | `internal/published` | V1 describes block/index/envelope object references and frame ranges for imported document locations. |

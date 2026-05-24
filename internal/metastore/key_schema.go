@@ -18,9 +18,23 @@ const (
 )
 
 func pebbleKey(logical string) []byte {
-	key := make([]byte, 0, 1+len(logical))
-	key = append(key, PebbleKeySchemaV1)
-	return append(key, []byte(logical)...)
+	key := make([]byte, 1+len(logical))
+	key[0] = PebbleKeySchemaV1
+	copy(key[1:], logical)
+	return key
+}
+
+func legacyPebbleKeyPrefixes() [][]byte {
+	return [][]byte{
+		[]byte("document\x00"),
+		[]byte("transaction\x00"),
+		[]byte("document_by_transaction\x00"),
+		[]byte("document_by_block\x00"),
+		[]byte("upload_intent\x00"),
+		[]byte("upload_intent_processable\x00"),
+		[]byte("repair_state\x00"),
+		[]byte("command_receipt\x00"),
+	}
 }
 
 func documentKey(doc identity.Document) []byte {
