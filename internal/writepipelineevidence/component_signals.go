@@ -14,7 +14,7 @@ const (
 	ComponentSignalSampled     = "sampled"
 	ComponentSignalNotObserved = "not-observed"
 
-	componentSignalSampleInterval = 250 * time.Microsecond
+	componentSignalSampleInterval = time.Millisecond
 )
 
 type componentSignalSampler struct {
@@ -33,6 +33,11 @@ type gaugeObservation struct {
 type histogramObservation struct {
 	count uint64
 	sum   float64
+}
+
+type gaugeSample struct {
+	value float64
+	ok    bool
 }
 
 func startComponentSignalSampler() *componentSignalSampler {
@@ -63,11 +68,11 @@ func (s *componentSignalSampler) run() {
 func (s *componentSignalSampler) stopAndBuild(require bool) []ComponentSignal {
 	close(s.stop)
 	<-s.done
-	s.sample()
 	families, err := observe.GatherMetrics()
 	if err != nil {
 		return unavailableComponentSignals(require)
 	}
+	s.sampleFamilies(families)
 	return s.buildSignals(families, require)
 }
 
@@ -76,18 +81,25 @@ func (s *componentSignalSampler) sample() {
 	if err != nil {
 		return
 	}
-	values := map[string]float64{
+	s.sampleFamilies(families)
+}
+
+func (s *componentSignalSampler) sampleFamilies(families []*dto.MetricFamily) {
+	values := map[string]gaugeSample{
 		"block_append_queue_depth": gaugeValue(families, "scrap_block_append_queue_depth"),
 		"raft_queue_depth":         gaugeValue(families, "scrap_raft_queue_depth"),
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for name, value := range values {
+	for name, sample := range values {
+		if !sample.ok {
+			continue
+		}
 		observation := s.gauges[name]
-		observation.current = value
-		if value > observation.max {
-			observation.max = value
+		observation.current = sample.value
+		if sample.value > observation.max {
+			observation.max = sample.value
 		}
 		observation.samples++
 		s.gauges[name] = observation
@@ -196,24 +208,33 @@ func unavailableComponentSignals(require bool) []ComponentSignal {
 	required := make([]ComponentSignal, 0, len(signals))
 	for _, signal := range signals {
 		next := signal
-		next.Required = true
+		next.Required = componentSignalRequiresObservation(next.Name)
 		next.Status = ComponentSignalNotObserved
 		required = append(required, next)
 	}
 	return required
 }
 
-func gaugeValue(families []*dto.MetricFamily, name string) float64 {
+func componentSignalRequiresObservation(name string) bool {
+	switch name {
+	case "block_append_sync_latency", "block_sync_batch_size", "metadata_command_sync_latency", "metadata_command_batch_size":
+		return true
+	default:
+		return false
+	}
+}
+
+func gaugeValue(families []*dto.MetricFamily, name string) gaugeSample {
 	family := metricFamily(families, name)
 	if family == nil {
-		return 0
+		return gaugeSample{}
 	}
 	for _, metric := range family.GetMetric() {
 		if metric.GetGauge() != nil {
-			return metric.GetGauge().GetValue()
+			return gaugeSample{value: metric.GetGauge().GetValue(), ok: true}
 		}
 	}
-	return 0
+	return gaugeSample{}
 }
 
 func histogramValue(families []*dto.MetricFamily, name string, labels map[string]string) histogramObservation {
