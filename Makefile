@@ -101,7 +101,7 @@ test-compat: ## Run compatibility tests for stored data and metadata boundaries.
 	$(GO) test $(COMPAT_PACKAGES)
 
 test-crashfault-catalog: ## Verify crash/fault catalog patterns match real tests.
-	$(GO) test -tags=integration ./internal/crashfault
+	GO="$(GO)" $(GO) test -tags=integration ./internal/crashfault
 
 test-race: ## Run package tests with the Go race detector.
 	$(GO) test -race $(TEST_PACKAGES)
