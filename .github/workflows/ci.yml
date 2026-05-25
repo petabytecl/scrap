@@ -29,11 +29,11 @@ jobs:
         with:
           version: "1.66.0"
 
-      - name: Install golangci-lint
+      - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.10.1
-          install-only: true
+          args: --timeout=5m
 
       - name: Check manifests
         run: make manifests-check
@@ -43,13 +43,6 @@ jobs:
 
       - name: Check protobuf schemas
         run: make BUF=buf proto-check
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.10.1
-          install-mode: none
-          args: --timeout=5m
 
   test:
     runs-on: ubuntu-latest
