@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/petabytecl/scrap/internal/adminui/templates"
 	"github.com/petabytecl/scrap/internal/api"
 	"github.com/petabytecl/scrap/internal/appstatus"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
@@ -161,6 +162,26 @@ func TestHandlerRendersMemberDetailAndTabs(t *testing.T) {
 	}
 }
 
+func TestHandlerRendersMemberDetailWithoutEvictionSafety(t *testing.T) {
+	handler := NewHandler(Options{
+		Inspect: fakeInspect{
+			member: &adminv1.StorageMember{
+				StorageMemberId: "local",
+				CellId:          "local",
+				State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+				BytesUsed:       2048,
+				BytesCapacity:   4096,
+			},
+		},
+	})
+
+	detail := request(handler, "/admin/members/local")
+	requireOK(t, detail)
+	body := detail.Body.String()
+	requireContains(t, body, "Members / local")
+	requireContains(t, body, "member application is unavailable")
+}
+
 func TestHandlerRendersClientDetailAndTabs(t *testing.T) {
 	handler := NewHandler(Options{})
 
@@ -258,6 +279,37 @@ func TestHandlerRejectsInvalidOperationFilter(t *testing.T) {
 	}
 }
 
+func TestPathParsingRejectsEscapedDotSegments(t *testing.T) {
+	if segment, ok := pathSegment("%2e%2e"); ok {
+		t.Fatalf("pathSegment escaped dot-dot = %q, true; want false", segment)
+	}
+	if segment, ok := pathSegment("%2e"); ok {
+		t.Fatalf("pathSegment escaped dot = %q, true; want false", segment)
+	}
+	if operationID, ok := operationIDFromDetailPath("/admin/operations/%2e%2e/detail"); ok {
+		t.Fatalf("operationIDFromDetailPath escaped dot-dot = %q, true; want false", operationID)
+	}
+	if memberID, _, _, ok := memberPath("/admin/members/%2e%2e"); ok {
+		t.Fatalf("memberPath escaped dot-dot = %q, true; want false", memberID)
+	}
+	if clientID, _, _, ok := clientPath("/admin/clients/%2e%2e"); ok {
+		t.Fatalf("clientPath escaped dot-dot = %q, true; want false", clientID)
+	}
+}
+
+func TestRepairDetailReportsDegradedDocumentsWithoutQueue(t *testing.T) {
+	data := templates.DashboardData{
+		Summary: templates.SummaryData{DegradedDocumentCount: 2},
+	}
+
+	if got, want := repairState(data), "warning"; got != want {
+		t.Fatalf("repairState = %q, want %q", got, want)
+	}
+	if got, want := repairDetail(data), "2 degraded document(s) need repair attention"; got != want {
+		t.Fatalf("repairDetail = %q, want %q", got, want)
+	}
+}
+
 func TestHandlerRejectsUnknownPaths(t *testing.T) {
 	handler := NewHandler(Options{})
 	if response := request(handler, "/not-admin"); response.Code != http.StatusNotFound {
@@ -307,7 +359,7 @@ func request(handler http.Handler, target string) *httptest.ResponseRecorder {
 func htmxRequest(handler http.Handler, target string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
-	req.Header.Set("HX-Request", "true")
+	req.Header.Set("Hx-Request", "true")
 	handler.ServeHTTP(recorder, req)
 	return recorder
 }

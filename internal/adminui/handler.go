@@ -213,18 +213,15 @@ func (h *Handler) clientDetail(w http.ResponseWriter, r *http.Request) {
 
 func operationIDFromDetailPath(requestPath string) (string, bool) {
 	cleaned := strings.Trim(path.Clean(strings.TrimPrefix(requestPath, "/admin/operations/")), "/")
-	operationID, suffix, ok := strings.Cut(cleaned, "/")
+	rawOperationID, suffix, ok := strings.Cut(cleaned, "/")
 	if !ok || suffix != "detail" {
 		return "", false
 	}
-	if operationID == "." || operationID == "" || strings.Contains(operationID, "/") {
+	operationID, ok := pathSegment(rawOperationID)
+	if !ok {
 		return "", false
 	}
-	unescaped, err := url.PathUnescape(operationID)
-	if err != nil || unescaped == "" || strings.Contains(unescaped, "/") {
-		return "", false
-	}
-	return unescaped, true
+	return operationID, true
 }
 
 func clientPath(requestPath string) (clientID, tab string, tabOnly, ok bool) {
@@ -270,14 +267,18 @@ func memberPath(requestPath string) (memberID, tab string, tabOnly, ok bool) {
 }
 
 func pathSegment(raw string) (string, bool) {
-	if raw == "." || raw == "" || strings.Contains(raw, "/") {
+	if isInvalidPathSegment(raw) {
 		return "", false
 	}
 	unescaped, err := url.PathUnescape(raw)
-	if err != nil || unescaped == "" || strings.Contains(unescaped, "/") {
+	if err != nil || isInvalidPathSegment(unescaped) {
 		return "", false
 	}
 	return unescaped, true
+}
+
+func isInvalidPathSegment(segment string) bool {
+	return segment == "" || segment == "." || segment == ".." || strings.Contains(segment, "/")
 }
 
 func validMemberTab(tab string) bool {
@@ -314,7 +315,7 @@ func partialComponent(view string) func(templates.DashboardData) templ.Component
 }
 
 func isHTMX(r *http.Request) bool {
-	return r.Header.Get("HX-Request") == "true"
+	return r.Header.Get("Hx-Request") == "true"
 }
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, component templ.Component) {
@@ -432,8 +433,10 @@ func memberDetailData(member *adminv1.StorageMember, safety *adminv1.EvictionSaf
 		return templates.MemberDetailData{Tab: tab, Tabs: templates.MemberTabs()}
 	}
 	warnings := []templates.WarningData(nil)
+	safeToEvict := false
 	if safety != nil {
 		warnings = warningsData(safety.GetWarnings())
+		safeToEvict = safety.GetSafeToEvict()
 	}
 	return templates.MemberDetailData{
 		ID:            member.GetStorageMemberId(),
@@ -447,7 +450,7 @@ func memberDetailData(member *adminv1.StorageMember, safety *adminv1.EvictionSaf
 		Tabs:          templates.MemberTabs(),
 		Eviction: templates.EvictionSafetyData{
 			Known:       safety != nil,
-			SafeToEvict: safety.GetSafeToEvict(),
+			SafeToEvict: safeToEvict,
 			Error:       safetyError,
 			Warnings:    warnings,
 		},
@@ -736,10 +739,13 @@ func repairState(data templates.DashboardData) string {
 }
 
 func repairDetail(data templates.DashboardData) string {
-	if data.RepairQueueCount == 0 {
-		return "repair queue empty"
+	if data.RepairQueueCount > 0 {
+		return templates.CountText(data.RepairQueueCount) + " queued repair item(s)"
 	}
-	return templates.CountText(data.RepairQueueCount) + " queued repair item(s)"
+	if data.Summary.DegradedDocumentCount > 0 {
+		return templates.CountText(int(data.Summary.DegradedDocumentCount)) + " degraded document(s) need repair attention"
+	}
+	return "repair queue empty"
 }
 
 func degradedState(count uint32) string {
