@@ -9,14 +9,14 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 )
 
-func (a *Application) GetRepairQueue(ctx context.Context, shardID string) ([]*adminv1.RepairQueueItem, error) {
+func (r *RepairApplication) GetRepairQueue(ctx context.Context, shardID string) ([]*adminv1.RepairQueueItem, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if shardID != "" && shardID != "local" {
 		return nil, nil
 	}
-	states, err := a.metadata.ListRepairStates()
+	states, err := r.app.metadata.ListRepairStates()
 	if err != nil {
 		return nil, err
 	}

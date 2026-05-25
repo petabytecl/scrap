@@ -8,13 +8,13 @@ import (
 	"github.com/petabytecl/scrap/internal/published"
 )
 
-func (a *Application) GetRecoveryReadiness(ctx context.Context) (*adminv1.RecoveryReadiness, error) {
+func (d *DisasterRecoveryApplication) GetRecoveryReadiness(ctx context.Context) (*adminv1.RecoveryReadiness, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	warnings := make([]*adminv1.OperationWarning, 0, 3)
 	readiness := &adminv1.RecoveryReadiness{Ready: false}
-	if a.backendStore == nil {
+	if d.app.backendStore == nil {
 		warnings = append(warnings, &adminv1.OperationWarning{
 			Code:    "SCRAP_DR_METADATA_EXPORT_MISSING",
 			Message: "local non-production mode has no published metadata checkpoint or tail to restore",
@@ -27,7 +27,7 @@ func (a *Application) GetRecoveryReadiness(ctx context.Context) (*adminv1.Recove
 		return readiness, nil
 	}
 
-	checkpoint, err := published.VerifyCurrentCheckpoint(ctx, a.backendStore, localPublishedCellID)
+	checkpoint, err := published.VerifyCurrentCheckpoint(ctx, d.app.backendStore, localPublishedCellID)
 	switch {
 	case err == nil:
 		readiness.Ready = true

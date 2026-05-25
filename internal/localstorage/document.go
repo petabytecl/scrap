@@ -16,7 +16,6 @@ import (
 
 	"github.com/petabytecl/scrap/internal/appstatus"
 	"github.com/petabytecl/scrap/internal/backend"
-	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
@@ -24,7 +23,6 @@ import (
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/observe"
-	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/safeconv"
@@ -35,124 +33,6 @@ import (
 const backendReadChunkSize = 1024 * 1024
 
 var ErrCorruptVerificationWindow = errors.New("localstorage: corrupt verification window")
-
-type BackendUploadOnceResult struct {
-	SealedBlockID       string
-	SealedBlockIDs      []string
-	Sealed              bool
-	Upload              backendupload.RunResult
-	MetadataPublished   bool
-	MetadataPublication *published.SnapshotPublication
-}
-
-func (a *Application) BackendUploadProcessor(store backend.Store) backendupload.Processor {
-	return backendupload.Processor{
-		Uploader: backendupload.Uploader{
-			Backend:  store,
-			Source:   backendupload.LocalBlockSource{Blocks: a.blocks},
-			Envelope: a.backendEnvelopeSource(),
-			Index: backendupload.LocalBlockIndexSource{
-				Documents: a.metadata,
-				ShardID:   "local",
-			},
-		},
-		Intents: a.metadata,
-		Updater: a.authority,
-		Now:     a.now,
-	}
-}
-
-func (a *Application) RunBackendUploadOnce(ctx context.Context, store backend.Store) (BackendUploadOnceResult, error) {
-	var result BackendUploadOnceResult
-	sealedBlockID, sealed, err := a.SealCurrentBlockIfDue(ctx)
-	if err != nil {
-		return result, err
-	}
-	result.SealedBlockID = sealedBlockID
-	result.Sealed = sealed
-	if sealed {
-		result.SealedBlockIDs = append(result.SealedBlockIDs, sealedBlockID)
-	}
-	recovered, err := a.SealPendingUploadBlocks(ctx)
-	if err != nil {
-		return result, err
-	}
-	result.SealedBlockIDs = append(result.SealedBlockIDs, recovered...)
-	result.Upload, err = a.BackendUploadProcessor(store).RunOnce(ctx)
-	if err != nil {
-		return result, err
-	}
-	if a.shouldPublishMetadataCheckpoint(ctx, store, result.Upload) {
-		mutable, ok := store.(backend.MutableStore)
-		if !ok {
-			return result, errors.New("localstorage: backend store does not support mutable metadata pointers")
-		}
-		publication, err := a.publishMetadataSnapshot(ctx, mutable)
-		if err != nil {
-			return result, err
-		}
-		result.MetadataPublished = true
-		result.MetadataPublication = &publication
-	}
-	return result, err
-}
-
-func (a *Application) shouldPublishMetadataCheckpoint(ctx context.Context, store backend.Store, upload backendupload.RunResult) bool {
-	if upload.Uploaded > 0 {
-		return true
-	}
-	if upload.Deferred > 0 || upload.Failed > 0 {
-		return false
-	}
-	if _, err := published.VerifyCurrentCheckpoint(ctx, store, localPublishedCellID); errors.Is(err, published.ErrCurrentPointerNotFound) {
-		return true
-	}
-	return false
-}
-
-func (a *Application) SealPendingUploadBlocks(ctx context.Context) ([]string, error) {
-	intents, err := a.metadata.ListUploadIntents()
-	if err != nil {
-		return nil, err
-	}
-	currentBlockID := a.blocks.CurrentBlockID()
-	var sealed []string
-	for _, intent := range intents {
-		if intent.BlockID == "" || intent.BlockID == currentBlockID || !isUploadPending(intent.State) {
-			continue
-		}
-		didSeal, err := a.blocks.SealBlock(ctx, intent.BlockID)
-		if errors.Is(err, blockstore.ErrEmptyBlock) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if didSeal {
-			sealed = append(sealed, intent.BlockID)
-		}
-	}
-	sort.Strings(sealed)
-	return sealed, nil
-}
-
-func isUploadPending(state metastore.UploadState) bool {
-	return state == metastore.UploadStatePending || state == metastore.UploadStateFailed
-}
-
-func (a *Application) SealCurrentBlockIfDue(ctx context.Context) (string, bool, error) {
-	if a.sealBlockAtBytes == 0 || a.blocks.CurrentBlockLength() < a.sealBlockAtBytes {
-		return "", false, nil
-	}
-	blockID, err := a.blocks.SealCurrent(ctx)
-	if errors.Is(err, blockstore.ErrEmptyBlock) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	return blockID, true, nil
-}
 
 func (a *verificationEngine) startByteServingVerifier(ctx context.Context) {
 	verifierCtx, cancel := context.WithCancel(ctx)
@@ -1190,21 +1070,21 @@ func mapError(err error) error {
 	return err
 }
 
-func (a *Application) CheckReadiness(ctx context.Context) error {
-	if a == nil || a.authority == nil {
+func (h *HealthApplication) CheckReadiness(ctx context.Context) error {
+	if h == nil || h.app == nil || h.app.authority == nil {
 		return errors.New("localstorage: application is closed")
 	}
-	if err := a.authority.CheckHealth(); err != nil {
+	if err := h.app.authority.CheckHealth(); err != nil {
 		return err
 	}
-	return a.authority.ReadFresh(ctx)
+	return h.app.authority.ReadFresh(ctx)
 }
 
-func (a *Application) CheckLiveness(ctx context.Context) error {
-	if a == nil || a.metadata == nil || a.blocks == nil || a.authority == nil {
+func (h *HealthApplication) CheckLiveness(ctx context.Context) error {
+	if h == nil || h.app == nil || h.app.metadata == nil || h.app.blocks == nil || h.app.authority == nil {
 		return errors.New("localstorage: application is closed")
 	}
-	return errors.Join(a.metadata.CheckReachable(), a.blocks.CheckOpen(ctx), a.authority.CheckHealth())
+	return errors.Join(h.app.metadata.CheckReachable(), h.app.blocks.CheckOpen(ctx), h.app.authority.CheckHealth())
 }
 
 var applicationErrorMappings = []struct {

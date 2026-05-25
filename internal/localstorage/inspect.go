@@ -24,7 +24,7 @@ import (
 
 const localCapacityProfileID = "local-non-production"
 
-func (a *Application) GetAdminClusterSummary(ctx context.Context) (*adminv1.ClusterSummary, error) {
+func (a *InspectApplication) GetAdminClusterSummary(ctx context.Context) (*adminv1.ClusterSummary, error) {
 	stats, err := a.localDiskStats(ctx)
 	if err != nil {
 		return nil, err
@@ -37,12 +37,12 @@ func (a *Application) GetAdminClusterSummary(ctx context.Context) (*adminv1.Clus
 	}, nil
 }
 
-func (a *Application) GetAdminShard(_ context.Context, shardID string) (*adminv1.Shard, error) {
+func (a *InspectApplication) GetAdminShard(_ context.Context, shardID string) (*adminv1.Shard, error) {
 	if shardID != "local" {
 		return nil, mapError(metastore.ErrNotFound)
 	}
-	appliedIndex := a.authority.AppliedIndex()
-	committedIndex := a.authority.DurableIndex()
+	appliedIndex := a.app.authority.AppliedIndex()
+	committedIndex := a.app.authority.DurableIndex()
 	return &adminv1.Shard{
 		ShardId:              "local",
 		LeaderMemberId:       "local",
@@ -53,8 +53,8 @@ func (a *Application) GetAdminShard(_ context.Context, shardID string) (*adminv1
 	}, nil
 }
 
-func (a *Application) GetAdminDocument(_ context.Context, doc identity.Document) (*adminv1.AdminDocument, error) {
-	document, err := a.metadata.HeadDocument(doc)
+func (a *InspectApplication) GetAdminDocument(_ context.Context, doc identity.Document) (*adminv1.AdminDocument, error) {
+	document, err := a.app.metadata.HeadDocument(doc)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -72,11 +72,11 @@ func (a *Application) GetAdminDocument(_ context.Context, doc identity.Document)
 	}, nil
 }
 
-func (a *Application) GetAdminBlock(ctx context.Context, target storageapp.BlockTarget) (*adminv1.Block, error) {
+func (a *InspectApplication) GetAdminBlock(ctx context.Context, target storageapp.BlockTarget) (*adminv1.Block, error) {
 	if target.ShardID != "local" {
 		return nil, mapError(metastore.ErrNotFound)
 	}
-	documents, err := a.metadata.ListBlockDocuments(target.BlockID)
+	documents, err := a.app.metadata.ListBlockDocuments(target.BlockID)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -88,7 +88,7 @@ func (a *Application) GetAdminBlock(ctx context.Context, target storageapp.Block
 		return nil, mapError(err)
 	}
 	backendObjectKey := ""
-	intent, err := a.metadata.GetUploadIntent(target.BlockID)
+	intent, err := a.app.metadata.GetUploadIntent(target.BlockID)
 	if err != nil && !errors.Is(err, metastore.ErrNotFound) {
 		return nil, mapError(err)
 	}
@@ -105,7 +105,7 @@ func (a *Application) GetAdminBlock(ctx context.Context, target storageapp.Block
 	}, nil
 }
 
-func (a *Application) GetAdminMember(ctx context.Context, memberID string) (*adminv1.StorageMember, error) {
+func (a *InspectApplication) GetAdminMember(ctx context.Context, memberID string) (*adminv1.StorageMember, error) {
 	if memberID != "local" {
 		return nil, mapError(metastore.ErrNotFound)
 	}
@@ -113,7 +113,7 @@ func (a *Application) GetAdminMember(ctx context.Context, memberID string) (*adm
 	if err != nil {
 		return nil, err
 	}
-	memberState := a.currentLocalMemberState()
+	memberState := a.app.currentLocalMemberState()
 	state := adminv1.MemberState_MEMBER_STATE_ONLINE
 	if memberState.Draining {
 		state = adminv1.MemberState_MEMBER_STATE_DRAINING
@@ -125,11 +125,11 @@ func (a *Application) GetAdminMember(ctx context.Context, memberID string) (*adm
 		Cordoned:        memberState.Cordoned,
 		BytesUsed:       stats.bytesUsed,
 		BytesCapacity:   stats.bytesCapacity,
-		LastSeenAt:      timestamppb.New(a.now()),
+		LastSeenAt:      timestamppb.New(a.app.now()),
 	}, nil
 }
 
-func (a *Application) GetAdminCapacityRunway(ctx context.Context, capacityProfileID string) (*adminv1.CapacityRunway, error) {
+func (a *InspectApplication) GetAdminCapacityRunway(ctx context.Context, capacityProfileID string) (*adminv1.CapacityRunway, error) {
 	if capacityProfileID == "" {
 		capacityProfileID = localCapacityProfileID
 	}
@@ -156,11 +156,11 @@ func (a *Application) GetAdminCapacityRunway(ctx context.Context, capacityProfil
 	}, nil
 }
 
-func (a *Application) blockDigest(ctx context.Context, blockID string) (uint64, []byte, error) {
+func (a *InspectApplication) blockDigest(ctx context.Context, blockID string) (uint64, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
-	file, err := os.Open(a.blocks.BlockPath(blockID))
+	file, err := os.Open(a.app.blocks.BlockPath(blockID))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -186,16 +186,16 @@ type localDiskStats struct {
 	usableBytesRemaining uint64
 }
 
-func (a *Application) localDiskStats(ctx context.Context) (localDiskStats, error) {
+func (a *InspectApplication) localDiskStats(ctx context.Context) (localDiskStats, error) {
 	if err := ctx.Err(); err != nil {
 		return localDiskStats{}, err
 	}
-	used, err := directorySize(a.dir)
+	used, err := directorySize(a.app.dir)
 	if err != nil {
 		return localDiskStats{}, err
 	}
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs(a.dir, &stat); err != nil {
+	if err := syscall.Statfs(a.app.dir, &stat); err != nil {
 		return localDiskStats{}, fmt.Errorf("stat local storage filesystem: %w", err)
 	}
 	return localDiskStats{

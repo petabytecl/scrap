@@ -19,30 +19,30 @@ func TestAdminInspectReportsLocalShardDocumentBlockAndCapacity(t *testing.T) {
 	doc := testDocumentIdentity()
 	stored := writeOperationTargetDocument(t, app, doc, "admin inspect bytes")
 
-	summary, err := app.GetAdminClusterSummary(ctx)
+	summary, err := Inspect(app).GetAdminClusterSummary(ctx)
 	testutil.RequireNoErrorf(t, err, "cluster summary")
 	testutil.RequireEqualf(t, summary.GetShardCount(), uint32(1), "cluster shard count")
-	shard, err := app.GetAdminShard(ctx, "local")
+	shard, err := Inspect(app).GetAdminShard(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "local shard")
 	testutil.RequireEqualf(t, shard.GetLeaderMemberId(), "local", "local shard leader")
-	if _, err := app.GetAdminShard(ctx, "remote"); err == nil {
+	if _, err := Inspect(app).GetAdminShard(ctx, "remote"); err == nil {
 		t.Fatal("remote shard error = nil, want not found")
 	}
 
-	adminDoc, err := app.GetAdminDocument(ctx, doc)
+	adminDoc, err := Inspect(app).GetAdminDocument(ctx, doc)
 	testutil.RequireNoErrorf(t, err, "admin document")
 	testutil.RequireEqualf(t, adminDoc.GetDocument().GetDocumentName(), doc.DocumentName, "admin document name")
-	block, err := app.GetAdminBlock(ctx, storageapp.BlockTarget{ShardID: "local", BlockID: stored.Location.BlockID})
+	block, err := Inspect(app).GetAdminBlock(ctx, storageapp.BlockTarget{ShardID: "local", BlockID: stored.Location.BlockID})
 	testutil.RequireNoErrorf(t, err, "admin block")
 	testutil.RequireEqualf(t, block.GetBlockId(), stored.Location.BlockID, "admin block id")
-	if _, err := app.GetAdminBlock(ctx, storageapp.BlockTarget{ShardID: "remote", BlockID: stored.Location.BlockID}); err == nil {
+	if _, err := Inspect(app).GetAdminBlock(ctx, storageapp.BlockTarget{ShardID: "remote", BlockID: stored.Location.BlockID}); err == nil {
 		t.Fatal("remote block error = nil, want not found")
 	}
 
-	runway, err := app.GetAdminCapacityRunway(ctx, "")
+	runway, err := Inspect(app).GetAdminCapacityRunway(ctx, "")
 	testutil.RequireNoErrorf(t, err, "default capacity runway")
 	testutil.RequireEqualf(t, runway.GetCapacityProfileId(), localCapacityProfileID, "capacity profile id")
-	if _, err := app.GetAdminCapacityRunway(ctx, "remote"); err == nil {
+	if _, err := Inspect(app).GetAdminCapacityRunway(ctx, "remote"); err == nil {
 		t.Fatal("remote capacity profile error = nil, want not found")
 	}
 }
