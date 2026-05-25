@@ -75,3 +75,4 @@ component_management:
 
 ignore:
   - "internal/gen/**"
+  - "internal/adminui/templates/*_templ.go"

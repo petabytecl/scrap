@@ -13,6 +13,7 @@ const (
 	DefaultPublicListenAddress   = "127.0.0.1:18080"
 	DefaultAdminListenAddress    = "127.0.0.1:18081"
 	DefaultMetricsListenAddress  = "127.0.0.1:18082"
+	DefaultAdminUIListenAddress  = ""
 	DefaultBackendUploadInterval = 30 * time.Second
 	DefaultOperationRunInterval  = 5 * time.Second
 	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
@@ -53,6 +54,7 @@ type Config struct {
 	PublicListenAddress             string
 	AdminListenAddress              string
 	MetricsListenAddress            string
+	AdminUIListenAddress            string
 	AuthorizationPolicyPath         string
 	TLSEnabled                      bool
 	TLSCertFile                     string
@@ -128,6 +130,7 @@ func Default() Config {
 		PublicListenAddress:   DefaultPublicListenAddress,
 		AdminListenAddress:    DefaultAdminListenAddress,
 		MetricsListenAddress:  DefaultMetricsListenAddress,
+		AdminUIListenAddress:  DefaultAdminUIListenAddress,
 		BackendUploadInterval: DefaultBackendUploadInterval,
 		OperationRunInterval:  DefaultOperationRunInterval,
 		LocalSealBlockAtBytes: DefaultLocalSealBlockAtBytes,
@@ -157,6 +160,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateLocalStorage(); err != nil {
+		return err
+	}
+	if err := c.validateAdminUI(); err != nil {
 		return err
 	}
 	if c.BackendUploadInterval <= 0 {
@@ -250,6 +256,9 @@ func (c Config) validateListenAddresses() error {
 		{field: "admin_listen_address", value: c.AdminListenAddress},
 		{field: "metrics_listen_address", value: c.MetricsListenAddress},
 	}
+	if strings.TrimSpace(c.AdminUIListenAddress) != "" {
+		addresses = append(addresses, listenAddress{field: "admin_ui_listen_address", value: c.AdminUIListenAddress})
+	}
 	seen := make(map[string]string, len(addresses))
 	for _, address := range addresses {
 		if err := validateListenAddress(address.field, address.value); err != nil {
@@ -291,6 +300,23 @@ func (c Config) validateLocalFilesystemBackend() error {
 		}
 	} else if strings.TrimSpace(c.LocalBackendDataDir) != "" {
 		return errors.New("local_backend_data_dir requires local filesystem backend to be explicitly enabled")
+	}
+	return nil
+}
+
+func (c Config) validateAdminUI() error {
+	if strings.TrimSpace(c.AdminUIListenAddress) == "" {
+		return nil
+	}
+	if !c.EnableLocalNonProductionStorage {
+		return errors.New("admin_ui_listen_address requires local non-production storage until HTTP admin UI authorization is implemented")
+	}
+	host, _, err := net.SplitHostPort(c.AdminUIListenAddress)
+	if err != nil {
+		return fmt.Errorf("admin_ui_listen_address must be host:port: %w", err)
+	}
+	if !isLoopback(host) {
+		return errors.New("admin_ui_listen_address must bind to a loopback address until HTTP admin UI authorization is implemented")
 	}
 	return nil
 }
@@ -464,6 +490,15 @@ type productionReadinessRequirement struct {
 	Ready                        bool
 	ProvidedArtifact             string
 	DownstreamDeploymentDeferral string
+}
+
+func isLoopback(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateListenAddress(field, value string) error {

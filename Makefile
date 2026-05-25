@@ -20,6 +20,7 @@ GOLANGCI_LINT ?= $(GO_TOOL) golangci-lint
 GOTESTSUM ?= $(GO_TOOL) gotestsum
 GOVULNCHECK ?= $(GO_TOOL) govulncheck
 KUSTOMIZE ?= $(GO_TOOL) kustomize
+TEMPL ?= $(GO_TOOL) templ
 
 # External command-line tools.
 ##? DOCKER Docker CLI used by local image targets.
@@ -81,6 +82,7 @@ STATIC_TARGETS := \
 	fmt-check \
 	package-boundaries \
 	proto-check \
+	templ-check \
 	lint
 TEST_TARGETS := \
 	test-compat \
@@ -137,12 +139,14 @@ LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
 
 ##@ Endpoint Variables
 ##? SCRAP_ADMIN_ADDR Local admin API address used by evidence targets.
+##? SCRAP_ADMIN_UI_ADDR Local admin UI HTTP address used by local scrapd runs.
 ##? SCRAP_METRICS_ADDR Local metrics HTTP address used by local scrapd runs.
 ##? SCRAP_PUBLIC_ADDR Local public API address used by evidence targets.
 ##? SCRAP_PUBLIC_WORKLOAD_IDENTITY Local public workload identity.
 ##? SCRAP_WORKLOAD_IDENTITY Local admin workload identity.
 
 SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
+SCRAP_ADMIN_UI_ADDR ?= 127.0.0.1:18083
 SCRAP_METRICS_ADDR ?= 127.0.0.1:18082
 SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
 SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
@@ -164,6 +168,11 @@ LOCAL_SCRAPD_AUTHZ_POLICY ?= deploy/kustomize/base/authz-policy.json
 LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL ?= 5s
 LOCAL_SCRAPD_OPERATION_RUN_INTERVAL ?= 5s
 LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES ?= 4096
+
+##@ Local Dev Variables
+##? LOCAL_DEV_SCRIPT Script used by local-dev targets.
+
+LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 
 ##@ Release Evidence Variables
 ##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
@@ -267,6 +276,9 @@ help: ## Show this help.
 proto: ## Generate protobuf and gRPC code.
 	$(BUF) generate
 
+.PHONY: generate
+generate: proto generate-templ ## Generate all checked-in code.
+
 .PHONY: proto-check
 proto-check: ## Lint schemas, check breaking changes, and verify generated code.
 	$(BUF) lint
@@ -278,6 +290,17 @@ proto-check: ## Lint schemas, check breaking changes, and verify generated code.
 	fi
 	$(BUF) generate
 	git diff --exit-code -- internal/gen
+
+.PHONY: generate-templ
+generate-templ: ## Generate templ admin UI code.
+	$(TEMPL) generate ./internal/adminui/templates/...
+	$(GO) run ./scripts/clean-templ-generated.go -- internal/adminui/templates/*_templ.go
+
+.PHONY: templ-check
+templ-check: ## Verify generated templ admin UI code is current.
+	$(TEMPL) generate ./internal/adminui/templates/...
+	$(GO) run ./scripts/clean-templ-generated.go -- internal/adminui/templates/*_templ.go
+	git diff --exit-code -- internal/adminui/templates/*_templ.go
 
 ##@ Development
 
@@ -343,6 +366,7 @@ local-scrapd-run: ## Run scrapd locally with non-production storage for manual t
 		--public-listen="$(SCRAP_PUBLIC_ADDR)" \
 		--admin-listen="$(SCRAP_ADMIN_ADDR)" \
 		--metrics-listen="$(SCRAP_METRICS_ADDR)" \
+		--admin-ui-listen="$(SCRAP_ADMIN_UI_ADDR)" \
 		--authorization-policy="$(LOCAL_SCRAPD_AUTHZ_POLICY)" \
 		--enable-local-non-production-storage \
 		--local-data-dir="$(LOCAL_SCRAPD_DATA_DIR)" \
@@ -351,6 +375,40 @@ local-scrapd-run: ## Run scrapd locally with non-production storage for manual t
 		--backend-upload-interval="$(LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL)" \
 		--operation-run-interval="$(LOCAL_SCRAPD_OPERATION_RUN_INTERVAL)" \
 		--local-seal-block-at-bytes="$(LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES)"
+
+##@ Local Dev
+
+.PHONY: local-dev-up
+local-dev-up: ## Start the full local dev environment: scrapd, admin UI, LocalStack, and OpenBao.
+	@$(LOCAL_DEV_SCRIPT) up
+
+.PHONY: local-dev-prod-up
+local-dev-prod-up: ## Start a production-like local dev environment with multiple scrapd nodes.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) up
+
+.PHONY: local-dev-down
+local-dev-down: ## Stop the full local dev environment and delete its kind cluster.
+	@$(LOCAL_DEV_SCRIPT) down
+
+.PHONY: local-dev-prod-down
+local-dev-prod-down: ## Stop the production-like local dev environment and delete its kind cluster.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) down
+
+.PHONY: local-dev-status
+local-dev-status: ## Show local dev Kubernetes resources and port-forwards.
+	@$(LOCAL_DEV_SCRIPT) status
+
+.PHONY: local-dev-prod-status
+local-dev-prod-status: ## Show production-like local dev Kubernetes resources and port-forwards.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) status
+
+.PHONY: local-dev-stop-forwards
+local-dev-stop-forwards: ## Stop only local dev port-forwards.
+	@$(LOCAL_DEV_SCRIPT) stop-forwards
+
+.PHONY: local-dev-prod-stop-forwards
+local-dev-prod-stop-forwards: ## Stop only production-like local dev port-forwards.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) stop-forwards
 
 .PHONY: static
 static: $(STATIC_TARGETS) ## Run all static analysis and format checks.

@@ -237,6 +237,7 @@ func initCrashFaultGitRepo(t *testing.T) string {
 	runCrashFaultGit(t, dir, "init")
 	runCrashFaultGit(t, dir, "config", "user.email", "test@example.com")
 	runCrashFaultGit(t, dir, "config", "user.name", "Test User")
+	runCrashFaultGit(t, dir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(dir+"/tracked.txt", []byte("clean"), 0o600); err != nil {
 		t.Fatalf("write tracked file: %v", err)
 	}

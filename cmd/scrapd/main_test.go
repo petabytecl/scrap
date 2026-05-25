@@ -51,6 +51,81 @@ func TestMetricsEndpointServesMetricsPath(t *testing.T) {
 	testutil.RequireNoErrorf(t, <-errCh, "metrics endpoint stopped")
 }
 
+func TestAdminUIEndpointDisabledWithEmptyAddress(t *testing.T) {
+	endpoint, err := listenAdminUIEndpoint("", node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen disabled admin UI endpoint")
+	testutil.RequireNilf(t, endpoint, "admin UI endpoint")
+}
+
+func TestAdminUIEndpointServesShell(t *testing.T) {
+	endpoint, err := listenAdminUIEndpoint("127.0.0.1:0", node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen admin UI endpoint")
+	defer func() { testutil.RequireNoErrorf(t, endpoint.Close(), "close admin UI endpoint") }()
+
+	errCh := endpoint.Serve()
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", endpoint.Address())
+	testutil.RequireNoErrorf(t, err, "dial admin UI endpoint")
+	defer func() { testutil.RequireNoErrorf(t, conn.Close(), "close admin UI connection") }()
+	_, err = fmt.Fprintf(conn, "%s /admin/ HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", http.MethodGet, endpoint.Address())
+	testutil.RequireNoErrorf(t, err, "write admin UI request")
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	testutil.RequireNoErrorf(t, err, "read admin UI response")
+	defer func() { testutil.RequireNoErrorf(t, resp.Body.Close(), "close response body") }()
+	testutil.RequireEqualf(t, resp.StatusCode, http.StatusOK, "admin UI status")
+	body, err := io.ReadAll(resp.Body)
+	testutil.RequireNoErrorf(t, err, "read admin UI body")
+	if !strings.Contains(string(body), "S.C.R.A.P. Admin") {
+		t.Fatalf("admin UI body missing title:\n%s", string(body))
+	}
+
+	testutil.RequireNoErrorf(t, endpoint.Close(), "close admin UI endpoint")
+	testutil.RequireNoErrorf(t, <-errCh, "admin UI endpoint stopped")
+}
+
+func TestListenHTTPEndpointsStartsAndLogsConfiguredEndpoints(t *testing.T) {
+	cfg := config.Default()
+	cfg.MetricsListenAddress = "127.0.0.1:0"
+	cfg.AdminUIListenAddress = "127.0.0.1:0"
+	endpoints, err := listenHTTPEndpoints(cfg, node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen http endpoints")
+	testutil.RequireNotNilf(t, endpoints.metrics, "metrics endpoint")
+	testutil.RequireNotNilf(t, endpoints.adminUI, "admin UI endpoint")
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	endpoints.logListening(logger)
+	if !strings.Contains(logs.String(), "metrics http listening") ||
+		!strings.Contains(logs.String(), "admin UI http listening") {
+		t.Fatalf("logs missing endpoint addresses:\n%s", logs.String())
+	}
+
+	endpoints.logClose(logPrintfFunc(logger))
+	testutil.RequireNoErrorf(t, endpoints.metrics.Close(), "metrics endpoint close is idempotent")
+	testutil.RequireNoErrorf(t, endpoints.adminUI.Close(), "admin UI endpoint close is idempotent")
+}
+
+func TestListenHTTPEndpointsHandlesDisabledAdminUI(t *testing.T) {
+	cfg := config.Default()
+	cfg.MetricsListenAddress = "127.0.0.1:0"
+	cfg.AdminUIListenAddress = ""
+	endpoints, err := listenHTTPEndpoints(cfg, node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen http endpoints")
+	defer func() { testutil.RequireNoErrorf(t, endpoints.metrics.Close(), "close metrics endpoint") }()
+	testutil.RequireNotNilf(t, endpoints.metrics, "metrics endpoint")
+	testutil.RequireNilf(t, endpoints.adminUI, "admin UI endpoint")
+	testutil.RequireNoErrorf(t, closeHTTPEndpoints(endpoints.metrics, endpoints.adminUI), "close optional endpoints")
+}
+
+func TestListenHTTPEndpointsReportsAdminUIListenFailure(t *testing.T) {
+	cfg := config.Default()
+	cfg.MetricsListenAddress = "127.0.0.1:0"
+	cfg.AdminUIListenAddress = "127.0.0.1:not-a-port"
+	_, err := listenHTTPEndpoints(cfg, node.Applications{})
+	if err == nil || !strings.Contains(err.Error(), "start admin UI listener") {
+		t.Fatalf("listenHTTPEndpoints error = %v, want admin UI listener failure", err)
+	}
+}
+
 func TestBuildLocalApplicationsRegistersHealthApplication(t *testing.T) {
 	cfg := config.Default()
 	cfg.LocalDataDir = t.TempDir()
@@ -124,6 +199,16 @@ func TestRegisterFlagSetParsesGRPCServerLimits(t *testing.T) {
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveMaxConnectionAgeGrace, 3*time.Second, "max connection age grace")
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveTime, 30*time.Second, "keepalive time")
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveTimeout, 4*time.Second, "keepalive timeout")
+}
+
+func TestRegisterFlagSetParsesAdminUIListenAddress(t *testing.T) {
+	cfg := config.Default()
+	flags := flag.NewFlagSet("scrapd-test", flag.ContinueOnError)
+	registerFlagSet(flags, &cfg)
+
+	err := flags.Parse([]string{"-admin-ui-listen=127.0.0.1:19083"})
+	testutil.RequireNoErrorf(t, err, "parse admin UI flag")
+	testutil.RequireEqualf(t, cfg.AdminUIListenAddress, "127.0.0.1:19083", "admin UI listen address")
 }
 
 func TestScrapdBackgroundLoggingHelpers(t *testing.T) {

@@ -1,0 +1,8 @@
+- op: add
+  path: /spec/template/spec/containers/0/args/3
+  value: --admin-ui-listen=127.0.0.1:18083
+- op: add
+  path: /spec/template/spec/containers/0/ports/-
+  value:
+    name: admin-ui
+    containerPort: 18083

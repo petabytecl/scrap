@@ -3,8 +3,10 @@ module github.com/petabytecl/scrap
 go 1.26.3
 
 require (
+	github.com/a-h/templ v0.3.1020
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/prometheus/client_golang v1.15.0
+	github.com/prometheus/client_model v0.3.0
 	go.etcd.io/raft/v3 v3.6.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171
 	google.golang.org/grpc v1.81.1
@@ -29,7 +31,6 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
