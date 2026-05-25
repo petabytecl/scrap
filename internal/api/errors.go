@@ -19,7 +19,7 @@ func ToGRPCError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if _, ok := status.FromError(err); ok {
+	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
 		return err
 	}
 	var applicationError *appstatus.Error
