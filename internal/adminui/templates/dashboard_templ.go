@@ -24,10 +24,6 @@ func Shell(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var1 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var1 == nil {
-			templ_7745c5c3_Var1 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>S.C.R.A.P. Admin</title><link rel=\"icon\" href=\"/admin/static/assets/favicon.ico\"><link rel=\"stylesheet\" href=\"/admin/static/admin.css\"><script src=\"/admin/static/htmx.min.js\" defer></script><script src=\"/admin/static/admin.js\" defer></script></head><body><div class=\"app-shell\"><aside class=\"sidebar\"><div class=\"brand\"><img class=\"brand-logo\" src=\"/admin/static/assets/logo-petabyte-color-white.png\" alt=\"Petabyte\"><div><div class=\"brand-title\">S.C.R.A.P.</div><div class=\"brand-subtitle\">Admin</div></div></div><nav>")
 		if templ_7745c5c3_Err != nil {
@@ -211,11 +207,7 @@ func TweaksPanel() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var12 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var12 == nil {
-			templ_7745c5c3_Var12 = templ.NopComponent
-		}
-		ctx = templ.ClearChildren(ctx)
+		templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<aside id=\"tweaks-panel\" class=\"tweaks-panel\" data-tweaks-panel hidden><div class=\"panel-heading\"><div><div class=\"eyebrow\">Tweaks</div><strong>Dashboard controls</strong></div><button class=\"text-button\" type=\"button\" data-tweaks-close>Close</button></div><div class=\"tweak-group\"><label for=\"tweak-refresh\">Auto-refresh</label><div class=\"tweak-slider-row\"><input id=\"tweak-refresh\" type=\"range\" min=\"5\" max=\"120\" step=\"5\" value=\"20\" data-tweak-refresh> <output for=\"tweak-refresh\" data-tweak-refresh-output>20s</output></div></div><label class=\"tweak-toggle\"><span>Compact numbers</span> <input type=\"checkbox\" data-tweak-compact checked></label> <label class=\"tweak-toggle\"><span>Sparklines</span> <input type=\"checkbox\" data-tweak-sparklines checked></label><div class=\"tweak-group\"><div class=\"tweak-label\">Accent</div><div class=\"swatch-row\"><button class=\"swatch active\" type=\"button\" data-tweak-accent=\"#0093d0\" style=\"--swatch: #0093d0\" aria-label=\"Petabyte blue\"></button> <button class=\"swatch\" type=\"button\" data-tweak-accent=\"#0ea5e9\" style=\"--swatch: #0ea5e9\" aria-label=\"Sky blue\"></button> <button class=\"swatch\" type=\"button\" data-tweak-accent=\"#6366f1\" style=\"--swatch: #6366f1\" aria-label=\"Indigo\"></button> <button class=\"swatch\" type=\"button\" data-tweak-accent=\"#34d399\" style=\"--swatch: #34d399\" aria-label=\"Green\"></button></div></div></aside>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -240,10 +232,6 @@ func View(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var13 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var13 == nil {
-			templ_7745c5c3_Var13 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		switch data.ActiveView {
 		case "capacity":
@@ -312,10 +300,6 @@ func Overview(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var14 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var14 == nil {
-			templ_7745c5c3_Var14 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = Errors(data).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
@@ -505,10 +489,6 @@ func Capacity(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var24 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var24 == nil {
-			templ_7745c5c3_Var24 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = Errors(data).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
@@ -605,10 +585,6 @@ func Operations(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var27 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var27 == nil {
-			templ_7745c5c3_Var27 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = Errors(data).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
@@ -726,10 +702,6 @@ func OperationsTable(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var34 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var34 == nil {
-			templ_7745c5c3_Var34 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		if len(data.Operations) == 0 {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "<p class=\"empty\">No operations have been recorded.</p>")
@@ -911,10 +883,6 @@ func OperationDetail(operation OperationData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var46 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var46 == nil {
-			templ_7745c5c3_Var46 = templ.NopComponent
-		}
 		ctx = templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 66, "<div class=\"operation-detail-card\"><div class=\"detail-grid\"><div><div class=\"eyebrow\">Operation</div><strong>")
 		if templ_7745c5c3_Err != nil {
@@ -1094,11 +1062,7 @@ func Metric(eyebrow string, value string, sub string) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var58 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var58 == nil {
-			templ_7745c5c3_Var58 = templ.NopComponent
-		}
-		ctx = templ.ClearChildren(ctx)
+		templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 81, "<div class=\"metric-card\"><div class=\"eyebrow\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -1188,11 +1152,7 @@ func Errors(data DashboardData) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var64 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var64 == nil {
-			templ_7745c5c3_Var64 = templ.NopComponent
-		}
-		ctx = templ.ClearChildren(ctx)
+		templ.ClearChildren(ctx)
 		if len(data.Errors) > 0 {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 87, "<div class=\"error-stack\">")
 			if templ_7745c5c3_Err != nil {

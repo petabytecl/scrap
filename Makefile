@@ -289,10 +289,12 @@ proto-check: ## Lint schemas, check breaking changes, and verify generated code.
 .PHONY: generate-templ
 generate-templ: ## Generate templ admin UI code.
 	$(TEMPL) generate ./internal/adminui/templates/...
+	$(GO) run ./scripts/clean-templ-generated.go -- internal/adminui/templates/*_templ.go
 
 .PHONY: templ-check
 templ-check: ## Verify generated templ admin UI code is current.
 	$(TEMPL) generate ./internal/adminui/templates/...
+	$(GO) run ./scripts/clean-templ-generated.go -- internal/adminui/templates/*_templ.go
 	git diff --exit-code -- internal/adminui/templates/*_templ.go
 
 ##@ Development
