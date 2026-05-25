@@ -2,10 +2,15 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - serviceaccount.yaml
-  - authz-policy.yaml
   - service.yaml
   - networkpolicy.yaml
   - statefulset.yaml
+configMapGenerator:
+  - name: scrapd-authz-policy
+    files:
+      - authz-policy.json
+generatorOptions:
+  disableNameSuffixHash: true
 labels:
   - includeSelectors: false
     includeTemplates: true

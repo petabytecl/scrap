@@ -254,6 +254,18 @@ func TestServerRejectsInvalidGRPCLimitConfig(t *testing.T) {
 	}
 }
 
+func TestServerCloseIgnoresAlreadyClosedListeners(t *testing.T) {
+	publicListener, err := net.Listen("tcp", "127.0.0.1:0")
+	testutil.RequireNoErrorf(t, err, "listen public")
+	adminListener, err := net.Listen("tcp", "127.0.0.1:0")
+	testutil.RequireNoErrorf(t, err, "listen admin")
+	server := newServer(publicListener, adminListener, Applications{}, testAuthorizationManager(t), "")
+
+	testutil.RequireNoErrorf(t, publicListener.Close(), "close public listener")
+	testutil.RequireNoErrorf(t, adminListener.Close(), "close admin listener")
+	testutil.RequireNoErrorf(t, server.Close(), "close server after listeners closed")
+}
+
 func TestServerHealthReadinessReflectsReadFreshFailure(t *testing.T) {
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)

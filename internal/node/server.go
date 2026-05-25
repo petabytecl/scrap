@@ -288,7 +288,15 @@ func (s *Server) ReloadAuthorizationPolicy() error {
 
 func (s *Server) Close() error {
 	s.Stop()
-	return errors.Join(s.publicListener.Close(), s.adminListener.Close())
+	return errors.Join(closeListener(s.publicListener), closeListener(s.adminListener))
+}
+
+func closeListener(listener net.Listener) error {
+	err := listener.Close()
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 type authorizationAuditSink struct {

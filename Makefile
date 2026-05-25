@@ -137,14 +137,33 @@ LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
 
 ##@ Endpoint Variables
 ##? SCRAP_ADMIN_ADDR Local admin API address used by evidence targets.
+##? SCRAP_METRICS_ADDR Local metrics HTTP address used by local scrapd runs.
 ##? SCRAP_PUBLIC_ADDR Local public API address used by evidence targets.
 ##? SCRAP_PUBLIC_WORKLOAD_IDENTITY Local public workload identity.
 ##? SCRAP_WORKLOAD_IDENTITY Local admin workload identity.
 
 SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
+SCRAP_METRICS_ADDR ?= 127.0.0.1:18082
 SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
 SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
 SCRAP_WORKLOAD_IDENTITY ?= local-operator
+
+##@ Local Scrapd Variables
+##? LOCAL_SCRAPD_AUTHZ_POLICY Authorization policy JSON used by local-scrapd-run.
+##? LOCAL_SCRAPD_BACKEND_DIR Local filesystem backend directory used by local-scrapd-run.
+##? LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL Backend upload scan interval used by local-scrapd-run.
+##? LOCAL_SCRAPD_DATA_DIR Local storage directory used by local-scrapd-run.
+##? LOCAL_SCRAPD_OPERATION_RUN_INTERVAL Operation scan interval used by local-scrapd-run.
+##? LOCAL_SCRAPD_ROOT Local scratch root used by local-scrapd-run.
+##? LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES Local block seal threshold used by local-scrapd-run.
+
+LOCAL_SCRAPD_ROOT ?= tmp/local-scrapd
+LOCAL_SCRAPD_DATA_DIR ?= $(LOCAL_SCRAPD_ROOT)/data
+LOCAL_SCRAPD_BACKEND_DIR ?= $(LOCAL_SCRAPD_ROOT)/backend
+LOCAL_SCRAPD_AUTHZ_POLICY ?= deploy/kustomize/base/authz-policy.json
+LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL ?= 5s
+LOCAL_SCRAPD_OPERATION_RUN_INTERVAL ?= 5s
+LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES ?= 4096
 
 ##@ Release Evidence Variables
 ##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
@@ -314,6 +333,24 @@ test-cover: ## Run tests producing both coverage profile and JUnit XML in one pa
 .PHONY: build
 build: ## Build all supported command binaries.
 	$(GO) build $(SCRAP_BINS)
+
+.PHONY: local-scrapd-run
+local-scrapd-run: ## Run scrapd locally with non-production storage for manual testing.
+	@test -f "$(LOCAL_SCRAPD_AUTHZ_POLICY)" || \
+		(echo "LOCAL_SCRAPD_AUTHZ_POLICY does not exist: $(LOCAL_SCRAPD_AUTHZ_POLICY)" >&2; exit 2)
+	mkdir -p "$(LOCAL_SCRAPD_DATA_DIR)" "$(LOCAL_SCRAPD_BACKEND_DIR)"
+	$(GO) run ./cmd/scrapd \
+		--public-listen="$(SCRAP_PUBLIC_ADDR)" \
+		--admin-listen="$(SCRAP_ADMIN_ADDR)" \
+		--metrics-listen="$(SCRAP_METRICS_ADDR)" \
+		--authorization-policy="$(LOCAL_SCRAPD_AUTHZ_POLICY)" \
+		--enable-local-non-production-storage \
+		--local-data-dir="$(LOCAL_SCRAPD_DATA_DIR)" \
+		--enable-local-filesystem-backend \
+		--local-backend-data-dir="$(LOCAL_SCRAPD_BACKEND_DIR)" \
+		--backend-upload-interval="$(LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL)" \
+		--operation-run-interval="$(LOCAL_SCRAPD_OPERATION_RUN_INTERVAL)" \
+		--local-seal-block-at-bytes="$(LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES)"
 
 .PHONY: static
 static: $(STATIC_TARGETS) ## Run all static analysis and format checks.

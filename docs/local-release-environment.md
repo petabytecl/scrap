@@ -29,6 +29,7 @@ Use the Makefile as the operator surface:
 
 ```sh
 make image
+make local-scrapd-run
 make manifests-render
 make manifests-check
 make local-kind-create
@@ -55,6 +56,21 @@ the local Go architecture, then passes the matching `IMAGE_PLATFORM` to Docker.
 Override all three together when building for a different kind node platform.
 The Makefile runs kind through Go by default; set `KIND=kind` to use an
 installed kind binary instead.
+
+## Local Scrapd Manual Testing
+
+Run the daemon directly from the checkout when you need fast manual validation
+without creating a kind cluster:
+
+```sh
+make local-scrapd-run
+```
+
+The target enables explicit non-production local storage and the local
+filesystem backend. It listens on `SCRAP_PUBLIC_ADDR`, `SCRAP_ADMIN_ADDR`, and
+`SCRAP_METRICS_ADDR`, defaulting to `127.0.0.1:18080`, `127.0.0.1:18081`, and
+`127.0.0.1:18082`. Scratch state is written under `tmp/local-scrapd`, which is
+ignored by git.
 
 ## Evidence Record
 
