@@ -108,6 +108,88 @@ func TestValidatePlanCapacityOverrideRequestRequiresBoundedReason(t *testing.T) 
 	}
 }
 
+func TestAdminPlanAndStartValidatorsRejectMissingRequests(t *testing.T) {
+	for name, run := range map[string]func() error{
+		"plan restore": func() error {
+			_, err := ValidatePlanRestoreRequest(nil)
+			return err
+		},
+		"plan prewarm": func() error {
+			_, err := ValidatePlanPrewarmRequest(nil)
+			return err
+		},
+		"plan repair": func() error {
+			_, err := ValidatePlanRepairRequest(nil)
+			return err
+		},
+		"plan scrub": func() error {
+			_, err := ValidatePlanScrubRequest(nil)
+			return err
+		},
+		"plan tombstone": func() error {
+			_, err := ValidatePlanTombstoneRequest(nil)
+			return err
+		},
+		"plan key rotation": func() error {
+			_, err := ValidatePlanKeyRotationRequest(nil)
+			return err
+		},
+		"plan recovery": func() error {
+			_, err := ValidatePlanRecoveryRequest(nil)
+			return err
+		},
+		"start restore": func() error {
+			_, err := ValidateStartRestoreRequest(nil)
+			return err
+		},
+		"start prewarm": func() error {
+			_, err := ValidateStartPrewarmRequest(nil)
+			return err
+		},
+		"start repair": func() error {
+			_, err := ValidateStartRepairRequest(nil)
+			return err
+		},
+		"start scrub": func() error {
+			_, err := ValidateStartScrubRequest(nil)
+			return err
+		},
+		"start drain": func() error {
+			_, err := ValidateStartDrainRequest(nil)
+			return err
+		},
+		"start tombstone": func() error {
+			_, err := ValidateStartTombstoneRequest(nil)
+			return err
+		},
+		"start key rotation": func() error {
+			_, err := ValidateStartKeyRotationRequest(nil)
+			return err
+		},
+		"start capacity override": func() error {
+			_, err := ValidateStartCapacityOverrideRequest(nil)
+			return err
+		},
+		"start metadata restore": func() error {
+			_, err := ValidateStartMetadataRestoreRequest(nil)
+			return err
+		},
+		"start copy verify": func() error {
+			_, err := ValidateStartCopyVerifyRequest(nil)
+			return err
+		},
+		"start dr drill": func() error {
+			_, err := ValidateStartDRDrillRequest(nil)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			violations := requireBadRequest(t, run())
+			requireViolation(t, violations, "request", identity.ReasonRequired)
+		})
+	}
+}
+
 func TestValidateStartRestoreRequestRequiresUUIDv7AndPlanToken(t *testing.T) {
 	_, err := ValidateStartRestoreRequest(&adminv1.StartRestoreRequest{
 		OperationId: "not-a-uuid",
@@ -125,6 +207,51 @@ func TestValidateStartRestoreRequestRequiresUUIDv7AndPlanToken(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "unexpected error")
 	if valid.OperationID != validUUIDv7() {
 		t.Fatalf("operation id = %q, want %q", valid.OperationID, validUUIDv7())
+	}
+}
+
+func TestAdminMemberAndDrainValidatorsMapValidRequests(t *testing.T) {
+	uncordon, err := ValidateUncordonMemberRequest(&adminv1.UncordonMemberRequest{
+		OperationId:   validUUIDv7(),
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "member-a"},
+	})
+	testutil.RequireNoErrorf(t, err, "validate uncordon")
+	testutil.RequireEqualf(t, uncordon.StorageMember, "member-a", "uncordon member")
+
+	eviction, err := ValidateGetEvictionSafetyRequest(&adminv1.GetEvictionSafetyRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "member-a"},
+	})
+	testutil.RequireNoErrorf(t, err, "validate eviction safety")
+	testutil.RequireEqualf(t, eviction.StorageMember, "member-a", "eviction member")
+
+	drain, err := ValidatePlanDrainRequest(&adminv1.PlanDrainRequest{
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "member-a"},
+		DryRun:        true,
+		Metadata:      map[string]string{"ticket": "INC-1"},
+	})
+	testutil.RequireNoErrorf(t, err, "validate plan drain")
+	testutil.RequireEqualf(t, drain.Targets[0].StorageMember, "member-a", "drain member")
+	testutil.RequireTruef(t, drain.DryRun, "drain dry run")
+	testutil.RequireEqualf(t, drain.Metadata["ticket"], "INC-1", "drain metadata")
+
+	for name, run := range map[string]func() error{
+		"uncordon": func() error {
+			_, err := ValidateUncordonMemberRequest(nil)
+			return err
+		},
+		"eviction": func() error {
+			_, err := ValidateGetEvictionSafetyRequest(nil)
+			return err
+		},
+		"drain": func() error {
+			_, err := ValidatePlanDrainRequest(nil)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			violations := requireBadRequest(t, run())
+			requireViolation(t, violations, "request", identity.ReasonRequired)
+		})
 	}
 }
 

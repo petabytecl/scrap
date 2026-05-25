@@ -59,6 +59,15 @@ func TestClassifyErrorNormalizesBackendErrors(t *testing.T) {
 	if err := NewError(ErrorClassThrottled, "put", "object", nil); !errors.Is(err, ErrThrottled) {
 		t.Fatalf("errors.Is(%v, ErrThrottled) = false", err)
 	}
+	wrapped := NewError(ErrorClassConflict, "put", "object", errors.New("conflict from provider"))
+	testutil.RequireEqualf(t, wrapped.Error(), "backend put object conflict: conflict from provider", "wrapped backend error")
+	testutil.RequireTruef(t, errors.Is(wrapped, ErrConflict), "wrapped backend error did not match conflict sentinel")
+	testutil.RequireEqualf(t, (&Error{}).Error(), "backend", "empty backend error message")
+	testutil.RequireEqualf(t, (*Error)(nil).Error(), "<nil>", "nil backend error message")
+	testutil.RequireNilf(t, (*Error)(nil).Unwrap(), "nil backend error unwrap")
+	testutil.RequireFalsef(t, (*Error)(nil).Is(ErrConflict), "nil backend error matched sentinel")
+	testutil.RequireFalsef(t, ErrorClass("unknown").Valid(), "unknown error class valid")
+	testutil.RequireTruef(t, strings.Contains(classSentinel(ErrorClass("unknown")).Error(), "unknown error class"), "unknown class sentinel")
 }
 
 func TestProductionCapacityProfileValidation(t *testing.T) {
@@ -91,15 +100,35 @@ func TestProductionCapacityProfileValidation(t *testing.T) {
 			mutate: func(p *CapacityProfile) { p.LaneBudgets = p.LaneBudgets[:len(p.LaneBudgets)-1] },
 			want:   "missing required lane budget",
 		},
+		"duplicate lane": {
+			mutate: func(p *CapacityProfile) { p.LaneBudgets[1].Lane = p.LaneBudgets[0].Lane },
+			want:   "duplicate lane budget",
+		},
+		"reserved workers required": {
+			mutate: func(p *CapacityProfile) { p.LaneBudgets[0].ReservedWorkers = 0 },
+			want:   "reserved workers must be positive",
+		},
+		"max workers cover reserved": {
+			mutate: func(p *CapacityProfile) { p.LaneBudgets[0].MaxWorkers = p.LaneBudgets[0].ReservedWorkers - 1 },
+			want:   "max workers must cover reserved workers",
+		},
 		"invalid ramp": {
 			mutate: func(p *CapacityProfile) {
 				p.RampPolicy.MaxRequestsPerSecond = p.RampPolicy.InitialRequestsPerSecond - 1
 			},
 			want: "ramp max must cover initial requests",
 		},
+		"invalid ramp interval": {
+			mutate: func(p *CapacityProfile) { p.RampPolicy.StepInterval = 0 },
+			want:   "ramp step interval must be positive",
+		},
 		"invalid circuit breaker": {
 			mutate: func(p *CapacityProfile) { p.CircuitBreakers.ErrorRatePermille = 1001 },
 			want:   "error rate must be 1..1000",
+		},
+		"invalid circuit breaker interval": {
+			mutate: func(p *CapacityProfile) { p.CircuitBreakers.OpenInterval = 0 },
+			want:   "open interval must be positive",
 		},
 		"unordered guard bands": {
 			mutate: func(p *CapacityProfile) {
@@ -107,9 +136,17 @@ func TestProductionCapacityProfileValidation(t *testing.T) {
 			},
 			want: "guard bands must be admission >= warning",
 		},
+		"admission guard exhausts capacity": {
+			mutate: func(p *CapacityProfile) { p.DiskGuardBands.AdmissionMinFreeBytes = p.ByteBudget.LocalUsableBytes },
+			want:   "admission guard band exhausts local usable bytes",
+		},
 		"unsafe max object": {
 			mutate: func(p *CapacityProfile) { p.ByteBudget.MaxObjectBytes = p.ByteBudget.LocalUsableBytes },
 			want:   "max object size exceeds post-admission local runway",
+		},
+		"overflowing runway estimate": {
+			mutate: func(p *CapacityProfile) { p.Runway.EstimatedBytesPerDay = ^uint64(0) },
+			want:   "estimated bytes per day must be finite",
 		},
 		"unsafe runway": {
 			mutate: func(p *CapacityProfile) { p.Runway.MinimumSafeRunway = 30 * 24 * time.Hour },

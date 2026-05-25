@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/petabytecl/scrap/internal/authz"
@@ -125,6 +127,25 @@ func TestPublicServerReadDocumentStreamsMetadataThenBytes(t *testing.T) {
 	}
 }
 
+func TestPublicServerFindDocumentsValidatesAndMapsResults(t *testing.T) {
+	documents := &fakeDocuments{}
+	client, _, cleanup := newPublicTestClients(t, documents, &fakeTransactions{})
+	defer cleanup()
+
+	docClass := scrapv1.DocumentClass_DOCUMENT_CLASS_PERMANENT
+	prefix := `folder\`
+	response, err := client.FindDocuments(context.Background(), &scrapv1.FindDocumentsRequest{
+		Transaction: validTransactionIdentity(),
+		Filter: &scrapv1.DocumentFilter{
+			DocumentNamePrefix: &prefix,
+			DocumentClass:      &docClass,
+		},
+	})
+	testutil.RequireNoErrorf(t, err, "FindDocuments")
+	testutil.RequireEqualf(t, len(response.GetDocuments()), 1, "document count")
+	testutil.RequireEqualf(t, response.GetDocuments()[0].GetIdentity().GetDocumentName(), "invoice.xml", "document name")
+}
+
 func TestPublicServerCompleteTransactionValidatesAndMapsState(t *testing.T) {
 	_, transactions, cleanup := newPublicTestClients(t, &fakeDocuments{}, &fakeTransactions{})
 	defer cleanup()
@@ -135,6 +156,39 @@ func TestPublicServerCompleteTransactionValidatesAndMapsState(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "CompleteTransaction")
 	if response.GetTransaction().GetState() != scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_COMPLETED {
 		t.Fatalf("state = %s, want completed", response.GetTransaction().GetState())
+	}
+}
+
+func TestPublicServerGetTransactionValidatesAndMapsState(t *testing.T) {
+	_, transactions, cleanup := newPublicTestClients(t, &fakeDocuments{}, &fakeTransactions{})
+	defer cleanup()
+
+	response, err := transactions.GetTransaction(context.Background(), &scrapv1.GetTransactionRequest{
+		Transaction: validTransactionIdentity(),
+	})
+	testutil.RequireNoErrorf(t, err, "GetTransaction")
+	testutil.RequireEqualf(t, response.GetTransaction().GetState(), scrapv1.TransactionStateKind_TRANSACTION_STATE_KIND_OPEN, "transaction state")
+	testutil.RequireEqualf(t, response.GetTransaction().GetTransaction().GetTenantId(), "tenant", "transaction tenant")
+}
+
+func TestPublicServerRejectsUnconfiguredApplications(t *testing.T) {
+	documents, transactions, cleanup := newPublicTestClients(t, nil, nil)
+	defer cleanup()
+
+	_, err := documents.HeadDocument(context.Background(), &scrapv1.HeadDocumentRequest{Identity: validDocumentIdentity()})
+	requireUnimplementedStatus(t, err)
+	_, err = documents.FindDocuments(context.Background(), &scrapv1.FindDocumentsRequest{Transaction: validTransactionIdentity()})
+	requireUnimplementedStatus(t, err)
+	_, err = transactions.CompleteTransaction(context.Background(), &scrapv1.CompleteTransactionRequest{Transaction: validTransactionIdentity()})
+	requireUnimplementedStatus(t, err)
+	_, err = transactions.GetTransaction(context.Background(), &scrapv1.GetTransactionRequest{Transaction: validTransactionIdentity()})
+	requireUnimplementedStatus(t, err)
+}
+
+func requireUnimplementedStatus(t *testing.T, err error) {
+	t.Helper()
+	if got := status.Code(err); got != codes.Unimplemented {
+		t.Fatalf("status code = %s, want %s; err = %v", got, codes.Unimplemented, err)
 	}
 }
 
