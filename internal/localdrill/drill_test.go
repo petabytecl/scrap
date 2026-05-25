@@ -7,14 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/capacitysample"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
+	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/openbaosmoke"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
@@ -114,6 +118,150 @@ func TestRunFailsWhenEvidenceInputsDoNotProveRequiredBackends(t *testing.T) {
 	}
 }
 
+func TestRunAbortsOnFixtureConnectivityFailure(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	capacityPath := writeCapacityReport(t, dir, true)
+	openbaoPath := writeOpenBaoReport(t, dir, true)
+	ops := &fakeOperationClient{operations: map[string]*adminv1.Operation{}}
+
+	report, err := Run(ctx, Options{
+		CapacitySampleReportPath: capacityPath,
+		OpenBaoSmokeReportPath:   openbaoPath,
+		DrillID:                  "drill-1",
+		Duration:                 time.Second,
+		PollInterval:             time.Millisecond,
+		Now:                      func() time.Time { return time.Unix(2_000, 0).UTC() },
+	}, Clients{
+		FixtureWriter: failingFixtureWriter{err: status.Error(codes.Unavailable, "public API unavailable")},
+		DR: &fakeDRClient{
+			ops: ops,
+			readiness: &adminv1.RecoveryReadiness{
+				Ready:                        true,
+				LatestRestorableCheckpointAt: timestamppb.Now(),
+			},
+		},
+		Operations: ops,
+	})
+	if !errors.Is(err, ErrDrillFailed) {
+		t.Fatalf("run error = %v, want %v", err, ErrDrillFailed)
+	}
+	testutil.RequireEqualf(t, report.Status, StatusFailed, "report status")
+	testutil.RequireEqualf(t, report.Fixture.ErrorClass, "transient", "fixture error class")
+	testutil.RequireEqualf(t, report.Commands[0].Step, "fixture-write", "failed command step")
+	testutil.RequireEqualf(t, report.Commands[0].ErrorClass, "transient", "command error class")
+	testutil.RequireEqualf(t, report.FailedOrSkippedSteps[0].Step, "fixture-write", "failure step")
+}
+
+func TestRunRecordsQuorumLossScenario(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	capacityPath := writeCapacityReport(t, dir, true)
+	openbaoPath := writeOpenBaoReport(t, dir, true)
+	ops := &fakeOperationClient{operations: map[string]*adminv1.Operation{}}
+	dr := &quorumLossDRClient{fakeDRClient: fakeDRClient{
+		ops: ops,
+		readiness: &adminv1.RecoveryReadiness{
+			Ready:                        true,
+			LatestRestorableCheckpointAt: timestamppb.New(time.Now().Add(time.Hour).UTC()),
+		},
+	}}
+
+	report, err := Run(ctx, Options{
+		CapacitySampleReportPath: capacityPath,
+		OpenBaoSmokeReportPath:   openbaoPath,
+		DrillID:                  "drill-1",
+		Duration:                 5 * time.Second,
+		PollInterval:             time.Millisecond,
+		Now:                      func() time.Time { return time.Unix(2_000, 0).UTC() },
+	}, Clients{
+		FixtureWriter: fakeFixtureWriter{},
+		DR:            dr,
+		Operations:    ops,
+	})
+	if !errors.Is(err, ErrDrillFailed) {
+		t.Fatalf("run error = %v, want %v", err, ErrDrillFailed)
+	}
+	testutil.RequireEqualf(t, report.Status, StatusFailed, "report status")
+	last := report.Commands[len(report.Commands)-1]
+	testutil.RequireEqualf(t, last.Step, "watch copy-verify", "failed command step")
+	testutil.RequireEqualf(t, last.OperationState, adminv1.OperationState_OPERATION_STATE_FAILED.String(), "failed operation state")
+	testutil.RequireEqualf(t, last.ErrorClass, "SCRAP_RAFT_QUORUM_LOSS", "failed operation error class")
+	testutil.RequireEqualf(t, report.FailedOrSkippedSteps[0].Step, "watch copy-verify", "failure step")
+}
+
+func TestValidateOptionsAndErrorClassificationBranches(t *testing.T) {
+	fixedNow := func() time.Time { return time.Unix(2_000, 0).UTC() }
+	opts, err := ValidateOptions(Options{Now: fixedNow})
+	testutil.RequireNoErrorf(t, err, "validate defaults")
+	testutil.RequireEqualf(t, opts.DrillID, "local-dr-19700101T003320Z", "default drill id")
+	testutil.RequireEqualf(t, opts.FixtureSizeBytes, uint64(DefaultFixtureSizeBytes), "default fixture size")
+
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{name: "negative duration", opts: Options{Duration: -time.Second}, want: "duration must be positive"},
+		{name: "negative poll interval", opts: Options{PollInterval: -time.Second}, want: "poll interval must be positive"},
+		{name: "oversized fixture", opts: Options{FixtureSizeBytes: MaxFixtureSizeBytes + 1}, want: "fixture size"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ValidateOptions(tc.opts)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+
+	testutil.RequireEqualf(t, classifyError(nil), "", "nil error class")
+	testutil.RequireEqualf(t, classifyError(context.Canceled), "transient", "canceled error class")
+	testutil.RequireEqualf(t, classifyError(status.Error(codes.NotFound, "missing")), "not_found", "not found error class")
+	testutil.RequireEqualf(t, classifyError(status.Error(codes.PermissionDenied, "denied")), "auth", "auth error class")
+	testutil.RequireEqualf(t, classifyError(status.Error(codes.FailedPrecondition, "conflict")), "conflict", "conflict error class")
+	testutil.RequireEqualf(t, classifyError(status.Error(codes.InvalidArgument, "invalid")), "permanent", "permanent error class")
+	testutil.RequireEqualf(t, classifyError(status.Error(codes.Unknown, "unknown")), "unknown", "unknown status class")
+	testutil.RequireEqualf(t, classifyError(errors.New("plain")), "permanent", "plain error class")
+}
+
+func TestGRPCFixtureWriterWritesInitChunkAndEvidence(t *testing.T) {
+	stream := &fakeWriteDocumentStream{
+		response: &scrapv1.WriteDocumentResponse{
+			Metadata: &scrapv1.DocumentMetadata{
+				Availability:   scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_HOT,
+				LifecycleState: scrapv1.DocumentLifecycleState_DOCUMENT_LIFECYCLE_STATE_ACTIVE,
+			},
+			DesiredReplicaCount:  3,
+			AchievedReplicaCount: 2,
+		},
+	}
+	writer := GRPCFixtureWriter{Client: fakeDocumentServiceClient{stream: stream}}
+	doc := FixtureDocument{TenantID: "tenant", TransactionID: "txn", DocumentName: "fixture.bin"}
+	data := []byte("fixture")
+
+	evidence, err := writer.WriteFixtureDocument(context.Background(), doc, data, Options{
+		DrillID:   "drill-1",
+		ProfileID: "profile-a",
+	})
+	testutil.RequireNoErrorf(t, err, "write fixture document")
+	testutil.RequireEqualf(t, len(stream.sent), 2, "sent message count")
+	init := stream.sent[0].GetInit()
+	testutil.RequireEqualf(t, init.GetIdentity().GetTenantId(), "tenant", "tenant")
+	testutil.RequireEqualf(t, init.GetTags()["profile"], "profile-a", "profile tag")
+	testutil.RequireEqualf(t, init.GetClientIdempotencyKey(), "local-dr-drill-drill-1", "idempotency key")
+	testutil.RequireEqualf(t, string(stream.sent[1].GetChunk().GetData()), "fixture", "chunk data")
+	testutil.RequireEqualf(t, evidence.Bytes, uint64(len(data)), "evidence bytes")
+	testutil.RequireEqualf(t, evidence.DesiredReplicas, uint32(3), "desired replicas")
+	testutil.RequireEqualf(t, evidence.AchievedReplicas, uint32(2), "achieved replicas")
+	testutil.RequireEqualf(t, evidence.Availability, scrapv1.DocumentAvailability_DOCUMENT_AVAILABILITY_HOT.String(), "availability")
+
+	failed, err := (GRPCFixtureWriter{}).WriteFixtureDocument(context.Background(), doc, data, Options{DrillID: "drill-1"})
+	if err == nil {
+		t.Fatal("missing client was accepted")
+	}
+	testutil.RequireEqualf(t, failed.ErrorClass, "permanent", "missing client error class")
+}
+
 type fakeFixtureWriter struct{}
 
 func (fakeFixtureWriter) WriteFixtureDocument(_ context.Context, doc FixtureDocument, data []byte, _ Options) (FixtureWriteEvidence, error) {
@@ -127,6 +275,55 @@ func (fakeFixtureWriter) WriteFixtureDocument(_ context.Context, doc FixtureDocu
 		Availability:        "AVAILABILITY_HOT",
 		LifecycleState:      "LIFECYCLE_STATE_ACTIVE",
 	}, nil
+}
+
+type failingFixtureWriter struct {
+	err error
+}
+
+func (w failingFixtureWriter) WriteFixtureDocument(_ context.Context, doc FixtureDocument, data []byte, _ Options) (FixtureWriteEvidence, error) {
+	sum := sha256.Sum256(data)
+	evidence := FixtureWriteEvidence{
+		Document:            doc,
+		Bytes:               uint64(len(data)),
+		LogicalSHA256Digest: hex.EncodeToString(sum[:]),
+	}
+	return failedFixtureWrite(evidence, time.Now(), w.err)
+}
+
+type fakeDocumentServiceClient struct {
+	scrapv1.DocumentServiceClient
+	stream *fakeWriteDocumentStream
+	err    error
+}
+
+func (c fakeDocumentServiceClient) WriteDocument(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.stream, nil
+}
+
+type fakeWriteDocumentStream struct {
+	grpc.ClientStream
+	sent     []*scrapv1.WriteDocumentRequest
+	response *scrapv1.WriteDocumentResponse
+	err      error
+}
+
+func (s *fakeWriteDocumentStream) Send(req *scrapv1.WriteDocumentRequest) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.sent = append(s.sent, req)
+	return nil
+}
+
+func (s *fakeWriteDocumentStream) CloseAndRecv() (*scrapv1.WriteDocumentResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
 }
 
 type fakeDRClient struct {
@@ -211,6 +408,29 @@ func (c *fakeDRClient) succeededOperation(id, operationType string, dryRun bool,
 	}
 	c.ops.operations[id] = operation
 	return operation
+}
+
+type quorumLossDRClient struct {
+	fakeDRClient
+}
+
+func (c *quorumLossDRClient) StartCopyVerify(_ context.Context, req *adminv1.StartCopyVerifyRequest, _ ...grpc.CallOption) (*adminv1.StartCopyVerifyResponse, error) {
+	started := &adminv1.Operation{
+		OperationId:   req.GetOperationId(),
+		OperationType: "copy-verify",
+		State:         adminv1.OperationState_OPERATION_STATE_RUNNING,
+	}
+	failed := &adminv1.Operation{
+		OperationId:   req.GetOperationId(),
+		OperationType: "copy-verify",
+		State:         adminv1.OperationState_OPERATION_STATE_FAILED,
+		LastError: &adminv1.OperationError{
+			Code:    "SCRAP_RAFT_QUORUM_LOSS",
+			Message: "copy verification lost quorum",
+		},
+	}
+	c.ops.operations[req.GetOperationId()] = failed
+	return &adminv1.StartCopyVerifyResponse{Operation: started}, nil
 }
 
 type fakeOperationClient struct {

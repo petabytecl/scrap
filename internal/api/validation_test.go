@@ -114,6 +114,41 @@ func TestValidateFindDocumentsRequestValidatesFilter(t *testing.T) {
 	requireViolation(t, violations, "filter.created_at", reasonInvalidTimeRange)
 }
 
+func TestValidateFindDocumentsRequestAcceptsCompleteFilter(t *testing.T) {
+	docClass := scrapv1.DocumentClass_DOCUMENT_CLASS_EPHEMERAL
+	contentType := "application/pdf"
+	workflowStage := "ingest"
+	createdByService := "billing-etl"
+	exact := `folder\invoice.xml`
+	prefix := `folder\`
+	start := timestamppb.New(time.Unix(10, 0))
+	end := timestamppb.New(time.Unix(20, 0))
+
+	validated, err := ValidateFindDocumentsRequest(&scrapv1.FindDocumentsRequest{
+		Transaction: validTransactionIdentity(),
+		Filter: &scrapv1.DocumentFilter{
+			DocumentNameExact:  &exact,
+			DocumentNamePrefix: &prefix,
+			DocumentClass:      &docClass,
+			ContentType:        &contentType,
+			WorkflowStage:      &workflowStage,
+			CreatedByService:   &createdByService,
+			CreatedAt:          &scrapv1.TimeRange{StartTime: start, EndTime: end},
+			Tags:               map[string]string{"workflow": "billing"},
+		},
+	})
+	testutil.RequireNoErrorf(t, err, "validate find documents")
+	testutil.RequireEqualf(t, validated.Filter.DocumentNameExact, "folder/invoice.xml", "document exact")
+	testutil.RequireEqualf(t, validated.Filter.DocumentNamePrefix, "folder/", "document prefix")
+	testutil.RequireEqualf(t, validated.Filter.DocumentClass, documentClassFromProto(docClass), "document class")
+	testutil.RequireEqualf(t, validated.Filter.ContentType, contentType, "content type")
+	testutil.RequireEqualf(t, validated.Filter.WorkflowStage, workflowStage, "workflow stage")
+	testutil.RequireEqualf(t, validated.Filter.CreatedByService, createdByService, "created by service")
+	testutil.RequireEqualf(t, validated.Filter.Tags["workflow"], "billing", "filter tag")
+	testutil.RequireTruef(t, validated.Filter.CreatedAt.StartTime != nil, "start time missing")
+	testutil.RequireTruef(t, validated.Filter.CreatedAt.EndTime != nil, "end time missing")
+}
+
 func TestValidateCompleteTransactionRequestRejectsTooManyTags(t *testing.T) {
 	req := &scrapv1.CompleteTransactionRequest{
 		Transaction: validTransactionIdentity(),
@@ -126,6 +161,46 @@ func TestValidateCompleteTransactionRequestRejectsTooManyTags(t *testing.T) {
 	_, err := ValidateCompleteTransactionRequest(req)
 	violations := requireBadRequest(t, err)
 	requireViolation(t, violations, "tags", reasonTooManyTags)
+}
+
+func TestValidateGetTransactionRequestValidatesIdentity(t *testing.T) {
+	validated, err := ValidateGetTransactionRequest(&scrapv1.GetTransactionRequest{Transaction: validTransactionIdentity()})
+	testutil.RequireNoErrorf(t, err, "validate get transaction")
+	testutil.RequireEqualf(t, validated.Transaction.TenantID, "tenant", "tenant")
+
+	_, err = ValidateGetTransactionRequest(&scrapv1.GetTransactionRequest{Transaction: &scrapv1.TransactionIdentity{TenantId: "tenant"}})
+	violations := requireBadRequest(t, err)
+	requireViolation(t, violations, "transaction.transaction_id", identity.ReasonRequired)
+
+	_, err = ValidateGetTransactionRequest(nil)
+	violations = requireBadRequest(t, err)
+	requireViolation(t, violations, "request", identity.ReasonRequired)
+}
+
+func TestValidationRejectsMalformedTextAndTags(t *testing.T) {
+	init := validWriteInit()
+	init.CreatedByService = "billing\netl"
+	badUTF8 := string([]byte{0xff})
+	init.ContentType = &badUTF8
+	init.Tags = map[string]string{
+		"":                                    "value",
+		"bad\nkey":                            "value",
+		strings.Repeat("k", MaxTagKeyBytes+1): "value",
+		"bad-value":                           "value\n",
+		"bad-utf8":                            badUTF8,
+		"oversized":                           strings.Repeat("v", MaxTagValueBytes+1),
+	}
+
+	_, err := ValidateWriteDocumentInit(init)
+	violations := requireBadRequest(t, err)
+	requireViolation(t, violations, "created_by_service", identity.ReasonControlChar)
+	requireViolation(t, violations, "content_type", identity.ReasonInvalidUTF8)
+	requireViolation(t, violations, "tags", identity.ReasonRequired)
+	requireViolation(t, violations, "tags", identity.ReasonTooLong)
+	requireViolation(t, violations, "tags", identity.ReasonControlChar)
+	requireViolation(t, violations, "tags[bad-value]", identity.ReasonControlChar)
+	requireViolation(t, violations, "tags[bad-utf8]", identity.ReasonInvalidUTF8)
+	requireViolation(t, violations, "tags[oversized]", identity.ReasonTooLong)
 }
 
 func validWriteInit() *scrapv1.WriteDocumentInit {

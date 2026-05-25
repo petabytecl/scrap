@@ -2,6 +2,8 @@ package crashfault
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -112,6 +114,29 @@ func TestRunRequiresArtifactURIForReleaseEvidence(t *testing.T) {
 	}
 }
 
+func TestRunCollectsGitStateWhenCommitIsNotProvided(t *testing.T) {
+	dir := initCrashFaultGitRepo(t)
+	sha, dirty, err := collectGitState(context.Background(), dir)
+	testutil.RequireNoErrorf(t, err, "collect clean git state")
+	testutil.RequireFalsef(t, dirty, "clean repository marked dirty")
+
+	report, err := Run(context.Background(), Options{
+		WorkDir:     dir,
+		GeneratedAt: time.Unix(100, 0).UTC(),
+		Runner:      &recordingRunner{},
+	})
+	testutil.RequireNoErrorf(t, err, "run evidence")
+	testutil.RequireEqualf(t, report.CommitSHA, sha, "collected commit sha")
+	testutil.RequireFalsef(t, report.DirtyTree, "run marked clean repository dirty")
+
+	if err := os.WriteFile(dir+"/tracked.txt", []byte("dirty"), 0o600); err != nil {
+		t.Fatalf("dirty tracked file: %v", err)
+	}
+	_, dirty, err = collectGitState(context.Background(), dir)
+	testutil.RequireNoErrorf(t, err, "collect dirty git state")
+	testutil.RequireTruef(t, dirty, "dirty repository marked clean")
+}
+
 func TestRunMarksFailuresAndSuppressesReleaseEvidence(t *testing.T) {
 	report, err := Run(context.Background(), Options{
 		GeneratedAt: time.Unix(100, 0).UTC(),
@@ -138,6 +163,31 @@ func TestRunMarksFailuresAndSuppressesReleaseEvidence(t *testing.T) {
 	}
 }
 
+func TestExecRunnerAndSanitizersBoundProcessOutput(t *testing.T) {
+	output := ExecRunner{}.Run(context.Background(), CommandInvocation{
+		Name:             "git",
+		Args:             []string{"--version"},
+		WorkDir:          t.TempDir(),
+		OutputLimitBytes: 8,
+	})
+	testutil.RequireEqualf(t, output.ExitCode, 0, "git version exit code")
+	testutil.RequireTruef(t, strings.Contains(output.Stdout, "[truncated]"), "stdout = %q", output.Stdout)
+
+	output = ExecRunner{}.Run(context.Background(), CommandInvocation{
+		Name:    "git",
+		Args:    []string{"not-a-real-git-subcommand"},
+		WorkDir: t.TempDir(),
+	})
+	testutil.RequireTruef(t, output.ExitCode != 0, "invalid git subcommand exit code")
+	testutil.RequireTruef(t, output.Error != "", "invalid git subcommand error is empty")
+
+	sanitized := sanitizeOutput("SCRAP_OPENBAO_TOKEN PlaintextDEK wrapped_dek 123456789", 40)
+	for _, leaked := range []string{"SCRAP_OPENBAO_TOKEN", "PlaintextDEK", "wrapped_dek", "123456789"} {
+		testutil.RequireFalsef(t, strings.Contains(sanitized, leaked), "sanitized output leaked %s: %q", leaked, sanitized)
+	}
+	testutil.RequireTruef(t, strings.Contains(sanitized, "[truncated]"), "sanitized output was not truncated: %q", sanitized)
+}
+
 func TestLimitedOutputBoundsCapture(t *testing.T) {
 	output := newLimitedOutput(5)
 	written, err := output.Write([]byte("123456789"))
@@ -148,6 +198,63 @@ func TestLimitedOutputBoundsCapture(t *testing.T) {
 	got := output.String()
 	if !strings.Contains(got, "12345") || !strings.Contains(got, "[truncated]") || strings.Contains(got, "6789") {
 		t.Fatalf("limited output = %q, want bounded truncated output", got)
+	}
+
+	defaulted := newLimitedOutput(0)
+	_, err = defaulted.Write([]byte("ok"))
+	testutil.RequireNoErrorf(t, err, "write default-limited output")
+	testutil.RequireEqualf(t, defaulted.String(), "ok", "default-limited output")
+}
+
+func TestValidateCatalogRejectsMalformedScenarios(t *testing.T) {
+	valid := Catalog()[0]
+	tests := map[string]Scenario{
+		"duplicate id":        valid,
+		"missing identity":    {Commands: valid.Commands, Invariants: valid.Invariants, ReadinessGates: valid.ReadinessGates, ReleaseGateIDs: valid.ReleaseGateIDs},
+		"missing gates":       {ID: "missing-gates", Name: "missing gates", Commands: valid.Commands, Invariants: valid.Invariants},
+		"incomplete command":  {ID: "bad-command", Name: "bad command", Commands: []GoTestCommand{{Package: valid.Commands[0].Package}}, Invariants: valid.Invariants, ReadinessGates: valid.ReadinessGates, ReleaseGateIDs: valid.ReleaseGateIDs},
+		"missing invariants":  {ID: "missing-invariants", Name: "missing invariants", Commands: valid.Commands, ReadinessGates: valid.ReadinessGates, ReleaseGateIDs: valid.ReleaseGateIDs},
+		"missing release ids": {ID: "missing-release", Name: "missing release", Commands: valid.Commands, Invariants: valid.Invariants, ReadinessGates: valid.ReadinessGates},
+	}
+
+	for name, scenario := range tests {
+		t.Run(name, func(t *testing.T) {
+			scenarios := []Scenario{valid, scenario}
+			if name != "duplicate id" {
+				scenarios = []Scenario{scenario}
+			}
+			err := ValidateCatalog(scenarios)
+			if err == nil {
+				t.Fatal("ValidateCatalog accepted malformed scenario")
+			}
+		})
+	}
+}
+
+func initCrashFaultGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runCrashFaultGit(t, dir, "init")
+	runCrashFaultGit(t, dir, "config", "user.email", "test@example.com")
+	runCrashFaultGit(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(dir+"/tracked.txt", []byte("clean"), 0o600); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	runCrashFaultGit(t, dir, "add", "tracked.txt")
+	runCrashFaultGit(t, dir, "commit", "-m", "initial")
+	return dir
+}
+
+func runCrashFaultGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// #nosec G204 -- tests invoke fixed git setup commands against a temp repo.
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }
 

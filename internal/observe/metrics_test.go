@@ -46,6 +46,7 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 	resetForTest(t)
 
 	RecordWriteLatency(OutcomeSuccess, 12*time.Millisecond)
+	RecordWriteLatency("tenant/document/backend-key", -time.Second)
 	RecordVerification(VerificationOutcomeMatch)
 	RecordVerification(VerificationOutcomeError)
 	RecordVerification("tenant/document/backend-key")
@@ -53,30 +54,43 @@ func TestMetricsRecordCriticalSignalOutcomes(t *testing.T) {
 	IncrementRaftQueueDepth()
 	IncrementRaftQueueDepth()
 	IncrementRaftQueueDepth()
+	DecrementRaftQueueDepth()
+	SetRaftQueueDepth(-1)
 	SetBlockAppendQueueDepth(4)
+	SetBlockAppendQueueDepth(-1)
 	RecordBlockSyncBatchSize(4)
+	RecordBlockSyncBatchSize(-1)
 	RecordBlockSyncLatency(OutcomeSuccess, 3*time.Millisecond)
+	RecordBlockSyncLatency("tenant/document/backend-key", -time.Second)
 	RecordMetadataCommandBatchSize(3)
+	RecordMetadataCommandBatchSize(-1)
 	RecordMetadataCommandSyncLatency(OutcomeSuccess, 4*time.Millisecond)
+	RecordMetadataCommandSyncLatency("tenant/document/backend-key", -time.Second)
 	RecordBatchFailure(BatchComponentBlockstore, BatchStageSync)
 	RecordBatchFailure(BatchComponentRaftMeta, BatchStageSync)
 	RecordBatchFailure(BatchComponentRaftMeta, BatchStagePostApplyRead)
+	families, err := GatherMetrics()
+	testutil.RequireNoErrorf(t, err, "gather metrics")
+	testutil.RequireTruef(t, len(families) > 0, "gathered metrics are empty")
 
 	body := scrapeMetrics(t)
 	for _, want := range []string{
 		"scrap_write_latency_seconds_count{outcome=\"success\"} 1",
+		"scrap_write_latency_seconds_count{outcome=\"error\"} 1",
 		"scrap_verification_total{outcome=\"match\"} 1",
 		"scrap_verification_total{outcome=\"mismatch\"} 1",
 		"scrap_verification_total{outcome=\"error\"} 1",
 		"scrap_backend_probe_total{operation=\"head\",outcome=\"not_found\"} 1",
-		"scrap_raft_queue_depth 3",
-		"scrap_block_append_queue_depth 4",
-		"scrap_block_sync_batch_size_count 1",
+		"scrap_raft_queue_depth 0",
+		"scrap_block_append_queue_depth 0",
+		"scrap_block_sync_batch_size_count 2",
 		"scrap_block_sync_batch_size_sum 4",
 		"scrap_block_sync_latency_seconds_count{outcome=\"success\"} 1",
-		"scrap_metadata_command_batch_size_count 1",
+		"scrap_block_sync_latency_seconds_count{outcome=\"error\"} 1",
+		"scrap_metadata_command_batch_size_count 2",
 		"scrap_metadata_command_batch_size_sum 3",
 		"scrap_metadata_command_sync_latency_seconds_count{outcome=\"success\"} 1",
+		"scrap_metadata_command_sync_latency_seconds_count{outcome=\"error\"} 1",
 		"scrap_batch_failures_total{component=\"blockstore\",stage=\"sync\"} 1",
 		"scrap_batch_failures_total{component=\"raftmeta\",stage=\"sync\"} 1",
 		"scrap_batch_failures_total{component=\"raftmeta\",stage=\"post_apply_read\"} 1",
