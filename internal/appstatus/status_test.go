@@ -3,12 +3,10 @@ package appstatus
 import (
 	"errors"
 	"testing"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestNewBuildsStatusErrorWithDetails(t *testing.T) {
-	detail := timestamppb.Now()
+	detail := testDetail{id: "detail-1"}
 	status := requireStatusError(t, New(CodeDataLoss, "stored checksum mismatch", WithDetails(detail)), CodeDataLoss, "stored checksum mismatch")
 
 	details := status.Details()
@@ -28,7 +26,7 @@ func TestErrorfBuildsFormattedStatusError(t *testing.T) {
 
 func TestWrapPreservesCauseAndDetails(t *testing.T) {
 	cause := errors.New("metadata write failed")
-	detail := timestamppb.Now()
+	detail := testDetail{id: "detail-1"}
 	err := Wrap(CodeUnavailable, "commit unavailable", cause, WithDetails(detail))
 
 	if got := err.Error(); got != "commit unavailable: metadata write failed" {
@@ -50,6 +48,10 @@ func TestWrapPreservesCauseAndDetails(t *testing.T) {
 	if details := status.Details(); len(details) != 1 || details[0] != detail {
 		t.Fatalf("details = %#v, want wrapped detail", details)
 	}
+}
+
+type testDetail struct {
+	id string
 }
 
 func requireStatusError(t *testing.T, err error, code Code, message string) *Error {

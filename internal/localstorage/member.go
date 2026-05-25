@@ -9,7 +9,6 @@ import (
 
 	"github.com/petabytecl/scrap/internal/appstatus"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safepath"
 	"github.com/petabytecl/scrap/internal/storageapp"
@@ -105,8 +104,8 @@ func (a *Application) requireCapacityAdmission(ctx context.Context, expectedLeng
 }
 
 func unsafeCapacityError(requiredBytes, availableBytes uint64, warnings []string) error {
-	return appstatus.New(appstatus.CodeResourceExhausted, "local capacity profile cannot admit write", appstatus.WithDetails(&scrapv1.UnsafeCapacityDetail{
-		CapacityProfileId: localCapacityProfileID,
+	return appstatus.New(appstatus.CodeResourceExhausted, "local capacity profile cannot admit write", appstatus.WithDetails(storageapp.UnsafeCapacityDetail{
+		CapacityProfileID: localCapacityProfileID,
 		RequiredBytes:     requiredBytes,
 		AvailableBytes:    availableBytes,
 		Warnings:          append([]string(nil), warnings...),

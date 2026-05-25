@@ -185,6 +185,40 @@ type ReadDocumentMetadata struct {
 	Source        StorageSource
 }
 
+type RetryHint struct {
+	Retryable  bool
+	RetryAt    *time.Time
+	RetryDelay *time.Duration
+	Reason     string
+}
+
+type IntegrityFailureDetail struct {
+	Identity         identity.Document
+	AttemptedSources []string
+	EvidenceID       string
+}
+
+type RestorePendingDetail struct {
+	Identity         identity.Document
+	AffectedBlockIDs []string
+	RestoreState     string
+	RestoreQueued    bool
+	RetryHint        RetryHint
+}
+
+type CryptoUnavailableDetail struct {
+	Identity  identity.Document
+	KeyScope  string
+	RetryHint RetryHint
+}
+
+type UnsafeCapacityDetail struct {
+	CapacityProfileID string
+	RequiredBytes     uint64
+	AvailableBytes    uint64
+	Warnings          []string
+}
+
 type TransactionState struct {
 	Transaction            identity.Transaction
 	State                  TransactionStateKind
