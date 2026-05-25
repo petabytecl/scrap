@@ -3,6 +3,8 @@ package backendupload
 import (
 	"bytes"
 	"context"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +122,77 @@ func TestBuildBlockIndexSortsDocumentsByPhysicalThenLogicalIdentity(t *testing.T
 	}
 }
 
+func TestLocalBlockIndexSourceOpenBlockIndexUsesPlainFrameMetadata(t *testing.T) {
+	ctx := context.Background()
+	metadataStore := openTestMetastore(t)
+	document := testIndexDocument("tenant", "txn", "plain.xml", 10, 5, time.Unix(100, 0).UTC())
+	testutil.RequireNoErrorf(t, metadataStore.PutDocument(document), "put document metadata")
+
+	reader, err := (LocalBlockIndexSource{Documents: metadataStore, ShardID: "local"}).OpenBlockIndex(ctx, testUploadIntent("block-1"), backend.Object{
+		Key:    "objects/block-1.blk",
+		Length: 64,
+		SHA256: [32]byte{9},
+	})
+	testutil.RequireNoErrorf(t, err, "open block index")
+	defer func() { testutil.RequireNoErrorf(t, reader.Close(), "close block index reader") }()
+	data, err := io.ReadAll(reader)
+	testutil.RequireNoErrorf(t, err, "read block index")
+	index, err := storageformat.UnmarshalBlockIndex(data)
+	testutil.RequireNoErrorf(t, err, "unmarshal block index")
+	testutil.RequireEqualf(t, len(index.GetFrames()), 1, "frame count")
+	testutil.RequireEqualf(t, index.GetFrames()[0].GetEncryptionMode(), storagev1.EncryptionMode_ENCRYPTION_MODE_NONE, "plain frame encryption mode")
+}
+
+func TestBuildEncryptedBlockIndexMapsDocumentsToPlaintextFrameRanges(t *testing.T) {
+	first := testIndexDocument("tenant-a", "txn-a", "a.xml", 0, 25, time.Unix(200, 0).UTC())
+	second := testIndexDocument("tenant-b", "txn-b", "b.xml", 25, 35, time.Unix(100, 0).UTC())
+	frames := []EncryptedFrame{
+		testEncryptedFrame(0, 0, 16, 0, 32),
+		testEncryptedFrame(1, 16, 16, 32, 32),
+		testEncryptedFrame(2, 32, 28, 64, 44),
+	}
+
+	index, err := buildBlockIndex("block-1", "shard-a", backend.Object{Length: 108, SHA256: [32]byte{9}}, "objects/block-1.env", []metastore.Document{first, second}, BlockIndexOptions{EncryptedFrames: frames})
+	testutil.RequireNoErrorf(t, err, "build encrypted index")
+	testutil.RequireEqualf(t, index.GetCreatedAt().AsTime(), second.CreatedAt, "index created_at")
+	testutil.RequireEqualf(t, len(index.GetDocuments()), 2, "document count")
+	testutil.RequireEqualf(t, index.GetDocuments()[0].GetFirstFrameIndex(), uint32(0), "first doc first frame")
+	testutil.RequireEqualf(t, index.GetDocuments()[0].GetLastFrameIndex(), uint32(1), "first doc last frame")
+	testutil.RequireEqualf(t, index.GetDocuments()[1].GetFirstFrameIndex(), uint32(1), "second doc first frame")
+	testutil.RequireEqualf(t, index.GetDocuments()[1].GetLastFrameIndex(), uint32(2), "second doc last frame")
+	testutil.RequireEqualf(t, len(index.GetFrames()), 3, "encrypted frame count")
+	for _, frame := range index.GetFrames() {
+		testutil.RequireEqualf(t, frame.GetEncryptionMode(), storagev1.EncryptionMode_ENCRYPTION_MODE_AES_256_GCM, "frame encryption mode")
+		testutil.RequireEqualf(t, len(frame.GetAuthTag()), 16, "frame auth tag length")
+	}
+}
+
+func TestBuildEncryptedBlockIndexRejectsInvalidEncryptedFrameMetadata(t *testing.T) {
+	document := testIndexDocument("tenant", "txn", "uncovered.xml", 100, 10, time.Unix(100, 0).UTC())
+	_, err := buildBlockIndex("block-1", "shard-a", backend.Object{Length: 64, SHA256: [32]byte{9}}, "", []metastore.Document{document}, BlockIndexOptions{
+		EncryptedFrames: []EncryptedFrame{testEncryptedFrame(0, 0, 32, 0, 48)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "do not cover document") {
+		t.Fatalf("uncovered document error = %v, want coverage failure", err)
+	}
+
+	document = testIndexDocument("tenant", "txn", "out-of-order.xml", 0, 10, time.Unix(100, 0).UTC())
+	_, err = buildBlockIndex("block-1", "shard-a", backend.Object{Length: 64, SHA256: [32]byte{9}}, "", []metastore.Document{document}, BlockIndexOptions{
+		EncryptedFrames: []EncryptedFrame{testEncryptedFrame(1, 0, 32, 0, 48)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match record order") {
+		t.Fatalf("out-of-order frame error = %v, want record order failure", err)
+	}
+
+	document = testIndexDocument("tenant", "txn", "overflow.xml", ^uint64(0)-1, 4, time.Unix(100, 0).UTC())
+	_, err = buildBlockIndex("block-1", "shard-a", backend.Object{Length: 64, SHA256: [32]byte{9}}, "", []metastore.Document{document}, BlockIndexOptions{
+		EncryptedFrames: []EncryptedFrame{testEncryptedFrame(0, 0, 32, 0, 48)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stored range overflows") {
+		t.Fatalf("overflow document error = %v, want range overflow", err)
+	}
+}
+
 func requireUploadedIndexResult(t *testing.T, result *backend.Object, key string) {
 	t.Helper()
 	testutil.RequireNotNilf(t, result, "index result")
@@ -144,6 +217,44 @@ func requireUploadedIndexDocument(t *testing.T, doc *storagev1.IndexDocumentReco
 	testutil.RequireEqualf(t, doc.GetStoredLength(), record.StoredLength, "index document stored length")
 	testutil.RequireEqualf(t, doc.GetLogicalLength(), record.StoredLength, "index document logical length")
 	testutil.RequireTruef(t, bytes.Equal(doc.GetLogicalSha256(), record.LogicalSHA256[:]), "index document logical sha256")
+}
+
+func testIndexDocument(tenantID, transactionID, documentName string, offset, length uint64, createdAt time.Time) metastore.Document {
+	return metastore.Document{
+		Identity: identity.Document{
+			TenantID:      tenantID,
+			TransactionID: transactionID,
+			DocumentName:  documentName,
+		},
+		DocumentClass:    metastore.DocumentClassPermanent,
+		PriorityClass:    metastore.PriorityClassNormal,
+		Length:           length,
+		LogicalSHA256:    [32]byte{1},
+		StoredSHA256:     [32]byte{2},
+		CreatedByService: "billing-etl",
+		CreatedAt:        createdAt,
+		Location: metastore.Location{
+			BlockID:      "block-1",
+			StoredOffset: offset,
+			StoredLength: length,
+			Frames: []metastore.FrameRecord{
+				{SegmentOffset: offset, SegmentLength: length, SHA256: [32]byte{3}},
+			},
+		},
+	}
+}
+
+func testEncryptedFrame(frameIndex uint32, plaintextOffset, plaintextLength, storedOffset, storedLength uint64) EncryptedFrame {
+	return EncryptedFrame{
+		FrameIndex:      frameIndex,
+		PlaintextOffset: plaintextOffset,
+		PlaintextLength: plaintextLength,
+		StoredOffset:    storedOffset,
+		StoredLength:    storedLength,
+		PlaintextSHA256: [32]byte{1},
+		StoredSHA256:    [32]byte{2},
+		AuthTag:         bytes.Repeat([]byte{1}, 16),
+	}
 }
 
 func metastoreLocationFromBlockRecord(record blockstore.Record) metastore.Location {

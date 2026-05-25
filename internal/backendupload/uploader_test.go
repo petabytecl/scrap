@@ -13,6 +13,7 @@ import (
 	"github.com/petabytecl/scrap/internal/backend"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/cryptoenv"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/storageformat"
 	"github.com/petabytecl/scrap/internal/testutil"
@@ -223,6 +224,29 @@ func TestUploadBlockRequiresEnvelopeSourceWhenEnvelopeObjectKeyIsSet(t *testing.
 	}
 }
 
+func TestUploadBlockRejectsEncryptedPayloadWithoutIndexObjectKey(t *testing.T) {
+	ctx := context.Background()
+	blocks := openTestBlockStore(t)
+	record, err := blocks.Append(ctx, bytes.NewReader([]byte("encrypted block requires index")))
+	testutil.RequireNoErrorf(t, err, "append block")
+	sealTestCurrentBlock(ctx, t, blocks)
+	intent := testUploadIntent(record.BlockID)
+	intent.IndexObjectKey = ""
+	intent.EnvelopeObjectKey = "objects/" + record.BlockID + ".env"
+
+	_, err = Uploader{
+		Backend: openTestBackendStore(t),
+		Source:  LocalBlockSource{Blocks: blocks},
+		Envelope: TransitBlockEnvelopeSource{
+			Transit: cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 1}),
+			KeyID:   "transit/backend",
+		},
+	}.UploadBlock(ctx, intent)
+	if err == nil || !strings.Contains(err.Error(), "encrypted block upload requires a block index object key") {
+		t.Fatalf("upload error = %v, want missing encrypted index error", err)
+	}
+}
+
 func TestUploadBlockRequiresBackendObjectKey(t *testing.T) {
 	_, err := Uploader{
 		Backend: openTestBackendStore(t),
@@ -280,6 +304,15 @@ func openTestBackendStore(t *testing.T) *backendfs.Store {
 	store, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	return store
+}
+
+func readBackendObject(ctx context.Context, t *testing.T, store backend.Store, key string) []byte {
+	t.Helper()
+	var got bytes.Buffer
+	if err := store.ReadObjectRange(ctx, key, backend.Range{}, &got); err != nil {
+		t.Fatalf("read backend object %q: %v", key, err)
+	}
+	return got.Bytes()
 }
 
 func testUploadIntent(blockID string) metastore.UploadIntent {

@@ -12,6 +12,8 @@ type verificationEngineRole interface {
 	waitByteServingReady(context.Context) error
 	readVerifiedBackendRange(context.Context, metastore.Document, metastore.UploadIntent, storageapp.ReadRange) ([]byte, error)
 	verifyBackendEnvelope(context.Context, metastore.UploadIntent) error
+	openBackendEnvelope(context.Context, metastore.UploadIntent) (backendEnvelopeMaterial, error)
+	openVerifiedEncryptedBackendBlock(context.Context, metastore.UploadIntent, backendEnvelopeMaterial) (verifiedEncryptedBackendBlock, error)
 }
 
 type verificationEngine struct {

@@ -327,8 +327,8 @@ func validateDocumentFrameCoverage(recordKind string, document *storagev1.IndexD
 	coveredUntil := start
 	for i := int(document.GetFirstFrameIndex()); i <= int(document.GetLastFrameIndex()); i++ {
 		frame := frames[i]
-		frameStart := frame.GetStoredOffset()
-		frameEnd := frameStart + frame.GetStoredLength()
+		frameStart := frame.GetPlaintextOffset()
+		frameEnd := frameStart + frame.GetPlaintextLength()
 		if frameEnd <= start {
 			continue
 		}
