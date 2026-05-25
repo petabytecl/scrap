@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -14,28 +15,28 @@ import (
 var errParseFlags = errors.New("parse flags")
 
 func main() {
-	os.Exit(run(os.Args))
+	os.Exit(run(os.Args, os.Stdout, os.Stderr))
 }
 
-func run(args []string) int {
-	options, outPath, err := parseOptions(args)
+func run(args []string, stdout, stderr io.Writer) int {
+	options, outPath, err := parseOptions(args, stderr)
 	if err != nil {
 		if errors.Is(err, errParseFlags) {
 			return 2
 		}
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		_, _ = fmt.Fprintf(stderr, "%v\n", err)
 		return 2
 	}
 	report, err := crashfault.Run(context.Background(), options)
 	if err != nil {
-		return fail("run crash/fault evidence", err)
+		return fail(stderr, "run crash/fault evidence", err)
 	}
 	data, err := crashfault.MarshalReport(report)
 	if err != nil {
-		return fail("marshal crash/fault evidence", err)
+		return fail(stderr, "marshal crash/fault evidence", err)
 	}
-	if err := writeReport(outPath, data); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+	if err := writeReport(outPath, stdout, data); err != nil {
+		_, _ = fmt.Fprintf(stderr, "%v\n", err)
 		return 2
 	}
 	if !report.Ready {
@@ -44,8 +45,9 @@ func run(args []string) int {
 	return 0
 }
 
-func parseOptions(args []string) (crashfault.Options, string, error) {
+func parseOptions(args []string, stderr io.Writer) (crashfault.Options, string, error) {
 	fs := flag.NewFlagSet("scrap-crash-fault-evidence", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	outPath := fs.String("out", "", "write JSON evidence report to this path; defaults to stdout")
 	runnerProfile := fs.String("runner-profile", "", "runner profile recorded in evidence")
 	filesystemProfile := fs.String("filesystem-profile", "", "filesystem profile recorded in evidence")
@@ -87,9 +89,9 @@ func artifactURIForOutput(artifactURI, outPath string) (string, error) {
 	return "file://" + abs, nil
 }
 
-func writeReport(outPath string, data []byte) error {
+func writeReport(outPath string, stdout io.Writer, data []byte) error {
 	if outPath == "" {
-		if _, err := os.Stdout.Write(data); err != nil {
+		if _, err := stdout.Write(data); err != nil {
 			return fmt.Errorf("write crash/fault evidence: %w", err)
 		}
 		return nil
@@ -101,7 +103,7 @@ func writeReport(outPath string, data []byte) error {
 	return nil
 }
 
-func fail(operation string, err error) int {
-	fmt.Fprintf(os.Stderr, "%s: %v\n", operation, err)
+func fail(stderr io.Writer, operation string, err error) int {
+	_, _ = fmt.Fprintf(stderr, "%s: %v\n", operation, err)
 	return 2
 }

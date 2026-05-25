@@ -15,6 +15,7 @@ import (
 
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
+	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
@@ -102,6 +103,43 @@ func TestAuthoritativeDocumentRecordRoundTripPreservesContractFields(t *testing.
 	if !proto.Equal(record, decoded) {
 		t.Fatalf("decoded record differs\n got: %v\nwant: %v", decoded, record)
 	}
+}
+
+func TestPublicRecordHelpersNormalizeAndExposeProtos(t *testing.T) {
+	document := sampleDocument("invoice.xml", DocumentClassPermanent)
+	document.CreatedAt = time.Time{}
+
+	data, err := MarshalDocument(document)
+	testutil.RequireNoErrorf(t, err, "marshal public document")
+	decoded, err := UnmarshalDocument(data)
+	testutil.RequireNoErrorf(t, err, "unmarshal public document")
+	testutil.RequireFalsef(t, decoded.CreatedAt.IsZero(), "decoded created_at should be normalized")
+	testutil.RequireTruef(t, decoded.CreatedAt.Equal(decoded.FinalizedAt), "decoded created_at = %v, want finalized_at %v", decoded.CreatedAt, decoded.FinalizedAt)
+
+	documentRecord := DocumentRecord(document)
+	testutil.RequireEqualf(t, documentRecord.GetSchemaVersion(), CurrentSchemaVersion, "document record schema")
+	testutil.RequireEqualf(t, len(documentRecord.GetDocumentIdentityFingerprint()), 16, "document record fingerprint length")
+	transaction := TransactionRecord(Transaction{
+		Identity: identity.Transaction{TenantID: "tenant", TransactionID: "txn"},
+		State:    TransactionStateOpen,
+	})
+	testutil.RequireEqualf(t, transaction.GetSchemaVersion(), CurrentSchemaVersion, "transaction record schema")
+	testutil.RequireEqualf(t, transaction.GetState(), uint32(TransactionStateOpen), "transaction state")
+	intent := UploadIntentRecord(sampleUploadIntent("block-1"))
+	testutil.RequireEqualf(t, intent.GetSchemaVersion(), CurrentSchemaVersion, "upload intent record schema")
+	testutil.RequireEqualf(t, intent.GetBlockId(), "block-1", "upload intent block id")
+	repair := RepairStateRecord(RepairState{
+		Identity:   document.Identity,
+		IncidentID: "incident-1",
+		UpdatedAt:  time.Unix(50, 0).UTC(),
+	})
+	testutil.RequireEqualf(t, repair.GetSchemaVersion(), CurrentSchemaVersion, "repair state record schema")
+	testutil.RequireEqualf(t, repair.GetIncidentId(), "incident-1", "repair state incident id")
+	receipt := CommandReceipt{CommandID: "command-1"}
+	receipt.CommandSHA256[0] = 1
+	commandReceipt := CommandReceiptRecord(receipt)
+	testutil.RequireEqualf(t, commandReceipt.GetSchemaVersion(), CurrentSchemaVersion, "command receipt record schema")
+	testutil.RequireEqualf(t, commandReceipt.GetCommandId(), "command-1", "command receipt id")
 }
 
 func TestAuthoritativeDocumentRecordMarshalIsDeterministic(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,17 @@ func TestProcessorUploadsPendingIntentAndRecordsUploaded(t *testing.T) {
 	requireUploadedIntentCall(t, updater.calls, 0, intent.BlockID, time.Unix(500, 0).UTC())
 	_, err = store.HeadObject(ctx, intent.BackendObjectKey)
 	testutil.RequireNoErrorf(t, err, "head uploaded object")
+}
+
+func TestProcessorRequiresConfiguredCollaborators(t *testing.T) {
+	_, err := Processor{}.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "upload intent lister") {
+		t.Fatalf("missing lister error = %v, want not configured", err)
+	}
+	_, err = Processor{Intents: staticIntentLister{}}.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "upload intent state updater") {
+		t.Fatalf("missing updater error = %v, want not configured", err)
+	}
 }
 
 func TestProcessorSkipsNonPendingIntents(t *testing.T) {

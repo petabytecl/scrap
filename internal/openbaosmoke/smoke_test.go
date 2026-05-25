@@ -123,6 +123,82 @@ func TestRedactedRequestIDUsesOpenBaoResponseBody(t *testing.T) {
 	}
 }
 
+func TestSmokeHelpersUseDefaultsAndOverrides(t *testing.T) {
+	fixed := time.Unix(500, 0).UTC()
+	customClock := smokeClock(Options{Now: func() time.Time { return fixed }})
+	testutil.RequireTruef(t, customClock().Equal(fixed), "custom clock was not used")
+	defaultClock := smokeClock(Options{})
+	testutil.RequireFalsef(t, defaultClock().IsZero(), "default clock returned zero time")
+
+	client := &http.Client{Timeout: time.Second}
+	testutil.RequireEqualf(t, smokeHTTPClient(Options{HTTPClient: client}), client, "custom HTTP client")
+	testutil.RequireEqualf(t, smokeHTTPClient(Options{}), http.DefaultClient, "default HTTP client")
+}
+
+func TestTransitKeyPathParsing(t *testing.T) {
+	tests := map[string]struct {
+		path      string
+		wantMount string
+		wantKey   string
+	}{
+		"mount and key": {
+			path:      "transit/scrap-backend",
+			wantMount: "transit",
+			wantKey:   "scrap-backend",
+		},
+		"keys API path": {
+			path:      "/transit/keys/team/scrap-backend/",
+			wantMount: "transit",
+			wantKey:   "team/scrap-backend",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			mount, key, err := splitTransitKeyPath(tt.path)
+			testutil.RequireNoErrorf(t, err, "split transit key path")
+			testutil.RequireEqualf(t, mount, tt.wantMount, "mount")
+			testutil.RequireEqualf(t, key, tt.wantKey, "key")
+		})
+	}
+	if _, _, err := splitTransitKeyPath("transit"); err == nil {
+		t.Fatal("single-part transit key path succeeded")
+	}
+}
+
+func TestTransitCiphertextVersionHelpers(t *testing.T) {
+	version, err := ciphertextVersion("vault:v12:ciphertext")
+	testutil.RequireNoErrorf(t, err, "parse ciphertext version")
+	testutil.RequireEqualf(t, version, uint32(12), "ciphertext version")
+	if _, err := ciphertextVersion("vault:12:ciphertext"); err == nil {
+		t.Fatal("ciphertext without v-prefixed version succeeded")
+	}
+	if _, err := ciphertextVersion("vault:v4294967296:ciphertext"); err == nil {
+		t.Fatal("overflowing ciphertext version succeeded")
+	}
+	testutil.RequireEqualf(t, replaceCiphertextVersion("vault:v1:ciphertext", "2"), "vault:v2:ciphertext", "replace ciphertext version")
+	testutil.RequireEqualf(t, replaceCiphertextVersion("malformed", "2"), "vault:v2:redacted", "replace malformed ciphertext version")
+}
+
+func TestValidateHTTPURLRejectsInvalidValues(t *testing.T) {
+	testutil.RequireNoErrorf(t, validateHTTPURL("openbao address", "https://openbao.local:8200"), "valid URL")
+	for _, raw := range []string{"ftp://openbao.local", "http:///missing-host", "http://[::1"} {
+		if err := validateHTTPURL("openbao address", raw); err == nil {
+			t.Fatalf("validateHTTPURL(%q) succeeded", raw)
+		}
+	}
+}
+
+func TestClassifyProbeErrorWrapsNetworkErrors(t *testing.T) {
+	err := classifyProbeError(probeTimeoutError{})
+	if err == nil || !strings.Contains(err.Error(), "transit unavailable") {
+		t.Fatalf("classified network error = %v, want transit unavailable wrapper", err)
+	}
+	generic := classifyProbeError(regularError("regular"))
+	if generic.Error() != "regular" {
+		t.Fatalf("generic error = %v, want unchanged", generic)
+	}
+}
+
 func newFakeOpenBao(t *testing.T, broadKeyAdmin bool) *httptest.Server {
 	t.Helper()
 	version := uint32(1)
@@ -157,6 +233,26 @@ func handleFakeOpenBaoRequest(t *testing.T, w http.ResponseWriter, r *http.Reque
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+type probeTimeoutError struct{}
+
+func (probeTimeoutError) Error() string {
+	return "timeout"
+}
+
+func (probeTimeoutError) Timeout() bool {
+	return true
+}
+
+func (probeTimeoutError) Temporary() bool {
+	return true
+}
+
+type regularError string
+
+func (e regularError) Error() string {
+	return string(e)
 }
 
 func handleFakeAuditStatus(t *testing.T, w http.ResponseWriter, r *http.Request) {

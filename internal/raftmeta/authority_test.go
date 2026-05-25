@@ -77,6 +77,44 @@ func TestAuthorityRebuildsProjectionFromCommandLog(t *testing.T) {
 	requireRebuiltRepairState(t, repair)
 }
 
+func TestSortHelpersOrderIdentityProjections(t *testing.T) {
+	documents := []metastore.Document{
+		{Identity: identity.Document{TenantID: "tenant-b", TransactionID: "tx-a", DocumentName: "a.xml"}},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-b", DocumentName: "b.xml"}},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-a", DocumentName: "b.xml"}},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-a", DocumentName: "a.xml"}},
+	}
+	sortDocuments(documents)
+	testutil.RequireEqualf(t, documents[0].Identity.DocumentName, "a.xml", "first document name")
+	testutil.RequireEqualf(t, documents[1].Identity.DocumentName, "b.xml", "second document name")
+	testutil.RequireEqualf(t, documents[2].Identity.TransactionID, "tx-b", "third document transaction")
+	testutil.RequireEqualf(t, documents[3].Identity.TenantID, "tenant-b", "last document tenant")
+
+	transactions := []metastore.Transaction{
+		{Identity: identity.Transaction{TenantID: "tenant-b", TransactionID: "tx-a"}},
+		{Identity: identity.Transaction{TenantID: "tenant-a", TransactionID: "tx-b"}},
+		{Identity: identity.Transaction{TenantID: "tenant-a", TransactionID: "tx-a"}},
+	}
+	sortTransactions(transactions)
+	testutil.RequireEqualf(t, transactions[0].Identity.TransactionID, "tx-a", "first transaction")
+	testutil.RequireEqualf(t, transactions[1].Identity.TransactionID, "tx-b", "second transaction")
+	testutil.RequireEqualf(t, transactions[2].Identity.TenantID, "tenant-b", "last transaction tenant")
+
+	repairStates := []metastore.RepairState{
+		{Identity: identity.Document{TenantID: "tenant-b", TransactionID: "tx-a", DocumentName: "a.xml"}, IncidentID: "incident-a"},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-b", DocumentName: "a.xml"}, IncidentID: "incident-a"},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-a", DocumentName: "b.xml"}, IncidentID: "incident-b"},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-a", DocumentName: "b.xml"}, IncidentID: "incident-a"},
+		{Identity: identity.Document{TenantID: "tenant-a", TransactionID: "tx-a", DocumentName: "a.xml"}, IncidentID: "incident-a"},
+	}
+	sortRepairStates(repairStates)
+	testutil.RequireEqualf(t, repairStates[0].Identity.DocumentName, "a.xml", "first repair document")
+	testutil.RequireEqualf(t, repairStates[1].IncidentID, "incident-a", "second repair incident")
+	testutil.RequireEqualf(t, repairStates[2].IncidentID, "incident-b", "third repair incident")
+	testutil.RequireEqualf(t, repairStates[3].Identity.TransactionID, "tx-b", "fourth repair transaction")
+	testutil.RequireEqualf(t, repairStates[4].Identity.TenantID, "tenant-b", "last repair tenant")
+}
+
 func TestAuthorityCompleteTransactionRetryDoesNotAppend(t *testing.T) {
 	dir := t.TempDir()
 	metadata := openTestMetadata(t, dir)

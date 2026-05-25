@@ -571,14 +571,7 @@ func (s *Store) updateTransactionRestoreState(batch *pebble.Batch, transaction i
 	for i := range documents {
 		documents[i].RestoreState = state
 		documents[i].Availability = availability
-		value, err := marshalDocument(documents[i])
-		if err != nil {
-			return nil, err
-		}
-		if err := batch.Set(documentKey(documents[i].Identity), value, nil); err != nil {
-			return nil, err
-		}
-		if err := batch.Set(transactionDocumentKey(documents[i].Identity), value, nil); err != nil {
+		if err := s.replaceDocument(batch, documents[i]); err != nil {
 			return nil, err
 		}
 	}

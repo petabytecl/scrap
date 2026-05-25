@@ -48,6 +48,30 @@ func TestHealthChecksReflectLocalStorageState(t *testing.T) {
 	testutil.RequireErrorIsf(t, app.CheckLiveness(context.Background()), blockstore.ErrClosed, "liveness after closed blockstore")
 }
 
+func TestApplicationAccessorsAndSettersExposeFocusedSubcomponents(t *testing.T) {
+	app := openTestApplication(t)
+	testutil.RequireNotNilf(t, app.Documents(), "document application")
+	testutil.RequireNotNilf(t, app.Transactions(), "transaction application")
+	testutil.RequireNotNilf(t, app.OperationExecutor(), "operation executor")
+
+	var nilApp *Application
+	testutil.RequireNilf(t, nilApp.Documents(), "nil document application")
+	testutil.RequireNilf(t, nilApp.Transactions(), "nil transaction application")
+	testutil.RequireNilf(t, nilApp.OperationExecutor(), "nil operation executor")
+
+	source := backendupload.LocalBlockEnvelopeSource{CellID: "test-cell"}
+	app.SetBlockEnvelopeSource(source)
+	gotSource, ok := app.backendEnvelopeSource().(backendupload.LocalBlockEnvelopeSource)
+	testutil.RequireTruef(t, ok, "custom envelope source type = %T", app.backendEnvelopeSource())
+	testutil.RequireEqualf(t, gotSource, source, "custom envelope source")
+	app.SetBlockEnvelopeSource(nil)
+	if _, ok := app.backendEnvelopeSource().(backendupload.LocalBlockEnvelopeSource); !ok {
+		t.Fatalf("default envelope source = %T, want local source", app.backendEnvelopeSource())
+	}
+	app.SetSealBlockAtBytes(123)
+	testutil.RequireEqualf(t, app.sealBlockAtBytes, uint64(123), "seal block threshold")
+}
+
 func TestHealthChecksReflectClosedRaftMetadataAuthority(t *testing.T) {
 	app := openTestApplication(t)
 	testutil.RequireNoErrorf(t, app.authority.Close(), "close authority")

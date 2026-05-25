@@ -27,6 +27,45 @@ func TestPublishedMetadataObjectKeysFollowLayout(t *testing.T) {
 	}
 }
 
+func TestPublishedMetadataObjectKeysValidateInputs(t *testing.T) {
+	tests := map[string]func() (string, error){
+		"current pointer missing cell": func() (string, error) {
+			return CurrentPointerObjectKey("")
+		},
+		"manifest missing cell": func() (string, error) {
+			return ManifestObjectKey("", "manifest-1")
+		},
+		"manifest missing id": func() (string, error) {
+			return ManifestObjectKey("cell-a", "")
+		},
+		"snapshot missing cell": func() (string, error) {
+			return SnapshotObjectKey("", "shard-a", "snapshot-1")
+		},
+		"snapshot missing shard": func() (string, error) {
+			return SnapshotObjectKey("cell-a", "", "snapshot-1")
+		},
+		"snapshot missing id": func() (string, error) {
+			return SnapshotObjectKey("cell-a", "shard-a", "")
+		},
+		"tail missing cell": func() (string, error) {
+			return TailObjectKey("", "shard-a", 1, 2)
+		},
+		"tail missing shard": func() (string, error) {
+			return TailObjectKey("cell-a", "", 1, 2)
+		},
+		"tail invalid range": func() (string, error) {
+			return TailObjectKey("cell-a", "shard-a", 2, 1)
+		},
+	}
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			if key, err := call(); err == nil {
+				t.Fatalf("key = %q, want validation error", key)
+			}
+		})
+	}
+}
+
 func TestBuildManifestClonesInputsAndBuildsPointerChecksum(t *testing.T) {
 	publishedAt := time.Unix(100, 0).UTC()
 	snapshot := &publishedv1.ArtifactRef{
@@ -77,6 +116,26 @@ func TestBuildManifestClonesInputsAndBuildsPointerChecksum(t *testing.T) {
 	testutil.RequireTruef(t, pointer.GetPublishedAt().AsTime().Equal(publishedAt), "pointer published_at = %s, want %s", pointer.GetPublishedAt().AsTime(), publishedAt)
 }
 
+func TestBuildManifestPreservesNilReferenceSlots(t *testing.T) {
+	manifest, err := BuildManifest(ManifestOptions{
+		CellID:          "cell-a",
+		SourceNamespace: "billing-prod",
+		ManifestID:      "manifest-1",
+		Generation:      2,
+		PublishedAt:     time.Unix(100, 0).UTC(),
+		ShardWatermarks: []*publishedv1.ShardWatermark{nil},
+		Snapshots:       []*publishedv1.ArtifactRef{nil},
+		Tails:           []*publishedv1.ArtifactRef{nil},
+		RequiredObjects: []*publishedv1.ObjectRef{nil},
+	})
+	testutil.RequireNoErrorf(t, err, "build manifest")
+	testutil.RequireEqualf(t, len(manifest.GetShardWatermarks()), 1, "watermark count")
+	testutil.RequireNilf(t, manifest.GetShardWatermarks()[0], "watermark nil slot")
+	testutil.RequireNilf(t, manifest.GetSnapshots()[0], "snapshot nil slot")
+	testutil.RequireNilf(t, manifest.GetTails()[0], "tail nil slot")
+	testutil.RequireNilf(t, manifest.GetRequiredObjects()[0], "required object nil slot")
+}
+
 func TestBuildManifestValidatesRequiredFields(t *testing.T) {
 	valid := ManifestOptions{
 		CellID:          "cell-a",
@@ -107,6 +166,9 @@ func TestBuildCurrentPointerValidatesInputs(t *testing.T) {
 	}
 	if _, err := BuildCurrentPointer(&publishedv1.Manifest{SchemaVersion: CurrentSchemaVersion}, nil); err == nil {
 		t.Fatal("empty manifest data succeeded")
+	}
+	if _, err := BuildCurrentPointer(&publishedv1.Manifest{SchemaVersion: CurrentSchemaVersion + 1}, []byte("manifest")); err == nil {
+		t.Fatal("unsupported manifest schema version succeeded")
 	}
 }
 
