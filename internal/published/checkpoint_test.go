@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,9 +75,56 @@ func TestVerifyCurrentCheckpointFailsWhenRequiredObjectIsMissing(t *testing.T) {
 		},
 	})
 	testutil.RequireNoErrorf(t, err, "build manifest")
+	writeCheckpointObjects(ctx, t, store, manifest)
+
+	_, err = VerifyCurrentCheckpoint(ctx, store, "cell-a")
+	if !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("verify error = %v, want missing required object", err)
+	}
+}
+
+func TestVerifyCurrentCheckpointFailsWhenCurrentPointerIsMissing(t *testing.T) {
+	ctx := context.Background()
+	store := openPublisherBackend(t)
+
+	_, err := VerifyCurrentCheckpoint(ctx, store, "cell-a")
+	if !errors.Is(err, ErrCurrentPointerNotFound) {
+		t.Fatalf("verify error = %v, want %v", err, ErrCurrentPointerNotFound)
+	}
+}
+
+func TestVerifyCurrentCheckpointRejectsSnapshotArtifactKindMismatch(t *testing.T) {
+	ctx := context.Background()
+	store := openPublisherBackend(t)
+	manifest, err := BuildManifest(ManifestOptions{
+		CellID:          "cell-a",
+		SourceNamespace: "source-a",
+		ManifestID:      "manifest-1",
+		Generation:      7,
+		PublishedAt:     time.Unix(100, 0).UTC(),
+		Snapshots: []*publishedv1.ArtifactRef{
+			{
+				Kind:      publishedv1.ArtifactKind_ARTIFACT_KIND_TAIL,
+				ShardId:   "shard-a",
+				ObjectKey: "cells/cell-a/metadata/v1/tails/shard=shard-a/00000000000000000001-00000000000000000002.tail",
+				Sha256:    bytes.Repeat([]byte{1}, 32),
+			},
+		},
+	})
+	testutil.RequireNoErrorf(t, err, "build manifest")
+	writeCheckpointObjects(ctx, t, store, manifest)
+
+	_, err = VerifyCurrentCheckpoint(ctx, store, "cell-a")
+	if err == nil || !strings.Contains(err.Error(), "invalid ARTIFACT_KIND_SNAPSHOT artifact kind ARTIFACT_KIND_TAIL") {
+		t.Fatalf("verify error = %v, want snapshot artifact kind mismatch", err)
+	}
+}
+
+func writeCheckpointObjects(ctx context.Context, t *testing.T, store backend.MutableStore, manifest *publishedv1.Manifest) {
+	t.Helper()
 	manifestData, err := MarshalManifest(manifest)
 	testutil.RequireNoErrorf(t, err, "marshal manifest")
-	manifestKey, err := ManifestObjectKey("cell-a", "manifest-1")
+	manifestKey, err := ManifestObjectKey(manifest.GetCellId(), manifest.GetManifestId())
 	testutil.RequireNoErrorf(t, err, "manifest key")
 	if _, err := store.PutObject(ctx, manifestKey, bytes.NewReader(manifestData)); err != nil {
 		t.Fatalf("put manifest: %v", err)
@@ -85,14 +133,9 @@ func TestVerifyCurrentCheckpointFailsWhenRequiredObjectIsMissing(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "build current pointer")
 	pointerData, err := MarshalCurrentPointer(pointer)
 	testutil.RequireNoErrorf(t, err, "marshal current pointer")
-	pointerKey, err := CurrentPointerObjectKey("cell-a")
+	pointerKey, err := CurrentPointerObjectKey(manifest.GetCellId())
 	testutil.RequireNoErrorf(t, err, "pointer key")
 	if _, err := store.PutMutableObject(ctx, pointerKey, bytes.NewReader(pointerData)); err != nil {
 		t.Fatalf("put pointer: %v", err)
-	}
-
-	_, err = VerifyCurrentCheckpoint(ctx, store, "cell-a")
-	if !errors.Is(err, backend.ErrNotFound) {
-		t.Fatalf("verify error = %v, want missing required object", err)
 	}
 }
