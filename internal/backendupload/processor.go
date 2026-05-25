@@ -13,7 +13,10 @@ import (
 	"github.com/petabytecl/scrap/internal/metastore"
 )
 
-const defaultRunOnceBatchSize = 100
+const (
+	defaultRunOnceBatchSize = 100
+	defaultUploadTimeout    = 10 * time.Minute
+)
 
 type IntentLister interface {
 	ListPendingUploadIntents(limit int) ([]metastore.UploadIntent, error)
@@ -29,6 +32,10 @@ type Processor struct {
 	Updater   IntentStateUpdater
 	Now       func() time.Time
 	BatchSize int
+
+	// UploadTimeout bounds each block upload attempt so a stalled backend
+	// cannot monopolize the processor loop indefinitely.
+	UploadTimeout time.Duration
 }
 
 type RunResult struct {
@@ -83,7 +90,7 @@ func (p Processor) processIntent(ctx context.Context, intent metastore.UploadInt
 		result.Skipped++
 		return nil
 	}
-	if _, err := p.Uploader.UploadBlock(ctx, intent); err != nil {
+	if _, err := p.uploadBlock(ctx, intent); err != nil {
 		return p.recordUploadFailure(ctx, intent, err, result)
 	}
 	if err := p.recordState(ctx, intent.BlockID, metastore.UploadStateUploaded, ""); err != nil {
@@ -91,6 +98,19 @@ func (p Processor) processIntent(ctx context.Context, intent metastore.UploadInt
 	}
 	result.Uploaded++
 	return nil
+}
+
+func (p Processor) uploadBlock(ctx context.Context, intent metastore.UploadIntent) (UploadResult, error) {
+	uploadCtx, cancel := context.WithTimeout(ctx, p.uploadTimeout())
+	defer cancel()
+	return p.Uploader.UploadBlock(uploadCtx, intent)
+}
+
+func (p Processor) uploadTimeout() time.Duration {
+	if p.UploadTimeout > 0 {
+		return p.UploadTimeout
+	}
+	return defaultUploadTimeout
 }
 
 func (p Processor) recordUploadFailure(ctx context.Context, intent metastore.UploadIntent, uploadErr error, result *RunResult) error {

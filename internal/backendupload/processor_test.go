@@ -150,6 +150,28 @@ func TestProcessorRequestsBoundedPendingIntentBatch(t *testing.T) {
 	testutil.RequireEqualf(t, updater.calls[0].blockID, first.BlockID, "updated block id")
 }
 
+func TestProcessorTimesOutStalledUploadAndRecordsFailure(t *testing.T) {
+	intent := testUploadIntent("block-1")
+	updater := &recordingIntentStateUpdater{}
+
+	result, err := Processor{
+		Uploader: Uploader{
+			Backend: blockingPutBackendStore{Store: openTestBackendStore(t)},
+			Source:  staticBlockSource{body: []byte("block")},
+			Index:   staticBlockIndexSource{body: []byte("index")},
+		},
+		Intents:       staticIntentLister{intents: []metastore.UploadIntent{intent}},
+		Updater:       updater,
+		UploadTimeout: 10 * time.Millisecond,
+	}.RunOnce(context.Background())
+	testutil.RequireNoErrorf(t, err, "run processor")
+	requireProcessorCounts(t, result, processorCounts{scanned: 1, failed: 1})
+	requireFailedIntentCall(t, updater.calls, 0)
+	if !strings.Contains(updater.calls[0].lastError, context.DeadlineExceeded.Error()) {
+		t.Fatalf("last error = %q, want deadline exceeded", updater.calls[0].lastError)
+	}
+}
+
 type processorCounts struct {
 	scanned  int
 	uploaded int
@@ -388,6 +410,15 @@ type failingPutBackendStore struct {
 
 func (s failingPutBackendStore) PutObject(context.Context, string, io.Reader) (backend.Object, error) {
 	return backend.Object{}, s.err
+}
+
+type blockingPutBackendStore struct {
+	backend.Store
+}
+
+func (s blockingPutBackendStore) PutObject(ctx context.Context, _ string, _ io.Reader) (backend.Object, error) {
+	<-ctx.Done()
+	return backend.Object{}, ctx.Err()
 }
 
 type stateCall struct {
