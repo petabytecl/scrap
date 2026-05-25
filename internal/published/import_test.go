@@ -149,6 +149,30 @@ func TestReadSnapshotContentsRejectsEmptyConstrainedImport(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotContentsImportsTombstoneRecords(t *testing.T) {
+	var snapshot bytes.Buffer
+	tombstonedAt := time.Unix(400, 0).UTC()
+	document := publishedTestDocument([]byte("deleted bytes"))
+	document.LifecycleState = metastore.LifecycleStateTombstoned
+	document.TombstonedAt = &tombstonedAt
+	err := WriteMetadataSnapshotRecords(&snapshot, SnapshotOptions{
+		SourceNamespace: "source-a",
+		ShardID:         "shard-a",
+		HighWatermark:   42,
+	}, []metastore.Document{document}, nil)
+	testutil.RequireNoErrorf(t, err, "write snapshot tombstone")
+
+	contents, err := ReadSnapshotContentsForImport(bytes.NewReader(snapshot.Bytes()), ImportOptions{
+		SourceNamespace:      "source-a",
+		ShardID:              "shard-a",
+		HighWatermark:        42,
+		RequireHighWatermark: true,
+	})
+	testutil.RequireNoErrorf(t, err, "read snapshot tombstone")
+	testutil.RequireEqualf(t, contents.Tombstones, 1, "snapshot tombstone count")
+	testutil.RequireEqualf(t, len(contents.Documents), 0, "snapshot document count")
+}
+
 func TestReadSnapshotContentsRejectsMalformedPublishedDocument(t *testing.T) {
 	var snapshot bytes.Buffer
 	document := publishedDocument(publishedTestDocument([]byte("imported bytes")), LocationObjects{
@@ -270,6 +294,60 @@ func requireTailContents(t *testing.T, contents TailContents, documentIdentity i
 	testutil.RequireEqualf(t, contents.ObjectStates[0].GetObject().GetObjectKey(), "objects/block-1.blk", "tail object key")
 }
 
+func TestReadTailContentsImportsTransactionAndTombstone(t *testing.T) {
+	var tail bytes.Buffer
+	completedAt := time.Unix(60, 0).UTC()
+	transaction := metastore.Transaction{
+		Identity: identity.Transaction{
+			TenantID:      "tenant-a",
+			TransactionID: "tx-a",
+		},
+		State:                  metastore.TransactionStateCompleted,
+		DocumentCount:          2,
+		PermanentDocumentCount: 1,
+		EphemeralDocumentCount: 1,
+		CreatedAt:              time.Unix(50, 0).UTC(),
+		CompletedAt:            &completedAt,
+		Tags:                   map[string]string{"closed_by": "import-test"},
+	}
+	err := WriteTailRecord(&tail, &publishedv1.TailRecord{
+		SchemaVersion:   CurrentSchemaVersion,
+		SourceNamespace: "source-a",
+		ShardId:         "shard-a",
+		LogIndex:        43,
+		Mutation: &publishedv1.TailRecord_TransactionState{
+			TransactionState: publishedTransaction(transaction),
+		},
+	})
+	testutil.RequireNoErrorf(t, err, "write transaction tail")
+
+	tombstonedAt := time.Unix(70, 0).UTC()
+	document := publishedTestDocument([]byte("deleted bytes"))
+	document.TombstonedAt = &tombstonedAt
+	err = WriteTailRecord(&tail, &publishedv1.TailRecord{
+		SchemaVersion:   CurrentSchemaVersion,
+		SourceNamespace: "source-a",
+		ShardId:         "shard-a",
+		LogIndex:        44,
+		Mutation: &publishedv1.TailRecord_Tombstone{
+			Tombstone: publishedTombstone(document, 44),
+		},
+	})
+	testutil.RequireNoErrorf(t, err, "write tombstone tail")
+
+	contents, err := ReadTailContentsForImport(bytes.NewReader(tail.Bytes()), ImportOptions{
+		SourceNamespace: "source-a",
+		ShardID:         "shard-a",
+		FirstLogIndex:   43,
+		LastLogIndex:    44,
+		RequireLogRange: true,
+	})
+	testutil.RequireNoErrorf(t, err, "read tail")
+	testutil.RequireEqualf(t, len(contents.Transactions), 1, "tail transaction count")
+	testutil.RequireEqualf(t, contents.Tombstones, 1, "tail tombstone count")
+	requireImportedTransaction(t, contents.Transactions[0], transaction.Identity, completedAt)
+}
+
 func TestReadTailContentsRejectsWrongSourceOwnership(t *testing.T) {
 	var tail bytes.Buffer
 	if err := WriteTailRecord(&tail, &publishedv1.TailRecord{
@@ -321,5 +399,80 @@ func TestReadTailContentsRejectsEmptyConstrainedImport(t *testing.T) {
 		len(contents.ObjectStates) != 0 ||
 		contents.Tombstones != 0 {
 		t.Fatalf("contents = %#v, want empty unconstrained tail", contents)
+	}
+}
+
+func TestReadTailContentsRejectsMalformedObjectState(t *testing.T) {
+	tests := map[string]*publishedv1.PublishedObjectState{
+		"missing available index": {
+			Object: validPublishedObjectRef(),
+		},
+		"missing object": {
+			AvailableAtIndex: 43,
+		},
+		"missing object kind": {
+			AvailableAtIndex: 43,
+			Object: &publishedv1.ObjectRef{
+				ObjectKey: "objects/block-1.blk",
+				Sha256:    bytes.Repeat([]byte{1}, sha256.Size),
+			},
+		},
+	}
+	for name, objectState := range tests {
+		t.Run(name, func(t *testing.T) {
+			var tail bytes.Buffer
+			err := WriteTailRecord(&tail, &publishedv1.TailRecord{
+				SchemaVersion:   CurrentSchemaVersion,
+				SourceNamespace: "source-a",
+				ShardId:         "shard-a",
+				LogIndex:        43,
+				Mutation: &publishedv1.TailRecord_ObjectState{
+					ObjectState: objectState,
+				},
+			})
+			testutil.RequireNoErrorf(t, err, "write object state tail")
+
+			_, err = ReadTailContentsForImport(bytes.NewReader(tail.Bytes()), ImportOptions{
+				SourceNamespace: "source-a",
+				ShardID:         "shard-a",
+			})
+			if !errors.Is(err, ErrInvalidArtifact) {
+				t.Fatalf("error = %v, want %v", err, ErrInvalidArtifact)
+			}
+		})
+	}
+}
+
+func TestImportTombstoneValidatesRequiredFields(t *testing.T) {
+	tombstonedAt := timestamppb.New(time.Unix(70, 0).UTC())
+	valid := &publishedv1.PublishedTombstone{
+		TenantId:          "tenant-a",
+		TransactionId:     "tx-a",
+		TombstonedAtIndex: 43,
+		TombstonedAt:      tombstonedAt,
+	}
+	tests := map[string]*publishedv1.PublishedTombstone{
+		"nil":                 nil,
+		"missing tenant":      {TransactionId: "tx-a", TombstonedAtIndex: 43, TombstonedAt: tombstonedAt},
+		"missing transaction": {TenantId: "tenant-a", TombstonedAtIndex: 43, TombstonedAt: tombstonedAt},
+		"missing index":       {TenantId: "tenant-a", TransactionId: "tx-a", TombstonedAt: tombstonedAt},
+		"missing timestamp":   {TenantId: "tenant-a", TransactionId: "tx-a", TombstonedAtIndex: 43},
+	}
+	testutil.RequireNoErrorf(t, importTombstone(valid), "valid tombstone")
+	for name, tombstone := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := importTombstone(tombstone); !errors.Is(err, ErrInvalidArtifact) {
+				t.Fatalf("error = %v, want %v", err, ErrInvalidArtifact)
+			}
+		})
+	}
+}
+
+func validPublishedObjectRef() *publishedv1.ObjectRef {
+	return &publishedv1.ObjectRef{
+		Kind:      publishedv1.ObjectKind_OBJECT_KIND_BLOCK,
+		ObjectKey: "objects/block-1.blk",
+		Length:    1,
+		Sha256:    bytes.Repeat([]byte{1}, sha256.Size),
 	}
 }

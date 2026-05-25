@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -115,6 +116,63 @@ func TestReadObjectRangeRejectsInvalidRange(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsEmptyKeysAndCanceledContexts(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.PutObject(context.Background(), "", strings.NewReader("data")); err == nil {
+		t.Fatal("PutObject with empty key succeeded")
+	}
+	if _, err := store.PutMutableObject(context.Background(), "", strings.NewReader("data")); err == nil {
+		t.Fatal("PutMutableObject with empty key succeeded")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.HeadObject(ctx, "blocks/block-1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("HeadObject canceled error = %v, want %v", err, context.Canceled)
+	}
+	if _, err := store.PutObject(ctx, "blocks/block-1", strings.NewReader("data")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("PutObject canceled error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestReadObjectRangeAllowsZeroLengthSelection(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.PutObject(context.Background(), "blocks/block-1", bytes.NewReader([]byte("short"))); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
+	length := uint64(0)
+	writer := failWriter{err: errors.New("writer should not be called")}
+	err := store.ReadObjectRange(context.Background(), "blocks/block-1", backend.Range{Offset: 2, Length: &length}, writer)
+	testutil.RequireNoErrorf(t, err, "read zero-length range")
+}
+
+func TestObjectFromMetadataValidatesChecksumShape(t *testing.T) {
+	if _, err := objectFromMetadata(metadata{Key: "blocks/block-1", SHA256Hex: "not-hex"}); err == nil {
+		t.Fatal("metadata with invalid hex checksum succeeded")
+	}
+	if _, err := objectFromMetadata(metadata{Key: "blocks/block-1", SHA256Hex: "01"}); err == nil {
+		t.Fatal("metadata with short checksum succeeded")
+	}
+}
+
+func TestCopyWithContextPropagatesFailures(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := copyWithContext(ctx, io.Discard, strings.NewReader("data")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled copy error = %v, want %v", err, context.Canceled)
+	}
+
+	writeErr := errors.New("write failed")
+	if err := copyWithContext(context.Background(), failWriter{err: writeErr}, strings.NewReader("data")); !errors.Is(err, writeErr) {
+		t.Fatalf("writer error = %v, want %v", err, writeErr)
+	}
+	if err := copyWithContext(context.Background(), shortWriter{}, strings.NewReader("data")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write error = %v, want %v", err, io.ErrShortWrite)
+	}
+	if err := copyWithContext(context.Background(), io.Discard, failReader{err: io.ErrUnexpectedEOF}); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("reader error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
 func TestObjectSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)
@@ -163,4 +221,26 @@ func openTestStore(t *testing.T) *Store {
 	store, err := Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open store")
 	return store
+}
+
+type failWriter struct {
+	err error
+}
+
+func (w failWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write([]byte) (int, error) {
+	return 0, nil
+}
+
+type failReader struct {
+	err error
+}
+
+func (r failReader) Read([]byte) (int, error) {
+	return 0, r.err
 }

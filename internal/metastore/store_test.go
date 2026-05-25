@@ -623,6 +623,99 @@ func TestApplyUpdateRestoreStateCommandForTransaction(t *testing.T) {
 	}
 }
 
+func TestUpdateTransactionRestoreStateReplacesAllDocumentIndexes(t *testing.T) {
+	store := openTestStore(t)
+	first := sampleDocument("invoice.xml", DocumentClassPermanent)
+	second := sampleDocument("summary.pdf", DocumentClassPermanent)
+	second.Location.StoredOffset = 128
+	testutil.RequireNoErrorf(t, store.PutDocument(first), "put first document")
+	testutil.RequireNoErrorf(t, store.PutDocument(second), "put second document")
+
+	transaction := identity.Transaction{TenantID: first.Identity.TenantID, TransactionID: first.Identity.TransactionID}
+	updated, err := store.UpdateTransactionRestoreState(transaction, RestoreStateRestorePending)
+	testutil.RequireNoErrorf(t, err, "update transaction restore state")
+	testutil.RequireEqualf(t, len(updated), 2, "updated document count")
+	for _, document := range updated {
+		testutil.RequireEqualf(t, document.RestoreState, RestoreStateRestorePending, "updated restore state")
+		testutil.RequireEqualf(t, document.Availability, AvailabilityRestorePending, "updated availability")
+	}
+
+	head, err := store.HeadDocument(first.Identity)
+	testutil.RequireNoErrorf(t, err, "head document")
+	testutil.RequireEqualf(t, head.Availability, AvailabilityRestorePending, "document index availability")
+
+	found, err := store.FindDocuments(transaction, DocumentFilter{})
+	testutil.RequireNoErrorf(t, err, "find documents")
+	for _, document := range found {
+		testutil.RequireEqualf(t, document.Availability, AvailabilityRestorePending, "transaction index availability")
+	}
+
+	blockDocuments, err := store.ListBlockDocuments(first.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "list block documents")
+	for _, document := range blockDocuments {
+		testutil.RequireEqualf(t, document.Availability, AvailabilityRestorePending, "block index availability")
+	}
+}
+
+func TestPublicDocumentStateMutatorsPersistAcrossIndexes(t *testing.T) {
+	store := openTestStore(t)
+	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
+	testutil.RequireNoErrorf(t, store.PutDocument(doc), "put document")
+
+	cold, err := store.UpdateDocumentRestoreState(doc.Identity, RestoreStateCold)
+	testutil.RequireNoErrorf(t, err, "update document restore state")
+	testutil.RequireEqualf(t, cold.RestoreState, RestoreStateCold, "cold restore state")
+	testutil.RequireEqualf(t, cold.Availability, AvailabilityCold, "cold availability")
+
+	blockDocuments, err := store.ListBlockDocuments(doc.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "list block documents")
+	testutil.RequireEqualf(t, len(blockDocuments), 1, "block document count")
+	testutil.RequireEqualf(t, blockDocuments[0].Availability, AvailabilityCold, "block index cold availability")
+
+	tombstonedAt := time.Unix(500, 0).UTC()
+	tombstoned, err := store.TombstoneDocument(doc.Identity, tombstonedAt, "operation-1")
+	testutil.RequireNoErrorf(t, err, "tombstone document")
+	testutil.RequireEqualf(t, tombstoned.LifecycleState, LifecycleStateTombstoned, "tombstone lifecycle")
+	testutil.RequireEqualf(t, tombstoned.TombstoneOperationID, "operation-1", "tombstone operation")
+
+	transaction := identity.Transaction{TenantID: doc.Identity.TenantID, TransactionID: doc.Identity.TransactionID}
+	found, err := store.FindDocuments(transaction, DocumentFilter{})
+	testutil.RequireNoErrorf(t, err, "find documents")
+	testutil.RequireEqualf(t, found[0].LifecycleState, LifecycleStateTombstoned, "transaction index tombstone lifecycle")
+	blockDocuments, err = store.ListBlockDocuments(doc.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "list block documents after tombstone")
+	testutil.RequireEqualf(t, blockDocuments[0].LifecycleState, LifecycleStateTombstoned, "block index tombstone lifecycle")
+}
+
+func TestPublicRepairStateAndCommandReceiptMethods(t *testing.T) {
+	store := openTestStore(t)
+	state := RepairState{
+		Identity:    identity.Document{TenantID: "tenant", TransactionID: "txn", DocumentName: "invoice.xml"},
+		PhysicalRef: "member-a/block-1/0",
+		IncidentID:  "incident-1",
+		Quarantined: true,
+	}
+	testutil.RequireNoErrorf(t, store.RecordRepairState(state), "record repair state")
+	gotState, err := store.GetRepairState(state.Identity, state.IncidentID)
+	testutil.RequireNoErrorf(t, err, "get repair state")
+	testutil.RequireTruef(t, gotState.Quarantined, "repair state quarantined")
+	testutil.RequireFalsef(t, gotState.UpdatedAt.IsZero(), "repair state updated_at")
+
+	receipt := CommandReceipt{CommandID: "command-1"}
+	receipt.CommandSHA256[0] = 1
+	testutil.RequireNoErrorf(t, store.RecordCommandReceipt(receipt), "record command receipt")
+	testutil.RequireNoErrorf(t, store.RecordCommandReceipt(receipt), "idempotent command receipt")
+	gotReceipt, err := store.GetCommandReceipt(receipt.CommandID)
+	testutil.RequireNoErrorf(t, err, "get command receipt")
+	testutil.RequireEqualf(t, gotReceipt.CommandSHA256, receipt.CommandSHA256, "command receipt checksum")
+
+	conflict := receipt
+	conflict.CommandSHA256[0] = 2
+	if err := store.RecordCommandReceipt(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting command receipt error = %v, want %v", err, ErrConflict)
+	}
+}
+
 func TestApplyUpdateRestoreStateRejectsUnspecifiedState(t *testing.T) {
 	store := openTestStore(t)
 	doc := sampleDocument("invoice.xml", DocumentClassPermanent)
@@ -774,6 +867,71 @@ func TestFindDocumentsFilters(t *testing.T) {
 	if len(found) != 1 || found[0].Identity.DocumentName != "scratch.tmp" {
 		t.Fatalf("found = %#v, want only scratch.tmp", found)
 	}
+}
+
+func TestShardSnapshotRoundTripAndApplyReplacesProjection(t *testing.T) {
+	store := openTestStore(t)
+	stale := sampleDocument("stale.xml", DocumentClassPermanent)
+	testutil.RequireNoErrorf(t, store.PutDocument(stale), "put stale document")
+	testutil.RequireNoErrorf(t, store.RecordUploadIntent(sampleUploadIntent("stale-block")), "record stale upload")
+
+	document := sampleDocument("invoice.xml", DocumentClassPermanent)
+	transaction := Transaction{
+		Identity:      identity.Transaction{TenantID: document.Identity.TenantID, TransactionID: document.Identity.TransactionID},
+		State:         TransactionStateOpen,
+		DocumentCount: 1,
+		CreatedAt:     document.CreatedAt,
+	}
+	repair := RepairState{
+		Identity:    document.Identity,
+		PhysicalRef: "member-a/block-1/64",
+		IncidentID:  "incident-1",
+		UpdatedAt:   time.Unix(70, 0).UTC(),
+	}
+	receipt := CommandReceipt{CommandID: "command-1"}
+	receipt.CommandSHA256[0] = 7
+	snapshot := &metastorev1.ShardSnapshot{
+		SchemaVersion: CurrentSchemaVersion,
+		ShardId:       "tenant-txn",
+		LastIndex:     42,
+		Membership: &metastorev1.MembershipState{
+			Members: []*metastorev1.MembershipMember{
+				{RaftId: 1, MemberId: "member-a", Role: metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER},
+				{RaftId: 2, MemberId: "member-b", Role: metastorev1.MembershipRole_MEMBERSHIP_ROLE_LEARNER},
+			},
+		},
+		Documents:       []*metastorev1.DocumentRecord{DocumentRecord(document)},
+		Transactions:    []*metastorev1.TransactionRecord{TransactionRecord(transaction)},
+		UploadIntents:   []*metastorev1.UploadIntentRecord{UploadIntentRecord(sampleUploadIntent(document.Location.BlockID))},
+		RepairStates:    []*metastorev1.RepairStateRecord{RepairStateRecord(repair)},
+		CommandReceipts: []*metastorev1.CommandReceiptRecord{CommandReceiptRecord(receipt)},
+	}
+
+	data, err := MarshalShardSnapshot(snapshot)
+	testutil.RequireNoErrorf(t, err, "marshal shard snapshot")
+	decoded, err := UnmarshalShardSnapshot(data)
+	testutil.RequireNoErrorf(t, err, "unmarshal shard snapshot")
+	testutil.RequireEqualf(t, decoded.GetLastIndex(), uint64(42), "snapshot last index")
+	testutil.RequireNoErrorf(t, store.ApplyShardSnapshot(decoded), "apply shard snapshot")
+
+	if _, err := store.HeadDocument(stale.Identity); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale document error = %v, want not found", err)
+	}
+	got, err := store.HeadDocument(document.Identity)
+	testutil.RequireNoErrorf(t, err, "head snapshot document")
+	testutil.RequireEqualf(t, got.Identity.DocumentName, document.Identity.DocumentName, "snapshot document")
+	blockDocuments, err := store.ListBlockDocuments(document.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "list snapshot block documents")
+	testutil.RequireEqualf(t, len(blockDocuments), 1, "snapshot block document count")
+	if _, err := store.GetUploadIntent("stale-block"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale upload intent error = %v, want not found", err)
+	}
+	_, err = store.GetUploadIntent(document.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "get snapshot upload intent")
+	_, err = store.GetRepairState(document.Identity, repair.IncidentID)
+	testutil.RequireNoErrorf(t, err, "get snapshot repair state")
+	_, err = store.GetCommandReceipt(receipt.CommandID)
+	testutil.RequireNoErrorf(t, err, "get snapshot command receipt")
 }
 
 func openTestStore(t *testing.T) *Store {

@@ -27,6 +27,14 @@ const (
 	capDrain Capability = "admin.member.drain.start"
 )
 
+func TestSortedCapabilitiesReturnsSortedCopy(t *testing.T) {
+	input := []Capability{capWrite, capDrain, capHead}
+	got := SortedCapabilities(input)
+	testutil.RequireDeepEqualf(t, got, []Capability{capDrain, capHead, capWrite}, "sorted capabilities")
+	input[0] = capDrain
+	testutil.RequireDeepEqualf(t, got, []Capability{capDrain, capHead, capWrite}, "sorted capabilities copied")
+}
+
 func TestManagerAuthorizesOperationSpecificCapabilities(t *testing.T) {
 	manager := newTestManager(t, Policy{
 		Version: "policy-v1",

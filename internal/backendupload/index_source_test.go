@@ -66,6 +66,60 @@ func TestUploadBlockStoresReadableIndexFromMetastore(t *testing.T) {
 	requireUploadedIndexDocument(t, doc, record)
 }
 
+func TestBuildBlockIndexSortsDocumentsByPhysicalThenLogicalIdentity(t *testing.T) {
+	first := metastore.Document{
+		Identity: identity.Document{
+			TenantID:      "tenant-b",
+			TransactionID: "txn-b",
+			DocumentName:  "b.xml",
+		},
+		DocumentClass:    metastore.DocumentClassPermanent,
+		PriorityClass:    metastore.PriorityClassNormal,
+		Length:           3,
+		LogicalSHA256:    [32]byte{1},
+		StoredSHA256:     [32]byte{2},
+		CreatedByService: "billing",
+		CreatedAt:        time.Unix(200, 0).UTC(),
+		Tags:             map[string]string{"stage": "seal"},
+		Location: metastore.Location{
+			BlockID:      "block-1",
+			StoredOffset: 10,
+			StoredLength: 3,
+			Frames: []metastore.FrameRecord{
+				{SegmentOffset: 10, SegmentLength: 3, SHA256: [32]byte{3}},
+			},
+		},
+	}
+	second := first
+	second.Identity.TenantID = "tenant-a"
+	second.Identity.TransactionID = "txn-a"
+	second.Identity.DocumentName = "a.xml"
+	second.CreatedAt = time.Unix(100, 0).UTC()
+	second.Location.StoredOffset = 10
+	later := first
+	later.Identity.DocumentName = "later.xml"
+	later.Location.StoredOffset = 20
+	later.Location.Frames = []metastore.FrameRecord{
+		{SegmentOffset: 20, SegmentLength: 3, SHA256: [32]byte{4}},
+	}
+	documents := []metastore.Document{later, first, second}
+
+	index, err := buildBlockIndex("block-1", "shard-a", backend.Object{Length: 100, SHA256: [32]byte{9}}, "", documents)
+	testutil.RequireNoErrorf(t, err, "build block index")
+	testutil.RequireEqualf(t, index.GetCreatedAt().AsTime(), second.CreatedAt, "index created_at")
+	testutil.RequireEqualf(t, len(index.GetDocuments()), 3, "index document count")
+	if got := index.GetDocuments()[0].GetMetadataBlob(); !bytes.Contains(got, []byte("a.xml")) {
+		t.Fatalf("first metadata blob = %x, want a.xml first after sort", got)
+	}
+	if got := index.GetDocuments()[2].GetStoredOffset(); got != 20 {
+		t.Fatalf("last stored offset = %d, want later physical offset", got)
+	}
+	documents[1].Tags["stage"] = "mutated"
+	if bytes.Contains(index.GetDocuments()[1].GetMetadataBlob(), []byte("mutated")) {
+		t.Fatal("index metadata changed after source tag mutation")
+	}
+}
+
 func requireUploadedIndexResult(t *testing.T, result *backend.Object, key string) {
 	t.Helper()
 	testutil.RequireNotNilf(t, result, "index result")
