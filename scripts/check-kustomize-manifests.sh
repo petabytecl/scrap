@@ -116,4 +116,5 @@ require '^[[:space:]]*-[[:space:]]*--cell-id=scrap-local-prod-like[[:space:]]*$'
 require '^[[:space:]]*-[[:space:]]*--member-id=\$\(SCRAP_MEMBER_ID\)[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like member identity"
 require '^[[:space:]]*-[[:space:]]*--member-slot-id=\$\(SCRAP_MEMBER_SLOT_ID\)[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like member slot identity"
 require '^[[:space:]]*-[[:space:]]*--peer-admin-workload-identity=local-operator[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like peer admin workload identity"
+require '^[[:space:]]*-[[:space:]]*--metadata-authority-member-id=scrapd-0[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like metadata authority member"
 require 'scrapd-0\.scrapd\.scrap-local\.svc\.cluster\.local:18081,scrapd-1\.scrapd\.scrap-local\.svc\.cluster\.local:18081,scrapd-2\.scrapd\.scrap-local\.svc\.cluster\.local:18081' "$local_prod_dev_statefulset_render" "local production-like peer discovery addresses"

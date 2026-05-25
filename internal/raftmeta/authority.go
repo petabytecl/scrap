@@ -157,6 +157,15 @@ func (a *Authority) DurableIndex() uint64 {
 	return a.log.LastIndex()
 }
 
+func (a *Authority) Members() []Member {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]Member(nil), a.members...)
+}
+
 // CheckHealth reports fail-closed authority state that requires operator restart.
 func (a *Authority) CheckHealth() error {
 	if a == nil {

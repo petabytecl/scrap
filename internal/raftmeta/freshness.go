@@ -67,3 +67,38 @@ func singleVoter(members []Member) (Member, bool) {
 	}
 	return voter, voters == 1
 }
+
+type staticLeaderFreshnessChecker struct {
+	leaderMemberID string
+}
+
+func NewStaticLeaderFreshnessChecker(leaderMemberID string) FreshnessChecker {
+	return staticLeaderFreshnessChecker{leaderMemberID: leaderMemberID}
+}
+
+func (c staticLeaderFreshnessChecker) RequireWriteQuorum(ctx context.Context, check FreshnessCheck) error {
+	return c.requireLeader(ctx, check)
+}
+
+func (c staticLeaderFreshnessChecker) RequireReadIndex(ctx context.Context, check FreshnessCheck) error {
+	return c.requireLeader(ctx, check)
+}
+
+func (c staticLeaderFreshnessChecker) requireLeader(ctx context.Context, check FreshnessCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.leaderMemberID == "" {
+		return fmt.Errorf("%w: shard %s has no configured metadata leader", ErrQuorumUnavailable, check.ShardID)
+	}
+	for _, member := range check.Members {
+		if member.MemberID != c.leaderMemberID || !member.IsVoter() {
+			continue
+		}
+		if check.LocalMemberID != c.leaderMemberID {
+			return fmt.Errorf("%w: local member %q is not metadata leader %q", ErrNotLeader, check.LocalMemberID, c.leaderMemberID)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: metadata leader %q is not a voter in shard %s", ErrQuorumUnavailable, c.leaderMemberID, check.ShardID)
+}

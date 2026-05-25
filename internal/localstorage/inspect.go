@@ -18,6 +18,7 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/safeconv"
 	"github.com/petabytecl/scrap/internal/storageapp"
 )
@@ -48,15 +49,32 @@ func (a *InspectApplication) GetAdminShard(_ context.Context, shardID string) (*
 	}
 	appliedIndex := a.app.authority.AppliedIndex()
 	committedIndex := a.app.authority.DurableIndex()
-	memberID := a.app.MemberID()
+	voterMemberIDs := authorityVoterMemberIDs(a.app.authority.Members())
+	leaderMemberID := a.app.metadataAuthorityMember
+	if leaderMemberID == "" {
+		leaderMemberID = a.app.MemberID()
+	}
 	return &adminv1.Shard{
 		ShardId:              "local",
-		LeaderMemberId:       memberID,
-		VoterMemberIds:       []string{memberID},
+		LeaderMemberId:       leaderMemberID,
+		VoterMemberIds:       voterMemberIDs,
 		CommittedIndex:       committedIndex,
 		AppliedIndex:         appliedIndex,
 		OpenTransactionCount: 0,
 	}, nil
+}
+
+func authorityVoterMemberIDs(members []raftmeta.Member) []string {
+	out := make([]string, 0, len(members))
+	for _, member := range members {
+		if member.IsVoter() {
+			out = append(out, member.MemberID)
+		}
+	}
+	if len(out) == 0 {
+		return []string{defaultLocalRuntimeID}
+	}
+	return out
 }
 
 func (a *InspectApplication) GetAdminDocument(_ context.Context, doc identity.Document) (*adminv1.AdminDocument, error) {
