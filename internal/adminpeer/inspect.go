@@ -24,6 +24,8 @@ const (
 
 	WarningPeerInspectUnavailable      = "SCRAP_PEER_ADMIN_INSPECT_UNAVAILABLE"
 	WarningPeerInspectIdentityMismatch = "SCRAP_PEER_ADMIN_IDENTITY_MISMATCH"
+
+	peerInspectLocalOnlyMetadataKey = "x-scrap-peer-inspect-local-only"
 )
 
 type Peer struct {
@@ -103,7 +105,7 @@ func (c *grpcInspectClient) GetMember(ctx context.Context, req *adminv1.GetMembe
 }
 
 func (c *grpcInspectClient) GetCapacityRunway(ctx context.Context, req *adminv1.GetCapacityRunwayRequest, opts ...grpc.CallOption) (*adminv1.GetCapacityRunwayResponse, error) {
-	return c.client.GetCapacityRunway(peerContext(ctx, c.workload), req, opts...)
+	return c.client.GetCapacityRunway(peerLocalOnlyContext(ctx, c.workload), req, opts...)
 }
 
 func peerContext(ctx context.Context, workloadIdentity string) context.Context {
@@ -111,6 +113,11 @@ func peerContext(ctx context.Context, workloadIdentity string) context.Context {
 		return ctx
 	}
 	return metadata.AppendToOutgoingContext(ctx, authz.WorkloadIdentityMetadataKey, workloadIdentity)
+}
+
+func peerLocalOnlyContext(ctx context.Context, workloadIdentity string) context.Context {
+	ctx = peerContext(ctx, workloadIdentity)
+	return metadata.AppendToOutgoingContext(ctx, peerInspectLocalOnlyMetadataKey, "true")
 }
 
 func (a *Aggregator) GetAdminClusterSummary(ctx context.Context) (*adminv1.ClusterSummary, error) {
@@ -172,6 +179,9 @@ func (a *Aggregator) GetAdminMember(ctx context.Context, memberID string) (*admi
 }
 
 func (a *Aggregator) GetAdminCapacityRunway(ctx context.Context, capacityProfileID string) (*adminv1.CapacityRunway, error) {
+	if peerInspectLocalOnly(ctx) {
+		return a.local.GetAdminCapacityRunway(ctx, capacityProfileID)
+	}
 	runway, err := a.local.GetAdminCapacityRunway(ctx, capacityProfileID)
 	if err != nil {
 		return nil, err
@@ -189,6 +199,19 @@ func (a *Aggregator) GetAdminCapacityRunway(ctx context.Context, capacityProfile
 		out.Warnings = append(out.Warnings, peerRunway.GetWarnings()...)
 	}
 	return out, nil
+}
+
+func peerInspectLocalOnly(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, value := range md.Get(peerInspectLocalOnlyMetadataKey) {
+		if value == "true" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Aggregator) fetchPeerMember(ctx context.Context, peer Peer, localCellID string) (*adminv1.StorageMember, *adminv1.OperationWarning) {

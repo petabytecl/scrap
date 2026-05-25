@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/petabytecl/scrap/internal/api"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
@@ -88,6 +89,24 @@ func TestAggregatorSurfacesPartialPeerFailureWarnings(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "aggregate partial runway")
 	testutil.RequireEqualf(t, runway.GetUsableBytesRemaining(), uint64(100), "partial usable bytes")
 	testutil.RequireEqualf(t, runway.GetWarnings()[0].GetCode(), WarningPeerInspectUnavailable, "partial runway warning code")
+}
+
+func TestAggregatorCapacityLocalOnlyMetadataSkipsPeerFetch(t *testing.T) {
+	local := &fakeInspectApplication{runway: runway(40)}
+	inspect := NewAggregator(Options{
+		Local:         local,
+		LocalMemberID: "scrapd-0",
+		Peers: []Peer{
+			{MemberID: "scrapd-1", Address: "scrapd-1:18081"},
+		},
+		Dial: fakeDialer(nil, map[string]error{"scrapd-1:18081": errors.New("peer must not be called")}),
+	})
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(peerInspectLocalOnlyMetadataKey, "true"))
+
+	runway, err := inspect.GetAdminCapacityRunway(ctx, "")
+	testutil.RequireNoErrorf(t, err, "local-only capacity runway")
+	testutil.RequireEqualf(t, runway.GetUsableBytesRemaining(), uint64(40), "local-only usable bytes")
+	testutil.RequireEqualf(t, len(runway.GetWarnings()), 0, "local-only warnings")
 }
 
 func TestNewAggregatorFallsBackToLocalInspectWithoutPeers(t *testing.T) {

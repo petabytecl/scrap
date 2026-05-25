@@ -124,9 +124,27 @@ func (a *InspectApplication) GetAdminBlock(ctx context.Context, target storageap
 		BlockId:          target.BlockID,
 		Length:           length,
 		Checksum:         checksum,
-		ReplicaMemberIds: []string{a.app.MemberID()},
+		ReplicaMemberIds: adminBlockReplicaMemberIDs(a.app.MemberID(), documents),
 		BackendObjectKey: backendObjectKey,
 	}, nil
+}
+
+func adminBlockReplicaMemberIDs(localMemberID string, documents []metastore.Document) []string {
+	seen := map[string]struct{}{localMemberID: {}}
+	out := []string{localMemberID}
+	for _, document := range documents {
+		for _, replica := range document.Location.Replicas {
+			if replica.MemberID == "" {
+				continue
+			}
+			if _, exists := seen[replica.MemberID]; exists {
+				continue
+			}
+			seen[replica.MemberID] = struct{}{}
+			out = append(out, replica.MemberID)
+		}
+	}
+	return out
 }
 
 func (a *InspectApplication) GetAdminMember(ctx context.Context, memberID string) (*adminv1.StorageMember, error) {

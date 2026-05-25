@@ -375,11 +375,30 @@ func TestWriteDocumentPreparesPeersBeforeMetadataVisibility(t *testing.T) {
 	if len(stored.Location.Replicas) != 2 {
 		t.Fatalf("replicas = %#v, want two peer prepare receipts", stored.Location.Replicas)
 	}
+	requireAdminBlockReplicaMembers(t, app, stored.Location.BlockID, []string{"local", "member-1", "member-2"})
 	if peer1.prepareCount != 1 || peer2.prepareCount != 1 {
 		t.Fatalf("peer prepare counts = %d/%d, want 1/1", peer1.prepareCount, peer2.prepareCount)
 	}
 	if !bytes.Equal(peer1.preparedBytes, data) || !bytes.Equal(peer2.preparedBytes, data) {
 		t.Fatalf("prepared bytes = %q/%q, want %q", peer1.preparedBytes, peer2.preparedBytes, data)
+	}
+}
+
+func requireAdminBlockReplicaMembers(t *testing.T, app *Application, blockID string, want []string) {
+	t.Helper()
+	block, err := Inspect(app).GetAdminBlock(context.Background(), storageapp.BlockTarget{
+		ShardID: "local",
+		BlockID: blockID,
+	})
+	testutil.RequireNoErrorf(t, err, "inspect replicated block")
+	memberIDs := map[string]bool{}
+	for _, memberID := range block.GetReplicaMemberIds() {
+		memberIDs[memberID] = true
+	}
+	for _, memberID := range want {
+		if !memberIDs[memberID] {
+			t.Fatalf("inspect block replica members = %v, missing %s", block.GetReplicaMemberIds(), memberID)
+		}
 	}
 }
 

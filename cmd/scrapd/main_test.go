@@ -283,6 +283,27 @@ func TestPeerInspectTargetsDeriveMemberIDsFromStatefulSetDNS(t *testing.T) {
 	testutil.RequireEqualf(t, peers[1].MemberID, "scrapd-2", "second peer member id")
 }
 
+func TestPeerPreparationTargetsUseStatefulSetDNSAndFullLocalQuorum(t *testing.T) {
+	cfg := config.Default()
+	cfg.PeerAdminWorkloadIdentity = "local-operator"
+	cfg.PeerAddresses = strings.Join([]string{
+		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+	}, ",")
+
+	targets := peerPreparationTargets(cfg, "scrapd-0")
+	testutil.RequireEqualf(t, len(targets), 2, "peer prepare target count")
+	testutil.RequireEqualf(t, targets[0].MemberID, "scrapd-1", "first peer prepare member")
+	testutil.RequireEqualf(t, targets[1].MemberID, "scrapd-2", "second peer prepare member")
+	testutil.RequireNotNilf(t, targets[0].Preparer, "first peer preparer")
+	testutil.RequireNotNilf(t, targets[1].Preparer, "second peer preparer")
+
+	policy := peerPreparationPolicy(targets)
+	testutil.RequireEqualf(t, policy.TargetReplicaCount, 3, "peer prepare target replicas")
+	testutil.RequireEqualf(t, policy.QuorumReplicaCount, 3, "peer prepare quorum replicas")
+}
+
 func TestAuthorityMemberIDsDeriveStableMembersFromRuntimeIdentity(t *testing.T) {
 	cfg := config.Default()
 	cfg.MemberID = "scrapd-1"

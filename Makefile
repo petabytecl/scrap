@@ -95,6 +95,7 @@ SCRAP_BINS := \
 	./cmd/scrapd \
 	./cmd/scrap-spike \
 	./cmd/scrapctl \
+	./cmd/scrap-local-prod-smoke \
 	./cmd/scrap-release-gate \
 	./cmd/scrap-crash-fault-evidence \
 	./cmd/scrap-openbao-smoke \
@@ -401,6 +402,10 @@ local-dev-status: ## Show local dev Kubernetes resources and port-forwards.
 .PHONY: local-dev-prod-status
 local-dev-prod-status: ## Show production-like local dev Kubernetes resources and port-forwards.
 	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) status
+
+.PHONY: local-dev-prod-smoke
+local-dev-prod-smoke: ## Validate replicated ACK success and fail-closed behavior in local production-like dev.
+	@./scripts/local-dev-prod-smoke.sh
 
 .PHONY: local-dev-stop-forwards
 local-dev-stop-forwards: ## Stop only local dev port-forwards.

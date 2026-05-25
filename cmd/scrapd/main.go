@@ -18,6 +18,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/adminpeer"
 	"github.com/petabytecl/scrap/internal/adminui"
+	"github.com/petabytecl/scrap/internal/api"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/closeutil"
@@ -26,6 +27,7 @@ import (
 	"github.com/petabytecl/scrap/internal/node"
 	"github.com/petabytecl/scrap/internal/observe"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/replication"
 )
 
 func main() {
@@ -357,6 +359,11 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 	}
 	localApp.SetOperationStore(operationStore)
 	localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
+	peerPrepareTargets := peerPreparationTargets(cfg, localApp.MemberID())
+	localstorage.ConfigurePeerPreparation(localApp, localstorage.PeerPreparationOptions{
+		Targets: peerPrepareTargets,
+		Policy:  peerPreparationPolicy(peerPrepareTargets),
+	})
 	inspectApp := adminpeer.NewAggregator(adminpeer.Options{
 		Local:            localstorage.Inspect(localApp),
 		LocalMemberID:    localApp.MemberID(),
@@ -372,6 +379,7 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 		DR:           localstorage.DisasterRecovery(localApp),
 		Operations:   operationStore,
 		Health:       localstorage.Health(localApp),
+		PeerReplica:  localstorage.PeerPreparer(localApp),
 	}, localApp, operationStore, nil
 }
 
@@ -386,6 +394,36 @@ func peerInspectTargets(cfg config.Config, localMemberID string) []adminpeer.Pee
 		peers = append(peers, adminpeer.Peer{MemberID: memberID, Address: address})
 	}
 	return peers
+}
+
+func peerPreparationTargets(cfg config.Config, localMemberID string) []replication.Target {
+	addresses := cfg.PeerAddressList()
+	targets := make([]replication.Target, 0, len(addresses))
+	for _, address := range addresses {
+		memberID := peerMemberID(address)
+		if memberID == "" || memberID == localMemberID {
+			continue
+		}
+		targets = append(targets, replication.Target{
+			MemberID: memberID,
+			Preparer: api.NewPeerReplicationClientPreparer(
+				address,
+				cfg.PeerAdminWorkloadIdentity,
+			),
+		})
+	}
+	return targets
+}
+
+func peerPreparationPolicy(targets []replication.Target) replication.Policy {
+	if len(targets) == 0 {
+		return replication.Policy{}
+	}
+	replicaCount := len(targets) + 1
+	return replication.Policy{
+		TargetReplicaCount: replicaCount,
+		QuorumReplicaCount: replicaCount,
+	}
 }
 
 func authorityMemberIDs(cfg config.Config) []string {
