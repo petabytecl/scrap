@@ -51,6 +51,33 @@ func TestMetricsEndpointServesMetricsPath(t *testing.T) {
 	testutil.RequireNoErrorf(t, <-errCh, "metrics endpoint stopped")
 }
 
+func TestAdminUIEndpointDisabledWithEmptyAddress(t *testing.T) {
+	endpoint, err := listenAdminUIEndpoint("", node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen disabled admin UI endpoint")
+	testutil.RequireNilf(t, endpoint, "admin UI endpoint")
+}
+
+func TestAdminUIEndpointServesShell(t *testing.T) {
+	endpoint, err := listenAdminUIEndpoint("127.0.0.1:0", node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen admin UI endpoint")
+	defer func() { testutil.RequireNoErrorf(t, endpoint.Close(), "close admin UI endpoint") }()
+
+	errCh := endpoint.Serve()
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + endpoint.Address() + "/admin/")
+	testutil.RequireNoErrorf(t, err, "request admin UI")
+	defer func() { testutil.RequireNoErrorf(t, resp.Body.Close(), "close response body") }()
+	testutil.RequireEqualf(t, resp.StatusCode, http.StatusOK, "admin UI status")
+	body, err := io.ReadAll(resp.Body)
+	testutil.RequireNoErrorf(t, err, "read admin UI body")
+	if !strings.Contains(string(body), "S.C.R.A.P. Admin") {
+		t.Fatalf("admin UI body missing title:\n%s", string(body))
+	}
+
+	testutil.RequireNoErrorf(t, endpoint.Close(), "close admin UI endpoint")
+	testutil.RequireNoErrorf(t, <-errCh, "admin UI endpoint stopped")
+}
+
 func TestBuildLocalApplicationsRegistersHealthApplication(t *testing.T) {
 	cfg := config.Default()
 	cfg.LocalDataDir = t.TempDir()
@@ -124,6 +151,16 @@ func TestRegisterFlagSetParsesGRPCServerLimits(t *testing.T) {
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveMaxConnectionAgeGrace, 3*time.Second, "max connection age grace")
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveTime, 30*time.Second, "keepalive time")
 	testutil.RequireEqualf(t, cfg.GRPCServerLimits.KeepaliveTimeout, 4*time.Second, "keepalive timeout")
+}
+
+func TestRegisterFlagSetParsesAdminUIListenAddress(t *testing.T) {
+	cfg := config.Default()
+	flags := flag.NewFlagSet("scrapd-test", flag.ContinueOnError)
+	registerFlagSet(flags, &cfg)
+
+	err := flags.Parse([]string{"-admin-ui-listen=127.0.0.1:19083"})
+	testutil.RequireNoErrorf(t, err, "parse admin UI flag")
+	testutil.RequireEqualf(t, cfg.AdminUIListenAddress, "127.0.0.1:19083", "admin UI listen address")
 }
 
 func TestScrapdBackgroundLoggingHelpers(t *testing.T) {

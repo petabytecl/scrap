@@ -137,12 +137,14 @@ LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
 
 ##@ Endpoint Variables
 ##? SCRAP_ADMIN_ADDR Local admin API address used by evidence targets.
+##? SCRAP_ADMIN_UI_ADDR Local admin UI HTTP address used by local scrapd runs.
 ##? SCRAP_METRICS_ADDR Local metrics HTTP address used by local scrapd runs.
 ##? SCRAP_PUBLIC_ADDR Local public API address used by evidence targets.
 ##? SCRAP_PUBLIC_WORKLOAD_IDENTITY Local public workload identity.
 ##? SCRAP_WORKLOAD_IDENTITY Local admin workload identity.
 
 SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
+SCRAP_ADMIN_UI_ADDR ?= 127.0.0.1:18083
 SCRAP_METRICS_ADDR ?= 127.0.0.1:18082
 SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
 SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
@@ -343,6 +345,7 @@ local-scrapd-run: ## Run scrapd locally with non-production storage for manual t
 		--public-listen="$(SCRAP_PUBLIC_ADDR)" \
 		--admin-listen="$(SCRAP_ADMIN_ADDR)" \
 		--metrics-listen="$(SCRAP_METRICS_ADDR)" \
+		--admin-ui-listen="$(SCRAP_ADMIN_UI_ADDR)" \
 		--authorization-policy="$(LOCAL_SCRAPD_AUTHZ_POLICY)" \
 		--enable-local-non-production-storage \
 		--local-data-dir="$(LOCAL_SCRAPD_DATA_DIR)" \

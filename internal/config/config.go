@@ -13,6 +13,7 @@ const (
 	DefaultPublicListenAddress   = "127.0.0.1:18080"
 	DefaultAdminListenAddress    = "127.0.0.1:18081"
 	DefaultMetricsListenAddress  = "127.0.0.1:18082"
+	DefaultAdminUIListenAddress  = ""
 	DefaultBackendUploadInterval = 30 * time.Second
 	DefaultOperationRunInterval  = 5 * time.Second
 	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
@@ -53,6 +54,7 @@ type Config struct {
 	PublicListenAddress             string
 	AdminListenAddress              string
 	MetricsListenAddress            string
+	AdminUIListenAddress            string
 	AuthorizationPolicyPath         string
 	TLSEnabled                      bool
 	TLSCertFile                     string
@@ -128,6 +130,7 @@ func Default() Config {
 		PublicListenAddress:   DefaultPublicListenAddress,
 		AdminListenAddress:    DefaultAdminListenAddress,
 		MetricsListenAddress:  DefaultMetricsListenAddress,
+		AdminUIListenAddress:  DefaultAdminUIListenAddress,
 		BackendUploadInterval: DefaultBackendUploadInterval,
 		OperationRunInterval:  DefaultOperationRunInterval,
 		LocalSealBlockAtBytes: DefaultLocalSealBlockAtBytes,
@@ -249,6 +252,9 @@ func (c Config) validateListenAddresses() error {
 		{field: "public_listen_address", value: c.PublicListenAddress},
 		{field: "admin_listen_address", value: c.AdminListenAddress},
 		{field: "metrics_listen_address", value: c.MetricsListenAddress},
+	}
+	if strings.TrimSpace(c.AdminUIListenAddress) != "" {
+		addresses = append(addresses, listenAddress{field: "admin_ui_listen_address", value: c.AdminUIListenAddress})
 	}
 	seen := make(map[string]string, len(addresses))
 	for _, address := range addresses {

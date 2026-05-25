@@ -58,6 +58,15 @@ func TestConfigRejectsMissingAndDuplicateAddresses(t *testing.T) {
 			},
 			wantErr: "admin_listen_address and metrics_listen_address listen addresses must be distinct",
 		},
+		"duplicate admin ui": {
+			cfg: Config{
+				PublicListenAddress:  "127.0.0.1:1",
+				AdminListenAddress:   "127.0.0.1:2",
+				MetricsListenAddress: "127.0.0.1:3",
+				AdminUIListenAddress: "127.0.0.1:2",
+			},
+			wantErr: "admin_listen_address and admin_ui_listen_address listen addresses must be distinct",
+		},
 	}
 
 	for name, tt := range tests {
