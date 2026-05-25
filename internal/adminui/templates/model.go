@@ -18,6 +18,8 @@ type DashboardData struct {
 	Capacity         CapacityData
 	MemberDetail     MemberDetailData
 	MemberTabs       []MemberTab
+	ClientDetail     ClientDetailData
+	ClientTabs       []ClientTab
 	Operations       []OperationData
 	OperationFilter  string
 	OperationFilters []OperationFilter
@@ -90,6 +92,25 @@ type EvictionSafetyData struct {
 	Warnings    []WarningData
 }
 
+const (
+	ClientTabOverview     = "overview"
+	ClientTabIdentity     = "identity"
+	ClientTabCapabilities = "capabilities"
+	ClientTabTraffic      = "traffic"
+	ClientTabEvents       = "events"
+)
+
+type ClientDetailData struct {
+	ID   string
+	Tab  string
+	Tabs []ClientTab
+}
+
+type ClientTab struct {
+	ID    string
+	Label string
+}
+
 type OperationData struct {
 	ID          string
 	Type        string
@@ -150,6 +171,16 @@ func MemberTabs() []MemberTab {
 		{ID: MemberTabStorage, Label: "Storage"},
 		{ID: MemberTabShards, Label: "Shards"},
 		{ID: MemberTabEvents, Label: "Events"},
+	}
+}
+
+func ClientTabs() []ClientTab {
+	return []ClientTab{
+		{ID: ClientTabOverview, Label: "Overview"},
+		{ID: ClientTabIdentity, Label: "Identity"},
+		{ID: ClientTabCapabilities, Label: "Capabilities"},
+		{ID: ClientTabTraffic, Label: "Traffic"},
+		{ID: ClientTabEvents, Label: "Events"},
 	}
 }
 
@@ -292,6 +323,21 @@ func memberTabHref(memberID, tab string) templ.SafeURL {
 }
 
 func memberTabClass(active, tab string) string {
+	if active == tab {
+		return "filter-pill active"
+	}
+	return "filter-pill"
+}
+
+func clientDetailHref(clientID string) templ.SafeURL {
+	return templ.SafeURL("/admin/clients/" + url.PathEscape(clientID))
+}
+
+func clientTabHref(clientID, tab string) templ.SafeURL {
+	return templ.SafeURL("/admin/clients/" + url.PathEscape(clientID) + "/tab/" + url.PathEscape(tab))
+}
+
+func clientTabClass(active, tab string) string {
 	if active == tab {
 		return "filter-pill active"
 	}

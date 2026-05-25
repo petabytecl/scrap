@@ -157,6 +157,28 @@ func TestHandlerRendersMemberDetailAndTabs(t *testing.T) {
 	}
 }
 
+func TestHandlerRendersClientDetailAndTabs(t *testing.T) {
+	handler := NewHandler(Options{})
+
+	detail := request(handler, "/admin/clients/etl-ingest")
+	requireOK(t, detail)
+	detailBody := detail.Body.String()
+	requireContains(t, detailBody, "Service mesh / etl-ingest")
+	requireContains(t, detailBody, "client telemetry unavailable")
+	requireContains(t, detailBody, "/admin/clients/etl-ingest/tab/traffic")
+
+	trafficTab := request(handler, "/admin/clients/etl-ingest/tab/traffic")
+	requireOK(t, trafficTab)
+	trafficBody := trafficTab.Body.String()
+	requireContains(t, trafficBody, "Active streams")
+	requireContains(t, trafficBody, "per-client stream counts")
+	requireNotContains(t, trafficBody, "Client tabs")
+
+	if response := request(handler, "/admin/clients/etl-ingest/tab/missing"); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown client tab status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
 func TestHandlerRejectsInvalidOperationFilter(t *testing.T) {
 	response := request(NewHandler(Options{}), "/admin/views/operations?state=missing")
 	if response.Code != http.StatusBadRequest {

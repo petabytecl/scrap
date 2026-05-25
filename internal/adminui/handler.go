@@ -64,6 +64,7 @@ func NewHandler(options Options) http.Handler {
 	mux.Handle("/admin/static/", http.StripPrefix("/admin/static/", http.FileServerFS(staticFS)))
 	mux.HandleFunc("/admin/operations/", handler.operationDetail)
 	mux.HandleFunc("/admin/members/", handler.memberDetail)
+	mux.HandleFunc("/admin/clients/", handler.clientDetail)
 	mux.HandleFunc("/", handler.redirectRoot)
 	mux.HandleFunc("/admin/", handler.shell)
 	mux.HandleFunc("/admin/views/", handler.partial)
@@ -166,6 +167,30 @@ func (h *Handler) memberDetail(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, templates.MemberDetail(data))
 }
 
+func (h *Handler) clientDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	clientID, tab, tabOnly, ok := clientPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if !validClientTab(tab) {
+		http.NotFound(w, r)
+		return
+	}
+	detail := clientDetailData(clientID, tab)
+	if tabOnly {
+		h.render(w, r, templates.ClientTabContent(detail))
+		return
+	}
+	data := h.dashboard(r.Context(), "clients", operationFilter{})
+	data.ClientDetail = detail
+	h.render(w, r, templates.ClientDetail(data))
+}
+
 func operationIDFromDetailPath(requestPath string) (string, bool) {
 	cleaned := strings.Trim(path.Clean(strings.TrimPrefix(requestPath, "/admin/operations/")), "/")
 	operationID, suffix, ok := strings.Cut(cleaned, "/")
@@ -180,6 +205,27 @@ func operationIDFromDetailPath(requestPath string) (string, bool) {
 		return "", false
 	}
 	return unescaped, true
+}
+
+func clientPath(requestPath string) (clientID, tab string, tabOnly, ok bool) {
+	cleaned := strings.Trim(path.Clean(strings.TrimPrefix(requestPath, "/admin/clients/")), "/")
+	rawClientID, suffix, hasSuffix := strings.Cut(cleaned, "/")
+	parsedClientID, ok := pathSegment(rawClientID)
+	if !ok {
+		return "", "", false, false
+	}
+	if !hasSuffix || suffix == "" {
+		return parsedClientID, templates.ClientTabOverview, false, true
+	}
+	rawTabPrefix, rawTab, hasTab := strings.Cut(suffix, "/")
+	if !hasTab || rawTabPrefix != "tab" {
+		return "", "", false, false
+	}
+	parsedTab, ok := pathSegment(rawTab)
+	if !ok {
+		return "", "", false, false
+	}
+	return parsedClientID, parsedTab, true, true
 }
 
 func memberPath(requestPath string) (memberID, tab string, tabOnly, ok bool) {
@@ -223,6 +269,15 @@ func validMemberTab(tab string) bool {
 	return false
 }
 
+func validClientTab(tab string) bool {
+	for _, item := range templates.ClientTabs() {
+		if item.ID == tab {
+			return true
+		}
+	}
+	return false
+}
+
 func partialComponent(view string) func(templates.DashboardData) templ.Component {
 	components := map[string]func(templates.DashboardData) templ.Component{
 		"overview":   templates.Overview,
@@ -252,6 +307,7 @@ func (h *Handler) dashboard(ctx context.Context, activeView string, filter opera
 		OperationFilter:  filter.ID,
 		OperationFilters: operationFilters(),
 		MemberTabs:       templates.MemberTabs(),
+		ClientTabs:       templates.ClientTabs(),
 	}
 	data.Nav = []templates.NavItem{
 		{ID: "overview", Label: "Overview", Group: "Cluster", Href: "/admin/views/overview"},
@@ -370,6 +426,14 @@ func memberDetailData(member *adminv1.StorageMember, safety *adminv1.EvictionSaf
 			Error:       safetyError,
 			Warnings:    warnings,
 		},
+	}
+}
+
+func clientDetailData(clientID, tab string) templates.ClientDetailData {
+	return templates.ClientDetailData{
+		ID:   clientID,
+		Tab:  tab,
+		Tabs: templates.ClientTabs(),
 	}
 }
 
