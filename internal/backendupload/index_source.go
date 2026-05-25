@@ -15,7 +15,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/backend"
-	"github.com/petabytecl/scrap/internal/blockstore"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/safeconv"
@@ -117,7 +116,7 @@ func compareBlockIndexDocuments(left, right metastore.Document) bool {
 	return left.Identity.DocumentName < right.Identity.DocumentName
 }
 
-func appendIndexFrameRecords(index *storagev1.BlockIndex, frames []blockstore.FrameRecord) error {
+func appendIndexFrameRecords(index *storagev1.BlockIndex, frames []metastore.FrameRecord) error {
 	for _, frame := range frames {
 		frameIndex, err := safeconv.IntToUint32("block index frame index", len(index.Frames))
 		if err != nil {

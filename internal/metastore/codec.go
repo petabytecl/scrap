@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/safeconv"
@@ -703,7 +702,7 @@ func commandReceiptFromProto(record *metastorev1.CommandReceiptRecord) CommandRe
 	return receipt
 }
 
-func locationToProto(location blockstore.Record) *metastorev1.Location {
+func locationToProto(location Location) *metastorev1.Location {
 	out := &metastorev1.Location{
 		BlockId:      location.BlockID,
 		StoredOffset: location.StoredOffset,
@@ -731,20 +730,20 @@ func locationToProto(location blockstore.Record) *metastorev1.Location {
 	return out
 }
 
-func locationFromProto(location *metastorev1.Location) blockstore.Record {
+func locationFromProto(location *metastorev1.Location) Location {
 	if location == nil {
-		return blockstore.Record{}
+		return Location{}
 	}
-	out := blockstore.Record{
+	out := Location{
 		BlockID:       location.GetBlockId(),
 		StoredOffset:  location.GetStoredOffset(),
 		StoredLength:  location.GetStoredLength(),
-		Frames:        make([]blockstore.FrameRecord, 0, len(location.GetFrames())),
-		Replicas:      make([]blockstore.ReplicaRef, 0, len(location.GetReplicas())),
+		Frames:        make([]FrameRecord, 0, len(location.GetFrames())),
+		Replicas:      make([]ReplicaRef, 0, len(location.GetReplicas())),
 		LogicalSHA256: [32]byte{},
 	}
 	for _, frame := range location.GetFrames() {
-		outFrame := blockstore.FrameRecord{
+		outFrame := FrameRecord{
 			FrameOffset:   frame.GetFrameOffset(),
 			SegmentOffset: frame.GetSegmentOffset(),
 			SegmentLength: frame.GetSegmentLength(),
@@ -753,7 +752,7 @@ func locationFromProto(location *metastorev1.Location) blockstore.Record {
 		out.Frames = append(out.Frames, outFrame)
 	}
 	for _, replica := range location.GetReplicas() {
-		outReplica := blockstore.ReplicaRef{
+		outReplica := ReplicaRef{
 			MemberID:     replica.GetMemberId(),
 			BlockID:      replica.GetBlockId(),
 			StoredOffset: replica.GetStoredOffset(),

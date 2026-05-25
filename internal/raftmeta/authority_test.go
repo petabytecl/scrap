@@ -738,7 +738,7 @@ func TestAuthoritySnapshotCompactionReplaysSnapshotAndTail(t *testing.T) {
 	document.Length = uint64(len(privateBytes))
 	document.LogicalSHA256 = record.LogicalSHA256
 	document.StoredSHA256 = record.LogicalSHA256
-	document.Location = record
+	document.Location = metastoreLocationFromBlockRecord(record)
 	testutil.RequireNoErrorf(t, authority.CommitDocument(context.Background(), document, "cmd-1", time.Unix(100, 0).UTC()), "commit document")
 	testutil.RequireNoErrorf(t, authority.RecordUploadIntent(context.Background(), metastore.UploadIntent{
 		BlockID:           document.Location.BlockID,
@@ -916,6 +916,36 @@ func requireNoBlockstoreErrorBeforeClose(t *testing.T, blocks *blockstore.Store,
 	}
 	_ = blocks.Close()
 	t.Fatalf("%s: %v", operation, err)
+}
+
+func metastoreLocationFromBlockRecord(record blockstore.Record) metastore.Location {
+	out := metastore.Location{
+		BlockID:       record.BlockID,
+		StoredOffset:  record.StoredOffset,
+		StoredLength:  record.StoredLength,
+		LogicalSHA256: record.LogicalSHA256,
+		StoredSHA256:  record.StoredSHA256,
+		Frames:        make([]metastore.FrameRecord, 0, len(record.Frames)),
+		Replicas:      make([]metastore.ReplicaRef, 0, len(record.Replicas)),
+	}
+	for _, frame := range record.Frames {
+		out.Frames = append(out.Frames, metastore.FrameRecord{
+			FrameOffset:   frame.FrameOffset,
+			SegmentOffset: frame.SegmentOffset,
+			SegmentLength: frame.SegmentLength,
+			SHA256:        frame.SHA256,
+		})
+	}
+	for _, replica := range record.Replicas {
+		out.Replicas = append(out.Replicas, metastore.ReplicaRef{
+			MemberID:     replica.MemberID,
+			BlockID:      replica.BlockID,
+			StoredOffset: replica.StoredOffset,
+			StoredLength: replica.StoredLength,
+			StoredSHA256: replica.StoredSHA256,
+		})
+	}
+	return out
 }
 
 func requireSnapshotInfo(t *testing.T, info SnapshotInfo) {
@@ -1229,12 +1259,12 @@ func authorityTestDocument(name string, fill []byte) metastore.Document {
 		FinalizedAt:                 now,
 		Availability:                metastore.AvailabilityHot,
 		LifecycleState:              metastore.LifecycleStateActive,
-		Location: blockstore.Record{
+		Location: metastore.Location{
 			BlockID:       "block-1",
 			StoredOffset:  64,
 			StoredLength:  42,
 			LogicalSHA256: logical,
-			Frames: []blockstore.FrameRecord{
+			Frames: []metastore.FrameRecord{
 				{
 					FrameOffset:   64,
 					SegmentOffset: 64,

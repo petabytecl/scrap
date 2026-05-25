@@ -218,7 +218,7 @@ func (a *verificationEngine) verifyLocalDocumentRefAndQueueRepair(ctx context.Co
 		return nil
 	}
 	length := document.Length
-	if err := a.blocks.VerifyRange(document.Location, 0, &length); err == nil {
+	if err := a.blocks.VerifyRange(blockstoreRecord(document.Location), 0, &length); err == nil {
 		return nil
 	} else if !isIntegrityFailure(err) {
 		return err
@@ -327,7 +327,7 @@ func newDocument(init storageapp.WriteDocumentInit, record blockstore.Record, no
 		Availability:                metastore.AvailabilityHot,
 		LifecycleState:              metastore.LifecycleStateActive,
 		Tags:                        cloneTags(init.Tags),
-		Location:                    record,
+		Location:                    metastoreLocation(record),
 		ClientIdempotencyKey:        init.ClientIdempotencyKey,
 		HasClientIdempotencyKey:     init.ClientIdempotencyKey != "",
 	}
@@ -433,7 +433,7 @@ func (a *documentApplication) ReadDocument(ctx context.Context, req storageapp.R
 		return mapError(blockstore.ErrInvalidRange)
 	}
 	readLength := *selectedRange.Length
-	if err := a.blocks.VerifyRange(document.Location, selectedRange.Offset, &readLength); err != nil {
+	if err := a.blocks.VerifyRange(blockstoreRecord(document.Location), selectedRange.Offset, &readLength); err != nil {
 		return a.readDocumentFromBackend(ctx, document, selectedRange, sender, err)
 	}
 	if err := sender.SendMetadata(storageapp.ReadDocumentMetadata{
@@ -443,7 +443,7 @@ func (a *documentApplication) ReadDocument(ctx context.Context, req storageapp.R
 	}); err != nil {
 		return err
 	}
-	return mapError(a.blocks.ReadRange(ctx, document.Location, selectedRange.Offset, &readLength, senderWriter{sender: sender}))
+	return mapError(a.blocks.ReadRange(ctx, blockstoreRecord(document.Location), selectedRange.Offset, &readLength, senderWriter{sender: sender}))
 }
 
 func (a *documentApplication) readableDocument(ctx context.Context, documentIdentity identity.Document) (metastore.Document, error) {
@@ -780,7 +780,7 @@ func (a *verificationEngine) verifyBackendEnvelope(ctx context.Context, intent m
 	return cryptoenv.ValidateEnvelopeRecordForRestore(ctx, a.envelopeTransit, envelope)
 }
 
-func verificationWindow(record blockstore.Record, offset, length uint64) (uint64, uint64, error) {
+func verificationWindow(record metastore.Location, offset, length uint64) (uint64, uint64, error) {
 	if offset+length < offset || offset+length > record.StoredLength {
 		return 0, 0, blockstore.ErrInvalidRange
 	}
@@ -809,7 +809,7 @@ type verificationFrameWindow struct {
 	initialized bool
 }
 
-func includeVerificationFrame(frame blockstore.FrameRecord, selectedStart, selectedEnd uint64, window verificationFrameWindow) (verificationFrameWindow, error) {
+func includeVerificationFrame(frame metastore.FrameRecord, selectedStart, selectedEnd uint64, window verificationFrameWindow) (verificationFrameWindow, error) {
 	frameStart := frame.SegmentOffset
 	frameEnd := frame.SegmentOffset + frame.SegmentLength
 	if frameEnd < frameStart {
@@ -828,7 +828,7 @@ func includeVerificationFrame(frame blockstore.FrameRecord, selectedStart, selec
 	return window, nil
 }
 
-func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verifyStart uint64, data []byte) (err error) {
+func verifyFetchedBackendWindow(record metastore.Location, offset, length, verifyStart uint64, data []byte) (err error) {
 	defer func() {
 		observe.RecordVerification(verificationOutcome(err))
 	}()
@@ -846,7 +846,7 @@ func verifyFetchedBackendWindow(record blockstore.Record, offset, length, verify
 	return nil
 }
 
-func verifyFetchedBackendDocument(record blockstore.Record, verifyStart uint64, data []byte) error {
+func verifyFetchedBackendDocument(record metastore.Location, verifyStart uint64, data []byte) error {
 	if verifyStart != record.StoredOffset {
 		return fmt.Errorf(
 			"localstorage: verification window start %d does not match document start %d: %w",
@@ -870,7 +870,7 @@ func verifyFetchedBackendDocument(record blockstore.Record, verifyStart uint64, 
 	return nil
 }
 
-func verifyFetchedBackendFrame(frame blockstore.FrameRecord, selectedStart, selectedEnd, verifyStart uint64, data []byte) error {
+func verifyFetchedBackendFrame(frame metastore.FrameRecord, selectedStart, selectedEnd, verifyStart uint64, data []byte) error {
 	frameStart := frame.SegmentOffset
 	frameEnd := frame.SegmentOffset + frame.SegmentLength
 	if frameEnd < frameStart {
@@ -1218,7 +1218,7 @@ func (a *Application) recordDocumentRepairState(ctx context.Context, document me
 	return a.recordRepairState(ctx, document.Identity, repairPhysicalRef(document), incidentID, quarantined, now)
 }
 
-func (a *Application) recordPeerRepairState(ctx context.Context, document metastore.Document, replica blockstore.ReplicaRef, quarantined bool, now time.Time) error {
+func (a *Application) recordPeerRepairState(ctx context.Context, document metastore.Document, replica metastore.ReplicaRef, quarantined bool, now time.Time) error {
 	return a.recordRepairState(ctx, document.Identity, peerRepairPhysicalRef(replica), peerIntegrityEvidenceID(document, replica), quarantined, now)
 }
 
@@ -1236,11 +1236,11 @@ func repairPhysicalRef(document metastore.Document) string {
 	return fmt.Sprintf("local/%s/%d/%d", document.Location.BlockID, document.Location.StoredOffset, document.Location.StoredLength)
 }
 
-func peerRepairPhysicalRef(replica blockstore.ReplicaRef) string {
+func peerRepairPhysicalRef(replica metastore.ReplicaRef) string {
 	return fmt.Sprintf("peer/%s/%s/%d/%d", replica.MemberID, replica.BlockID, replica.StoredOffset, replica.StoredLength)
 }
 
-func peerIntegrityEvidenceID(document metastore.Document, replica blockstore.ReplicaRef) string {
+func peerIntegrityEvidenceID(document metastore.Document, replica metastore.ReplicaRef) string {
 	return stableCommandID(
 		"peer-integrity-evidence",
 		document.Identity.TenantID,

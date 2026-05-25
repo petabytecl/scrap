@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/petabytecl/scrap/internal/blockstore"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -200,12 +199,12 @@ func sampleMetastoreDocument(name string) metastore.Document {
 		RestoreState:                metastore.RestoreStateHot,
 		UploadState:                 metastore.UploadStateUploaded,
 		Tags:                        map[string]string{"workflow": "billing"},
-		Location: blockstore.Record{
+		Location: metastore.Location{
 			BlockID:       "block-1",
 			StoredOffset:  64,
 			StoredLength:  42,
 			LogicalSHA256: logicalSHA,
-			Frames: []blockstore.FrameRecord{
+			Frames: []metastore.FrameRecord{
 				{
 					FrameOffset:   64,
 					SegmentOffset: 64,

@@ -13,7 +13,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
@@ -469,12 +468,12 @@ func sampleMetastoreDocument() metastore.Document {
 		RestoreState:                metastore.RestoreStateHot,
 		UploadState:                 metastore.UploadStatePending,
 		Tags:                        map[string]string{"stage": "seal", "workflow": "billing"},
-		Location: blockstore.Record{
+		Location: metastore.Location{
 			BlockID:       "018f6d86-7a22-7abc-8def-123456789abc",
 			StoredOffset:  64,
 			StoredLength:  42,
 			LogicalSHA256: array32(1),
-			Frames: []blockstore.FrameRecord{
+			Frames: []metastore.FrameRecord{
 				{
 					FrameOffset:   0,
 					SegmentOffset: 64,

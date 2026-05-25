@@ -14,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/backend"
-	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -816,7 +815,7 @@ func (a *OperationExecutor) applyScrubOperation(ctx context.Context, operation *
 			continue
 		}
 		length := document.Length
-		err := a.blocks.VerifyRange(document.Location, 0, &length)
+		err := a.blocks.VerifyRange(blockstoreRecord(document.Location), 0, &length)
 		if err == nil {
 			continue
 		}
@@ -1110,7 +1109,7 @@ func (a *OperationExecutor) repairDocumentFromReplica(
 	ctx context.Context,
 	document metastore.Document,
 	prepared replication.PreparedDocument,
-	replica blockstore.ReplicaRef,
+	replica metastore.ReplicaRef,
 	now time.Time,
 ) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -1128,7 +1127,7 @@ func (a *OperationExecutor) repairDocumentFromReplica(
 	if err != nil || data == nil {
 		return false, err
 	}
-	if err := a.blocks.InstallVerifiedRange(ctx, document.Location, document.StoredSHA256, bytes.NewReader(data)); err != nil {
+	if err := a.blocks.InstallVerifiedRange(ctx, blockstoreRecord(document.Location), document.StoredSHA256, bytes.NewReader(data)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1138,12 +1137,12 @@ func (a *OperationExecutor) readVerifiedPeerReplica(
 	ctx context.Context,
 	document metastore.Document,
 	prepared replication.PreparedDocument,
-	replica blockstore.ReplicaRef,
+	replica metastore.ReplicaRef,
 	source PeerRepairSource,
 	now time.Time,
 ) ([]byte, error) {
 	var data bytes.Buffer
-	err := source.ReadReplica(ctx, replica, &data)
+	err := source.ReadReplica(ctx, blockstoreReplicaRef(replica), &data)
 	if err == nil {
 		err = replication.ValidatePreparedBytes(prepared, data.Bytes())
 	}
@@ -1165,7 +1164,7 @@ func (a *OperationExecutor) readVerifiedPeerReplica(
 	return nil, nil
 }
 
-func (a *OperationExecutor) peerRepairSourceQuarantined(document metastore.Document, replica blockstore.ReplicaRef) (bool, error) {
+func (a *OperationExecutor) peerRepairSourceQuarantined(document metastore.Document, replica metastore.ReplicaRef) (bool, error) {
 	state, err := a.metadata.GetRepairState(document.Identity, peerIntegrityEvidenceID(document, replica))
 	if errors.Is(err, metastore.ErrNotFound) {
 		return false, nil

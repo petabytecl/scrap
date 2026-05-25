@@ -125,8 +125,24 @@ func PreparedDocumentFromMetadata(document metastore.Document) PreparedDocument 
 		StoredLength:  document.Location.StoredLength,
 		LogicalSHA256: document.LogicalSHA256,
 		StoredSHA256:  document.StoredSHA256,
-		Frames:        append([]blockstore.FrameRecord(nil), document.Location.Frames...),
+		Frames:        preparedFramesFromMetadata(document.Location.Frames),
 	}
+}
+
+func preparedFramesFromMetadata(frames []metastore.FrameRecord) []blockstore.FrameRecord {
+	if len(frames) == 0 {
+		return nil
+	}
+	out := make([]blockstore.FrameRecord, 0, len(frames))
+	for _, frame := range frames {
+		out = append(out, blockstore.FrameRecord{
+			FrameOffset:   frame.FrameOffset,
+			SegmentOffset: frame.SegmentOffset,
+			SegmentLength: frame.SegmentLength,
+			SHA256:        frame.SHA256,
+		})
+	}
+	return out
 }
 
 func PrepareDocument(ctx context.Context, document PreparedDocument, source ByteSource, targets []Target, policy Policy) (Result, error) {
@@ -290,10 +306,10 @@ func ReceiptFromPreparedDocument(memberID string, document PreparedDocument) Rec
 	}
 }
 
-func ReplicaRefs(receipts []Receipt) []blockstore.ReplicaRef {
-	replicas := make([]blockstore.ReplicaRef, 0, len(receipts))
+func ReplicaRefs(receipts []Receipt) []metastore.ReplicaRef {
+	replicas := make([]metastore.ReplicaRef, 0, len(receipts))
 	for _, receipt := range receipts {
-		replicas = append(replicas, blockstore.ReplicaRef{
+		replicas = append(replicas, metastore.ReplicaRef{
 			MemberID:     receipt.MemberID,
 			BlockID:      receipt.BlockID,
 			StoredOffset: receipt.StoredOffset,

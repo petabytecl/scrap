@@ -60,6 +60,7 @@ CHECK_TARGETS := \
 STATIC_TARGETS := \
 	manifests-check \
 	fmt-check \
+	package-boundaries \
 	proto-check \
 	lint
 TEST_TARGETS := \
@@ -185,6 +186,10 @@ fmt-check: ## Check formatter drift using configured golangci formatters.
 .PHONY: lint
 lint: ## Run the golangci-lint baseline.
 	$(GOLANGCI_LINT) run --timeout=$(LINT_TIMEOUT)
+
+.PHONY: package-boundaries
+package-boundaries: ## Check package dependency boundaries.
+	GO="$(GO)" scripts/check-package-boundaries.sh
 
 .PHONY: vuln
 vuln: ## Run govulncheck against the module graph.

@@ -3,7 +3,6 @@ package metastore
 import (
 	"time"
 
-	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/identity"
 )
 
@@ -86,9 +85,34 @@ type Document struct {
 	TombstoneOperationID        string
 	HasTombstoneOperationID     bool
 	Tags                        map[string]string
-	Location                    blockstore.Record
+	Location                    Location
 	ClientIdempotencyKey        string
 	HasClientIdempotencyKey     bool
+}
+
+type Location struct {
+	BlockID       string
+	StoredOffset  uint64
+	StoredLength  uint64
+	LogicalSHA256 [32]byte
+	StoredSHA256  [32]byte
+	Frames        []FrameRecord
+	Replicas      []ReplicaRef
+}
+
+type FrameRecord struct {
+	FrameOffset   uint64
+	SegmentOffset uint64
+	SegmentLength uint64
+	SHA256        [32]byte
+}
+
+type ReplicaRef struct {
+	MemberID     string
+	BlockID      string
+	StoredOffset uint64
+	StoredLength uint64
+	StoredSHA256 [32]byte
 }
 
 type Transaction struct {
