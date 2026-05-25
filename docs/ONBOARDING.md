@@ -15,6 +15,7 @@ Read these files first:
 | --- | --- |
 | [`CONTEXT.md`](../CONTEXT.md) | Domain language and storage-gateway mental model. |
 | [`docs/storage-gateway-design-notes.md`](storage-gateway-design-notes.md) | Full design notes and deferred decisions. |
+| [`docs/multi-member-runtime-contract.md`](multi-member-runtime-contract.md) | Runtime contract for turning multiple `scrapd` pods into one cell. |
 | [`docs/storage-gateway-package-architecture.md`](storage-gateway-package-architecture.md) | Package ownership and dependency rules. |
 | [`docs/storage-gateway-durability-coding-guidelines.md`](storage-gateway-durability-coding-guidelines.md) | Durability and fail-closed coding rules. |
 | [`docs/storage-gateway-operator-runbooks.md`](storage-gateway-operator-runbooks.md) | Shared operator workflows. |

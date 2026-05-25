@@ -5,6 +5,7 @@ S.C.R.A.P. is a proposed storage gateway for billing ETL document workflows.
 - [Domain context](CONTEXT.md)
 - [Storage gateway design notes](docs/storage-gateway-design-notes.md)
 - [Storage gateway implementation roadmap](docs/storage-gateway-implementation-roadmap.md)
+- [Multi-member runtime contract](docs/multi-member-runtime-contract.md)
 - [Contributor onboarding](docs/ONBOARDING.md)
 - [Local release evidence environment](docs/local-release-environment.md)
 - [Operator runbooks](docs/storage-gateway-operator-runbooks.md)
