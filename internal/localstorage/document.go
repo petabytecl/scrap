@@ -19,7 +19,6 @@ import (
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
-	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/observe"
@@ -1144,14 +1143,10 @@ func readIntegrityError(document metastore.Document, attemptedSources []string, 
 	if !isIntegrityFailure(cause) {
 		return mapError(cause)
 	}
-	return appstatus.New(appstatus.CodeDataLoss, "document bytes failed integrity verification", appstatus.WithDetails(&scrapv1.IntegrityFailureDetail{
-		Identity: &scrapv1.DocumentIdentity{
-			TenantId:      document.Identity.TenantID,
-			TransactionId: document.Identity.TransactionID,
-			DocumentName:  document.Identity.DocumentName,
-		},
+	return appstatus.New(appstatus.CodeDataLoss, "document bytes failed integrity verification", appstatus.WithDetails(storageapp.IntegrityFailureDetail{
+		Identity:         document.Identity,
 		AttemptedSources: append([]string(nil), attemptedSources...),
-		EvidenceId:       integrityEvidenceID(document),
+		EvidenceID:       integrityEvidenceID(document),
 	}))
 }
 
@@ -1167,16 +1162,12 @@ func unavailableReadStateError(document metastore.Document) error {
 }
 
 func restorePendingError(document metastore.Document) error {
-	return appstatus.New(appstatus.CodeUnavailable, "document bytes require backend restore", appstatus.WithDetails(&scrapv1.RestorePendingDetail{
-		Identity: &scrapv1.DocumentIdentity{
-			TenantId:      document.Identity.TenantID,
-			TransactionId: document.Identity.TransactionID,
-			DocumentName:  document.Identity.DocumentName,
-		},
-		AffectedBlockIds: []string{document.Location.BlockID},
+	return appstatus.New(appstatus.CodeUnavailable, "document bytes require backend restore", appstatus.WithDetails(storageapp.RestorePendingDetail{
+		Identity:         document.Identity,
+		AffectedBlockIDs: []string{document.Location.BlockID},
 		RestoreState:     restoreStateText(document.RestoreState),
 		RestoreQueued:    document.IsRestoreQueued(),
-		RetryHint: &scrapv1.RetryHint{
+		RetryHint: storageapp.RetryHint{
 			Retryable: true,
 			Reason:    "restore_pending",
 		},
@@ -1184,14 +1175,10 @@ func restorePendingError(document metastore.Document) error {
 }
 
 func cryptoUnavailableError(document metastore.Document) error {
-	return appstatus.New(appstatus.CodeUnavailable, "document bytes require unavailable crypto material", appstatus.WithDetails(&scrapv1.CryptoUnavailableDetail{
-		Identity: &scrapv1.DocumentIdentity{
-			TenantId:      document.Identity.TenantID,
-			TransactionId: document.Identity.TransactionID,
-			DocumentName:  document.Identity.DocumentName,
-		},
+	return appstatus.New(appstatus.CodeUnavailable, "document bytes require unavailable crypto material", appstatus.WithDetails(storageapp.CryptoUnavailableDetail{
+		Identity: document.Identity,
 		KeyScope: "backend",
-		RetryHint: &scrapv1.RetryHint{
+		RetryHint: storageapp.RetryHint{
 			Retryable: true,
 			Reason:    "crypto_unavailable",
 		},

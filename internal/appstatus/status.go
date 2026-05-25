@@ -2,8 +2,6 @@ package appstatus
 
 import (
 	"fmt"
-
-	"google.golang.org/protobuf/proto"
 )
 
 type Code uint8
@@ -23,7 +21,7 @@ type Error struct {
 	Code    Code
 	Message string
 	Cause   error
-	details []proto.Message
+	details []any
 }
 
 type Option func(*Error)
@@ -48,7 +46,7 @@ func Wrap(code Code, message string, cause error, options ...Option) error {
 	return err
 }
 
-func WithDetails(details ...proto.Message) Option {
+func WithDetails(details ...any) Option {
 	return func(err *Error) {
 		err.details = append(err.details, details...)
 	}
@@ -65,6 +63,6 @@ func (e *Error) Unwrap() error {
 	return e.Cause
 }
 
-func (e *Error) Details() []proto.Message {
-	return append([]proto.Message(nil), e.details...)
+func (e *Error) Details() []any {
+	return append([]any(nil), e.details...)
 }
