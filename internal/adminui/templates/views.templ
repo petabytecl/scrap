@@ -342,7 +342,10 @@ templ Backend(data DashboardData) {
 	<section class="metrics-grid">
 		@Metric("Storage used", bytesText(data.Summary.LocalBytesUsed), percentText(data.Summary.LocalBytesUsed, data.Summary.LocalBytesCapacity) + " of local capacity")
 		@Metric("Backend lag", "not exposed", "requires live backend upload evidence")
-		@Metric("Restore lag", "not exposed", "requires restore workflow telemetry")
+		@Metric("Recovery", recoveryMetric(data.Recovery), "DisasterRecoveryService readiness")
+		if data.Recovery.LatestRestorableCheckpointAt != "" {
+			@Metric("Checkpoint", data.Recovery.LatestRestorableCheckpointAt, "latest restorable metadata checkpoint")
+		}
 	</section>
 	<section class="panel">
 		<div class="panel-heading">
@@ -353,6 +356,16 @@ templ Backend(data DashboardData) {
 		</div>
 		@SignalList(data, "Backend lag")
 		@SignalList(data, "Restore lag")
+		if len(data.Recovery.Warnings) > 0 {
+			<div class="warning-list detail-progress">
+				for _, warning := range data.Recovery.Warnings {
+					<div class="warning-item">
+						<strong>{ warning.Code }</strong>
+						<p>{ warning.Message }</p>
+					</div>
+				}
+			</div>
+		}
 	</section>
 }
 
@@ -389,6 +402,7 @@ templ Repair(data DashboardData) {
 			</div>
 		</div>
 		@SignalList(data, "Repair lag")
+		@SignalList(data, "Restore lag")
 		@SignalList(data, "Corruption incidents")
 	</section>
 }

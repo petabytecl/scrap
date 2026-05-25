@@ -36,6 +36,7 @@ type Options struct {
 	Inspect    api.InspectApplication
 	Member     api.MemberApplication
 	Repair     api.RepairApplication
+	DR         api.DisasterRecoveryApplication
 	Operations *operations.Store
 	Now        func() time.Time
 }
@@ -44,6 +45,7 @@ type Handler struct {
 	inspect    api.InspectApplication
 	member     api.MemberApplication
 	repair     api.RepairApplication
+	dr         api.DisasterRecoveryApplication
 	operations *operations.Store
 	now        func() time.Time
 }
@@ -57,6 +59,7 @@ func NewHandler(options Options) http.Handler {
 		inspect:    options.Inspect,
 		member:     options.Member,
 		repair:     options.Repair,
+		dr:         options.DR,
 		operations: options.Operations,
 		now:        now,
 	}
@@ -324,6 +327,7 @@ func (h *Handler) dashboard(ctx context.Context, activeView string, filter opera
 	h.loadCapacity(ctx, &data)
 	h.loadOperations(&data, filter)
 	h.loadRepair(ctx, &data)
+	h.loadRecovery(ctx, &data)
 	data.Signals = readinessSignals(data)
 	return data
 }
@@ -567,6 +571,33 @@ func (h *Handler) loadRepair(ctx context.Context, data *templates.DashboardData)
 	data.RepairQueueCount = len(items)
 }
 
+func (h *Handler) loadRecovery(ctx context.Context, data *templates.DashboardData) {
+	if h.dr == nil {
+		return
+	}
+	readiness, err := h.dr.GetRecoveryReadiness(ctx)
+	if err != nil {
+		data.Recovery = templates.RecoveryData{
+			Known: true,
+			Error: "recovery readiness: " + err.Error(),
+		}
+		return
+	}
+	data.Recovery = recoveryData(readiness)
+}
+
+func recoveryData(readiness *adminv1.RecoveryReadiness) templates.RecoveryData {
+	if readiness == nil {
+		return templates.RecoveryData{Known: true, Error: "recovery readiness unavailable"}
+	}
+	return templates.RecoveryData{
+		Known:                        true,
+		Ready:                        readiness.GetReady(),
+		LatestRestorableCheckpointAt: timestampText(readiness.GetLatestRestorableCheckpointAt()),
+		Warnings:                     warningsData(readiness.GetWarnings()),
+	}
+}
+
 func timestampText(ts *timestamppb.Timestamp) string {
 	if ts == nil {
 		return ""
@@ -607,8 +638,8 @@ func readinessSignals(data templates.DashboardData) []templates.ReadinessSignal 
 		},
 		{
 			Name:   "Restore lag",
-			State:  "unknown",
-			Detail: "restore workflow lag is not yet exposed by the local admin API",
+			State:  recoveryState(data.Recovery),
+			Detail: recoveryDetail(data.Recovery),
 		},
 		{
 			Name:   "Corruption incidents",
@@ -627,6 +658,36 @@ func readinessSignals(data templates.DashboardData) []templates.ReadinessSignal 
 		},
 	}
 	return signals
+}
+
+func recoveryState(recovery templates.RecoveryData) string {
+	switch {
+	case !recovery.Known:
+		return "unknown"
+	case recovery.Error != "":
+		return "warning"
+	case recovery.Ready:
+		return "healthy"
+	default:
+		return "warning"
+	}
+}
+
+func recoveryDetail(recovery templates.RecoveryData) string {
+	switch {
+	case !recovery.Known:
+		return "disaster recovery readiness application is unavailable"
+	case recovery.Error != "":
+		return recovery.Error
+	case recovery.Ready && recovery.LatestRestorableCheckpointAt != "":
+		return "latest restorable checkpoint " + recovery.LatestRestorableCheckpointAt
+	case recovery.Ready:
+		return "recovery artifacts are ready"
+	case len(recovery.Warnings) > 0:
+		return recovery.Warnings[0].Message
+	default:
+		return "recovery readiness has not been established"
+	}
 }
 
 func runwayState(capacity templates.CapacityData) string {

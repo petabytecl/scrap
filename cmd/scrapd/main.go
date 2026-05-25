@@ -179,6 +179,7 @@ func listenAdminUIEndpoint(address string, apps node.Applications) (*httpEndpoin
 		Inspect:    apps.Inspect,
 		Member:     apps.Member,
 		Repair:     apps.Repair,
+		DR:         apps.DR,
 		Operations: apps.Operations,
 	}))
 	if err != nil {

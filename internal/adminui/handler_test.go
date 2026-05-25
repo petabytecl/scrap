@@ -183,6 +183,30 @@ func TestHandlerRendersClientDetailAndTabs(t *testing.T) {
 	}
 }
 
+func TestHandlerRendersRecoveryReadiness(t *testing.T) {
+	checkpoint := time.Date(2026, 5, 25, 15, 0, 0, 0, time.UTC)
+	handler := NewHandler(Options{
+		DR: fakeDR{
+			readiness: &adminv1.RecoveryReadiness{
+				Ready:                        true,
+				LatestRestorableCheckpointAt: timestamppb.New(checkpoint),
+				Warnings: []*adminv1.OperationWarning{
+					{Code: "SCRAP_DR_NON_PRODUCTION_MODE", Message: "local recovery artifacts are ready"},
+				},
+			},
+		},
+	})
+
+	backend := request(handler, "/admin/views/backend")
+	requireOK(t, backend)
+	backendBody := backend.Body.String()
+	requireContains(t, backendBody, "DisasterRecoveryService readiness")
+	requireContains(t, backendBody, "ready")
+	requireContains(t, backendBody, "2026-05-25T15:00:00Z")
+	requireContains(t, backendBody, "SCRAP_DR_NON_PRODUCTION_MODE")
+	requireContains(t, backendBody, "latest restorable checkpoint 2026-05-25T15:00:00Z")
+}
+
 func TestHandlerRejectsInvalidOperationFilter(t *testing.T) {
 	response := request(NewHandler(Options{}), "/admin/views/operations?state=missing")
 	if response.Code != http.StatusBadRequest {
@@ -258,7 +282,11 @@ func populatedHandler() http.Handler {
 			},
 		},
 		Repair: fakeRepair{items: []*adminv1.RepairQueueItem{{}, {}}},
-		Now:    func() time.Time { return time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC) },
+		DR: fakeDR{readiness: &adminv1.RecoveryReadiness{
+			Ready:                        true,
+			LatestRestorableCheckpointAt: timestamppb.New(time.Date(2026, 5, 25, 12, 30, 0, 0, time.UTC)),
+		}},
+		Now: func() time.Time { return time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC) },
 	})
 }
 
@@ -323,6 +351,14 @@ type fakeRepair struct {
 
 func (f fakeRepair) GetRepairQueue(context.Context, string) ([]*adminv1.RepairQueueItem, error) {
 	return f.items, nil
+}
+
+type fakeDR struct {
+	readiness *adminv1.RecoveryReadiness
+}
+
+func (f fakeDR) GetRecoveryReadiness(context.Context) (*adminv1.RecoveryReadiness, error) {
+	return f.readiness, nil
 }
 
 type fakeMember struct {

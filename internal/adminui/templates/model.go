@@ -24,6 +24,7 @@ type DashboardData struct {
 	OperationFilter  string
 	OperationFilters []OperationFilter
 	RepairQueueCount int
+	Recovery         RecoveryData
 	Signals          []ReadinessSignal
 	Errors           []string
 }
@@ -56,6 +57,14 @@ type CapacityData struct {
 type WarningData struct {
 	Code    string
 	Message string
+}
+
+type RecoveryData struct {
+	Known                        bool
+	Ready                        bool
+	LatestRestorableCheckpointAt string
+	Warnings                     []WarningData
+	Error                        string
 }
 
 const (
@@ -204,6 +213,19 @@ func pageTitle(activeView string) string {
 		return "Repair"
 	default:
 		return "Overview"
+	}
+}
+
+func recoveryMetric(recovery RecoveryData) string {
+	switch {
+	case !recovery.Known:
+		return "unknown"
+	case recovery.Error != "":
+		return "error"
+	case recovery.Ready:
+		return "ready"
+	default:
+		return "not ready"
 	}
 }
 
