@@ -125,6 +125,9 @@ func peerPrepareFramesFromProto(values []*adminv1.PreparedFrame) ([]blockstore.F
 	}
 	frames := make([]blockstore.FrameRecord, 0, len(values))
 	for _, value := range values {
+		if value == nil {
+			return nil, invalidArgument("frames", "SCRAP_INVALID_FRAME", "frame is required")
+		}
 		sha, err := peerPrepareSHA256("frames.sha256", value.GetSha256())
 		if err != nil {
 			return nil, err

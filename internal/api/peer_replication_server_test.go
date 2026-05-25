@@ -59,18 +59,17 @@ func TestPeerReplicationClientPreparerSendsPrepareRPC(t *testing.T) {
 	preparer := &recordingPeerReplicationPreparer{memberID: "scrapd-2"}
 	address, cleanup := startPeerReplicationServer(t, NewPeerReplicationServer(preparer))
 	defer cleanup()
+	client := NewPeerReplicationClientPreparer(address, "local-operator")
+	defer func() { testutil.RequireNoErrorf(t, client.Close(), "close peer client") }()
 
-	receipt, err := NewPeerReplicationClientPreparer(address, "local-operator").PrepareDocument(context.Background(), replication.PrepareRequest{
-		Document: document,
-		Source: replication.ByteSourceFunc(func(_ context.Context, _ replication.PreparedDocument, writer io.Writer) error {
-			_, err := writer.Write(data)
-			return err
-		}),
-	})
-	testutil.RequireNoErrorf(t, err, "prepare peer through client")
+	receipt, err := client.PrepareDocument(context.Background(), testPrepareRequest(document, data))
+	testutil.RequireNoErrorf(t, err, "first prepare peer through client")
+	_, err = client.PrepareDocument(context.Background(), testPrepareRequest(document, data))
+	testutil.RequireNoErrorf(t, err, "second prepare peer through reused client")
 	testutil.RequireEqualf(t, receipt.MemberID, "scrapd-2", "receipt member")
 	testutil.RequireDeepEqualf(t, preparer.bytes, data, "client transferred bytes")
 	testutil.RequireEqualf(t, preparer.workloadIdentity, "local-operator", "workload metadata")
+	testutil.RequireEqualf(t, preparer.prepareCount, 2, "prepare call count")
 }
 
 func TestPeerReplicationClientPreparerRejectsInvalidLocalRequest(t *testing.T) {
@@ -81,10 +80,7 @@ func TestPeerReplicationClientPreparerRejectsInvalidLocalRequest(t *testing.T) {
 	document.StoredLength++
 	_, err = NewPeerReplicationClientPreparer("127.0.0.1:1", "").PrepareDocument(context.Background(), replication.PrepareRequest{
 		Document: document,
-		Source: replication.ByteSourceFunc(func(_ context.Context, _ replication.PreparedDocument, writer io.Writer) error {
-			_, writeErr := writer.Write(data)
-			return writeErr
-		}),
+		Source:   testByteSource(data),
 	})
 	testutil.RequireErrorIsf(t, err, replication.ErrTransferMismatch, "invalid prepared bytes")
 }
@@ -100,6 +96,7 @@ func TestPeerReplicationServerRejectsInvalidProtoRequests(t *testing.T) {
 		{name: "missing identity", req: clonePrepareRequest(valid, func(req *adminv1.PrepareDocumentRequest) { req.Identity = nil })},
 		{name: "invalid logical sha", req: clonePrepareRequest(valid, func(req *adminv1.PrepareDocumentRequest) { req.LogicalSha256 = []byte("short") })},
 		{name: "invalid stored sha", req: clonePrepareRequest(valid, func(req *adminv1.PrepareDocumentRequest) { req.StoredSha256 = []byte("short") })},
+		{name: "nil frame", req: clonePrepareRequest(valid, func(req *adminv1.PrepareDocumentRequest) { req.Frames = []*adminv1.PreparedFrame{nil} })},
 		{name: "zero frame segment", req: clonePrepareRequest(valid, func(req *adminv1.PrepareDocumentRequest) {
 			req.Frames = []*adminv1.PreparedFrame{{SegmentLength: 0, Sha256: valid.GetStoredSha256()}}
 		})},
@@ -153,6 +150,7 @@ type recordingPeerReplicationPreparer struct {
 	memberID         string
 	bytes            []byte
 	workloadIdentity string
+	prepareCount     int
 }
 
 func (p *recordingPeerReplicationPreparer) PrepareDocument(ctx context.Context, request replication.PrepareRequest) (replication.Receipt, error) {
@@ -166,8 +164,23 @@ func (p *recordingPeerReplicationPreparer) PrepareDocument(ctx context.Context, 
 			p.workloadIdentity = values[0]
 		}
 	}
+	p.prepareCount++
 	p.bytes = append(p.bytes[:0], data.Bytes()...)
 	return replication.ReceiptFromPreparedDocument(p.memberID, request.Document), nil
+}
+
+func testPrepareRequest(document replication.PreparedDocument, data []byte) replication.PrepareRequest {
+	return replication.PrepareRequest{
+		Document: document,
+		Source:   testByteSource(data),
+	}
+}
+
+func testByteSource(data []byte) replication.ByteSource {
+	return replication.ByteSourceFunc(func(_ context.Context, _ replication.PreparedDocument, writer io.Writer) error {
+		_, err := writer.Write(data)
+		return err
+	})
 }
 
 func startPeerReplicationServer(t *testing.T, handler *PeerReplicationServer) (string, func()) {

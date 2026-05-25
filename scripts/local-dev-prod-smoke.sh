@@ -13,6 +13,17 @@ public_workload=${SCRAP_PUBLIC_WORKLOAD_IDENTITY:-local-public-client}
 admin_workload=${SCRAP_WORKLOAD_IDENTITY:-local-operator}
 expected_replicas=${SCRAP_LOCAL_PROD_SMOKE_REPLICAS:-3}
 
+case "$expected_replicas" in
+	''|*[!0-9]*)
+		printf 'SCRAP_LOCAL_PROD_SMOKE_REPLICAS must be a positive integer: %s\n' "$expected_replicas" >&2
+		exit 2
+		;;
+esac
+if [ "$expected_replicas" -lt 2 ]; then
+	printf 'SCRAP_LOCAL_PROD_SMOKE_REPLICAS must be at least 2 for fail-closed smoke: %s\n' "$expected_replicas" >&2
+	exit 2
+fi
+
 log() {
 	printf '[local-prod-smoke] %s\n' "$*"
 }
@@ -80,6 +91,15 @@ wait_for_pod_absent() {
 	exit 1
 }
 
+wait_for_replicas_ready() {
+	replicas=$1
+	index=0
+	while [ "$index" -lt "$replicas" ]; do
+		"$kubectl_bin" -n "$namespace" wait --for=condition=Ready "pod/scrapd-$index" --timeout="$rollout_timeout"
+		index=$((index + 1))
+	done
+}
+
 restore_replicas() {
 	stop_forwards
 	if [ -n "${initial_replicas:-}" ]; then
@@ -96,9 +116,7 @@ trap restore_replicas EXIT INT TERM
 log "ensuring $expected_replicas scrapd replicas are ready"
 "$kubectl_bin" -n "$namespace" scale statefulset/scrapd --replicas="$expected_replicas" >/dev/null
 "$kubectl_bin" -n "$namespace" rollout status statefulset/scrapd --timeout="$rollout_timeout"
-"$kubectl_bin" -n "$namespace" wait --for=condition=Ready pod/scrapd-0 --timeout="$rollout_timeout"
-"$kubectl_bin" -n "$namespace" wait --for=condition=Ready pod/scrapd-1 --timeout="$rollout_timeout"
-"$kubectl_bin" -n "$namespace" wait --for=condition=Ready pod/scrapd-2 --timeout="$rollout_timeout"
+wait_for_replicas_ready "$expected_replicas"
 
 start_forward public-authority "$public_port" 18080
 start_forward admin-authority "$admin_port" 18081
@@ -117,9 +135,11 @@ log "running replicated ACK success smoke"
 cat "$success_report"
 
 log "scaling one peer down to demonstrate fail-closed ACK"
-"$kubectl_bin" -n "$namespace" scale statefulset/scrapd --replicas=2 >/dev/null
+reduced_replicas=$((expected_replicas - 1))
+removed_pod="scrapd-$reduced_replicas"
+"$kubectl_bin" -n "$namespace" scale statefulset/scrapd --replicas="$reduced_replicas" >/dev/null
 "$kubectl_bin" -n "$namespace" rollout status statefulset/scrapd --timeout="$rollout_timeout"
-wait_for_pod_absent scrapd-2
+wait_for_pod_absent "$removed_pod"
 
 log "running fail-closed smoke"
 "$go_bin" run ./cmd/scrap-local-prod-smoke \
