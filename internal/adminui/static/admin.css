@@ -1,3 +1,19 @@
+@font-face {
+  font-family: "Maven Pro";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/admin/static/fonts/Maven_Pro_Regular.otf") format("opentype");
+}
+
+@font-face {
+  font-family: "Maven Pro";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/admin/static/fonts/Maven_Pro_Bold.otf") format("opentype");
+}
+
 :root {
   --pb-primary: #0093d0;
   --pb-primary-hover: #38bdf8;
@@ -57,16 +73,10 @@ a {
   margin-bottom: 34px;
 }
 
-.brand-mark {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--pb-primary);
-  color: white;
-  font-family: var(--pb-font-mono);
-  font-weight: 700;
+.brand-logo {
+  width: 112px;
+  height: auto;
+  display: block;
 }
 
 .brand-title {

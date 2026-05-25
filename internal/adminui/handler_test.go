@@ -200,6 +200,18 @@ func TestHandlerServesEmbeddedStaticAssets(t *testing.T) {
 	response := request(NewHandler(Options{}), "/admin/static/admin.css")
 	requireOK(t, response)
 	requireContains(t, response.Body.String(), ".app-shell")
+
+	logo := request(NewHandler(Options{}), "/admin/static/assets/logo-petabyte-color-white.png")
+	requireOK(t, logo)
+	if logo.Body.Len() == 0 {
+		t.Fatal("logo asset is empty")
+	}
+
+	font := request(NewHandler(Options{}), "/admin/static/fonts/Maven_Pro_Bold.otf")
+	requireOK(t, font)
+	if font.Body.Len() == 0 {
+		t.Fatal("font asset is empty")
+	}
 }
 
 func TestHandlerReportsUnavailableInspectApplication(t *testing.T) {
