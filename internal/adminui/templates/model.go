@@ -3,6 +3,7 @@ package templates
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,8 @@ type DashboardData struct {
 	Summary          SummaryData
 	Capacity         CapacityData
 	Operations       []OperationData
+	OperationFilter  string
+	OperationFilters []OperationFilter
 	RepairQueueCount int
 	Signals          []ReadinessSignal
 	Errors           []string
@@ -52,13 +55,23 @@ type WarningData struct {
 }
 
 type OperationData struct {
-	ID        string
-	Type      string
-	State     string
-	Requested string
-	Completed uint64
-	Total     uint64
-	Message   string
+	ID          string
+	Type        string
+	State       string
+	RequestedBy string
+	Requested   string
+	Started     string
+	Finished    string
+	DryRun      bool
+	Completed   uint64
+	Total       uint64
+	Message     string
+}
+
+type OperationFilter struct {
+	ID    string
+	Label string
+	Href  string
 }
 
 type ReadinessSignal struct {
@@ -184,6 +197,8 @@ func progressWidth(completed, total uint64) string {
 
 func stateClass(state string) string {
 	switch state {
+	case "OPERATION_STATE_PLANNED":
+		return "status planned"
 	case "OPERATION_STATE_RUNNING":
 		return "status running"
 	case "OPERATION_STATE_QUEUED":
@@ -192,6 +207,8 @@ func stateClass(state string) string {
 		return "status succeeded"
 	case "OPERATION_STATE_FAILED":
 		return "status failed"
+	case "OPERATION_STATE_CANCELED", "OPERATION_STATE_EXPIRED":
+		return "status canceled"
 	default:
 		return "status"
 	}
@@ -204,6 +221,45 @@ func shortState(state string) string {
 		return "unknown"
 	}
 	return state
+}
+
+func operationFilterClass(active, item string) string {
+	if active == item {
+		return "filter-pill active"
+	}
+	return "filter-pill"
+}
+
+func operationDetailHref(operationID string) templ.SafeURL {
+	return templ.SafeURL("/admin/operations/" + url.PathEscape(operationID) + "/detail")
+}
+
+func operationDetailTarget(operationID string) string {
+	return "#" + operationDetailTargetID(operationID)
+}
+
+func operationDetailTargetID(operationID string) string {
+	return "operation-detail-" + safeHTMLID(operationID)
+}
+
+func safeHTMLID(value string) string {
+	var builder strings.Builder
+	for _, char := range value {
+		if isHTMLIDChar(char) {
+			builder.WriteRune(char)
+			continue
+		}
+		builder.WriteByte('-')
+	}
+	return builder.String()
+}
+
+func isHTMLIDChar(char rune) bool {
+	return char >= 'a' && char <= 'z' ||
+		char >= 'A' && char <= 'Z' ||
+		char >= '0' && char <= '9' ||
+		char == '-' ||
+		char == '_'
 }
 
 func signalClass(state string) string {

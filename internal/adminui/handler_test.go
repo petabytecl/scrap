@@ -61,24 +61,62 @@ func TestHandlerRendersOperationsFromStore(t *testing.T) {
 	defer func() { testutil.RequireNoErrorf(t, store.Close(), "close operations store") }()
 	requestedAt := time.Date(2026, 5, 25, 13, 0, 0, 0, time.UTC)
 	testutil.RequireNoErrorf(t, store.Put(&adminv1.Operation{
-		OperationId:   "op-1",
-		OperationType: "repair",
-		State:         adminv1.OperationState_OPERATION_STATE_RUNNING,
-		RequestedAt:   timestamppb.New(requestedAt),
+		OperationId:         "op-1",
+		OperationType:       "repair",
+		State:               adminv1.OperationState_OPERATION_STATE_RUNNING,
+		RequestedByIdentity: "operator-a",
+		RequestedAt:         timestamppb.New(requestedAt),
+		StartedAt:           timestamppb.New(requestedAt.Add(time.Minute)),
+		DryRun:              true,
 		Progress: &adminv1.OperationProgress{
 			WorkUnitsCompleted: 3,
 			WorkUnitsTotal:     6,
 			Message:            "repairing peer copy",
 		},
 	}), "put operation")
+	testutil.RequireNoErrorf(t, store.Put(&adminv1.Operation{
+		OperationId:   "op-2",
+		OperationType: "restore",
+		State:         adminv1.OperationState_OPERATION_STATE_SUCCEEDED,
+		RequestedAt:   timestamppb.New(requestedAt.Add(2 * time.Minute)),
+		FinishedAt:    timestamppb.New(requestedAt.Add(3 * time.Minute)),
+		Progress: &adminv1.OperationProgress{
+			WorkUnitsCompleted: 6,
+			WorkUnitsTotal:     6,
+			Message:            "restore complete",
+		},
+	}), "put succeeded operation")
 
 	response := request(NewHandler(Options{Operations: store}), "/admin/views/operations")
 	requireOK(t, response)
 	body := response.Body.String()
 	requireContains(t, body, "op-1")
+	requireContains(t, body, "op-2")
 	requireContains(t, body, "running")
+	requireContains(t, body, "Succeeded")
 	requireContains(t, body, "repairing peer copy")
 	requireContains(t, body, "2026-05-25T13:00:00Z")
+
+	filtered := request(NewHandler(Options{Operations: store}), "/admin/views/operations?state=running")
+	requireOK(t, filtered)
+	filteredBody := filtered.Body.String()
+	requireContains(t, filteredBody, "op-1")
+	requireContains(t, filteredBody, "filter-pill active")
+	requireNotContains(t, filteredBody, "op-2")
+
+	detail := request(NewHandler(Options{Operations: store}), "/admin/operations/op-1/detail")
+	requireOK(t, detail)
+	detailBody := detail.Body.String()
+	requireContains(t, detailBody, "operator-a")
+	requireContains(t, detailBody, "true")
+	requireContains(t, detailBody, "2026-05-25T13:01:00Z")
+}
+
+func TestHandlerRejectsInvalidOperationFilter(t *testing.T) {
+	response := request(NewHandler(Options{}), "/admin/views/operations?state=missing")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body:\n%s", response.Code, http.StatusBadRequest, response.Body.String())
+	}
 }
 
 func TestHandlerRejectsUnknownPaths(t *testing.T) {
@@ -147,6 +185,13 @@ func requireContains(t *testing.T, body, want string) {
 	t.Helper()
 	if !strings.Contains(body, want) {
 		t.Fatalf("body missing %q:\n%s", want, body)
+	}
+}
+
+func requireNotContains(t *testing.T, body, unwanted string) {
+	t.Helper()
+	if strings.Contains(body, unwanted) {
+		t.Fatalf("body unexpectedly contains %q:\n%s", unwanted, body)
 	}
 }
 

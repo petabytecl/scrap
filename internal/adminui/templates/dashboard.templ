@@ -180,6 +180,11 @@ templ Operations(data DashboardData) {
 			</div>
 			<span class="pill">{ numberText(uint64(len(data.Operations))) } total</span>
 		</div>
+		<div class="filter-row" id="operation-filters">
+			for _, filter := range data.OperationFilters {
+				<a class={ operationFilterClass(data.OperationFilter, filter.ID) } href={ safeURL(filter.Href) } hx-get={ filter.Href } hx-target="#main-content" hx-push-url="true">{ filter.Label }</a>
+			}
+		</div>
 		@OperationsTable(data)
 	</section>
 }
@@ -212,12 +217,66 @@ templ OperationsTable(data DashboardData) {
 								<span>{ operation.Message }</span>
 							</div>
 						</td>
-						<td class="mono muted">{ operation.Requested }</td>
+						<td class="mono muted">
+							<div>{ operation.Requested }</div>
+							<button class="text-button" type="button" hx-get={ operationDetailHref(operation.ID) } hx-target={ operationDetailTarget(operation.ID) } hx-swap="innerHTML">Details</button>
+						</td>
+					</tr>
+					<tr class="operation-detail-row">
+						<td colspan="5">
+							<div id={ operationDetailTargetID(operation.ID) }></div>
+						</td>
 					</tr>
 				}
 			</tbody>
 		</table>
 	}
+}
+
+templ OperationDetail(operation OperationData) {
+	<div class="operation-detail-card">
+		<div class="detail-grid">
+			<div>
+				<div class="eyebrow">Operation</div>
+				<strong>{ operation.Type }</strong>
+				<p class="mono muted">{ operation.ID }</p>
+			</div>
+			<div>
+				<div class="eyebrow">State</div>
+				<span class={ stateClass(operation.State) }>{ shortState(operation.State) }</span>
+			</div>
+			<div>
+				<div class="eyebrow">Requested by</div>
+				<strong>{ operation.RequestedBy }</strong>
+			</div>
+			<div>
+				<div class="eyebrow">Dry run</div>
+				if operation.DryRun {
+					<strong>true</strong>
+				} else {
+					<strong>false</strong>
+				}
+			</div>
+			<div>
+				<div class="eyebrow">Requested</div>
+				<span class="mono muted">{ operation.Requested }</span>
+			</div>
+			<div>
+				<div class="eyebrow">Started</div>
+				<span class="mono muted">{ operation.Started }</span>
+			</div>
+			<div>
+				<div class="eyebrow">Finished</div>
+				<span class="mono muted">{ operation.Finished }</span>
+			</div>
+		</div>
+		<div class="table-progress detail-progress">
+			<div class="progress">
+				<div class="progress-fill" style={ widthStyle(progressWidth(operation.Completed, operation.Total)) }></div>
+			</div>
+			<span>{ operation.Message }</span>
+		</div>
+	</div>
 }
 
 templ Metric(eyebrow string, value string, sub string) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -18,6 +19,17 @@ import (
 )
 
 const warningRunwayDays = 7
+
+const (
+	operationStateAll       = "all"
+	operationStatePlanned   = "planned"
+	operationStateQueued    = "queued"
+	operationStateRunning   = "running"
+	operationStateSucceeded = "succeeded"
+	operationStateFailed    = "failed"
+	operationStateCanceled  = "canceled"
+	operationStateExpired   = "expired"
+)
 
 type Options struct {
 	Inspect    api.InspectApplication
@@ -46,6 +58,7 @@ func NewHandler(options Options) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/admin/static/", http.StripPrefix("/admin/static/", http.FileServerFS(staticFS)))
+	mux.HandleFunc("/admin/operations/", handler.operationDetail)
 	mux.HandleFunc("/", handler.redirectRoot)
 	mux.HandleFunc("/admin/", handler.shell)
 	mux.HandleFunc("/admin/views/", handler.partial)
@@ -65,7 +78,7 @@ func (h *Handler) shell(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.render(w, r, templates.Shell(h.dashboard(r.Context(), "overview")))
+	h.render(w, r, templates.Shell(h.dashboard(r.Context(), "overview", operationFilter{})))
 }
 
 func (h *Handler) partial(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +91,54 @@ func (h *Handler) partial(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.render(w, r, component(h.dashboard(r.Context(), view)))
+	filter, err := operationFilterFromRequest(r, view)
+	if err != nil {
+		http.Error(w, "invalid operation state filter", http.StatusBadRequest)
+		return
+	}
+	h.render(w, r, component(h.dashboard(r.Context(), view, filter)))
+}
+
+func (h *Handler) operationDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.operations == nil {
+		http.Error(w, "operation store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	operationID, ok := operationIDFromDetailPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	operation, err := h.operations.Get(operationID)
+	if errors.Is(err, operations.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "operation detail unavailable", http.StatusInternalServerError)
+		return
+	}
+	h.render(w, r, templates.OperationDetail(operationData(operation)))
+}
+
+func operationIDFromDetailPath(requestPath string) (string, bool) {
+	cleaned := strings.Trim(path.Clean(strings.TrimPrefix(requestPath, "/admin/operations/")), "/")
+	operationID, suffix, ok := strings.Cut(cleaned, "/")
+	if !ok || suffix != "detail" {
+		return "", false
+	}
+	if operationID == "." || operationID == "" || strings.Contains(operationID, "/") {
+		return "", false
+	}
+	unescaped, err := url.PathUnescape(operationID)
+	if err != nil || unescaped == "" || strings.Contains(unescaped, "/") {
+		return "", false
+	}
+	return unescaped, true
 }
 
 func partialComponent(view string) func(templates.DashboardData) templ.Component {
@@ -103,10 +163,12 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, component templ
 	}
 }
 
-func (h *Handler) dashboard(ctx context.Context, activeView string) templates.DashboardData {
+func (h *Handler) dashboard(ctx context.Context, activeView string, filter operationFilter) templates.DashboardData {
 	data := templates.DashboardData{
-		ActiveView:  activeView,
-		GeneratedAt: h.now().Format(time.RFC3339),
+		ActiveView:       activeView,
+		GeneratedAt:      h.now().Format(time.RFC3339),
+		OperationFilter:  filter.ID,
+		OperationFilters: operationFilters(),
 	}
 	data.Nav = []templates.NavItem{
 		{ID: "overview", Label: "Overview", Group: "Cluster", Href: "/admin/views/overview"},
@@ -121,7 +183,7 @@ func (h *Handler) dashboard(ctx context.Context, activeView string) templates.Da
 	}
 	h.loadSummary(ctx, &data)
 	h.loadCapacity(ctx, &data)
-	h.loadOperations(&data)
+	h.loadOperations(&data, filter)
 	h.loadRepair(ctx, &data)
 	data.Signals = readinessSignals(data)
 	return data
@@ -180,11 +242,11 @@ func capacityData(runway *adminv1.CapacityRunway) templates.CapacityData {
 	}
 }
 
-func (h *Handler) loadOperations(data *templates.DashboardData) {
+func (h *Handler) loadOperations(data *templates.DashboardData, filter operationFilter) {
 	if h.operations == nil {
 		return
 	}
-	items, err := h.operations.List(operations.ListFilter{})
+	items, err := h.operations.List(operations.ListFilter{States: filter.States})
 	if err != nil {
 		data.Errors = append(data.Errors, "operations: "+err.Error())
 		return
@@ -209,14 +271,82 @@ func operationData(operation *adminv1.Operation) templates.OperationData {
 		message = progress.GetMessage()
 	}
 	return templates.OperationData{
-		ID:        operation.GetOperationId(),
-		Type:      operation.GetOperationType(),
-		State:     operation.GetState().String(),
-		Requested: timestampText(operation.GetRequestedAt()),
-		Completed: completed,
-		Total:     total,
-		Message:   message,
+		ID:          operation.GetOperationId(),
+		Type:        operation.GetOperationType(),
+		State:       operation.GetState().String(),
+		RequestedBy: operation.GetRequestedByIdentity(),
+		Requested:   timestampText(operation.GetRequestedAt()),
+		Started:     timestampText(operation.GetStartedAt()),
+		Finished:    timestampText(operation.GetFinishedAt()),
+		DryRun:      operation.GetDryRun(),
+		Completed:   completed,
+		Total:       total,
+		Message:     message,
 	}
+}
+
+type operationFilter struct {
+	ID     string
+	States []adminv1.OperationState
+}
+
+func operationFilterFromRequest(r *http.Request, view string) (operationFilter, error) {
+	if view != "operations" {
+		return operationFilter{}, nil
+	}
+	return parseOperationFilter(r.URL.Query().Get("state"))
+}
+
+func parseOperationFilter(value string) (operationFilter, error) {
+	filterID := strings.ToLower(strings.TrimSpace(value))
+	if filterID == "" {
+		filterID = operationStateAll
+	}
+	for _, option := range operationFilterOptions() {
+		if option.ID == filterID {
+			return operationFilter{ID: filterID, States: option.States}, nil
+		}
+	}
+	return operationFilter{}, errors.New("unknown operation state filter")
+}
+
+func operationFilters() []templates.OperationFilter {
+	options := operationFilterOptions()
+	filters := make([]templates.OperationFilter, 0, len(options))
+	for _, option := range options {
+		filters = append(filters, templates.OperationFilter{
+			ID:    option.ID,
+			Label: option.Label,
+			Href:  option.Href(),
+		})
+	}
+	return filters
+}
+
+func operationFilterOptions() []operationFilterOption {
+	return []operationFilterOption{
+		{ID: operationStateAll, Label: "All"},
+		{ID: operationStatePlanned, Label: "Planned", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_PLANNED}},
+		{ID: operationStateQueued, Label: "Queued", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_QUEUED}},
+		{ID: operationStateRunning, Label: "Running", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_RUNNING}},
+		{ID: operationStateSucceeded, Label: "Succeeded", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_SUCCEEDED}},
+		{ID: operationStateFailed, Label: "Failed", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_FAILED}},
+		{ID: operationStateCanceled, Label: "Canceled", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_CANCELED}},
+		{ID: operationStateExpired, Label: "Expired", States: []adminv1.OperationState{adminv1.OperationState_OPERATION_STATE_EXPIRED}},
+	}
+}
+
+type operationFilterOption struct {
+	ID     string
+	Label  string
+	States []adminv1.OperationState
+}
+
+func (o operationFilterOption) Href() string {
+	if o.ID == operationStateAll {
+		return "/admin/views/operations"
+	}
+	return "/admin/views/operations?state=" + o.ID
 }
 
 func (h *Handler) loadRepair(ctx context.Context, data *templates.DashboardData) {

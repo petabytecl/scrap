@@ -20,6 +20,7 @@ GOLANGCI_LINT ?= $(GO_TOOL) golangci-lint
 GOTESTSUM ?= $(GO_TOOL) gotestsum
 GOVULNCHECK ?= $(GO_TOOL) govulncheck
 KUSTOMIZE ?= $(GO_TOOL) kustomize
+TEMPL ?= $(GO_TOOL) templ
 
 # External command-line tools.
 ##? DOCKER Docker CLI used by local image targets.
@@ -81,6 +82,7 @@ STATIC_TARGETS := \
 	fmt-check \
 	package-boundaries \
 	proto-check \
+	templ-check \
 	lint
 TEST_TARGETS := \
 	test-compat \
@@ -269,6 +271,9 @@ help: ## Show this help.
 proto: ## Generate protobuf and gRPC code.
 	$(BUF) generate
 
+.PHONY: generate
+generate: proto generate-templ ## Generate all checked-in code.
+
 .PHONY: proto-check
 proto-check: ## Lint schemas, check breaking changes, and verify generated code.
 	$(BUF) lint
@@ -280,6 +285,15 @@ proto-check: ## Lint schemas, check breaking changes, and verify generated code.
 	fi
 	$(BUF) generate
 	git diff --exit-code -- internal/gen
+
+.PHONY: generate-templ
+generate-templ: ## Generate templ admin UI code.
+	$(TEMPL) generate ./internal/adminui/templates/...
+
+.PHONY: templ-check
+templ-check: ## Verify generated templ admin UI code is current.
+	$(TEMPL) generate ./internal/adminui/templates/...
+	git diff --exit-code -- internal/adminui/templates/*_templ.go
 
 ##@ Development
 
