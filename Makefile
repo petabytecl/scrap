@@ -3,6 +3,8 @@
 # Override variables with environment values or `make VAR=value <target>`.
 .DEFAULT_GOAL := help
 
+# Values documented with ##? are shown by `make help`.
+
 ##@ Tool Variables
 ##? GO Go command used by all Go targets.
 ##? TOOLS_MODFILE Go tool module file used by Go-managed tools.
@@ -11,18 +13,26 @@
 ##? KUBECTL kubectl CLI used by local release evidence targets.
 
 # -----------------------------------------------------------------------------
-# Toolchain
+# Go toolchain
 # -----------------------------------------------------------------------------
 
 GO ?= go
 TOOLS_MODFILE ?= tools.go.mod
 GO_TOOL = $(GO) tool -modfile=$(TOOLS_MODFILE)
 
+# -----------------------------------------------------------------------------
+# Go-managed project tools
+# -----------------------------------------------------------------------------
+
 BUF ?= $(GO_TOOL) buf
 GOLANGCI_LINT ?= $(GO_TOOL) golangci-lint
 GOTESTSUM ?= $(GO_TOOL) gotestsum
 GOVULNCHECK ?= $(GO_TOOL) govulncheck
 KUSTOMIZE ?= $(GO_TOOL) kustomize
+
+# -----------------------------------------------------------------------------
+# External command-line tools
+# -----------------------------------------------------------------------------
 
 DOCKER ?= docker
 KIND ?= kind
@@ -40,23 +50,31 @@ KUBECTL ?= kubectl
 ##? TEST_RESULTS_DIR Directory used for JUnit and coverage artifacts.
 
 # -----------------------------------------------------------------------------
-# Verification inputs
+# Test package selection
 # -----------------------------------------------------------------------------
 
 COMPAT_PACKAGES ?= ./internal/compat ./internal/metastore
 TEST_PACKAGES ?= ./...
 COVER_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
 
+# -----------------------------------------------------------------------------
+# Static analysis inputs
+# -----------------------------------------------------------------------------
+
 LINT_TIMEOUT ?= 5m
 PROTO_BREAKING_REF ?= main
 PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
+
+# -----------------------------------------------------------------------------
+# Test report outputs
+# -----------------------------------------------------------------------------
 
 COVERMODE ?= atomic
 COVERPROFILE ?= coverage.out
 TEST_RESULTS_DIR ?= test-results
 JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
 
-# Internal verification target groups.
+# Aggregate target groups used by local and CI verification entry points.
 CHECK_TARGETS := \
 	static \
 	tests \
@@ -73,7 +91,7 @@ TEST_TARGETS := \
 	test \
 	test-race
 
-# Internal binary list used by the build target.
+# Command packages built by `make build`.
 SCRAP_BINS := \
 	./cmd/scrapd \
 	./cmd/scrap-spike \
@@ -147,23 +165,50 @@ SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
 SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
 SCRAP_WORKLOAD_IDENTITY ?= local-operator
 
-##@ Evidence Variables
+##@ Release Evidence Variables
+##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
+
+##@ Capacity Sample Variables
 ##? CAPACITY_SAMPLE_BACKEND_REGION Backend region recorded by capacity-sample.
 ##? CAPACITY_SAMPLE_BACKEND_URL Backend URL recorded by capacity-sample.
 ##? CAPACITY_SAMPLE_OPENBAO_ADDR OpenBao address used by local evidence targets.
 ##? CAPACITY_SAMPLE_OPENBAO_KEY_PATH OpenBao transit key path used by capacity-sample.
 ##? CAPACITY_SAMPLE_REPORT Output path for capacity-sample evidence.
+
+##@ OpenBao Smoke Variables
+##? OPENBAO_SMOKE_JWT_CMD Command used to mint the local OpenBao smoke JWT.
+##? OPENBAO_SMOKE_OUTAGE_ADDR OpenBao outage address used by smoke evidence.
+##? OPENBAO_SMOKE_REPORT Output path for OpenBao smoke evidence.
+
+##@ Local DR Drill Variables
+##? LOCAL_DR_DRILL_IMAGE_IDENTITY Image identity recorded by local DR drill evidence.
+##? LOCAL_DR_DRILL_OPERATOR_OWNER Operator owner recorded by local DR drill evidence.
 ##? LOCAL_DR_DRILL_REPORT Output path for local DR drill evidence.
 ##? LOCAL_DR_DRILL_RUNNER Runner identifier recorded by local DR drill evidence.
+
+##@ Local Soak Variables
+##? LOCAL_SOAK_IMAGE_IDENTITY Image identity recorded by local soak evidence.
 ##? LOCAL_SOAK_REPORT Output path for local soak evidence.
 ##? LOCAL_SOAK_RUNNER Runner identifier recorded by local soak evidence.
-##? OPENBAO_SMOKE_REPORT Output path for OpenBao smoke evidence.
-##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
+
+##@ Write Pipeline Variables
+##? WRITE_PIPELINE_CONCURRENCY Concurrent writers used by write-pipeline evidence.
+##? WRITE_PIPELINE_DOCUMENT_SIZE Document size used by write-pipeline evidence.
+##? WRITE_PIPELINE_DURATION Run duration used by write-pipeline evidence.
+##? WRITE_PIPELINE_MAX_P99_ACK_LATENCY Maximum accepted p99 ACK latency.
+##? WRITE_PIPELINE_MIN_WRITES_PER_SECOND Minimum accepted writes per second.
 ##? WRITE_PIPELINE_REPORT Output path for write-pipeline evidence.
+##? WRITE_PIPELINE_RUNNER Runner identifier recorded by write-pipeline evidence.
 ##? WRITE_PIPELINE_SAMPLES Sample count used by write-pipeline evidence.
 
 # -----------------------------------------------------------------------------
-# Evidence inputs
+# Release evidence inputs
+# -----------------------------------------------------------------------------
+
+RELEASE_EVIDENCE_MANIFEST ?=
+
+# -----------------------------------------------------------------------------
+# Capacity sample inputs
 # -----------------------------------------------------------------------------
 
 CAPACITY_SAMPLE_BACKEND_REGION ?= us-east-1
@@ -171,17 +216,35 @@ CAPACITY_SAMPLE_BACKEND_URL ?= http://127.0.0.1:4566/scrap-local
 CAPACITY_SAMPLE_OPENBAO_ADDR ?= http://127.0.0.1:8200
 CAPACITY_SAMPLE_OPENBAO_KEY_PATH ?= transit/keys/scrap-backend
 CAPACITY_SAMPLE_REPORT ?= capacity-sample-advisory.json
+
+# -----------------------------------------------------------------------------
+# OpenBao Transit smoke inputs
+# -----------------------------------------------------------------------------
+
 OPENBAO_SMOKE_JWT_CMD ?= $(KUBECTL) -n scrap-local create token openbao-transit-smoke --duration=10m
 OPENBAO_SMOKE_OUTAGE_ADDR ?= http://127.0.0.1:1
 OPENBAO_SMOKE_REPORT ?= openbao-transit-smoke-evidence.json
+
+# -----------------------------------------------------------------------------
+# Local DR drill inputs
+# -----------------------------------------------------------------------------
 
 LOCAL_DR_DRILL_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 LOCAL_DR_DRILL_OPERATOR_OWNER ?= @cotocisternas
 LOCAL_DR_DRILL_REPORT ?= local-dr-drill-evidence.json
 LOCAL_DR_DRILL_RUNNER ?= local-kind
+
+# -----------------------------------------------------------------------------
+# Local soak inputs
+# -----------------------------------------------------------------------------
+
 LOCAL_SOAK_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 LOCAL_SOAK_REPORT ?= local-soak-evidence.json
 LOCAL_SOAK_RUNNER ?= local-kind
+
+# -----------------------------------------------------------------------------
+# Write-pipeline evidence inputs
+# -----------------------------------------------------------------------------
 
 WRITE_PIPELINE_CONCURRENCY ?= 8
 WRITE_PIPELINE_DOCUMENT_SIZE ?= 4096

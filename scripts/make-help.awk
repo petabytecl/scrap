@@ -1,5 +1,6 @@
 BEGIN {
 	FS = ":.*##"
+	name_width = 42
 	printf "\n\033[1mUsage:\033[0m\n  make \033[36m<target>\033[0m\n"
 }
 
@@ -16,10 +17,10 @@ BEGIN {
 		name = substr(line, 1, RSTART - 1)
 		description = substr(line, RSTART + RLENGTH)
 	}
-	printf "  \033[36m%-34s\033[0m %s\n", name, description
+	printf "  \033[36m%-*s\033[0m %s\n", name_width, name, description
 	next
 }
 
 /^[a-zA-Z0-9_.-]+:.*##/ {
-	printf "  \033[36m%-34s\033[0m %s\n", $1, $2
+	printf "  \033[36m%-*s\033[0m %s\n", name_width, $1, $2
 }
