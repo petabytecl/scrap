@@ -247,12 +247,12 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 	return node.Applications{
 		Documents:    localApp.Documents(),
 		Transactions: localApp.Transactions(),
-		Inspect:      localApp,
-		Repair:       localApp,
-		Member:       localApp,
-		DR:           localApp,
+		Inspect:      localstorage.Inspect(localApp),
+		Repair:       localstorage.Repair(localApp),
+		Member:       localstorage.Members(localApp),
+		DR:           localstorage.DisasterRecovery(localApp),
 		Operations:   operationStore,
-		Health:       localApp,
+		Health:       localstorage.Health(localApp),
 	}, localApp, operationStore, nil
 }
 
@@ -263,9 +263,10 @@ func buildUploadRunner(cfg config.Config, localApp *localstorage.Application, lo
 	}
 	localApp.SetBackendStore(backendStore)
 	logger.Warn("local filesystem backend enabled; this is a non-production backend adapter", "path", cfg.LocalBackendDataDir)
+	uploads := localstorage.BackendUploads(localApp)
 	return &backendupload.Runner{
 		RunOnceFunc: func(ctx context.Context) (backendupload.RunResult, error) {
-			result, err := localApp.RunBackendUploadOnce(ctx, backendStore)
+			result, err := uploads.RunOnce(ctx, backendStore)
 			logBackendUploadPublication(logger, result)
 			return result.Upload, err
 		},

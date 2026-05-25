@@ -61,7 +61,7 @@ func TestBuildLocalApplicationsRegistersHealthApplication(t *testing.T) {
 	defer func() { testutil.RequireNoErrorf(t, localApp.Close(), "close local application") }()
 
 	testutil.RequireNotNilf(t, apps.Health, "health application")
-	testutil.RequireTruef(t, apps.Health == localApp, "health application is not local application")
+	testutil.RequireNoErrorf(t, apps.Health.CheckLiveness(context.Background()), "health application liveness")
 }
 
 func TestBuildApplicationsDisabledReturnsNoopCleanup(t *testing.T) {

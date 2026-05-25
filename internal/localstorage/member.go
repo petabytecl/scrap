@@ -22,37 +22,37 @@ type localMemberState struct {
 	Draining bool `json:"draining"`
 }
 
-func (a *Application) CordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
+func (m *MemberApplication) CordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if req.StorageMember != "local" {
 		return nil, mapError(metastore.ErrNotFound)
 	}
-	if err := a.updateLocalMemberState(func(state *localMemberState) {
+	if err := m.app.updateLocalMemberState(func(state *localMemberState) {
 		state.Cordoned = true
 	}); err != nil {
 		return nil, err
 	}
-	return a.GetAdminMember(ctx, "local")
+	return Inspect(m.app).GetAdminMember(ctx, "local")
 }
 
-func (a *Application) UncordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
+func (m *MemberApplication) UncordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if req.StorageMember != "local" {
 		return nil, mapError(metastore.ErrNotFound)
 	}
-	if err := a.updateLocalMemberState(func(state *localMemberState) {
+	if err := m.app.updateLocalMemberState(func(state *localMemberState) {
 		state.Cordoned = false
 	}); err != nil {
 		return nil, err
 	}
-	return a.GetAdminMember(ctx, "local")
+	return Inspect(m.app).GetAdminMember(ctx, "local")
 }
 
-func (a *Application) GetEvictionSafety(ctx context.Context, memberID string) (*adminv1.EvictionSafety, error) {
+func (m *MemberApplication) GetEvictionSafety(ctx context.Context, memberID string) (*adminv1.EvictionSafety, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (a *Application) requireCapacityAdmission(ctx context.Context, expectedLeng
 	if required == 0 {
 		return nil
 	}
-	stats, err := a.localDiskStats(ctx)
+	stats, err := Inspect(a).localDiskStats(ctx)
 	if err != nil {
 		return err
 	}

@@ -759,7 +759,7 @@ func (a *OperationExecutor) applyDrainOperation(ctx context.Context, operation *
 	if err != nil {
 		return 0, nil, err
 	}
-	safety, err := a.GetEvictionSafety(ctx, memberID)
+	safety, err := Members(a.Application).GetEvictionSafety(ctx, memberID)
 	if err != nil {
 		return 0, nil, err
 	}

@@ -42,11 +42,11 @@ import (
 
 func TestHealthChecksReflectLocalStorageState(t *testing.T) {
 	app := openTestApplication(t)
-	testutil.RequireNoErrorf(t, app.CheckReadiness(context.Background()), "readiness health")
-	testutil.RequireNoErrorf(t, app.CheckLiveness(context.Background()), "liveness health")
+	testutil.RequireNoErrorf(t, Health(app).CheckReadiness(context.Background()), "readiness health")
+	testutil.RequireNoErrorf(t, Health(app).CheckLiveness(context.Background()), "liveness health")
 
 	testutil.RequireNoErrorf(t, app.blocks.Close(), "close blockstore")
-	testutil.RequireErrorIsf(t, app.CheckLiveness(context.Background()), blockstore.ErrClosed, "liveness after closed blockstore")
+	testutil.RequireErrorIsf(t, Health(app).CheckLiveness(context.Background()), blockstore.ErrClosed, "liveness after closed blockstore")
 }
 
 func TestApplicationAccessorsAndSettersExposeFocusedSubcomponents(t *testing.T) {
@@ -54,11 +54,23 @@ func TestApplicationAccessorsAndSettersExposeFocusedSubcomponents(t *testing.T) 
 	testutil.RequireNotNilf(t, app.Documents(), "document application")
 	testutil.RequireNotNilf(t, app.Transactions(), "transaction application")
 	testutil.RequireNotNilf(t, app.OperationExecutor(), "operation executor")
+	testutil.RequireNotNilf(t, BackendUploads(app), "backend upload application")
+	testutil.RequireNotNilf(t, Inspect(app), "inspect application")
+	testutil.RequireNotNilf(t, Repair(app), "repair application")
+	testutil.RequireNotNilf(t, Members(app), "member application")
+	testutil.RequireNotNilf(t, DisasterRecovery(app), "disaster recovery application")
+	testutil.RequireNotNilf(t, Health(app), "health application")
 
 	var nilApp *Application
 	testutil.RequireNilf(t, nilApp.Documents(), "nil document application")
 	testutil.RequireNilf(t, nilApp.Transactions(), "nil transaction application")
 	testutil.RequireNilf(t, nilApp.OperationExecutor(), "nil operation executor")
+	testutil.RequireNilf(t, BackendUploads(nilApp), "nil backend upload application")
+	testutil.RequireNilf(t, Inspect(nilApp), "nil inspect application")
+	testutil.RequireNilf(t, Repair(nilApp), "nil repair application")
+	testutil.RequireNilf(t, Members(nilApp), "nil member application")
+	testutil.RequireNilf(t, DisasterRecovery(nilApp), "nil disaster recovery application")
+	testutil.RequireNilf(t, Health(nilApp), "nil health application")
 
 	source := backendupload.LocalBlockEnvelopeSource{CellID: "test-cell"}
 	app.SetBlockEnvelopeSource(source)
@@ -82,11 +94,11 @@ func TestHealthChecksReflectClosedRaftMetadataAuthority(t *testing.T) {
 	app := openTestApplication(t)
 	testutil.RequireNoErrorf(t, app.authority.Close(), "close authority")
 
-	readinessErr := app.CheckReadiness(context.Background())
+	readinessErr := Health(app).CheckReadiness(context.Background())
 	if readinessErr == nil || !strings.Contains(readinessErr.Error(), "command log is closed") {
 		t.Fatalf("readiness after closed authority = %v, want command log closed", readinessErr)
 	}
-	livenessErr := app.CheckLiveness(context.Background())
+	livenessErr := Health(app).CheckLiveness(context.Background())
 	if livenessErr == nil || !strings.Contains(livenessErr.Error(), "command log is closed") {
 		t.Fatalf("liveness after closed authority = %v, want command log closed", livenessErr)
 	}
@@ -95,10 +107,10 @@ func TestHealthChecksReflectClosedRaftMetadataAuthority(t *testing.T) {
 func TestHealthChecksRejectNilApplication(t *testing.T) {
 	var app *Application
 
-	if err := app.CheckReadiness(context.Background()); err == nil {
+	if err := Health(app).CheckReadiness(context.Background()); err == nil {
 		t.Fatal("nil application readiness error = nil, want error")
 	}
-	if err := app.CheckLiveness(context.Background()); err == nil {
+	if err := Health(app).CheckLiveness(context.Background()); err == nil {
 		t.Fatal("nil application liveness error = nil, want error")
 	}
 }
@@ -801,7 +813,7 @@ func TestMetadataProjectionRebuildsFromAuthorityLog(t *testing.T) {
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read rebuilt document = %q, want %q", got, data)
 	}
-	queue, err := reopened.GetRepairQueue(context.Background(), "local")
+	queue, err := Repair(reopened).GetRepairQueue(context.Background(), "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue after clean rebuild")
 	if len(queue) != 0 {
 		t.Fatalf("repair queue after clean rebuild = %#v, want empty", queue)
@@ -908,7 +920,7 @@ func TestBackendUploadProcessorUploadsPendingIntentAndReplaysOutcome(t *testing.
 	testutil.RequireNoErrorf(t, err, "seal current block")
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
-	result, err := app.BackendUploadProcessor(backendStore).RunOnce(ctx)
+	result, err := BackendUploads(app).Processor(backendStore).RunOnce(ctx)
 	testutil.RequireNoErrorf(t, err, "run backend upload processor")
 	requireUploadRunResult(t, result, 1, 1, 0, 0)
 	intent, err := app.metadata.GetUploadIntent(storedDocument.Location.BlockID)
@@ -945,7 +957,7 @@ func TestRunBackendUploadOnceSealsDueBlockAndUploads(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 
-	result, err := app.RunBackendUploadOnce(ctx, backendStore)
+	result, err := BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	testutil.RequireTruef(t, result.Sealed, "backend upload result did not seal")
 	testutil.RequireEqualf(t, result.SealedBlockID, storedDocument.Location.BlockID, "sealed block id")
@@ -977,7 +989,7 @@ func TestRunBackendUploadOnceDoesNotPublishDeferredOpenBlock(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 
-	result, err := app.RunBackendUploadOnce(ctx, backendStore)
+	result, err := BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	if result.Sealed || result.Upload.Scanned != 1 || result.Upload.Deferred != 1 || result.Upload.Uploaded != 0 {
 		t.Fatalf("upload result = %#v, want one deferred open block", result)
@@ -1014,7 +1026,7 @@ func TestRunBackendUploadOnceSealsRecoveredPendingBlockAfterRestart(t *testing.T
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 
-	result, err := reopened.RunBackendUploadOnce(ctx, backendStore)
+	result, err := BackendUploads(reopened).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	if result.Sealed || result.Upload.Uploaded != 1 || result.Upload.Deferred != 0 || !result.MetadataPublished {
 		t.Fatalf("backend upload result = %#v, want recovered block upload and checkpoint", result)
@@ -1044,7 +1056,7 @@ func TestRunBackendUploadOnceRepublishesMissingCurrentPointerAfterUploadedIntent
 	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
-	first, err := app.RunBackendUploadOnce(ctx, backendStore)
+	first, err := BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run initial backend upload once")
 	if !first.MetadataPublished || first.MetadataPublication == nil {
 		t.Fatalf("initial metadata publication = %#v, want published", first.MetadataPublication)
@@ -1054,7 +1066,7 @@ func TestRunBackendUploadOnceRepublishesMissingCurrentPointerAfterUploadedIntent
 		missingPointerKey: first.MetadataPublication.PointerKey,
 	}
 
-	second, err := app.RunBackendUploadOnce(ctx, missingPointer)
+	second, err := BackendUploads(app).RunOnce(ctx, missingPointer)
 	testutil.RequireNoErrorf(t, err, "rerun backend upload once")
 	if second.Upload.Uploaded != 0 || second.Upload.Deferred != 0 || !second.MetadataPublished {
 		t.Fatalf("rerun result = %#v, want pointer republished without uploading", second)
@@ -1081,7 +1093,7 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -1100,7 +1112,7 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 	if got := bytes.Join(sender.chunks, nil); !bytes.Equal(got, data) {
 		t.Fatalf("read bytes = %q, want %q", got, data)
 	}
-	queue, err := app.GetRepairQueue(ctx, "local")
+	queue, err := Repair(app).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 1 ||
 		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
@@ -1324,7 +1336,7 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -1372,7 +1384,7 @@ func TestReadDocumentRejectsCorruptEncryptedBackendByteBeforeServing(t *testing.
 	backendStore, err := backendfs.Open(backendRoot)
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -1406,7 +1418,7 @@ func TestReadDocumentWithHealthyLocalBytesDoesNotRequireTransit(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	transit.SetUnavailable(true)
 
@@ -1611,7 +1623,7 @@ func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -1695,7 +1707,7 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+	if _, err := BackendUploads(app).RunOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
@@ -1753,7 +1765,7 @@ func TestRunQueuedOperationsOnceRestoresTransitEncryptedDocumentFromBackend(t *t
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+	if _, err := BackendUploads(app).RunOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
@@ -1799,7 +1811,7 @@ func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+	if _, err := BackendUploads(app).RunOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
@@ -1843,7 +1855,7 @@ func TestReadDocumentReportsColdStateWithoutQueuingRestore(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
 	app.SetOperationStore(store)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -1934,7 +1946,7 @@ func TestRunQueuedOperationsOnceKeepsArchiveRestorePendingAndRetries(t *testing.
 	testutil.RequireNoErrorf(t, err, "write document")
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -1984,7 +1996,7 @@ func TestRunQueuedOperationsOncePrewarmsDocumentFromBackendAndAudits(t *testing.
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -2027,7 +2039,7 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+	if _, err := BackendUploads(app).RunOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	stored, err := app.metadata.HeadDocument(doc)
@@ -2057,7 +2069,7 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlock(t *testing.T) {
 	if result.Scanned != 1 || result.Succeeded != 1 || result.Failed != 0 {
 		t.Fatalf("operation result = %#v, want one repair success", result)
 	}
-	queue, err := app.GetRepairQueue(ctx, "local")
+	queue, err := Repair(app).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 0 {
 		t.Fatalf("repair queue = %#v, want resolved repair", queue)
@@ -2088,7 +2100,7 @@ func TestReplaceBlockFromBackendKeepsLocalBlockWhenBackendReadFails(t *testing.T
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -2130,7 +2142,7 @@ func TestReplaceBlockFromBackendInstallsVerifiedBackendBlock(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -2167,7 +2179,7 @@ func TestReplaceBlockFromBackendInstallsDecryptedTransitEncryptedBlock(t *testin
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.SetBackendStore(backendStore)
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -2222,7 +2234,7 @@ func TestRunQueuedOperationsOnceRepairsQuarantinedLocalBlockFromPeer(t *testing.
 	if peer.repairReadCount != 1 {
 		t.Fatalf("peer repair reads = %d, want 1", peer.repairReadCount)
 	}
-	queue, err := app.GetRepairQueue(ctx, "local")
+	queue, err := Repair(app).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 0 {
 		t.Fatalf("repair queue = %#v, want resolved repair", queue)
@@ -2273,7 +2285,7 @@ func TestRunQueuedOperationsOnceQuarantinesCorruptPeerAndFailsWithoutVerifiedSou
 	if peer.repairReadCount != 1 {
 		t.Fatalf("peer repair reads = %d, want 1", peer.repairReadCount)
 	}
-	queue, err := app.GetRepairQueue(ctx, "local")
+	queue, err := Repair(app).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 2 ||
 		!repairQueueReasonContains(queue, "local/"+stored.Location.BlockID) ||
@@ -2333,7 +2345,7 @@ func TestRunQueuedOperationsOnceRetriesPeerRepairAfterRestart(t *testing.T) {
 	result, err = reopened.RunQueuedOperationsOnce(ctx, store)
 	testutil.RequireNoErrorf(t, err, "run second queued operations")
 	requireOperationRunResult(t, result, 1, 1, 0, 0)
-	queue, err := reopened.GetRepairQueue(ctx, "local")
+	queue, err := Repair(reopened).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	testutil.RequireEqualf(t, len(queue), 0, "repair queue length")
 	sender := &recordingReadSender{}
@@ -2380,7 +2392,7 @@ func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
 	backendStore, err := backendfs.Open(t.TempDir())
 	testutil.RequireNoErrorf(t, err, "open backend store")
 	app.sealBlockAtBytes = app.blocks.CurrentBlockLength()
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	intent, err := app.metadata.GetUploadIntent(firstStored.Location.BlockID)
 	testutil.RequireNoErrorf(t, err, "get upload intent")
@@ -2403,7 +2415,7 @@ func TestRunQueuedOperationsOnceDedupesBackendRepairByBlock(t *testing.T) {
 	result, err := app.RunQueuedOperationsOnce(ctx, store)
 	testutil.RequireNoErrorf(t, err, "run queued operations")
 	requireBackendDedupeRepairResult(t, result, countingBackend, intent.BackendObjectKey)
-	queue, err := app.GetRepairQueue(ctx, "local")
+	queue, err := Repair(app).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	testutil.RequireEqualf(t, len(queue), 0, "repair queue length")
 }
@@ -2505,7 +2517,7 @@ func TestRunQueuedOperationsOnceScrubQueuesRepairForCorruptLocalBlock(t *testing
 	testutil.RequireEqualf(t, finished.GetState(), adminv1.OperationState_OPERATION_STATE_SUCCEEDED, "scrub operation state")
 	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["documents_scanned"], "1", "scrub documents scanned")
 	testutil.RequireEqualf(t, finished.GetProgress().GetCounters()["repair_queued"], "1", "scrub repair queued")
-	queue, err := app.GetRepairQueue(ctx, "local")
+	queue, err := Repair(app).GetRepairQueue(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	testutil.RequireEqualf(t, len(queue), 1, "repair queue length")
 	testutil.RequireEqualf(t, queue[0].GetTarget().GetDocument().GetDocumentName(), doc.DocumentName, "repair queue document")
@@ -2806,27 +2818,27 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head document")
 
-	adminDoc, err := app.GetAdminDocument(ctx, doc)
+	adminDoc, err := Inspect(app).GetAdminDocument(ctx, doc)
 	testutil.RequireNoErrorf(t, err, "get admin document")
 	requireAdminDocument(t, adminDoc, doc, stored, data)
 
-	adminBlock, err := app.GetAdminBlock(ctx, api.BlockTarget{ShardID: "local", BlockID: stored.Location.BlockID})
+	adminBlock, err := Inspect(app).GetAdminBlock(ctx, api.BlockTarget{ShardID: "local", BlockID: stored.Location.BlockID})
 	testutil.RequireNoErrorf(t, err, "get admin block")
 	requireAdminBlock(t, adminBlock, stored.Location.BlockID, data)
 
-	shard, err := app.GetAdminShard(ctx, "local")
+	shard, err := Inspect(app).GetAdminShard(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get admin shard")
 	requireAdminShard(t, shard)
 
-	member, err := app.GetAdminMember(ctx, "local")
+	member, err := Inspect(app).GetAdminMember(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get admin member")
 	requireAdminMember(t, member, time.Unix(200, 0).UTC())
 
-	summary, err := app.GetAdminClusterSummary(ctx)
+	summary, err := Inspect(app).GetAdminClusterSummary(ctx)
 	testutil.RequireNoErrorf(t, err, "get admin cluster summary")
 	requireAdminClusterSummary(t, summary)
 
-	runway, err := app.GetAdminCapacityRunway(ctx, "")
+	runway, err := Inspect(app).GetAdminCapacityRunway(ctx, "")
 	testutil.RequireNoErrorf(t, err, "get admin capacity runway")
 	requireAdminCapacityRunway(t, runway)
 }
@@ -2849,7 +2861,7 @@ func TestGetAdminShardSeparatesCommittedAndAppliedIndexesAfterApplyFailure(t *te
 	if applyErr == nil {
 		t.Fatal("apply failure was nil")
 	}
-	shard, err := app.GetAdminShard(ctx, "local")
+	shard, err := Inspect(app).GetAdminShard(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get admin shard after apply failure")
 	testutil.RequireEqualf(t, shard.GetCommittedIndex(), appliedBefore+1, "committed index")
 	testutil.RequireEqualf(t, shard.GetAppliedIndex(), appliedBefore, "applied index")
@@ -2962,7 +2974,7 @@ func TestLocalMemberCordonStatePersists(t *testing.T) {
 	dir := t.TempDir()
 	app, err := Open(dir)
 	testutil.RequireNoErrorf(t, err, "open app")
-	member, err := app.CordonMember(ctx, api.MemberMutationRequest{
+	member, err := Members(app).CordonMember(ctx, api.MemberMutationRequest{
 		OperationID:   "cordon-1",
 		StorageMember: "local",
 		Reason:        "maintenance",
@@ -2976,17 +2988,17 @@ func TestLocalMemberCordonStatePersists(t *testing.T) {
 	reopened, err := Open(dir)
 	testutil.RequireNoErrorf(t, err, "reopen app")
 	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
-	member, err = reopened.GetAdminMember(ctx, "local")
+	member, err = Inspect(reopened).GetAdminMember(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get reopened member")
 	if !member.GetCordoned() {
 		t.Fatalf("reopened member = %#v, want persisted cordon", member)
 	}
-	safety, err := reopened.GetEvictionSafety(ctx, "local")
+	safety, err := Members(reopened).GetEvictionSafety(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get eviction safety")
 	if safety.GetSafeToEvict() || len(safety.GetWarnings()) == 0 {
 		t.Fatalf("eviction safety = %#v, want unsafe single-member warning", safety)
 	}
-	member, err = reopened.UncordonMember(ctx, api.MemberMutationRequest{
+	member, err = Members(reopened).UncordonMember(ctx, api.MemberMutationRequest{
 		OperationID:   "uncordon-1",
 		StorageMember: "local",
 	})
@@ -3015,7 +3027,7 @@ func TestCordonedLocalMemberRejectsNewWritesButAllowsReplay(t *testing.T) {
 	if _, err := app.WriteDocument(ctx, init, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write initial document: %v", err)
 	}
-	if _, err := app.CordonMember(ctx, api.MemberMutationRequest{
+	if _, err := Members(app).CordonMember(ctx, api.MemberMutationRequest{
 		OperationID:   "cordon-1",
 		StorageMember: "local",
 		Reason:        "maintenance",
@@ -3038,7 +3050,7 @@ func TestCordonedLocalMemberRejectsNewWritesButAllowsReplay(t *testing.T) {
 func TestLocalRecoveryReadinessFailsClosedWithoutPublishedMetadata(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
-	readiness, err := app.GetRecoveryReadiness(ctx)
+	readiness, err := DisasterRecovery(app).GetRecoveryReadiness(ctx)
 	testutil.RequireNoErrorf(t, err, "get recovery readiness")
 	if readiness.GetReady() || len(readiness.GetWarnings()) < 2 {
 		t.Fatalf("readiness = %#v, want not ready with missing metadata/backend warnings", readiness)
@@ -3060,7 +3072,7 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("published metadata bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	stored, err := app.metadata.HeadDocument(testDocumentIdentity())
 	testutil.RequireNoErrorf(t, err, "head stored document")
@@ -3077,7 +3089,7 @@ func TestPublishMetadataSnapshotWritesCurrentPointerAndUpdatesReadiness(t *testi
 	required := publication.Manifest.GetRequiredObjects()
 	requirePublishedRequiredObjects(t, required, intent)
 
-	readiness, err := app.GetRecoveryReadiness(ctx)
+	readiness, err := DisasterRecovery(app).GetRecoveryReadiness(ctx)
 	testutil.RequireNoErrorf(t, err, "get recovery readiness")
 	requireRecoveryReadinessReady(t, readiness, app.now())
 }
@@ -3132,7 +3144,7 @@ func TestRunQueuedOperationsOnceCopyVerifySucceedsWithPublishedCheckpoint(t *tes
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("copy verify bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := app.PublishMetadataSnapshot(ctx)
 	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
@@ -3192,7 +3204,7 @@ func TestRunQueuedOperationsOnceMetadataRestoreImportsColdDocuments(t *testing.T
 		Tags:        map[string]string{"closed_by": "metadata-restore-test"},
 	})
 	testutil.RequireNoErrorf(t, err, "complete source transaction")
-	_, err = source.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(source).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := source.PublishMetadataSnapshot(ctx)
 	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
@@ -3305,7 +3317,7 @@ func TestRunQueuedOperationsOnceDryRunDROperationReportsReadiness(t *testing.T) 
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("dry-run drill bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := app.PublishMetadataSnapshot(ctx)
 	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
@@ -3354,7 +3366,7 @@ func TestRunQueuedOperationsOnceDRDrillRestoresScratchMetadata(t *testing.T) {
 		CreatedByService: "billing-etl",
 	}, newChunkReader([][]byte{[]byte("scratch drill bytes")}))
 	testutil.RequireNoErrorf(t, err, "write document")
-	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	_, err = BackendUploads(app).RunOnce(ctx, backendStore)
 	testutil.RequireNoErrorf(t, err, "run backend upload once")
 	publication, err := app.PublishMetadataSnapshot(ctx)
 	testutil.RequireNoErrorf(t, err, "publish metadata snapshot")
@@ -3523,7 +3535,7 @@ func TestRunQueuedOperationsOnceFailsUnsafeDrainInSingleMemberMode(t *testing.T)
 		len(finished.GetWarnings()) == 0 {
 		t.Fatalf("finished operation = %#v, want unsafe drain failure with warnings", finished)
 	}
-	member, err := app.GetAdminMember(ctx, "local")
+	member, err := Inspect(app).GetAdminMember(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get member")
 	if member.GetState() == adminv1.MemberState_MEMBER_STATE_DRAINING || member.GetCordoned() {
 		t.Fatalf("member = %#v, want failed drain to leave local member online and uncordoned", member)
@@ -3556,7 +3568,7 @@ func TestRunQueuedOperationsOnceDryRunDrainDoesNotMutateMember(t *testing.T) {
 		len(finished.GetWarnings()) == 0 {
 		t.Fatalf("finished operation = %#v, want dry-run success with safety warning", finished)
 	}
-	member, err := app.GetAdminMember(ctx, "local")
+	member, err := Inspect(app).GetAdminMember(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "get member")
 	if member.GetState() == adminv1.MemberState_MEMBER_STATE_DRAINING || member.GetCordoned() {
 		t.Fatalf("member = %#v, want dry-run drain to leave local member online and uncordoned", member)
@@ -3938,7 +3950,7 @@ func assertUnreadableRepairRef(t *testing.T, app *Application, doc identity.Docu
 	if sender.sentMetadata || len(sender.chunks) != 0 {
 		t.Fatalf("sent metadata=%v chunks=%d for unreadable repair ref", sender.sentMetadata, len(sender.chunks))
 	}
-	queue, err := app.GetRepairQueue(context.Background(), "local")
+	queue, err := Repair(app).GetRepairQueue(context.Background(), "local")
 	testutil.RequireNoErrorf(t, err, "get repair queue")
 	if len(queue) != 1 ||
 		queue[0].GetTarget().GetDocument().GetDocumentName() != doc.DocumentName ||
@@ -4131,7 +4143,7 @@ func publishDRDrillTestDocument(ctx context.Context, t *testing.T, app *Applicat
 	}, newChunkReader([][]byte{data})); err != nil {
 		t.Fatalf("write document: %v", err)
 	}
-	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+	if _, err := BackendUploads(app).RunOnce(ctx, backendStore); err != nil {
 		t.Fatalf("run backend upload once: %v", err)
 	}
 	publication, err := app.PublishMetadataSnapshot(ctx)

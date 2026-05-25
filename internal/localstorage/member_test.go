@@ -19,7 +19,7 @@ func TestMemberCordonLifecyclePersistsAdmissionState(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
 
-	member, err := app.CordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"})
+	member, err := Members(app).CordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"})
 	testutil.RequireNoErrorf(t, err, "cordon local member")
 	testutil.RequireTruef(t, member.GetCordoned(), "cordoned member = %#v", member)
 	state, err := readLocalMemberState(app.dir)
@@ -29,7 +29,7 @@ func TestMemberCordonLifecyclePersistsAdmissionState(t *testing.T) {
 		t.Fatalf("write admission after cordon = %v, want cordoned error", err)
 	}
 
-	member, err = app.UncordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"})
+	member, err = Members(app).UncordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"})
 	testutil.RequireNoErrorf(t, err, "uncordon local member")
 	testutil.RequireFalsef(t, member.GetCordoned(), "uncordoned member = %#v", member)
 	state, err = readLocalMemberState(app.dir)
@@ -43,19 +43,19 @@ func TestMemberAdminMethodsRejectRemoteAndCanceledRequests(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := app.CordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"}); !errors.Is(err, context.Canceled) {
+	if _, err := Members(app).CordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cordon canceled error = %v, want %v", err, context.Canceled)
 	}
-	if _, err := app.UncordonMember(context.Background(), storageapp.MemberMutationRequest{StorageMember: "remote"}); err == nil {
+	if _, err := Members(app).UncordonMember(context.Background(), storageapp.MemberMutationRequest{StorageMember: "remote"}); err == nil {
 		t.Fatal("uncordon remote error = nil, want not found")
 	}
-	if _, err := app.GetEvictionSafety(ctx, "local"); !errors.Is(err, context.Canceled) {
+	if _, err := Members(app).GetEvictionSafety(ctx, "local"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("eviction canceled error = %v, want %v", err, context.Canceled)
 	}
-	if safety, err := app.GetEvictionSafety(context.Background(), "local"); err != nil || safety.GetSafeToEvict() {
+	if safety, err := Members(app).GetEvictionSafety(context.Background(), "local"); err != nil || safety.GetSafeToEvict() {
 		t.Fatalf("local eviction safety = %#v, %v; want unsafe local member", safety, err)
 	}
-	if safety, err := app.GetEvictionSafety(context.Background(), "remote"); err == nil || safety != nil {
+	if safety, err := Members(app).GetEvictionSafety(context.Background(), "remote"); err == nil || safety != nil {
 		t.Fatalf("remote eviction safety = %#v, %v; want not found", safety, err)
 	}
 }

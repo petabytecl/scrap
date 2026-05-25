@@ -349,13 +349,14 @@ func TestServerServesLocalStorageApplications(t *testing.T) {
 	publicListener := bufconn.Listen(1024 * 1024)
 	adminListener := bufconn.Listen(1024 * 1024)
 	server := newServer(publicListener, adminListener, Applications{
-		Documents:    app,
-		Transactions: app,
-		Inspect:      app,
-		Repair:       app,
-		Member:       app,
-		DR:           app,
+		Documents:    app.Documents(),
+		Transactions: app.Transactions(),
+		Inspect:      localstorage.Inspect(app),
+		Repair:       localstorage.Repair(app),
+		Member:       localstorage.Members(app),
+		DR:           localstorage.DisasterRecovery(app),
 		Operations:   operationStore,
+		Health:       localstorage.Health(app),
 	}, testAuthorizationManager(t), "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
