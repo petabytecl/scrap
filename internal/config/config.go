@@ -311,6 +311,13 @@ func (c Config) validateAdminUI() error {
 	if !c.EnableLocalNonProductionStorage {
 		return errors.New("admin_ui_listen_address requires local non-production storage until HTTP admin UI authorization is implemented")
 	}
+	host, _, err := net.SplitHostPort(c.AdminUIListenAddress)
+	if err != nil {
+		return fmt.Errorf("admin_ui_listen_address must be host:port: %w", err)
+	}
+	if !isLoopback(host) {
+		return errors.New("admin_ui_listen_address must bind to a loopback address until HTTP admin UI authorization is implemented")
+	}
 	return nil
 }
 
@@ -483,6 +490,15 @@ type productionReadinessRequirement struct {
 	Ready                        bool
 	ProvidedArtifact             string
 	DownstreamDeploymentDeferral string
+}
+
+func isLoopback(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateListenAddress(field, value string) error {
