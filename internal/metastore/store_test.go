@@ -869,6 +869,31 @@ func TestFindDocumentsFilters(t *testing.T) {
 	}
 }
 
+func TestDocumentFilterRejectsNonMatchingIdentityAttributesTimeAndTags(t *testing.T) {
+	document := sampleDocument("invoice.xml", DocumentClassPermanent)
+	startAfterDocument := document.CreatedAt.Add(time.Second)
+	endBeforeDocument := document.CreatedAt.Add(-time.Second)
+	for _, tc := range []struct {
+		name   string
+		filter DocumentFilter
+	}{
+		{name: "exact name", filter: DocumentFilter{HasDocumentNameExact: true, DocumentNameExact: "summary.xml"}},
+		{name: "prefix", filter: DocumentFilter{HasDocumentNamePrefix: true, DocumentNamePrefix: "summary"}},
+		{name: "class", filter: DocumentFilter{HasDocumentClass: true, DocumentClass: DocumentClassEphemeral}},
+		{name: "content type", filter: DocumentFilter{HasContentType: true, ContentType: "application/pdf"}},
+		{name: "workflow stage", filter: DocumentFilter{HasWorkflowStage: true, WorkflowStage: "archive"}},
+		{name: "service", filter: DocumentFilter{HasCreatedByService: true, CreatedByService: "other-service"}},
+		{name: "created after", filter: DocumentFilter{CreatedAfter: &startAfterDocument}},
+		{name: "created before", filter: DocumentFilter{CreatedBefore: &endBeforeDocument}},
+		{name: "tags", filter: DocumentFilter{Tags: map[string]string{"workflow": "other"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.RequireFalsef(t, matchesFilter(document, tc.filter), "filter unexpectedly matched")
+		})
+	}
+	testutil.RequireTruef(t, matchesFilter(document, DocumentFilter{Tags: map[string]string{"workflow": "billing"}}), "matching tag filter")
+}
+
 func TestShardSnapshotRoundTripAndApplyReplacesProjection(t *testing.T) {
 	store := openTestStore(t)
 	stale := sampleDocument("stale.xml", DocumentClassPermanent)

@@ -428,6 +428,74 @@ func TestShardCommandPreservesUnknownForwardFields(t *testing.T) {
 	}
 }
 
+func TestShardSnapshotRejectsInvalidNestedRecords(t *testing.T) {
+	document := sampleDocument("invoice.xml", DocumentClassPermanent)
+	validMembership := func(memberID string) *metastorev1.MembershipState {
+		return &metastorev1.MembershipState{
+			Members: []*metastorev1.MembershipMember{
+				{RaftId: 1, MemberId: memberID, Role: metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER},
+			},
+		}
+	}
+	snapshotWith := func(
+		membership *metastorev1.MembershipState,
+		transactions []*metastorev1.TransactionRecord,
+		uploadIntents []*metastorev1.UploadIntentRecord,
+		commandReceipts []*metastorev1.CommandReceiptRecord,
+	) *metastorev1.ShardSnapshot {
+		return &metastorev1.ShardSnapshot{
+			SchemaVersion:   CurrentSchemaVersion,
+			ShardId:         "tenant-txn",
+			Membership:      membership,
+			Documents:       []*metastorev1.DocumentRecord{DocumentRecord(document)},
+			Transactions:    transactions,
+			UploadIntents:   uploadIntents,
+			CommandReceipts: commandReceipts,
+		}
+	}
+
+	tests := []struct {
+		name     string
+		snapshot *metastorev1.ShardSnapshot
+	}{
+		{
+			name:     "missing membership member id",
+			snapshot: snapshotWith(validMembership(""), nil, nil, nil),
+		},
+		{
+			name: "invalid transaction state",
+			snapshot: snapshotWith(validMembership("member-a"), []*metastorev1.TransactionRecord{{
+				SchemaVersion: CurrentSchemaVersion,
+				TenantId:      document.Identity.TenantID,
+				TransactionId: document.Identity.TransactionID,
+			}}, nil, nil),
+		},
+		{
+			name: "invalid upload state enum",
+			snapshot: snapshotWith(validMembership("member-a"), nil, []*metastorev1.UploadIntentRecord{{
+				SchemaVersion: CurrentSchemaVersion,
+				BlockId:       "block-1",
+				State:         metastorev1.UploadState(math.MaxUint16 + 1),
+			}}, nil),
+		},
+		{
+			name: "invalid command receipt checksum",
+			snapshot: snapshotWith(validMembership("member-a"), nil, nil, []*metastorev1.CommandReceiptRecord{{
+				SchemaVersion: CurrentSchemaVersion,
+				CommandId:     "command-1",
+				CommandSha256: []byte{1, 2, 3},
+			}}),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := MarshalShardSnapshot(tc.snapshot); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("marshal snapshot error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
 func sampleShardCommand() *metastorev1.ShardCommand {
 	return &metastorev1.ShardCommand{
 		SchemaVersion: CurrentSchemaVersion,
