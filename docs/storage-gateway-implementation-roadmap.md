@@ -47,6 +47,11 @@ Observability and audit signal policy for issue `#20` is captured in
 Production dashboard and alert contracts for issue `#46` are captured in
 [Storage Gateway Dashboard And Alert Contract](storage-gateway-dashboard-alert-contract.md).
 
+The multi-member runtime contract for issue `#240` is captured in
+[Multi-Member Runtime Contract](multi-member-runtime-contract.md). It is the
+dependency root for member identity, peer discovery, admin aggregation,
+multi-member routing, and replicated write ACK validation work.
+
 Production operator runbooks for issue `#47` are captured in
 [Storage Gateway Operator Runbooks](storage-gateway-operator-runbooks.md).
 
