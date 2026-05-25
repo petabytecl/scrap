@@ -598,7 +598,7 @@ func TestCrashAfterPrepareSyncLeavesDocumentInvisible(t *testing.T) {
 		t.Fatalf("prepared documents = %#v, want prepared document invisible", prepared)
 	}
 	readLength := prepared[0].Length
-	testutil.RequireNoErrorf(t, reopened.blocks.VerifyRange(prepared[0].Location, 0, &readLength), "verify prepared local bytes")
+	testutil.RequireNoErrorf(t, reopened.blocks.VerifyRange(blockstoreRecord(prepared[0].Location), 0, &readLength), "verify prepared local bytes")
 }
 
 func TestCrashAfterMetadataApplyKeepsCommittedDocumentRetryable(t *testing.T) {
@@ -1081,10 +1081,10 @@ func TestReadDocumentFallsBackToVerifiedBackendCopy(t *testing.T) {
 }
 
 func TestVerificationWindowAcceptsFrameAtSegmentOffsetZero(t *testing.T) {
-	start, end, err := verificationWindow(blockstore.Record{
+	start, end, err := verificationWindow(metastore.Location{
 		StoredOffset: 0,
 		StoredLength: 4,
-		Frames: []blockstore.FrameRecord{
+		Frames: []metastore.FrameRecord{
 			{SegmentOffset: 0, SegmentLength: 4},
 		},
 	}, 0, 4)
@@ -1094,11 +1094,11 @@ func TestVerificationWindowAcceptsFrameAtSegmentOffsetZero(t *testing.T) {
 }
 
 func TestVerificationWindowKeepsOffsetZeroStartAcrossFrames(t *testing.T) {
-	start, end, err := verificationWindow(blockstore.Record{
+	start, end, err := verificationWindow(metastore.Location{
 		StoredOffset:  0,
 		StoredLength:  1536,
 		LogicalSHA256: sha256.Sum256([]byte("unused")),
-		Frames: []blockstore.FrameRecord{
+		Frames: []metastore.FrameRecord{
 			{SegmentOffset: 0, SegmentLength: 512},
 			{SegmentOffset: 512, SegmentLength: 512},
 			{SegmentOffset: 1024, SegmentLength: 512},
@@ -1110,10 +1110,10 @@ func TestVerificationWindowKeepsOffsetZeroStartAcrossFrames(t *testing.T) {
 }
 
 func TestVerificationWindowRejectsWindowStartingAfterSelection(t *testing.T) {
-	_, _, err := verificationWindow(blockstore.Record{
+	_, _, err := verificationWindow(metastore.Location{
 		StoredOffset: 0,
 		StoredLength: 1024,
-		Frames: []blockstore.FrameRecord{
+		Frames: []metastore.FrameRecord{
 			{SegmentOffset: 256, SegmentLength: 512},
 		},
 	}, 0, 512)
@@ -1125,11 +1125,11 @@ func TestVerificationWindowRejectsWindowStartingAfterSelection(t *testing.T) {
 func TestVerifyFetchedBackendWindowRejectsFrameBeforeWindow(t *testing.T) {
 	frameData := []byte("data")
 	frameSHA256 := sha256.Sum256(frameData)
-	err := verifyFetchedBackendWindow(blockstore.Record{
+	err := verifyFetchedBackendWindow(metastore.Location{
 		StoredOffset:  0,
 		StoredLength:  uint64(len(frameData)),
 		LogicalSHA256: frameSHA256,
-		Frames: []blockstore.FrameRecord{
+		Frames: []metastore.FrameRecord{
 			{SegmentOffset: 0, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
 		},
 	}, 0, uint64(len(frameData)), 1, frameData)
@@ -1141,11 +1141,11 @@ func TestVerifyFetchedBackendWindowRejectsFrameBeforeWindow(t *testing.T) {
 func TestVerifyFetchedBackendWindowRejectsFrameBeyondFetchedData(t *testing.T) {
 	frameData := []byte("data")
 	frameSHA256 := sha256.Sum256(frameData)
-	err := verifyFetchedBackendWindow(blockstore.Record{
+	err := verifyFetchedBackendWindow(metastore.Location{
 		StoredOffset:  0,
 		StoredLength:  uint64(len(frameData)),
 		LogicalSHA256: frameSHA256,
-		Frames: []blockstore.FrameRecord{
+		Frames: []metastore.FrameRecord{
 			{SegmentOffset: 0, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
 		},
 	}, 0, uint64(len(frameData)), 0, frameData[:len(frameData)-1])
@@ -1157,7 +1157,7 @@ func TestVerifyFetchedBackendWindowRejectsFrameBeyondFetchedData(t *testing.T) {
 func TestVerifyFetchedBackendWindowWithoutFrames(t *testing.T) {
 	documentData := []byte("whole")
 	documentSHA256 := sha256.Sum256(documentData)
-	record := blockstore.Record{
+	record := metastore.Location{
 		StoredOffset:  7,
 		StoredLength:  uint64(len(documentData)),
 		LogicalSHA256: documentSHA256,
@@ -1187,7 +1187,7 @@ func TestVerifyFetchedBackendWindowFrameSelectionAndChecksum(t *testing.T) {
 	frameSHA256 := sha256.Sum256(frameData)
 	for _, tc := range []struct {
 		name   string
-		record blockstore.Record
+		record metastore.Location
 		offset uint64
 		length uint64
 		data   []byte
@@ -1195,7 +1195,7 @@ func TestVerifyFetchedBackendWindowFrameSelectionAndChecksum(t *testing.T) {
 	}{
 		{
 			name: "skips frame outside selection",
-			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+			record: metastore.Location{StoredLength: 16, Frames: []metastore.FrameRecord{
 				{SegmentOffset: 8, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
 			}},
 			offset: 0,
@@ -1203,7 +1203,7 @@ func TestVerifyFetchedBackendWindowFrameSelectionAndChecksum(t *testing.T) {
 		},
 		{
 			name: "accepts selected frame",
-			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+			record: metastore.Location{StoredLength: 16, Frames: []metastore.FrameRecord{
 				{SegmentOffset: 8, SegmentLength: uint64(len(frameData)), SHA256: frameSHA256},
 			}},
 			offset: 8,
@@ -1212,7 +1212,7 @@ func TestVerifyFetchedBackendWindowFrameSelectionAndChecksum(t *testing.T) {
 		},
 		{
 			name: "rejects frame checksum mismatch",
-			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+			record: metastore.Location{StoredLength: 16, Frames: []metastore.FrameRecord{
 				{SegmentOffset: 8, SegmentLength: uint64(len(frameData))},
 			}},
 			offset: 8,
@@ -1222,7 +1222,7 @@ func TestVerifyFetchedBackendWindowFrameSelectionAndChecksum(t *testing.T) {
 		},
 		{
 			name: "rejects frame offset overflow",
-			record: blockstore.Record{StoredLength: 16, Frames: []blockstore.FrameRecord{
+			record: metastore.Location{StoredLength: 16, Frames: []metastore.FrameRecord{
 				{SegmentOffset: ^uint64(0), SegmentLength: 2},
 			}},
 			offset: 0,
@@ -3587,7 +3587,7 @@ func writeLocalReadVerificationDocument(t *testing.T, app *Application, doc iden
 	return stored
 }
 
-func corruptStoredByte(t *testing.T, app *Application, record blockstore.Record, offset uint64) {
+func corruptStoredByte(t *testing.T, app *Application, record metastore.Location, offset uint64) {
 	t.Helper()
 	file, err := os.OpenFile(app.blocks.BlockPath(record.BlockID), os.O_RDWR, 0)
 	testutil.RequireNoErrorf(t, err, "open block")

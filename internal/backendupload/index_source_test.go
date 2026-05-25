@@ -42,7 +42,7 @@ func TestUploadBlockStoresReadableIndexFromMetastore(t *testing.T) {
 		LifecycleState:   metastore.LifecycleStateActive,
 		RestoreState:     metastore.RestoreStateHot,
 		UploadState:      metastore.UploadStatePending,
-		Location:         record,
+		Location:         metastoreLocationFromBlockRecord(record),
 	}
 	testutil.RequireNoErrorf(t, metadataStore.PutDocument(document), "put document metadata")
 	intent := testUploadIntent(record.BlockID)
@@ -90,6 +90,26 @@ func requireUploadedIndexDocument(t *testing.T, doc *storagev1.IndexDocumentReco
 	testutil.RequireEqualf(t, doc.GetStoredLength(), record.StoredLength, "index document stored length")
 	testutil.RequireEqualf(t, doc.GetLogicalLength(), record.StoredLength, "index document logical length")
 	testutil.RequireTruef(t, bytes.Equal(doc.GetLogicalSha256(), record.LogicalSHA256[:]), "index document logical sha256")
+}
+
+func metastoreLocationFromBlockRecord(record blockstore.Record) metastore.Location {
+	out := metastore.Location{
+		BlockID:       record.BlockID,
+		StoredOffset:  record.StoredOffset,
+		StoredLength:  record.StoredLength,
+		LogicalSHA256: record.LogicalSHA256,
+		StoredSHA256:  record.StoredSHA256,
+		Frames:        make([]metastore.FrameRecord, 0, len(record.Frames)),
+	}
+	for _, frame := range record.Frames {
+		out.Frames = append(out.Frames, metastore.FrameRecord{
+			FrameOffset:   frame.FrameOffset,
+			SegmentOffset: frame.SegmentOffset,
+			SegmentLength: frame.SegmentLength,
+			SHA256:        frame.SHA256,
+		})
+	}
+	return out
 }
 
 func openTestMetastore(t *testing.T) *metastore.Store {

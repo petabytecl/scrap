@@ -8,7 +8,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/petabytecl/scrap/internal/blockstore"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -351,7 +350,7 @@ func importDocument(document *publishedv1.PublishedDocument) (metastore.Document
 		LifecycleState:              metastore.LifecycleState(enums.lifecycleState),
 		UploadState:                 metastore.UploadStateUploaded,
 		Tags:                        clonePublishedTags(document.GetTags()),
-		Location: blockstore.Record{
+		Location: metastore.Location{
 			BlockID:       location.GetBlockId(),
 			StoredOffset:  location.GetStoredOffset(),
 			StoredLength:  location.GetStoredLength(),
@@ -483,11 +482,11 @@ func importTransaction(transaction *publishedv1.PublishedTransaction) (metastore
 	return imported, nil
 }
 
-func importFrames(frames []*publishedv1.PublishedFrame) ([]blockstore.FrameRecord, error) {
+func importFrames(frames []*publishedv1.PublishedFrame) ([]metastore.FrameRecord, error) {
 	if len(frames) == 0 {
 		return nil, invalidArtifact("document frames are required")
 	}
-	out := make([]blockstore.FrameRecord, 0, len(frames))
+	out := make([]metastore.FrameRecord, 0, len(frames))
 	for i, frame := range frames {
 		if frame == nil {
 			return nil, invalidArtifact("frame %d is required", i)
@@ -499,7 +498,7 @@ func importFrames(frames []*publishedv1.PublishedFrame) ([]blockstore.FrameRecor
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, blockstore.FrameRecord{
+		out = append(out, metastore.FrameRecord{
 			FrameOffset:   frame.GetFrameOffset(),
 			SegmentOffset: frame.GetSegmentOffset(),
 			SegmentLength: frame.GetSegmentLength(),

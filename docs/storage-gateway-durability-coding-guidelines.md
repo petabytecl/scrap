@@ -112,6 +112,21 @@ or CLI transport boundaries. Storage, shard, repair, backend, and metadata
 packages must not depend on `google.golang.org/grpc/status` or choose status
 codes directly.
 
+Concrete mapping pattern:
+
+```text
+internal/localstorage:
+  return appstatus.New(appstatus.CodeDataLoss, "stored bytes failed checksum")
+
+internal/api:
+  call storageapp.DocumentApplication
+  map the returned appstatus error with ToGRPCError
+  attach client-visible details only after validation/sanitization
+```
+
+Core packages own the durable failure class and retry semantics. Transport
+adapters own client status codes, error details, and message redaction.
+
 Retry rules:
 
 - retries must be bounded by count, total time, and backoff policy;

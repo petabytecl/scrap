@@ -9,7 +9,6 @@ import (
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/petabytecl/scrap/internal/blockstore"
 	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/testutil"
@@ -836,12 +835,12 @@ func sampleDocument(name string, class DocumentClass) Document {
 		Tags: map[string]string{
 			"workflow": "billing",
 		},
-		Location: blockstore.Record{
+		Location: Location{
 			BlockID:       "018f6d86-7a22-7abc-8def-123456789abc",
 			StoredOffset:  64,
 			StoredLength:  42,
 			LogicalSHA256: logicalSHA,
-			Frames: []blockstore.FrameRecord{
+			Frames: []FrameRecord{
 				{
 					FrameOffset:   64,
 					SegmentOffset: 64,

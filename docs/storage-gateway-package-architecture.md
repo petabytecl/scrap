@@ -74,6 +74,13 @@ or backend adapters.
 Storage core uses explicit internal Go structs for identities, physical
 references, lifecycle state, operation state, and invariants.
 
+`internal/metastore` owns logical index metadata. Its `Document.Location` value
+records the provider-neutral location fields that are serialized into metadata
+and published snapshots; it must not expose `internal/blockstore.Record` or
+other physical IO structs in its public model. Workflow packages that need to
+verify or serve local bytes convert the metastore location into a blockstore
+record at the adapter boundary.
+
 Public and admin request/response protobufs are boundary formats. They should
 be converted at API, admin, CLI, metadata serialization, published metadata, or
 snapshot boundaries. New storage workflow APIs must not accept or return public
@@ -111,14 +118,17 @@ These rules are intentionally reviewable now and automatable later.
    `internal/raftmeta`, and `internal/published` must not import gRPC status,
    public API handlers, CLI packages, backend provider-specific packages, or
    process wiring.
-7. Provider-specific backend packages depend inward on `internal/backend`; the
+7. `internal/metastore` must not import `internal/blockstore`; metadata records
+   mirror durable logical location fields instead of reusing physical IO record
+   types.
+8. Provider-specific backend packages depend inward on `internal/backend`; the
    provider-neutral backend package must not import provider SDK packages.
-8. `internal/cryptoenv` owns the OpenBao client boundary. Storage core depends
+9. `internal/cryptoenv` owns the OpenBao client boundary. Storage core depends
    on crypto envelope interfaces or value types, not on OpenBao client types.
-9. `internal/observe` may define low-cardinality metric/log/trace helpers, but
+10. `internal/observe` may define low-cardinality metric/log/trace helpers, but
    domain packages must not call global loggers, global meters, or process
    singletons directly.
-10. Shared utility packages are allowed only when they have a narrow owner and
+11. Shared utility packages are allowed only when they have a narrow owner and
     stable meaning. Do not create generic `internal/common`, `internal/util`,
     or `internal/core` dumping grounds.
 
@@ -174,6 +184,7 @@ internal/published -> internal/gen/scrap/published/v1
 ```text
 internal/blockstore -> internal/api
 internal/blockstore -> google.golang.org/grpc/status
+internal/metastore -> internal/blockstore
 internal/metastore -> internal/node
 internal/raftmeta -> internal/backend/s3
 internal/backend -> internal/backend/fs

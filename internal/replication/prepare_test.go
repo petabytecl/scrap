@@ -232,6 +232,80 @@ func TestValidatePreparedBytesAllowsStoredHashDifferentFromLogicalHash(t *testin
 	testutil.RequireNoErrorf(t, ValidatePreparedBytes(document, testPreparedBytes), "validate prepared bytes with different logical hash")
 }
 
+func TestPreparedDocumentFromMetadataCopiesLocationFrames(t *testing.T) {
+	logicalSHA := sha256Bytes([]byte("logical"))
+	storedSHA := sha256Bytes([]byte("stored"))
+	frameSHA := sha256Bytes([]byte("frame"))
+	document := metastore.Document{
+		Identity: identity.Document{
+			TenantID:      "tenant",
+			TransactionID: "txn",
+			DocumentName:  "invoice.xml",
+		},
+		PriorityClass: metastore.PriorityClassCriticalIngest,
+		Length:        42,
+		LogicalSHA256: logicalSHA,
+		StoredSHA256:  storedSHA,
+		Location: metastore.Location{
+			BlockID:      "block-1",
+			StoredOffset: 64,
+			StoredLength: 42,
+			Frames: []metastore.FrameRecord{
+				{
+					FrameOffset:   8,
+					SegmentOffset: 64,
+					SegmentLength: 42,
+					SHA256:        frameSHA,
+				},
+			},
+		},
+	}
+
+	prepared := PreparedDocumentFromMetadata(document)
+	document.Location.Frames[0].FrameOffset = 999
+
+	testutil.RequireDeepEqualf(t, prepared, PreparedDocument{
+		Identity:      document.Identity,
+		PriorityClass: metastore.PriorityClassCriticalIngest,
+		BlockID:       "block-1",
+		StoredOffset:  64,
+		StoredLength:  42,
+		LogicalSHA256: logicalSHA,
+		StoredSHA256:  storedSHA,
+		Frames: []blockstore.FrameRecord{
+			{
+				FrameOffset:   8,
+				SegmentOffset: 64,
+				SegmentLength: 42,
+				SHA256:        frameSHA,
+			},
+		},
+	}, "prepared document")
+}
+
+func TestReplicaRefsReturnsMetastoreReplicaRefs(t *testing.T) {
+	storedSHA := sha256Bytes([]byte("stored"))
+	replicas := ReplicaRefs([]Receipt{
+		{
+			MemberID:     "member-a",
+			BlockID:      "block-1",
+			StoredOffset: 64,
+			StoredLength: 42,
+			StoredSHA256: storedSHA,
+		},
+	})
+
+	testutil.RequireDeepEqualf(t, replicas, []metastore.ReplicaRef{
+		{
+			MemberID:     "member-a",
+			BlockID:      "block-1",
+			StoredOffset: 64,
+			StoredLength: 42,
+			StoredSHA256: storedSHA,
+		},
+	}, "replica refs")
+}
+
 var testPreparedBytes = []byte("replicated document bytes")
 
 func testPreparedDocument(priority metastore.PriorityClass) PreparedDocument {

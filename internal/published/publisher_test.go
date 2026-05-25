@@ -10,7 +10,6 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
-	"github.com/petabytecl/scrap/internal/blockstore"
 	publishedv1 "github.com/petabytecl/scrap/internal/gen/scrap/published/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -167,12 +166,12 @@ func publishedTestDocument(data []byte) metastore.Document {
 		FinalizedAt:      time.Unix(2, 0).UTC(),
 		Availability:     metastore.AvailabilityHot,
 		LifecycleState:   metastore.LifecycleStateActive,
-		Location: blockstore.Record{
+		Location: metastore.Location{
 			BlockID:       "block-1",
 			StoredOffset:  0,
 			StoredLength:  uint64(len(data)),
 			LogicalSHA256: sum,
-			Frames: []blockstore.FrameRecord{
+			Frames: []metastore.FrameRecord{
 				{
 					FrameOffset:   0,
 					SegmentOffset: 0,
