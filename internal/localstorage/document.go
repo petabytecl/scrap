@@ -92,7 +92,7 @@ func (a *verificationEngine) verifyLocalDocumentRefAndQueueRepair(ctx context.Co
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if document.RestoreState != metastore.RestoreStateHot || document.Availability != metastore.AvailabilityHot {
+	if !document.IsHot() {
 		return nil
 	}
 	length := document.Length
@@ -1128,10 +1128,10 @@ func readIntegrityError(document metastore.Document, attemptedSources []string, 
 }
 
 func unavailableReadStateError(document metastore.Document) error {
-	switch document.Availability {
-	case metastore.AvailabilityCold, metastore.AvailabilityRestorePending:
+	switch {
+	case document.RequiresBackendRestore():
 		return restorePendingError(document)
-	case metastore.AvailabilityCryptoUnavailable:
+	case document.IsCryptoUnavailable():
 		return cryptoUnavailableError(document)
 	default:
 		return nil
@@ -1147,7 +1147,7 @@ func restorePendingError(document metastore.Document) error {
 		},
 		AffectedBlockIds: []string{document.Location.BlockID},
 		RestoreState:     restoreStateText(document.RestoreState),
-		RestoreQueued:    document.RestoreState == metastore.RestoreStateRestorePending,
+		RestoreQueued:    document.IsRestoreQueued(),
 		RetryHint: &scrapv1.RetryHint{
 			Retryable: true,
 			Reason:    "restore_pending",

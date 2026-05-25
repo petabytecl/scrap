@@ -122,26 +122,15 @@ func (s *Store) putDocument(batch *pebble.Batch, document Document) error {
 	if err != nil {
 		return err
 	}
-	if transaction.State != TransactionStateOpen {
-		return fmt.Errorf("%w: transaction %s/%s is not open", ErrTransactionClosed, transaction.Identity.TenantID, transaction.Identity.TransactionID)
+	transaction, err = transaction.AppendDocument(document.DocumentClass)
+	if err != nil {
+		return err
 	}
-	transaction = incrementTransactionDocumentCount(transaction, document.DocumentClass)
 	transactionValue, err := marshalTransaction(transaction)
 	if err != nil {
 		return err
 	}
 	return s.putDocumentIndexes(batch, document, docKey, value, transactionValue, transaction)
-}
-
-func incrementTransactionDocumentCount(transaction Transaction, class DocumentClass) Transaction {
-	transaction.DocumentCount++
-	switch class {
-	case DocumentClassPermanent:
-		transaction.PermanentDocumentCount++
-	case DocumentClassEphemeral:
-		transaction.EphemeralDocumentCount++
-	}
-	return transaction
 }
 
 func (s *Store) putDocumentIndexes(batch *pebble.Batch, document Document, docKey, value, transactionValue []byte, transaction Transaction) error {
@@ -397,15 +386,13 @@ func (s *Store) completeTransaction(batch *pebble.Batch, transaction identity.Tr
 	if !ok {
 		return Transaction{}, ErrNotFound
 	}
-	if current.State == TransactionStateCompleted {
+	current, changed, err := current.Complete(completedAt, tags)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if !changed {
 		return current, nil
 	}
-	if current.State != TransactionStateOpen {
-		return Transaction{}, fmt.Errorf("%w: transaction %s/%s is not open", ErrTransactionClosed, current.Identity.TenantID, current.Identity.TransactionID)
-	}
-	current.State = TransactionStateCompleted
-	current.CompletedAt = &completedAt
-	current.Tags = cloneTags(tags)
 	value, err := marshalTransaction(current)
 	if err != nil {
 		return Transaction{}, err
