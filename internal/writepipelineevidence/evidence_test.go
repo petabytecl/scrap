@@ -218,6 +218,38 @@ func TestRunWritesThroughApplicationBoundary(t *testing.T) {
 	}
 }
 
+func TestFailedSampleClassifiesWriteErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "canceled", err: context.Canceled, want: "transient"},
+		{name: "deadline", err: context.DeadlineExceeded, want: "transient"},
+		{name: "timeout text", err: errors.New("backend timeout"), want: "transient"},
+		{name: "closed text", err: errors.New("writer closed"), want: "closed"},
+		{name: "generic", err: errors.New("invalid result"), want: "error"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyError(test.err); got != test.want {
+				t.Fatalf("classifyError = %q, want %q", got, test.want)
+			}
+			sample := failedSample("doc-000001.bin", 4096, test.err)
+			if sample.DocumentName != "doc-000001.bin" || sample.Bytes != 4096 {
+				t.Fatalf("failedSample = %#v, want document metadata", sample)
+			}
+			if sample.ErrorClass != test.want {
+				t.Fatalf("failedSample class = %q, want %q", sample.ErrorClass, test.want)
+			}
+			if sample.Error != test.err.Error() {
+				t.Fatalf("failedSample error = %q, want %q", sample.Error, test.err.Error())
+			}
+		})
+	}
+}
+
 func hasViolation(violations []ThresholdViolation, code string) bool {
 	for _, violation := range violations {
 		if violation.Code == code {
