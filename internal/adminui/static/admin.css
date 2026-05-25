@@ -386,7 +386,9 @@ th {
 }
 
 .warning-list,
-.error-stack {
+.error-stack,
+.coverage-grid,
+.signal-list {
   display: grid;
   gap: 12px;
 }
@@ -408,6 +410,65 @@ th {
   border-color: rgba(239, 68, 68, 0.36);
   background: rgba(239, 68, 68, 0.1);
   color: #fecaca;
+}
+
+.coverage-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.signal {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 76px;
+  padding: 16px;
+  border: 1px solid var(--pb-border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.signal strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.signal p {
+  margin: 0;
+  color: var(--pb-fg3);
+  font-size: 13px;
+}
+
+.signal span {
+  flex: 0 0 auto;
+  color: var(--pb-fg3);
+  font-family: var(--pb-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.signal.healthy {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.signal.healthy span {
+  color: var(--pb-success);
+}
+
+.signal.warning {
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.signal.warning span {
+  color: var(--pb-warning);
+}
+
+.signal.external {
+  border-color: rgba(0, 147, 208, 0.3);
+}
+
+.signal.external span {
+  color: var(--pb-primary-hover);
 }
 
 @media (max-width: 900px) {

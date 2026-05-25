@@ -52,12 +52,35 @@ templ Shell(data DashboardData) {
 						</div>
 					</header>
 					<section id="main-content" class="view">
-						@Overview(data)
+						@View(data)
 					</section>
 				</main>
 			</div>
 		</body>
 	</html>
+}
+
+templ View(data DashboardData) {
+	switch data.ActiveView {
+		case "capacity":
+			@Capacity(data)
+		case "members":
+			@Members(data)
+		case "raft":
+			@Raft(data)
+		case "clients":
+			@Clients(data)
+		case "backend":
+			@Backend(data)
+		case "openbao":
+			@OpenBao(data)
+		case "operations":
+			@Operations(data)
+		case "repair":
+			@Repair(data)
+		default:
+			@Overview(data)
+	}
 }
 
 templ Overview(data DashboardData) {

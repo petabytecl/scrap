@@ -59,31 +59,21 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("start listeners: %w", err)
 	}
 	defer closeutil.Log("server", logPrintf, server)
-	metricsEndpoint, err := listenMetricsEndpoint(cfg.MetricsListenAddress)
+	httpEndpoints, err := listenHTTPEndpoints(cfg, apps)
 	if err != nil {
-		return fmt.Errorf("start metrics listener: %w", err)
+		return err
 	}
-	defer closeutil.Log("metrics endpoint", logPrintf, metricsEndpoint)
-	adminUIEndpoint, err := listenAdminUIEndpoint(cfg.AdminUIListenAddress, apps)
-	if err != nil {
-		return fmt.Errorf("start admin UI listener: %w", err)
-	}
-	if adminUIEndpoint != nil {
-		defer closeutil.Log("admin UI endpoint", logPrintf, adminUIEndpoint)
-	}
+	defer httpEndpoints.logClose(logPrintf)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	logger.Info("public grpc listening", "address", server.PublicAddress())
 	logger.Info("admin grpc listening", "address", server.AdminAddress())
-	logger.Info("metrics http listening", "address", metricsEndpoint.Address())
-	if adminUIEndpoint != nil {
-		logger.Info("admin UI http listening", "address", adminUIEndpoint.Address())
-	}
+	httpEndpoints.logListening(logger)
 	go reloadAuthorizationPolicy(ctx, server, logger)
 	startBackgroundRunners(ctx, cfg, apps, uploadRunner, operationExecutor, logger)
-	if err := serveUntilStopped(ctx, server, metricsEndpoint, adminUIEndpoint); err != nil {
+	if err := serveUntilStopped(ctx, server, httpEndpoints); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
@@ -153,6 +143,24 @@ type httpEndpoint struct {
 	closeErr error
 }
 
+type httpEndpoints struct {
+	metrics *httpEndpoint
+	adminUI *httpEndpoint
+}
+
+func listenHTTPEndpoints(cfg config.Config, apps node.Applications) (httpEndpoints, error) {
+	metricsEndpoint, err := listenMetricsEndpoint(cfg.MetricsListenAddress)
+	if err != nil {
+		return httpEndpoints{}, fmt.Errorf("start metrics listener: %w", err)
+	}
+	adminUIEndpoint, err := listenAdminUIEndpoint(cfg.AdminUIListenAddress, apps)
+	if err != nil {
+		_ = metricsEndpoint.Close()
+		return httpEndpoints{}, fmt.Errorf("start admin UI listener: %w", err)
+	}
+	return httpEndpoints{metrics: metricsEndpoint, adminUI: adminUIEndpoint}, nil
+}
+
 func listenMetricsEndpoint(address string) (*httpEndpoint, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", observe.Handler())
@@ -165,7 +173,7 @@ func listenMetricsEndpoint(address string) (*httpEndpoint, error) {
 
 func listenAdminUIEndpoint(address string, apps node.Applications) (*httpEndpoint, error) {
 	if strings.TrimSpace(address) == "" {
-		return nil, nil
+		return disabledHTTPEndpoint(), nil
 	}
 	endpoint, err := listenHTTPEndpoint(address, adminui.NewHandler(adminui.Options{
 		Inspect:    apps.Inspect,
@@ -182,7 +190,7 @@ func listenHTTPEndpoint(address string, handler http.Handler) (*httpEndpoint, er
 	listenConfig := net.ListenConfig{}
 	listener, err := listenConfig.Listen(context.Background(), "tcp", address)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listen tcp %q: %w", address, err)
 	}
 	return &httpEndpoint{
 		listener: listener,
@@ -191,6 +199,10 @@ func listenHTTPEndpoint(address string, handler http.Handler) (*httpEndpoint, er
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}, nil
+}
+
+func disabledHTTPEndpoint() *httpEndpoint {
+	return nil
 }
 
 func (e *httpEndpoint) Address() string {
@@ -220,11 +232,25 @@ func (e *httpEndpoint) Close() error {
 	return e.closeErr
 }
 
-func serveUntilStopped(ctx context.Context, server *node.Server, metricsEndpoint, adminUIEndpoint *httpEndpoint) error {
-	metricsErrCh := metricsEndpoint.Serve()
+func (e httpEndpoints) logClose(logPrintf closeutil.Logger) {
+	closeutil.Log("metrics endpoint", logPrintf, e.metrics)
+	if e.adminUI != nil {
+		closeutil.Log("admin UI endpoint", logPrintf, e.adminUI)
+	}
+}
+
+func (e httpEndpoints) logListening(logger *slog.Logger) {
+	logger.Info("metrics http listening", "address", e.metrics.Address())
+	if e.adminUI != nil {
+		logger.Info("admin UI http listening", "address", e.adminUI.Address())
+	}
+}
+
+func serveUntilStopped(ctx context.Context, server *node.Server, endpoints httpEndpoints) error {
+	metricsErrCh := endpoints.metrics.Serve()
 	var adminUIErrCh <-chan error
-	if adminUIEndpoint != nil {
-		adminUIErrCh = adminUIEndpoint.Serve()
+	if endpoints.adminUI != nil {
+		adminUIErrCh = endpoints.adminUI.Serve()
 	}
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -233,18 +259,18 @@ func serveUntilStopped(ctx context.Context, server *node.Server, metricsEndpoint
 
 	select {
 	case err := <-serverErrCh:
-		closeErr := closeHTTPEndpoints(metricsEndpoint, adminUIEndpoint)
+		closeErr := closeHTTPEndpoints(endpoints.metrics, endpoints.adminUI)
 		return errors.Join(err, closeErr)
 	case err := <-metricsErrCh:
 		server.Stop()
-		closeErr := closeOptionalHTTPEndpoint(adminUIEndpoint)
+		closeErr := closeOptionalHTTPEndpoint(endpoints.adminUI)
 		if err != nil {
 			err = fmt.Errorf("metrics http: %w", err)
 		}
 		return errors.Join(err, closeErr, <-serverErrCh)
 	case err := <-adminUIErrCh:
 		server.Stop()
-		closeErr := metricsEndpoint.Close()
+		closeErr := endpoints.metrics.Close()
 		if err != nil {
 			err = fmt.Errorf("admin UI http: %w", err)
 		}

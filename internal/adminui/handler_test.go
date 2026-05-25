@@ -15,7 +15,62 @@ import (
 )
 
 func TestHandlerServesOverviewAndCapacityPartials(t *testing.T) {
-	handler := NewHandler(Options{
+	handler := populatedHandler()
+
+	overview := request(handler, "/admin/")
+	requireOK(t, overview)
+	overviewBody := overview.Body.String()
+	requireContains(t, overviewBody, "S.C.R.A.P. Admin")
+	requireContains(t, overviewBody, "4.0 KiB")
+	requireContains(t, overviewBody, "2.0 KiB/day")
+	requireContains(t, overviewBody, "2026-05-25T12:00:00Z")
+
+	capacity := request(handler, "/admin/views/capacity")
+	requireOK(t, capacity)
+	capacityBody := capacity.Body.String()
+	requireContains(t, capacityBody, "local-profile")
+	requireContains(t, capacityBody, "LOW_RUNWAY")
+	requireContains(t, capacityBody, "two days remaining")
+}
+
+func TestHandlerServesExpandedDashboardViewRoutes(t *testing.T) {
+	handler := populatedHandler()
+	tests := map[string]string{
+		"/admin/views/members":  "Member inventory surface",
+		"/admin/views/raft":     "Consensus evidence surface",
+		"/admin/views/clients":  "Client connection coverage",
+		"/admin/views/backend":  "Upload and restore evidence",
+		"/admin/views/openbao":  "Envelope and key custody surface",
+		"/admin/views/repair":   "Repair and corruption evidence",
+		"/admin/views/overview": "Production write ACK",
+	}
+	for target, want := range tests {
+		response := request(handler, target)
+		requireOK(t, response)
+		requireContains(t, response.Body.String(), want)
+	}
+}
+
+func TestHandlerServesEmbeddedStaticAssets(t *testing.T) {
+	response := request(NewHandler(Options{}), "/admin/static/admin.css")
+	requireOK(t, response)
+	requireContains(t, response.Body.String(), ".app-shell")
+}
+
+func TestHandlerReportsUnavailableInspectApplication(t *testing.T) {
+	response := request(NewHandler(Options{}), "/admin/views/overview")
+	requireOK(t, response)
+	requireContains(t, response.Body.String(), "inspect application is unavailable")
+}
+
+func request(handler http.Handler, target string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	return recorder
+}
+
+func populatedHandler() http.Handler {
+	return NewHandler(Options{
 		Inspect: fakeInspect{
 			summary: &adminv1.ClusterSummary{
 				ShardCount:            2,
@@ -38,43 +93,11 @@ func TestHandlerServesOverviewAndCapacityPartials(t *testing.T) {
 		Repair: fakeRepair{items: []*adminv1.RepairQueueItem{{}, {}}},
 		Now:    func() time.Time { return time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC) },
 	})
-
-	overview := request(handler, "/admin/")
-	requireStatus(t, overview, http.StatusOK)
-	overviewBody := overview.Body.String()
-	requireContains(t, overviewBody, "S.C.R.A.P. Admin")
-	requireContains(t, overviewBody, "4.0 KiB")
-	requireContains(t, overviewBody, "2.0 KiB/day")
-	requireContains(t, overviewBody, "2026-05-25T12:00:00Z")
-
-	capacity := request(handler, "/admin/views/capacity")
-	requireStatus(t, capacity, http.StatusOK)
-	capacityBody := capacity.Body.String()
-	requireContains(t, capacityBody, "local-profile")
-	requireContains(t, capacityBody, "LOW_RUNWAY")
-	requireContains(t, capacityBody, "two days remaining")
 }
 
-func TestHandlerServesEmbeddedStaticAssets(t *testing.T) {
-	response := request(NewHandler(Options{}), "/admin/static/admin.css")
-	requireStatus(t, response, http.StatusOK)
-	requireContains(t, response.Body.String(), ".app-shell")
-}
-
-func TestHandlerReportsUnavailableInspectApplication(t *testing.T) {
-	response := request(NewHandler(Options{}), "/admin/views/overview")
-	requireStatus(t, response, http.StatusOK)
-	requireContains(t, response.Body.String(), "inspect application is unavailable")
-}
-
-func request(handler http.Handler, target string) *httptest.ResponseRecorder {
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
-	return recorder
-}
-
-func requireStatus(t *testing.T, response *httptest.ResponseRecorder, want int) {
+func requireOK(t *testing.T, response *httptest.ResponseRecorder) {
 	t.Helper()
+	const want = http.StatusOK
 	if response.Code != want {
 		t.Fatalf("status = %d, want %d; body:\n%s", response.Code, want, response.Body.String())
 	}

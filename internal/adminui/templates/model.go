@@ -3,6 +3,7 @@ package templates
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/a-h/templ"
@@ -16,6 +17,7 @@ type DashboardData struct {
 	Capacity         CapacityData
 	Operations       []OperationData
 	RepairQueueCount int
+	Signals          []ReadinessSignal
 	Errors           []string
 }
 
@@ -59,6 +61,12 @@ type OperationData struct {
 	Message   string
 }
 
+type ReadinessSignal struct {
+	Name   string
+	State  string
+	Detail string
+}
+
 func navClass(data DashboardData, item NavItem) string {
 	if data.ActiveView == item.ID {
 		return "nav-item active"
@@ -89,8 +97,20 @@ func pageTitle(activeView string) string {
 	switch activeView {
 	case "capacity":
 		return "Capacity"
+	case "members":
+		return "Members"
+	case "raft":
+		return "Raft consensus"
+	case "clients":
+		return "Service mesh"
+	case "backend":
+		return "Backend"
+	case "openbao":
+		return "OpenBao"
 	case "operations":
 		return "Operations"
+	case "repair":
+		return "Repair"
 	default:
 		return "Overview"
 	}
@@ -111,7 +131,24 @@ func bytesText(value uint64) string {
 }
 
 func numberText(value uint64) string {
-	raw := fmt.Sprintf("%d", value)
+	return NumberText(value)
+}
+
+func countText(value int) string {
+	return CountText(value)
+}
+
+func NumberText(value uint64) string {
+	raw := strconv.FormatUint(value, 10)
+	return commaText(raw)
+}
+
+func CountText(value int) string {
+	raw := strconv.Itoa(value)
+	return commaText(raw)
+}
+
+func commaText(raw string) string {
 	var builder strings.Builder
 	for i, char := range raw {
 		if i > 0 && (len(raw)-i)%3 == 0 {
@@ -167,6 +204,19 @@ func shortState(state string) string {
 		return "unknown"
 	}
 	return state
+}
+
+func signalClass(state string) string {
+	switch state {
+	case "healthy":
+		return "signal healthy"
+	case "warning", "advisory":
+		return "signal warning"
+	case "external":
+		return "signal external"
+	default:
+		return "signal unknown"
+	}
 }
 
 func safeURL(value string) templ.SafeURL {

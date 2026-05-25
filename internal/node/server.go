@@ -293,10 +293,13 @@ func (s *Server) Close() error {
 
 func closeListener(listener net.Listener) error {
 	err := listener.Close()
+	if err == nil {
+		return nil
+	}
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
-	return err
+	return fmt.Errorf("close listener: %w", err)
 }
 
 type authorizationAuditSink struct {

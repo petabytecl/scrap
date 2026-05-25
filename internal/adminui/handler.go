@@ -17,6 +17,8 @@ import (
 	"github.com/petabytecl/scrap/internal/operations"
 )
 
+const warningRunwayDays = 7
+
 type Options struct {
 	Inspect    api.InspectApplication
 	Repair     api.RepairApplication
@@ -71,17 +73,27 @@ func (h *Handler) partial(w http.ResponseWriter, r *http.Request) {
 	if view == "." || view == "" {
 		view = "overview"
 	}
-	data := h.dashboard(r.Context(), view)
-	switch view {
-	case "overview":
-		h.render(w, r, templates.Overview(data))
-	case "capacity":
-		h.render(w, r, templates.Capacity(data))
-	case "operations":
-		h.render(w, r, templates.Operations(data))
-	default:
+	component := partialComponent(view)
+	if component == nil {
 		http.NotFound(w, r)
+		return
 	}
+	h.render(w, r, component(h.dashboard(r.Context(), view)))
+}
+
+func partialComponent(view string) func(templates.DashboardData) templ.Component {
+	components := map[string]func(templates.DashboardData) templ.Component{
+		"overview":   templates.Overview,
+		"capacity":   templates.Capacity,
+		"members":    templates.Members,
+		"raft":       templates.Raft,
+		"clients":    templates.Clients,
+		"backend":    templates.Backend,
+		"openbao":    templates.OpenBao,
+		"operations": templates.Operations,
+		"repair":     templates.Repair,
+	}
+	return components[view]
 }
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, component templ.Component) {
@@ -99,12 +111,19 @@ func (h *Handler) dashboard(ctx context.Context, activeView string) templates.Da
 	data.Nav = []templates.NavItem{
 		{ID: "overview", Label: "Overview", Group: "Cluster", Href: "/admin/views/overview"},
 		{ID: "capacity", Label: "Capacity", Group: "Cluster", Href: "/admin/views/capacity"},
+		{ID: "members", Label: "Members", Group: "Infrastructure", Href: "/admin/views/members"},
+		{ID: "raft", Label: "Raft consensus", Group: "Infrastructure", Href: "/admin/views/raft"},
+		{ID: "clients", Label: "Service mesh", Group: "Data plane", Href: "/admin/views/clients"},
+		{ID: "backend", Label: "Backend", Group: "Data plane", Href: "/admin/views/backend"},
+		{ID: "openbao", Label: "OpenBao", Group: "Data plane", Href: "/admin/views/openbao"},
 		{ID: "operations", Label: "Operations", Group: "Reliability", Href: "/admin/views/operations"},
+		{ID: "repair", Label: "Repair", Group: "Reliability", Href: "/admin/views/repair"},
 	}
 	h.loadSummary(ctx, &data)
 	h.loadCapacity(ctx, &data)
 	h.loadOperations(&data)
 	h.loadRepair(ctx, &data)
+	data.Signals = readinessSignals(data)
 	return data
 }
 
@@ -221,4 +240,109 @@ func timestampText(ts *timestamppb.Timestamp) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+func readinessSignals(data templates.DashboardData) []templates.ReadinessSignal {
+	signals := []templates.ReadinessSignal{
+		{
+			Name:   "Write admission",
+			State:  "advisory",
+			Detail: "production write ACK evidence remains in the release gate",
+		},
+		{
+			Name:   "Disk runway",
+			State:  runwayState(data.Capacity),
+			Detail: runwayDetail(data.Capacity),
+		},
+		{
+			Name:   "Backend lag",
+			State:  "unknown",
+			Detail: "backend upload lag requires live deployment evidence",
+		},
+		{
+			Name:   "Repair lag",
+			State:  repairState(data),
+			Detail: repairDetail(data),
+		},
+		{
+			Name:   "Restore lag",
+			State:  "unknown",
+			Detail: "restore workflow lag is not yet exposed by the local admin API",
+		},
+		{
+			Name:   "Corruption incidents",
+			State:  degradedState(data.Summary.DegradedDocumentCount),
+			Detail: degradedDetail(data.Summary.DegradedDocumentCount),
+		},
+		{
+			Name:   "Raft health",
+			State:  memberState(data.Summary.StorageMemberCount),
+			Detail: memberDetail(data.Summary.StorageMemberCount),
+		},
+		{
+			Name:   "OpenBao health",
+			State:  "external",
+			Detail: "OpenBao release evidence is collected outside this local UI",
+		},
+	}
+	return signals
+}
+
+func runwayState(capacity templates.CapacityData) string {
+	if !capacity.HasMeasuredIngressRate {
+		return "unknown"
+	}
+	if capacity.RunwayDays < warningRunwayDays {
+		return "warning"
+	}
+	return "healthy"
+}
+
+func runwayDetail(capacity templates.CapacityData) string {
+	if !capacity.HasMeasuredIngressRate {
+		return "ingress rate not measured locally"
+	}
+	return "estimated runway " + templates.NumberText(uint64(capacity.RunwayDays)) + " days"
+}
+
+func repairState(data templates.DashboardData) string {
+	if data.RepairQueueCount > 0 || data.Summary.DegradedDocumentCount > 0 {
+		return "warning"
+	}
+	return "healthy"
+}
+
+func repairDetail(data templates.DashboardData) string {
+	if data.RepairQueueCount == 0 {
+		return "repair queue empty"
+	}
+	return templates.CountText(data.RepairQueueCount) + " queued repair item(s)"
+}
+
+func degradedState(count uint32) string {
+	if count > 0 {
+		return "warning"
+	}
+	return "healthy"
+}
+
+func degradedDetail(count uint32) string {
+	if count == 0 {
+		return "no degraded documents reported"
+	}
+	return templates.NumberText(uint64(count)) + " degraded document(s) reported"
+}
+
+func memberState(count uint32) string {
+	if count == 0 {
+		return "unknown"
+	}
+	return "healthy"
+}
+
+func memberDetail(count uint32) string {
+	if count == 0 {
+		return "no storage members reported by local summary"
+	}
+	return templates.NumberText(uint64(count)) + " storage member(s) visible"
 }

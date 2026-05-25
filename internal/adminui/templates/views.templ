@@ -1,0 +1,140 @@
+package templates
+
+templ Members(data DashboardData) {
+	@Errors(data)
+	<section class="metrics-grid">
+		@Metric("Members", numberText(uint64(data.Summary.StorageMemberCount)), "storage members visible to admin summary")
+		@Metric("Shards", numberText(uint64(data.Summary.ShardCount)), "metadata partitions tracked locally")
+		@Metric("Repair queue", countText(data.RepairQueueCount), "items awaiting operator attention")
+	</section>
+	<section class="panel">
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">Infrastructure</div>
+				<strong>Member inventory surface</strong>
+			</div>
+		</div>
+		<div class="coverage-grid">
+			@CoverageItem("Live count", "healthy", "Cluster summary reports the storage member count.")
+			@CoverageItem("Detail route", "unknown", "Direct member detail pages need addressable member IDs from an admin list RPC.")
+			@CoverageItem("Kubernetes tab", "unknown", "Pod and node metadata are not exposed by the current admin API.")
+		</div>
+	</section>
+}
+
+templ Raft(data DashboardData) {
+	@Errors(data)
+	<section class="metrics-grid">
+		@Metric("Shard count", numberText(uint64(data.Summary.ShardCount)), "raft-backed metadata shards")
+		@Metric("Members", numberText(uint64(data.Summary.StorageMemberCount)), "voter/member visibility from summary")
+		@Metric("Pending ops", numberText(uint64(data.Summary.PendingOperationCount)), "operations that may affect consensus state")
+	</section>
+	<section class="panel">
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">Raft health</div>
+				<strong>Consensus evidence surface</strong>
+			</div>
+		</div>
+		@SignalList(data, "Raft health")
+	</section>
+}
+
+templ Clients(data DashboardData) {
+	@Errors(data)
+	<section class="panel">
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">Service mesh</div>
+				<strong>Client connection coverage</strong>
+			</div>
+		</div>
+		<div class="coverage-grid">
+			@CoverageItem("mTLS clients", "unknown", "Connected client telemetry needs a dedicated admin API surface.")
+			@CoverageItem("Active streams", "unknown", "gRPC stream accounting is not currently exported to this handler.")
+			@CoverageItem("Capability map", "unknown", "Authorization policy capabilities are enforced by gRPC interceptors but not yet rendered here.")
+		</div>
+	</section>
+}
+
+templ Backend(data DashboardData) {
+	@Errors(data)
+	<section class="metrics-grid">
+		@Metric("Storage used", bytesText(data.Summary.LocalBytesUsed), percentText(data.Summary.LocalBytesUsed, data.Summary.LocalBytesCapacity) + " of local capacity")
+		@Metric("Backend lag", "not exposed", "requires live backend upload evidence")
+		@Metric("Restore lag", "not exposed", "requires restore workflow telemetry")
+	</section>
+	<section class="panel">
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">Backend readiness</div>
+				<strong>Upload and restore evidence</strong>
+			</div>
+		</div>
+		@SignalList(data, "Backend lag")
+		@SignalList(data, "Restore lag")
+	</section>
+}
+
+templ OpenBao(data DashboardData) {
+	@Errors(data)
+	<section class="panel">
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">OpenBao</div>
+				<strong>Envelope and key custody surface</strong>
+			</div>
+		</div>
+		@SignalList(data, "OpenBao health")
+		<div class="coverage-grid">
+			@CoverageItem("Transit latency", "unknown", "OpenBao latency samples are produced by release evidence tooling, not the local UI yet.")
+			@CoverageItem("Key rotation", "external", "Key-retention and rotation evidence remain release artifacts.")
+			@CoverageItem("Audit device", "external", "Audit readiness is validated outside this process.")
+		</div>
+	</section>
+}
+
+templ Repair(data DashboardData) {
+	@Errors(data)
+	<section class="metrics-grid">
+		@Metric("Repair queue", countText(data.RepairQueueCount), "items returned by RepairApplication")
+		@Metric("Degraded", numberText(uint64(data.Summary.DegradedDocumentCount)), "documents requiring repair")
+		@Metric("Corruption incidents", numberText(uint64(data.Summary.DegradedDocumentCount)), "local proxy until dedicated incident telemetry exists")
+	</section>
+	<section class="panel">
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">Reliability</div>
+				<strong>Repair and corruption evidence</strong>
+			</div>
+		</div>
+		@SignalList(data, "Repair lag")
+		@SignalList(data, "Corruption incidents")
+	</section>
+}
+
+templ SignalList(data DashboardData, name string) {
+	<div class="signal-list">
+		for _, signal := range data.Signals {
+			if name == "" || signal.Name == name {
+				<div class={ signalClass(signal.State) }>
+					<div>
+						<strong>{ signal.Name }</strong>
+						<p>{ signal.Detail }</p>
+					</div>
+					<span>{ signal.State }</span>
+				</div>
+			}
+		}
+	</div>
+}
+
+templ CoverageItem(name string, state string, detail string) {
+	<div class={ signalClass(state) }>
+		<div>
+			<strong>{ name }</strong>
+			<p>{ detail }</p>
+		</div>
+		<span>{ state }</span>
+	</div>
+}

@@ -120,6 +120,7 @@ linters:
           allow:
             - $gostd
             - github.com/petabytecl/scrap
+            - github.com/a-h/templ
             - github.com/cockroachdb/pebble
             - github.com/prometheus/client_golang
             - github.com/prometheus/client_model

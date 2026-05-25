@@ -63,9 +63,13 @@ func TestAdminUIEndpointServesShell(t *testing.T) {
 	defer func() { testutil.RequireNoErrorf(t, endpoint.Close(), "close admin UI endpoint") }()
 
 	errCh := endpoint.Serve()
-	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + endpoint.Address() + "/admin/")
-	testutil.RequireNoErrorf(t, err, "request admin UI")
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", endpoint.Address())
+	testutil.RequireNoErrorf(t, err, "dial admin UI endpoint")
+	defer func() { testutil.RequireNoErrorf(t, conn.Close(), "close admin UI connection") }()
+	_, err = fmt.Fprintf(conn, "%s /admin/ HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", http.MethodGet, endpoint.Address())
+	testutil.RequireNoErrorf(t, err, "write admin UI request")
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	testutil.RequireNoErrorf(t, err, "read admin UI response")
 	defer func() { testutil.RequireNoErrorf(t, resp.Body.Close(), "close response body") }()
 	testutil.RequireEqualf(t, resp.StatusCode, http.StatusOK, "admin UI status")
 	body, err := io.ReadAll(resp.Body)
