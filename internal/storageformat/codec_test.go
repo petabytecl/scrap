@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
@@ -164,6 +165,27 @@ func TestBlockIndexPreservesUnknownForwardFields(t *testing.T) {
 	testutil.RequireNoErrorf(t, proto.Unmarshal(roundTrip, &reparsed), "reparse index")
 	if got := reparsed.ProtoReflect().GetUnknown(); !bytes.Equal(got, unknown) {
 		t.Fatalf("round-trip unknown fields = %x, want %x", got, unknown)
+	}
+}
+
+func TestClearUnknownFieldsClearsMessageValuedMaps(t *testing.T) {
+	record, err := structpb.NewStruct(map[string]any{"entry": "value"})
+	testutil.RequireNoErrorf(t, err, "build struct")
+
+	unknown := appendUnknownVarint(nil, 1000, 77)
+	record.ProtoReflect().SetUnknown(unknown)
+	fields := record.ProtoReflect().Descriptor().Fields().ByName("fields")
+	entry := record.ProtoReflect().Get(fields).Map().Get(protoreflect.ValueOfString("entry").MapKey()).Message()
+	entry.SetUnknown(unknown)
+
+	clearUnknownFields(record)
+
+	if got := record.ProtoReflect().GetUnknown(); len(got) != 0 {
+		t.Fatalf("root unknown fields = %x, want none", got)
+	}
+	entry = record.ProtoReflect().Get(fields).Map().Get(protoreflect.ValueOfString("entry").MapKey()).Message()
+	if got := entry.GetUnknown(); len(got) != 0 {
+		t.Fatalf("map value unknown fields = %x, want none", got)
 	}
 }
 

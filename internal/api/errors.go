@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 
 	"google.golang.org/grpc/codes"
@@ -19,12 +20,18 @@ func ToGRPCError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if _, ok := status.FromError(err); ok {
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, "request canceled")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	}
+	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
 		return err
 	}
 	var applicationError *appstatus.Error
 	if !errors.As(err, &applicationError) {
-		return err
+		return status.Error(codes.Internal, "internal error")
 	}
 	st := status.New(grpcCode(applicationError.Code), applicationError.Message)
 	withDetails, detailErr := statusWithDetails(st, applicationError.Details())

@@ -163,13 +163,17 @@ CAPACITY_SAMPLE_OPENBAO_KEY_PATH ?= transit/keys/scrap-backend
 CAPACITY_SAMPLE_REPORT ?= capacity-sample-advisory.json
 
 ##@ OpenBao Smoke Variables
+##? OPENBAO_SMOKE_ADDR OpenBao address used by smoke evidence.
 ##? OPENBAO_SMOKE_JWT_CMD Command used to mint the local OpenBao smoke JWT.
 ##? OPENBAO_SMOKE_OUTAGE_ADDR OpenBao outage address used by smoke evidence.
 ##? OPENBAO_SMOKE_REPORT Output path for OpenBao smoke evidence.
+##? OPENBAO_SMOKE_KEY_PATH OpenBao transit key path used by smoke evidence.
 
+OPENBAO_SMOKE_ADDR ?= $(CAPACITY_SAMPLE_OPENBAO_ADDR)
 OPENBAO_SMOKE_JWT_CMD ?= $(KUBECTL) -n scrap-local create token openbao-transit-smoke --duration=10m
 OPENBAO_SMOKE_OUTAGE_ADDR ?= http://127.0.0.1:1
 OPENBAO_SMOKE_REPORT ?= openbao-transit-smoke-evidence.json
+OPENBAO_SMOKE_KEY_PATH ?= $(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)
 
 ##@ Local DR Drill Variables
 ##? LOCAL_DR_DRILL_IMAGE_IDENTITY Image identity recorded by local DR drill evidence.
@@ -286,7 +290,7 @@ test-compat: ## Run compatibility tests for stored data and metadata boundaries.
 
 .PHONY: test-crashfault-catalog
 test-crashfault-catalog: ## Verify crash/fault catalog patterns match real tests.
-	GO="$(GO)" $(GO) test -tags=integration ./internal/crashfault
+	$(GO) test -tags=integration ./internal/crashfault
 
 .PHONY: test-race
 test-race: ## Run package tests with the Go race detector.
@@ -410,9 +414,9 @@ openbao-smoke-evidence: ## Emit local OpenBao Transit smoke evidence.
 		--environment-id "local-kind" \
 		--namespace "scrap-local" \
 		--deployment "openbao" \
-		--openbao-addr "$(CAPACITY_SAMPLE_OPENBAO_ADDR)" \
+		--openbao-addr "$(OPENBAO_SMOKE_ADDR)" \
 		--outage-addr "$(OPENBAO_SMOKE_OUTAGE_ADDR)" \
-		--transit-key-path "$(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)"
+		--transit-key-path "$(OPENBAO_SMOKE_KEY_PATH)"
 
 .PHONY: local-soak-evidence
 local-soak-evidence: ## Emit local release soak and capacity rehearsal evidence.
