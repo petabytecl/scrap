@@ -5,13 +5,17 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestRunWritesClusterRaftReportWithReadBack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	var out bytes.Buffer
-	err := Run(context.Background(), RunnerConfig{
+	err := Run(ctx, RunnerConfig{
 		Dir:                   t.TempDir(),
 		Transactions:          1,
 		Concurrency:           1,
@@ -38,8 +42,11 @@ func TestRunWritesClusterRaftReportWithReadBack(t *testing.T) {
 }
 
 func TestRunRejectsMultipleRaftBarrierModes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	var out bytes.Buffer
-	err := Run(context.Background(), RunnerConfig{
+	err := Run(ctx, RunnerConfig{
 		Dir:                   t.TempDir(),
 		UseRaftBarrier:        true,
 		UseRaftClusterBarrier: true,

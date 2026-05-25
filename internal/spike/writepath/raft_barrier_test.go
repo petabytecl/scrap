@@ -454,6 +454,7 @@ func TestRaftClusterRetriesPendingProposalAfterLeaderTransferDropsIt(t *testing.
 			continue
 		}
 		cluster.tick()
+		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("proposal did not complete after leader transfer")
 }
