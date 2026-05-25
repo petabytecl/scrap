@@ -808,7 +808,7 @@ func (a *OperationExecutor) applyScrubOperation(ctx context.Context, operation *
 		if err := ctx.Err(); err != nil {
 			return summary, err
 		}
-		if document.RestoreState != metastore.RestoreStateHot || document.Availability != metastore.AvailabilityHot {
+		if !document.IsHot() {
 			summary.SkippedUnavailable++
 			continue
 		}

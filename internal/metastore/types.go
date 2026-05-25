@@ -1,6 +1,7 @@
 package metastore
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/identity"
@@ -90,6 +91,22 @@ type Document struct {
 	HasClientIdempotencyKey     bool
 }
 
+func (d Document) IsHot() bool {
+	return d.RestoreState == RestoreStateHot && d.Availability == AvailabilityHot
+}
+
+func (d Document) RequiresBackendRestore() bool {
+	return d.Availability == AvailabilityCold || d.Availability == AvailabilityRestorePending
+}
+
+func (d Document) IsRestoreQueued() bool {
+	return d.RestoreState == RestoreStateRestorePending
+}
+
+func (d Document) IsCryptoUnavailable() bool {
+	return d.Availability == AvailabilityCryptoUnavailable
+}
+
 type Location struct {
 	BlockID       string
 	StoredOffset  uint64
@@ -125,6 +142,47 @@ type Transaction struct {
 	CompletedAt            *time.Time
 	TimeoutAt              *time.Time
 	Tags                   map[string]string
+}
+
+func (t Transaction) IsOpen() bool {
+	return t.State == TransactionStateOpen
+}
+
+func (t Transaction) IsCompleted() bool {
+	return t.State == TransactionStateCompleted
+}
+
+func (t Transaction) AppendDocument(class DocumentClass) (Transaction, error) {
+	if !t.IsOpen() {
+		return t, closedTransactionError(t)
+	}
+	updated := t
+	updated.DocumentCount++
+	switch class {
+	case DocumentClassPermanent:
+		updated.PermanentDocumentCount++
+	case DocumentClassEphemeral:
+		updated.EphemeralDocumentCount++
+	}
+	return updated, nil
+}
+
+func (t Transaction) Complete(completedAt time.Time, tags map[string]string) (Transaction, bool, error) {
+	if t.IsCompleted() {
+		return t, false, nil
+	}
+	if !t.IsOpen() {
+		return t, false, closedTransactionError(t)
+	}
+	updated := t
+	updated.State = TransactionStateCompleted
+	updated.CompletedAt = &completedAt
+	updated.Tags = cloneTags(tags)
+	return updated, true, nil
+}
+
+func closedTransactionError(transaction Transaction) error {
+	return fmt.Errorf("%w: transaction %s/%s is not open", ErrTransactionClosed, transaction.Identity.TenantID, transaction.Identity.TransactionID)
 }
 
 type UploadIntent struct {
