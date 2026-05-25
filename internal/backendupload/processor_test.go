@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"testing"
 	"time"
 
@@ -167,7 +166,8 @@ func TestProcessorTimesOutStalledUploadAndRecordsFailure(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "run processor")
 	requireProcessorCounts(t, result, processorCounts{scanned: 1, failed: 1})
 	requireFailedIntentCall(t, updater.calls, 0)
-	if !strings.Contains(updater.calls[0].lastError, context.DeadlineExceeded.Error()) {
+	lastErr := errors.New(updater.calls[0].lastError)
+	if !errors.Is(lastErr, context.DeadlineExceeded) {
 		t.Fatalf("last error = %q, want deadline exceeded", updater.calls[0].lastError)
 	}
 }
