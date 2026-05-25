@@ -11,7 +11,7 @@ on:
 
 jobs:
   static:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
         with:
@@ -45,7 +45,7 @@ jobs:
         run: make BUF=buf proto-check
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       id-token: write
@@ -99,7 +99,7 @@ jobs:
         run: exit 1
 
   race:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -115,7 +115,7 @@ jobs:
         run: make test-race
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -131,7 +131,7 @@ jobs:
         run: make build
 
   vulnerability:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -146,7 +146,7 @@ jobs:
       - run: make vuln
 
   check:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     needs:
       - static
       - test
