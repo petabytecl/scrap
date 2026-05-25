@@ -104,11 +104,19 @@ templ View(data DashboardData) {
 		case "capacity":
 			@Capacity(data)
 		case "members":
-			@Members(data)
+			if data.MemberDetail.ID != "" {
+				@MemberDetail(data)
+			} else {
+				@Members(data)
+			}
 		case "raft":
 			@Raft(data)
 		case "clients":
-			@Clients(data)
+			if data.ClientDetail.ID != "" {
+				@ClientDetail(data)
+			} else {
+				@Clients(data)
+			}
 		case "backend":
 			@Backend(data)
 		case "openbao":

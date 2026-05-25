@@ -109,7 +109,7 @@ func TestHandlerRendersOperationsFromStore(t *testing.T) {
 	requireContains(t, filteredBody, "filter-pill active")
 	requireNotContains(t, filteredBody, "op-2")
 
-	detail := request(NewHandler(Options{Operations: store}), "/admin/operations/op-1/detail")
+	detail := htmxRequest(NewHandler(Options{Operations: store}), "/admin/operations/op-1/detail")
 	requireOK(t, detail)
 	detailBody := detail.Body.String()
 	requireContains(t, detailBody, "operator-a")
@@ -149,7 +149,7 @@ func TestHandlerRendersMemberDetailAndTabs(t *testing.T) {
 	requireContains(t, detailBody, "SCRAP_SINGLE_MEMBER_LOCAL_MODE")
 	requireContains(t, detailBody, "/admin/members/local/tab/kubernetes")
 
-	storageTab := request(handler, "/admin/members/local/tab/storage")
+	storageTab := htmxRequest(handler, "/admin/members/local/tab/storage")
 	requireOK(t, storageTab)
 	storageBody := storageTab.Body.String()
 	requireContains(t, storageBody, "Bytes used")
@@ -171,7 +171,7 @@ func TestHandlerRendersClientDetailAndTabs(t *testing.T) {
 	requireContains(t, detailBody, "client telemetry unavailable")
 	requireContains(t, detailBody, "/admin/clients/etl-ingest/tab/traffic")
 
-	trafficTab := request(handler, "/admin/clients/etl-ingest/tab/traffic")
+	trafficTab := htmxRequest(handler, "/admin/clients/etl-ingest/tab/traffic")
 	requireOK(t, trafficTab)
 	trafficBody := trafficTab.Body.String()
 	requireContains(t, trafficBody, "Active streams")
@@ -181,6 +181,50 @@ func TestHandlerRendersClientDetailAndTabs(t *testing.T) {
 	if response := request(handler, "/admin/clients/etl-ingest/tab/missing"); response.Code != http.StatusNotFound {
 		t.Fatalf("unknown client tab status = %d, want %d", response.Code, http.StatusNotFound)
 	}
+}
+
+func TestHandlerWrapsPartialsInShellForDirectNavigation(t *testing.T) {
+	handler := populatedHandler()
+
+	response := request(handler, "/admin/views/capacity")
+	requireOK(t, response)
+	body := response.Body.String()
+	requireContains(t, body, "<!doctype html>")
+	requireContains(t, body, "admin.css")
+	requireContains(t, body, "local-profile")
+
+	htmx := htmxRequest(handler, "/admin/views/capacity")
+	requireOK(t, htmx)
+	htmxBody := htmx.Body.String()
+	requireNotContains(t, htmxBody, "<!doctype html>")
+	requireContains(t, htmxBody, "local-profile")
+}
+
+func TestHandlerWrapsDetailInShellForDirectNavigation(t *testing.T) {
+	handler := NewHandler(Options{
+		Inspect: fakeInspect{
+			member: &adminv1.StorageMember{
+				StorageMemberId: "local",
+				CellId:          "local",
+				State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+				BytesUsed:       2048,
+				BytesCapacity:   4096,
+			},
+		},
+		Member: fakeMember{safety: &adminv1.EvictionSafety{SafeToEvict: true}},
+	})
+
+	detail := request(handler, "/admin/members/local")
+	requireOK(t, detail)
+	detailBody := detail.Body.String()
+	requireContains(t, detailBody, "<!doctype html>")
+	requireContains(t, detailBody, "Members / local")
+
+	tabDirect := request(handler, "/admin/members/local/tab/storage")
+	requireOK(t, tabDirect)
+	tabBody := tabDirect.Body.String()
+	requireContains(t, tabBody, "<!doctype html>")
+	requireContains(t, tabBody, "Members / local")
 }
 
 func TestHandlerRendersRecoveryReadiness(t *testing.T) {
@@ -257,6 +301,14 @@ func TestHandlerReportsUnavailableInspectApplication(t *testing.T) {
 func request(handler http.Handler, target string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	return recorder
+}
+
+func htmxRequest(handler http.Handler, target string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Header.Set("HX-Request", "true")
+	handler.ServeHTTP(recorder, req)
 	return recorder
 }
 

@@ -105,7 +105,12 @@ func (h *Handler) partial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid operation state filter", http.StatusBadRequest)
 		return
 	}
-	h.render(w, r, component(h.dashboard(r.Context(), view, filter)))
+	data := h.dashboard(r.Context(), view, filter)
+	if isHTMX(r) {
+		h.render(w, r, component(data))
+		return
+	}
+	h.render(w, r, templates.Shell(data))
 }
 
 func (h *Handler) operationDetail(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +136,11 @@ func (h *Handler) operationDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "operation detail unavailable", http.StatusInternalServerError)
 		return
 	}
-	h.render(w, r, templates.OperationDetail(operationData(operation)))
+	if isHTMX(r) {
+		h.render(w, r, templates.OperationDetail(operationData(operation)))
+		return
+	}
+	h.render(w, r, templates.Shell(h.dashboard(r.Context(), "operations", operationFilter{})))
 }
 
 func (h *Handler) memberDetail(w http.ResponseWriter, r *http.Request) {
@@ -161,13 +170,17 @@ func (h *Handler) memberDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "member detail unavailable", http.StatusInternalServerError)
 		return
 	}
-	if tabOnly {
+	if tabOnly && isHTMX(r) {
 		h.render(w, r, templates.MemberTabContent(detail))
 		return
 	}
 	data := h.dashboard(r.Context(), "members", operationFilter{})
 	data.MemberDetail = detail
-	h.render(w, r, templates.MemberDetail(data))
+	if isHTMX(r) {
+		h.render(w, r, templates.MemberDetail(data))
+		return
+	}
+	h.render(w, r, templates.Shell(data))
 }
 
 func (h *Handler) clientDetail(w http.ResponseWriter, r *http.Request) {
@@ -185,13 +198,17 @@ func (h *Handler) clientDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail := clientDetailData(clientID, tab)
-	if tabOnly {
+	if tabOnly && isHTMX(r) {
 		h.render(w, r, templates.ClientTabContent(detail))
 		return
 	}
 	data := h.dashboard(r.Context(), "clients", operationFilter{})
 	data.ClientDetail = detail
-	h.render(w, r, templates.ClientDetail(data))
+	if isHTMX(r) {
+		h.render(w, r, templates.ClientDetail(data))
+		return
+	}
+	h.render(w, r, templates.Shell(data))
 }
 
 func operationIDFromDetailPath(requestPath string) (string, bool) {
@@ -294,6 +311,10 @@ func partialComponent(view string) func(templates.DashboardData) templ.Component
 		"repair":     templates.Repair,
 	}
 	return components[view]
+}
+
+func isHTMX(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true"
 }
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, component templ.Component) {
