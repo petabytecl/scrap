@@ -169,6 +169,11 @@ LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL ?= 5s
 LOCAL_SCRAPD_OPERATION_RUN_INTERVAL ?= 5s
 LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES ?= 4096
 
+##@ Local Dev Variables
+##? LOCAL_DEV_SCRIPT Script used by local-dev targets.
+
+LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
+
 ##@ Release Evidence Variables
 ##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
 
@@ -370,6 +375,40 @@ local-scrapd-run: ## Run scrapd locally with non-production storage for manual t
 		--backend-upload-interval="$(LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL)" \
 		--operation-run-interval="$(LOCAL_SCRAPD_OPERATION_RUN_INTERVAL)" \
 		--local-seal-block-at-bytes="$(LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES)"
+
+##@ Local Dev
+
+.PHONY: local-dev-up
+local-dev-up: ## Start the full local dev environment: scrapd, admin UI, LocalStack, and OpenBao.
+	@$(LOCAL_DEV_SCRIPT) up
+
+.PHONY: local-dev-prod-up
+local-dev-prod-up: ## Start a production-like local dev environment with multiple scrapd nodes.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) up
+
+.PHONY: local-dev-down
+local-dev-down: ## Stop the full local dev environment and delete its kind cluster.
+	@$(LOCAL_DEV_SCRIPT) down
+
+.PHONY: local-dev-prod-down
+local-dev-prod-down: ## Stop the production-like local dev environment and delete its kind cluster.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) down
+
+.PHONY: local-dev-status
+local-dev-status: ## Show local dev Kubernetes resources and port-forwards.
+	@$(LOCAL_DEV_SCRIPT) status
+
+.PHONY: local-dev-prod-status
+local-dev-prod-status: ## Show production-like local dev Kubernetes resources and port-forwards.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) status
+
+.PHONY: local-dev-stop-forwards
+local-dev-stop-forwards: ## Stop only local dev port-forwards.
+	@$(LOCAL_DEV_SCRIPT) stop-forwards
+
+.PHONY: local-dev-prod-stop-forwards
+local-dev-prod-stop-forwards: ## Stop only production-like local dev port-forwards.
+	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) stop-forwards
 
 .PHONY: static
 static: $(STATIC_TARGETS) ## Run all static analysis and format checks.
