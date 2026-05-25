@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -107,6 +108,7 @@ func registerFlagSet(flags *flag.FlagSet, cfg *config.Config) {
 	flags.StringVar(&cfg.MemberSlotID, "member-slot-id", cfg.MemberSlotID, "StatefulSet slot identity for this scrapd process")
 	flags.StringVar(&cfg.PeerAddresses, "peer-addresses", cfg.PeerAddresses, "comma-separated peer discovery addresses as host:port entries")
 	flags.StringVar(&cfg.PeerAdminWorkloadIdentity, "peer-admin-workload-identity", cfg.PeerAdminWorkloadIdentity, "workload identity metadata used for peer admin inspect requests")
+	flags.StringVar(&cfg.MetadataAuthorityMemberID, "metadata-authority-member-id", cfg.MetadataAuthorityMemberID, "storage member that owns the local metadata authority for this cell")
 	flags.Uint64Var(&cfg.GRPCServerLimits.MaxConcurrentStreams, "grpc-max-concurrent-streams", cfg.GRPCServerLimits.MaxConcurrentStreams, "maximum concurrent HTTP/2 streams per gRPC server transport")
 	flags.IntVar(&cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, "grpc-max-recv-msg-size-bytes", cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, "maximum inbound gRPC message size in bytes")
 	flags.IntVar(&cfg.GRPCServerLimits.MaxSendMsgSizeBytes, "grpc-max-send-msg-size-bytes", cfg.GRPCServerLimits.MaxSendMsgSizeBytes, "maximum outbound gRPC message size in bytes")
@@ -325,6 +327,7 @@ func buildApplications(
 		"member_slot_id", cfg.MemberSlotID,
 		"peer_addresses", cfg.PeerAddresses,
 		"peer_admin_workload_identity", cfg.PeerAdminWorkloadIdentity,
+		"metadata_authority_member_id", cfg.MetadataAuthorityMemberID,
 	)
 	var uploadRunner *backendupload.Runner
 	if cfg.EnableLocalFilesystemBackend {
@@ -339,8 +342,10 @@ func buildApplications(
 
 func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage.Application, *operations.Store, error) {
 	localApp, err := localstorage.OpenWithOptions(context.Background(), cfg.LocalDataDir, localstorage.OpenOptions{
-		CellID:   cfg.CellID,
-		MemberID: cfg.MemberID,
+		CellID:                    cfg.CellID,
+		MemberID:                  cfg.MemberID,
+		AuthorityMemberIDs:        authorityMemberIDs(cfg),
+		MetadataAuthorityMemberID: cfg.MetadataAuthorityMemberID,
 	})
 	if err != nil {
 		return node.Applications{}, nil, nil, fmt.Errorf("open local non-production storage: %w", err)
@@ -381,6 +386,28 @@ func peerInspectTargets(cfg config.Config, localMemberID string) []adminpeer.Pee
 		peers = append(peers, adminpeer.Peer{MemberID: memberID, Address: address})
 	}
 	return peers
+}
+
+func authorityMemberIDs(cfg config.Config) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(memberID string) {
+		memberID = strings.TrimSpace(memberID)
+		if memberID == "" {
+			return
+		}
+		if _, exists := seen[memberID]; exists {
+			return
+		}
+		seen[memberID] = struct{}{}
+		out = append(out, memberID)
+	}
+	add(cfg.MemberID)
+	for _, address := range cfg.PeerAddressList() {
+		add(peerMemberID(address))
+	}
+	sort.Strings(out)
+	return out
 }
 
 func peerMemberID(address string) string {

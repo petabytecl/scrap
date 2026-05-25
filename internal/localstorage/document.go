@@ -32,8 +32,9 @@ import (
 const backendReadChunkSize = 1024 * 1024
 
 var (
-	ErrCorruptVerificationWindow = errors.New("localstorage: corrupt verification window")
-	ErrWritePipelineInvariant    = errors.New("localstorage: write pipeline invariant violated")
+	ErrCorruptVerificationWindow  = errors.New("localstorage: corrupt verification window")
+	ErrWritePipelineInvariant     = errors.New("localstorage: write pipeline invariant violated")
+	ErrNotMetadataAuthorityMember = errors.New("localstorage: local member is not metadata authority")
 )
 
 func (a *verificationEngine) startByteServingVerifier(ctx context.Context) {
@@ -122,6 +123,9 @@ func (a *verificationEngine) repairStateIsQuarantined(document metastore.Documen
 }
 
 func (a *transactionCoordinator) WriteDocument(ctx context.Context, init storageapp.WriteDocumentInit, chunks storageapp.ChunkReader) (storageapp.WriteDocumentResult, error) {
+	if err := a.requireMetadataAuthorityForWrite(); err != nil {
+		return storageapp.WriteDocumentResult{}, mapError(err)
+	}
 	if err := a.authority.EnsureWriteReady(ctx); err != nil {
 		return storageapp.WriteDocumentResult{}, mapError(err)
 	}
@@ -144,6 +148,14 @@ func (a *transactionCoordinator) WriteDocument(ctx context.Context, init storage
 		return storageapp.WriteDocumentResult{}, err
 	}
 	return writeDocumentResult(document, replicationResult)
+}
+
+func (a *transactionCoordinator) requireMetadataAuthorityForWrite() error {
+	authorityMemberID := a.metadataAuthorityMember
+	if authorityMemberID == "" || authorityMemberID == a.MemberID() {
+		return nil
+	}
+	return fmt.Errorf("%w: local member %q, authority member %q", ErrNotMetadataAuthorityMember, a.MemberID(), authorityMemberID)
 }
 
 func (a *transactionCoordinator) replayExistingDocument(ctx context.Context, init storageapp.WriteDocumentInit, chunks storageapp.ChunkReader) (storageapp.WriteDocumentResult, bool, error) {
@@ -1103,6 +1115,9 @@ func (h *HealthApplication) CheckReadiness(ctx context.Context) error {
 	if err := h.app.authority.CheckHealth(); err != nil {
 		return err
 	}
+	if !h.app.isMetadataAuthorityMember() {
+		return nil
+	}
 	return h.app.authority.ReadFresh(ctx)
 }
 
@@ -1128,6 +1143,7 @@ var applicationErrorMappings = []struct {
 	{target: backend.ErrNotFound, code: appstatus.CodeDataLoss, message: "backend document bytes are missing"},
 	{target: ErrCorruptVerificationWindow, code: appstatus.CodeDataLoss, message: "backend verification window is corrupt"},
 	{target: ErrWritePipelineInvariant, code: appstatus.CodeInternal, message: "write pipeline invariant failed"},
+	{target: ErrNotMetadataAuthorityMember, code: appstatus.CodeUnavailable, message: "write must be retried against the metadata authority member"},
 	{target: os.ErrNotExist, code: appstatus.CodeDataLoss, message: "stored document bytes are missing"},
 	{target: raftmeta.ErrNotLeader, code: appstatus.CodeFailedPrecondition, message: "local metadata authority is not leader"},
 	{target: raftmeta.ErrQuorumUnavailable, code: appstatus.CodeUnavailable, message: "metadata quorum is unavailable"},

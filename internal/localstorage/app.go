@@ -33,6 +33,7 @@ type Application struct {
 	operationStore           *operations.Store
 	metadata                 *metastore.Store
 	authority                *raftmeta.Authority
+	metadataAuthorityMember  string
 	prepare                  *prepareLog
 	memberMu                 sync.RWMutex
 	memberState              localMemberState
@@ -60,8 +61,10 @@ const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
 const defaultLocalRuntimeID = "local"
 
 type OpenOptions struct {
-	CellID   string
-	MemberID string
+	CellID                    string
+	MemberID                  string
+	AuthorityMemberIDs        []string
+	MetadataAuthorityMemberID string
 }
 
 type PeerRepairSource interface {
@@ -107,16 +110,16 @@ func OpenWithOptions(ctx context.Context, dir string, options OpenOptions) (*App
 		_ = blocks.Close()
 		return nil, err
 	}
-	authority, err := raftmeta.OpenAuthorityWithOptions(filepath.Join(dir, "raftmeta"), "local", metadata, raftmeta.AuthorityOptions{
+	authorityMembers := authorityMembersFromIDs(options.AuthorityMemberIDs, memberID)
+	metadataAuthorityMemberID := normalizeMetadataAuthorityMemberID(options.MetadataAuthorityMemberID, memberID)
+	authorityOptions := raftmeta.AuthorityOptions{
 		LocalMemberID: memberID,
-		Members: []raftmeta.Member{
-			{
-				RaftID:   1,
-				MemberID: memberID,
-				Role:     metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER,
-			},
-		},
-	})
+		Members:       authorityMembers,
+	}
+	if metadataAuthorityMemberID != "" {
+		authorityOptions.FreshnessChecker = raftmeta.NewStaticLeaderFreshnessChecker(metadataAuthorityMemberID)
+	}
+	authority, err := raftmeta.OpenAuthorityWithOptions(filepath.Join(dir, "raftmeta"), "local", metadata, authorityOptions)
 	if err != nil {
 		_ = metadata.Close()
 		_ = blocks.Close()
@@ -145,21 +148,60 @@ func OpenWithOptions(ctx context.Context, dir string, options OpenOptions) (*App
 		return nil, err
 	}
 	app := &Application{
-		dir:              dir,
-		cellID:           cellID,
-		memberID:         memberID,
-		blocks:           blocks,
-		metadata:         metadata,
-		authority:        authority,
-		prepare:          prepare,
-		memberState:      memberState,
-		byteServingDone:  make(chan struct{}),
-		sealBlockAtBytes: DefaultSealBlockAtBytes,
-		now:              func() time.Time { return time.Now().UTC() },
+		dir:                     dir,
+		cellID:                  cellID,
+		memberID:                memberID,
+		blocks:                  blocks,
+		metadata:                metadata,
+		authority:               authority,
+		metadataAuthorityMember: metadataAuthorityMemberID,
+		prepare:                 prepare,
+		memberState:             memberState,
+		byteServingDone:         make(chan struct{}),
+		sealBlockAtBytes:        DefaultSealBlockAtBytes,
+		now:                     func() time.Time { return time.Now().UTC() },
 	}
 	app.initComponents()
 	app.verifier.startByteServingVerifier(ctx)
 	return app, nil
+}
+
+func authorityMembersFromIDs(memberIDs []string, localMemberID string) []raftmeta.Member {
+	ids := append([]string(nil), memberIDs...)
+	if len(ids) == 0 {
+		ids = append(ids, localMemberID)
+	}
+	members := make([]raftmeta.Member, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	nextRaftID := uint64(1)
+	for _, memberID := range ids {
+		memberID = strings.TrimSpace(memberID)
+		if memberID == "" {
+			continue
+		}
+		if _, exists := seen[memberID]; exists {
+			continue
+		}
+		seen[memberID] = struct{}{}
+		members = append(members, raftmeta.Member{
+			RaftID:   nextRaftID,
+			MemberID: memberID,
+			Role:     metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER,
+		})
+		nextRaftID++
+	}
+	return members
+}
+
+func normalizeMetadataAuthorityMemberID(configured, localMemberID string) string {
+	configured = strings.TrimSpace(configured)
+	if configured != "" {
+		return configured
+	}
+	if len(strings.TrimSpace(localMemberID)) == 0 {
+		return defaultLocalRuntimeID
+	}
+	return localMemberID
 }
 
 func normalizeOpenIdentity(options OpenOptions) (string, string) {
@@ -186,6 +228,14 @@ func (a *Application) MemberID() string {
 		return defaultLocalRuntimeID
 	}
 	return a.memberID
+}
+
+func (a *Application) isMetadataAuthorityMember() bool {
+	if a == nil {
+		return false
+	}
+	authorityMemberID := strings.TrimSpace(a.metadataAuthorityMember)
+	return authorityMemberID == "" || authorityMemberID == a.MemberID()
 }
 
 func (a *Application) initComponents() {

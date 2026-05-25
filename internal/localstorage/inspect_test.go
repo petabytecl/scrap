@@ -9,6 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+
+	"github.com/petabytecl/scrap/internal/blockstore"
+	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/storageapp"
 	"github.com/petabytecl/scrap/internal/testutil"
 )
@@ -86,6 +90,67 @@ func TestAdminInspectReportsConfiguredRuntimeIdentity(t *testing.T) {
 	safety, err := Members(app).GetEvictionSafety(ctx, "scrapd-0")
 	testutil.RequireNoErrorf(t, err, "configured eviction safety")
 	testutil.RequireEqualf(t, safety.GetStorageMember().GetStorageMemberId(), "scrapd-0", "eviction safety member")
+}
+
+func TestConfiguredMetadataAuthorityReportsVotersAndRejectsFollowerWrites(t *testing.T) {
+	ctx := context.Background()
+	memberIDs := []string{"scrapd-0", "scrapd-1", "scrapd-2"}
+	leader, err := OpenWithOptions(ctx, t.TempDir(), OpenOptions{
+		CellID:                    "scrap-cell-a",
+		MemberID:                  "scrapd-0",
+		AuthorityMemberIDs:        memberIDs,
+		MetadataAuthorityMemberID: "scrapd-0",
+	})
+	testutil.RequireNoErrorf(t, err, "open leader")
+	t.Cleanup(func() {
+		testutil.RequireNoErrorf(t, leader.Close(), "close leader")
+	})
+	follower, err := OpenWithOptions(ctx, t.TempDir(), OpenOptions{
+		CellID:                    "scrap-cell-a",
+		MemberID:                  "scrapd-1",
+		AuthorityMemberIDs:        memberIDs,
+		MetadataAuthorityMemberID: "scrapd-0",
+	})
+	testutil.RequireNoErrorf(t, err, "open follower")
+	t.Cleanup(func() {
+		testutil.RequireNoErrorf(t, follower.Close(), "close follower")
+	})
+
+	leaderShard, err := Inspect(leader).GetAdminShard(ctx, "local")
+	testutil.RequireNoErrorf(t, err, "leader shard")
+	testutil.RequireEqualf(t, leaderShard.GetLeaderMemberId(), "scrapd-0", "leader member id")
+	testutil.RequireDeepEqualf(t, leaderShard.GetVoterMemberIds(), memberIDs, "leader voters")
+	followerShard, err := Inspect(follower).GetAdminShard(ctx, "local")
+	testutil.RequireNoErrorf(t, err, "follower shard")
+	testutil.RequireEqualf(t, followerShard.GetLeaderMemberId(), "scrapd-0", "follower leader member id")
+	testutil.RequireDeepEqualf(t, followerShard.GetVoterMemberIds(), memberIDs, "follower voters")
+	testutil.RequireNoErrorf(t, Health(follower).CheckReadiness(ctx), "follower readiness")
+
+	doc := testDocumentIdentity()
+	doc.DocumentName = "authority-owned.xml"
+	_, err = leader.WriteDocument(ctx, storageapp.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("leader accepts the write")}))
+	testutil.RequireNoErrorf(t, err, "leader write")
+
+	followerDoc := testDocumentIdentity()
+	followerDoc.DocumentName = "follower-rejected.xml"
+	_, err = follower.WriteDocument(ctx, storageapp.WriteDocumentInit{
+		Identity:         followerDoc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("follower must not append")}))
+	requireCode(t, err, codes.Unavailable)
+	_, err = follower.HeadDocument(ctx, storageapp.HeadDocumentRequest{Identity: doc})
+	requireCode(t, err, codes.FailedPrecondition)
+	testutil.RequireEqualf(t, follower.blocks.CurrentBlockLength(), blockstore.HeaderLength, "follower block length")
+	if _, headErr := follower.metadata.HeadDocument(followerDoc); !errors.Is(headErr, metastore.ErrNotFound) {
+		t.Fatalf("follower metadata after rejected write = %v, want %v", headErr, metastore.ErrNotFound)
+	}
 }
 
 func TestDiskStatsHelpersHandleEdgeCases(t *testing.T) {

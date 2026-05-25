@@ -76,6 +76,7 @@ type Config struct {
 	MemberSlotID                    string
 	PeerAddresses                   string
 	PeerAdminWorkloadIdentity       string
+	MetadataAuthorityMemberID       string
 	GRPCServerLimits                GRPCServerLimits
 	EnableProductionWriteACK        bool
 	ProductionReadinessEvidence     ProductionReadinessEvidence
@@ -324,6 +325,7 @@ func (c Config) validateRuntimeIdentity() error {
 		validateRuntimeID("member_id", identity.memberID),
 		validateOptionalRuntimeID("member_slot_id", identity.memberSlotID),
 		validatePeerAdminWorkloadIdentity(identity),
+		validateMetadataAuthorityMemberID(identity),
 		validatePeerAddresses(identity.peerAddresses),
 	)
 }
@@ -335,6 +337,7 @@ type runtimeIdentity struct {
 	peerAddressesValue string
 	peerAddresses      []string
 	peerAdminIdentity  string
+	metadataAuthority  string
 }
 
 func (c Config) runtimeIdentity() runtimeIdentity {
@@ -345,11 +348,12 @@ func (c Config) runtimeIdentity() runtimeIdentity {
 		peerAddressesValue: strings.TrimSpace(c.PeerAddresses),
 		peerAddresses:      parsePeerAddresses(c.PeerAddresses),
 		peerAdminIdentity:  strings.TrimSpace(c.PeerAdminWorkloadIdentity),
+		metadataAuthority:  strings.TrimSpace(c.MetadataAuthorityMemberID),
 	}
 }
 
 func (i runtimeIdentity) configured() bool {
-	return i.cellID != "" || i.memberID != "" || i.memberSlotID != ""
+	return i.cellID != "" || i.memberID != "" || i.memberSlotID != "" || i.metadataAuthority != ""
 }
 
 func (i runtimeIdentity) hasPeerAddresses() bool {
@@ -387,6 +391,8 @@ func (i runtimeIdentity) validatePeerFields() error {
 		return errors.New("member_slot_id is required when peer_addresses are configured")
 	case i.peerAdminIdentity == "":
 		return errors.New("peer_admin_workload_identity is required when peer_addresses are configured")
+	case i.metadataAuthority == "":
+		return errors.New("metadata_authority_member_id is required when peer_addresses are configured")
 	default:
 		return nil
 	}
@@ -419,6 +425,13 @@ func validatePeerAdminWorkloadIdentity(identity runtimeIdentity) error {
 		return nil
 	}
 	return validateRuntimeID("peer_admin_workload_identity", identity.peerAdminIdentity)
+}
+
+func validateMetadataAuthorityMemberID(identity runtimeIdentity) error {
+	if identity.metadataAuthority == "" {
+		return nil
+	}
+	return validateRuntimeID("metadata_authority_member_id", identity.metadataAuthority)
 }
 
 func runtimeIDHasInvalidByte(value string) bool {

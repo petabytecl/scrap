@@ -146,6 +146,7 @@ func TestBuildLocalApplicationsUsesRuntimeIdentity(t *testing.T) {
 	cfg.MemberID = "scrapd-1"
 	cfg.MemberSlotID = "scrapd-1"
 	cfg.PeerAdminWorkloadIdentity = "local-operator"
+	cfg.MetadataAuthorityMemberID = "scrapd-0"
 	cfg.PeerAddresses = strings.Join([]string{
 		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
 		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
@@ -163,6 +164,10 @@ func TestBuildLocalApplicationsUsesRuntimeIdentity(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "inspect configured member")
 	testutil.RequireEqualf(t, member.GetStorageMemberId(), "scrapd-1", "admin member id")
 	testutil.RequireEqualf(t, member.GetCellId(), "scrap-cell-a", "admin member cell")
+	shard, err := apps.Inspect.GetAdminShard(context.Background(), "local")
+	testutil.RequireNoErrorf(t, err, "inspect configured shard")
+	testutil.RequireEqualf(t, shard.GetLeaderMemberId(), "scrapd-0", "metadata authority leader")
+	testutil.RequireDeepEqualf(t, shard.GetVoterMemberIds(), []string{"scrapd-0", "scrapd-1", "scrapd-2"}, "metadata authority voters")
 }
 
 func TestBuildApplicationsDisabledReturnsNoopCleanup(t *testing.T) {
@@ -247,6 +252,7 @@ func TestRegisterFlagSetParsesRuntimeIdentity(t *testing.T) {
 		"-member-id=scrapd-2",
 		"-member-slot-id=scrapd-2",
 		"-peer-admin-workload-identity=local-operator",
+		"-metadata-authority-member-id=scrapd-0",
 		"-peer-addresses=scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
 	})
 	testutil.RequireNoErrorf(t, err, "parse runtime identity flags")
@@ -254,6 +260,7 @@ func TestRegisterFlagSetParsesRuntimeIdentity(t *testing.T) {
 	testutil.RequireEqualf(t, cfg.MemberID, "scrapd-2", "member id flag")
 	testutil.RequireEqualf(t, cfg.MemberSlotID, "scrapd-2", "member slot id flag")
 	testutil.RequireEqualf(t, cfg.PeerAdminWorkloadIdentity, "local-operator", "peer admin workload identity flag")
+	testutil.RequireEqualf(t, cfg.MetadataAuthorityMemberID, "scrapd-0", "metadata authority member id flag")
 	testutil.RequireEqualf(
 		t,
 		cfg.PeerAddresses,
@@ -274,6 +281,19 @@ func TestPeerInspectTargetsDeriveMemberIDsFromStatefulSetDNS(t *testing.T) {
 	testutil.RequireEqualf(t, len(peers), 2, "peer count")
 	testutil.RequireEqualf(t, peers[0].MemberID, "scrapd-0", "first peer member id")
 	testutil.RequireEqualf(t, peers[1].MemberID, "scrapd-2", "second peer member id")
+}
+
+func TestAuthorityMemberIDsDeriveStableMembersFromRuntimeIdentity(t *testing.T) {
+	cfg := config.Default()
+	cfg.MemberID = "scrapd-1"
+	cfg.PeerAddresses = strings.Join([]string{
+		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
+	}, ",")
+
+	got := authorityMemberIDs(cfg)
+	testutil.RequireDeepEqualf(t, got, []string{"scrapd-0", "scrapd-1", "scrapd-2"}, "authority member ids")
 }
 
 func TestScrapdBackgroundLoggingHelpers(t *testing.T) {
