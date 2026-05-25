@@ -56,3 +56,25 @@ func TestPeerPreparerInstallsVerifiedRangeDurably(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "read installed peer range")
 	testutil.RequireDeepEqualf(t, got.Bytes(), data, "installed peer bytes")
 }
+
+func TestConfigurePeerPreparationCopiesTargets(t *testing.T) {
+	app := openTestApplication(t)
+	targets := []replication.Target{{MemberID: "member-1", Preparer: PeerPreparer(app)}}
+	ConfigurePeerPreparation(app, PeerPreparationOptions{
+		Targets: targets,
+		Policy:  replication.Policy{TargetReplicaCount: 2, QuorumReplicaCount: 2},
+	})
+	targets[0].MemberID = "mutated"
+
+	testutil.RequireEqualf(t, app.peerPrepareTargets[0].MemberID, "member-1", "copied target member")
+	testutil.RequireEqualf(t, app.peerPreparePolicy.TargetReplicaCount, 2, "target replicas")
+	ConfigurePeerPreparation(nil, PeerPreparationOptions{Targets: targets})
+}
+
+func TestPeerPreparerRejectsInvalidInputs(t *testing.T) {
+	_, err := PeerPreparer(nil).PrepareDocument(context.Background(), replication.PrepareRequest{})
+	testutil.RequireErrorIsf(t, err, replication.ErrReceiptMismatch, "nil application")
+	app := openTestApplication(t)
+	_, err = PeerPreparer(app).PrepareDocument(context.Background(), replication.PrepareRequest{})
+	testutil.RequireErrorIsf(t, err, replication.ErrMissingByteSource, "missing byte source")
+}

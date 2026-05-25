@@ -53,6 +53,22 @@ func TestAdminInspectReportsLocalShardDocumentBlockAndCapacity(t *testing.T) {
 	}
 }
 
+func TestAdminBlockReplicaMemberIDsAreStableAndDeduplicated(t *testing.T) {
+	sum := [32]byte{1}
+	got := adminBlockReplicaMemberIDs("local", []metastore.Document{
+		{Location: metastore.Location{Replicas: []metastore.ReplicaRef{
+			{MemberID: "member-1", StoredSHA256: sum},
+			{MemberID: "local", StoredSHA256: sum},
+			{MemberID: "", StoredSHA256: sum},
+		}}},
+		{Location: metastore.Location{Replicas: []metastore.ReplicaRef{
+			{MemberID: "member-1", StoredSHA256: sum},
+			{MemberID: "member-2", StoredSHA256: sum},
+		}}},
+	})
+	testutil.RequireDeepEqualf(t, got, []string{"local", "member-1", "member-2"}, "replica member ids")
+}
+
 func TestAdminInspectReportsConfiguredRuntimeIdentity(t *testing.T) {
 	ctx := context.Background()
 	app, err := OpenWithOptions(ctx, t.TempDir(), OpenOptions{

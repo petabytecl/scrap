@@ -109,6 +109,14 @@ func TestAggregatorCapacityLocalOnlyMetadataSkipsPeerFetch(t *testing.T) {
 	testutil.RequireEqualf(t, len(runway.GetWarnings()), 0, "local-only warnings")
 }
 
+func TestPeerInspectLocalOnlyRequiresTrueMetadata(t *testing.T) {
+	testutil.RequireFalsef(t, peerInspectLocalOnly(context.Background()), "missing metadata")
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(peerInspectLocalOnlyMetadataKey, "false"))
+	testutil.RequireFalsef(t, peerInspectLocalOnly(ctx), "false metadata")
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.Pairs(peerInspectLocalOnlyMetadataKey, "true"))
+	testutil.RequireTruef(t, peerInspectLocalOnly(ctx), "true metadata")
+}
+
 func TestNewAggregatorFallsBackToLocalInspectWithoutPeers(t *testing.T) {
 	local := &fakeInspectApplication{summary: summaryWithMembers(member("local", 1, 2))}
 	inspect := NewAggregator(Options{Local: local, LocalMemberID: "local"})
