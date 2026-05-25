@@ -162,6 +162,9 @@ func (c Config) Validate() error {
 	if err := c.validateLocalStorage(); err != nil {
 		return err
 	}
+	if err := c.validateAdminUI(); err != nil {
+		return err
+	}
 	if c.BackendUploadInterval <= 0 {
 		return errors.New("backend_upload_interval must be positive")
 	}
@@ -297,6 +300,16 @@ func (c Config) validateLocalFilesystemBackend() error {
 		}
 	} else if strings.TrimSpace(c.LocalBackendDataDir) != "" {
 		return errors.New("local_backend_data_dir requires local filesystem backend to be explicitly enabled")
+	}
+	return nil
+}
+
+func (c Config) validateAdminUI() error {
+	if strings.TrimSpace(c.AdminUIListenAddress) == "" {
+		return nil
+	}
+	if !c.EnableLocalNonProductionStorage {
+		return errors.New("admin_ui_listen_address requires local non-production storage until HTTP admin UI authorization is implemented")
 	}
 	return nil
 }

@@ -87,7 +87,7 @@ func registerFlagSet(flags *flag.FlagSet, cfg *config.Config) {
 	flags.StringVar(&cfg.PublicListenAddress, "public-listen", cfg.PublicListenAddress, "public gRPC listen address")
 	flags.StringVar(&cfg.AdminListenAddress, "admin-listen", cfg.AdminListenAddress, "admin gRPC listen address")
 	flags.StringVar(&cfg.MetricsListenAddress, "metrics-listen", cfg.MetricsListenAddress, "metrics HTTP listen address")
-	flags.StringVar(&cfg.AdminUIListenAddress, "admin-ui-listen", cfg.AdminUIListenAddress, "admin UI HTTP listen address; empty disables the admin UI")
+	flags.StringVar(&cfg.AdminUIListenAddress, "admin-ui-listen", cfg.AdminUIListenAddress, "local admin UI HTTP listen address; empty disables the admin UI")
 	flags.StringVar(&cfg.AuthorizationPolicyPath, "authorization-policy", cfg.AuthorizationPolicyPath, "authorization policy JSON path; required for public and admin APIs")
 	flags.BoolVar(&cfg.TLSEnabled, "grpc-tls-enabled", cfg.TLSEnabled, "enable mutual TLS on public and admin gRPC listeners")
 	flags.StringVar(&cfg.TLSCertFile, "grpc-tls-cert-file", cfg.TLSCertFile, "server TLS certificate PEM path for public and admin gRPC listeners")

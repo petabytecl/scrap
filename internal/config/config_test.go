@@ -108,6 +108,25 @@ func TestLocalNonProductionStorageRequiresExplicitEnableAndDataDir(t *testing.T)
 	testutil.RequireNoErrorf(t, cfg.Validate(), "local non-production config did not validate")
 }
 
+func TestAdminUIRequiresLocalNonProductionStorage(t *testing.T) {
+	cfg := Default()
+	cfg.AdminUIListenAddress = "127.0.0.1:18083"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	testutil.RequireEqualf(
+		t,
+		err.Error(),
+		"admin_ui_listen_address requires local non-production storage until HTTP admin UI authorization is implemented",
+		"admin UI validation error",
+	)
+
+	cfg.EnableLocalNonProductionStorage = true
+	cfg.LocalDataDir = t.TempDir()
+	testutil.RequireNoErrorf(t, cfg.Validate(), "local admin UI config did not validate")
+}
+
 func TestLocalFilesystemBackendRequiresExplicitEnableStorageAndDataDir(t *testing.T) {
 	tests := map[string]Config{
 		"enabled without local storage": {
