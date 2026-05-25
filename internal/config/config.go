@@ -75,6 +75,7 @@ type Config struct {
 	MemberID                        string
 	MemberSlotID                    string
 	PeerAddresses                   string
+	PeerAdminWorkloadIdentity       string
 	GRPCServerLimits                GRPCServerLimits
 	EnableProductionWriteACK        bool
 	ProductionReadinessEvidence     ProductionReadinessEvidence
@@ -322,6 +323,7 @@ func (c Config) validateRuntimeIdentity() error {
 		validateRuntimeID("cell_id", identity.cellID),
 		validateRuntimeID("member_id", identity.memberID),
 		validateOptionalRuntimeID("member_slot_id", identity.memberSlotID),
+		validatePeerAdminWorkloadIdentity(identity),
 		validatePeerAddresses(identity.peerAddresses),
 	)
 }
@@ -332,6 +334,7 @@ type runtimeIdentity struct {
 	memberSlotID       string
 	peerAddressesValue string
 	peerAddresses      []string
+	peerAdminIdentity  string
 }
 
 func (c Config) runtimeIdentity() runtimeIdentity {
@@ -341,6 +344,7 @@ func (c Config) runtimeIdentity() runtimeIdentity {
 		memberSlotID:       strings.TrimSpace(c.MemberSlotID),
 		peerAddressesValue: strings.TrimSpace(c.PeerAddresses),
 		peerAddresses:      parsePeerAddresses(c.PeerAddresses),
+		peerAdminIdentity:  strings.TrimSpace(c.PeerAdminWorkloadIdentity),
 	}
 }
 
@@ -358,12 +362,31 @@ func (i runtimeIdentity) validateRequiredFields() error {
 		return errors.New("peer_addresses require cell_id, member_id, and member_slot_id")
 	case !i.configured():
 		return nil
+	default:
+		return firstValidationError(i.validateConfiguredFields(), i.validatePeerFields())
+	}
+}
+
+func (i runtimeIdentity) validateConfiguredFields() error {
+	switch {
 	case i.cellID == "":
 		return errors.New("cell_id is required when runtime identity is configured")
 	case i.memberID == "":
 		return errors.New("member_id is required when runtime identity is configured")
-	case i.hasPeerAddresses() && i.memberSlotID == "":
+	default:
+		return nil
+	}
+}
+
+func (i runtimeIdentity) validatePeerFields() error {
+	if !i.hasPeerAddresses() {
+		return nil
+	}
+	switch {
+	case i.memberSlotID == "":
 		return errors.New("member_slot_id is required when peer_addresses are configured")
+	case i.peerAdminIdentity == "":
+		return errors.New("peer_admin_workload_identity is required when peer_addresses are configured")
 	default:
 		return nil
 	}
@@ -389,6 +412,13 @@ func validateRuntimeID(field, value string) error {
 		return fmt.Errorf("%s must contain only lowercase ASCII letters, digits, and hyphens", field)
 	}
 	return nil
+}
+
+func validatePeerAdminWorkloadIdentity(identity runtimeIdentity) error {
+	if identity.peerAdminIdentity == "" {
+		return nil
+	}
+	return validateRuntimeID("peer_admin_workload_identity", identity.peerAdminIdentity)
 }
 
 func runtimeIDHasInvalidByte(value string) bool {
@@ -439,6 +469,10 @@ func parsePeerAddresses(value string) []string {
 		}
 	}
 	return out
+}
+
+func (c Config) PeerAddressList() []string {
+	return parsePeerAddresses(c.PeerAddresses)
 }
 
 func (c Config) validateLocalFilesystemBackend() error {

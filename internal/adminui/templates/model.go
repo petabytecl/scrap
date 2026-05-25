@@ -43,6 +43,17 @@ type SummaryData struct {
 	LocalBytesCapacity    uint64
 	DegradedDocumentCount uint32
 	PendingOperationCount uint32
+	StorageMembers        []MemberSummaryData
+	Warnings              []WarningData
+}
+
+type MemberSummaryData struct {
+	ID            string
+	CellID        string
+	State         string
+	Cordoned      bool
+	BytesUsed     uint64
+	BytesCapacity uint64
 }
 
 type CapacityData struct {
@@ -363,6 +374,27 @@ func memberStateClass(state string) string {
 	default:
 		return "status"
 	}
+}
+
+func memberSummaryStatusClass(member MemberSummaryData) string {
+	if member.Cordoned {
+		return "status queued"
+	}
+	return memberStateClass(member.State)
+}
+
+func memberRowsState(members []MemberSummaryData) string {
+	if len(members) == 0 {
+		return "unknown"
+	}
+	return "healthy"
+}
+
+func memberRowsDetail(members []MemberSummaryData) string {
+	if len(members) == 0 {
+		return "Cluster summary did not include addressable storage member rows."
+	}
+	return CountText(len(members)) + " addressable storage member row(s) reported."
 }
 
 func shortMemberState(state string) string {

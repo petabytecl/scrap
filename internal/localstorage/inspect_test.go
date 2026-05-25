@@ -22,6 +22,8 @@ func TestAdminInspectReportsLocalShardDocumentBlockAndCapacity(t *testing.T) {
 	summary, err := Inspect(app).GetAdminClusterSummary(ctx)
 	testutil.RequireNoErrorf(t, err, "cluster summary")
 	testutil.RequireEqualf(t, summary.GetShardCount(), uint32(1), "cluster shard count")
+	testutil.RequireEqualf(t, len(summary.GetStorageMembers()), 1, "cluster storage members")
+	testutil.RequireEqualf(t, summary.GetStorageMembers()[0].GetStorageMemberId(), "local", "cluster storage member id")
 	shard, err := Inspect(app).GetAdminShard(ctx, "local")
 	testutil.RequireNoErrorf(t, err, "local shard")
 	testutil.RequireEqualf(t, shard.GetLeaderMemberId(), "local", "local shard leader")

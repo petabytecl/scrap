@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/adminpeer"
 	"github.com/petabytecl/scrap/internal/adminui"
 	backendfs "github.com/petabytecl/scrap/internal/backend/fs"
 	"github.com/petabytecl/scrap/internal/backendupload"
@@ -105,6 +106,7 @@ func registerFlagSet(flags *flag.FlagSet, cfg *config.Config) {
 	flags.StringVar(&cfg.MemberID, "member-id", cfg.MemberID, "durable storage member identity for this scrapd process")
 	flags.StringVar(&cfg.MemberSlotID, "member-slot-id", cfg.MemberSlotID, "StatefulSet slot identity for this scrapd process")
 	flags.StringVar(&cfg.PeerAddresses, "peer-addresses", cfg.PeerAddresses, "comma-separated peer discovery addresses as host:port entries")
+	flags.StringVar(&cfg.PeerAdminWorkloadIdentity, "peer-admin-workload-identity", cfg.PeerAdminWorkloadIdentity, "workload identity metadata used for peer admin inspect requests")
 	flags.Uint64Var(&cfg.GRPCServerLimits.MaxConcurrentStreams, "grpc-max-concurrent-streams", cfg.GRPCServerLimits.MaxConcurrentStreams, "maximum concurrent HTTP/2 streams per gRPC server transport")
 	flags.IntVar(&cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, "grpc-max-recv-msg-size-bytes", cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, "maximum inbound gRPC message size in bytes")
 	flags.IntVar(&cfg.GRPCServerLimits.MaxSendMsgSizeBytes, "grpc-max-send-msg-size-bytes", cfg.GRPCServerLimits.MaxSendMsgSizeBytes, "maximum outbound gRPC message size in bytes")
@@ -322,6 +324,7 @@ func buildApplications(
 		"member_id", localApp.MemberID(),
 		"member_slot_id", cfg.MemberSlotID,
 		"peer_addresses", cfg.PeerAddresses,
+		"peer_admin_workload_identity", cfg.PeerAdminWorkloadIdentity,
 	)
 	var uploadRunner *backendupload.Runner
 	if cfg.EnableLocalFilesystemBackend {
@@ -349,16 +352,47 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 	}
 	localApp.SetOperationStore(operationStore)
 	localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
+	inspectApp := adminpeer.NewAggregator(adminpeer.Options{
+		Local:            localstorage.Inspect(localApp),
+		LocalMemberID:    localApp.MemberID(),
+		Peers:            peerInspectTargets(cfg, localApp.MemberID()),
+		WorkloadIdentity: cfg.PeerAdminWorkloadIdentity,
+	})
 	return node.Applications{
 		Documents:    localApp.Documents(),
 		Transactions: localApp.Transactions(),
-		Inspect:      localstorage.Inspect(localApp),
+		Inspect:      inspectApp,
 		Repair:       localstorage.Repair(localApp),
 		Member:       localstorage.Members(localApp),
 		DR:           localstorage.DisasterRecovery(localApp),
 		Operations:   operationStore,
 		Health:       localstorage.Health(localApp),
 	}, localApp, operationStore, nil
+}
+
+func peerInspectTargets(cfg config.Config, localMemberID string) []adminpeer.Peer {
+	addresses := cfg.PeerAddressList()
+	peers := make([]adminpeer.Peer, 0, len(addresses))
+	for _, address := range addresses {
+		memberID := peerMemberID(address)
+		if memberID == "" || memberID == localMemberID {
+			continue
+		}
+		peers = append(peers, adminpeer.Peer{MemberID: memberID, Address: address})
+	}
+	return peers
+}
+
+func peerMemberID(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return ""
+	}
+	if strings.Contains(host, ":") {
+		return ""
+	}
+	memberID, _, _ := strings.Cut(host, ".")
+	return memberID
 }
 
 func buildUploadRunner(cfg config.Config, localApp *localstorage.Application, logger *slog.Logger) (*backendupload.Runner, error) {

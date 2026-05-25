@@ -145,6 +145,7 @@ func TestBuildLocalApplicationsUsesRuntimeIdentity(t *testing.T) {
 	cfg.CellID = "scrap-cell-a"
 	cfg.MemberID = "scrapd-1"
 	cfg.MemberSlotID = "scrapd-1"
+	cfg.PeerAdminWorkloadIdentity = "local-operator"
 	cfg.PeerAddresses = strings.Join([]string{
 		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
 		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
@@ -245,18 +246,34 @@ func TestRegisterFlagSetParsesRuntimeIdentity(t *testing.T) {
 		"-cell-id=scrap-cell-a",
 		"-member-id=scrapd-2",
 		"-member-slot-id=scrapd-2",
+		"-peer-admin-workload-identity=local-operator",
 		"-peer-addresses=scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
 	})
 	testutil.RequireNoErrorf(t, err, "parse runtime identity flags")
 	testutil.RequireEqualf(t, cfg.CellID, "scrap-cell-a", "cell id flag")
 	testutil.RequireEqualf(t, cfg.MemberID, "scrapd-2", "member id flag")
 	testutil.RequireEqualf(t, cfg.MemberSlotID, "scrapd-2", "member slot id flag")
+	testutil.RequireEqualf(t, cfg.PeerAdminWorkloadIdentity, "local-operator", "peer admin workload identity flag")
 	testutil.RequireEqualf(
 		t,
 		cfg.PeerAddresses,
 		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
 		"peer addresses flag",
 	)
+}
+
+func TestPeerInspectTargetsDeriveMemberIDsFromStatefulSetDNS(t *testing.T) {
+	cfg := config.Default()
+	cfg.PeerAddresses = strings.Join([]string{
+		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+	}, ",")
+
+	peers := peerInspectTargets(cfg, "scrapd-1")
+	testutil.RequireEqualf(t, len(peers), 2, "peer count")
+	testutil.RequireEqualf(t, peers[0].MemberID, "scrapd-0", "first peer member id")
+	testutil.RequireEqualf(t, peers[1].MemberID, "scrapd-2", "second peer member id")
 }
 
 func TestScrapdBackgroundLoggingHelpers(t *testing.T) {

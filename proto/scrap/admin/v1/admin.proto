@@ -82,6 +82,8 @@ message ClusterSummary {
   uint64 local_bytes_capacity = 4;
   uint32 degraded_document_count = 5;
   uint32 pending_operation_count = 6;
+  repeated StorageMember storage_members = 7;
+  repeated OperationWarning warnings = 8;
 }
 
 message GetShardRequest {

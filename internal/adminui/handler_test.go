@@ -59,6 +59,14 @@ func TestHandlerServesExpandedDashboardViewRoutes(t *testing.T) {
 		requireOK(t, response)
 		requireContains(t, response.Body.String(), want)
 	}
+
+	members := request(handler, "/admin/views/members")
+	requireOK(t, members)
+	membersBody := members.Body.String()
+	requireContains(t, membersBody, "scrapd-0")
+	requireContains(t, membersBody, "scrapd-1")
+	requireContains(t, membersBody, "scrapd-2")
+	requireNotContains(t, membersBody, "Single-node local non-production member.")
 }
 
 func TestHandlerRendersOperationsFromStore(t *testing.T) {
@@ -374,6 +382,11 @@ func populatedHandler() http.Handler {
 				LocalBytesCapacity:    8192,
 				DegradedDocumentCount: 1,
 				PendingOperationCount: 4,
+				StorageMembers: []*adminv1.StorageMember{
+					memberSummary("scrapd-0", 1024, 2048),
+					memberSummary("scrapd-1", 1024, 2048),
+					memberSummary("scrapd-2", 2048, 4096),
+				},
 			},
 			runway: &adminv1.CapacityRunway{
 				CapacityProfileId:    "local-profile",
@@ -392,6 +405,16 @@ func populatedHandler() http.Handler {
 		}},
 		Now: func() time.Time { return time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC) },
 	})
+}
+
+func memberSummary(memberID string, used, capacity uint64) *adminv1.StorageMember {
+	return &adminv1.StorageMember{
+		StorageMemberId: memberID,
+		CellId:          "scrap-cell-a",
+		State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+		BytesUsed:       used,
+		BytesCapacity:   capacity,
+	}
 }
 
 func requireOK(t *testing.T, response *httptest.ResponseRecorder) {

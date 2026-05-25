@@ -392,7 +392,24 @@ func (h *Handler) loadSummary(ctx context.Context, data *templates.DashboardData
 		LocalBytesCapacity:    summary.GetLocalBytesCapacity(),
 		DegradedDocumentCount: summary.GetDegradedDocumentCount(),
 		PendingOperationCount: summary.GetPendingOperationCount(),
+		StorageMembers:        memberSummaryData(summary.GetStorageMembers()),
+		Warnings:              warningsData(summary.GetWarnings()),
 	}
+}
+
+func memberSummaryData(members []*adminv1.StorageMember) []templates.MemberSummaryData {
+	out := make([]templates.MemberSummaryData, 0, len(members))
+	for _, member := range members {
+		out = append(out, templates.MemberSummaryData{
+			ID:            member.GetStorageMemberId(),
+			CellID:        member.GetCellId(),
+			State:         member.GetState().String(),
+			Cordoned:      member.GetCordoned(),
+			BytesUsed:     member.GetBytesUsed(),
+			BytesCapacity: member.GetBytesCapacity(),
+		})
+	}
+	return out
 }
 
 func (h *Handler) loadCapacity(ctx context.Context, data *templates.DashboardData) {
