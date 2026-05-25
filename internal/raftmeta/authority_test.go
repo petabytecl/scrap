@@ -808,6 +808,37 @@ func TestAuthorityRejectsSnapshotAndCompactionAfterApplyFailure(t *testing.T) {
 	testutil.RequireEqualf(t, 2, len(entries), "log entry count after rejected compaction")
 }
 
+func TestAuthorityDurableIndexAdvancesPastAppliedIndexAfterApplyFailure(t *testing.T) {
+	dir := t.TempDir()
+	raftDir := filepath.Join(dir, "raftmeta")
+	metadata := openTestMetadata(t, dir)
+	authority := openTestAuthority(t, raftDir, metadata)
+	defer closeTestAuthority(t, authority, metadata)
+	document := authorityTestDocument("invoice.xml", []byte{1})
+
+	testutil.RequireNoErrorf(t, authority.CommitDocument(
+		context.Background(),
+		document,
+		"cmd-1",
+		time.Unix(100, 0).UTC(),
+	), "commit document")
+	failure := induceInvalidRestoreApplyFailure(t, authority, document.Identity, "cmd-apply-failure")
+	if failure == nil {
+		t.Fatal("apply failure was nil")
+	}
+
+	testutil.RequireEqualf(t, authority.AppliedIndex(), uint64(1), "applied index after failed apply")
+	testutil.RequireEqualf(t, authority.DurableIndex(), uint64(2), "durable index after failed apply")
+}
+
+func TestAuthorityDurableIndexReportsZeroWhenUnavailable(t *testing.T) {
+	var nilAuthority *Authority
+	testutil.RequireEqualf(t, nilAuthority.DurableIndex(), uint64(0), "nil authority durable index")
+
+	authority := &Authority{}
+	testutil.RequireEqualf(t, authority.DurableIndex(), uint64(0), "authority without log durable index")
+}
+
 func induceInvalidRestoreApplyFailure(t *testing.T, authority *Authority, document identity.Document, commandID string) error {
 	t.Helper()
 	documentName := document.DocumentName

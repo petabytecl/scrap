@@ -136,6 +136,9 @@ func (a *Authority) Close() error {
 	return a.log.Close()
 }
 
+// AppliedIndex reports the highest durable command index whose mutation has
+// been applied to the local metadata projection. It can lag DurableIndex after
+// a fail-closed apply error.
 func (a *Authority) AppliedIndex() uint64 {
 	if a == nil {
 		return 0
@@ -143,6 +146,15 @@ func (a *Authority) AppliedIndex() uint64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.appliedIndex
+}
+
+// DurableIndex reports the highest command index durably appended to the local
+// command log. It can be ahead of AppliedIndex if local metadata apply fails.
+func (a *Authority) DurableIndex() uint64 {
+	if a == nil || a.log == nil {
+		return 0
+	}
+	return a.log.LastIndex()
 }
 
 // CheckHealth reports fail-closed authority state that requires operator restart.
