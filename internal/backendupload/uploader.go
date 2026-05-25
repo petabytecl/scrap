@@ -1,6 +1,7 @@
 package backendupload
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/closeutil"
+	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
+	"github.com/petabytecl/scrap/internal/storageformat"
 )
 
 type BlockSource interface {
@@ -64,18 +67,31 @@ func (u Uploader) UploadBlock(ctx context.Context, intent metastore.UploadIntent
 		return UploadResult{}, err
 	}
 	defer closeutil.Ignore(reader)
-	blockObject, err := u.Backend.PutObject(ctx, intent.BackendObjectKey, reader)
+	payload := reader
+	var envelopeRecord *storagev1.EnvelopeRecord
+	var indexOptions BlockIndexOptions
+	if encryptor, ok := u.Envelope.(BlockPayloadEncryptor); ok && intent.EnvelopeObjectKey != "" {
+		encrypted, err := encryptor.EncryptBlockPayload(ctx, intent, reader)
+		if err != nil {
+			return UploadResult{}, err
+		}
+		defer closeutil.Ignore(encrypted.Reader)
+		payload = encrypted.Reader
+		envelopeRecord = encrypted.Envelope
+		indexOptions.EncryptedFrames = encrypted.Frames
+	}
+	blockObject, err := u.Backend.PutObject(ctx, intent.BackendObjectKey, payload)
 	if err != nil {
 		return UploadResult{}, err
 	}
 	result := UploadResult{Block: blockObject}
-	if err := u.uploadEnvelope(ctx, intent, blockObject, &result); err != nil {
+	if err := u.uploadEnvelope(ctx, intent, blockObject, envelopeRecord, &result); err != nil {
 		return result, err
 	}
 	if intent.IndexObjectKey == "" {
 		return result, u.verifyUpload(ctx, intent, result)
 	}
-	if err := u.uploadIndex(ctx, intent, blockObject, &result); err != nil {
+	if err := u.uploadIndex(ctx, intent, blockObject, indexOptions, &result); err != nil {
 		return result, err
 	}
 	return result, u.verifyUpload(ctx, intent, result)
@@ -97,16 +113,34 @@ func (u Uploader) validateUploadIntent(intent metastore.UploadIntent) error {
 	if intent.EnvelopeObjectKey != "" && u.Envelope == nil {
 		return errors.New("backendupload: block envelope source is not configured")
 	}
-	return nil
+	return u.validateEncryptedUploadIntent(intent)
 }
 
-func (u Uploader) uploadEnvelope(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object, result *UploadResult) error {
+func (u Uploader) validateEncryptedUploadIntent(intent metastore.UploadIntent) error {
+	_, encryptsPayload := u.Envelope.(BlockPayloadEncryptor)
+	if !encryptsPayload || intent.EnvelopeObjectKey == "" || intent.IndexObjectKey != "" {
+		return nil
+	}
+	return errors.New("backendupload: encrypted block upload requires a block index object key")
+}
+
+func (u Uploader) uploadEnvelope(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object, record *storagev1.EnvelopeRecord, result *UploadResult) error {
 	if intent.EnvelopeObjectKey == "" {
 		return nil
 	}
-	envelopeReader, err := u.Envelope.OpenBlockEnvelope(ctx, intent, blockObject)
-	if err != nil {
-		return err
+	var envelopeReader io.ReadCloser
+	if record != nil {
+		data, err := storageformat.MarshalEnvelopeRecord(record)
+		if err != nil {
+			return err
+		}
+		envelopeReader = io.NopCloser(bytes.NewReader(data))
+	} else {
+		var err error
+		envelopeReader, err = u.Envelope.OpenBlockEnvelope(ctx, intent, blockObject)
+		if err != nil {
+			return err
+		}
 	}
 	defer closeutil.Ignore(envelopeReader)
 	envelopeObject, err := u.Backend.PutObject(ctx, intent.EnvelopeObjectKey, envelopeReader)
@@ -117,11 +151,17 @@ func (u Uploader) uploadEnvelope(ctx context.Context, intent metastore.UploadInt
 	return nil
 }
 
-func (u Uploader) uploadIndex(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object, result *UploadResult) error {
+func (u Uploader) uploadIndex(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object, options BlockIndexOptions, result *UploadResult) error {
 	if u.Index == nil {
 		return errors.New("backendupload: block index source is not configured")
 	}
-	indexReader, err := u.Index.OpenBlockIndex(ctx, intent, blockObject)
+	var indexReader io.ReadCloser
+	var err error
+	if indexed, ok := u.Index.(BlockIndexSourceWithOptions); ok {
+		indexReader, err = indexed.OpenBlockIndexWithOptions(ctx, intent, blockObject, options)
+	} else {
+		indexReader, err = u.Index.OpenBlockIndex(ctx, intent, blockObject)
+	}
 	if err != nil {
 		return err
 	}

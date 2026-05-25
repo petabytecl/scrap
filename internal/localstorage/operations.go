@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/closeutil"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
@@ -1187,9 +1188,22 @@ func (a *OperationExecutor) replaceBlockFromBackend(ctx context.Context, blockID
 	if intent.State != metastore.UploadStateUploaded {
 		return fmt.Errorf("localstorage: block %s is not uploaded", blockID)
 	}
-	if err := a.verifier.verifyBackendEnvelope(ctx, intent); err != nil {
+	envelope, err := a.verifier.openBackendEnvelope(ctx, intent)
+	if err != nil {
 		return err
 	}
+	if envelope.encrypted() {
+		block, err := a.verifier.openVerifiedEncryptedBackendBlock(ctx, intent, envelope)
+		if err != nil {
+			return err
+		}
+		defer closeutil.Ignore(block.reader)
+		return a.blocks.ReplaceSealedBlock(ctx, blockID, block.length, block.sha256, block.reader)
+	}
+	return a.replacePlainBlockFromBackend(ctx, blockID, intent)
+}
+
+func (a *OperationExecutor) replacePlainBlockFromBackend(ctx context.Context, blockID string, intent metastore.UploadIntent) error {
 	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
 	if err != nil {
 		return err
@@ -1431,9 +1445,17 @@ func (a *OperationExecutor) restoreBlockFromBackend(ctx context.Context, blockID
 	if intent.State != metastore.UploadStateUploaded {
 		return false, fmt.Errorf("localstorage: block %s is not uploaded", blockID)
 	}
-	if err := a.verifier.verifyBackendEnvelope(ctx, intent); err != nil {
+	envelope, err := a.verifier.openBackendEnvelope(ctx, intent)
+	if err != nil {
 		return false, err
 	}
+	if envelope.encrypted() {
+		return a.restoreEncryptedBlockFromBackend(ctx, blockID, intent, envelope)
+	}
+	return a.restorePlainBlockFromBackend(ctx, blockID, intent)
+}
+
+func (a *OperationExecutor) restorePlainBlockFromBackend(ctx context.Context, blockID string, intent metastore.UploadIntent) (bool, error) {
 	object, err := a.backendStore.HeadObject(ctx, intent.BackendObjectKey)
 	if err != nil {
 		return false, err
@@ -1460,6 +1482,25 @@ func (a *OperationExecutor) restoreBlockFromBackend(ctx context.Context, blockID
 	}
 	if readErr != nil {
 		return false, readErr
+	}
+	return true, nil
+}
+
+func (a *OperationExecutor) restoreEncryptedBlockFromBackend(ctx context.Context, blockID string, intent metastore.UploadIntent, envelope backendEnvelopeMaterial) (bool, error) {
+	block, err := a.verifier.openVerifiedEncryptedBackendBlock(ctx, intent, envelope)
+	if err != nil {
+		return false, err
+	}
+	defer closeutil.Ignore(block.reader)
+	installed, err := a.blocks.EnsureSealedBlock(ctx, blockID, block.length, block.sha256)
+	if err != nil {
+		return false, err
+	}
+	if installed {
+		return false, nil
+	}
+	if err := a.blocks.InstallSealedBlock(ctx, blockID, block.length, block.sha256, block.reader); err != nil {
+		return false, err
 	}
 	return true, nil
 }

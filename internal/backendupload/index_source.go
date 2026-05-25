@@ -27,6 +27,14 @@ type BlockIndexSource interface {
 	OpenBlockIndex(context.Context, metastore.UploadIntent, backend.Object) (io.ReadCloser, error)
 }
 
+type BlockIndexSourceWithOptions interface {
+	OpenBlockIndexWithOptions(context.Context, metastore.UploadIntent, backend.Object, BlockIndexOptions) (io.ReadCloser, error)
+}
+
+type BlockIndexOptions struct {
+	EncryptedFrames []EncryptedFrame
+}
+
 type BlockDocumentLister interface {
 	ListBlockDocuments(blockID string) ([]metastore.Document, error)
 }
@@ -37,6 +45,10 @@ type LocalBlockIndexSource struct {
 }
 
 func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object) (io.ReadCloser, error) {
+	return s.OpenBlockIndexWithOptions(ctx, intent, blockObject, BlockIndexOptions{})
+}
+
+func (s LocalBlockIndexSource) OpenBlockIndexWithOptions(ctx context.Context, intent metastore.UploadIntent, blockObject backend.Object, options BlockIndexOptions) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -50,7 +62,7 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 	if len(documents) == 0 {
 		return nil, fmt.Errorf("backendupload: no documents found for block %q", intent.BlockID)
 	}
-	index, err := buildBlockIndex(intent.BlockID, s.ShardID, blockObject, intent.EnvelopeObjectKey, documents)
+	index, err := buildBlockIndex(intent.BlockID, s.ShardID, blockObject, intent.EnvelopeObjectKey, documents, options)
 	if err != nil {
 		return nil, err
 	}
@@ -61,8 +73,12 @@ func (s LocalBlockIndexSource) OpenBlockIndex(ctx context.Context, intent metast
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelopeObjectKey string, documents []metastore.Document) (*storagev1.BlockIndex, error) {
+func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelopeObjectKey string, documents []metastore.Document, options ...BlockIndexOptions) (*storagev1.BlockIndex, error) {
 	sortBlockIndexDocuments(documents)
+	blockIndexOptions := BlockIndexOptions{}
+	if len(options) > 0 {
+		blockIndexOptions = options[0]
+	}
 
 	createdAt := documents[0].CreatedAt
 	index := &storagev1.BlockIndex{
@@ -75,19 +91,15 @@ func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelo
 		EnvelopeObjectKey: optionalString(envelopeObjectKey, envelopeObjectKey != ""),
 		CreatedAt:         timestamppb.New(createdAt),
 	}
-	for _, document := range documents {
-		if !document.CreatedAt.IsZero() && document.CreatedAt.Before(createdAt) {
-			createdAt = document.CreatedAt
-			index.CreatedAt = timestamppb.New(createdAt)
-		}
-		record, err := buildIndexDocumentRecord(document, len(index.Frames))
-		if err != nil {
+	if len(blockIndexOptions.EncryptedFrames) > 0 {
+		if err := appendEncryptedBlockIndexDocuments(index, documents, blockIndexOptions); err != nil {
 			return nil, err
 		}
-		index.Documents = append(index.Documents, record)
-		if err := appendIndexFrameRecords(index, document.Location.Frames); err != nil {
+		if err := appendEncryptedFrameRecords(index, blockIndexOptions.EncryptedFrames); err != nil {
 			return nil, err
 		}
+	} else if err := appendPlainBlockIndexDocuments(index, documents); err != nil {
+		return nil, err
 	}
 	digest, err := storageformat.BlockIndexSHA256(index)
 	if err != nil {
@@ -95,6 +107,45 @@ func buildBlockIndex(blockID, shardID string, blockObject backend.Object, envelo
 	}
 	index.IndexSha256 = digest
 	return index, nil
+}
+
+func appendPlainBlockIndexDocuments(index *storagev1.BlockIndex, documents []metastore.Document) error {
+	for _, document := range documents {
+		if !document.CreatedAt.IsZero() && document.CreatedAt.Before(index.GetCreatedAt().AsTime()) {
+			index.CreatedAt = timestamppb.New(document.CreatedAt)
+		}
+		firstFrame, lastFrame, err := indexDocumentFrameRange(document, index.Frames, BlockIndexOptions{})
+		if err != nil {
+			return err
+		}
+		record, err := buildIndexDocumentRecord(document, firstFrame, lastFrame)
+		if err != nil {
+			return err
+		}
+		index.Documents = append(index.Documents, record)
+		if err := appendIndexFrameRecords(index, document.Location.Frames); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendEncryptedBlockIndexDocuments(index *storagev1.BlockIndex, documents []metastore.Document, options BlockIndexOptions) error {
+	for _, document := range documents {
+		if !document.CreatedAt.IsZero() && document.CreatedAt.Before(index.GetCreatedAt().AsTime()) {
+			index.CreatedAt = timestamppb.New(document.CreatedAt)
+		}
+		firstFrame, lastFrame, err := indexDocumentFrameRange(document, nil, options)
+		if err != nil {
+			return err
+		}
+		record, err := buildIndexDocumentRecord(document, firstFrame, lastFrame)
+		if err != nil {
+			return err
+		}
+		index.Documents = append(index.Documents, record)
+	}
+	return nil
 }
 
 func sortBlockIndexDocuments(documents []metastore.Document) {
@@ -136,7 +187,67 @@ func appendIndexFrameRecords(index *storagev1.BlockIndex, frames []metastore.Fra
 	return nil
 }
 
-func buildIndexDocumentRecord(document metastore.Document, firstFrame int) (*storagev1.IndexDocumentRecord, error) {
+func appendEncryptedFrameRecords(index *storagev1.BlockIndex, frames []EncryptedFrame) error {
+	for _, frame := range frames {
+		frameIndex, err := safeconv.IntToUint32("block index frame index", len(index.Frames))
+		if err != nil {
+			return err
+		}
+		if frame.FrameIndex != frameIndex {
+			return fmt.Errorf("backendupload: encrypted frame index %d does not match record order %d", frame.FrameIndex, frameIndex)
+		}
+		index.Frames = append(index.Frames, &storagev1.FrameChecksumRecord{
+			FrameIndex:      frameIndex,
+			PlaintextOffset: frame.PlaintextOffset,
+			PlaintextLength: frame.PlaintextLength,
+			StoredOffset:    frame.StoredOffset,
+			StoredLength:    frame.StoredLength,
+			PlaintextSha256: append([]byte(nil), frame.PlaintextSHA256[:]...),
+			StoredSha256:    append([]byte(nil), frame.StoredSHA256[:]...),
+			EncryptionMode:  storagev1.EncryptionMode_ENCRYPTION_MODE_AES_256_GCM,
+			AuthTag:         append([]byte(nil), frame.AuthTag...),
+		})
+	}
+	return nil
+}
+
+func indexDocumentFrameRange(document metastore.Document, frames []*storagev1.FrameChecksumRecord, options BlockIndexOptions) (int, int, error) {
+	if len(options.EncryptedFrames) == 0 {
+		firstFrame := len(frames)
+		lastFrame := firstFrame
+		if len(document.Location.Frames) > 0 {
+			lastFrame = firstFrame + len(document.Location.Frames) - 1
+		}
+		return firstFrame, lastFrame, nil
+	}
+	documentStart := document.Location.StoredOffset
+	documentEnd := documentStart + document.Location.StoredLength
+	if documentEnd < documentStart {
+		return 0, 0, fmt.Errorf("backendupload: document %s stored range overflows", document.Identity.DocumentName)
+	}
+	firstFrame := -1
+	lastFrame := -1
+	for i, frame := range options.EncryptedFrames {
+		frameStart := frame.PlaintextOffset
+		frameEnd := frame.PlaintextOffset + frame.PlaintextLength
+		if frameEnd < frameStart {
+			return 0, 0, fmt.Errorf("backendupload: encrypted frame %d plaintext range overflows", i)
+		}
+		if frameEnd <= documentStart || frameStart >= documentEnd {
+			continue
+		}
+		if firstFrame == -1 {
+			firstFrame = i
+		}
+		lastFrame = i
+	}
+	if firstFrame == -1 {
+		return 0, 0, fmt.Errorf("backendupload: encrypted frames do not cover document %s", document.Identity.DocumentName)
+	}
+	return firstFrame, lastFrame, nil
+}
+
+func buildIndexDocumentRecord(document metastore.Document, firstFrame, lastFrame int) (*storagev1.IndexDocumentRecord, error) {
 	metadata, err := deterministicMarshal.Marshal(&storagev1.DocumentMetadataBlob{
 		TenantId:             document.Identity.TenantID,
 		TransactionId:        document.Identity.TransactionID,
@@ -149,10 +260,6 @@ func buildIndexDocumentRecord(document metastore.Document, firstFrame int) (*sto
 	})
 	if err != nil {
 		return nil, err
-	}
-	lastFrame := firstFrame
-	if len(document.Location.Frames) > 0 {
-		lastFrame = firstFrame + len(document.Location.Frames) - 1
 	}
 	firstFrameIndex, err := safeconv.IntToUint32("document first frame index", firstFrame)
 	if err != nil {

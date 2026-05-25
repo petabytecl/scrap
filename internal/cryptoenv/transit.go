@@ -2,8 +2,13 @@ package cryptoenv
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -155,22 +160,133 @@ func defaultEnvelopeRequest(req EnvelopeRequest) EnvelopeRequest {
 }
 
 func ValidateEnvelopeRecordForRestore(ctx context.Context, transit Transit, record *storagev1.EnvelopeRecord) error {
-	if transit == nil {
-		return fmt.Errorf("%w: transit client is required", ErrUnavailable)
+	_, err := UnwrapEnvelopeDataKey(ctx, transit, record)
+	return err
+}
+
+func UnwrapEnvelopeDataKey(ctx context.Context, transit Transit, record *storagev1.EnvelopeRecord) ([]byte, error) {
+	if record == nil {
+		return nil, fmt.Errorf("%w: envelope record is required", ErrInvalidEnvelope)
 	}
 	if record.GetAeadAlgorithm() == "none" {
-		return nil
+		return nil, nil
 	}
-	if _, err := transit.UnwrapDataKey(ctx, UnwrapDataKeyRequest{
+	if transit == nil {
+		return nil, fmt.Errorf("%w: transit client is required", ErrUnavailable)
+	}
+	key, err := transit.UnwrapDataKey(ctx, UnwrapDataKeyRequest{
 		KeyID:      record.GetKeyId(),
 		KeyVersion: record.GetKeyVersion(),
 		WrappedDEK: append([]byte(nil), record.GetWrappedDek()...),
 		AAD:        append([]byte(nil), record.GetAadContext()...),
 		Algorithm:  record.GetDekAlgorithm(),
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return append([]byte(nil), key.PlaintextDEK...), nil
+}
+
+func SealPayloadFrame(plaintextDEK []byte, record *storagev1.EnvelopeRecord, frameIndex uint32, plaintextOffset uint64, plaintext []byte) ([]byte, []byte, error) {
+	aead, err := payloadAEAD(plaintextDEK, record)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce := payloadFrameNonce(record, frameIndex, plaintextOffset)
+	aad := payloadFrameAAD(record, frameIndex, plaintextOffset, uint64(len(plaintext)))
+	ciphertext := aead.Seal(nil, nonce, plaintext, aad)
+	authTagLength := aead.Overhead()
+	authTag := append([]byte(nil), ciphertext[len(ciphertext)-authTagLength:]...)
+	return ciphertext, authTag, nil
+}
+
+func OpenPayloadFrame(plaintextDEK []byte, record *storagev1.EnvelopeRecord, frameIndex uint32, plaintextOffset, plaintextLength uint64, ciphertext []byte) ([]byte, error) {
+	aead, err := payloadAEAD(plaintextDEK, record)
+	if err != nil {
+		return nil, err
+	}
+	nonce := payloadFrameNonce(record, frameIndex, plaintextOffset)
+	aad := payloadFrameAAD(record, frameIndex, plaintextOffset, plaintextLength)
+	plaintext, err := aead.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return nil, fmt.Errorf("%w: frame %d authentication failed", ErrInvalidEnvelope, frameIndex)
+	}
+	if uint64(len(plaintext)) != plaintextLength {
+		return nil, fmt.Errorf("%w: frame %d plaintext length mismatch", ErrInvalidEnvelope, frameIndex)
+	}
+	return plaintext, nil
+}
+
+func payloadAEAD(plaintextDEK []byte, record *storagev1.EnvelopeRecord) (cipher.AEAD, error) {
+	if record == nil {
+		return nil, fmt.Errorf("%w: envelope record is required", ErrInvalidEnvelope)
+	}
+	if record.GetDekAlgorithm() != DefaultDEKAlgorithm {
+		return nil, fmt.Errorf("%w: unsupported DEK algorithm %q", ErrInvalidEnvelope, record.GetDekAlgorithm())
+	}
+	if record.GetAeadAlgorithm() != DefaultAEADAlgorithm {
+		return nil, fmt.Errorf("%w: unsupported AEAD algorithm %q", ErrInvalidEnvelope, record.GetAeadAlgorithm())
+	}
+	if len(plaintextDEK) == 0 {
+		return nil, fmt.Errorf("%w: plaintext DEK is required", ErrKeyMaterialUnavailable)
+	}
+	key := payloadAEADKey(plaintextDEK, record)
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("%w: initialize AES cipher: %w", ErrInvalidEnvelope, err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("%w: initialize AES-GCM: %w", ErrInvalidEnvelope, err)
+	}
+	return aead, nil
+}
+
+func payloadAEADKey(plaintextDEK []byte, record *storagev1.EnvelopeRecord) [32]byte {
+	hasher := sha256.New()
+	writePayloadFramePart(hasher, []byte("scrap/backend-block/aes-256-gcm/key/v1"))
+	writePayloadFramePart(hasher, plaintextDEK)
+	writePayloadFramePart(hasher, []byte(record.GetEnvelopeId()))
+	writePayloadFramePart(hasher, []byte(record.GetBlockId()))
+	writePayloadFramePart(hasher, record.GetAadContext())
+	var out [32]byte
+	copy(out[:], hasher.Sum(nil))
+	return out
+}
+
+func payloadFrameNonce(record *storagev1.EnvelopeRecord, frameIndex uint32, plaintextOffset uint64) []byte {
+	hasher := sha256.New()
+	writePayloadFramePart(hasher, []byte("scrap/backend-block/aes-256-gcm/nonce/v1"))
+	writePayloadFramePart(hasher, []byte(record.GetEnvelopeId()))
+	writePayloadFramePart(hasher, []byte(record.GetBlockId()))
+	writePayloadFramePart(hasher, record.GetAadContext())
+	var numeric [12]byte
+	binary.BigEndian.PutUint32(numeric[:4], frameIndex)
+	binary.BigEndian.PutUint64(numeric[4:], plaintextOffset)
+	writePayloadFramePart(hasher, numeric[:])
+	sum := hasher.Sum(nil)
+	return append([]byte(nil), sum[:12]...)
+}
+
+func payloadFrameAAD(record *storagev1.EnvelopeRecord, frameIndex uint32, plaintextOffset, plaintextLength uint64) []byte {
+	hasher := sha256.New()
+	writePayloadFramePart(hasher, []byte("scrap/backend-block/aes-256-gcm/aad/v1"))
+	writePayloadFramePart(hasher, []byte(record.GetEnvelopeId()))
+	writePayloadFramePart(hasher, []byte(record.GetBlockId()))
+	writePayloadFramePart(hasher, record.GetAadContext())
+	var numeric [20]byte
+	binary.BigEndian.PutUint32(numeric[:4], frameIndex)
+	binary.BigEndian.PutUint64(numeric[4:12], plaintextOffset)
+	binary.BigEndian.PutUint64(numeric[12:], plaintextLength)
+	writePayloadFramePart(hasher, numeric[:])
+	return hasher.Sum(nil)
+}
+
+func writePayloadFramePart(hasher hash.Hash, part []byte) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(part)))
+	_, _ = hasher.Write(length[:])
+	_, _ = hasher.Write(part)
 }
 
 func RewrapEnvelopeRecord(ctx context.Context, transit Transit, record *storagev1.EnvelopeRecord, destinationKeyID string, createdAt time.Time) (*storagev1.EnvelopeRecord, error) {
@@ -215,7 +331,7 @@ func RewrapEnvelopeRecord(ctx context.Context, transit Transit, record *storagev
 }
 
 func EnvelopeAAD(cellID, blockID string, blockObject backend.Object) []byte {
-	return []byte(fmt.Sprintf("%s\x00%s\x00%s\x00%x", cellID, blockID, blockObject.Key, blockObject.SHA256))
+	return []byte(fmt.Sprintf("%s\x00%s\x00%s", cellID, blockID, blockObject.Key))
 }
 
 func IsUnavailable(err error) bool {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
+	storagev1 "github.com/petabytecl/scrap/internal/gen/scrap/storage/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
@@ -550,8 +552,12 @@ func (a *verificationEngine) readVerifiedBackendRange(ctx context.Context, docum
 	if readLength == 0 {
 		return nil, nil
 	}
-	if err := a.verifyBackendEnvelope(ctx, intent); err != nil {
+	envelope, err := a.openBackendEnvelope(ctx, intent)
+	if err != nil {
 		return nil, err
+	}
+	if envelope.encrypted() {
+		return a.readVerifiedEncryptedBackendRange(ctx, document, intent, selectedRange, envelope)
 	}
 	verifyStart, verifyEnd, err := verificationWindow(document.Location, selectedRange.Offset, readLength)
 	if err != nil {
@@ -579,24 +585,295 @@ func (a *verificationEngine) readVerifiedBackendRange(ctx context.Context, docum
 }
 
 func (a *verificationEngine) verifyBackendEnvelope(ctx context.Context, intent metastore.UploadIntent) error {
+	_, err := a.openBackendEnvelope(ctx, intent)
+	return err
+}
+
+type backendEnvelopeMaterial struct {
+	record       *storagev1.EnvelopeRecord
+	plaintextDEK []byte
+}
+
+type verifiedEncryptedBackendBlock struct {
+	reader io.ReadCloser
+	length uint64
+	sha256 [32]byte
+}
+
+func (m backendEnvelopeMaterial) encrypted() bool {
+	return m.record != nil && m.record.GetAeadAlgorithm() != "" && m.record.GetAeadAlgorithm() != "none"
+}
+
+func (a *verificationEngine) openBackendEnvelope(ctx context.Context, intent metastore.UploadIntent) (backendEnvelopeMaterial, error) {
 	if intent.EnvelopeObjectKey == "" {
-		return nil
+		return backendEnvelopeMaterial{}, nil
 	}
 	var data bytes.Buffer
 	if err := a.backendStore.ReadObjectRange(ctx, intent.EnvelopeObjectKey, backend.Range{}, &data); err != nil {
-		return err
+		return backendEnvelopeMaterial{}, err
 	}
 	envelope, err := storageformat.UnmarshalEnvelopeRecord(data.Bytes())
 	if err != nil {
-		return fmt.Errorf("%w: backend envelope %s is invalid: %w", backend.ErrChecksumMismatch, intent.EnvelopeObjectKey, err)
+		return backendEnvelopeMaterial{}, fmt.Errorf("%w: backend envelope %s is invalid: %w", backend.ErrChecksumMismatch, intent.EnvelopeObjectKey, err)
 	}
 	if envelope.GetAeadAlgorithm() == "none" {
-		return nil
+		return backendEnvelopeMaterial{record: envelope}, nil
 	}
 	if a.envelopeTransit == nil {
-		return fmt.Errorf("%w: backend envelope %s requires key %s", cryptoenv.ErrUnavailable, intent.EnvelopeObjectKey, envelope.GetKeyId())
+		return backendEnvelopeMaterial{}, fmt.Errorf("%w: backend envelope %s requires key %s", cryptoenv.ErrUnavailable, intent.EnvelopeObjectKey, envelope.GetKeyId())
 	}
-	return cryptoenv.ValidateEnvelopeRecordForRestore(ctx, a.envelopeTransit, envelope)
+	plaintextDEK, err := cryptoenv.UnwrapEnvelopeDataKey(ctx, a.envelopeTransit, envelope)
+	if err != nil {
+		return backendEnvelopeMaterial{}, err
+	}
+	return backendEnvelopeMaterial{record: envelope, plaintextDEK: plaintextDEK}, nil
+}
+
+func (a *verificationEngine) readVerifiedEncryptedBackendRange(ctx context.Context, document metastore.Document, intent metastore.UploadIntent, selectedRange storageapp.ReadRange, envelope backendEnvelopeMaterial) ([]byte, error) {
+	index, err := a.readBackendBlockIndex(ctx, intent)
+	if err != nil {
+		return nil, err
+	}
+	selectedStart, selectedEnd, err := encryptedSelectedRange(document, selectedRange)
+	if err != nil {
+		return nil, err
+	}
+	frames, err := encryptedFrameWindow(index.GetFrames(), selectedStart, selectedEnd)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	for _, frame := range frames {
+		plaintext, err := a.readVerifiedEncryptedBackendFrame(ctx, intent, envelope, frame)
+		if err != nil {
+			return nil, err
+		}
+		if err := writeSelectedFramePlaintext(&out, plaintext, frame, selectedStart, selectedEnd); err != nil {
+			return nil, err
+		}
+	}
+	outLength, err := safeconv.IntToUint64("encrypted backend read length", out.Len())
+	if err != nil {
+		return nil, err
+	}
+	if outLength != *selectedRange.Length {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return append([]byte(nil), out.Bytes()...), nil
+}
+
+func encryptedSelectedRange(document metastore.Document, selectedRange storageapp.ReadRange) (uint64, uint64, error) {
+	if selectedRange.Length == nil {
+		return 0, 0, blockstore.ErrInvalidRange
+	}
+	selectedStart := document.Location.StoredOffset + selectedRange.Offset
+	selectedEnd := selectedStart + *selectedRange.Length
+	if selectedEnd < selectedStart {
+		return 0, 0, blockstore.ErrInvalidRange
+	}
+	return selectedStart, selectedEnd, nil
+}
+
+func writeSelectedFramePlaintext(out *bytes.Buffer, plaintext []byte, frame *storagev1.FrameChecksumRecord, selectedStart, selectedEnd uint64) error {
+	frameStart := frame.GetPlaintextOffset()
+	frameEnd := frameStart + frame.GetPlaintextLength()
+	if frameEnd < frameStart {
+		return blockstore.ErrInvalidRange
+	}
+	copyStart := maxUint64(selectedStart, frameStart)
+	copyEnd := minUint64(selectedEnd, frameEnd)
+	if copyStart >= copyEnd {
+		return nil
+	}
+	start := copyStart - frameStart
+	end := copyEnd - frameStart
+	if end > uint64(len(plaintext)) {
+		return io.ErrUnexpectedEOF
+	}
+	out.Write(plaintext[start:end])
+	return nil
+}
+
+func (a *verificationEngine) readBackendBlockIndex(ctx context.Context, intent metastore.UploadIntent) (*storagev1.BlockIndex, error) {
+	if intent.IndexObjectKey == "" {
+		return nil, fmt.Errorf("%w: backend block index is required for encrypted block %s", backend.ErrChecksumMismatch, intent.BackendObjectKey)
+	}
+	var data bytes.Buffer
+	if err := a.backendStore.ReadObjectRange(ctx, intent.IndexObjectKey, backend.Range{}, &data); err != nil {
+		return nil, err
+	}
+	index, err := storageformat.UnmarshalBlockIndex(data.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("%w: backend index %s is invalid: %w", backend.ErrChecksumMismatch, intent.IndexObjectKey, err)
+	}
+	return index, nil
+}
+
+func encryptedFrameWindow(frames []*storagev1.FrameChecksumRecord, selectedStart, selectedEnd uint64) ([]*storagev1.FrameChecksumRecord, error) {
+	var selected []*storagev1.FrameChecksumRecord
+	coveredUntil := selectedStart
+	for _, frame := range frames {
+		frameStart := frame.GetPlaintextOffset()
+		frameEnd := frameStart + frame.GetPlaintextLength()
+		if frameEnd < frameStart {
+			return nil, blockstore.ErrInvalidRange
+		}
+		if frameEnd <= selectedStart {
+			continue
+		}
+		if frameStart >= selectedEnd {
+			break
+		}
+		if frameStart > coveredUntil {
+			return nil, io.ErrUnexpectedEOF
+		}
+		selected = append(selected, frame)
+		if frameEnd > coveredUntil {
+			coveredUntil = frameEnd
+		}
+		if coveredUntil >= selectedEnd {
+			return selected, nil
+		}
+	}
+	return nil, io.ErrUnexpectedEOF
+}
+
+func (a *verificationEngine) readVerifiedEncryptedBackendFrame(ctx context.Context, intent metastore.UploadIntent, envelope backendEnvelopeMaterial, frame *storagev1.FrameChecksumRecord) ([]byte, error) {
+	if frame.GetEncryptionMode() != storagev1.EncryptionMode_ENCRYPTION_MODE_AES_256_GCM {
+		return nil, fmt.Errorf("%w: encrypted backend frame %d has unsupported encryption mode %s", backend.ErrChecksumMismatch, frame.GetFrameIndex(), frame.GetEncryptionMode())
+	}
+	storedLength := frame.GetStoredLength()
+	var ciphertext bytes.Buffer
+	if err := a.backendStore.ReadObjectRange(ctx, intent.BackendObjectKey, backend.Range{
+		Offset: frame.GetStoredOffset(),
+		Length: &storedLength,
+	}, &ciphertext); err != nil {
+		return nil, err
+	}
+	if got := sha256.Sum256(ciphertext.Bytes()); !bytes.Equal(got[:], frame.GetStoredSha256()) {
+		return nil, backend.ErrChecksumMismatch
+	}
+	plaintext, err := cryptoenv.OpenPayloadFrame(
+		envelope.plaintextDEK,
+		envelope.record,
+		frame.GetFrameIndex(),
+		frame.GetPlaintextOffset(),
+		frame.GetPlaintextLength(),
+		ciphertext.Bytes(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: decrypt backend frame %d: %w", backend.ErrChecksumMismatch, frame.GetFrameIndex(), err)
+	}
+	if got := sha256.Sum256(plaintext); !bytes.Equal(got[:], frame.GetPlaintextSha256()) {
+		return nil, blockstore.ErrChecksumMismatch
+	}
+	return plaintext, nil
+}
+
+func (a *verificationEngine) openVerifiedEncryptedBackendBlock(ctx context.Context, intent metastore.UploadIntent, envelope backendEnvelopeMaterial) (verifiedEncryptedBackendBlock, error) {
+	index, err := a.readBackendBlockIndex(ctx, intent)
+	if err != nil {
+		return verifiedEncryptedBackendBlock{}, err
+	}
+	temp, err := a.createScratchFile("backend-restore", "encrypted-backend-block-*.blk")
+	if err != nil {
+		return verifiedEncryptedBackendBlock{}, err
+	}
+	tempPath := temp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = temp.Close()
+			removeScratchFile(tempPath)
+		}
+	}()
+	length, sum, err := a.writeVerifiedEncryptedBackendBlockFrames(ctx, temp, intent, envelope, index.GetFrames())
+	if err != nil {
+		return verifiedEncryptedBackendBlock{}, err
+	}
+	if err := temp.Sync(); err != nil {
+		return verifiedEncryptedBackendBlock{}, err
+	}
+	if _, err := temp.Seek(0, io.SeekStart); err != nil {
+		return verifiedEncryptedBackendBlock{}, err
+	}
+	committed = true
+	return verifiedEncryptedBackendBlock{
+		reader: removeOnCloseScratchFile{File: temp, path: tempPath},
+		length: length,
+		sha256: sum,
+	}, nil
+}
+
+func (a *verificationEngine) writeVerifiedEncryptedBackendBlockFrames(
+	ctx context.Context,
+	writer io.Writer,
+	intent metastore.UploadIntent,
+	envelope backendEnvelopeMaterial,
+	frames []*storagev1.FrameChecksumRecord,
+) (uint64, [32]byte, error) {
+	hasher := sha256.New()
+	coveredUntil := uint64(0)
+	for _, frame := range frames {
+		nextCoveredUntil, err := a.writeVerifiedEncryptedBackendBlockFrame(ctx, writer, hasher, intent, envelope, frame, coveredUntil)
+		if err != nil {
+			return 0, [32]byte{}, err
+		}
+		coveredUntil = nextCoveredUntil
+	}
+	var sum [32]byte
+	copy(sum[:], hasher.Sum(nil))
+	return coveredUntil, sum, nil
+}
+
+func (a *verificationEngine) writeVerifiedEncryptedBackendBlockFrame(
+	ctx context.Context,
+	writer io.Writer,
+	hasher hash.Hash,
+	intent metastore.UploadIntent,
+	envelope backendEnvelopeMaterial,
+	frame *storagev1.FrameChecksumRecord,
+	coveredUntil uint64,
+) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if frame.GetPlaintextOffset() != coveredUntil {
+		return 0, io.ErrUnexpectedEOF
+	}
+	plaintext, err := a.readVerifiedEncryptedBackendFrame(ctx, intent, envelope, frame)
+	if err != nil {
+		return 0, err
+	}
+	written, err := writer.Write(plaintext)
+	if err != nil {
+		return 0, err
+	}
+	if written != len(plaintext) {
+		return 0, io.ErrShortWrite
+	}
+	_, _ = hasher.Write(plaintext)
+	nextCoveredUntil := coveredUntil + frame.GetPlaintextLength()
+	if nextCoveredUntil < coveredUntil {
+		return 0, blockstore.ErrInvalidRange
+	}
+	return nextCoveredUntil, nil
+}
+
+type removeOnCloseScratchFile struct {
+	*os.File
+	path string
+}
+
+func (f removeOnCloseScratchFile) Close() error {
+	closeErr := f.File.Close()
+	removeScratchFile(f.path)
+	return closeErr
+}
+
+func removeScratchFile(path string) {
+	// #nosec G703 -- path comes directly from os.CreateTemp in the application scratch directory.
+	_ = os.Remove(path)
 }
 
 func verificationWindow(record metastore.Location, offset, length uint64) (uint64, uint64, error) {
@@ -730,6 +1007,20 @@ func verificationFrameDataRange(frameStart, frameEnd, frameLength, verifyStart, 
 		)
 	}
 	return start, start + frameLength, nil
+}
+
+func maxUint64(left, right uint64) uint64 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func minUint64(left, right uint64) uint64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func verificationOutcome(err error) string {

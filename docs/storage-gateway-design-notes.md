@@ -2041,7 +2041,7 @@ default frame size: 1 MiB
 optional tuning size: 4 MiB
 ```
 
-Frame boundaries are over the stored plaintext block byte stream before encryption. Encryption, when enabled, produces per-frame ciphertext offsets and lengths. Document stored offsets remain independent of encryption mode.
+Frame boundaries are over the stored plaintext block byte stream before encryption. Encryption, when enabled, produces per-frame ciphertext offsets and lengths. Document stored offsets remain plaintext block offsets and are independent of encryption mode.
 
 Documents do not need to align to frame boundaries. Many small documents may share a frame, and medium documents may span many frames.
 
@@ -3115,7 +3115,8 @@ frame record:
   ciphertext_offset
   ciphertext_length
   auth_tag
-  checksum
+  plaintext_sha256
+  ciphertext_sha256
 ```
 
 Default crypto frame size is 1 MiB, with 4 MiB as a possible tuning option. Frame nonces are derived from the envelope nonce seed and canonical context; they are not stored per frame.
@@ -3173,9 +3174,18 @@ Hashes:
 
 ```text
 logical_sha256: original client-visible bytes
-stored_sha256: bytes stored inside the block before backend encryption
-ciphertext_sha256: encrypted backend bytes when applicable
+document stored_sha256: bytes stored inside the local block before backend encryption
+frame plaintext_sha256: plaintext frame bytes before backend encryption
+frame stored_sha256: encrypted backend frame bytes when encryption is enabled
+backend block object sha256: encrypted backend object bytes when encryption is enabled
 ```
+
+For Transit-backed encrypted uploads, document `StoredSHA256` does not change
+when the backend object is encrypted; it continues to describe the local
+plaintext block segment used by hot reads and peer repair. The `.idx` frame
+records carry the ciphertext offsets, lengths, auth tags, and stored checksums
+needed to authenticate encrypted backend range reads before any client-visible
+bytes are served.
 
 ## Admin API And Operator Control Plane
 

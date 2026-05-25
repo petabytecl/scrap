@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -68,6 +69,11 @@ func TestApplicationAccessorsAndSettersExposeFocusedSubcomponents(t *testing.T) 
 	if _, ok := app.backendEnvelopeSource().(backendupload.LocalBlockEnvelopeSource); !ok {
 		t.Fatalf("default envelope source = %T, want local source", app.backendEnvelopeSource())
 	}
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 1})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	transitSource, ok := app.backendEnvelopeSource().(backendupload.TransitBlockEnvelopeSource)
+	testutil.RequireTruef(t, ok, "transit envelope source type = %T", app.backendEnvelopeSource())
+	testutil.RequireEqualf(t, transitSource.TempDir, filepath.Join(app.dir, "tmp", "backend-upload"), "transit upload temp dir")
 	app.SetSealBlockAtBytes(123)
 	testutil.RequireEqualf(t, app.sealBlockAtBytes, uint64(123), "seal block threshold")
 }
@@ -1347,6 +1353,210 @@ func TestReadDocumentWithTransitEnvelopeRequiresKeyMaterial(t *testing.T) {
 	requireReadBytes(t, sender, data)
 }
 
+func TestReadDocumentRejectsCorruptEncryptedBackendByteBeforeServing(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("corrupt encrypted backend bytes")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	backendRoot := t.TempDir()
+	backendStore, err := backendfs.Open(backendRoot)
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(backendStore)
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
+	stored, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	intent, err := app.metadata.GetUploadIntent(stored.Location.BlockID)
+	testutil.RequireNoErrorf(t, err, "get upload intent")
+	corruptStoredByte(t, app, stored.Location, 0)
+	corruptBackendObjectByte(t, backendRoot, intent.BackendObjectKey, 0)
+
+	sender := &recordingReadSender{}
+	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender)
+	requireCode(t, err, codes.DataLoss)
+	requireIntegrityDetail(t, err)
+	requireNoReadDataSent(t, sender)
+}
+
+func TestReadDocumentWithHealthyLocalBytesDoesNotRequireTransit(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("healthy local encrypted upload bytes")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	backendStore, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(backendStore)
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
+	transit.SetUnavailable(true)
+
+	sender := &recordingReadSender{}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read healthy local document")
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
+	requireReadBytes(t, sender, data)
+}
+
+func TestEncryptedSelectedRangeRejectsMissingLengthAndOverflow(t *testing.T) {
+	document := metastore.Document{
+		Identity: identity.Document{DocumentName: "encrypted.xml"},
+		Location: metastore.Location{
+			StoredOffset: 10,
+			StoredLength: 20,
+		},
+	}
+	_, _, err := encryptedSelectedRange(document, storageapp.ReadRange{Offset: 1})
+	testutil.RequireErrorIsf(t, err, blockstore.ErrInvalidRange, "missing range length")
+
+	length := uint64(10)
+	document.Location.StoredOffset = ^uint64(0) - 3
+	_, _, err = encryptedSelectedRange(document, storageapp.ReadRange{Offset: 2, Length: &length})
+	testutil.RequireErrorIsf(t, err, blockstore.ErrInvalidRange, "overflowing selected range")
+}
+
+func TestEncryptedFrameWindowRequiresContiguousCoverage(t *testing.T) {
+	frames := []*storagev1.FrameChecksumRecord{
+		{FrameIndex: 0, PlaintextOffset: 0, PlaintextLength: 10},
+		{FrameIndex: 1, PlaintextOffset: 10, PlaintextLength: 10},
+		{FrameIndex: 2, PlaintextOffset: 20, PlaintextLength: 10},
+	}
+	selected, err := encryptedFrameWindow(frames, 5, 25)
+	testutil.RequireNoErrorf(t, err, "select encrypted frame window")
+	testutil.RequireEqualf(t, len(selected), 3, "selected frame count")
+
+	_, err = encryptedFrameWindow([]*storagev1.FrameChecksumRecord{
+		{FrameIndex: 0, PlaintextOffset: 0, PlaintextLength: 10},
+		{FrameIndex: 1, PlaintextOffset: 20, PlaintextLength: 10},
+	}, 5, 25)
+	testutil.RequireErrorIsf(t, err, io.ErrUnexpectedEOF, "gap in encrypted frame coverage")
+
+	_, err = encryptedFrameWindow([]*storagev1.FrameChecksumRecord{
+		{FrameIndex: 0, PlaintextOffset: ^uint64(0) - 1, PlaintextLength: 4},
+	}, ^uint64(0)-1, ^uint64(0))
+	testutil.RequireErrorIsf(t, err, blockstore.ErrInvalidRange, "overflowing encrypted frame")
+}
+
+func TestWriteSelectedFramePlaintextCopiesOnlySelectedBytes(t *testing.T) {
+	frame := &storagev1.FrameChecksumRecord{
+		FrameIndex:      0,
+		PlaintextOffset: 10,
+		PlaintextLength: 10,
+	}
+	var out bytes.Buffer
+	testutil.RequireNoErrorf(t, writeSelectedFramePlaintext(&out, []byte("0123456789"), frame, 13, 18), "copy selected frame plaintext")
+	testutil.RequireEqualf(t, out.String(), "34567", "selected plaintext")
+
+	out.Reset()
+	err := writeSelectedFramePlaintext(&out, []byte("short"), frame, 10, 20)
+	testutil.RequireErrorIsf(t, err, io.ErrUnexpectedEOF, "short frame plaintext")
+
+	out.Reset()
+	testutil.RequireNoErrorf(t, writeSelectedFramePlaintext(&out, []byte("0123456789"), frame, 0, 5), "skip disjoint frame")
+	testutil.RequireEqualf(t, out.Len(), 0, "disjoint frame output length")
+
+	overflowFrame := &storagev1.FrameChecksumRecord{
+		FrameIndex:      1,
+		PlaintextOffset: ^uint64(0) - 1,
+		PlaintextLength: 4,
+	}
+	err = writeSelectedFramePlaintext(&out, []byte("overflow"), overflowFrame, ^uint64(0)-1, ^uint64(0))
+	testutil.RequireErrorIsf(t, err, blockstore.ErrInvalidRange, "overflowing frame plaintext range")
+}
+
+func TestReadBackendBlockIndexRequiresValidIndexObject(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(store)
+	engine := app.verifier.(*verificationEngine)
+
+	_, err = engine.readBackendBlockIndex(ctx, metastore.UploadIntent{BackendObjectKey: "objects/block-1.blk"})
+	testutil.RequireErrorIsf(t, err, backend.ErrChecksumMismatch, "missing encrypted backend index key")
+
+	intent := metastore.UploadIntent{
+		BackendObjectKey: "objects/block-1.blk",
+		IndexObjectKey:   "objects/block-1.idx",
+	}
+	_, err = store.PutObject(ctx, intent.IndexObjectKey, strings.NewReader("not an index"))
+	testutil.RequireNoErrorf(t, err, "put invalid index object")
+	_, err = engine.readBackendBlockIndex(ctx, intent)
+	testutil.RequireErrorIsf(t, err, backend.ErrChecksumMismatch, "invalid encrypted backend index")
+}
+
+func TestReadVerifiedEncryptedBackendFrameRejectsInvalidMetadata(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(store)
+	engine := app.verifier.(*verificationEngine)
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	material, err := cryptoenv.CreateEnvelopeRecord(ctx, transit, cryptoenv.EnvelopeRequest{
+		BlockID:     "block-1",
+		BlockObject: backend.Object{Key: "objects/block-1.blk"},
+		KeyID:       "transit/backend",
+		CreatedAt:   time.Unix(100, 0).UTC(),
+	})
+	testutil.RequireNoErrorf(t, err, "create envelope")
+	envelope := backendEnvelopeMaterial{record: material.Record, plaintextDEK: material.PlaintextDEK}
+	intent := metastore.UploadIntent{BackendObjectKey: "objects/block-1.blk"}
+
+	_, err = engine.readVerifiedEncryptedBackendFrame(ctx, intent, envelope, &storagev1.FrameChecksumRecord{
+		FrameIndex:     0,
+		EncryptionMode: storagev1.EncryptionMode_ENCRYPTION_MODE_NONE,
+	})
+	testutil.RequireErrorIsf(t, err, backend.ErrChecksumMismatch, "unsupported encrypted frame mode")
+
+	plaintext := []byte("encrypted backend frame")
+	ciphertext, _, err := cryptoenv.SealPayloadFrame(material.PlaintextDEK, material.Record, 0, 0, plaintext)
+	testutil.RequireNoErrorf(t, err, "seal backend frame")
+	_, err = store.PutObject(ctx, intent.BackendObjectKey, bytes.NewReader(ciphertext))
+	testutil.RequireNoErrorf(t, err, "put encrypted backend object")
+	storedSHA := sha256.Sum256(ciphertext)
+	_, err = engine.readVerifiedEncryptedBackendFrame(ctx, intent, envelope, &storagev1.FrameChecksumRecord{
+		FrameIndex:      0,
+		PlaintextOffset: 0,
+		PlaintextLength: uint64(len(plaintext)),
+		StoredOffset:    0,
+		StoredLength:    uint64(len(ciphertext)),
+		PlaintextSha256: bytes.Repeat([]byte{0xff}, sha256.Size),
+		StoredSha256:    storedSHA[:],
+		EncryptionMode:  storagev1.EncryptionMode_ENCRYPTION_MODE_AES_256_GCM,
+	})
+	testutil.RequireErrorIsf(t, err, blockstore.ErrChecksumMismatch, "plaintext checksum mismatch")
+}
+
+func TestBackendEnvelopeMaterialEncryptedAndUint64Bounds(t *testing.T) {
+	testutil.RequireFalsef(t, (backendEnvelopeMaterial{}).encrypted(), "nil envelope encrypted")
+	testutil.RequireFalsef(t, (backendEnvelopeMaterial{record: &storagev1.EnvelopeRecord{AeadAlgorithm: "none"}}).encrypted(), "noop envelope encrypted")
+	testutil.RequireTruef(t, (backendEnvelopeMaterial{record: &storagev1.EnvelopeRecord{AeadAlgorithm: cryptoenv.DefaultAEADAlgorithm}}).encrypted(), "AES-GCM envelope encrypted")
+
+	testutil.RequireEqualf(t, maxUint64(9, 3), uint64(9), "max left")
+	testutil.RequireEqualf(t, maxUint64(3, 9), uint64(9), "max right")
+	testutil.RequireEqualf(t, minUint64(3, 9), uint64(3), "min left")
+	testutil.RequireEqualf(t, minUint64(9, 3), uint64(3), "min right")
+}
+
 func requireCryptoUnavailableBackendDetail(t *testing.T, detail *scrapv1.CryptoUnavailableDetail, documentName string) {
 	t.Helper()
 	testutil.RequireEqualf(t, detail.GetIdentity().GetDocumentName(), documentName, "crypto detail document name")
@@ -1358,6 +1568,25 @@ func requireNoReadDataSent(t *testing.T, sender *recordingReadSender) {
 	t.Helper()
 	testutil.RequireFalsef(t, sender.sentMetadata, "metadata was sent before read error")
 	testutil.RequireEqualf(t, len(sender.chunks), 0, "chunk count before read error")
+}
+
+func corruptBackendObjectByte(t *testing.T, root, key string, offset int64) {
+	t.Helper()
+	sum := sha256.Sum256([]byte(key))
+	path := filepath.Join(root, "objects", hex.EncodeToString(sum[:])+".data")
+	// #nosec G304 -- test path is derived from t.TempDir plus backend/fs object hashing.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	testutil.RequireNoErrorf(t, err, "open backend object")
+	defer func() { testutil.RequireNoErrorf(t, file.Close(), "close backend object") }()
+	one := []byte{0}
+	if _, err := file.ReadAt(one, offset); err != nil {
+		t.Fatalf("read backend object byte: %v", err)
+	}
+	one[0] ^= 0xff
+	if _, err := file.WriteAt(one, offset); err != nil {
+		t.Fatalf("write corrupt backend object byte: %v", err)
+	}
+	testutil.RequireNoErrorf(t, file.Sync(), "sync corrupt backend object")
 }
 
 func TestRunQueuedOperationsOnceRewrapsEnvelopeAndAudits(t *testing.T) {
@@ -1498,6 +1727,46 @@ func TestRunQueuedOperationsOnceRestoresDocumentFromBackend(t *testing.T) {
 	testutil.RequireNoErrorf(t, err, "head restored document")
 	testutil.RequireEqualf(t, restored.RestoreState, metastore.RestoreStateHot, "restore state")
 	testutil.RequireEqualf(t, restored.Availability, metastore.AvailabilityHot, "availability")
+	sender := &recordingReadSender{}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
+	requireReadBytes(t, sender, data)
+}
+
+func TestRunQueuedOperationsOnceRestoresTransitEncryptedDocumentFromBackend(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	store := openTestOperationStore(t)
+	data := []byte("restore encrypted backend bytes")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data})); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	backendStore, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(backendStore)
+	if _, err := app.RunBackendUploadOnce(ctx, backendStore); err != nil {
+		t.Fatalf("run backend upload once: %v", err)
+	}
+	stored, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "restore-encrypted-cold-1", time.Unix(200, 0).UTC()), "mark cold")
+	testutil.RequireNoErrorf(t, os.Remove(app.blocks.BlockPath(stored.Location.BlockID)), "remove local block")
+	removeLocalSealIfPresent(t, app, stored.Location.BlockID)
+	operation := queuedOperation("restore-encrypted-op-1", "restore", []*adminv1.Target{documentTarget(doc)})
+	testutil.RequireNoErrorf(t, store.Put(operation), "put operation")
+
+	result, err := app.RunQueuedOperationsOnce(ctx, store)
+	testutil.RequireNoErrorf(t, err, "run queued operations")
+	requireOperationRunResult(t, result, 1, 1, 0, 0)
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
 	requireReadSource(t, sender, storageapp.StorageSourceLocal)
@@ -1874,6 +2143,37 @@ func TestReplaceBlockFromBackendInstallsVerifiedBackendBlock(t *testing.T) {
 	testutil.RequireNoErrorf(t, app.replaceBlockFromBackend(ctx, stored.Location.BlockID), "replace block from backend")
 	blockBytes := readTestBlockFile(t, app.blocks.BlockPath(stored.Location.BlockID), "read replaced block")
 	testutil.RequireEqualf(t, sha256.Sum256(blockBytes), backendObject.SHA256, "replaced block checksum")
+	sender := &recordingReadSender{}
+	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read replaced document")
+	requireReadSource(t, sender, storageapp.StorageSourceLocal)
+	requireReadBytes(t, sender, data)
+}
+
+func TestReplaceBlockFromBackendInstallsDecryptedTransitEncryptedBlock(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	data := []byte("replace restores decrypted encrypted backend block")
+	doc := testDocumentIdentity()
+	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
+	transit := cryptoenv.NewFakeTransit(map[string]uint32{"transit/backend": 2})
+	app.SetEnvelopeTransit(transit, "transit/backend")
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{data}))
+	testutil.RequireNoErrorf(t, err, "write document")
+	backendStore, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend store")
+	app.SetBackendStore(backendStore)
+	_, err = app.RunBackendUploadOnce(ctx, backendStore)
+	testutil.RequireNoErrorf(t, err, "run backend upload once")
+	stored, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head stored document")
+	corruptStoredByte(t, app, stored.Location, 0)
+
+	testutil.RequireNoErrorf(t, app.replaceBlockFromBackend(ctx, stored.Location.BlockID), "replace block from backend")
 	sender := &recordingReadSender{}
 	testutil.RequireNoErrorf(t, app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read replaced document")
 	requireReadSource(t, sender, storageapp.StorageSourceLocal)

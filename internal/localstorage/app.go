@@ -180,6 +180,7 @@ func (a *Application) SetEnvelopeTransit(transit cryptoenv.Transit, keyID string
 		Transit: transit,
 		CellID:  localPublishedCellID,
 		KeyID:   keyID,
+		TempDir: a.scratchDir("backend-upload"),
 	}
 }
 
@@ -197,6 +198,18 @@ func (a *Application) SetOperationStore(store *operations.Store) {
 
 func (a *Application) SetSealBlockAtBytes(bytes uint64) {
 	a.sealBlockAtBytes = bytes
+}
+
+func (a *Application) scratchDir(name string) string {
+	return filepath.Join(a.dir, "tmp", name)
+}
+
+func (a *Application) createScratchFile(name, pattern string) (*os.File, error) {
+	dir := a.scratchDir(name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return os.CreateTemp(dir, pattern)
 }
 
 func (a *Application) backendEnvelopeSource() backendupload.BlockEnvelopeSource {
