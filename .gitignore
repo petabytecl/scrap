@@ -1,0 +1,34 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# LLM
+/.claude/
+/.codex/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Build and test outputs
+/bin/
+/build/
+/dist/
+/tmp/
+coverage.out
+test-results/
+*.coverprofile
+*.prof
+*.pprof
+*.test
+
+# Logs
+*.log
