@@ -400,6 +400,9 @@ capacity-sample: ## Emit advisory local capacity sample evidence.
 		$(RELEASE_EVIDENCE_FLAGS) \
 		> "$(CAPACITY_SAMPLE_REPORT)"
 
+OPENBAO_SMOKE_ADDR ?= $(CAPACITY_SAMPLE_OPENBAO_ADDR)
+OPENBAO_SMOKE_KEY_PATH ?= $(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)
+
 .PHONY: openbao-smoke-evidence
 openbao-smoke-evidence: ## Emit local OpenBao Transit smoke evidence.
 	@BAO_TOKEN="$${BAO_TOKEN:-local-root}" \
@@ -410,9 +413,9 @@ openbao-smoke-evidence: ## Emit local OpenBao Transit smoke evidence.
 		--environment-id "local-kind" \
 		--namespace "scrap-local" \
 		--deployment "openbao" \
-		--openbao-addr "$(CAPACITY_SAMPLE_OPENBAO_ADDR)" \
+		--openbao-addr "$(OPENBAO_SMOKE_ADDR)" \
 		--outage-addr "$(OPENBAO_SMOKE_OUTAGE_ADDR)" \
-		--transit-key-path "$(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)"
+		--transit-key-path "$(OPENBAO_SMOKE_KEY_PATH)"
 
 .PHONY: local-soak-evidence
 local-soak-evidence: ## Emit local release soak and capacity rehearsal evidence.
