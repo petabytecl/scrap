@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/appstatus"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/operations"
@@ -112,6 +113,50 @@ func TestHandlerRendersOperationsFromStore(t *testing.T) {
 	requireContains(t, detailBody, "2026-05-25T13:01:00Z")
 }
 
+func TestHandlerRendersMemberDetailAndTabs(t *testing.T) {
+	lastSeen := time.Date(2026, 5, 25, 14, 0, 0, 0, time.UTC)
+	handler := NewHandler(Options{
+		Inspect: fakeInspect{
+			member: &adminv1.StorageMember{
+				StorageMemberId: "local",
+				CellId:          "local",
+				State:           adminv1.MemberState_MEMBER_STATE_ONLINE,
+				BytesUsed:       2048,
+				BytesCapacity:   4096,
+				LastSeenAt:      timestamppb.New(lastSeen),
+			},
+		},
+		Member: fakeMember{
+			safety: &adminv1.EvictionSafety{
+				SafeToEvict: false,
+				Warnings: []*adminv1.OperationWarning{
+					{Code: "SCRAP_SINGLE_MEMBER_LOCAL_MODE", Message: "no alternate member"},
+				},
+			},
+		},
+	})
+
+	detail := request(handler, "/admin/members/local")
+	requireOK(t, detail)
+	detailBody := detail.Body.String()
+	requireContains(t, detailBody, "Members / local")
+	requireContains(t, detailBody, "2.0 KiB")
+	requireContains(t, detailBody, "50.0% of 4.0 KiB")
+	requireContains(t, detailBody, "SCRAP_SINGLE_MEMBER_LOCAL_MODE")
+	requireContains(t, detailBody, "/admin/members/local/tab/kubernetes")
+
+	storageTab := request(handler, "/admin/members/local/tab/storage")
+	requireOK(t, storageTab)
+	storageBody := storageTab.Body.String()
+	requireContains(t, storageBody, "Bytes used")
+	requireContains(t, storageBody, "2.0 KiB")
+	requireNotContains(t, storageBody, "Member tabs")
+
+	if response := request(handler, "/admin/members/local/tab/missing"); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown member tab status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
 func TestHandlerRejectsInvalidOperationFilter(t *testing.T) {
 	response := request(NewHandler(Options{}), "/admin/views/operations?state=missing")
 	if response.Code != http.StatusBadRequest {
@@ -198,6 +243,7 @@ func requireNotContains(t *testing.T, body, unwanted string) {
 type fakeInspect struct {
 	summary *adminv1.ClusterSummary
 	runway  *adminv1.CapacityRunway
+	member  *adminv1.StorageMember
 }
 
 func (f fakeInspect) GetAdminClusterSummary(context.Context) (*adminv1.ClusterSummary, error) {
@@ -217,7 +263,10 @@ func (f fakeInspect) GetAdminBlock(context.Context, api.BlockTarget) (*adminv1.B
 }
 
 func (f fakeInspect) GetAdminMember(context.Context, string) (*adminv1.StorageMember, error) {
-	return nil, errors.New("not implemented")
+	if f.member == nil {
+		return nil, appstatus.New(appstatus.CodeNotFound, "member not found")
+	}
+	return f.member, nil
 }
 
 func (f fakeInspect) GetAdminCapacityRunway(context.Context, string) (*adminv1.CapacityRunway, error) {
@@ -230,4 +279,23 @@ type fakeRepair struct {
 
 func (f fakeRepair) GetRepairQueue(context.Context, string) ([]*adminv1.RepairQueueItem, error) {
 	return f.items, nil
+}
+
+type fakeMember struct {
+	safety *adminv1.EvictionSafety
+}
+
+func (f fakeMember) CordonMember(context.Context, api.MemberMutationRequest) (*adminv1.StorageMember, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f fakeMember) UncordonMember(context.Context, api.MemberMutationRequest) (*adminv1.StorageMember, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f fakeMember) GetEvictionSafety(context.Context, string) (*adminv1.EvictionSafety, error) {
+	if f.safety == nil {
+		return nil, appstatus.New(appstatus.CodeNotFound, "member not found")
+	}
+	return f.safety, nil
 }

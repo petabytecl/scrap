@@ -14,6 +14,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/adminui/templates"
 	"github.com/petabytecl/scrap/internal/api"
+	"github.com/petabytecl/scrap/internal/appstatus"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/operations"
 )
@@ -33,6 +34,7 @@ const (
 
 type Options struct {
 	Inspect    api.InspectApplication
+	Member     api.MemberApplication
 	Repair     api.RepairApplication
 	Operations *operations.Store
 	Now        func() time.Time
@@ -40,6 +42,7 @@ type Options struct {
 
 type Handler struct {
 	inspect    api.InspectApplication
+	member     api.MemberApplication
 	repair     api.RepairApplication
 	operations *operations.Store
 	now        func() time.Time
@@ -52,6 +55,7 @@ func NewHandler(options Options) http.Handler {
 	}
 	handler := &Handler{
 		inspect:    options.Inspect,
+		member:     options.Member,
 		repair:     options.Repair,
 		operations: options.Operations,
 		now:        now,
@@ -59,6 +63,7 @@ func NewHandler(options Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/admin/static/", http.StripPrefix("/admin/static/", http.FileServerFS(staticFS)))
 	mux.HandleFunc("/admin/operations/", handler.operationDetail)
+	mux.HandleFunc("/admin/members/", handler.memberDetail)
 	mux.HandleFunc("/", handler.redirectRoot)
 	mux.HandleFunc("/admin/", handler.shell)
 	mux.HandleFunc("/admin/views/", handler.partial)
@@ -125,6 +130,42 @@ func (h *Handler) operationDetail(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, templates.OperationDetail(operationData(operation)))
 }
 
+func (h *Handler) memberDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	memberID, tab, tabOnly, ok := memberPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if h.inspect == nil {
+		http.Error(w, "inspect application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !validMemberTab(tab) {
+		http.NotFound(w, r)
+		return
+	}
+	detail, err := h.loadMemberDetail(r.Context(), memberID, tab)
+	if isAppNotFound(err) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "member detail unavailable", http.StatusInternalServerError)
+		return
+	}
+	if tabOnly {
+		h.render(w, r, templates.MemberTabContent(detail))
+		return
+	}
+	data := h.dashboard(r.Context(), "members", operationFilter{})
+	data.MemberDetail = detail
+	h.render(w, r, templates.MemberDetail(data))
+}
+
 func operationIDFromDetailPath(requestPath string) (string, bool) {
 	cleaned := strings.Trim(path.Clean(strings.TrimPrefix(requestPath, "/admin/operations/")), "/")
 	operationID, suffix, ok := strings.Cut(cleaned, "/")
@@ -139,6 +180,47 @@ func operationIDFromDetailPath(requestPath string) (string, bool) {
 		return "", false
 	}
 	return unescaped, true
+}
+
+func memberPath(requestPath string) (memberID, tab string, tabOnly, ok bool) {
+	cleaned := strings.Trim(path.Clean(strings.TrimPrefix(requestPath, "/admin/members/")), "/")
+	rawMemberID, suffix, hasSuffix := strings.Cut(cleaned, "/")
+	parsedMemberID, ok := pathSegment(rawMemberID)
+	if !ok {
+		return "", "", false, false
+	}
+	if !hasSuffix || suffix == "" {
+		return parsedMemberID, templates.MemberTabOverview, false, true
+	}
+	rawTabPrefix, rawTab, hasTab := strings.Cut(suffix, "/")
+	if !hasTab || rawTabPrefix != "tab" {
+		return "", "", false, false
+	}
+	parsedTab, ok := pathSegment(rawTab)
+	if !ok {
+		return "", "", false, false
+	}
+	return parsedMemberID, parsedTab, true, true
+}
+
+func pathSegment(raw string) (string, bool) {
+	if raw == "." || raw == "" || strings.Contains(raw, "/") {
+		return "", false
+	}
+	unescaped, err := url.PathUnescape(raw)
+	if err != nil || unescaped == "" || strings.Contains(unescaped, "/") {
+		return "", false
+	}
+	return unescaped, true
+}
+
+func validMemberTab(tab string) bool {
+	for _, item := range templates.MemberTabs() {
+		if item.ID == tab {
+			return true
+		}
+	}
+	return false
 }
 
 func partialComponent(view string) func(templates.DashboardData) templ.Component {
@@ -169,6 +251,7 @@ func (h *Handler) dashboard(ctx context.Context, activeView string, filter opera
 		GeneratedAt:      h.now().Format(time.RFC3339),
 		OperationFilter:  filter.ID,
 		OperationFilters: operationFilters(),
+		MemberTabs:       templates.MemberTabs(),
 	}
 	data.Nav = []templates.NavItem{
 		{ID: "overview", Label: "Overview", Group: "Cluster", Href: "/admin/views/overview"},
@@ -187,6 +270,27 @@ func (h *Handler) dashboard(ctx context.Context, activeView string, filter opera
 	h.loadRepair(ctx, &data)
 	data.Signals = readinessSignals(data)
 	return data
+}
+
+func (h *Handler) loadMemberDetail(ctx context.Context, memberID, tab string) (templates.MemberDetailData, error) {
+	member, err := h.inspect.GetAdminMember(ctx, memberID)
+	if err != nil {
+		return templates.MemberDetailData{}, err
+	}
+	var safety *adminv1.EvictionSafety
+	safetyError := ""
+	if h.member == nil {
+		safetyError = "member application is unavailable"
+	} else {
+		safety, err = h.member.GetEvictionSafety(ctx, memberID)
+		if isAppNotFound(err) {
+			return templates.MemberDetailData{}, err
+		}
+		if err != nil {
+			safetyError = "eviction safety unavailable"
+		}
+	}
+	return memberDetailData(member, safety, safetyError, tab), nil
 }
 
 func (h *Handler) loadSummary(ctx context.Context, data *templates.DashboardData) {
@@ -240,6 +344,44 @@ func capacityData(runway *adminv1.CapacityRunway) templates.CapacityData {
 		Warnings:               warnings,
 		HasMeasuredIngressRate: runway.GetEstimatedBytesPerDay() > 0,
 	}
+}
+
+func memberDetailData(member *adminv1.StorageMember, safety *adminv1.EvictionSafety, safetyError, tab string) templates.MemberDetailData {
+	if member == nil {
+		return templates.MemberDetailData{Tab: tab, Tabs: templates.MemberTabs()}
+	}
+	warnings := []templates.WarningData(nil)
+	if safety != nil {
+		warnings = warningsData(safety.GetWarnings())
+	}
+	return templates.MemberDetailData{
+		ID:            member.GetStorageMemberId(),
+		CellID:        member.GetCellId(),
+		State:         member.GetState().String(),
+		Cordoned:      member.GetCordoned(),
+		BytesUsed:     member.GetBytesUsed(),
+		BytesCapacity: member.GetBytesCapacity(),
+		LastSeen:      timestampText(member.GetLastSeenAt()),
+		Tab:           tab,
+		Tabs:          templates.MemberTabs(),
+		Eviction: templates.EvictionSafetyData{
+			Known:       safety != nil,
+			SafeToEvict: safety.GetSafeToEvict(),
+			Error:       safetyError,
+			Warnings:    warnings,
+		},
+	}
+}
+
+func warningsData(warnings []*adminv1.OperationWarning) []templates.WarningData {
+	result := make([]templates.WarningData, 0, len(warnings))
+	for _, warning := range warnings {
+		result = append(result, templates.WarningData{
+			Code:    warning.GetCode(),
+			Message: warning.GetMessage(),
+		})
+	}
+	return result
 }
 
 func (h *Handler) loadOperations(data *templates.DashboardData, filter operationFilter) {
@@ -370,6 +512,11 @@ func timestampText(ts *timestamppb.Timestamp) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+func isAppNotFound(err error) bool {
+	var appErr *appstatus.Error
+	return errors.As(err, &appErr) && appErr.Code == appstatus.CodeNotFound
 }
 
 func readinessSignals(data templates.DashboardData) []templates.ReadinessSignal {

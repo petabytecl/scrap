@@ -177,6 +177,7 @@ func listenAdminUIEndpoint(address string, apps node.Applications) (*httpEndpoin
 	}
 	endpoint, err := listenHTTPEndpoint(address, adminui.NewHandler(adminui.Options{
 		Inspect:    apps.Inspect,
+		Member:     apps.Member,
 		Repair:     apps.Repair,
 		Operations: apps.Operations,
 	}))

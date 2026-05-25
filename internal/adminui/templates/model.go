@@ -16,6 +16,8 @@ type DashboardData struct {
 	Nav              []NavItem
 	Summary          SummaryData
 	Capacity         CapacityData
+	MemberDetail     MemberDetailData
+	MemberTabs       []MemberTab
 	Operations       []OperationData
 	OperationFilter  string
 	OperationFilters []OperationFilter
@@ -52,6 +54,40 @@ type CapacityData struct {
 type WarningData struct {
 	Code    string
 	Message string
+}
+
+const (
+	MemberTabOverview   = "overview"
+	MemberTabKubernetes = "kubernetes"
+	MemberTabRaft       = "raft"
+	MemberTabStorage    = "storage"
+	MemberTabShards     = "shards"
+	MemberTabEvents     = "events"
+)
+
+type MemberDetailData struct {
+	ID            string
+	CellID        string
+	State         string
+	Cordoned      bool
+	BytesUsed     uint64
+	BytesCapacity uint64
+	LastSeen      string
+	Tab           string
+	Tabs          []MemberTab
+	Eviction      EvictionSafetyData
+}
+
+type MemberTab struct {
+	ID    string
+	Label string
+}
+
+type EvictionSafetyData struct {
+	Known       bool
+	SafeToEvict bool
+	Error       string
+	Warnings    []WarningData
 }
 
 type OperationData struct {
@@ -104,6 +140,17 @@ func groupedNav(items []NavItem) []navGroup {
 type navGroup struct {
 	Name  string
 	Items []NavItem
+}
+
+func MemberTabs() []MemberTab {
+	return []MemberTab{
+		{ID: MemberTabOverview, Label: "Overview"},
+		{ID: MemberTabKubernetes, Label: "Kubernetes"},
+		{ID: MemberTabRaft, Label: "Raft"},
+		{ID: MemberTabStorage, Label: "Storage"},
+		{ID: MemberTabShards, Label: "Shards"},
+		{ID: MemberTabEvents, Label: "Events"},
+	}
 }
 
 func pageTitle(activeView string) string {
@@ -209,6 +256,77 @@ func stateClass(state string) string {
 		return "status failed"
 	case "OPERATION_STATE_CANCELED", "OPERATION_STATE_EXPIRED":
 		return "status canceled"
+	default:
+		return "status"
+	}
+}
+
+func memberStateClass(state string) string {
+	switch state {
+	case "MEMBER_STATE_ONLINE":
+		return "status succeeded"
+	case "MEMBER_STATE_DRAINING":
+		return "status queued"
+	case "MEMBER_STATE_OFFLINE":
+		return "status failed"
+	default:
+		return "status"
+	}
+}
+
+func shortMemberState(state string) string {
+	state = strings.TrimPrefix(state, "MEMBER_STATE_")
+	state = strings.ToLower(strings.ReplaceAll(state, "_", " "))
+	if state == "" {
+		return "unknown"
+	}
+	return state
+}
+
+func memberDetailHref(memberID string) templ.SafeURL {
+	return templ.SafeURL("/admin/members/" + url.PathEscape(memberID))
+}
+
+func memberTabHref(memberID, tab string) templ.SafeURL {
+	return templ.SafeURL("/admin/members/" + url.PathEscape(memberID) + "/tab/" + url.PathEscape(tab))
+}
+
+func memberTabClass(active, tab string) string {
+	if active == tab {
+		return "filter-pill active"
+	}
+	return "filter-pill"
+}
+
+func evictionState(eviction EvictionSafetyData) string {
+	if eviction.Error != "" || !eviction.Known {
+		return "unknown"
+	}
+	if eviction.SafeToEvict {
+		return "healthy"
+	}
+	return "warning"
+}
+
+func evictionText(eviction EvictionSafetyData) string {
+	if eviction.Error != "" {
+		return eviction.Error
+	}
+	if !eviction.Known {
+		return "eviction safety is not available"
+	}
+	if eviction.SafeToEvict {
+		return "safe to evict"
+	}
+	return "not safe to evict"
+}
+
+func evictionStatusClass(eviction EvictionSafetyData) string {
+	switch evictionState(eviction) {
+	case "healthy":
+		return "status succeeded"
+	case "warning":
+		return "status queued"
 	default:
 		return "status"
 	}
