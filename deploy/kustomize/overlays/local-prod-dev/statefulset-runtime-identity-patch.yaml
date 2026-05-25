@@ -20,4 +20,7 @@
   value: --member-slot-id=$(SCRAP_MEMBER_SLOT_ID)
 - op: add
   path: /spec/template/spec/containers/0/args/-
+  value: --peer-admin-workload-identity=local-operator
+- op: add
+  path: /spec/template/spec/containers/0/args/-
   value: --peer-addresses=scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081

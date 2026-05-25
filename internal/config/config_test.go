@@ -18,6 +18,7 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 	cfg.CellID = "scrap-local-prod-like"
 	cfg.MemberID = "scrapd-0"
 	cfg.MemberSlotID = "scrapd-0"
+	cfg.PeerAdminWorkloadIdentity = "local-operator"
 	cfg.PeerAddresses = strings.Join([]string{
 		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
 		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
@@ -51,9 +52,19 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.CellID = "scrap-local-prod-like"
 				cfg.MemberID = "scrapd-0"
+				cfg.PeerAdminWorkloadIdentity = "local-operator"
 				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:18081"
 			},
 			wantErr: "member_slot_id is required when peer_addresses are configured",
+		},
+		"missing peer admin workload identity with peers": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:18081"
+			},
+			wantErr: "peer_admin_workload_identity is required when peer_addresses are configured",
 		},
 		"uppercase id": {
 			mutate: func(cfg *Config) {
@@ -81,6 +92,7 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 				cfg.CellID = "scrap-local-prod-like"
 				cfg.MemberID = "scrapd-0"
 				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAdminWorkloadIdentity = "local-operator"
 				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local"
 			},
 			wantErr: "peer_addresses entries must be host:port",
@@ -90,6 +102,7 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 				cfg.CellID = "scrap-local-prod-like"
 				cfg.MemberID = "scrapd-0"
 				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAdminWorkloadIdentity = "local-operator"
 				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:99999"
 			},
 			wantErr: "peer_addresses entries must include a valid TCP port",
@@ -99,6 +112,7 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 				cfg.CellID = "scrap-local-prod-like"
 				cfg.MemberID = "scrapd-0"
 				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAdminWorkloadIdentity = "local-operator"
 				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:18081, scrapd-0.scrapd.scrap-local.svc.cluster.local:18081"
 			},
 			wantErr: "peer_addresses contains duplicate address",

@@ -29,11 +29,16 @@ func (a *InspectApplication) GetAdminClusterSummary(ctx context.Context) (*admin
 	if err != nil {
 		return nil, err
 	}
+	member, err := a.localAdminMember(ctx, stats)
+	if err != nil {
+		return nil, err
+	}
 	return &adminv1.ClusterSummary{
 		ShardCount:         1,
 		StorageMemberCount: 1,
 		LocalBytesUsed:     stats.bytesUsed,
 		LocalBytesCapacity: stats.bytesCapacity,
+		StorageMembers:     []*adminv1.StorageMember{member},
 	}, nil
 }
 
@@ -112,6 +117,13 @@ func (a *InspectApplication) GetAdminMember(ctx context.Context, memberID string
 	}
 	stats, err := a.localDiskStats(ctx)
 	if err != nil {
+		return nil, err
+	}
+	return a.localAdminMember(ctx, stats)
+}
+
+func (a *InspectApplication) localAdminMember(ctx context.Context, stats localDiskStats) (*adminv1.StorageMember, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	memberState := a.app.currentLocalMemberState()

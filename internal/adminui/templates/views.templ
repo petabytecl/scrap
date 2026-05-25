@@ -16,26 +16,40 @@ templ Members(data DashboardData) {
 		</div>
 		<div class="coverage-grid">
 			@CoverageItem("Live count", "healthy", "Cluster summary reports the storage member count.")
-			@CoverageItem("Local detail route", "healthy", "Local non-production storage exposes the stable local member detail route.")
+			@CoverageItem("Member rows", memberRowsState(data.Summary.StorageMembers), memberRowsDetail(data.Summary.StorageMembers))
 			@CoverageItem("Kubernetes tab", "unknown", "Pod and node metadata are not exposed by the current admin API.")
 		</div>
 	</section>
 	<section class="panel">
 		<div class="panel-heading">
 			<div>
-				<div class="eyebrow">Storage member</div>
-				<strong>Local member detail</strong>
+				<div class="eyebrow">Storage members</div>
+				<strong>Reported member detail</strong>
 			</div>
-			<a class="text-link" href={ memberDetailHref("local") } hx-get={ memberDetailHref("local") } hx-target="#main-content" hx-push-url="true">Open detail</a>
 		</div>
-		<a class="member-card" href={ memberDetailHref("local") } hx-get={ memberDetailHref("local") } hx-target="#main-content" hx-push-url="true">
-			<div>
-				<div class="eyebrow">member id</div>
-				<strong>local</strong>
-				<p>Single-node local non-production member.</p>
+		if len(data.Summary.Warnings) > 0 {
+			<div class="warning-list">
+				for _, warning := range data.Summary.Warnings {
+					<div class="warning-item">
+						<strong>{ warning.Code }</strong>
+						<span>{ warning.Message }</span>
+					</div>
+				}
 			</div>
-			<span class="status succeeded">online</span>
-		</a>
+		}
+		if len(data.Summary.StorageMembers) == 0 {
+			<p class="muted">No storage member rows are available from the admin summary.</p>
+		}
+		for _, member := range data.Summary.StorageMembers {
+			<a class="member-card" href={ memberDetailHref(member.ID) } hx-get={ memberDetailHref(member.ID) } hx-target="#main-content" hx-push-url="true">
+				<div>
+					<div class="eyebrow">member id</div>
+					<strong>{ member.ID }</strong>
+					<p>{ member.CellID } / { bytesText(member.BytesUsed) } / { bytesText(member.BytesCapacity) }</p>
+				</div>
+				<span class={ memberSummaryStatusClass(member) }>{ shortMemberState(member.State) }</span>
+			</a>
+		}
 	</section>
 }
 
