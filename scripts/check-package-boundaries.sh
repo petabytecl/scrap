@@ -4,12 +4,21 @@ set -euo pipefail
 go_cmd="${GO:-go}"
 failures=0
 
+# Package-boundary rules apply to production package imports. Tests may import
+# transport adapters to assert mapping behavior at the boundary.
 check_no_direct_import() {
 	local package="$1"
 	local forbidden="$2"
 	local reason="$3"
+	local imports
 
-	if "$go_cmd" list -f '{{range .Imports}}{{println .}}{{end}}' "$package" | grep -Fx "$forbidden" >/dev/null; then
+	if ! imports="$("$go_cmd" list -f '{{range .Imports}}{{println .}}{{end}}' "$package")"; then
+		echo "package boundary check failed: go list ${package}" >&2
+		failures=$((failures + 1))
+		return
+	fi
+
+	if grep -Fx "$forbidden" <<<"$imports" >/dev/null; then
 		echo "package boundary violation: ${package} imports ${forbidden} (${reason})" >&2
 		failures=$((failures + 1))
 	fi

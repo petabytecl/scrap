@@ -433,7 +433,8 @@ func (a *documentApplication) ReadDocument(ctx context.Context, req storageapp.R
 		return mapError(blockstore.ErrInvalidRange)
 	}
 	readLength := *selectedRange.Length
-	if err := a.blocks.VerifyRange(blockstoreRecord(document.Location), selectedRange.Offset, &readLength); err != nil {
+	location := blockstoreRecord(document.Location)
+	if err := a.blocks.VerifyRange(location, selectedRange.Offset, &readLength); err != nil {
 		return a.readDocumentFromBackend(ctx, document, selectedRange, sender, err)
 	}
 	if err := sender.SendMetadata(storageapp.ReadDocumentMetadata{
@@ -443,7 +444,7 @@ func (a *documentApplication) ReadDocument(ctx context.Context, req storageapp.R
 	}); err != nil {
 		return err
 	}
-	return mapError(a.blocks.ReadRange(ctx, blockstoreRecord(document.Location), selectedRange.Offset, &readLength, senderWriter{sender: sender}))
+	return mapError(a.blocks.ReadRange(ctx, location, selectedRange.Offset, &readLength, senderWriter{sender: sender}))
 }
 
 func (a *documentApplication) readableDocument(ctx context.Context, documentIdentity identity.Document) (metastore.Document, error) {
