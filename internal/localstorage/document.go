@@ -32,7 +32,10 @@ import (
 
 const backendReadChunkSize = 1024 * 1024
 
-var ErrCorruptVerificationWindow = errors.New("localstorage: corrupt verification window")
+var (
+	ErrCorruptVerificationWindow = errors.New("localstorage: corrupt verification window")
+	ErrWritePipelineInvariant    = errors.New("localstorage: write pipeline invariant violated")
+)
 
 func (a *verificationEngine) startByteServingVerifier(ctx context.Context) {
 	verifierCtx, cancel := context.WithCancel(ctx)
@@ -222,6 +225,9 @@ func (a *transactionCoordinator) commitDocumentWrite(ctx context.Context, docume
 	if err != nil {
 		return metastore.Document{}, replication.Result{}, mapError(err)
 	}
+	if err := validateWriteReplicationResult(replicationResult); err != nil {
+		return metastore.Document{}, replication.Result{}, mapError(err)
+	}
 	document.Location.Replicas = replication.ReplicaRefs(replicationResult.Receipts)
 	if err := a.authority.CommitDocument(ctx, document, commitDocumentCommandID(document), now); err != nil {
 		return metastore.Document{}, replication.Result{}, mapError(err)
@@ -237,6 +243,27 @@ func (a *transactionCoordinator) commitDocumentWrite(ctx context.Context, docume
 		return metastore.Document{}, replication.Result{}, err
 	}
 	return document, replicationResult, nil
+}
+
+func validateWriteReplicationResult(result replication.Result) error {
+	switch {
+	case result.DesiredReplicaCount < 1:
+		return fmt.Errorf("%w: desired replica count %d must include local replica", ErrWritePipelineInvariant, result.DesiredReplicaCount)
+	case result.RequiredReplicaCount < 1:
+		return fmt.Errorf("%w: required replica count %d must include local replica", ErrWritePipelineInvariant, result.RequiredReplicaCount)
+	case result.RequiredReplicaCount > result.DesiredReplicaCount:
+		return fmt.Errorf("%w: required replicas %d exceed desired replicas %d", ErrWritePipelineInvariant, result.RequiredReplicaCount, result.DesiredReplicaCount)
+	case result.AchievedReplicaCount < 1:
+		return fmt.Errorf("%w: achieved replica count %d must include local replica", ErrWritePipelineInvariant, result.AchievedReplicaCount)
+	case result.AchievedReplicaCount < result.RequiredReplicaCount:
+		return fmt.Errorf("%w: achieved replicas %d below required replicas %d", ErrWritePipelineInvariant, result.AchievedReplicaCount, result.RequiredReplicaCount)
+	case result.AchievedReplicaCount > result.DesiredReplicaCount:
+		return fmt.Errorf("%w: achieved replicas %d exceed desired replicas %d", ErrWritePipelineInvariant, result.AchievedReplicaCount, result.DesiredReplicaCount)
+	case len(result.Receipts) != result.AchievedReplicaCount-1:
+		return fmt.Errorf("%w: peer receipts %d do not match achieved peer replicas %d", ErrWritePipelineInvariant, len(result.Receipts), result.AchievedReplicaCount-1)
+	default:
+		return nil
+	}
 }
 
 func runDocumentWriteFault(fault func(metastore.Document) error, document metastore.Document) error {
@@ -1101,6 +1128,7 @@ var applicationErrorMappings = []struct {
 	{target: backend.ErrChecksumMismatch, code: appstatus.CodeDataLoss, message: "backend document bytes failed checksum verification"},
 	{target: backend.ErrNotFound, code: appstatus.CodeDataLoss, message: "backend document bytes are missing"},
 	{target: ErrCorruptVerificationWindow, code: appstatus.CodeDataLoss, message: "backend verification window is corrupt"},
+	{target: ErrWritePipelineInvariant, code: appstatus.CodeInternal, message: "write pipeline invariant failed"},
 	{target: os.ErrNotExist, code: appstatus.CodeDataLoss, message: "stored document bytes are missing"},
 	{target: raftmeta.ErrNotLeader, code: appstatus.CodeFailedPrecondition, message: "local metadata authority is not leader"},
 	{target: raftmeta.ErrQuorumUnavailable, code: appstatus.CodeUnavailable, message: "metadata quorum is unavailable"},
