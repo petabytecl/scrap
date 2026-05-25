@@ -3,26 +3,43 @@
 # Override variables with environment values or `make VAR=value <target>`.
 .DEFAULT_GOAL := help
 
-# Toolchain.
-BUF ?= $(GO) tool -modfile=$(TOOLS_MODFILE) buf
-DOCKER ?= docker
+# Base commands and tool module.
 GO ?= go
-GOLANGCI_LINT ?= $(GO) tool -modfile=$(TOOLS_MODFILE) golangci-lint
-GOTESTSUM ?= $(GO) tool -modfile=$(TOOLS_MODFILE) gotestsum
-GOVULNCHECK ?= $(GO) tool -modfile=$(TOOLS_MODFILE) govulncheck
+TOOLS_MODFILE ?= tools.go.mod
+GO_TOOL = $(GO) tool -modfile=$(TOOLS_MODFILE)
+
+# Go-managed development and CI tools.
+BUF ?= $(GO_TOOL) buf
+GOLANGCI_LINT ?= $(GO_TOOL) golangci-lint
+GOTESTSUM ?= $(GO_TOOL) gotestsum
+GOVULNCHECK ?= $(GO_TOOL) govulncheck
+KUSTOMIZE ?= $(GO_TOOL) kustomize
+
+# External local orchestration CLIs.
+DOCKER ?= docker
 KIND ?= kind
 KUBECTL ?= kubectl
-KUSTOMIZE ?= $(GO) tool -modfile=$(TOOLS_MODFILE) kustomize
-TOOLS_MODFILE ?= tools.go.mod
 
-##@ Variables
+##@ Tool Variables
+##? GO Go command used by all Go targets.
+##? TOOLS_MODFILE Go tool module file used by go tool invocations.
+
+##@ Verification Variables
+##? COMPAT_PACKAGES Go packages used by compatibility tests.
+##? COVER_PACKAGES Go packages included in coverage reports.
+##? LINT_TIMEOUT Timeout passed to golangci-lint run.
+##? PROTO_BREAKING_REF Git ref used by buf breaking checks.
 ##? TEST_PACKAGES Go packages used by test and race targets.
+##? TEST_RESULTS_DIR Directory used for JUnit and coverage artifacts.
+
+##@ Local Release Variables
 ##? IMAGE_NAME Local container image tag for image and local-kind targets.
 ##? KIND_CLUSTER Local kind cluster name used by local-kind targets.
 ##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
 
-# Package sets.
+# Verification package sets.
 COMPAT_PACKAGES ?= ./internal/compat ./internal/metastore
+TEST_PACKAGES ?= ./...
 COVER_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
 SCRAP_BINS := \
 	./cmd/scrapd \
@@ -34,9 +51,8 @@ SCRAP_BINS := \
 	./cmd/scrap-local-soak-evidence \
 	./cmd/scrap-local-dr-drill-evidence \
 	./cmd/scrap-write-pipeline-evidence
-TEST_PACKAGES ?= ./...
 
-# Aggregate target dependencies.
+# Verification target groups.
 CHECK_TARGETS := \
 	static \
 	tests \
@@ -52,29 +68,29 @@ TEST_TARGETS := \
 	test \
 	test-race
 
-# Static analysis, protobuf, and test reporting.
+# Verification options and report paths.
+LINT_TIMEOUT ?= 5m
+PROTO_BREAKING_REF ?= main
+PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 COVERMODE ?= atomic
 COVERPROFILE ?= coverage.out
-JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
-LINT_TIMEOUT ?= 5m
-PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
-PROTO_BREAKING_REF ?= main
 TEST_RESULTS_DIR ?= test-results
+JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
 
-# Release and build metadata.
+# Release identity.
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY_TREE ?= $(shell git diff --quiet && git diff --cached --quiet && echo clean || echo dirty)
 RELEASE_SHA ?= $(shell git rev-parse HEAD)
 RELEASE_VERSION ?= dev
 
-# Container image build.
+# Container image inputs.
 IMAGE_GOARCH ?= $(shell $(GO) env GOARCH)
 IMAGE_GOOS ?= linux
 IMAGE_NAME ?= localhost/scrapd:local
 IMAGE_PLATFORM ?= $(IMAGE_GOOS)/$(IMAGE_GOARCH)
 SCRAPD_IMAGE_BINARY ?= bin/scrapd-$(IMAGE_GOOS)-$(IMAGE_GOARCH)
 
-# Local kind release rehearsal.
+# Local release rehearsal inputs.
 KIND_CLUSTER ?= scrap-local
 LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
@@ -86,7 +102,7 @@ SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
 SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
 SCRAP_WORKLOAD_IDENTITY ?= local-operator
 
-# Capacity and OpenBao evidence.
+# Capacity and OpenBao evidence inputs.
 CAPACITY_SAMPLE_BACKEND_REGION ?= us-east-1
 CAPACITY_SAMPLE_BACKEND_URL ?= http://127.0.0.1:4566/scrap-local
 CAPACITY_SAMPLE_OPENBAO_ADDR ?= http://127.0.0.1:8200
@@ -96,7 +112,7 @@ OPENBAO_SMOKE_JWT_CMD ?= $(KUBECTL) -n scrap-local create token openbao-transit-
 OPENBAO_SMOKE_OUTAGE_ADDR ?= http://127.0.0.1:1
 OPENBAO_SMOKE_REPORT ?= openbao-transit-smoke-evidence.json
 
-# Local soak and DR drill evidence.
+# Local soak and DR drill evidence inputs.
 LOCAL_DR_DRILL_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 LOCAL_DR_DRILL_OPERATOR_OWNER ?= @cotocisternas
 LOCAL_DR_DRILL_REPORT ?= local-dr-drill-evidence.json
@@ -105,7 +121,7 @@ LOCAL_SOAK_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 LOCAL_SOAK_REPORT ?= local-soak-evidence.json
 LOCAL_SOAK_RUNNER ?= local-kind
 
-# Write-pipeline performance smoke evidence.
+# Write-pipeline performance smoke inputs.
 WRITE_PIPELINE_CONCURRENCY ?= 8
 WRITE_PIPELINE_DOCUMENT_SIZE ?= 4096
 WRITE_PIPELINE_DURATION ?= 30s
@@ -115,7 +131,7 @@ WRITE_PIPELINE_REPORT ?= write-pipeline-performance-evidence.json
 WRITE_PIPELINE_RUNNER ?= local-application
 WRITE_PIPELINE_SAMPLES ?= 128
 
-# Shared recipe fragments.
+# Shared command fragments.
 ADMIN_CLIENT_FLAGS = \
 	--admin-addr "$(SCRAP_ADMIN_ADDR)" \
 	--workload-identity "$(SCRAP_WORKLOAD_IDENTITY)"
