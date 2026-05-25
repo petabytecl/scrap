@@ -13,19 +13,15 @@ import (
 	"strconv"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	"github.com/petabytecl/scrap/internal/appstatus"
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
-	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/identity"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/observe"
-	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/published"
 	"github.com/petabytecl/scrap/internal/raftmeta"
 	"github.com/petabytecl/scrap/internal/replication"
@@ -458,10 +454,7 @@ func (a *documentApplication) readableDocument(ctx context.Context, documentIden
 	if err != nil {
 		return metastore.Document{}, err
 	}
-	if document.Availability != metastore.AvailabilityCold {
-		return document, nil
-	}
-	return a.queueRestoreOnColdRead(ctx, document)
+	return document, nil
 }
 
 func selectedDocumentRange(documentLength uint64, requested *storageapp.ReadRange) (storageapp.ReadRange, error) {
@@ -547,181 +540,6 @@ func sendReadChunks(sender storageapp.ReadDocumentSender, data []byte) error {
 		data = data[n:]
 	}
 	return nil
-}
-
-func (a *documentApplication) queueRestoreOnColdRead(ctx context.Context, document metastore.Document) (metastore.Document, error) {
-	if a.operationStore == nil {
-		return document, nil
-	}
-	now := a.now()
-	operation := newRestoreOnReadOperation(document, now)
-	stored, err := a.createOrLoadRestoreOnReadOperation(operation)
-	if err != nil {
-		return document, err
-	}
-	if restoreOnReadNeedsRequeue(stored) {
-		stored = requeueRestoreOnReadOperation(stored, operation, now)
-		if err := a.operationStore.Put(stored); err != nil {
-			return document, err
-		}
-	}
-	if !restoreOnReadIsQueuedOrRunning(stored) {
-		return document, fmt.Errorf("localstorage: restore-on-read operation id %q is %s", stored.GetOperationId(), stored.GetState())
-	}
-	if err := a.operationStore.AppendAuditEvent(restoreQueuedAuditEvent(stored)); err != nil && !errors.Is(err, operations.ErrConflict) {
-		return document, err
-	}
-	return a.markDocumentRestorePending(ctx, document, now)
-}
-
-func newRestoreOnReadOperation(document metastore.Document, now time.Time) *adminv1.Operation {
-	operation := &adminv1.Operation{
-		OperationId:         restoreOnReadOperationID(document),
-		OperationType:       "restore",
-		State:               adminv1.OperationState_OPERATION_STATE_QUEUED,
-		RequestedByIdentity: "document-read",
-		RequestedAt:         timestamppb.New(now),
-		Targets:             []*adminv1.Target{documentOperationTarget(document.Identity)},
-		Progress:            &adminv1.OperationProgress{Message: "queued by cold read"},
-		Metadata: map[string]string{
-			operationLaneMetadata:  operationLaneInteractive,
-			backendLaneMetadata:    string(backend.LaneRestore),
-			restoreTriggerMetadata: restoreTriggerRead,
-		},
-	}
-	return operation
-}
-
-func (a *documentApplication) createOrLoadRestoreOnReadOperation(operation *adminv1.Operation) (*adminv1.Operation, error) {
-	if existing, err := a.operationStore.Get(operation.GetOperationId()); err == nil {
-		return validateRestoreOnReadOperation(existing)
-	} else if !errors.Is(err, operations.ErrNotFound) {
-		return nil, err
-	}
-	created, err := a.operationStore.Create(operation)
-	if err == nil {
-		return created, nil
-	}
-	if !errors.Is(err, operations.ErrConflict) {
-		return nil, err
-	}
-	existing, getErr := a.operationStore.Get(operation.GetOperationId())
-	if getErr != nil {
-		return nil, getErr
-	}
-	return validateRestoreOnReadOperation(existing)
-}
-
-func validateRestoreOnReadOperation(operation *adminv1.Operation) (*adminv1.Operation, error) {
-	if operation.GetOperationType() != "restore" {
-		return nil, fmt.Errorf("localstorage: restore-on-read operation id %q has type %q", operation.GetOperationId(), operation.GetOperationType())
-	}
-	return operation, nil
-}
-
-func restoreOnReadNeedsRequeue(operation *adminv1.Operation) bool {
-	switch operation.GetState() {
-	case adminv1.OperationState_OPERATION_STATE_SUCCEEDED,
-		adminv1.OperationState_OPERATION_STATE_FAILED,
-		adminv1.OperationState_OPERATION_STATE_CANCELED,
-		adminv1.OperationState_OPERATION_STATE_EXPIRED:
-		return true
-	default:
-		return false
-	}
-}
-
-func restoreOnReadIsQueuedOrRunning(operation *adminv1.Operation) bool {
-	switch operation.GetState() {
-	case adminv1.OperationState_OPERATION_STATE_QUEUED,
-		adminv1.OperationState_OPERATION_STATE_RUNNING:
-		return true
-	default:
-		return false
-	}
-}
-
-func requeueRestoreOnReadOperation(existing, desired *adminv1.Operation, now time.Time) *adminv1.Operation {
-	operation := cloneOperation(existing)
-	operation.State = adminv1.OperationState_OPERATION_STATE_QUEUED
-	operation.StartedAt = nil
-	operation.FinishedAt = nil
-	operation.LastError = nil
-	operation.Progress = &adminv1.OperationProgress{Message: "requeued by cold read"}
-	if operation.GetRequestedAt() == nil {
-		operation.RequestedAt = timestamppb.New(now)
-	}
-	if operation.GetRequestedByIdentity() == "" {
-		operation.RequestedByIdentity = desired.GetRequestedByIdentity()
-	}
-	if len(operation.GetTargets()) == 0 {
-		operation.Targets = cloneOperationTargets(desired.GetTargets())
-	}
-	operation.Metadata = cloneTags(operation.GetMetadata())
-	if operation.Metadata == nil {
-		operation.Metadata = make(map[string]string)
-	}
-	for key, value := range desired.GetMetadata() {
-		if operation.Metadata[key] == "" {
-			operation.Metadata[key] = value
-		}
-	}
-	return operation
-}
-
-func (a *documentApplication) markDocumentRestorePending(ctx context.Context, document metastore.Document, now time.Time) (metastore.Document, error) {
-	if document.RestoreState != metastore.RestoreStateRestorePending {
-		if err := a.authority.UpdateDocumentRestoreState(
-			ctx,
-			document.Identity,
-			metastore.RestoreStateRestorePending,
-			"cold read queued backend restore",
-			stableCommandID("restore-on-read-state", document.Identity.TenantID, document.Identity.TransactionID, document.Identity.DocumentName, document.Location.BlockID),
-			now,
-		); err != nil {
-			return document, err
-		}
-	}
-	updated, err := a.metadata.HeadDocument(document.Identity)
-	if err != nil {
-		return document, err
-	}
-	return updated, nil
-}
-
-func restoreOnReadOperationID(document metastore.Document) string {
-	return stableCommandID(
-		"restore-on-read-operation",
-		document.Identity.TenantID,
-		document.Identity.TransactionID,
-		document.Identity.DocumentName,
-		document.Location.BlockID,
-	)
-}
-
-func documentOperationTarget(doc identity.Document) *adminv1.Target {
-	return &adminv1.Target{
-		Target: &adminv1.Target_Document{
-			Document: &adminv1.DocumentTarget{
-				TenantId:      doc.TenantID,
-				TransactionId: doc.TransactionID,
-				DocumentName:  doc.DocumentName,
-			},
-		},
-	}
-}
-
-func restoreQueuedAuditEvent(operation *adminv1.Operation) *adminv1.AuditEvent {
-	return &adminv1.AuditEvent{
-		EventId:       stableCommandID(operationEventRestoreQueued, operation.GetOperationId()),
-		EventType:     operationEventRestoreQueued,
-		OperationId:   operation.GetOperationId(),
-		OperationType: operation.GetOperationType(),
-		ActorIdentity: operation.GetRequestedByIdentity(),
-		OccurredAt:    operation.GetRequestedAt(),
-		Targets:       cloneOperationTargets(operation.GetTargets()),
-		Metadata:      sanitizeOperationAuditMetadata(operation.GetMetadata()),
-	}
 }
 
 func (a *verificationEngine) readVerifiedBackendRange(ctx context.Context, document metastore.Document, intent metastore.UploadIntent, selectedRange storageapp.ReadRange) ([]byte, error) {

@@ -38,12 +38,9 @@ var errDrainUnsafe = errors.New("storage member is not safe to drain")
 const (
 	operationLaneMetadata         = "scrap.operation_lane"
 	backendLaneMetadata           = "scrap.backend_lane"
-	restoreTriggerMetadata        = "scrap.restore_trigger"
-	restoreTriggerRead            = "read"
 	operationLaneInteractive      = "interactive-restore"
 	operationLanePlannedPrewarm   = "planned-prewarm"
 	operationLaneRestoreFallback  = "restore"
-	operationEventRestoreQueued   = "restore_queued"
 	operationEventRestoreComplete = "restore_completed"
 	operationEventPrewarmComplete = "prewarm_completed"
 )

@@ -1526,14 +1526,16 @@ func TestHeadDocumentReportsColdMetadataWithoutLocalBytes(t *testing.T) {
 	}
 }
 
-func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T) {
+func TestReadDocumentReportsColdStateWithoutQueuingRestore(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	app, err := OpenWithContext(ctx, dir)
 	testutil.RequireNoErrorf(t, err, "open app")
+	defer func() { testutil.RequireNoErrorf(t, app.Close(), "close app") }()
 	store, err := operations.Open(dir)
 	testutil.RequireNoErrorf(t, err, "open operation store")
-	data := []byte("restore queued by read")
+	defer func() { testutil.RequireNoErrorf(t, store.Close(), "close operation store") }()
+	data := []byte("cold read is query only")
 	doc := testDocumentIdentity()
 	app.sealBlockAtBytes = blockstore.HeaderLength + uint64(len(data))
 	if _, err := app.WriteDocument(ctx, api.WriteDocumentInit{
@@ -1559,55 +1561,21 @@ func TestReadDocumentQueuesRestoreOnColdReadAndRetriesAfterRestart(t *testing.T)
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)
 	detail := requireRestorePendingDetail(t, err)
-	testutil.RequireTruef(t, detail.GetRestoreQueued(), "restore detail = %#v, want queued", detail)
-	testutil.RequireEqualf(t, detail.GetRestoreState(), "restore_pending", "restore detail state")
-	operationID := restoreOnReadOperationID(stored)
-	queued, err := store.Get(operationID)
-	testutil.RequireNoErrorf(t, err, "get queued restore-on-read operation")
-	requireRestoreOnReadOperation(t, queued)
-	testutil.RequireNoErrorf(t, app.Close(), "close app")
-	testutil.RequireNoErrorf(t, store.Close(), "close operation store")
-
-	reopened, err := OpenWithContext(ctx, dir)
-	testutil.RequireNoErrorf(t, err, "reopen app")
-	defer func() { testutil.RequireNoErrorf(t, reopened.Close(), "close reopened") }()
-	reopened.SetBackendStore(backendStore)
-	reopenedStore, err := operations.Open(dir)
-	testutil.RequireNoErrorf(t, err, "reopen operation store")
-	defer func() { testutil.RequireNoErrorf(t, reopenedStore.Close(), "close reopened store") }()
-	reopened.SetOperationStore(reopenedStore)
-	result, err := reopened.RunQueuedOperationsOnce(ctx, reopenedStore)
-	testutil.RequireNoErrorf(t, err, "run queued restore after restart")
-	requireOperationRunResult(t, result, 1, 1, 0, 0)
-	events, err := reopenedStore.ListAuditEvents()
-	testutil.RequireNoErrorf(t, err, "list audit events")
-	requireRestoreQueuedAndCompletedEvents(t, events)
-	sender := &recordingReadSender{}
-	testutil.RequireNoErrorf(t, reopened.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, sender), "read restored document")
-	requireReadSource(t, sender, storageapp.StorageSourceLocal)
-	requireReadBytes(t, sender, data)
+	testutil.RequireFalsef(t, detail.GetRestoreQueued(), "restore detail = %#v, want query-only cold state", detail)
+	testutil.RequireEqualf(t, detail.GetRestoreState(), "cold", "restore detail state")
+	operationList, err := store.List(operations.ListFilter{})
+	testutil.RequireNoErrorf(t, err, "list restore operations")
+	testutil.RequireEqualf(t, len(operationList), 0, "operation count after cold read")
+	events, err := store.ListAuditEvents()
+	testutil.RequireNoErrorf(t, err, "list restore audit events")
+	testutil.RequireEqualf(t, len(events), 0, "audit event count after cold read")
+	metadata, err := app.metadata.HeadDocument(doc)
+	testutil.RequireNoErrorf(t, err, "head document after cold read")
+	testutil.RequireEqualf(t, metadata.RestoreState, metastore.RestoreStateCold, "restore state after cold read")
+	testutil.RequireEqualf(t, metadata.Availability, metastore.AvailabilityCold, "availability after cold read")
 }
 
-func requireRestoreOnReadOperation(t *testing.T, operation *adminv1.Operation) {
-	t.Helper()
-	testutil.RequireEqualf(t, operation.GetOperationType(), "restore", "restore-on-read operation type")
-	testutil.RequireEqualf(t, operation.GetState(), adminv1.OperationState_OPERATION_STATE_QUEUED, "restore-on-read state")
-	testutil.RequireEqualf(t, operation.GetMetadata()[operationLaneMetadata], operationLaneInteractive, "restore-on-read operation lane")
-	testutil.RequireEqualf(t, operation.GetMetadata()[backendLaneMetadata], string(backend.LaneRestore), "restore-on-read backend lane")
-}
-
-func requireRestoreQueuedAndCompletedEvents(t *testing.T, events []*adminv1.AuditEvent) {
-	t.Helper()
-	eventTypes := make(map[string]bool, len(events))
-	for _, event := range events {
-		eventTypes[event.GetEventType()] = true
-	}
-	testutil.RequireEqualf(t, len(events), 2, "restore audit event count")
-	testutil.RequireTruef(t, eventTypes[operationEventRestoreQueued], "restore queued event missing")
-	testutil.RequireTruef(t, eventTypes[operationEventRestoreComplete], "restore complete event missing")
-}
-
-func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
+func TestReadDocumentDoesNotRequeueTerminalRestoreOperation(t *testing.T) {
 	ctx := context.Background()
 	app := openTestApplication(t)
 	store := openTestOperationStore(t)
@@ -1624,7 +1592,7 @@ func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
 	stored, err := app.metadata.HeadDocument(doc)
 	testutil.RequireNoErrorf(t, err, "head stored document")
 	testutil.RequireNoErrorf(t, app.authority.UpdateDocumentRestoreState(ctx, doc, metastore.RestoreStateCold, "test cold state", "terminal-cold-1", time.Unix(225, 0).UTC()), "mark cold")
-	operationID := restoreOnReadOperationID(stored)
+	operationID := "terminal-restore-op-1"
 	terminal := queuedOperation(operationID, "restore", []*adminv1.Target{documentTarget(doc)})
 	terminal.State = adminv1.OperationState_OPERATION_STATE_FAILED
 	terminal.FinishedAt = timestamppb.New(time.Unix(226, 0).UTC())
@@ -1634,21 +1602,26 @@ func TestReadDocumentRequeuesTerminalRestoreOnReadOperation(t *testing.T) {
 	err = app.ReadDocument(ctx, api.ReadDocumentRequest{Identity: doc}, &recordingReadSender{})
 	requireCode(t, err, codes.Unavailable)
 	detail := requireRestorePendingDetail(t, err)
-	if !detail.GetRestoreQueued() {
-		t.Fatalf("restore detail = %#v, want queued retry", detail)
+	if detail.GetRestoreQueued() {
+		t.Fatalf("restore detail = %#v, want query-only cold state", detail)
 	}
-	requeued, err := store.Get(operationID)
-	testutil.RequireNoErrorf(t, err, "get requeued operation")
-	if requeued.GetState() != adminv1.OperationState_OPERATION_STATE_QUEUED ||
-		requeued.GetFinishedAt() != nil ||
-		requeued.GetLastError() != nil ||
-		requeued.GetProgress().GetMessage() != "requeued by cold read" {
-		t.Fatalf("requeued operation = %#v, want queued clean retry", requeued)
+	testutil.RequireEqualf(t, detail.GetRestoreState(), "cold", "restore detail state")
+	unchanged, err := store.Get(operationID)
+	testutil.RequireNoErrorf(t, err, "get terminal operation after read")
+	if unchanged.GetState() != adminv1.OperationState_OPERATION_STATE_FAILED ||
+		unchanged.GetFinishedAt() == nil ||
+		unchanged.GetLastError().GetMessage() != "previous restore failed" {
+		t.Fatalf("terminal operation = %#v, want unchanged failed operation", unchanged)
 	}
 	events, err := store.ListAuditEvents()
 	testutil.RequireNoErrorf(t, err, "list audit events")
-	if len(events) != 1 || events[0].GetEventType() != operationEventRestoreQueued {
-		t.Fatalf("audit events = %#v, want queued audit backfill", events)
+	if len(events) != 0 {
+		t.Fatalf("audit events = %#v, want no read-side audit events", events)
+	}
+	metadata, err := app.metadata.HeadDocument(stored.Identity)
+	testutil.RequireNoErrorf(t, err, "head document after read")
+	if metadata.RestoreState != metastore.RestoreStateCold || metadata.Availability != metastore.AvailabilityCold {
+		t.Fatalf("metadata = %#v, want cold state unchanged", metadata)
 	}
 }
 
