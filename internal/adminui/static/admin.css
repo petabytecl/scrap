@@ -180,6 +180,26 @@ h1 {
   font-size: 12px;
 }
 
+.tool-button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--pb-border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--pb-fg2);
+  cursor: pointer;
+  font-family: var(--pb-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.tool-button:hover,
+.tool-button[aria-expanded="true"] {
+  border-color: rgba(0, 147, 208, 0.32);
+  background: rgba(0, 147, 208, 0.1);
+  color: var(--pb-primary-hover);
+}
+
 .pill,
 .status {
   display: inline-flex;
@@ -593,6 +613,93 @@ th {
   color: var(--pb-primary-hover);
 }
 
+.tweaks-panel {
+  position: fixed;
+  top: 82px;
+  right: 28px;
+  z-index: 10;
+  width: min(340px, calc(100vw - 36px));
+  padding: 20px;
+  border: 1px solid rgba(0, 147, 208, 0.3);
+  border-radius: 8px;
+  background: #0b1220;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
+}
+
+.tweaks-panel[hidden] {
+  display: none;
+}
+
+.tweak-group,
+.tweak-toggle {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tweak-group label,
+.tweak-label,
+.tweak-toggle span {
+  color: var(--pb-fg2);
+  font-family: var(--pb-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.tweak-slider-row,
+.tweak-toggle {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.tweak-slider-row {
+  display: grid;
+  gap: 12px;
+}
+
+.tweak-slider-row input {
+  accent-color: var(--pb-primary);
+}
+
+.tweak-slider-row output {
+  color: var(--pb-fg3);
+  font-family: var(--pb-font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tweak-toggle {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.tweak-toggle input {
+  accent-color: var(--pb-primary);
+}
+
+.swatch-row {
+  display: flex;
+  gap: 8px;
+}
+
+.swatch {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--swatch);
+  cursor: pointer;
+}
+
+.swatch.active {
+  border-color: var(--pb-fg1);
+  box-shadow: 0 0 0 3px rgba(0, 147, 208, 0.2);
+}
+
+body[data-sparklines="false"] .sparkline {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -613,5 +720,14 @@ th {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .topbar-status {
+    flex-wrap: wrap;
+  }
+
+  .tweaks-panel {
+    top: 20px;
+    right: 18px;
   }
 }

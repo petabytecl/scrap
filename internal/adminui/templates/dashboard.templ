@@ -50,15 +50,53 @@ templ Shell(data DashboardData) {
 							<span id="admin-clock">{ data.GeneratedAt }</span>
 							<span class="live-dot"></span>
 							<span>Live</span>
+							<button class="tool-button" type="button" data-tweaks-toggle aria-expanded="false" aria-controls="tweaks-panel">Tune</button>
 						</div>
 					</header>
 					<section id="main-content" class="view">
 						@View(data)
 					</section>
 				</main>
+				@TweaksPanel()
 			</div>
 		</body>
 	</html>
+}
+
+templ TweaksPanel() {
+	<aside id="tweaks-panel" class="tweaks-panel" data-tweaks-panel hidden>
+		<div class="panel-heading">
+			<div>
+				<div class="eyebrow">Tweaks</div>
+				<strong>Dashboard controls</strong>
+			</div>
+			<button class="text-button" type="button" data-tweaks-close>Close</button>
+		</div>
+		<div class="tweak-group">
+			<label for="tweak-refresh">Auto-refresh</label>
+			<div class="tweak-slider-row">
+				<input id="tweak-refresh" type="range" min="5" max="120" step="5" value="20" data-tweak-refresh/>
+				<output for="tweak-refresh" data-tweak-refresh-output>20s</output>
+			</div>
+		</div>
+		<label class="tweak-toggle">
+			<span>Compact numbers</span>
+			<input type="checkbox" data-tweak-compact checked/>
+		</label>
+		<label class="tweak-toggle">
+			<span>Sparklines</span>
+			<input type="checkbox" data-tweak-sparklines checked/>
+		</label>
+		<div class="tweak-group">
+			<div class="tweak-label">Accent</div>
+			<div class="swatch-row">
+				<button class="swatch active" type="button" data-tweak-accent="#0093d0" style="--swatch: #0093d0" aria-label="Petabyte blue"></button>
+				<button class="swatch" type="button" data-tweak-accent="#0ea5e9" style="--swatch: #0ea5e9" aria-label="Sky blue"></button>
+				<button class="swatch" type="button" data-tweak-accent="#6366f1" style="--swatch: #6366f1" aria-label="Indigo"></button>
+				<button class="swatch" type="button" data-tweak-accent="#34d399" style="--swatch: #34d399" aria-label="Green"></button>
+			</div>
+		</div>
+	</aside>
 }
 
 templ View(data DashboardData) {
@@ -283,7 +321,7 @@ templ OperationDetail(operation OperationData) {
 templ Metric(eyebrow string, value string, sub string) {
 	<div class="metric-card">
 		<div class="eyebrow">{ eyebrow }</div>
-		<div class="metric-value">{ value }</div>
+		<div class="metric-value" data-full-value={ value } data-compact-value={ compactMetricValue(value) }>{ value }</div>
 		<div class="metric-sub">{ sub }</div>
 	</div>
 }

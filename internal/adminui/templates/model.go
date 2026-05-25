@@ -239,6 +239,44 @@ func CountText(value int) string {
 	return commaText(raw)
 }
 
+func compactMetricValue(value string) string {
+	raw := strings.ReplaceAll(value, ",", "")
+	if raw == "" {
+		return value
+	}
+	for _, char := range raw {
+		if char < '0' || char > '9' {
+			return value
+		}
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || parsed < 10000 {
+		return value
+	}
+	return compactUnsigned(parsed)
+}
+
+func compactUnsigned(value uint64) string {
+	units := []struct {
+		suffix string
+		value  uint64
+	}{
+		{suffix: "B", value: 1_000_000_000},
+		{suffix: "M", value: 1_000_000},
+		{suffix: "K", value: 1_000},
+	}
+	for _, unit := range units {
+		if value >= unit.value {
+			scaled := float64(value) / float64(unit.value)
+			if scaled >= 100 || math.Mod(scaled, 1) == 0 {
+				return fmt.Sprintf("%.0f%s", scaled, unit.suffix)
+			}
+			return fmt.Sprintf("%.1f%s", scaled, unit.suffix)
+		}
+	}
+	return strconv.FormatUint(value, 10)
+}
+
 func commaText(raw string) string {
 	var builder strings.Builder
 	for i, char := range raw {

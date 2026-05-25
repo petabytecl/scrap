@@ -29,6 +29,10 @@ func TestHandlerServesOverviewAndCapacityPartials(t *testing.T) {
 	requireContains(t, overviewBody, "4.0 KiB")
 	requireContains(t, overviewBody, "2.0 KiB/day")
 	requireContains(t, overviewBody, "2026-05-25T12:00:00Z")
+	requireContains(t, overviewBody, "data-tweaks-toggle")
+	requireContains(t, overviewBody, "data-tweak-refresh")
+	requireContains(t, overviewBody, "data-tweak-accent=\"#0093d0\"")
+	requireContains(t, overviewBody, "data-compact-value")
 
 	capacity := request(handler, "/admin/views/capacity")
 	requireOK(t, capacity)
@@ -200,6 +204,12 @@ func TestHandlerServesEmbeddedStaticAssets(t *testing.T) {
 	response := request(NewHandler(Options{}), "/admin/static/admin.css")
 	requireOK(t, response)
 	requireContains(t, response.Body.String(), ".app-shell")
+
+	script := request(NewHandler(Options{}), "/admin/static/admin.js")
+	requireOK(t, script)
+	requireContains(t, script.Body.String(), "scrap.admin.ui.tweaks")
+	requireContains(t, script.Body.String(), "htmx.ajax")
+	requireContains(t, script.Body.String(), "applyCompactNumbers")
 
 	logo := request(NewHandler(Options{}), "/admin/static/assets/logo-petabyte-color-white.png")
 	requireOK(t, logo)
