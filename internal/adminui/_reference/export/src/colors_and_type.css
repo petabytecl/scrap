@@ -1,0 +1,264 @@
+/* ================================================================
+   Petabyte Design System — Colors & Typography
+   Source: web/src/styles/global.css (Tailwind @theme block)
+   Fonts: Maven Pro (headings) + Inter (body) + JetBrains Mono (code/eyebrow)
+   Loaded from Google Fonts — see /* Font loading */ block below.
+   ================================================================ */
+
+/* ---------- Font loading ----------------------------------------
+   Maven Pro is served from the local OTFs the brand ships with
+   (/fonts/*). Inter + JetBrains Mono continue to load from Google
+   Fonts since the production site already uses them that way.
+*/
+@font-face {
+  font-family: 'Maven Pro';
+  src: url('fonts/Maven_Pro_Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Maven Pro';
+  src: url('fonts/Maven_Pro_Medium.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Maven Pro';
+  src: url('fonts/Maven_Pro_Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Maven Pro';
+  src: url('fonts/Maven_Pro_Black.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ============================================================
+     BRAND
+     ============================================================ */
+  --pb-brand-blue: #0093D0;           /* Primary brand */
+  --pb-brand-charcoal: #3C4043;       /* Wordmark grey */
+
+  /* ============================================================
+     CORE PALETTE (dark mode is primary)
+     ============================================================ */
+  --pb-primary: #0093D0;
+  --pb-primary-hover: #38BDF8;
+  --pb-on-primary: #FFFFFF;
+  --pb-secondary: #94A3B8;
+  --pb-accent: #7DD3FC;
+
+  --pb-background: #0F172A;           /* page bg — slate-900 */
+  --pb-background-alt: #0C1322;       /* alt section bg */
+  --pb-foreground: #F1F5F9;           /* primary text */
+  --pb-surface: #1E293B;              /* cards */
+  --pb-surface-hover: #263348;
+  --pb-muted: #334155;
+  --pb-muted-fg: #94A3B8;             /* secondary text */
+  --pb-border: #334155;
+  --pb-border-subtle: #1E293B;
+
+  --pb-destructive: #EF4444;
+  --pb-success: #34D399;
+  --pb-warning: #FBBF24;
+  --pb-ring: #0093D0;
+
+  /* Tier accents (Services pricing / role colors) */
+  --pb-tier-launch: #0EA5E9;
+  --pb-tier-platform: #0093D0;
+  --pb-tier-studio: #6366F1;
+
+  /* ============================================================
+     SEMANTIC FOREGROUNDS (fg1 → strongest, fg4 → weakest)
+     ============================================================ */
+  --pb-fg1: #F1F5F9;                  /* primary */
+  --pb-fg2: rgba(241, 245, 249, 0.80);/* foreground/80 usage */
+  --pb-fg3: #94A3B8;                  /* muted */
+  --pb-fg4: #64748B;                  /* tertiary */
+
+  /* ============================================================
+     TYPOGRAPHY — families
+     ============================================================ */
+  --pb-font-heading: 'Maven Pro', system-ui, -apple-system, sans-serif;
+  --pb-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --pb-font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* ============================================================
+     TYPE SCALE
+     ============================================================ */
+  --pb-text-xs: 12px;
+  --pb-text-sm: 14px;
+  --pb-text-base: 16px;
+  --pb-text-lg: 18px;
+  --pb-text-xl: 20px;
+  --pb-text-2xl: 24px;
+  --pb-text-3xl: 30px;
+  --pb-text-4xl: 36px;
+  --pb-text-5xl: 48px;
+  --pb-text-6xl: 60px;
+  --pb-text-7xl: 72px;
+
+  --pb-leading-tight: 1.1;
+  --pb-leading-snug: 1.3;
+  --pb-leading-normal: 1.5;
+  --pb-leading-relaxed: 1.65;
+
+  --pb-tracking-tight: -0.02em;
+  --pb-tracking-normal: 0;
+  --pb-tracking-wide: 0.08em;
+  --pb-tracking-widest: 0.2em;        /* used on eyebrow labels */
+
+  /* ============================================================
+     SPACING (4px baseline — Tailwind scale)
+     ============================================================ */
+  --pb-space-1: 4px;
+  --pb-space-2: 8px;
+  --pb-space-3: 12px;
+  --pb-space-4: 16px;
+  --pb-space-5: 20px;
+  --pb-space-6: 24px;
+  --pb-space-8: 32px;
+  --pb-space-10: 40px;
+  --pb-space-12: 48px;
+  --pb-space-16: 64px;
+  --pb-space-24: 96px;
+
+  /* ============================================================
+     RADII
+     ============================================================ */
+  --pb-radius-sm: 4px;
+  --pb-radius-md: 8px;
+  --pb-radius-lg: 12px;
+  --pb-radius-xl: 16px;
+  --pb-radius-full: 9999px;
+
+  /* ============================================================
+     SHADOWS & GLOW
+     ============================================================ */
+  --pb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --pb-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.25), 0 2px 4px -2px rgba(0, 0, 0, 0.15);
+  --pb-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px rgba(0, 0, 0, 0.15);
+  --pb-shadow-glow-blue: 0 0 20px rgba(0, 147, 208, 0.15);
+
+  /* ============================================================
+     MOTION
+     ============================================================ */
+  --pb-ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --pb-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --pb-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --pb-duration-fast: 150ms;
+  --pb-duration-normal: 250ms;
+  --pb-duration-slow: 400ms;
+
+  /* ============================================================
+     LAYOUT
+     ============================================================ */
+  --pb-container: 1152px;   /* max-w-6xl */
+  --pb-container-sm: 672px; /* max-w-2xl */
+  --pb-container-md: 896px; /* max-w-4xl */
+}
+
+/* ================================================================
+   SEMANTIC TYPE STYLES
+   Use these on raw HTML or as mixin-style classes.
+   ================================================================ */
+.pb-h1 {
+  font-family: var(--pb-font-heading);
+  font-weight: 700;
+  font-size: clamp(36px, 6vw, 72px);
+  line-height: var(--pb-leading-tight);
+  letter-spacing: var(--pb-tracking-tight);
+  color: var(--pb-fg1);
+}
+
+.pb-h2 {
+  font-family: var(--pb-font-heading);
+  font-weight: 700;
+  font-size: clamp(30px, 4vw, 40px);
+  line-height: var(--pb-leading-snug);
+  color: var(--pb-fg1);
+}
+
+.pb-h3 {
+  font-family: var(--pb-font-heading);
+  font-weight: 700;
+  font-size: var(--pb-text-2xl);
+  line-height: var(--pb-leading-snug);
+  color: var(--pb-fg1);
+}
+
+.pb-h4 {
+  font-family: var(--pb-font-heading);
+  font-weight: 700;
+  font-size: var(--pb-text-xl);
+  line-height: var(--pb-leading-snug);
+  color: var(--pb-fg1);
+}
+
+.pb-eyebrow {
+  font-family: var(--pb-font-mono);
+  font-size: var(--pb-text-sm);
+  font-weight: 500;
+  letter-spacing: var(--pb-tracking-widest);
+  text-transform: uppercase;
+  color: var(--pb-primary);
+}
+
+.pb-body {
+  font-family: var(--pb-font-sans);
+  font-size: var(--pb-text-base);
+  line-height: var(--pb-leading-relaxed);
+  color: var(--pb-fg1);
+}
+
+.pb-body-lg {
+  font-family: var(--pb-font-sans);
+  font-size: var(--pb-text-lg);
+  line-height: var(--pb-leading-relaxed);
+  color: var(--pb-muted-fg);
+}
+
+.pb-body-sm {
+  font-family: var(--pb-font-sans);
+  font-size: var(--pb-text-sm);
+  line-height: var(--pb-leading-normal);
+  color: var(--pb-fg2);
+}
+
+.pb-caption {
+  font-family: var(--pb-font-sans);
+  font-size: var(--pb-text-xs);
+  color: var(--pb-muted-fg);
+}
+
+.pb-code {
+  font-family: var(--pb-font-mono);
+  font-size: var(--pb-text-sm);
+  color: var(--pb-fg2);
+}
+
+/* ================================================================
+   ELEMENT-LEVEL DEFAULTS
+   Opt in by adding class="pb" to a container.
+   ================================================================ */
+.pb {
+  font-family: var(--pb-font-sans);
+  color: var(--pb-foreground);
+  background: var(--pb-background);
+  font-size: var(--pb-text-base);
+  line-height: var(--pb-leading-relaxed);
+}
+.pb h1 { font: 700 clamp(36px,6vw,72px)/1.1 var(--pb-font-heading); letter-spacing: -0.02em; }
+.pb h2 { font: 700 clamp(30px,4vw,40px)/1.3 var(--pb-font-heading); }
+.pb h3 { font: 700 24px/1.3 var(--pb-font-heading); }
+.pb h4 { font: 700 20px/1.3 var(--pb-font-heading); }
+.pb p  { color: var(--pb-muted-fg); line-height: 1.65; }
+.pb code, .pb pre { font-family: var(--pb-font-mono); }

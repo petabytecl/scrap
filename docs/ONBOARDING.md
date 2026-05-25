@@ -60,8 +60,8 @@ Required tools:
 
 - Go toolchain from `go.mod`
 - `buf`
-- Docker, kind, kubectl, and kustomize-compatible tooling for local release
-  rehearsal targets
+- Docker and kubectl for local release rehearsal targets. The Makefile runs
+  kind and kustomize through Go by default.
 
 Start with:
 

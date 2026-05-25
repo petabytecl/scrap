@@ -23,11 +23,13 @@ KUSTOMIZE ?= $(GO_TOOL) kustomize
 
 # External command-line tools.
 ##? DOCKER Docker CLI used by local image targets.
-##? KIND kind CLI used by local cluster targets.
+##? KIND kind command used by local cluster targets.
+##? KIND_VERSION kind version used by the default KIND command.
 ##? KUBECTL kubectl CLI used by local release evidence targets.
 
 DOCKER ?= docker
-KIND ?= kind
+KIND_VERSION ?= v0.31.0
+KIND ?= $(GO) run sigs.k8s.io/kind@$(KIND_VERSION)
 KUBECTL ?= kubectl
 
 ##@ Verification Variables
@@ -355,9 +357,15 @@ manifests-check: ## Validate rendered GitOps manifests and deployment hardening 
 local-kind-create: ## Create the local kind cluster for release rehearsal.
 	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml
 
-.PHONY: local-kind-delete
-local-kind-delete: ## Delete the local kind cluster.
+.PHONY: local-kind-clean
+local-kind-clean: ## Clean up the local kind cluster.
 	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
+
+.PHONY: local-kind-cleanup
+local-kind-cleanup: local-kind-clean ## Alias for local-kind-clean.
+
+.PHONY: local-kind-delete
+local-kind-delete: local-kind-clean ## Alias for local-kind-clean.
 
 .PHONY: local-kind-load
 local-kind-load: image ## Load the scrapd image into the local kind cluster.

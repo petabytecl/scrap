@@ -40,7 +40,7 @@ make openbao-smoke-evidence
 make capacity-sample
 make local-soak-evidence
 make local-dr-drill-evidence
-make local-kind-delete
+make local-kind-clean
 ```
 
 The default image is `localhost/scrapd:local`. Override `IMAGE_NAME` to test a
@@ -53,6 +53,8 @@ make image IMAGE_NAME=ghcr.io/petabytecl/scrap/scrapd:$(git rev-parse --short HE
 `make image` builds for `IMAGE_GOOS` and `IMAGE_GOARCH`, defaulting to Linux and
 the local Go architecture, then passes the matching `IMAGE_PLATFORM` to Docker.
 Override all three together when building for a different kind node platform.
+The Makefile runs kind through Go by default; set `KIND=kind` to use an
+installed kind binary instead.
 
 ## Evidence Record
 
