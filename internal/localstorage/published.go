@@ -49,6 +49,12 @@ func backendStoreIsNil(store backend.Store) bool {
 
 func (a *Application) publishMetadataSnapshot(ctx context.Context, store backend.MutableStore) (published.SnapshotPublication, error) {
 	now := a.now()
+	if err := a.authority.CheckHealth(); err != nil {
+		return published.SnapshotPublication{}, err
+	}
+	// Published metadata snapshots describe the applied projection contents.
+	// Refuse fail-closed authority state above instead of using the durable
+	// command-log index for records that have not applied locally.
 	highWatermark := a.authority.AppliedIndex()
 	generation := highWatermark
 	if generation == 0 {

@@ -42,11 +42,12 @@ func (a *Application) GetAdminShard(_ context.Context, shardID string) (*adminv1
 		return nil, mapError(metastore.ErrNotFound)
 	}
 	appliedIndex := a.authority.AppliedIndex()
+	committedIndex := a.authority.DurableIndex()
 	return &adminv1.Shard{
 		ShardId:              "local",
 		LeaderMemberId:       "local",
 		VoterMemberIds:       []string{"local"},
-		CommittedIndex:       appliedIndex,
+		CommittedIndex:       committedIndex,
 		AppliedIndex:         appliedIndex,
 		OpenTransactionCount: 0,
 	}, nil

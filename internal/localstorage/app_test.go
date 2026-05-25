@@ -2534,6 +2534,71 @@ func TestGetAdminDocumentReturnsPhysicalReference(t *testing.T) {
 	requireAdminCapacityRunway(t, runway)
 }
 
+func TestGetAdminShardSeparatesCommittedAndAppliedIndexesAfterApplyFailure(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	app.now = fixedClock(time.Unix(200, 0).UTC())
+	doc := testDocumentIdentity()
+	_, err := app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("inspect me")}))
+	testutil.RequireNoErrorf(t, err, "write document")
+
+	appliedBefore := app.authority.AppliedIndex()
+	applyErr := induceInvalidApplicationApplyFailure(t, app, doc, "invalid-restore-state-1")
+	if applyErr == nil {
+		t.Fatal("apply failure was nil")
+	}
+	shard, err := app.GetAdminShard(ctx, "local")
+	testutil.RequireNoErrorf(t, err, "get admin shard after apply failure")
+	testutil.RequireEqualf(t, shard.GetCommittedIndex(), appliedBefore+1, "committed index")
+	testutil.RequireEqualf(t, shard.GetAppliedIndex(), appliedBefore, "applied index")
+}
+
+func TestPublishMetadataSnapshotRejectsFailClosedAuthority(t *testing.T) {
+	ctx := context.Background()
+	app := openTestApplication(t)
+	backendStore, err := backendfs.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open backend")
+	app.SetBackendStore(backendStore)
+	doc := testDocumentIdentity()
+	_, err = app.WriteDocument(ctx, api.WriteDocumentInit{
+		Identity:         doc,
+		DocumentClass:    storageapp.DocumentClassPermanent,
+		PriorityClass:    storageapp.PriorityClassNormal,
+		CreatedByService: "billing-etl",
+	}, newChunkReader([][]byte{[]byte("snapshot me")}))
+	testutil.RequireNoErrorf(t, err, "write document")
+
+	applyErr := induceInvalidApplicationApplyFailure(t, app, doc, "invalid-restore-state-2")
+	if applyErr == nil {
+		t.Fatal("apply failure was nil")
+	}
+	_, err = app.PublishMetadataSnapshot(ctx)
+	if !errors.Is(err, applyErr) || !strings.Contains(err.Error(), "fail-closed") {
+		t.Fatalf("publish metadata snapshot error = %v, want fail-closed apply failure", err)
+	}
+}
+
+func induceInvalidApplicationApplyFailure(t *testing.T, app *Application, doc identity.Document, commandID string) error {
+	t.Helper()
+	err := app.authority.UpdateDocumentRestoreState(
+		context.Background(),
+		doc,
+		metastore.RestoreState(0),
+		"invalid state should fail after durable append",
+		commandID,
+		time.Unix(300, 0).UTC(),
+	)
+	if err == nil {
+		t.Fatal("invalid restore state did not fail")
+	}
+	return err
+}
+
 func requireAdminDocument(t *testing.T, adminDoc *adminv1.AdminDocument, doc identity.Document, stored metastore.Document, data []byte) {
 	t.Helper()
 	testutil.RequireEqualf(t, adminDoc.GetShardId(), "local", "admin document shard")
