@@ -30,7 +30,7 @@ hostname:       scrapd-0
 statefulset:    scrapd
 ordinal:        0
 member_slot_id: scrapd-0
-peer DNS:       scrapd-0.scrapd.<namespace>.svc
+peer DNS:       scrapd-0.scrapd.<namespace>.svc.<cluster_domain>
 ```
 
 The slot is used for stable peer discovery and for operator messages such as
@@ -68,8 +68,13 @@ Authoritative Kubernetes deployments use:
 StatefulSet discovery resolves every expected slot through the headless Service:
 
 ```text
-<member_slot_id>.<headless_service>.<namespace>.svc:<peer_port>
+<member_slot_id>.<headless_service>.<namespace>.svc.<cluster_domain>:<peer_port>
 ```
+
+The shorter `<member_slot_id>.<headless_service>.<namespace>.svc` form is
+only a search-path convenience when the cluster DNS domain is configured to
+complete it. Runtime configuration should store or derive the full DNS name,
+including the cluster domain, so non-default Kubernetes DNS domains work.
 
 The peer handshake must verify `cell_id`, `member_id`, and
 `member_slot_id`. A peer address alone is not authority to join a shard or serve
