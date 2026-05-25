@@ -3,12 +3,15 @@ set -eu
 
 KUSTOMIZE_CMD=${KUSTOMIZE_CMD:-"go run sigs.k8s.io/kustomize/kustomize/v5@v5.7.1"}
 LOCAL_KIND_OVERLAY=${LOCAL_KIND_OVERLAY:-deploy/kustomize/overlays/local-kind}
+LOCAL_PROD_DEV_OVERLAY=${LOCAL_PROD_DEV_OVERLAY:-deploy/kustomize/overlays/local-prod-dev}
 
 base_render="$(mktemp)"
 local_kind_render="$(mktemp)"
+local_prod_dev_render="$(mktemp)"
 network_policy_render="$(mktemp)"
 statefulset_render="$(mktemp)"
-trap 'rm -f "$base_render" "$local_kind_render" "$network_policy_render" "$statefulset_render"' EXIT
+local_prod_dev_statefulset_render="$(mktemp)"
+trap 'rm -f "$base_render" "$local_kind_render" "$local_prod_dev_render" "$network_policy_render" "$statefulset_render" "$local_prod_dev_statefulset_render"' EXIT
 
 render() {
 	# KUSTOMIZE_CMD intentionally supports commands with arguments, as defined by Makefile.
@@ -68,15 +71,19 @@ extract_first_kind() {
 
 render deploy/kustomize/base > "$base_render"
 render "$LOCAL_KIND_OVERLAY" > "$local_kind_render"
+render "$LOCAL_PROD_DEV_OVERLAY" > "$local_prod_dev_render"
 
 test -s "$base_render"
 test -s "$local_kind_render"
+test -s "$local_prod_dev_render"
 
 extract_first_kind NetworkPolicy "$base_render" > "$network_policy_render"
 test -s "$network_policy_render"
 
 extract_first_kind StatefulSet "$base_render" > "$statefulset_render"
 test -s "$statefulset_render"
+extract_first_kind StatefulSet "$local_prod_dev_render" > "$local_prod_dev_statefulset_render"
+test -s "$local_prod_dev_statefulset_render"
 
 reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "NodePort service in base render"
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
@@ -100,3 +107,12 @@ require 'memory:[[:space:]]*"?512Mi"?[[:space:]]*$' "$statefulset_render" "scrap
 
 require '^[[:space:]]*nodePort:[[:space:]]*30080[[:space:]]*$' "$local_kind_render" "local-kind public NodePort"
 require '^[[:space:]]*nodePort:[[:space:]]*30081[[:space:]]*$' "$local_kind_render" "local-kind admin NodePort"
+
+require '^[[:space:]]*replicas:[[:space:]]*3[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like StatefulSet replicas"
+require 'name:[[:space:]]*SCRAP_MEMBER_ID[[:space:]]*$' "$local_prod_dev_statefulset_render" "runtime member id downward API environment"
+require 'name:[[:space:]]*SCRAP_MEMBER_SLOT_ID[[:space:]]*$' "$local_prod_dev_statefulset_render" "runtime member slot downward API environment"
+require 'fieldPath:[[:space:]]*metadata\.name[[:space:]]*$' "$local_prod_dev_statefulset_render" "runtime identity field path"
+require '^[[:space:]]*-[[:space:]]*--cell-id=scrap-local-prod-like[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like cell identity"
+require '^[[:space:]]*-[[:space:]]*--member-id=\$\(SCRAP_MEMBER_ID\)[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like member identity"
+require '^[[:space:]]*-[[:space:]]*--member-slot-id=\$\(SCRAP_MEMBER_SLOT_ID\)[[:space:]]*$' "$local_prod_dev_statefulset_render" "local production-like member slot identity"
+require 'scrapd-0\.scrapd\.scrap-local\.svc\.cluster\.local:18081,scrapd-1\.scrapd\.scrap-local\.svc\.cluster\.local:18081,scrapd-2\.scrapd\.scrap-local\.svc\.cluster\.local:18081' "$local_prod_dev_statefulset_render" "local production-like peer discovery addresses"

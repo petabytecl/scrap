@@ -47,6 +47,45 @@ func TestAdminInspectReportsLocalShardDocumentBlockAndCapacity(t *testing.T) {
 	}
 }
 
+func TestAdminInspectReportsConfiguredRuntimeIdentity(t *testing.T) {
+	ctx := context.Background()
+	app, err := OpenWithOptions(ctx, t.TempDir(), OpenOptions{
+		CellID:   "scrap-cell-a",
+		MemberID: "scrapd-0",
+	})
+	testutil.RequireNoErrorf(t, err, "open app with runtime identity")
+	t.Cleanup(func() {
+		testutil.RequireNoErrorf(t, app.Close(), "close app")
+	})
+
+	testutil.RequireEqualf(t, app.CellID(), "scrap-cell-a", "application cell id")
+	testutil.RequireEqualf(t, app.MemberID(), "scrapd-0", "application member id")
+
+	member, err := Inspect(app).GetAdminMember(ctx, "scrapd-0")
+	testutil.RequireNoErrorf(t, err, "configured admin member")
+	testutil.RequireEqualf(t, member.GetStorageMemberId(), "scrapd-0", "admin member id")
+	testutil.RequireEqualf(t, member.GetCellId(), "scrap-cell-a", "admin cell id")
+	if _, err := Inspect(app).GetAdminMember(ctx, "local"); err == nil {
+		t.Fatal("legacy local member lookup error = nil, want not found for configured identity")
+	}
+
+	shard, err := Inspect(app).GetAdminShard(ctx, "local")
+	testutil.RequireNoErrorf(t, err, "configured admin shard")
+	testutil.RequireEqualf(t, shard.GetLeaderMemberId(), "scrapd-0", "admin shard leader")
+	testutil.RequireEqualf(t, shard.GetVoterMemberIds()[0], "scrapd-0", "admin shard voter")
+
+	cordoned, err := Members(app).CordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "scrapd-0"})
+	testutil.RequireNoErrorf(t, err, "cordon configured member")
+	testutil.RequireTruef(t, cordoned.GetCordoned(), "configured member was not cordoned")
+	if _, err := Members(app).UncordonMember(ctx, storageapp.MemberMutationRequest{StorageMember: "local"}); err == nil {
+		t.Fatal("legacy local uncordon error = nil, want not found for configured identity")
+	}
+
+	safety, err := Members(app).GetEvictionSafety(ctx, "scrapd-0")
+	testutil.RequireNoErrorf(t, err, "configured eviction safety")
+	testutil.RequireEqualf(t, safety.GetStorageMember().GetStorageMemberId(), "scrapd-0", "eviction safety member")
+}
+
 func TestDiskStatsHelpersHandleEdgeCases(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "one.bin"), []byte("1234"), 0o600); err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +20,8 @@ const (
 	DefaultLocalSealBlockAtBytes = 256 * 1024 * 1024
 	DefaultProductionProfileID   = "scrap-prod-v1"
 )
+
+const maxRuntimeIDBytes = 128
 
 const (
 	DefaultGRPCMaxConcurrentStreams           uint64 = 256
@@ -68,6 +71,10 @@ type Config struct {
 	BackendUploadInterval           time.Duration
 	OperationRunInterval            time.Duration
 	LocalSealBlockAtBytes           uint64
+	CellID                          string
+	MemberID                        string
+	MemberSlotID                    string
+	PeerAddresses                   string
 	GRPCServerLimits                GRPCServerLimits
 	EnableProductionWriteACK        bool
 	ProductionReadinessEvidence     ProductionReadinessEvidence
@@ -165,14 +172,11 @@ func (c Config) Validate() error {
 	if err := c.validateAdminUI(); err != nil {
 		return err
 	}
-	if c.BackendUploadInterval <= 0 {
-		return errors.New("backend_upload_interval must be positive")
+	if err := c.validateLocalRuntimeSettings(); err != nil {
+		return err
 	}
-	if c.OperationRunInterval <= 0 {
-		return errors.New("operation_run_interval must be positive")
-	}
-	if c.LocalSealBlockAtBytes == 0 {
-		return errors.New("local_seal_block_at_bytes must be positive")
+	if err := c.validateRuntimeIdentity(); err != nil {
+		return err
 	}
 	if err := c.GRPCServerLimits.validate(); err != nil {
 		return err
@@ -277,6 +281,19 @@ type listenAddress struct {
 	value string
 }
 
+func (c Config) validateLocalRuntimeSettings() error {
+	if err := validatePositiveDuration("backend_upload_interval", c.BackendUploadInterval); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration("operation_run_interval", c.OperationRunInterval); err != nil {
+		return err
+	}
+	if c.LocalSealBlockAtBytes == 0 {
+		return errors.New("local_seal_block_at_bytes must be positive")
+	}
+	return nil
+}
+
 func (c Config) validateLocalStorage() error {
 	if c.EnableLocalNonProductionStorage {
 		if strings.TrimSpace(c.LocalDataDir) == "" {
@@ -288,6 +305,140 @@ func (c Config) validateLocalStorage() error {
 		return errors.New("local_data_dir requires local non-production storage to be explicitly enabled")
 	}
 	return nil
+}
+
+func (c Config) validateRuntimeIdentity() error {
+	identity := c.runtimeIdentity()
+	if identity.hasPeerAddresses() && len(identity.peerAddresses) == 0 {
+		return errors.New("peer_addresses must include at least one host:port entry")
+	}
+	if err := identity.validateRequiredFields(); err != nil {
+		return err
+	}
+	if !identity.configured() {
+		return nil
+	}
+	return firstValidationError(
+		validateRuntimeID("cell_id", identity.cellID),
+		validateRuntimeID("member_id", identity.memberID),
+		validateOptionalRuntimeID("member_slot_id", identity.memberSlotID),
+		validatePeerAddresses(identity.peerAddresses),
+	)
+}
+
+type runtimeIdentity struct {
+	cellID             string
+	memberID           string
+	memberSlotID       string
+	peerAddressesValue string
+	peerAddresses      []string
+}
+
+func (c Config) runtimeIdentity() runtimeIdentity {
+	return runtimeIdentity{
+		cellID:             strings.TrimSpace(c.CellID),
+		memberID:           strings.TrimSpace(c.MemberID),
+		memberSlotID:       strings.TrimSpace(c.MemberSlotID),
+		peerAddressesValue: strings.TrimSpace(c.PeerAddresses),
+		peerAddresses:      parsePeerAddresses(c.PeerAddresses),
+	}
+}
+
+func (i runtimeIdentity) configured() bool {
+	return i.cellID != "" || i.memberID != "" || i.memberSlotID != ""
+}
+
+func (i runtimeIdentity) hasPeerAddresses() bool {
+	return i.peerAddressesValue != ""
+}
+
+func (i runtimeIdentity) validateRequiredFields() error {
+	switch {
+	case i.hasPeerAddresses() && !i.configured():
+		return errors.New("peer_addresses require cell_id, member_id, and member_slot_id")
+	case !i.configured():
+		return nil
+	case i.cellID == "":
+		return errors.New("cell_id is required when runtime identity is configured")
+	case i.memberID == "":
+		return errors.New("member_id is required when runtime identity is configured")
+	case i.hasPeerAddresses() && i.memberSlotID == "":
+		return errors.New("member_slot_id is required when peer_addresses are configured")
+	default:
+		return nil
+	}
+}
+
+func validateOptionalRuntimeID(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return validateRuntimeID(field, value)
+}
+
+func validateRuntimeID(field, value string) error {
+	value = strings.TrimSpace(value)
+	switch {
+	case value == "":
+		return fmt.Errorf("%s is required", field)
+	case len(value) > maxRuntimeIDBytes:
+		return fmt.Errorf("%s must be no more than %d bytes", field, maxRuntimeIDBytes)
+	case strings.HasPrefix(value, "-") || strings.HasSuffix(value, "-"):
+		return fmt.Errorf("%s must not start or end with a hyphen", field)
+	case runtimeIDHasInvalidByte(value):
+		return fmt.Errorf("%s must contain only lowercase ASCII letters, digits, and hyphens", field)
+	}
+	return nil
+}
+
+func runtimeIDHasInvalidByte(value string) bool {
+	for i := range len(value) {
+		if !isRuntimeIDByte(value[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRuntimeIDByte(b byte) bool {
+	lower := 'a' <= b && b <= 'z'
+	digit := '0' <= b && b <= '9'
+	hyphen := b == '-'
+	return lower || digit || hyphen
+}
+
+func validatePeerAddresses(addresses []string) error {
+	seen := make(map[string]struct{}, len(addresses))
+	for _, address := range addresses {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("peer_addresses entries must be host:port: %q", address)
+		}
+		if strings.TrimSpace(host) == "" {
+			return fmt.Errorf("peer_addresses entries must include a host: %q", address)
+		}
+		parsedPort, err := strconv.Atoi(port)
+		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
+			return fmt.Errorf("peer_addresses entries must include a valid TCP port: %q", address)
+		}
+		if _, exists := seen[address]; exists {
+			return fmt.Errorf("peer_addresses contains duplicate address %q", address)
+		}
+		seen[address] = struct{}{}
+	}
+	return nil
+}
+
+func parsePeerAddresses(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func (c Config) validateLocalFilesystemBackend() error {

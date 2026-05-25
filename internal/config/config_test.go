@@ -13,6 +13,113 @@ func TestDefaultConfigValidates(t *testing.T) {
 	testutil.RequireNoErrorf(t, Default().Validate(), "default config did not validate")
 }
 
+func TestRuntimeIdentityValidation(t *testing.T) {
+	cfg := Default()
+	cfg.CellID = "scrap-local-prod-like"
+	cfg.MemberID = "scrapd-0"
+	cfg.MemberSlotID = "scrapd-0"
+	cfg.PeerAddresses = strings.Join([]string{
+		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+	}, ",")
+	testutil.RequireNoErrorf(t, cfg.Validate(), "runtime identity config did not validate")
+
+	tests := map[string]struct {
+		mutate  func(*Config)
+		wantErr string
+	}{
+		"peer addresses without identity": {
+			mutate: func(cfg *Config) {
+				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:18081"
+			},
+			wantErr: "peer_addresses require cell_id, member_id, and member_slot_id",
+		},
+		"empty peer address list": {
+			mutate:  func(cfg *Config) { cfg.PeerAddresses = ", ," },
+			wantErr: "peer_addresses must include at least one host:port entry",
+		},
+		"missing cell id": {
+			mutate:  func(cfg *Config) { cfg.MemberID = "scrapd-0" },
+			wantErr: "cell_id is required when runtime identity is configured",
+		},
+		"missing member id": {
+			mutate:  func(cfg *Config) { cfg.CellID = "scrap-local-prod-like" },
+			wantErr: "member_id is required when runtime identity is configured",
+		},
+		"missing member slot with peers": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:18081"
+			},
+			wantErr: "member_slot_id is required when peer_addresses are configured",
+		},
+		"uppercase id": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "Scrapd-0"
+			},
+			wantErr: "member_id must contain only lowercase ASCII letters, digits, and hyphens",
+		},
+		"underscore id": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap_local"
+				cfg.MemberID = "scrapd-0"
+			},
+			wantErr: "cell_id must contain only lowercase ASCII letters, digits, and hyphens",
+		},
+		"leading hyphen id": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "-scrap-local"
+				cfg.MemberID = "scrapd-0"
+			},
+			wantErr: "cell_id must not start or end with a hyphen",
+		},
+		"peer missing port": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local"
+			},
+			wantErr: "peer_addresses entries must be host:port",
+		},
+		"peer invalid port": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:99999"
+			},
+			wantErr: "peer_addresses entries must include a valid TCP port",
+		},
+		"duplicate peer": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAddresses = "scrapd-0.scrapd.scrap-local.svc.cluster.local:18081, scrapd-0.scrapd.scrap-local.svc.cluster.local:18081"
+			},
+			wantErr: "peer_addresses contains duplicate address",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validation error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestConfigRejectsMissingAndDuplicateAddresses(t *testing.T) {
 	tests := map[string]struct {
 		cfg     Config

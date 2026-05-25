@@ -139,6 +139,31 @@ func TestBuildLocalApplicationsRegistersHealthApplication(t *testing.T) {
 	testutil.RequireNoErrorf(t, apps.Health.CheckLiveness(context.Background()), "health application liveness")
 }
 
+func TestBuildLocalApplicationsUsesRuntimeIdentity(t *testing.T) {
+	cfg := config.Default()
+	cfg.LocalDataDir = t.TempDir()
+	cfg.CellID = "scrap-cell-a"
+	cfg.MemberID = "scrapd-1"
+	cfg.MemberSlotID = "scrapd-1"
+	cfg.PeerAddresses = strings.Join([]string{
+		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+	}, ",")
+
+	apps, localApp, operationStore, err := buildLocalApplications(cfg)
+	testutil.RequireNoErrorf(t, err, "build local applications")
+	defer func() { testutil.RequireNoErrorf(t, operationStore.Close(), "close operation store") }()
+	defer func() { testutil.RequireNoErrorf(t, localApp.Close(), "close local application") }()
+
+	testutil.RequireEqualf(t, localApp.CellID(), "scrap-cell-a", "local app cell id")
+	testutil.RequireEqualf(t, localApp.MemberID(), "scrapd-1", "local app member id")
+	member, err := apps.Inspect.GetAdminMember(context.Background(), "scrapd-1")
+	testutil.RequireNoErrorf(t, err, "inspect configured member")
+	testutil.RequireEqualf(t, member.GetStorageMemberId(), "scrapd-1", "admin member id")
+	testutil.RequireEqualf(t, member.GetCellId(), "scrap-cell-a", "admin member cell")
+}
+
 func TestBuildApplicationsDisabledReturnsNoopCleanup(t *testing.T) {
 	cfg := config.Default()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -209,6 +234,29 @@ func TestRegisterFlagSetParsesAdminUIListenAddress(t *testing.T) {
 	err := flags.Parse([]string{"-admin-ui-listen=127.0.0.1:19083"})
 	testutil.RequireNoErrorf(t, err, "parse admin UI flag")
 	testutil.RequireEqualf(t, cfg.AdminUIListenAddress, "127.0.0.1:19083", "admin UI listen address")
+}
+
+func TestRegisterFlagSetParsesRuntimeIdentity(t *testing.T) {
+	cfg := config.Default()
+	flags := flag.NewFlagSet("scrapd-test", flag.ContinueOnError)
+	registerFlagSet(flags, &cfg)
+
+	err := flags.Parse([]string{
+		"-cell-id=scrap-cell-a",
+		"-member-id=scrapd-2",
+		"-member-slot-id=scrapd-2",
+		"-peer-addresses=scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+	})
+	testutil.RequireNoErrorf(t, err, "parse runtime identity flags")
+	testutil.RequireEqualf(t, cfg.CellID, "scrap-cell-a", "cell id flag")
+	testutil.RequireEqualf(t, cfg.MemberID, "scrapd-2", "member id flag")
+	testutil.RequireEqualf(t, cfg.MemberSlotID, "scrapd-2", "member slot id flag")
+	testutil.RequireEqualf(
+		t,
+		cfg.PeerAddresses,
+		"scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+		"peer addresses flag",
+	)
 }
 
 func TestScrapdBackgroundLoggingHelpers(t *testing.T) {

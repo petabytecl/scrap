@@ -8,6 +8,10 @@ patches:
     target:
       kind: StatefulSet
       name: scrapd
+  - path: statefulset-runtime-identity-patch.yaml
+    target:
+      kind: StatefulSet
+      name: scrapd
 labels:
   - includeSelectors: false
     includeTemplates: true
