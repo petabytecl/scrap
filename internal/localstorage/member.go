@@ -25,7 +25,8 @@ func (m *MemberApplication) CordonMember(ctx context.Context, req storageapp.Mem
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if req.StorageMember != "local" {
+	memberID := m.app.MemberID()
+	if req.StorageMember != memberID {
 		return nil, mapError(metastore.ErrNotFound)
 	}
 	if err := m.app.updateLocalMemberState(func(state *localMemberState) {
@@ -33,14 +34,15 @@ func (m *MemberApplication) CordonMember(ctx context.Context, req storageapp.Mem
 	}); err != nil {
 		return nil, err
 	}
-	return Inspect(m.app).GetAdminMember(ctx, "local")
+	return Inspect(m.app).GetAdminMember(ctx, memberID)
 }
 
 func (m *MemberApplication) UncordonMember(ctx context.Context, req storageapp.MemberMutationRequest) (*adminv1.StorageMember, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if req.StorageMember != "local" {
+	memberID := m.app.MemberID()
+	if req.StorageMember != memberID {
 		return nil, mapError(metastore.ErrNotFound)
 	}
 	if err := m.app.updateLocalMemberState(func(state *localMemberState) {
@@ -48,24 +50,24 @@ func (m *MemberApplication) UncordonMember(ctx context.Context, req storageapp.M
 	}); err != nil {
 		return nil, err
 	}
-	return Inspect(m.app).GetAdminMember(ctx, "local")
+	return Inspect(m.app).GetAdminMember(ctx, memberID)
 }
 
 func (m *MemberApplication) GetEvictionSafety(ctx context.Context, memberID string) (*adminv1.EvictionSafety, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if memberID != "local" {
+	if memberID != m.app.MemberID() {
 		return nil, mapError(metastore.ErrNotFound)
 	}
 	return &adminv1.EvictionSafety{
-		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"},
+		StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: memberID},
 		SafeToEvict:   false,
 		Warnings: []*adminv1.OperationWarning{
 			{
 				Code:    "SCRAP_SINGLE_MEMBER_LOCAL_MODE",
 				Message: "local non-production mode has no alternate member to preserve byte availability during eviction",
-				Target:  &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: "local"}}},
+				Target:  &adminv1.Target{Target: &adminv1.Target_StorageMember{StorageMember: &adminv1.StorageMemberTarget{StorageMemberId: memberID}}},
 			},
 		},
 	}, nil

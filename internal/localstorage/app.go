@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/petabytecl/scrap/internal/backendupload"
 	"github.com/petabytecl/scrap/internal/blockstore"
 	"github.com/petabytecl/scrap/internal/cryptoenv"
+	metastorev1 "github.com/petabytecl/scrap/internal/gen/scrap/metastore/v1"
 	"github.com/petabytecl/scrap/internal/metastore"
 	"github.com/petabytecl/scrap/internal/operations"
 	"github.com/petabytecl/scrap/internal/raftmeta"
@@ -22,6 +24,8 @@ import (
 
 type Application struct {
 	dir                      string
+	cellID                   string
+	memberID                 string
 	blocks                   *blockstore.Store
 	backendStore             backend.Store
 	envelopeSource           backendupload.BlockEnvelopeSource
@@ -53,6 +57,13 @@ type Application struct {
 
 const DefaultSealBlockAtBytes uint64 = 256 * 1024 * 1024
 
+const defaultLocalRuntimeID = "local"
+
+type OpenOptions struct {
+	CellID   string
+	MemberID string
+}
+
 type PeerRepairSource interface {
 	ReadReplica(context.Context, blockstore.ReplicaRef, io.Writer) error
 }
@@ -77,6 +88,11 @@ func Open(dir string) (*Application, error) {
 }
 
 func OpenWithContext(ctx context.Context, dir string) (*Application, error) {
+	return OpenWithOptions(ctx, dir, OpenOptions{})
+}
+
+func OpenWithOptions(ctx context.Context, dir string, options OpenOptions) (*Application, error) {
+	cellID, memberID := normalizeOpenIdentity(options)
 	blocks, err := blockstore.Open(dir)
 	if err != nil {
 		return nil, err
@@ -91,7 +107,16 @@ func OpenWithContext(ctx context.Context, dir string) (*Application, error) {
 		_ = blocks.Close()
 		return nil, err
 	}
-	authority, err := raftmeta.OpenAuthority(filepath.Join(dir, "raftmeta"), "local", metadata)
+	authority, err := raftmeta.OpenAuthorityWithOptions(filepath.Join(dir, "raftmeta"), "local", metadata, raftmeta.AuthorityOptions{
+		LocalMemberID: memberID,
+		Members: []raftmeta.Member{
+			{
+				RaftID:   1,
+				MemberID: memberID,
+				Role:     metastorev1.MembershipRole_MEMBERSHIP_ROLE_VOTER,
+			},
+		},
+	})
 	if err != nil {
 		_ = metadata.Close()
 		_ = blocks.Close()
@@ -121,6 +146,8 @@ func OpenWithContext(ctx context.Context, dir string) (*Application, error) {
 	}
 	app := &Application{
 		dir:              dir,
+		cellID:           cellID,
+		memberID:         memberID,
 		blocks:           blocks,
 		metadata:         metadata,
 		authority:        authority,
@@ -133,6 +160,32 @@ func OpenWithContext(ctx context.Context, dir string) (*Application, error) {
 	app.initComponents()
 	app.verifier.startByteServingVerifier(ctx)
 	return app, nil
+}
+
+func normalizeOpenIdentity(options OpenOptions) (string, string) {
+	cellID := strings.TrimSpace(options.CellID)
+	memberID := strings.TrimSpace(options.MemberID)
+	if cellID == "" {
+		cellID = defaultLocalRuntimeID
+	}
+	if memberID == "" {
+		memberID = defaultLocalRuntimeID
+	}
+	return cellID, memberID
+}
+
+func (a *Application) CellID() string {
+	if a == nil || a.cellID == "" {
+		return defaultLocalRuntimeID
+	}
+	return a.cellID
+}
+
+func (a *Application) MemberID() string {
+	if a == nil || a.memberID == "" {
+		return defaultLocalRuntimeID
+	}
+	return a.memberID
 }
 
 func (a *Application) initComponents() {

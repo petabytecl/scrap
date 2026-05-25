@@ -101,6 +101,10 @@ func registerFlagSet(flags *flag.FlagSet, cfg *config.Config) {
 	flags.DurationVar(&cfg.BackendUploadInterval, "backend-upload-interval", cfg.BackendUploadInterval, "interval for non-production backend upload scans")
 	flags.DurationVar(&cfg.OperationRunInterval, "operation-run-interval", cfg.OperationRunInterval, "interval for non-production queued operation scans")
 	flags.Uint64Var(&cfg.LocalSealBlockAtBytes, "local-seal-block-at-bytes", cfg.LocalSealBlockAtBytes, "local non-production block size threshold before backend upload sealing")
+	flags.StringVar(&cfg.CellID, "cell-id", cfg.CellID, "S.C.R.A.P. cell identity for multi-member runtime wiring")
+	flags.StringVar(&cfg.MemberID, "member-id", cfg.MemberID, "durable storage member identity for this scrapd process")
+	flags.StringVar(&cfg.MemberSlotID, "member-slot-id", cfg.MemberSlotID, "StatefulSet slot identity for this scrapd process")
+	flags.StringVar(&cfg.PeerAddresses, "peer-addresses", cfg.PeerAddresses, "comma-separated peer discovery addresses as host:port entries")
 	flags.Uint64Var(&cfg.GRPCServerLimits.MaxConcurrentStreams, "grpc-max-concurrent-streams", cfg.GRPCServerLimits.MaxConcurrentStreams, "maximum concurrent HTTP/2 streams per gRPC server transport")
 	flags.IntVar(&cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, "grpc-max-recv-msg-size-bytes", cfg.GRPCServerLimits.MaxRecvMsgSizeBytes, "maximum inbound gRPC message size in bytes")
 	flags.IntVar(&cfg.GRPCServerLimits.MaxSendMsgSizeBytes, "grpc-max-send-msg-size-bytes", cfg.GRPCServerLimits.MaxSendMsgSizeBytes, "maximum outbound gRPC message size in bytes")
@@ -311,7 +315,14 @@ func buildApplications(
 		closeutil.Log("operation store", logPrintf, operationStore)
 		closeutil.Log("local storage application", logPrintf, localApp)
 	}
-	logger.Warn("local non-production storage enabled; this does not satisfy the production write ACK contract", "path", cfg.LocalDataDir)
+	logger.Warn(
+		"local non-production storage enabled; this does not satisfy the production write ACK contract",
+		"path", cfg.LocalDataDir,
+		"cell_id", localApp.CellID(),
+		"member_id", localApp.MemberID(),
+		"member_slot_id", cfg.MemberSlotID,
+		"peer_addresses", cfg.PeerAddresses,
+	)
 	var uploadRunner *backendupload.Runner
 	if cfg.EnableLocalFilesystemBackend {
 		uploadRunner, err = buildUploadRunner(cfg, localApp, logger)
@@ -324,7 +335,10 @@ func buildApplications(
 }
 
 func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage.Application, *operations.Store, error) {
-	localApp, err := localstorage.Open(cfg.LocalDataDir)
+	localApp, err := localstorage.OpenWithOptions(context.Background(), cfg.LocalDataDir, localstorage.OpenOptions{
+		CellID:   cfg.CellID,
+		MemberID: cfg.MemberID,
+	})
 	if err != nil {
 		return node.Applications{}, nil, nil, fmt.Errorf("open local non-production storage: %w", err)
 	}

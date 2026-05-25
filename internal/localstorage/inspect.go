@@ -43,10 +43,11 @@ func (a *InspectApplication) GetAdminShard(_ context.Context, shardID string) (*
 	}
 	appliedIndex := a.app.authority.AppliedIndex()
 	committedIndex := a.app.authority.DurableIndex()
+	memberID := a.app.MemberID()
 	return &adminv1.Shard{
 		ShardId:              "local",
-		LeaderMemberId:       "local",
-		VoterMemberIds:       []string{"local"},
+		LeaderMemberId:       memberID,
+		VoterMemberIds:       []string{memberID},
 		CommittedIndex:       committedIndex,
 		AppliedIndex:         appliedIndex,
 		OpenTransactionCount: 0,
@@ -100,13 +101,13 @@ func (a *InspectApplication) GetAdminBlock(ctx context.Context, target storageap
 		BlockId:          target.BlockID,
 		Length:           length,
 		Checksum:         checksum,
-		ReplicaMemberIds: []string{"local"},
+		ReplicaMemberIds: []string{a.app.MemberID()},
 		BackendObjectKey: backendObjectKey,
 	}, nil
 }
 
 func (a *InspectApplication) GetAdminMember(ctx context.Context, memberID string) (*adminv1.StorageMember, error) {
-	if memberID != "local" {
+	if memberID != a.app.MemberID() {
 		return nil, mapError(metastore.ErrNotFound)
 	}
 	stats, err := a.localDiskStats(ctx)
@@ -119,8 +120,8 @@ func (a *InspectApplication) GetAdminMember(ctx context.Context, memberID string
 		state = adminv1.MemberState_MEMBER_STATE_DRAINING
 	}
 	return &adminv1.StorageMember{
-		StorageMemberId: "local",
-		CellId:          "local",
+		StorageMemberId: a.app.MemberID(),
+		CellId:          a.app.CellID(),
 		State:           state,
 		Cordoned:        memberState.Cordoned,
 		BytesUsed:       stats.bytesUsed,

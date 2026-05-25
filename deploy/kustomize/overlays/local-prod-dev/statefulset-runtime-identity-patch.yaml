@@ -1,0 +1,23 @@
+- op: add
+  path: /spec/template/spec/containers/0/env
+  value:
+    - name: SCRAP_MEMBER_ID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: SCRAP_MEMBER_SLOT_ID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --cell-id=scrap-local-prod-like
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --member-id=$(SCRAP_MEMBER_ID)
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --member-slot-id=$(SCRAP_MEMBER_SLOT_ID)
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --peer-addresses=scrapd-0.scrapd.scrap-local.svc.cluster.local:18081,scrapd-1.scrapd.scrap-local.svc.cluster.local:18081,scrapd-2.scrapd.scrap-local.svc.cluster.local:18081
