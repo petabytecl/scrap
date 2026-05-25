@@ -135,16 +135,11 @@ func validateBlockHeader(header *storagev1.BlockHeader) error {
 	if err := validateSchemaVersion("block header", header.GetSchemaVersion()); err != nil {
 		return err
 	}
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
+	if err := validateRequiredStrings("block header", []requiredString{
 		{name: "block_id", value: header.GetBlockId()},
 		{name: "shard_id", value: header.GetShardId()},
-	} {
-		if field.value == "" {
-			return invalidRecord("block header", "%s is required", field.name)
-		}
+	}); err != nil {
+		return err
 	}
 	if header.GetHeaderLength() == 0 {
 		return invalidRecord("block header", "header_length is required")
