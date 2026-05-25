@@ -34,12 +34,17 @@ KUBECTL ?= kubectl
 
 # Test package selection.
 ##? COMPAT_PACKAGES Go packages used by compatibility tests.
-##? COVER_PACKAGES Go packages included in coverage reports.
+##? COVER_EXCLUDE_PATTERN Extended regex for packages excluded from coverage instrumentation.
+##? COVER_PACKAGES Go packages instrumented in coverage reports.
+##? COVER_TEST_PACKAGES Go packages whose tests run during coverage reports.
+##? COVERPKG Comma-separated Go packages passed to go test -coverpkg.
 ##? TEST_PACKAGES Go packages used by test and race targets.
 
 COMPAT_PACKAGES ?= ./internal/compat ./internal/metastore
 TEST_PACKAGES ?= ./...
-COVER_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
+COVER_TEST_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
+COVER_EXCLUDE_PATTERN ?= (/cmd/scrap-spike$$|/internal/spike/|/internal/testutil$$)
+COVER_PACKAGES ?= $(shell printf '%s\n' $(COVER_TEST_PACKAGES) | grep -Ev '$(COVER_EXCLUDE_PATTERN)')
 
 # Static analysis inputs.
 ##? LINT_TIMEOUT Timeout passed to golangci-lint run.
@@ -59,6 +64,10 @@ COVERMODE ?= atomic
 COVERPROFILE ?= coverage.out
 TEST_RESULTS_DIR ?= test-results
 JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
+comma := ,
+empty :=
+space := $(empty) $(empty)
+COVERPKG ?= $(subst $(space),$(comma),$(strip $(COVER_PACKAGES)))
 
 # Verification target groups.
 CHECK_TARGETS := \
@@ -291,8 +300,9 @@ test-cover: ## Run tests producing both coverage profile and JUnit XML in one pa
 		--format testname \
 		-- \
 		-covermode=$(COVERMODE) \
+		-coverpkg=$(COVERPKG) \
 		-coverprofile=$(COVERPROFILE) \
-		$(COVER_PACKAGES)
+		$(COVER_TEST_PACKAGES)
 	$(GO) tool cover -func="$(COVERPROFILE)" | tail -n 1
 
 .PHONY: build
