@@ -588,6 +588,16 @@ func clearUnknownFields(message proto.Message) {
 			}
 			return true
 		}
+		if field.IsMap() {
+			if field.MapValue().Kind() == protoreflect.MessageKind {
+				m := value.Map()
+				m.Range(func(_ protoreflect.MapKey, mapValue protoreflect.Value) bool {
+					clearUnknownFields(mapValue.Message().Interface())
+					return true
+				})
+			}
+			return true
+		}
 		if field.Kind() == protoreflect.MessageKind {
 			clearUnknownFields(value.Message().Interface())
 		}
