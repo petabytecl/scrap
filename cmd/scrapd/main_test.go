@@ -82,6 +82,50 @@ func TestAdminUIEndpointServesShell(t *testing.T) {
 	testutil.RequireNoErrorf(t, <-errCh, "admin UI endpoint stopped")
 }
 
+func TestListenHTTPEndpointsStartsAndLogsConfiguredEndpoints(t *testing.T) {
+	cfg := config.Default()
+	cfg.MetricsListenAddress = "127.0.0.1:0"
+	cfg.AdminUIListenAddress = "127.0.0.1:0"
+	endpoints, err := listenHTTPEndpoints(cfg, node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen http endpoints")
+	testutil.RequireNotNilf(t, endpoints.metrics, "metrics endpoint")
+	testutil.RequireNotNilf(t, endpoints.adminUI, "admin UI endpoint")
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	endpoints.logListening(logger)
+	if !strings.Contains(logs.String(), "metrics http listening") ||
+		!strings.Contains(logs.String(), "admin UI http listening") {
+		t.Fatalf("logs missing endpoint addresses:\n%s", logs.String())
+	}
+
+	endpoints.logClose(logPrintfFunc(logger))
+	testutil.RequireNoErrorf(t, endpoints.metrics.Close(), "metrics endpoint close is idempotent")
+	testutil.RequireNoErrorf(t, endpoints.adminUI.Close(), "admin UI endpoint close is idempotent")
+}
+
+func TestListenHTTPEndpointsHandlesDisabledAdminUI(t *testing.T) {
+	cfg := config.Default()
+	cfg.MetricsListenAddress = "127.0.0.1:0"
+	cfg.AdminUIListenAddress = ""
+	endpoints, err := listenHTTPEndpoints(cfg, node.Applications{})
+	testutil.RequireNoErrorf(t, err, "listen http endpoints")
+	defer func() { testutil.RequireNoErrorf(t, endpoints.metrics.Close(), "close metrics endpoint") }()
+	testutil.RequireNotNilf(t, endpoints.metrics, "metrics endpoint")
+	testutil.RequireNilf(t, endpoints.adminUI, "admin UI endpoint")
+	testutil.RequireNoErrorf(t, closeHTTPEndpoints(endpoints.metrics, endpoints.adminUI), "close optional endpoints")
+}
+
+func TestListenHTTPEndpointsReportsAdminUIListenFailure(t *testing.T) {
+	cfg := config.Default()
+	cfg.MetricsListenAddress = "127.0.0.1:0"
+	cfg.AdminUIListenAddress = "127.0.0.1:not-a-port"
+	_, err := listenHTTPEndpoints(cfg, node.Applications{})
+	if err == nil || !strings.Contains(err.Error(), "start admin UI listener") {
+		t.Fatalf("listenHTTPEndpoints error = %v, want admin UI listener failure", err)
+	}
+}
+
 func TestBuildLocalApplicationsRegistersHealthApplication(t *testing.T) {
 	cfg := config.Default()
 	cfg.LocalDataDir = t.TempDir()

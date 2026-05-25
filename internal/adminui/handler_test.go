@@ -9,9 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/petabytecl/scrap/internal/api"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/identity"
+	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/testutil"
 )
 
 func TestHandlerServesOverviewAndCapacityPartials(t *testing.T) {
@@ -48,6 +52,42 @@ func TestHandlerServesExpandedDashboardViewRoutes(t *testing.T) {
 		response := request(handler, target)
 		requireOK(t, response)
 		requireContains(t, response.Body.String(), want)
+	}
+}
+
+func TestHandlerRendersOperationsFromStore(t *testing.T) {
+	store, err := operations.Open(t.TempDir())
+	testutil.RequireNoErrorf(t, err, "open operations store")
+	defer func() { testutil.RequireNoErrorf(t, store.Close(), "close operations store") }()
+	requestedAt := time.Date(2026, 5, 25, 13, 0, 0, 0, time.UTC)
+	testutil.RequireNoErrorf(t, store.Put(&adminv1.Operation{
+		OperationId:   "op-1",
+		OperationType: "repair",
+		State:         adminv1.OperationState_OPERATION_STATE_RUNNING,
+		RequestedAt:   timestamppb.New(requestedAt),
+		Progress: &adminv1.OperationProgress{
+			WorkUnitsCompleted: 3,
+			WorkUnitsTotal:     6,
+			Message:            "repairing peer copy",
+		},
+	}), "put operation")
+
+	response := request(NewHandler(Options{Operations: store}), "/admin/views/operations")
+	requireOK(t, response)
+	body := response.Body.String()
+	requireContains(t, body, "op-1")
+	requireContains(t, body, "running")
+	requireContains(t, body, "repairing peer copy")
+	requireContains(t, body, "2026-05-25T13:00:00Z")
+}
+
+func TestHandlerRejectsUnknownPaths(t *testing.T) {
+	handler := NewHandler(Options{})
+	if response := request(handler, "/not-admin"); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown root status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+	if response := request(handler, "/admin/views/missing"); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown view status = %d, want %d", response.Code, http.StatusNotFound)
 	}
 }
 
