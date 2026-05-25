@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -143,11 +144,56 @@ func TestToGRPCErrorPassThroughAndCodeMapping(t *testing.T) {
 	if !errors.Is(ToGRPCError(statusErr), statusErr) {
 		t.Fatal("existing gRPC status was not passed through")
 	}
-	plainErr := errors.New("plain")
-	if !errors.Is(ToGRPCError(plainErr), plainErr) {
-		t.Fatal("plain error was not passed through")
+}
+
+func TestToGRPCErrorMapsContextErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{name: "context canceled", err: context.Canceled, want: codes.Canceled},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ok := status.FromError(ToGRPCError(tc.err))
+			if !ok {
+				t.Fatal("context error is not gRPC status")
+			}
+			if st.Code() != tc.want {
+				t.Fatalf("code = %s, want %s", st.Code(), tc.want)
+			}
+		})
+	}
+}
+
+func TestToGRPCErrorMasksRawInternalErrors(t *testing.T) {
+	plainErr := errors.New("raw pebble path /var/lib/scrap/private")
+	st, ok := status.FromError(ToGRPCError(plainErr))
+	if !ok {
+		t.Fatal("plain error is not gRPC status")
+	}
+	if st.Code() != codes.Internal {
+		t.Fatalf("plain error code = %s, want %s", st.Code(), codes.Internal)
+	}
+	if st.Message() == plainErr.Error() {
+		t.Fatal("plain error message leaked raw internal details")
 	}
 
+	unknownStatus := status.Error(codes.Unknown, "raw unknown status")
+	st, ok = status.FromError(ToGRPCError(unknownStatus))
+	if !ok {
+		t.Fatal("unknown status is not gRPC status")
+	}
+	if st.Code() != codes.Internal {
+		t.Fatalf("unknown status code = %s, want %s", st.Code(), codes.Internal)
+	}
+	if st.Message() == "raw unknown status" {
+		t.Fatal("unknown status message leaked raw details")
+	}
+}
+
+func TestToGRPCErrorMapsApplicationCodes(t *testing.T) {
 	for _, tc := range []struct {
 		code appstatus.Code
 		want codes.Code

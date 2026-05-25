@@ -109,7 +109,7 @@ func TestMapErrorMapsWritePipelineInvariant(t *testing.T) {
 
 	var statusErr *appstatus.Error
 	testutil.RequireTruef(t, errors.As(err, &statusErr), "mapped error type")
-	testutil.RequireEqualf(t, statusErr.Code, appstatus.CodeInternal, "mapped error code")
+	testutil.RequireEqualf(t, appstatus.CodeInternal, statusErr.Code, "mapped error code")
 	testutil.RequireTruef(t, errors.Is(err, ErrWritePipelineInvariant), "mapped error cause")
 }
 

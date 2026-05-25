@@ -135,16 +135,11 @@ func validateBlockHeader(header *storagev1.BlockHeader) error {
 	if err := validateSchemaVersion("block header", header.GetSchemaVersion()); err != nil {
 		return err
 	}
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
-		{name: "block_id", value: header.GetBlockId()},
-		{name: "shard_id", value: header.GetShardId()},
-	} {
-		if field.value == "" {
-			return invalidRecord("block header", "%s is required", field.name)
-		}
+	if err := validateRequiredStrings("block header",
+		requiredString{name: "block_id", value: header.GetBlockId()},
+		requiredString{name: "shard_id", value: header.GetShardId()},
+	); err != nil {
+		return err
 	}
 	if header.GetHeaderLength() == 0 {
 		return invalidRecord("block header", "header_length is required")
@@ -581,16 +576,36 @@ func clearUnknownFields(message proto.Message) {
 	fields := message.ProtoReflect()
 	fields.SetUnknown(nil)
 	fields.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if field.IsList() && field.Kind() == protoreflect.MessageKind {
-			list := value.List()
-			for i := range list.Len() {
-				clearUnknownFields(list.Get(i).Message().Interface())
-			}
-			return true
-		}
-		if field.Kind() == protoreflect.MessageKind {
-			clearUnknownFields(value.Message().Interface())
-		}
+		clearUnknownFieldValue(field, value)
+		return true
+	})
+}
+
+func clearUnknownFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Value) {
+	switch {
+	case field.IsList() && field.Kind() == protoreflect.MessageKind:
+		clearUnknownListValues(value)
+	case field.IsMap():
+		clearUnknownMapValues(field, value)
+	case field.Kind() == protoreflect.MessageKind:
+		clearUnknownFields(value.Message().Interface())
+	}
+}
+
+func clearUnknownListValues(value protoreflect.Value) {
+	list := value.List()
+	for i := range list.Len() {
+		clearUnknownFields(list.Get(i).Message().Interface())
+	}
+}
+
+func clearUnknownMapValues(field protoreflect.FieldDescriptor, value protoreflect.Value) {
+	if field.MapValue().Kind() != protoreflect.MessageKind {
+		return
+	}
+	m := value.Map()
+	m.Range(func(_ protoreflect.MapKey, mapValue protoreflect.Value) bool {
+		clearUnknownFields(mapValue.Message().Interface())
 		return true
 	})
 }
