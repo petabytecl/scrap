@@ -4,16 +4,21 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/petabytecl/scrap/internal/backend"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
@@ -159,6 +164,96 @@ func TestStatfsBytesSaturatesOnOverflow(t *testing.T) {
 	}
 }
 
+func TestClassifyGRPCErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want backend.ErrorClass
+	}{
+		{name: "nil", err: nil, want: ""},
+		{name: "resource exhausted", err: status.Error(codes.ResourceExhausted, "slow down"), want: backend.ErrorClassThrottled},
+		{name: "unavailable", err: status.Error(codes.Unavailable, "try again"), want: backend.ErrorClassTransient},
+		{name: "permission denied", err: status.Error(codes.PermissionDenied, "denied"), want: backend.ErrorClassAuth},
+		{name: "not found", err: status.Error(codes.NotFound, "missing"), want: backend.ErrorClassNotFound},
+		{name: "aborted", err: status.Error(codes.Aborted, "conflict"), want: backend.ErrorClassConflict},
+		{name: "data loss", err: status.Error(codes.DataLoss, "corrupt"), want: backend.ErrorClassCorrupt},
+		{name: "unknown", err: status.Error(codes.Unknown, "unknown"), want: backend.ErrorClassPermanent},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyGRPCError(test.err); got != test.want {
+				t.Fatalf("classifyGRPCError = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestClassifyHTTPStatusesAndProbeErrors(t *testing.T) {
+	statusTests := []struct {
+		code int
+		want backend.ErrorClass
+	}{
+		{code: http.StatusOK, want: ""},
+		{code: http.StatusTooManyRequests, want: backend.ErrorClassThrottled},
+		{code: http.StatusUnauthorized, want: backend.ErrorClassAuth},
+		{code: http.StatusNotFound, want: backend.ErrorClassNotFound},
+		{code: http.StatusConflict, want: backend.ErrorClassConflict},
+		{code: http.StatusServiceUnavailable, want: backend.ErrorClassTransient},
+		{code: http.StatusTeapot, want: backend.ErrorClassPermanent},
+	}
+	for _, test := range statusTests {
+		t.Run(fmt.Sprintf("status_%d", test.code), func(t *testing.T) {
+			if got := classifyHTTPStatus(test.code); got != test.want {
+				t.Fatalf("classifyHTTPStatus = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	probeTests := []struct {
+		name string
+		err  error
+		want backend.ErrorClass
+	}{
+		{name: "network timeout", err: timeoutProbeError{}, want: backend.ErrorClassTransient},
+		{name: "backend classified", err: backend.NewError(backend.ErrorClassNotFound, "get", "key", nil), want: backend.ErrorClassNotFound},
+		{name: "plain error", err: errors.New("plain failure"), want: backend.ErrorClassPermanent},
+	}
+	for _, test := range probeTests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyProbeError(test.err); got != test.want {
+				t.Fatalf("classifyProbeError = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalQuerySortsAndEscapesAWSValues(t *testing.T) {
+	parsed := &url.URL{RawQuery: "z=last&a=two&a=one&space=a+b&tilde=~"}
+	if got, want := canonicalQuery(parsed), "a=one&a=two&space=a%20b&tilde=~&z=last"; got != want {
+		t.Fatalf("canonicalQuery = %q, want %q", got, want)
+	}
+
+	invalid := &url.URL{RawQuery: "bad=%zz"}
+	if got := canonicalQuery(invalid); got != invalid.RawQuery {
+		t.Fatalf("canonicalQuery invalid query = %q, want raw %q", got, invalid.RawQuery)
+	}
+}
+
+func TestFailedRequestSampleDefaultsPermanentClass(t *testing.T) {
+	err := errors.New("request failed")
+	sample := failedRequestSample("backend", "put", http.MethodPut, 128, time.Now().Add(-time.Millisecond), "", err)
+	if sample.ErrorClass != string(backend.ErrorClassPermanent) {
+		t.Fatalf("error class = %q, want %q", sample.ErrorClass, backend.ErrorClassPermanent)
+	}
+	if sample.Error != err.Error() {
+		t.Fatalf("error = %q, want %q", sample.Error, err.Error())
+	}
+	if sample.Target != "backend" || sample.Operation != "put" || sample.Method != http.MethodPut || sample.Bytes != 128 {
+		t.Fatalf("sample = %#v, want backend put request metadata", sample)
+	}
+}
+
 func validOptions(t *testing.T, backendServer, openbaoServer *httptest.Server) Options {
 	t.Helper()
 	backendURL := "http://127.0.0.1/backend"
@@ -266,3 +361,19 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+type timeoutProbeError struct{}
+
+func (timeoutProbeError) Error() string {
+	return "timeout"
+}
+
+func (timeoutProbeError) Timeout() bool {
+	return true
+}
+
+func (timeoutProbeError) Temporary() bool {
+	return true
+}
+
+var _ net.Error = timeoutProbeError{}

@@ -344,6 +344,207 @@ func TestEnvelopeRecordRejectsMissingOrCorruptDigest(t *testing.T) {
 	}
 }
 
+func TestBlockHeaderRejectsInvalidRecords(t *testing.T) {
+	valid := func() *storagev1.BlockHeader {
+		return &storagev1.BlockHeader{
+			SchemaVersion: CurrentSchemaVersion,
+			BlockId:       "block-1",
+			ShardId:       "tenant-txn",
+			FormatMajor:   1,
+			FormatMinor:   0,
+			HeaderLength:  64,
+			FrameSize:     1024,
+			CreatedAt:     timestamppb.New(time.Unix(100, 0).UTC()),
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*storagev1.BlockHeader) *storagev1.BlockHeader
+		want   error
+	}{
+		{
+			name: "nil header",
+			mutate: func(*storagev1.BlockHeader) *storagev1.BlockHeader {
+				return nil
+			},
+			want: ErrInvalidRecord,
+		},
+		{
+			name: "unsupported version",
+			mutate: func(header *storagev1.BlockHeader) *storagev1.BlockHeader {
+				header.SchemaVersion = CurrentSchemaVersion + 1
+				return header
+			},
+			want: ErrUnsupportedSchemaVersion,
+		},
+		{
+			name: "missing block id",
+			mutate: func(header *storagev1.BlockHeader) *storagev1.BlockHeader {
+				header.BlockId = ""
+				return header
+			},
+			want: ErrInvalidRecord,
+		},
+		{
+			name: "missing header length",
+			mutate: func(header *storagev1.BlockHeader) *storagev1.BlockHeader {
+				header.HeaderLength = 0
+				return header
+			},
+			want: ErrInvalidRecord,
+		},
+		{
+			name: "zero timestamp",
+			mutate: func(header *storagev1.BlockHeader) *storagev1.BlockHeader {
+				header.CreatedAt = timestamppb.New(time.Time{})
+				return header
+			},
+			want: ErrInvalidRecord,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := MarshalBlockHeader(test.mutate(valid())); !errors.Is(err, test.want) {
+				t.Fatalf("MarshalBlockHeader error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestBlockIndexRejectsDocumentAndFrameBoundaryCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*storagev1.BlockIndex)
+	}{
+		{
+			name: "nil document",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Documents[0] = nil
+			},
+		},
+		{
+			name: "document stored range overflows",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Documents[0].StoredOffset = ^uint64(0)
+				index.Documents[0].StoredLength = 2
+			},
+		},
+		{
+			name: "missing metadata blob",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Documents[0].MetadataBlob = nil
+			},
+		},
+		{
+			name: "first frame out of range",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Documents[0].FirstFrameIndex = 1
+				index.Documents[0].LastFrameIndex = 1
+			},
+		},
+		{
+			name: "first frame after last frame",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Frames = append(index.Frames, &storagev1.FrameChecksumRecord{
+					FrameIndex:      1,
+					PlaintextOffset: 106,
+					PlaintextLength: 1,
+					StoredOffset:    106,
+					StoredLength:    1,
+					PlaintextSha256: bytes32(13),
+					StoredSha256:    bytes32(14),
+					EncryptionMode:  storagev1.EncryptionMode_ENCRYPTION_MODE_NONE,
+				})
+				index.Documents[0].FirstFrameIndex = 1
+				index.Documents[0].LastFrameIndex = 0
+			},
+		},
+		{
+			name: "unspecified encryption mode",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Frames[0].EncryptionMode = storagev1.EncryptionMode_ENCRYPTION_MODE_UNSPECIFIED
+			},
+		},
+		{
+			name: "unencrypted frame with auth tag",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Frames[0].AuthTag = []byte{1}
+			},
+		},
+		{
+			name: "encrypted frame missing auth tag",
+			mutate: func(index *storagev1.BlockIndex) {
+				index.Frames[0].EncryptionMode = storagev1.EncryptionMode_ENCRYPTION_MODE_AES_256_GCM
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			index := blockIndexWithDigest(t)
+			test.mutate(index)
+			if _, err := MarshalBlockIndex(index); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("MarshalBlockIndex error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
+func TestEnvelopeRecordRejectsRequiredFieldEdges(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*storagev1.EnvelopeRecord)
+		want   error
+	}{
+		{
+			name: "unsupported version",
+			mutate: func(record *storagev1.EnvelopeRecord) {
+				record.SchemaVersion = CurrentSchemaVersion + 1
+			},
+			want: ErrUnsupportedSchemaVersion,
+		},
+		{
+			name: "missing block id",
+			mutate: func(record *storagev1.EnvelopeRecord) {
+				record.BlockId = ""
+			},
+			want: ErrInvalidRecord,
+		},
+		{
+			name: "missing key version",
+			mutate: func(record *storagev1.EnvelopeRecord) {
+				record.KeyVersion = 0
+			},
+			want: ErrInvalidRecord,
+		},
+		{
+			name: "missing aad context",
+			mutate: func(record *storagev1.EnvelopeRecord) {
+				record.AadContext = nil
+			},
+			want: ErrInvalidRecord,
+		},
+		{
+			name: "zero timestamp",
+			mutate: func(record *storagev1.EnvelopeRecord) {
+				record.CreatedAt = timestamppb.New(time.Time{})
+			},
+			want: ErrInvalidRecord,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := sampleEnvelopeRecord(t)
+			test.mutate(record)
+			if _, err := MarshalEnvelopeRecord(record); !errors.Is(err, test.want) {
+				t.Fatalf("MarshalEnvelopeRecord error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func sampleBlockIndex() *storagev1.BlockIndex {
 	now := timestamppb.New(time.Unix(100, 0).UTC())
 	return &storagev1.BlockIndex{
