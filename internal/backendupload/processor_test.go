@@ -398,8 +398,8 @@ type metastoreIntentStateUpdater struct {
 	Store *metastore.Store
 }
 
-func (u metastoreIntentStateUpdater) UpdateUploadIntentState(_ context.Context, blockID string, state metastore.UploadState, lastError, _ string, proposedAt time.Time) error {
-	_, err := u.Store.UpdateUploadIntentState(blockID, state, lastError, proposedAt)
+func (u metastoreIntentStateUpdater) UpdateUploadIntentState(_ context.Context, blockID string, state metastore.UploadState, lastError, commandID string, proposedAt time.Time) error {
+	_, err := u.Store.UpdateUploadIntentState(blockID, state, lastError, commandID, proposedAt)
 	return err
 }
 
