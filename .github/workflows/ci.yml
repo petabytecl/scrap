@@ -26,11 +26,17 @@ jobs:
         with:
           version: "1.66.0"
 
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.10.1
+          install-only: true
+
       - name: Check manifests
         run: make manifests-check
 
       - name: Check formatting
-        run: make fmt-check
+        run: make GOLANGCI_LINT=golangci-lint fmt-check
 
       - name: Check protobuf schemas
         run: make BUF=buf proto-check
@@ -39,6 +45,7 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.10.1
+          install-mode: none
           args: --timeout=5m
 
   test:
