@@ -7,28 +7,41 @@ import (
 	"sync"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/petabytecl/scrap/internal/authz"
-	"github.com/petabytecl/scrap/internal/config"
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	"github.com/petabytecl/scrap/internal/replication"
 )
+
+type PeerReplicationClientOption func(*PeerReplicationClientPreparer)
 
 type PeerReplicationClientPreparer struct {
 	Address          string
 	WorkloadIdentity string
 
-	mu     sync.Mutex
-	conn   *grpc.ClientConn
-	client adminv1.PeerReplicationServiceClient
+	transport credentials.TransportCredentials
+	mu        sync.Mutex
+	conn      *grpc.ClientConn
+	client    adminv1.PeerReplicationServiceClient
 }
 
-func NewPeerReplicationClientPreparer(address, workloadIdentity string) *PeerReplicationClientPreparer {
-	return &PeerReplicationClientPreparer{
+func NewPeerReplicationClientPreparer(address, workloadIdentity string, options ...PeerReplicationClientOption) *PeerReplicationClientPreparer {
+	preparer := &PeerReplicationClientPreparer{
 		Address:          strings.TrimSpace(address),
 		WorkloadIdentity: strings.TrimSpace(workloadIdentity),
+	}
+	for _, option := range options {
+		option(preparer)
+	}
+	return preparer
+}
+
+func WithPeerReplicationTransportCredentials(transport credentials.TransportCredentials) PeerReplicationClientOption {
+	return func(preparer *PeerReplicationClientPreparer) {
+		preparer.transport = transport
 	}
 }
 
@@ -64,13 +77,13 @@ func (p *PeerReplicationClientPreparer) peerClient() (adminv1.PeerReplicationSer
 	if p.client != nil {
 		return p.client, nil
 	}
+	transport := p.transport
+	if transport == nil {
+		transport = insecure.NewCredentials()
+	}
 	conn, err := grpc.NewClient(
 		p.Address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(config.DefaultGRPCMaxRecvMsgSizeBytes),
-			grpc.MaxCallSendMsgSize(config.DefaultGRPCMaxSendMsgSizeBytes),
-		),
+		grpc.WithTransportCredentials(transport),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create peer replication client %q: %w", p.Address, err)

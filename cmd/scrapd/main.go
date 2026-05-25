@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"google.golang.org/grpc/credentials"
 
 	"github.com/petabytecl/scrap/internal/adminpeer"
 	"github.com/petabytecl/scrap/internal/adminui"
@@ -359,7 +363,12 @@ func buildLocalApplications(cfg config.Config) (node.Applications, *localstorage
 	}
 	localApp.SetOperationStore(operationStore)
 	localApp.SetSealBlockAtBytes(cfg.LocalSealBlockAtBytes)
-	peerPrepareTargets := peerPreparationTargets(cfg, localApp.MemberID())
+	peerPrepareTargets, err := peerPreparationTargets(cfg, localApp.MemberID())
+	if err != nil {
+		_ = operationStore.Close()
+		_ = localApp.Close()
+		return node.Applications{}, nil, nil, err
+	}
 	localstorage.ConfigurePeerPreparation(localApp, localstorage.PeerPreparationOptions{
 		Targets: peerPrepareTargets,
 		Policy:  peerPreparationPolicy(peerPrepareTargets),
@@ -396,23 +405,77 @@ func peerInspectTargets(cfg config.Config, localMemberID string) []adminpeer.Pee
 	return peers
 }
 
-func peerPreparationTargets(cfg config.Config, localMemberID string) []replication.Target {
+func peerPreparationTargets(cfg config.Config, localMemberID string) ([]replication.Target, error) {
 	addresses := cfg.PeerAddressList()
-	targets := make([]replication.Target, 0, len(addresses))
+	type targetSpec struct {
+		memberID string
+		address  string
+	}
+	specs := make([]targetSpec, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {
 		memberID := peerMemberID(address)
 		if memberID == "" || memberID == localMemberID {
 			continue
 		}
+		if _, exists := seen[memberID]; exists {
+			continue
+		}
+		seen[memberID] = struct{}{}
+		specs = append(specs, targetSpec{memberID: memberID, address: address})
+	}
+	if len(specs) == 0 {
+		return []replication.Target{}, nil
+	}
+	clientOptions, err := peerReplicationClientOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]replication.Target, 0, len(specs))
+	for _, spec := range specs {
 		targets = append(targets, replication.Target{
-			MemberID: memberID,
+			MemberID: spec.memberID,
 			Preparer: api.NewPeerReplicationClientPreparer(
-				address,
+				spec.address,
 				cfg.PeerAdminWorkloadIdentity,
+				clientOptions...,
 			),
 		})
 	}
-	return targets
+	return targets, nil
+}
+
+func peerReplicationClientOptions(cfg config.Config) ([]api.PeerReplicationClientOption, error) {
+	if !cfg.TLSEnabled {
+		return []api.PeerReplicationClientOption{}, nil
+	}
+	transportCredentials, err := peerReplicationTransportCredentials(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return []api.PeerReplicationClientOption{
+		api.WithPeerReplicationTransportCredentials(transportCredentials),
+	}, nil
+}
+
+func peerReplicationTransportCredentials(cfg config.Config) (credentials.TransportCredentials, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load peer replication TLS certificate pair: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.TLSCACertFile)
+	if err != nil {
+		return nil, fmt.Errorf("read peer replication TLS CA certificate: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, errors.New("peer replication TLS CA certificate file contains no PEM certificates")
+	}
+	return credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		MinVersion:   tls.VersionTLS12,
+	}), nil
 }
 
 func peerPreparationPolicy(targets []replication.Target) replication.Policy {
@@ -449,15 +512,7 @@ func authorityMemberIDs(cfg config.Config) []string {
 }
 
 func peerMemberID(address string) string {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return ""
-	}
-	if strings.Contains(host, ":") {
-		return ""
-	}
-	memberID, _, _ := strings.Cut(host, ".")
-	return memberID
+	return config.PeerAddressMemberID(address)
 }
 
 func buildUploadRunner(cfg config.Config, localApp *localstorage.Application, logger *slog.Logger) (*backendupload.Runner, error) {

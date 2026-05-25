@@ -292,7 +292,8 @@ func TestPeerPreparationTargetsUseStatefulSetDNSAndFullLocalQuorum(t *testing.T)
 		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
 	}, ",")
 
-	targets := peerPreparationTargets(cfg, "scrapd-0")
+	targets, err := peerPreparationTargets(cfg, "scrapd-0")
+	testutil.RequireNoErrorf(t, err, "peer preparation targets")
 	testutil.RequireEqualf(t, len(targets), 2, "peer prepare target count")
 	testutil.RequireEqualf(t, targets[0].MemberID, "scrapd-1", "first peer prepare member")
 	testutil.RequireEqualf(t, targets[1].MemberID, "scrapd-2", "second peer prepare member")
@@ -302,6 +303,37 @@ func TestPeerPreparationTargetsUseStatefulSetDNSAndFullLocalQuorum(t *testing.T)
 	policy := peerPreparationPolicy(targets)
 	testutil.RequireEqualf(t, policy.TargetReplicaCount, 3, "peer prepare target replicas")
 	testutil.RequireEqualf(t, policy.QuorumReplicaCount, 3, "peer prepare quorum replicas")
+}
+
+func TestPeerPreparationTargetsDeduplicateMemberIDs(t *testing.T) {
+	cfg := config.Default()
+	cfg.PeerAdminWorkloadIdentity = "local-operator"
+	cfg.PeerAddresses = strings.Join([]string{
+		"scrapd-1.scrapd.scrap-local.svc.cluster.local:18081",
+		"scrapd-1.other.scrap-local.svc.cluster.local:18081",
+		"scrapd-2.scrapd.scrap-local.svc.cluster.local:18081",
+	}, ",")
+
+	targets, err := peerPreparationTargets(cfg, "scrapd-0")
+	testutil.RequireNoErrorf(t, err, "peer preparation targets")
+	testutil.RequireEqualf(t, len(targets), 2, "deduplicated peer target count")
+	testutil.RequireEqualf(t, targets[0].MemberID, "scrapd-1", "first peer prepare member")
+	testutil.RequireEqualf(t, targets[1].MemberID, "scrapd-2", "second peer prepare member")
+}
+
+func TestPeerPreparationTargetsUseTLSConfigWhenEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.TLSEnabled = true
+	cfg.TLSCertFile = "missing-server.pem"
+	cfg.TLSKeyFile = "missing-server-key.pem"
+	cfg.TLSCACertFile = "missing-ca.pem"
+	cfg.PeerAdminWorkloadIdentity = "local-operator"
+	cfg.PeerAddresses = "scrapd-1.scrapd.scrap-local.svc.cluster.local:18081"
+
+	_, err := peerPreparationTargets(cfg, "scrapd-0")
+	if err == nil || !strings.Contains(err.Error(), "load peer replication TLS certificate pair") {
+		t.Fatalf("peer preparation TLS error = %v, want certificate load error", err)
+	}
 }
 
 func TestAuthorityMemberIDsDeriveStableMembersFromRuntimeIdentity(t *testing.T) {

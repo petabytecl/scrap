@@ -144,6 +144,28 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 			},
 			wantErr: "peer_addresses contains duplicate address",
 		},
+		"peer host is an ip address": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAdminWorkloadIdentity = "local-operator"
+				cfg.MetadataAuthorityMemberID = "scrapd-0"
+				cfg.PeerAddresses = "10.0.0.12:18081"
+			},
+			wantErr: "peer_addresses host must start with a valid member id",
+		},
+		"duplicate peer member id": {
+			mutate: func(cfg *Config) {
+				cfg.CellID = "scrap-local-prod-like"
+				cfg.MemberID = "scrapd-0"
+				cfg.MemberSlotID = "scrapd-0"
+				cfg.PeerAdminWorkloadIdentity = "local-operator"
+				cfg.MetadataAuthorityMemberID = "scrapd-0"
+				cfg.PeerAddresses = "scrapd-1.scrapd.scrap-local.svc.cluster.local:18081, scrapd-1.other.svc.cluster.local:18081"
+			},
+			wantErr: "peer_addresses contains duplicate member id",
+		},
 	}
 
 	for name, tt := range tests {
@@ -159,6 +181,12 @@ func TestRuntimeIdentityValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPeerAddressMemberIDExtractsFirstDNSLabel(t *testing.T) {
+	testutil.RequireEqualf(t, PeerAddressMemberID("scrapd-1.scrapd.scrap-local.svc.cluster.local:18081"), "scrapd-1", "statefulset peer member id")
+	testutil.RequireEqualf(t, PeerAddressMemberID("10.0.0.12:18081"), "", "ip address member id")
+	testutil.RequireEqualf(t, PeerAddressMemberID("bad_member.example:18081"), "", "invalid member id")
 }
 
 func TestConfigRejectsMissingAndDuplicateAddresses(t *testing.T) {
