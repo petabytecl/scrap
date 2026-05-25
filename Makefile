@@ -1,51 +1,83 @@
 .DEFAULT_GOAL := help
 
+# Target declarations.
 .PHONY: help
+
 .PHONY: proto proto-check
+
 .PHONY: fmt fmt-check lint vuln
 .PHONY: test test-compat test-crashfault-catalog test-race test-cover build static tests check
-.PHONY: image manifests-render manifests-check local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
-.PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence local-soak-evidence local-dr-drill-evidence write-pipeline-evidence
+
+.PHONY: image manifests-render manifests-check
+.PHONY: local-kind-create local-kind-delete local-kind-load local-kind-deploy local-kind-smoke local-kind-evidence
+
+.PHONY: release-check crash-fault-evidence capacity-sample openbao-smoke-evidence
+.PHONY: local-soak-evidence local-dr-drill-evidence write-pipeline-evidence
+
 .PHONY: spike-write-path spike-write-path-raft spike-write-path-raft-durable spike-write-path-raft-cluster
 
+# Toolchain.
 GO ?= go
 TOOLS_MODFILE ?= tools.go.mod
 BUF ?= $(GO) tool -modfile=$(TOOLS_MODFILE) buf
+GOLANGCI_LINT ?= $(GO) tool -modfile=$(TOOLS_MODFILE) golangci-lint
+GOTESTSUM ?= $(GO) tool -modfile=$(TOOLS_MODFILE) gotestsum
+GOVULNCHECK ?= $(GO) tool -modfile=$(TOOLS_MODFILE) govulncheck
+KUSTOMIZE ?= $(GO) tool -modfile=$(TOOLS_MODFILE) kustomize
 DOCKER ?= docker
 KIND ?= kind
 KUBECTL ?= kubectl
-KUSTOMIZE ?= $(GO) tool -modfile=$(TOOLS_MODFILE) kustomize
+
+# Package sets.
 TEST_PACKAGES ?= ./...
 COMPAT_PACKAGES ?= ./internal/compat ./internal/metastore
 COVER_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
+SCRAP_BINS := \
+	./cmd/scrapd \
+	./cmd/scrap-spike \
+	./cmd/scrapctl \
+	./cmd/scrap-release-gate \
+	./cmd/scrap-crash-fault-evidence \
+	./cmd/scrap-openbao-smoke \
+	./cmd/scrap-local-soak-evidence \
+	./cmd/scrap-local-dr-drill-evidence \
+	./cmd/scrap-write-pipeline-evidence
+
+# Static analysis, protobuf, and test reporting.
+LINT_TIMEOUT ?= 5m
+PROTO_BREAKING_REF ?= main
+PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 COVERPROFILE ?= coverage.out
 COVERMODE ?= atomic
 TEST_RESULTS_DIR ?= test-results
 JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
-GOTESTSUM ?= $(GO) tool -modfile=$(TOOLS_MODFILE) gotestsum
-LINT_TIMEOUT ?= 5m
-GOLANGCI_LINT ?= $(GO) tool -modfile=$(TOOLS_MODFILE) golangci-lint
-GOVULNCHECK ?= $(GO) tool -modfile=$(TOOLS_MODFILE) govulncheck
-PROTO_BREAKING_REF ?= main
-PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
-SCRAP_BINS := ./cmd/scrapd ./cmd/scrap-spike ./cmd/scrapctl ./cmd/scrap-release-gate ./cmd/scrap-crash-fault-evidence ./cmd/scrap-openbao-smoke ./cmd/scrap-local-soak-evidence ./cmd/scrap-local-dr-drill-evidence ./cmd/scrap-write-pipeline-evidence
+
+# Release and build metadata.
 RELEASE_SHA ?= $(shell git rev-parse HEAD)
 RELEASE_VERSION ?= dev
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY_TREE ?= $(shell git diff --quiet && git diff --cached --quiet && echo clean || echo dirty)
+
+# Container image build.
 IMAGE_NAME ?= localhost/scrapd:local
 IMAGE_GOOS ?= linux
 IMAGE_GOARCH ?= $(shell $(GO) env GOARCH)
 IMAGE_PLATFORM ?= $(IMAGE_GOOS)/$(IMAGE_GOARCH)
 SCRAPD_IMAGE_BINARY ?= bin/scrapd-$(IMAGE_GOOS)-$(IMAGE_GOARCH)
+
+# Local kind release rehearsal.
 KIND_CLUSTER ?= scrap-local
 LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
+
+# Local workload identities and endpoints.
 PROFILE_ID ?= scrap-prod-v1
 SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
 SCRAP_WORKLOAD_IDENTITY ?= local-operator
 SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
 SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
+
+# Capacity and OpenBao evidence.
 CAPACITY_SAMPLE_BACKEND_URL ?= http://127.0.0.1:4566/scrap-local
 CAPACITY_SAMPLE_BACKEND_REGION ?= us-east-1
 CAPACITY_SAMPLE_OPENBAO_ADDR ?= http://127.0.0.1:8200
@@ -53,6 +85,8 @@ CAPACITY_SAMPLE_OPENBAO_KEY_PATH ?= transit/keys/scrap-backend
 CAPACITY_SAMPLE_REPORT ?= capacity-sample-advisory.json
 OPENBAO_SMOKE_REPORT ?= openbao-transit-smoke-evidence.json
 OPENBAO_SMOKE_OUTAGE_ADDR ?= http://127.0.0.1:1
+
+# Local soak and DR drill evidence.
 LOCAL_SOAK_REPORT ?= local-soak-evidence.json
 LOCAL_SOAK_RUNNER ?= local-kind
 LOCAL_SOAK_IMAGE_IDENTITY ?= $(IMAGE_NAME)
@@ -60,6 +94,8 @@ LOCAL_DR_DRILL_REPORT ?= local-dr-drill-evidence.json
 LOCAL_DR_DRILL_RUNNER ?= local-kind
 LOCAL_DR_DRILL_IMAGE_IDENTITY ?= $(IMAGE_NAME)
 LOCAL_DR_DRILL_OPERATOR_OWNER ?= @cotocisternas
+
+# Write-pipeline performance smoke evidence.
 WRITE_PIPELINE_REPORT ?= write-pipeline-performance-evidence.json
 WRITE_PIPELINE_RUNNER ?= local-application
 WRITE_PIPELINE_SAMPLES ?= 128
