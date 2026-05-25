@@ -26,6 +26,7 @@ import (
 	adminv1 "github.com/petabytecl/scrap/internal/gen/scrap/admin/v1"
 	scrapv1 "github.com/petabytecl/scrap/internal/gen/scrap/v1"
 	"github.com/petabytecl/scrap/internal/operations"
+	"github.com/petabytecl/scrap/internal/replication"
 	"github.com/petabytecl/scrap/internal/safeconv"
 )
 
@@ -38,6 +39,7 @@ type Applications struct {
 	DR           api.DisasterRecoveryApplication
 	Operations   *operations.Store
 	Health       HealthApplication
+	PeerReplica  replication.Preparer
 }
 
 type Server struct {
@@ -137,6 +139,7 @@ func newServerWithConfig(
 		api.WithDisasterRecoveryApplication(apps.DR),
 		api.WithOperationStore(apps.Operations),
 	))
+	api.RegisterPeerReplicationServer(adminGRPC, api.NewPeerReplicationServer(apps.PeerReplica))
 	registerHealthServer(adminGRPC, apps.Health)
 	return &Server{
 		publicListener: publicListener,
@@ -553,6 +556,7 @@ func adminMethodCapabilities() map[string]authz.Capability {
 		adminv1.DisasterRecoveryService_StartMetadataRestore_FullMethodName: "admin.dr.metadata_restore.start",
 		adminv1.DisasterRecoveryService_StartCopyVerify_FullMethodName:      "admin.dr.copy_verify.start",
 		adminv1.DisasterRecoveryService_StartDRDrill_FullMethodName:         "admin.dr.drill.start",
+		adminv1.PeerReplicationService_PrepareDocument_FullMethodName:       "admin.peer_replication.prepare",
 	}
 }
 

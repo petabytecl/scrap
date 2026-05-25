@@ -38,7 +38,8 @@
         "admin.dr.recovery.plan",
         "admin.dr.metadata_restore.start",
         "admin.dr.copy_verify.start",
-        "admin.dr.drill.start"
+        "admin.dr.drill.start",
+        "admin.peer_replication.prepare"
       ]
     },
     "local-public-client": {

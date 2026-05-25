@@ -452,6 +452,7 @@ func isRuntimeIDByte(b byte) bool {
 
 func validatePeerAddresses(addresses []string) error {
 	seen := make(map[string]struct{}, len(addresses))
+	seenMemberIDs := make(map[string]string, len(addresses))
 	for _, address := range addresses {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
@@ -467,9 +468,47 @@ func validatePeerAddresses(addresses []string) error {
 		if _, exists := seen[address]; exists {
 			return fmt.Errorf("peer_addresses contains duplicate address %q", address)
 		}
+		memberID, err := peerAddressMemberID(host)
+		if err != nil {
+			return fmt.Errorf("peer_addresses host must start with a valid member id: %q: %w", address, err)
+		}
+		if existing, exists := seenMemberIDs[memberID]; exists {
+			return fmt.Errorf("peer_addresses contains duplicate member id %q in %q and %q", memberID, existing, address)
+		}
 		seen[address] = struct{}{}
+		seenMemberIDs[memberID] = address
 	}
 	return nil
+}
+
+// PeerAddressMemberID extracts the storage member ID encoded in a peer address host.
+// Peer addresses intentionally use StatefulSet-style DNS names where the first
+// label is the durable member ID, for example scrapd-1.scrapd.namespace.svc:18081.
+func PeerAddressMemberID(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return ""
+	}
+	memberID, err := peerAddressMemberID(host)
+	if err != nil {
+		return ""
+	}
+	return memberID
+}
+
+func peerAddressMemberID(host string) (string, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", errors.New("host is required")
+	}
+	if strings.Contains(host, ":") || net.ParseIP(host) != nil {
+		return "", errors.New("host must be a DNS name whose first label is the member id")
+	}
+	memberID, _, _ := strings.Cut(host, ".")
+	if err := validateRuntimeID("peer_addresses member id", memberID); err != nil {
+		return "", err
+	}
+	return memberID, nil
 }
 
 func parsePeerAddresses(value string) []string {

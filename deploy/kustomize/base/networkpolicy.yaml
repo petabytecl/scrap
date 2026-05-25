@@ -24,6 +24,9 @@ spec:
         - protocol: TCP
           port: 18080
     - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: scrapd
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: scrap-ops

@@ -120,6 +120,16 @@ func TestAdminServiceCatalogShape(t *testing.T) {
 			}
 		}
 	}
+	peerReplication := requireService(t, adminv1.File_scrap_admin_v1_peer_replication_proto, "PeerReplicationService")
+	requireMethod(
+		t,
+		peerReplication,
+		"PrepareDocument",
+		"scrap.admin.v1.PrepareDocumentRequest",
+		"scrap.admin.v1.PrepareDocumentResponse",
+		false,
+		false,
+	)
 }
 
 func TestAdminOperationModelShape(t *testing.T) {
