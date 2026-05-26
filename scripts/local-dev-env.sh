@@ -29,7 +29,7 @@ case "$PROFILE" in
 	dev)
 		DEFAULT_CLUSTER=scrap-dev
 		DEFAULT_OVERLAY=deploy/kustomize/overlays/local-kind
-		DEFAULT_NODE_COUNT=3
+		DEFAULT_NODE_COUNT=4
 		;;
 	prod-like)
 		DEFAULT_CLUSTER=scrap-prod-dev
