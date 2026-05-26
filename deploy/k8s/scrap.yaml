@@ -89,10 +89,26 @@ spec:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
           readinessProbe:
-            tcpSocket:
-              port: 9090
-            initialDelaySeconds: 5
+            exec:
+              command:
+                - /usr/local/bin/scrapd
+                - healthcheck
+                - --address=127.0.0.1:9090
+                - --service=scrap.v1-readiness
+                - --timeout=1s
+            initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            exec:
+              command:
+                - /usr/local/bin/scrapd
+                - healthcheck
+                - --address=127.0.0.1:9090
+                - --timeout=1s
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
           resources:
             requests:
               cpu: 100m

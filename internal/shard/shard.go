@@ -317,6 +317,13 @@ func (s *Shard) IsLeader() bool {
 	return s.raft.IsLeader()
 }
 
+func (s *Shard) CheckReadiness(_ context.Context) error {
+	if s.raft.LeaderID() == 0 {
+		return fmt.Errorf("shard: no leader elected")
+	}
+	return nil
+}
+
 func (s *Shard) requireLeader() error {
 	if s.raft.IsLeader() {
 		return nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +18,20 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := runHealthcheck(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if err := run(); err != nil {
+		log.Fatalf("scrapd: %v", err)
+	}
+}
+
+func run() error {
 	dataDir := flag.String("data-dir", "/data", "storage root directory")
 	listenAddr := flag.String("listen-addr", ":9090", "gRPC client listen address")
 	peerAddr := flag.String("peer-addr", ":9091", "gRPC peer listen address")
@@ -40,7 +55,7 @@ func main() {
 		var err error
 		peers, err = scrapraft.ParsePeersFlag(*peersFlag)
 		if err != nil {
-			log.Fatalf("invalid --peers: %v", err)
+			return fmt.Errorf("invalid --peers: %w", err)
 		}
 		hostname, _ := os.Hostname()
 		ord, err := scrapraft.ParseOrdinal(hostname)
@@ -53,11 +68,11 @@ func main() {
 		peers = scrapraft.BuildK8sPeers(replicas, headlessSvc, namespace, peerPort)
 		hostname, err := os.Hostname()
 		if err != nil {
-			log.Fatalf("hostname: %v", err)
+			return fmt.Errorf("hostname: %w", err)
 		}
 		ord, err := scrapraft.ParseOrdinal(hostname)
 		if err != nil {
-			log.Fatalf("parse ordinal from %q: %v", hostname, err)
+			return fmt.Errorf("parse ordinal from %q: %w", hostname, err)
 		}
 		raftID = scrapraft.OrdinalToRaftID(ord)
 	} else {
@@ -73,50 +88,42 @@ func main() {
 		BlockSealSize: *blockSealSize,
 	})
 	if err != nil {
-		log.Fatalf("failed to open shard: %v", err)
+		return fmt.Errorf("open shard: %w", err)
 	}
+	defer s.Close()
 
-	lis, err := net.Listen("tcp", *listenAddr)
+	clientLis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
-		s.Close()
-		log.Fatalf("failed to listen: %v", err)
+		return fmt.Errorf("listen client %s: %w", *listenAddr, err)
 	}
-
-	blocksDir := *dataDir + "/blocks"
 
 	gs := grpc.NewServer()
 	server.Register(gs, s)
+	server.RegisterHealth(gs, s)
 
 	peerLis, err := net.Listen("tcp", *peerAddr)
 	if err != nil {
-		s.Close()
-		log.Fatalf("failed to listen on peer addr: %v", err)
+		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
 	peerGS := grpc.NewServer()
-	peerSrv := peer.NewServer(blocksDir)
+	peerSrv := peer.NewServer(*dataDir + "/blocks")
 	peer.RegisterServer(peerGS, peerSrv)
-	go peerGS.Serve(peerLis)
 
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		sig := <-sigCh
-		fmt.Fprintf(os.Stderr, "received %v, shutting down\n", sig)
-		peerGS.GracefulStop()
-		gs.GracefulStop()
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go peerGS.Serve(peerLis)
+	go gs.Serve(clientLis)
 
 	log.Printf("scrapd starting: client=%s peer=%s data-dir=%s raft-id=%d cell=%s peers=%d",
 		*listenAddr, *peerAddr, *dataDir, raftID, cellID, len(peers))
 
-	if err := gs.Serve(lis); err != nil {
-		s.Close()
-		log.Fatalf("serve error: %v", err)
-	}
+	<-ctx.Done()
+	log.Printf("shutting down")
+	peerGS.GracefulStop()
+	gs.GracefulStop()
 
-	if err := s.Close(); err != nil {
-		log.Fatalf("close error: %v", err)
-	}
+	return nil
 }
 
 func envInt(key string, fallback int) int {
