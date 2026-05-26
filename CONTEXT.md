@@ -18,6 +18,84 @@ files. Documents are addressed by `(tenant_id, transaction_id, document_name)`.
 This is not an S3-compatible API. It is a purpose-built gateway with strong consistency
 guarantees for the billing ETL use case.
 
+## Language
+
+**Document**:
+An immutable file (XML, PDF, etc.) stored in S.C.R.A.P., addressed by
+`(transaction_id, document_name)`. Once ACK'd, a Document can never be
+modified, overwritten, or deleted by the API. Size: ~16 KiB (p50) to 128 MiB (max).
+_Avoid_: File, object, blob, artifact
+
+**Transaction**:
+A group of 2–7 related **Documents** from a single billing workflow step. All Documents
+in a Transaction share a **Shard**. Identified by a globally unique `transaction_id`.
+_Avoid_: Batch, bundle, upload session
+
+**Block**:
+An append-only file containing multiple **Documents** as sequential **Frames**. Sealed
+when it reaches a size threshold (default 64 MiB). The unit of backend upload and local
+eviction. One Block belongs to exactly one **Shard**.
+_Avoid_: Volume, chunk, segment
+
+**Frame**:
+A contiguous chunk of **Document** bytes within a **Block**. The unit of checksum
+verification (CRC-32C). Max 64 KiB. Small Documents fit in a single Frame; larger
+Documents span multiple Frames.
+_Avoid_: Chunk, slice, piece
+
+**Shard**:
+An independent Raft group managing a subset of **Transactions**. Has its own Raft log,
+**Pebble Projection**, and **Block** files. Transactions are assigned to Shards via
+fixed hash slots.
+_Avoid_: Partition, range, region
+
+**Cell**:
+A complete S.C.R.A.P. deployment identified by a permanent `cell_id`. One Cell per
+Kubernetes cluster. Contains multiple **Members** forming one or more **Shard** groups.
+_Avoid_: Cluster (ambiguous with K8s cluster), deployment, instance
+
+**Member**:
+A storage node within a **Cell**. Identified by three levels: `cell_id` (permanent),
+`member_slot_id` (K8s pod hostname), `member_id` (durable identity on the PVC).
+A Member hosts replicas of multiple **Shards**.
+_Avoid_: Node (ambiguous with K8s node), replica, pod
+
+**Backend**:
+The cloud object store (S3, GCS, Azure Blob) providing cold durability for sealed,
+uploaded **Blocks**. Not in the ACK path — **Documents** are ACK'd from local replicas.
+One upload per sealed Block from the **Shard** leader.
+_Avoid_: Cold storage, archive, remote storage
+
+**Pebble Projection**:
+A derived key-value store (CockroachDB's Pebble) indexing **Document** metadata for
+fast lookups. Fully rebuildable from Raft log replay + **Block** bytes. Not a source
+of truth for visibility or durability.
+_Avoid_: Index, cache, store
+
+**Openlog**:
+A per-**Shard** crash-recovery mechanism. Records in-flight write prepare records
+before bytes are committed to Raft. On recovery, entries are compared against committed
+Raft state to identify completed vs. partial writes.
+_Avoid_: WAL (ambiguous with Raft WAL), prepare log, journal
+
+### Example dialogue
+
+> **Dev:** "A billing service just wrote 5 invoices for the same order."
+> **Expert:** "Those 5 Documents form a Transaction. They'll land in the same Shard,
+> packed into the current open Block."
+>
+> **Dev:** "What if I need to find all the invoices?"
+> **Expert:** "FindDocuments on the Transaction — it's a prefix scan in the Pebble
+> Projection. You'll get back all 5 Document names."
+>
+> **Dev:** "And if the pod restarts during a write?"
+> **Expert:** "The Member recovers using its Openlog — it checks each prepare record
+> against committed Raft state. Partial writes are discarded from the Block."
+>
+> **Dev:** "How long are Documents kept?"
+> **Expert:** "7 years. They live in local Blocks initially, then the Shard leader
+> uploads sealed Blocks to the Backend. After upload, the Block can be evicted locally."
+
 ## What V2 Is
 
 V2 is a full restart from scratch. V1 produced extensive documentation and a spike,
@@ -326,46 +404,141 @@ Each is the *what*; the *why* is in the V1 ADR reasoning table.
   timing/fencing assumptions need explicit evidence first. ReadIndex protocol
   is the read freshness mechanism.
 
-## Open Design Questions for V2
+## V2 First Slice — Resolved Design Decisions
 
-Re-derive these through a structured design session. Do not assume V1 answers.
+Resolved through structured design session (2026-05-25). See `docs/adr/` for
+hard-to-reverse decisions with full rationale.
 
-### Core Safety Invariants
+### Scope
 
-What are the absolute properties this system must never violate?
-(Re-derive from the workload facts and the spike ordering contract, not from memory.)
+Single Shard, multi-voter Raft, full write-through-ACK + read path.
+Deferred: backend upload, cell federation, multi-tier write ACK, encryption (OpenBao).
+API: WriteDocument, HeadDocument, ReadDocument, FindDocuments (4 RPCs).
 
-### Sharding Model
+### Safety Invariants
 
-V1 sharded by `(tenant_id, transaction_id)`. Is this still the right key?
-What happens when a transaction's shard is unavailable — does the whole transaction block?
+1. No acknowledged write may be lost
+2. No read may return corrupt bytes (all-or-error)
+3. No read may return an unacknowledged Document
+4. No silent data divergence between replicas
+5. Metadata is the authority for Document existence
 
-### Replication Model
+### Replication
 
-V1 targeted 5 Raft voters per shard (survive 2-node loss). Is this the right budget?
-What does "eligible storage node" mean? What's the minimum deployment footprint?
+Voter-count-agnostic code. Deploy with 3 voters (dev) / 5 voters (prod).
+Byte replication: leader fan-out via separate gRPC peer service (not through Raft).
+Bytes on quorum Members before Raft metadata commit. See ADR 0001.
 
-### Write ACK Contract
+### Write Path
 
-V1 had 3 priority classes with different durability tiers (all-5-replicas vs quorum).
-Is multi-tier durability the right model? What are the actual write priority patterns?
+1. Client streams bytes to leader
+2. Leader writes to local Block + fsync
+3. Leader fans out bytes to all N-1 peers in parallel; waits for quorum-1 ACKs
+4. Leader proposes metadata to Raft; waits for quorum commit (~330 bytes)
+5. Leader applies to Pebble Projection
+6. Leader ACKs client → Document visible
+
+### Read Path
+
+Leader-only reads for first slice. ReadIndex from followers is a known extension.
+Client routing: smart Go client library with redirect-on-leader-change, no gateway.
+Document resolution: Pebble maps Transaction → Block ID; .idx file resolves per-Document
+metadata (offset, size, checksum). See ADR 0004.
+
+### Pebble Projection Model
+
+Lean per-Transaction keys (Option D): Pebble stores `transaction_id` →
+`{block_ids, doc_count, completed}` (~27 bytes). A Transaction may span multiple
+Blocks when a seal triggers between Documents, so `block_ids` is a list.
+Per-Document resolution via .idx files.
+Metadata tiering: Pebble holds a configurable hot window (default 6 months, ~60 GiB/shard
+at 50M tx/day). Eviction triggers: (1) entries older than the hot window (time-based),
+(2) operator-initiated on-demand eviction, (3) automatic eviction under disk pressure
+(when local metadata exceeds a configurable threshold). Evicted entries go into monthly
+catalog archives
+uploaded to the Backend (~1.5-2 GiB each, compressed). Per-month bloom filters (~10 GiB
+total, mmap'd locally) enable deterministic cold lookup without scanning. Bloom filters
+are derived from catalogs (rebuildable, not backed up). Cold reads: bloom filter check
+(~100µs) → download + cache right monthly catalog (~3s once, then instant) → lookup
+transaction → block_id → .idx → bytes. Catalog granularity is a deployment config
+(default monthly). See ADR 0004.
+
+### Identity Model
+
+Document identity: `(transaction_id, document_name)`. Transaction IDs are globally
+unique (enforced by billing services). `tenant_id` is an optional API field reserved
+for future routing, federation, and quota features — not stored in the data path.
+Shard routing: `hash(transaction_id) % 1024` → slot → Shard.
 
 ### Block Format
 
-V1 defined a precise binary format (`.blk` + `.idx` + `.env`). What constraints drive
-the format? Can it be simpler? When do we need to lock it?
+Shared Blocks (multiple Documents per Block). 64 MiB seal threshold. 64 KiB max
+Frame size. 18-byte self-describing frame headers: magic(2) + version(1) +
+flags(1) + doc_seq(4) + frame_seq(2) + payload_len(4) + crc32c(4).
+Mirror layout: all replicas have identical Block files. See ADR 0003.
+Checksums: CRC-32C per Frame, SHA-256 per Document. See ADR 0002.
 
-### Cell Federation
+### Sharding (future, not in first slice)
 
-V1 included a "cell model" for federated read-cache deployments across Kubernetes clusters.
-Is this in V2 scope, or a later extension?
+Fixed 1024 hash slots. `hash(transaction_id) % 1024` → slot → Shard.
+Shard count = deployment config (~3× node count). Placement: node labels (rack, AZ),
+fail-closed when placement rules unsatisfiable.
 
-### Metadata Authority Boundary
+### Data Lifecycle
 
-V1: Raft = authority, Pebble = derived projection. What specifically must be in Raft?
-What can live outside? Where is the exact boundary?
+Phase 1 (first slice): Write ACK'd → local copies on all voters.
+Phase 2 (future): Backend upload → leader uploads sealed Blocks.
+Phase 3 (future): Partial eviction → followers evict uploaded Blocks.
+Phase 4 (future): Cold-only → all local copies evicted, Backend-only reads.
 
-### Scope and Phasing
+### Raft Operations
 
-What is the minimum useful first slice of V2?
-What is the explicit, enforced gate between spike-quality and production-quality code?
+Log truncation: two-mode heuristic (free truncation when all replicas healthy;
+size-capped at ~4 MiB when a replica is offline, then force snapshot). Always gate
+truncation on snapshot-in-progress status.
+
+Atomic batch apply: applied-index + Pebble state update in a single
+`Batch.Commit()`. Prevents V1 lesson #5 (appliedIndex vs durableLogIndex mismatch).
+
+### Recovery
+
+Raft snapshot = Pebble Projection only (small). Block files transfer separately
+via peer service. New Members catch up via snapshot + block transfer + log replay.
+Repair throttling: concurrent block-file repairs limited per node, bandwidth budget
+reserves ≥75% of I/O for client reads. Prevents recovery storms.
+
+### Background Scrubbing
+
+Two-tier scrubbing (first slice):
+- Light scrub (daily): leader proposes consistency-check via Raft, all voters
+  compute Pebble state checksum at same applied index, leader compares. Mismatch
+  triggers Pebble wipe + Raft replay on the divergent replica.
+- Deep scrub (weekly): sequentially read all local Block bytes, re-verify all Frame
+  CRC-32C and Document SHA-256 against Raft metadata. Corrupt → quarantine + fetch
+  from peer.
+- Auto-repair cap: >5 corrupt Frames per Block → treat as bad disk, quarantine
+  entire Block, fetch from peer.
+- I/O budget: deep scrub limited to 25% of disk read bandwidth (configurable),
+  pauses during high client load.
+
+### Filesystem Layout
+
+```
+/data/
+├── identity/member.json
+├── shards/{shard_id}/
+│   ├── raft/{wal/, snap/}
+│   ├── pebble/
+│   ├── blocks/{block_id}.blk, {block_id}.idx
+│   └── openlog/{write_id}.prep
+└── tmp/
+```
+
+### Open Questions (deferred beyond first slice)
+
+- Cell federation model
+- Multi-tier write ACK (priority classes)
+- Backend capacity profiles and admission pressure
+- Encryption (OpenBao Transit integration)
+- Group commit optimization
+- Shard rebalancing and slot transfer protocol
