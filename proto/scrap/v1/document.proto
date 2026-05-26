@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service DocumentService {
+  rpc WriteDocument(stream WriteDocumentRequest) returns (WriteDocumentResponse);
+  rpc HeadDocument(HeadDocumentRequest) returns (HeadDocumentResponse);
+  rpc ReadDocument(ReadDocumentRequest) returns (stream ReadDocumentResponse);
+  rpc FindDocuments(FindDocumentsRequest) returns (FindDocumentsResponse);
+}
+
+message WriteDocumentRequest {
+  string transaction_id = 1;
+  string document_name = 2;
+  string content_type = 3;
+  string idempotency_key = 4;
+  bytes chunk_data = 5;
+  string tenant_id = 6;
+}
+
+message WriteDocumentResponse {
+  string sha256_checksum = 1;
+  int64 size = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message HeadDocumentRequest {
+  string transaction_id = 1;
+  string document_name = 2;
+  string tenant_id = 3;
+}
+
+message HeadDocumentResponse {
+  string name = 1;
+  string content_type = 2;
+  int64 size = 3;
+  string sha256_checksum = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message ReadDocumentRequest {
+  string transaction_id = 1;
+  string document_name = 2;
+  string tenant_id = 3;
+}
+
+message ReadDocumentResponse {
+  string content_type = 1;
+  int64 size = 2;
+  string sha256_checksum = 3;
+  google.protobuf.Timestamp created_at = 4;
+  bytes chunk_data = 5;
+}
+
+message FindDocumentsRequest {
+  string transaction_id = 1;
+  string tenant_id = 2;
+}
+
+message FindDocumentsResponse {
+  repeated DocumentMeta documents = 1;
+}
+
+message DocumentMeta {
+  string name = 1;
+  string content_type = 2;
+  int64 size = 3;
+  string sha256_checksum = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
