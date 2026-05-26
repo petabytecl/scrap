@@ -23,7 +23,7 @@ func TestBlockWriterHeader(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // test reads file it just created in a temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

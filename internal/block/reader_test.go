@@ -72,7 +72,7 @@ func TestBlockReaderSmallDoc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexReader: %v", err)
 	}
-	defer ir.Close()
+	defer func() { _ = ir.Close() }()
 
 	entry, err := ir.Find("tx-001", "small.xml")
 	if err != nil {
@@ -83,7 +83,7 @@ func TestBlockReaderSmallDoc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDocument: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	got, err := io.ReadAll(rc)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestBlockReaderMultiFrameDoc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexReader: %v", err)
 	}
-	defer ir.Close()
+	defer func() { _ = ir.Close() }()
 
 	entry, err := ir.Find("tx-001", "medium.pdf")
 	if err != nil {
@@ -115,7 +115,7 @@ func TestBlockReaderMultiFrameDoc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDocument: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	got, err := io.ReadAll(rc)
 	if err != nil {
@@ -132,12 +132,12 @@ func TestBlockReaderCorruptPayload(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath)
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	data[block.BlockHeaderSize+block.FrameHeaderSize+5] ^= 0xFF
-	if err := os.WriteFile(blkPath, data, 0644); err != nil {
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestBlockReaderCorruptPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexReader: %v", err)
 	}
-	defer ir.Close()
+	defer func() { _ = ir.Close() }()
 
 	entry, _ := ir.Find("tx-001", "small.xml")
 	_, err = block.ReadDocument(blkPath, entry)

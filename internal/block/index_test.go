@@ -10,7 +10,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 )
 
-func TestIndexRoundTrip(t *testing.T) {
+func TestIndexRoundTrip(t *testing.T) { //nolint:cyclop // test function with exhaustive assertions
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.idx")
 
@@ -58,7 +58,7 @@ func TestIndexRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexReader: %v", err)
 	}
-	defer ir.Close()
+	defer func() { _ = ir.Close() }()
 
 	got, err := ir.Find("tx-001", "invoice.xml")
 	if err != nil {
@@ -105,7 +105,7 @@ func TestIndexFindNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexReader: %v", err)
 	}
-	defer ir.Close()
+	defer func() { _ = ir.Close() }()
 
 	_, err = ir.Find("tx-001", "nonexistent.xml")
 	if err == nil {
@@ -143,7 +143,7 @@ func TestIndexAllEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexReader: %v", err)
 	}
-	defer ir.Close()
+	defer func() { _ = ir.Close() }()
 
 	all := ir.FindByTransaction("tx-bulk")
 	if len(all) != 100 {
@@ -162,7 +162,7 @@ func TestIndexCorruptHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.idx")
 
-	if err := os.WriteFile(path, []byte("garbage_data"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("garbage_data"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -195,12 +195,12 @@ func TestIndexCorruptEntryCRC(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // test reads file it just created in a temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	data[20] ^= 0xFF // corrupt entry payload
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	data[20] ^= 0xFF                                        // corrupt entry payload
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
 

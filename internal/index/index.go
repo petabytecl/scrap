@@ -10,7 +10,10 @@ import (
 
 var ErrNotFound = errors.New("index: transaction not found")
 
-const valueVersion byte = 0x01
+const (
+	valueVersion  byte = 0x01
+	minEncodedLen int  = 6 // version(1) + block_count(2) + doc_count(2) + completed(1)
+)
 
 type Entry struct {
 	BlockIDs  []uint64
@@ -47,7 +50,7 @@ func (idx *Index) Get(txID string) (Entry, error) {
 		}
 		return Entry{}, fmt.Errorf("index: get: %w", err)
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 
 	return decodeEntry(val)
 }
@@ -57,7 +60,7 @@ func (idx *Index) Exists(txID string) bool {
 	if err != nil {
 		return false
 	}
-	closer.Close()
+	_ = closer.Close()
 	return true
 }
 
@@ -93,7 +96,7 @@ func encodeEntry(e Entry) []byte {
 	n := 1 + 2 + 8*len(e.BlockIDs) + 2 + 1
 	buf := make([]byte, n)
 	buf[0] = valueVersion
-	binary.LittleEndian.PutUint16(buf[1:3], uint16(len(e.BlockIDs)))
+	binary.LittleEndian.PutUint16(buf[1:3], uint16(len(e.BlockIDs))) //nolint:gosec // block count bounded by shard design
 	off := 3
 	for _, id := range e.BlockIDs {
 		binary.LittleEndian.PutUint64(buf[off:off+8], id)
@@ -108,7 +111,7 @@ func encodeEntry(e Entry) []byte {
 }
 
 func decodeEntry(val []byte) (Entry, error) {
-	if len(val) < 6 {
+	if len(val) < minEncodedLen {
 		return Entry{}, fmt.Errorf("index: value too short: %d bytes", len(val))
 	}
 	if val[0] != valueVersion {

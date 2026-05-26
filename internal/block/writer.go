@@ -3,7 +3,9 @@ package block
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"os"
@@ -35,7 +37,7 @@ type BlockWriter struct {
 //
 //	created_at_unix_micro(8) + reserved(4) + header_crc32c(4)
 func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) {
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: create %s: %w", path, err)
 	}
@@ -51,7 +53,7 @@ func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) 
 	binary.LittleEndian.PutUint32(hdr[36:40], crc32.Checksum(hdr[0:36], crcTable))
 
 	if _, err := f.Write(hdr[:]); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("block: write header: %w", err)
 	}
 
@@ -64,12 +66,37 @@ func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) 
 	}, nil
 }
 
+//nolint:revive // txID, docName, contentType are part of the public API contract; callers pass document metadata
 func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.Reader) (AppendResult, error) {
 	if w.closed {
-		return AppendResult{}, fmt.Errorf("block: writer is closed")
+		return AppendResult{}, errors.New("block: writer is closed")
 	}
 
 	firstOffset := w.offset
+	frameSeq, totalSize, docHash, err := w.writeDocFrames(body)
+	if err != nil {
+		return AppendResult{}, err
+	}
+
+	if err := w.f.Sync(); err != nil {
+		return AppendResult{}, fmt.Errorf("block: fsync after document: %w", err)
+	}
+
+	w.docSeq++
+	w.docCount++
+
+	var digest [32]byte
+	copy(digest[:], docHash.Sum(nil))
+
+	return AppendResult{
+		SHA256:           digest,
+		Size:             totalSize,
+		FrameCount:       frameSeq,
+		FirstFrameOffset: firstOffset,
+	}, nil
+}
+
+func (w *BlockWriter) writeDocFrames(body io.Reader) (uint32, int64, hash.Hash, error) {
 	hasher := sha256.New()
 	buf := make([]byte, MaxFramePayload)
 	var frameSeq uint32
@@ -82,14 +109,8 @@ func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.
 			hasher.Write(payload)
 			totalSize += int64(n)
 
-			var flags byte
-			if frameSeq == 0 && (readErr == io.EOF || readErr == io.ErrUnexpectedEOF) {
-				flags = FlagSingleFrame
-			} else if frameSeq == 0 {
-				flags = FlagFirstFrame
-			} else if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
-				flags = FlagLastFrame
-			}
+			isLast := readErr == io.EOF || readErr == io.ErrUnexpectedEOF
+			flags := frameFlags(frameSeq, isLast)
 
 			err := WriteFrame(w.f, FrameHeader{
 				DocSeq:   w.docSeq,
@@ -97,7 +118,7 @@ func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.
 				Flags:    flags,
 			}, payload)
 			if err != nil {
-				return AppendResult{}, fmt.Errorf("block: write frame %d: %w", frameSeq, err)
+				return 0, 0, nil, fmt.Errorf("block: write frame %d: %w", frameSeq, err)
 			}
 
 			w.offset += int64(FrameHeaderSize + n)
@@ -107,26 +128,23 @@ func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.
 			break
 		}
 		if readErr != nil {
-			return AppendResult{}, fmt.Errorf("block: read body: %w", readErr)
+			return 0, 0, nil, fmt.Errorf("block: read body: %w", readErr)
 		}
 	}
+	return frameSeq, totalSize, hasher, nil
+}
 
-	if err := w.f.Sync(); err != nil {
-		return AppendResult{}, fmt.Errorf("block: fsync after document: %w", err)
+func frameFlags(seq uint32, isLast bool) byte {
+	switch {
+	case seq == 0 && isLast:
+		return FlagSingleFrame
+	case seq == 0:
+		return FlagFirstFrame
+	case isLast:
+		return FlagLastFrame
+	default:
+		return 0
 	}
-
-	w.docSeq++
-	w.docCount++
-
-	var digest [32]byte
-	copy(digest[:], hasher.Sum(nil))
-
-	return AppendResult{
-		SHA256:           digest,
-		Size:             totalSize,
-		FrameCount:       frameSeq,
-		FirstFrameOffset: firstOffset,
-	}, nil
 }
 
 func (w *BlockWriter) DocCount() uint32 {
@@ -151,7 +169,7 @@ func (w *BlockWriter) Close() error {
 	}
 	w.closed = true
 	if err := w.f.Sync(); err != nil {
-		w.f.Close()
+		_ = w.f.Close()
 		return fmt.Errorf("block: final fsync: %w", err)
 	}
 	return w.f.Close()

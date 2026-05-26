@@ -3,8 +3,10 @@ package shard
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,14 +15,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+	raftpb "go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/protobuf/proto"
+
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	storeapi "github.com/petabytecl/scrap/internal/store"
-	"github.com/oklog/ulid/v2"
-	raftpb "go.etcd.io/raft/v3/raftpb"
-	"google.golang.org/protobuf/proto"
 )
 
 const DefaultBlockSealSize = 64 * 1024 * 1024
@@ -60,7 +63,7 @@ func Open(cfg Config) (*Shard, error) {
 	raftDir := filepath.Join(cfg.DataDir, "raft")
 
 	for _, d := range []string{blocksDir, pebbleDir, openlogDir, raftDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, 0o750); err != nil {
 			return nil, fmt.Errorf("shard: mkdir %s: %w", d, err)
 		}
 	}
@@ -77,7 +80,7 @@ func Open(cfg Config) (*Shard, error) {
 
 	nextID, err := scanMaxBlockID(blocksDir)
 	if err != nil {
-		idx.Close()
+		_ = idx.Close() // best-effort cleanup on scan failure
 		return nil, err
 	}
 
@@ -94,12 +97,12 @@ func Open(cfg Config) (*Shard, error) {
 	}
 
 	if err := s.recoverOpenlog(); err != nil {
-		idx.Close()
+		_ = idx.Close() // best-effort cleanup on recovery failure
 		return nil, fmt.Errorf("shard: openlog recovery: %w", err)
 	}
 
 	if err := s.openNewBlock(); err != nil {
-		idx.Close()
+		_ = idx.Close() // best-effort cleanup on block open failure
 		return nil, fmt.Errorf("shard: open block: %w", err)
 	}
 
@@ -119,7 +122,7 @@ func Open(cfg Config) (*Shard, error) {
 	})
 	if err != nil {
 		s.closeBlockAndIdx()
-		idx.Close()
+		_ = idx.Close() // best-effort cleanup on raft open failure
 		return nil, fmt.Errorf("shard: open raft: %w", err)
 	}
 	s.raft = raftNode
@@ -127,6 +130,7 @@ func Open(cfg Config) (*Shard, error) {
 	return s, nil
 }
 
+//nolint:cyclop // orchestration function managing seal check, prep file, block append, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
 	if err := s.requireLeader(); err != nil {
 		return storeapi.WriteResult{}, err
@@ -151,6 +155,10 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	blockID := s.blockWriter.BlockID()
 	startOffset := s.blockWriter.Offset()
 
+	if startOffset < 0 {
+		s.mu.Unlock()
+		return storeapi.WriteResult{}, fmt.Errorf("shard: negative start offset %d", startOffset)
+	}
 	prepEntry := &scrapv1.OpenlogEntry{
 		TransactionId:  txID,
 		DocumentName:   docName,
@@ -182,7 +190,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 				ContentType:    contentType,
 				IdempotencyKey: idempotencyKey,
 				BlockId:        blockID,
-				FirstFrameOff:  uint64(result.FirstFrameOffset),
+				FirstFrameOff:  uint64(max(0, result.FirstFrameOffset)),
 				FrameCount:     result.FrameCount,
 				TotalBytes:     result.Size,
 				Sha256:         result.SHA256[:],
@@ -217,7 +225,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		return storeapi.WriteResult{}, ctx.Err()
 	}
 
-	os.Remove(s.prepPath(writeID))
+	_ = os.Remove(s.prepPath(writeID)) // best-effort cleanup of prep file after commit
 
 	return storeapi.WriteResult{
 		SHA256:    result.SHA256,
@@ -264,7 +272,7 @@ func (s *Shard) ReadDocument(ctx context.Context, txID, docName string) (io.Read
 	blkPath := s.blockPath(entry.blockID)
 	rc, err := block.ReadDocument(blkPath, entry.IndexEntry)
 	if err != nil {
-		return nil, storeapi.DocumentMeta{}, fmt.Errorf("%w: %v", storeapi.ErrDataLoss, err)
+		return nil, storeapi.DocumentMeta{}, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 	}
 
 	meta := storeapi.DocumentMeta{
@@ -295,10 +303,10 @@ func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.Docu
 		idxPath := s.idxPath(bid)
 		ir, err := block.OpenIndexReader(idxPath)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", storeapi.ErrDataLoss, err)
+			return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 		}
 		entries := ir.FindByTransaction(txID)
-		ir.Close()
+		_ = ir.Close() // best-effort; data already read
 
 		for _, e := range entries {
 			docs = append(docs, storeapi.DocumentMeta{
@@ -319,7 +327,7 @@ func (s *Shard) IsLeader() bool {
 
 func (s *Shard) CheckReadiness(_ context.Context) error {
 	if s.raft.LeaderID() == 0 {
-		return fmt.Errorf("shard: no leader elected")
+		return errors.New("shard: no leader elected")
 	}
 	return nil
 }
@@ -361,9 +369,7 @@ func (s *Shard) Close() error {
 
 	var firstErr error
 	if s.idxWriter != nil {
-		if err := s.idxWriter.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		firstErr = s.idxWriter.Close()
 	}
 	if s.blockWriter != nil {
 		if err := s.blockWriter.Close(); err != nil && firstErr == nil {
@@ -424,7 +430,7 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 			DocName:       doc.DocumentName,
 			ContentType:   doc.ContentType,
 			CreatedAt:     createdAt,
-			FirstFrameOff: int64(doc.FirstFrameOff),
+			FirstFrameOff: safeUint64ToInt64(doc.FirstFrameOff),
 			FrameCount:    doc.FrameCount,
 			TotalBytes:    doc.TotalBytes,
 			SHA256:        sha,
@@ -473,7 +479,7 @@ func (s *Shard) docExistsInPebble(txID, docName string) bool {
 			continue
 		}
 		_, err = ir.Find(txID, docName)
-		ir.Close()
+		_ = ir.Close() // best-effort; data already read
 		if err == nil {
 			return true
 		}
@@ -487,16 +493,16 @@ func (s *Shard) writePrepFile(writeID string, entry *scrapv1.OpenlogEntry) error
 		return err
 	}
 	path := s.prepPath(writeID)
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path constructed from known openlogDir + ULID
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close() // best-effort close after write failure
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close() // best-effort close after sync failure
 		return err
 	}
 	if err := f.Close(); err != nil {
@@ -528,7 +534,7 @@ func (s *Shard) recoverOpenlog() error {
 
 	for _, name := range prepFiles {
 		path := filepath.Join(s.openlogDir, name)
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // path constructed from known openlogDir + directory listing
 		if err != nil {
 			return fmt.Errorf("shard: read prep %s: %w", name, err)
 		}
@@ -539,15 +545,15 @@ func (s *Shard) recoverOpenlog() error {
 		}
 
 		if s.docExistsInPebble(entry.TransactionId, entry.DocumentName) {
-			os.Remove(path)
+			_ = os.Remove(path) // best-effort cleanup of already-committed prep
 			continue
 		}
 
 		blkPath := s.blockPath(entry.BlockId)
-		if err := truncateFile(blkPath, int64(entry.StartOffset)); err != nil {
+		if err := truncateFile(blkPath, safeUint64ToInt64(entry.StartOffset)); err != nil {
 			return fmt.Errorf("shard: truncate block %d: %w", entry.BlockId, err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path) // best-effort cleanup after truncation
 	}
 
 	return nil
@@ -568,10 +574,10 @@ func (s *Shard) findDocEntry(txID, docName string) (docWithBlock, error) {
 		idxPath := s.idxPath(bid)
 		ir, err := block.OpenIndexReader(idxPath)
 		if err != nil {
-			return docWithBlock{}, fmt.Errorf("%w: %v", storeapi.ErrDataLoss, err)
+			return docWithBlock{}, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 		}
 		entry, err := ir.Find(txID, docName)
-		ir.Close()
+		_ = ir.Close() // best-effort; data already read
 		if err == nil {
 			return docWithBlock{IndexEntry: entry, blockID: bid}, nil
 		}
@@ -600,7 +606,7 @@ func (s *Shard) openNewBlock() error {
 	}
 	iw, err := block.NewIndexWriter(s.idxPath(id))
 	if err != nil {
-		bw.Close()
+		_ = bw.Close() // best-effort cleanup on index writer failure
 		return err
 	}
 	s.blockWriter = bw
@@ -610,10 +616,10 @@ func (s *Shard) openNewBlock() error {
 
 func (s *Shard) closeBlockAndIdx() {
 	if s.idxWriter != nil {
-		s.idxWriter.Close()
+		_ = s.idxWriter.Close() // best-effort cleanup
 	}
 	if s.blockWriter != nil {
-		s.blockWriter.Close()
+		_ = s.blockWriter.Close() // best-effort cleanup
 	}
 }
 
@@ -626,24 +632,38 @@ func (s *Shard) idxPath(id uint64) string {
 }
 
 func truncateFile(path string, size int64) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o644) //nolint:gosec // path constructed from known blocksDir + block ID
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	defer f.Close()
-	return f.Truncate(size)
+	truncErr := f.Truncate(size)
+	if closeErr := f.Close(); closeErr != nil && truncErr == nil {
+		return closeErr
+	}
+	return truncErr
 }
 
 func syncDir(path string) error {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is the shard's own openlogDir
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return f.Sync()
+	syncErr := f.Sync()
+	if closeErr := f.Close(); closeErr != nil && syncErr == nil {
+		return closeErr
+	}
+	return syncErr
+}
+
+// safeUint64ToInt64 converts a uint64 to int64, clamping to math.MaxInt64 on overflow.
+func safeUint64ToInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }
 
 func scanMaxBlockID(blocksDir string) (uint64, error) {

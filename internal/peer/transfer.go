@@ -6,10 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
 const transferChunkSize = 64 * 1024
@@ -52,11 +53,12 @@ func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.Se
 }
 
 func streamFile(path string, stream grpc.ServerStreamingServer[scrapv1.TransferBlockResponse]) error {
-	f, err := os.Open(path)
+	cleanPath := filepath.Clean(path)
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, transferChunkSize)
 	for {

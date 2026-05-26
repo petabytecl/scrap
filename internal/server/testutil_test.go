@@ -6,11 +6,12 @@ import (
 	"net"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/server"
 	storeapi "github.com/petabytecl/scrap/internal/store"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 type notLeaderStore struct {
@@ -36,21 +37,21 @@ func (s *notLeaderStore) FindDocuments(_ context.Context, _ string) ([]storeapi.
 func startNotLeaderServer(t *testing.T, leaderAddr string) scrapv1.DocumentServiceClient {
 	t.Helper()
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 
 	gs := grpc.NewServer()
 	server.Register(gs, &notLeaderStore{leaderAddr: leaderAddr})
-	go gs.Serve(lis)
+	go func() { _ = gs.Serve(lis) }()
 	t.Cleanup(gs.GracefulStop)
 
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	return scrapv1.NewDocumentServiceClient(conn)
 }

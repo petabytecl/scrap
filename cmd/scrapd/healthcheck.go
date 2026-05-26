@@ -23,7 +23,7 @@ func runHealthcheck(args []string) error {
 	flags.StringVar(&service, "service", "", "gRPC health service name; empty checks liveness")
 	flags.DurationVar(&timeout, "timeout", time.Second, "health check timeout")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	if address == "" {
 		return errors.New("address is required")
@@ -36,7 +36,7 @@ func runHealthcheck(args []string) error {
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", address, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	resp, err := healthv1.NewHealthClient(conn).Check(ctx, &healthv1.HealthCheckRequest{
 		Service: service,

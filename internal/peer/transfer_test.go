@@ -3,19 +3,52 @@ package peer_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	"github.com/petabytecl/scrap/internal/block"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/block"
 )
 
 func TestTransferBlockStreamsFileContents(t *testing.T) {
 	dir := t.TempDir()
+	seedTransferBlock(t, dir)
+	addr := startPeerServer(t, dir)
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := scrapv1.NewPeerServiceClient(conn)
+	stream, err := client.TransferBlock(context.Background(), &scrapv1.TransferBlockRequest{
+		ShardId: 0,
+		BlockId: 1,
+	})
+	if err != nil {
+		t.Fatalf("TransferBlock: %v", err)
+	}
+
+	meta := recvAndVerifyMeta(t, stream)
+	received := recvAllChunks(t, stream)
+
+	expectedTotal := meta.GetBlockSize() + meta.GetIdxSize()
+	if int64(len(received)) != expectedTotal {
+		t.Fatalf("received %d bytes, expected %d (blk=%d + idx=%d)",
+			len(received), expectedTotal, meta.GetBlockSize(), meta.GetIdxSize())
+	}
+}
+
+// seedTransferBlock creates a block file and index file in dir for block ID 1.
+func seedTransferBlock(t *testing.T, dir string) {
+	t.Helper()
 
 	bw, err := block.NewBlockWriter(dir+"/0000000000000001.blk", 0, 1)
 	if err != nil {
@@ -26,13 +59,13 @@ func TestTransferBlockStreamsFileContents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendDocument: %v", err)
 	}
-	bw.Close()
+	_ = bw.Close()
 
 	iw, err := block.NewIndexWriter(dir + "/0000000000000001.idx")
 	if err != nil {
 		t.Fatalf("NewIndexWriter: %v", err)
 	}
-	iw.Append(block.IndexEntry{
+	if err := iw.Append(block.IndexEntry{
 		TransactionID: "tx-transfer",
 		DocName:       "doc.xml",
 		ContentType:   "text/xml",
@@ -40,25 +73,14 @@ func TestTransferBlockStreamsFileContents(t *testing.T) {
 		FrameCount:    result.FrameCount,
 		TotalBytes:    result.Size,
 		SHA256:        result.SHA256,
-	})
-	iw.Close()
-
-	addr, _ := startPeerServer(t, dir)
-
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
+	}); err != nil {
+		t.Fatalf("iw.Append: %v", err)
 	}
-	defer conn.Close()
+	_ = iw.Close()
+}
 
-	client := scrapv1.NewPeerServiceClient(conn)
-	stream, err := client.TransferBlock(context.Background(), &scrapv1.TransferBlockRequest{
-		ShardId: 0,
-		BlockId: 1,
-	})
-	if err != nil {
-		t.Fatalf("TransferBlock: %v", err)
-	}
+func recvAndVerifyMeta(t *testing.T, stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse]) *scrapv1.TransferBlockMeta {
+	t.Helper()
 
 	firstMsg, err := stream.Recv()
 	if err != nil {
@@ -77,11 +99,16 @@ func TestTransferBlockStreamsFileContents(t *testing.T) {
 	if meta.GetIdxSize() <= 0 {
 		t.Fatalf("IdxSize should be > 0, got %d", meta.GetIdxSize())
 	}
+	return meta
+}
+
+func recvAllChunks(t *testing.T, stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse]) []byte {
+	t.Helper()
 
 	var received []byte
 	for {
 		msg, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -89,23 +116,18 @@ func TestTransferBlockStreamsFileContents(t *testing.T) {
 		}
 		received = append(received, msg.GetChunkData()...)
 	}
-
-	expectedTotal := meta.GetBlockSize() + meta.GetIdxSize()
-	if int64(len(received)) != expectedTotal {
-		t.Fatalf("received %d bytes, expected %d (blk=%d + idx=%d)",
-			len(received), expectedTotal, meta.GetBlockSize(), meta.GetIdxSize())
-	}
+	return received
 }
 
 func TestTransferBlockNotFound(t *testing.T) {
 	dir := t.TempDir()
-	addr, _ := startPeerServer(t, dir)
+	addr := startPeerServer(t, dir)
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := scrapv1.NewPeerServiceClient(conn)
 	stream, err := client.TransferBlock(context.Background(), &scrapv1.TransferBlockRequest{

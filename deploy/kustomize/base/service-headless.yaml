@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: scrap-headless
+  namespace: scrap
+spec:
+  clusterIP: None
+  selector:
+    app: scrap
+  ports:
+    - name: peer
+      port: 9091
+      targetPort: 9091
+    - name: client
+      port: 9090
+      targetPort: 9090

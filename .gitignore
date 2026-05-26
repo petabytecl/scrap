@@ -31,5 +31,10 @@ test-results/
 *.pprof
 *.test
 
+# Local kind evidence
+*.json
+!deploy/**/*.json
+!codecov.yml
+
 # Logs
 *.log

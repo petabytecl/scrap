@@ -3,6 +3,7 @@ package shard_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestNonLeaderWriteReturnsNotLeaderError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -60,7 +61,7 @@ func TestNonLeaderHeadReturnsNotLeaderError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -77,7 +78,8 @@ func TestNonLeaderHeadReturnsNotLeaderError(t *testing.T) {
 
 func isNotLeaderError(err error, target **storeapi.NotLeaderError) bool {
 	for err != nil {
-		if nle, ok := err.(*storeapi.NotLeaderError); ok {
+		nle := &storeapi.NotLeaderError{}
+		if errors.As(err, &nle) {
 			*target = nle
 			return true
 		}

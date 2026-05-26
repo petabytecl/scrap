@@ -59,7 +59,7 @@ func WriteFrame(w io.Writer, hdr FrameHeader, payload []byte) error {
 	// buf[6:8] reserved
 	binary.LittleEndian.PutUint32(buf[8:12], hdr.DocSeq)
 	binary.LittleEndian.PutUint32(buf[12:16], hdr.FrameSeq)
-	binary.LittleEndian.PutUint32(buf[16:20], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(buf[16:20], uint32(len(payload))) //nolint:gosec // payload bounded by MaxFramePayload (64 KiB) check above
 	binary.LittleEndian.PutUint32(buf[20:24], crc32.Checksum(payload, crcTable))
 	// buf[24:28] reserved
 	binary.LittleEndian.PutUint32(buf[28:32], crc32.Checksum(buf[0:28], crcTable))

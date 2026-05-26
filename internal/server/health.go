@@ -31,16 +31,19 @@ func (s *healthServer) Check(ctx context.Context, req *healthv1.HealthCheckReque
 			Status: healthv1.HealthCheckResponse_SERVING,
 		}, nil
 	case ReadinessService:
-		err := s.checker.CheckReadiness(ctx)
-		if err != nil {
-			return &healthv1.HealthCheckResponse{
-				Status: healthv1.HealthCheckResponse_NOT_SERVING,
-			}, nil
-		}
-		return &healthv1.HealthCheckResponse{
-			Status: healthv1.HealthCheckResponse_SERVING,
-		}, nil
+		return s.checkReadinessResponse(ctx)
+
 	default:
 		return nil, status.Errorf(codes.NotFound, "unknown health service %q", req.GetService())
 	}
+}
+
+// checkReadinessResponse maps readiness check errors to NOT_SERVING status
+// without propagating the error as a gRPC error.
+func (s *healthServer) checkReadinessResponse(ctx context.Context) (*healthv1.HealthCheckResponse, error) {
+	serving := healthv1.HealthCheckResponse_SERVING
+	if s.checker.CheckReadiness(ctx) != nil {
+		serving = healthv1.HealthCheckResponse_NOT_SERVING
+	}
+	return &healthv1.HealthCheckResponse{Status: serving}, nil
 }

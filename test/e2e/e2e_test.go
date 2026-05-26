@@ -3,16 +3,18 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"testing"
 	"time"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
 func scrapAddr() string {
@@ -28,16 +30,16 @@ func connect(t *testing.T) scrapv1.DocumentServiceClient {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return scrapv1.NewDocumentServiceClient(conn)
 }
 
+//nolint:gocognit // test helper with exhaustive retry and streaming logic
 func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, data []byte) *scrapv1.WriteDocumentResponse {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var resp *scrapv1.WriteDocumentResponse
 	var lastErr error
 
 	for attempt := range 10 {
@@ -61,6 +63,7 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 			continue
 		}
 
+		chunkErr := false
 		for i := 0; i < len(data); i += 4096 {
 			end := min(i+4096, len(data))
 			if err := stream.Send(&scrapv1.WriteDocumentRequest{
@@ -69,10 +72,15 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 				},
 			}); err != nil {
 				lastErr = err
+				chunkErr = true
 				break
 			}
 		}
+		if chunkErr {
+			continue
+		}
 
+		var resp *scrapv1.WriteDocumentResponse
 		resp, lastErr = stream.CloseAndRecv()
 		if lastErr == nil {
 			return resp
@@ -89,6 +97,7 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 	return nil
 }
 
+//nolint:cyclop // test function with exhaustive write-then-read flow
 func TestE2EWriteAndRead(t *testing.T) {
 	if os.Getenv("SCRAP_E2E") == "" {
 		t.Skip("set SCRAP_E2E=1 to run E2E tests")
@@ -126,7 +135,7 @@ func TestE2EWriteAndRead(t *testing.T) {
 	var readBack []byte
 	for {
 		msg, err := readStream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

@@ -2,18 +2,23 @@ package peer
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	"github.com/petabytecl/scrap/internal/block"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/block"
 )
+
+// sha256DigestLen is the byte length of a SHA-256 digest.
+const sha256DigestLen = sha256.Size
 
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
@@ -38,7 +43,7 @@ func RegisterServer(gs *grpc.Server, s *Server) {
 	scrapv1.RegisterPeerServiceServer(gs, s)
 }
 
-func (s *Server) getOrCreateBlock(blockID uint64, shardID uint64) (*blockState, error) {
+func (s *Server) getOrCreateBlock(blockID, shardID uint64) (*blockState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -60,7 +65,7 @@ func (s *Server) getOrCreateBlock(blockID uint64, shardID uint64) (*blockState, 
 
 	iw, err := block.NewIndexWriter(idxPath)
 	if err != nil {
-		bw.Close()
+		_ = bw.Close()
 		return nil, err
 	}
 
@@ -89,11 +94,11 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 
 	go func() {
 		defer close(done)
-		defer pr.Close()
+		defer func() { _ = pr.Close() }()
 
-		bs, err := s.getOrCreateBlock(init.BlockId, 0)
-		if err != nil {
-			appendErr = err
+		bs, bsErr := s.getOrCreateBlock(init.BlockId, 0)
+		if bsErr != nil {
+			appendErr = bsErr
 			return
 		}
 
@@ -103,27 +108,11 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 		)
 	}()
 
-	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			pw.CloseWithError(err)
-			<-done
-			return status.Errorf(codes.Internal, "receive chunk: %v", err)
-		}
-		chunk := msg.GetChunkData()
-		if len(chunk) > 0 {
-			if _, err := pw.Write(chunk); err != nil {
-				pw.Close()
-				<-done
-				return status.Errorf(codes.Internal, "write chunk: %v", err)
-			}
-		}
+	if recvErr := s.recvChunks(stream, pw, done); recvErr != nil {
+		return recvErr
 	}
 
-	pw.Close()
+	_ = pw.Close()
 	<-done
 
 	if appendErr != nil {
@@ -131,7 +120,7 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 	}
 
 	computedSHA := hasher.Sum(nil)
-	if init.Sha256 != nil && len(init.Sha256) == 32 {
+	if len(init.Sha256) == sha256DigestLen {
 		if string(computedSHA) != string(init.Sha256) {
 			return status.Errorf(codes.DataLoss, "SHA-256 mismatch: expected %x, got %x", init.Sha256, computedSHA)
 		}
@@ -144,11 +133,35 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 	})
 }
 
+// recvChunks reads chunk messages from the stream and writes them into pw.
+// It closes pw (with error if needed) and waits on done before returning on failure.
+func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], pw *io.PipeWriter, done <-chan struct{}) error {
+	for {
+		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			pw.CloseWithError(err)
+			<-done
+			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+		}
+		chunk := msg.GetChunkData()
+		if len(chunk) > 0 {
+			if _, err := pw.Write(chunk); err != nil {
+				_ = pw.Close()
+				<-done
+				return status.Errorf(codes.Internal, "write chunk: %v", err)
+			}
+		}
+	}
+}
+
 func (s *Server) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, bs := range s.writers {
-		bs.idxWriter.Close()
-		bs.writer.Close()
+		_ = bs.idxWriter.Close()
+		_ = bs.writer.Close()
 	}
 }

@@ -5,16 +5,17 @@ import (
 	"net"
 	"testing"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	"github.com/petabytecl/scrap/internal/peer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/peer"
 )
 
-func startPeerServer(t *testing.T, blocksDir string) (string, *peer.Server) {
+func startPeerServer(t *testing.T, blocksDir string) string {
 	t.Helper()
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -22,24 +23,24 @@ func startPeerServer(t *testing.T, blocksDir string) (string, *peer.Server) {
 	s := peer.NewServer(blocksDir)
 	gs := grpc.NewServer()
 	peer.RegisterServer(gs, s)
-	go gs.Serve(lis)
+	go func() { _ = gs.Serve(lis) }()
 	t.Cleanup(func() {
 		gs.GracefulStop()
 		s.Close()
 	})
 
-	return lis.Addr().String(), s
+	return lis.Addr().String()
 }
 
 func TestReplicateDocumentSinglePeer(t *testing.T) {
 	dir := t.TempDir()
-	addr, _ := startPeerServer(t, dir)
+	addr := startPeerServer(t, dir)
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := scrapv1.NewPeerServiceClient(conn)
 	stream, err := client.ReplicateDocument(context.Background())
@@ -82,8 +83,8 @@ func TestReplicateDocumentSinglePeer(t *testing.T) {
 func TestFanOutQuorum(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
-	addr1, _ := startPeerServer(t, dir1)
-	addr2, _ := startPeerServer(t, dir2)
+	addr1 := startPeerServer(t, dir1)
+	addr2 := startPeerServer(t, dir2)
 
 	c := peer.NewClient()
 	defer c.Close()
@@ -130,7 +131,7 @@ func TestQuorumMetCalculation(t *testing.T) {
 
 func TestFanOutWithDeadPeer(t *testing.T) {
 	dir := t.TempDir()
-	addr, _ := startPeerServer(t, dir)
+	addr := startPeerServer(t, dir)
 
 	c := peer.NewClient()
 	defer c.Close()

@@ -11,6 +11,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 )
 
+//nolint:unparam // idxPath is created as a side-effect; callers only need blkPath and entry
 func writeSingleDocBlock(t *testing.T, dir string, data []byte) (blkPath, idxPath string, entry block.IndexEntry) {
 	t.Helper()
 	blkPath = filepath.Join(dir, "test.blk")
@@ -43,9 +44,13 @@ func writeSingleDocBlock(t *testing.T, dir string, data []byte) (blkPath, idxPat
 	if err := iw.Append(entry); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	bw.Close()
-	iw.Close()
-	return
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close block: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index: %v", err)
+	}
+	return blkPath, idxPath, entry
 }
 
 func TestTwoPassReadCorrect(t *testing.T) {
@@ -57,8 +62,11 @@ func TestTwoPassReadCorrect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDocumentTwoPass: %v", err)
 	}
-	got, _ := io.ReadAll(rc)
-	rc.Close()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	_ = rc.Close()
 
 	if !bytes.Equal(got, data) {
 		t.Fatalf("content mismatch: got %d bytes", len(got))
@@ -70,11 +78,16 @@ func TestTwoPassCorruptPayload(t *testing.T) {
 	data := bytes.Repeat([]byte("A"), 512)
 	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
 
-	raw, _ := os.ReadFile(blkPath)
+	raw, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
 	raw[block.BlockHeaderSize+block.FrameHeaderSize+10] ^= 0xFF
-	os.WriteFile(blkPath, raw, 0644)
+	if err := os.WriteFile(blkPath, raw, 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
+		t.Fatalf("WriteFile: %v", err)
+	}
 
-	_, err := block.ReadDocumentTwoPass(blkPath, entry)
+	_, err = block.ReadDocumentTwoPass(blkPath, entry)
 	if err == nil {
 		t.Fatal("expected error on corrupt payload")
 	}
@@ -98,10 +111,15 @@ func TestTwoPassTruncatedBlock(t *testing.T) {
 	data := bytes.Repeat([]byte("C"), 512)
 	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
 
-	raw, _ := os.ReadFile(blkPath)
-	os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0644)
+	raw, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if err := os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
+		t.Fatalf("WriteFile: %v", err)
+	}
 
-	_, err := block.ReadDocumentTwoPass(blkPath, entry)
+	_, err = block.ReadDocumentTwoPass(blkPath, entry)
 	if err == nil {
 		t.Fatal("expected error on truncated block")
 	}
@@ -116,8 +134,11 @@ func TestTwoPassMultiFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDocumentTwoPass: %v", err)
 	}
-	got, _ := io.ReadAll(rc)
-	rc.Close()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	_ = rc.Close()
 
 	if !bytes.Equal(got, data) {
 		t.Fatalf("multi-frame content mismatch: got %d bytes, want %d", len(got), len(data))

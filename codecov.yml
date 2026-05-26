@@ -1,0 +1,46 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 2%
+        if_ci_failed: error
+    patch:
+      default:
+        target: 70%
+        threshold: 5%
+        if_ci_failed: error
+
+comment:
+  layout: "reach,diff,flags,components,tree,footer"
+  behavior: default
+  require_changes: false
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 2%
+  individual_components:
+    - component_id: storage-core
+      name: Storage Core
+      paths:
+        - internal/block/**
+        - internal/index/**
+        - internal/store/**
+        - internal/spike/**
+    - component_id: consensus
+      name: Consensus and Replication
+      paths:
+        - internal/raft/**
+        - internal/peer/**
+        - internal/shard/**
+    - component_id: transport
+      name: Transport
+      paths:
+        - cmd/scrapd/**
+        - internal/server/**
+
+ignore:
+  - "gen/**"

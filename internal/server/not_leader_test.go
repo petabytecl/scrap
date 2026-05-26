@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
 func TestNotLeaderHeadDocumentReturnsUnavailableWithHint(t *testing.T) {

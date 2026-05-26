@@ -45,7 +45,7 @@ func OpenWithConfig(dataDir string, cfg Config) (*Store, error) {
 	pebbleDir := filepath.Join(dataDir, "pebble")
 
 	for _, d := range []string{blocksDir, pebbleDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("spike: mkdir %s: %w", d, err)
 		}
 	}

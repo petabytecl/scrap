@@ -3,15 +3,17 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/spike"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func startTestServer(t *testing.T) scrapv1.DocumentServiceClient {
@@ -22,23 +24,23 @@ func startTestServer(t *testing.T) scrapv1.DocumentServiceClient {
 	if err != nil {
 		t.Fatalf("spike.Open: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 
 	gs := grpc.NewServer()
 	server.Register(gs, s)
-	go gs.Serve(lis)
+	go func() { _ = gs.Serve(lis) }()
 	t.Cleanup(gs.GracefulStop)
 
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	return scrapv1.NewDocumentServiceClient(conn)
 }
@@ -49,6 +51,20 @@ func TestGRPCWriteAndRead(t *testing.T) {
 
 	content := bytes.Repeat([]byte("grpc test data "), 100)
 
+	resp := writeDocument(ctx, t, client, "tx-grpc-001", "test.xml", "text/xml", content)
+	verifyWriteResponse(t, resp, content)
+	readContent := readDocument(ctx, t, client, "tx-grpc-001", "test.xml")
+
+	if !bytes.Equal(readContent, content) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(readContent), len(content))
+	}
+}
+
+const writeChunkSize = 1024
+
+func writeDocument(ctx context.Context, t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, content []byte) *scrapv1.WriteDocumentResponse {
+	t.Helper()
+
 	stream, err := client.WriteDocument(ctx)
 	if err != nil {
 		t.Fatalf("WriteDocument: %v", err)
@@ -57,18 +73,17 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	if err := stream.Send(&scrapv1.WriteDocumentRequest{
 		Part: &scrapv1.WriteDocumentRequest_Init{
 			Init: &scrapv1.WriteDocumentInit{
-				TransactionId: "tx-grpc-001",
-				DocumentName:  "test.xml",
-				ContentType:   "text/xml",
+				TransactionId: txID,
+				DocumentName:  docName,
+				ContentType:   contentType,
 			},
 		},
 	}); err != nil {
 		t.Fatalf("Send init: %v", err)
 	}
 
-	chunkSize := 1024
-	for i := 0; i < len(content); i += chunkSize {
-		end := min(i+chunkSize, len(content))
+	for i := 0; i < len(content); i += writeChunkSize {
+		end := min(i+writeChunkSize, len(content))
 		if err := stream.Send(&scrapv1.WriteDocumentRequest{
 			Part: &scrapv1.WriteDocumentRequest_ChunkData{
 				ChunkData: content[i:end],
@@ -82,20 +97,31 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CloseAndRecv: %v", err)
 	}
+	return resp
+}
+
+func verifyWriteResponse(t *testing.T, resp *scrapv1.WriteDocumentResponse, content []byte) {
+	t.Helper()
 
 	if resp.GetSha256Checksum() == "" {
 		t.Fatal("checksum should not be empty")
 	}
-	if len(resp.GetSha256Checksum()) != 64 {
-		t.Fatalf("checksum should be 64 hex chars, got %d", len(resp.GetSha256Checksum()))
+
+	const hexSHA256Len = 64
+	if len(resp.GetSha256Checksum()) != hexSHA256Len {
+		t.Fatalf("checksum should be %d hex chars, got %d", hexSHA256Len, len(resp.GetSha256Checksum()))
 	}
 	if resp.GetSize() != int64(len(content)) {
 		t.Fatalf("size: got %d, want %d", resp.GetSize(), len(content))
 	}
+}
+
+func readDocument(ctx context.Context, t *testing.T, client scrapv1.DocumentServiceClient, txID, docName string) []byte {
+	t.Helper()
 
 	readStream, err := client.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{
-		TransactionId: "tx-grpc-001",
-		DocumentName:  "test.xml",
+		TransactionId: txID,
+		DocumentName:  docName,
 	})
 	if err != nil {
 		t.Fatalf("ReadDocument: %v", err)
@@ -112,14 +138,16 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	if meta.GetContentType() != "text/xml" {
 		t.Fatalf("ContentType: got %q", meta.GetContentType())
 	}
-	if len(meta.GetSha256Checksum()) != 64 {
-		t.Fatalf("meta checksum should be 64 hex chars, got %d", len(meta.GetSha256Checksum()))
+
+	const hexSHA256Len = 64
+	if len(meta.GetSha256Checksum()) != hexSHA256Len {
+		t.Fatalf("meta checksum should be %d hex chars, got %d", hexSHA256Len, len(meta.GetSha256Checksum()))
 	}
 
 	var readContent []byte
 	for {
 		msg, err := readStream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -127,8 +155,5 @@ func TestGRPCWriteAndRead(t *testing.T) {
 		}
 		readContent = append(readContent, msg.GetChunkData()...)
 	}
-
-	if !bytes.Equal(readContent, content) {
-		t.Fatalf("content mismatch: got %d bytes, want %d", len(readContent), len(content))
-	}
+	return readContent
 }

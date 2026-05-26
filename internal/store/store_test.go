@@ -27,14 +27,8 @@ func (s *stubStore) FindDocuments(_ context.Context, _ string) ([]store.Document
 	return nil, nil
 }
 
+// Compile-time interface compliance check.
 var _ store.Store = (*stubStore)(nil)
-
-func TestStoreInterfaceCompliance(t *testing.T) {
-	var s store.Store = &stubStore{}
-	if s == nil {
-		t.Fatal("stubStore should satisfy Store interface")
-	}
-}
 
 func TestWriteResultFields(t *testing.T) {
 	r := store.WriteResult{

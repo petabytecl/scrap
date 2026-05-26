@@ -13,7 +13,7 @@ func TestPutGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer idx.Close()
+	defer func() { _ = idx.Close() }()
 
 	if err := idx.Put("tx-001", 100, 3, true); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -41,7 +41,7 @@ func TestGetNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer idx.Close()
+	defer func() { _ = idx.Close() }()
 
 	_, err = idx.Get("nonexistent")
 	if err == nil {
@@ -55,7 +55,7 @@ func TestAddBlockID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer idx.Close()
+	defer func() { _ = idx.Close() }()
 
 	if err := idx.Put("tx-multi", 100, 2, false); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -84,7 +84,7 @@ func TestIncrementDocCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer idx.Close()
+	defer func() { _ = idx.Close() }()
 
 	if err := idx.Put("tx-inc", 100, 0, false); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -112,7 +112,7 @@ func TestExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer idx.Close()
+	defer func() { _ = idx.Close() }()
 
 	if idx.Exists("tx-new") {
 		t.Fatal("Exists should return false for missing key")

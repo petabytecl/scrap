@@ -24,7 +24,7 @@ func openTestShard(t *testing.T) *shard.Shard {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -82,7 +82,7 @@ func TestWriteAndReadDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDocument: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	if meta.ContentType != "application/pdf" {
 		t.Fatalf("ContentType: got %q", meta.ContentType)
@@ -173,7 +173,7 @@ func TestOpenlogRecoveryDeletesCompletedPrep(t *testing.T) {
 		t.Fatalf("WriteDocument: %v", err)
 	}
 
-	s.Close()
+	_ = s.Close()
 
 	s2, err := shard.Open(shard.Config{
 		DataDir:      dir,
@@ -185,7 +185,7 @@ func TestOpenlogRecoveryDeletesCompletedPrep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

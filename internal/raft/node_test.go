@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	scrapraft "github.com/petabytecl/scrap/internal/raft"
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	scrapraft "github.com/petabytecl/scrap/internal/raft"
 )
 
 type inProcessTransport struct {
@@ -34,7 +35,7 @@ func (t *inProcessTransport) Send(msgs []raftpb.Message) {
 	defer t.mu.RUnlock()
 	for _, m := range msgs {
 		if target, ok := t.nodes[m.To]; ok {
-			target.Step(context.Background(), m)
+			_ = target.Step(context.Background(), m) // best-effort in-process delivery
 		}
 	}
 }
@@ -96,9 +97,11 @@ func startTestCluster(t *testing.T) *testCluster {
 	return tc
 }
 
-func (tc *testCluster) waitForLeader(t *testing.T, timeout time.Duration) uint64 {
+const leaderElectionTimeout = 5 * time.Second
+
+func (tc *testCluster) waitForLeader(t *testing.T) uint64 {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(leaderElectionTimeout)
 	for time.Now().Before(deadline) {
 		for _, n := range tc.nodes {
 			if n.IsLeader() {
@@ -129,7 +132,7 @@ func (tc *testCluster) appliedCount(idx int) int {
 func TestThreeNodeElection(t *testing.T) {
 	tc := startTestCluster(t)
 
-	leaderID := tc.waitForLeader(t, 5*time.Second)
+	leaderID := tc.waitForLeader(t)
 	if leaderID == 0 {
 		t.Fatal("leader ID should not be 0")
 	}
@@ -145,9 +148,10 @@ func TestThreeNodeElection(t *testing.T) {
 	}
 }
 
+//nolint:gocognit,cyclop // integration test verifying proposal replication across a 3-node cluster
 func TestProposeAndApply(t *testing.T) {
 	tc := startTestCluster(t)
-	tc.waitForLeader(t, 5*time.Second)
+	tc.waitForLeader(t)
 
 	leader := tc.leader()
 	if leader == nil {
@@ -212,9 +216,10 @@ func TestProposeAndApply(t *testing.T) {
 	t.Fatal("not all nodes applied the entry within timeout")
 }
 
+//nolint:gocognit,cyclop // integration test verifying leader failover and re-election
 func TestLeaderFailoverReElection(t *testing.T) {
 	tc := startTestCluster(t)
-	oldLeaderID := tc.waitForLeader(t, 5*time.Second)
+	oldLeaderID := tc.waitForLeader(t)
 
 	tc.nodes[oldLeaderID-1].Stop()
 	tc.transport.mu.Lock()
@@ -274,7 +279,7 @@ func TestLeaderFailoverReElection(t *testing.T) {
 
 func TestMultipleProposals(t *testing.T) {
 	tc := startTestCluster(t)
-	tc.waitForLeader(t, 5*time.Second)
+	tc.waitForLeader(t)
 
 	leader := tc.leader()
 	ctx := context.Background()

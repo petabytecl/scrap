@@ -158,7 +158,11 @@ func TestBlockFilenamesAreFixedWidthHex(t *testing.T) {
 	}
 }
 
-func readAll(rc interface{ Read([]byte) (int, error); Close() error }) ([]byte, error) {
+func readAll(rc interface {
+	Read([]byte) (int, error)
+	Close() error
+},
+) ([]byte, error) {
 	defer rc.Close()
 	var buf bytes.Buffer
 	_, err := buf.ReadFrom(rc)

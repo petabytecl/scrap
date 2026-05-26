@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"sync"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
 type Client struct {
@@ -73,7 +74,7 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, conn := range c.conns {
-		conn.Close()
+		_ = conn.Close()
 	}
 }
 
@@ -100,7 +101,7 @@ func (c *Client) FanOut(ctx context.Context, peerAddrs []string, init *scrapv1.R
 	return results
 }
 
-func QuorumMet(totalVoters int, successfulPeers int) bool {
+func QuorumMet(totalVoters, successfulPeers int) bool {
 	quorum := totalVoters/2 + 1
 	leaderPlusSuccessful := 1 + successfulPeers
 	return leaderPlusSuccessful >= quorum

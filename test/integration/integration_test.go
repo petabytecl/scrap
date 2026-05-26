@@ -3,19 +3,21 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	"github.com/petabytecl/scrap/internal/server"
-	"github.com/petabytecl/scrap/internal/spike"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/server"
+	"github.com/petabytecl/scrap/internal/spike"
 )
 
 func startIntegrationServer(t *testing.T, sealSize int64) (scrapv1.DocumentServiceClient, string) {
@@ -29,23 +31,23 @@ func startIntegrationServer(t *testing.T, sealSize int64) (scrapv1.DocumentServi
 	if err != nil {
 		t.Fatalf("spike.Open: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 
 	gs := grpc.NewServer()
 	server.Register(gs, s)
-	go gs.Serve(lis)
+	go func() { _ = gs.Serve(lis) }()
 	t.Cleanup(gs.GracefulStop)
 
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	return scrapv1.NewDocumentServiceClient(conn), dir
 }
@@ -100,7 +102,7 @@ func readDoc(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName s
 	var content []byte
 	for {
 		msg, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -224,7 +226,7 @@ func TestCorruptBlockDataLoss(t *testing.T) {
 	}
 	data, _ := os.ReadFile(blks[0])
 	data[100] ^= 0xFF
-	os.WriteFile(blks[0], data, 0644)
+	_ = os.WriteFile(blks[0], data, 0o600) //nolint:gosec // test intentionally corrupts a known block file
 
 	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
 		TransactionId: "tx-corrupt",
@@ -342,13 +344,13 @@ func TestRestartDurability(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 	gs := grpc.NewServer()
 	server.Register(gs, s)
-	go gs.Serve(lis)
+	go func() { _ = gs.Serve(lis) }()
 
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -359,30 +361,30 @@ func TestRestartDurability(t *testing.T) {
 	content := bytes.Repeat([]byte("durable"), 100)
 	writeDoc(t, client, "tx-durable", "persist.xml", "text/xml", content)
 
-	conn.Close()
+	_ = conn.Close()
 	gs.GracefulStop()
-	s.Close()
+	_ = s.Close()
 
 	s2, err := spike.OpenWithConfig(dir, spike.Config{BlockSealSize: sealSize})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
-	lis2, err := net.Listen("tcp", "127.0.0.1:0")
+	lis2, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
 	gs2 := grpc.NewServer()
 	server.Register(gs2, s2)
-	go gs2.Serve(lis2)
+	go func() { _ = gs2.Serve(lis2) }()
 	defer gs2.GracefulStop()
 
 	conn2, err := grpc.NewClient(lis2.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 	client2 := scrapv1.NewDocumentServiceClient(conn2)
 
 	got := readDoc(t, client2, "tx-durable", "persist.xml")

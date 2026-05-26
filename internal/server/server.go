@@ -6,12 +6,13 @@ import (
 	"errors"
 	"io"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	storeapi "github.com/petabytecl/scrap/internal/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 type documentServer struct {
@@ -51,34 +52,15 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 
 	go func() {
 		defer close(done)
-		defer pr.Close()
+		defer func() { _ = pr.Close() }()
 		writeResult, writeErr = s.store.WriteDocument(stream.Context(), txID, docName, contentType, idempotencyKey, pr)
 	}()
 
-	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			pw.CloseWithError(err)
-			<-done
-			return status.Errorf(codes.Internal, "receive chunk: %v", err)
-		}
-		chunk := msg.GetChunkData()
-		if len(chunk) > 0 {
-			if _, err := pw.Write(chunk); err != nil {
-				pw.Close()
-				<-done
-				if writeErr != nil {
-					return mapStoreError(writeErr)
-				}
-				return status.Errorf(codes.Internal, "write chunk: %v", err)
-			}
-		}
+	if recvErr := s.recvChunks(stream, pw, done, &writeErr); recvErr != nil {
+		return recvErr
 	}
 
-	pw.Close()
+	_ = pw.Close()
 	<-done
 
 	if writeErr != nil {
@@ -90,6 +72,33 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 		Size:           writeResult.Size,
 		CreatedAt:      timestamppb.New(writeResult.CreatedAt),
 	})
+}
+
+// recvChunks reads chunk messages from the stream and writes them into pw.
+// It closes pw (with error if needed) and waits on done before returning on failure.
+func (s *documentServer) recvChunks(stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], pw *io.PipeWriter, done <-chan struct{}, writeErr *error) error {
+	for {
+		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			pw.CloseWithError(err)
+			<-done
+			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+		}
+		chunk := msg.GetChunkData()
+		if len(chunk) > 0 {
+			if _, err := pw.Write(chunk); err != nil {
+				_ = pw.Close()
+				<-done
+				if *writeErr != nil {
+					return mapStoreError(*writeErr)
+				}
+				return status.Errorf(codes.Internal, "write chunk: %v", err)
+			}
+		}
+	}
 }
 
 func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocumentRequest) (*scrapv1.HeadDocumentResponse, error) {
@@ -112,7 +121,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 	if err != nil {
 		return mapStoreError(err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	if err := stream.Send(&scrapv1.ReadDocumentResponse{
 		Part: &scrapv1.ReadDocumentResponse_Meta{

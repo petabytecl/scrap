@@ -4,17 +4,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/grpc"
+
 	"github.com/petabytecl/scrap/internal/peer"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
-	"google.golang.org/grpc"
 )
 
 func main() {
@@ -27,7 +27,8 @@ func main() {
 	}
 
 	if err := run(); err != nil {
-		log.Fatalf("scrapd: %v", err)
+		fmt.Fprintf(os.Stderr, "scrapd: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -39,45 +40,11 @@ func run() error {
 	peersFlag := flag.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
 	flag.Parse()
 
-	replicas := envInt("SCRAP_REPLICAS", 0)
-	headlessSvc := os.Getenv("SCRAP_HEADLESS_SERVICE")
 	cellID := os.Getenv("SCRAP_CELL_ID")
-	peerPort := envInt("SCRAP_PEER_PORT", 9091)
-	namespace := os.Getenv("POD_NAMESPACE")
-	if namespace == "" {
-		namespace = "default"
-	}
 
-	var peers map[uint64]string
-	var raftID uint64
-
-	if *peersFlag != "" {
-		var err error
-		peers, err = scrapraft.ParsePeersFlag(*peersFlag)
-		if err != nil {
-			return fmt.Errorf("invalid --peers: %w", err)
-		}
-		hostname, _ := os.Hostname()
-		ord, err := scrapraft.ParseOrdinal(hostname)
-		if err != nil {
-			raftID = 1
-		} else {
-			raftID = scrapraft.OrdinalToRaftID(ord)
-		}
-	} else if replicas > 0 && headlessSvc != "" {
-		peers = scrapraft.BuildK8sPeers(replicas, headlessSvc, namespace, peerPort)
-		hostname, err := os.Hostname()
-		if err != nil {
-			return fmt.Errorf("hostname: %w", err)
-		}
-		ord, err := scrapraft.ParseOrdinal(hostname)
-		if err != nil {
-			return fmt.Errorf("parse ordinal from %q: %w", hostname, err)
-		}
-		raftID = scrapraft.OrdinalToRaftID(ord)
-	} else {
-		peers = map[uint64]string{1: "localhost:9091"}
-		raftID = 1
+	peers, raftID, err := resolvePeers(*peersFlag)
+	if err != nil {
+		return err
 	}
 
 	s, err := shard.Open(shard.Config{
@@ -90,9 +57,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
-	clientLis, err := net.Listen("tcp", *listenAddr)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	lc := net.ListenConfig{}
+
+	clientLis, err := lc.Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
 		return fmt.Errorf("listen client %s: %w", *listenAddr, err)
 	}
@@ -101,7 +73,7 @@ func run() error {
 	server.Register(gs, s)
 	server.RegisterHealth(gs, s)
 
-	peerLis, err := net.Listen("tcp", *peerAddr)
+	peerLis, err := lc.Listen(ctx, "tcp", *peerAddr)
 	if err != nil {
 		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
@@ -109,21 +81,57 @@ func run() error {
 	peerSrv := peer.NewServer(*dataDir + "/blocks")
 	peer.RegisterServer(peerGS, peerSrv)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	go func() { _ = peerGS.Serve(peerLis) }()
+	go func() { _ = gs.Serve(clientLis) }()
 
-	go peerGS.Serve(peerLis)
-	go gs.Serve(clientLis)
-
-	log.Printf("scrapd starting: client=%s peer=%s data-dir=%s raft-id=%d cell=%s peers=%d",
+	fmt.Fprintf(os.Stderr, "scrapd starting: client=%s peer=%s data-dir=%s raft-id=%d cell=%s peers=%d\n",
 		*listenAddr, *peerAddr, *dataDir, raftID, cellID, len(peers))
 
 	<-ctx.Done()
-	log.Printf("shutting down")
+	fmt.Fprintln(os.Stderr, "shutting down")
 	peerGS.GracefulStop()
 	gs.GracefulStop()
 
 	return nil
+}
+
+func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
+	replicas := envInt("SCRAP_REPLICAS", 0)
+	headlessSvc := os.Getenv("SCRAP_HEADLESS_SERVICE")
+	peerPort := envInt("SCRAP_PEER_PORT", 9091)
+	namespace := os.Getenv("POD_NAMESPACE")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	switch {
+	case peersFlag != "":
+		peers, err := scrapraft.ParsePeersFlag(peersFlag)
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid --peers: %w", err)
+		}
+		hostname, _ := os.Hostname()
+		ord, oErr := scrapraft.ParseOrdinal(hostname)
+		if oErr != nil {
+			return peers, 1, nil //nolint:nilerr // ordinal parse failure is expected for non-StatefulSet hostnames; fall back to raft ID 1
+		}
+		return peers, scrapraft.OrdinalToRaftID(ord), nil
+
+	case replicas > 0 && headlessSvc != "":
+		peers := scrapraft.BuildK8sPeers(replicas, headlessSvc, namespace, peerPort)
+		hostname, err := os.Hostname()
+		if err != nil {
+			return nil, 0, fmt.Errorf("hostname: %w", err)
+		}
+		ord, err := scrapraft.ParseOrdinal(hostname)
+		if err != nil {
+			return nil, 0, fmt.Errorf("parse ordinal from %q: %w", hostname, err)
+		}
+		return peers, scrapraft.OrdinalToRaftID(ord), nil
+
+	default:
+		return map[uint64]string{1: "localhost:9091"}, 1, nil
+	}
 }
 
 func envInt(key string, fallback int) int {

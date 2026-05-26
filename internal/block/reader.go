@@ -23,11 +23,11 @@ func ReadDocumentTwoPass(blkPath string, entry IndexEntry) (io.ReadCloser, error
 }
 
 func verifyPass(blkPath string, entry IndexEntry) error {
-	f, err := os.Open(blkPath)
+	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return fmt.Errorf("block: open %s: %w", blkPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only verify pass; close error is non-critical
 
 	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
 		return fmt.Errorf("block: seek: %w", err)
@@ -55,13 +55,13 @@ func verifyPass(blkPath string, entry IndexEntry) error {
 }
 
 func streamPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
-	f, err := os.Open(blkPath)
+	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: open %s for stream: %w", blkPath, err)
 	}
 
 	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("block: seek for stream: %w", err)
 	}
 
@@ -69,12 +69,14 @@ func streamPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
 	for i := range int(entry.FrameCount) {
 		_, payload, err := ReadFrame(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("block: stream frame %d: %w", i, err)
 		}
 		combined = append(combined, payload...)
 	}
 
-	f.Close()
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("block: close after stream: %w", err)
+	}
 	return io.NopCloser(bytes.NewReader(combined)), nil
 }

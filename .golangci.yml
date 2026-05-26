@@ -1,0 +1,196 @@
+version: "2"
+
+run:
+  go: "1.26"
+  timeout: 5m
+  tests: true
+
+issues:
+  max-same-issues: 20
+
+formatters:
+  enable:
+    - goimports
+    - gci
+    - gofumpt
+    - gofmt
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/petabytecl/scrap
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/petabytecl/scrap)
+    gofumpt:
+      module-path: github.com/petabytecl/scrap
+      extra-rules: true
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: any
+        - pattern: "a[b:len(a)]"
+          replacement: "a[b:]"
+
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - copyloopvar
+    - cyclop
+    - depguard
+    - durationcheck
+    - errcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - exptostd
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gocognit
+    - gocritic
+    - gomoddirectives
+    - goprintffuncname
+    - gosec
+    - govet
+    - ineffassign
+    - intrange
+    - makezero
+    - mirror
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - nolintlint
+    - nosprintfhostport
+    - perfsprint
+    - mnd
+    - predeclared
+    - revive
+    - sloglint
+    - testableexamples
+    - staticcheck
+    - testifylint
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - wrapcheck
+    - whitespace
+
+  exclusions:
+    paths:
+      - ^gen/
+      - ^internal/spike/
+    rules:
+      - path: ^internal/raft/
+        text: var-naming
+        linters:
+          - revive
+
+  settings:
+    cyclop:
+      max-complexity: 10
+      package-average: 0.0
+    depguard:
+      rules:
+        deprecated:
+          files:
+            - $all
+          allow:
+            - $gostd
+            - github.com/petabytecl/scrap
+            - github.com/cockroachdb/pebble
+            - github.com/oklog/ulid/v2
+            - go.etcd.io/etcd
+            - go.etcd.io/raft/v3
+            - go.uber.org/zap
+            - google.golang.org/genproto
+            - google.golang.org/grpc
+            - google.golang.org/protobuf
+          deny:
+            - pkg: github.com/golang/protobuf
+              desc: Use google.golang.org/protobuf instead.
+        non-test files:
+          files:
+            - "!$test"
+          deny:
+            - pkg: log$
+              desc: Use go.uber.org/zap instead.
+    exhaustive:
+      check:
+        - switch
+        - map
+      default-signifies-exhaustive: true
+    gochecksumtype:
+      default-signifies-exhaustive: false
+    gocognit:
+      min-complexity: 15
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+    mnd:
+      checks:
+        - condition
+      ignored-functions:
+        - args.Error
+        - flag.Arg
+        - flag.Duration.*
+        - flag.Float.*
+        - flag.Int.*
+        - flag.Uint.*
+        - os.Chmod
+        - os.Mkdir.*
+        - os.OpenFile
+        - os.WriteFile
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    sloglint:
+      no-global: all
+      context: scope
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1016
+        - -QF1008
+    wrapcheck:
+      extra-ignore-sigs:
+        - status.Error(
+      ignore-package-globs:
+        - context
+        - encoding/*
+        - github.com/cockroachdb/pebble
+        - github.com/petabytecl/scrap/internal/*
+        - go.etcd.io/raft/v3
+        - go.etcd.io/etcd/*
+        - google.golang.org/grpc*
+        - google.golang.org/protobuf*
+        - io
+        - os
+        - os/exec
+        - strconv

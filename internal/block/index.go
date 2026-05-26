@@ -11,9 +11,13 @@ import (
 )
 
 const (
-	idxMagic     = "SIDX"
-	idxVersion   = 1
-	idxHeaderLen = 12
+	idxMagic          = "SIDX"
+	idxVersion        = 1
+	idxHeaderLen      = 12
+	idxEntryVersion   = 0x01
+	idxMinEntryLen    = 2  // version + reserved
+	idxLenPrefixSize  = 2  // uint16 length prefix for strings
+	idxFixedFieldSize = 60 // created_at(8) + first_frame_off(8) + frame_count(4) + total_bytes(8) + sha256(32)
 )
 
 var (
@@ -39,7 +43,7 @@ type IndexWriter struct {
 // NewIndexWriter creates a CRC-protected .idx file.
 // Header: magic(4)="SIDX" + version(2) + header_len(2) + header_crc32c(4)
 func NewIndexWriter(path string) (*IndexWriter, error) {
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: create index %s: %w", path, err)
 	}
@@ -51,7 +55,7 @@ func NewIndexWriter(path string) (*IndexWriter, error) {
 	binary.LittleEndian.PutUint32(hdr[8:12], crc32.Checksum(hdr[0:8], crcTable))
 
 	if _, err := f.Write(hdr[:]); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("block: write index header: %w", err)
 	}
 
@@ -63,7 +67,7 @@ func (w *IndexWriter) Append(e IndexEntry) error {
 	payload := encodeIndexEntry(e)
 
 	var lenBuf [4]byte
-	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(payload))) //nolint:gosec // index entries are small, well under uint32 max
 	if _, err := w.f.Write(lenBuf[:]); err != nil {
 		return err
 	}
@@ -80,7 +84,7 @@ func (w *IndexWriter) Append(e IndexEntry) error {
 
 func (w *IndexWriter) Close() error {
 	if err := w.f.Sync(); err != nil {
-		w.f.Close()
+		_ = w.f.Close()
 		return err
 	}
 	return w.f.Close()
@@ -92,66 +96,85 @@ type IndexReader struct {
 }
 
 func OpenIndexReader(path string) (*IndexReader, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: open index %s: %w", path, err)
 	}
 
-	var hdr [idxHeaderLen]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("%w: read header: %v", ErrIdxCorrupt, err)
+	entries, err := readIndexEntries(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
 	}
-	if string(hdr[0:4]) != idxMagic {
-		f.Close()
-		return nil, fmt.Errorf("%w: invalid magic: %q", ErrIdxCorrupt, hdr[0:4])
-	}
-	headerCRC := binary.LittleEndian.Uint32(hdr[8:12])
-	if crc32.Checksum(hdr[0:8], crcTable) != headerCRC {
-		f.Close()
-		return nil, fmt.Errorf("%w: header CRC mismatch", ErrIdxCorrupt)
+
+	return &IndexReader{entries: entries, f: f}, nil
+}
+
+func readIndexEntries(f *os.File) ([]IndexEntry, error) {
+	if err := validateIndexHeader(f); err != nil {
+		return nil, err
 	}
 
 	var entries []IndexEntry
 	for {
-		var lenBuf [4]byte
-		if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			f.Close()
-			return nil, fmt.Errorf("%w: read entry len: %v", ErrIdxCorrupt, err)
-		}
-
-		payloadLen := binary.LittleEndian.Uint32(lenBuf[:])
-		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(f, payload); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("%w: read entry payload: %v", ErrIdxCorrupt, err)
-		}
-
-		var crcBuf [4]byte
-		if _, err := io.ReadFull(f, crcBuf[:]); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("%w: read entry CRC: %v", ErrIdxCorrupt, err)
-		}
-
-		expectedCRC := binary.LittleEndian.Uint32(crcBuf[:])
-		if crc32.Checksum(payload, crcTable) != expectedCRC {
-			f.Close()
-			return nil, fmt.Errorf("%w: entry CRC mismatch", ErrIdxCorrupt)
-		}
-
-		entry, err := decodeIndexEntry(payload)
+		entry, done, err := readNextEntry(f)
 		if err != nil {
-			f.Close()
-			return nil, fmt.Errorf("%w: decode entry: %v", ErrIdxCorrupt, err)
+			return nil, err
 		}
-
+		if done {
+			break
+		}
 		entries = append(entries, entry)
 	}
+	return entries, nil
+}
 
-	return &IndexReader{entries: entries, f: f}, nil
+func validateIndexHeader(f *os.File) error {
+	var hdr [idxHeaderLen]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return fmt.Errorf("%w: read header: %w", ErrIdxCorrupt, err)
+	}
+	if string(hdr[0:4]) != idxMagic {
+		return fmt.Errorf("%w: invalid magic: %q", ErrIdxCorrupt, hdr[0:4])
+	}
+	headerCRC := binary.LittleEndian.Uint32(hdr[8:12])
+	if crc32.Checksum(hdr[0:8], crcTable) != headerCRC {
+		return fmt.Errorf("%w: header CRC mismatch", ErrIdxCorrupt)
+	}
+	return nil
+}
+
+func readNextEntry(f *os.File) (IndexEntry, bool, error) {
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+		if errors.Is(err, io.EOF) {
+			return IndexEntry{}, true, nil
+		}
+		return IndexEntry{}, false, fmt.Errorf("%w: read entry len: %w", ErrIdxCorrupt, err)
+	}
+
+	payloadLen := binary.LittleEndian.Uint32(lenBuf[:])
+	payload := make([]byte, payloadLen)
+	if _, err := io.ReadFull(f, payload); err != nil {
+		return IndexEntry{}, false, fmt.Errorf("%w: read entry payload: %w", ErrIdxCorrupt, err)
+	}
+
+	var crcBuf [4]byte
+	if _, err := io.ReadFull(f, crcBuf[:]); err != nil {
+		return IndexEntry{}, false, fmt.Errorf("%w: read entry CRC: %w", ErrIdxCorrupt, err)
+	}
+
+	expectedCRC := binary.LittleEndian.Uint32(crcBuf[:])
+	if crc32.Checksum(payload, crcTable) != expectedCRC {
+		return IndexEntry{}, false, fmt.Errorf("%w: entry CRC mismatch", ErrIdxCorrupt)
+	}
+
+	entry, err := decodeIndexEntry(payload)
+	if err != nil {
+		return IndexEntry{}, false, fmt.Errorf("%w: decode entry: %w", ErrIdxCorrupt, err)
+	}
+
+	return entry, false, nil
 }
 
 func (r *IndexReader) Find(txID, docName string) (IndexEntry, error) {
@@ -186,33 +209,33 @@ func encodeIndexEntry(e IndexEntry) []byte {
 	size := 2 + (2 + len(txIDBytes)) + (2 + len(docNameBytes)) + (2 + len(ctBytes)) + 8 + 8 + 4 + 8 + 32
 	buf := make([]byte, 0, size)
 
-	buf = append(buf, 0x01) // version
-	buf = append(buf, 0x00) // reserved
+	buf = append(buf, idxEntryVersion) // version
+	buf = append(buf, 0x00)            // reserved
 
 	buf = appendLenPrefixed(buf, txIDBytes)
 	buf = appendLenPrefixed(buf, docNameBytes)
 	buf = appendLenPrefixed(buf, ctBytes)
 
-	var fixed [60]byte
+	var fixed [idxFixedFieldSize]byte
 	binary.LittleEndian.PutUint64(fixed[0:8], uint64(e.CreatedAt.UnixMicro()))
-	binary.LittleEndian.PutUint64(fixed[8:16], uint64(e.FirstFrameOff))
+	binary.LittleEndian.PutUint64(fixed[8:16], uint64(e.FirstFrameOff)) //nolint:gosec // frame offsets are non-negative in valid blocks
 	binary.LittleEndian.PutUint32(fixed[16:20], e.FrameCount)
-	binary.LittleEndian.PutUint64(fixed[20:28], uint64(e.TotalBytes))
-	copy(fixed[28:60], e.SHA256[:])
+	binary.LittleEndian.PutUint64(fixed[20:28], uint64(e.TotalBytes)) //nolint:gosec // total bytes are non-negative in valid blocks
+	copy(fixed[28:idxFixedFieldSize], e.SHA256[:])
 
-	buf = append(buf, fixed[:60]...)
+	buf = append(buf, fixed[:idxFixedFieldSize]...)
 	return buf
 }
 
 func decodeIndexEntry(data []byte) (IndexEntry, error) {
-	if len(data) < 2 {
-		return IndexEntry{}, fmt.Errorf("entry too short")
+	if len(data) < idxMinEntryLen {
+		return IndexEntry{}, errors.New("entry too short")
 	}
-	if data[0] != 0x01 {
+	if data[0] != idxEntryVersion {
 		return IndexEntry{}, fmt.Errorf("unknown entry version: %d", data[0])
 	}
 
-	off := 2
+	off := idxMinEntryLen
 	txID, n, err := readLenPrefixed(data[off:])
 	if err != nil {
 		return IndexEntry{}, err
@@ -231,16 +254,16 @@ func decodeIndexEntry(data []byte) (IndexEntry, error) {
 	}
 	off += n
 
-	if len(data[off:]) < 60 {
-		return IndexEntry{}, fmt.Errorf("entry fixed fields truncated")
+	if len(data[off:]) < idxFixedFieldSize {
+		return IndexEntry{}, errors.New("entry fixed fields truncated")
 	}
 
-	createdAt := time.UnixMicro(int64(binary.LittleEndian.Uint64(data[off : off+8])))
-	firstFrameOff := int64(binary.LittleEndian.Uint64(data[off+8 : off+16]))
+	createdAt := time.UnixMicro(int64(binary.LittleEndian.Uint64(data[off : off+8]))) //nolint:gosec // stored as uint64, safe round-trip for valid timestamps
+	firstFrameOff := int64(binary.LittleEndian.Uint64(data[off+8 : off+16]))          //nolint:gosec // stored as uint64, safe round-trip for valid frame offsets
 	frameCount := binary.LittleEndian.Uint32(data[off+16 : off+20])
-	totalBytes := int64(binary.LittleEndian.Uint64(data[off+20 : off+28]))
+	totalBytes := int64(binary.LittleEndian.Uint64(data[off+20 : off+28])) //nolint:gosec // stored as uint64, safe round-trip for valid byte counts
 	var sha [32]byte
-	copy(sha[:], data[off+28:off+60])
+	copy(sha[:], data[off+28:off+idxFixedFieldSize])
 
 	return IndexEntry{
 		TransactionID: txID,
@@ -255,20 +278,20 @@ func decodeIndexEntry(data []byte) (IndexEntry, error) {
 }
 
 func appendLenPrefixed(buf, data []byte) []byte {
-	var lenBuf [2]byte
-	binary.LittleEndian.PutUint16(lenBuf[:], uint16(len(data)))
+	var lenBuf [idxLenPrefixSize]byte
+	binary.LittleEndian.PutUint16(lenBuf[:], uint16(len(data))) //nolint:gosec // index string fields (txID, docName, contentType) are well under 64 KiB
 	buf = append(buf, lenBuf[:]...)
 	buf = append(buf, data...)
 	return buf
 }
 
 func readLenPrefixed(data []byte) (string, int, error) {
-	if len(data) < 2 {
-		return "", 0, fmt.Errorf("missing length prefix")
+	if len(data) < idxLenPrefixSize {
+		return "", 0, errors.New("missing length prefix")
 	}
-	n := int(binary.LittleEndian.Uint16(data[0:2]))
-	if len(data) < 2+n {
-		return "", 0, fmt.Errorf("truncated string: need %d, have %d", n, len(data)-2)
+	n := int(binary.LittleEndian.Uint16(data[0:idxLenPrefixSize]))
+	if len(data) < idxLenPrefixSize+n {
+		return "", 0, fmt.Errorf("truncated string: need %d, have %d", n, len(data)-idxLenPrefixSize)
 	}
-	return string(data[2 : 2+n]), 2 + n, nil
+	return string(data[idxLenPrefixSize : idxLenPrefixSize+n]), idxLenPrefixSize + n, nil
 }

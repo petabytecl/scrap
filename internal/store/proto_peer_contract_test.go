@@ -3,8 +3,9 @@ package store_test
 import (
 	"testing"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"google.golang.org/protobuf/proto"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
 func TestReplicateDocumentRequestOneofInit(t *testing.T) {

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -32,12 +33,12 @@ type Config struct {
 	Transport    Transport
 	TickInterval time.Duration
 
-	MaxSnapCount     uint64
-	MaxWALSize       int64
-	ElectionTick     int
-	HeartbeatTick    int
-	MaxSizePerMsg    uint64
-	MaxInflightMsgs  int
+	MaxSnapCount    uint64
+	MaxWALSize      int64
+	ElectionTick    int
+	HeartbeatTick   int
+	MaxSizePerMsg   uint64
+	MaxInflightMsgs int
 }
 
 type RaftNode struct {
@@ -52,7 +53,6 @@ type RaftNode struct {
 	snapshotIndex uint64
 
 	leaderID atomic.Uint64
-	mu       sync.RWMutex
 	readMu   sync.Mutex
 	readMap  map[string]chan uint64
 
@@ -60,15 +60,16 @@ type RaftNode struct {
 	donec chan struct{}
 }
 
+//nolint:gocognit,cyclop // initialization function validating multiple config fields and bootstrapping WAL/snapshot
 func Open(cfg Config) (*RaftNode, error) {
 	if cfg.ID == 0 {
-		return nil, fmt.Errorf("raft: node ID must be non-zero")
+		return nil, errors.New("raft: node ID must be non-zero")
 	}
 	if cfg.Apply == nil {
-		return nil, fmt.Errorf("raft: Apply function is required")
+		return nil, errors.New("raft: Apply function is required")
 	}
 	if cfg.Transport == nil {
-		return nil, fmt.Errorf("raft: Transport is required")
+		return nil, errors.New("raft: Transport is required")
 	}
 	if cfg.TickInterval == 0 {
 		cfg.TickInterval = 100 * time.Millisecond
@@ -93,7 +94,7 @@ func Open(cfg Config) (*RaftNode, error) {
 	snapDir := cfg.DataDir + "/snap"
 
 	for _, d := range []string{walDir, snapDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, 0o750); err != nil {
 			return nil, fmt.Errorf("raft: mkdir %s: %w", d, err)
 		}
 	}
@@ -152,9 +153,10 @@ func (n *RaftNode) startNode(lg *zap.Logger, walDir string) error {
 	return nil
 }
 
+//nolint:gocognit,cyclop // restart orchestrates snapshot load, WAL replay, and storage reconstruction
 func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 	snapshot, err := n.snap.Load()
-	if err != nil && err != snap.ErrNoSnapshot {
+	if err != nil && !errors.Is(err, snap.ErrNoSnapshot) {
 		return fmt.Errorf("raft: load snapshot: %w", err)
 	}
 
@@ -171,7 +173,7 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 
 	_, hardState, entries, err := w.ReadAll()
 	if err != nil {
-		w.Close()
+		_ = w.Close() // best-effort close on read failure
 		return fmt.Errorf("raft: read WAL: %w", err)
 	}
 	n.wal = w
@@ -201,13 +203,15 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 
 	cs := deriveConfState(entries, snapshot)
 	if cs != nil {
-		n.storage.ApplySnapshot(raftpb.Snapshot{
+		if err := n.storage.ApplySnapshot(raftpb.Snapshot{
 			Metadata: raftpb.SnapshotMetadata{
 				Index:     hardState.Commit,
 				Term:      hardState.Term,
 				ConfState: *cs,
 			},
-		})
+		}); err != nil {
+			return fmt.Errorf("raft: apply derived conf state: %w", err)
+		}
 	}
 
 	c := &raft.Config{
@@ -224,6 +228,7 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 	return nil
 }
 
+//nolint:gocognit,cyclop // main event loop processing ticks, ready states, and shutdown
 func (n *RaftNode) run() {
 	defer close(n.donec)
 	ticker := time.NewTicker(n.cfg.TickInterval)
@@ -277,7 +282,7 @@ func (n *RaftNode) run() {
 
 		case <-n.stopc:
 			n.node.Stop()
-			n.wal.Close()
+			_ = n.wal.Close() // best-effort close on shutdown
 			return
 		}
 	}
@@ -362,6 +367,8 @@ func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.
 			voters = appendUnique(voters, cc.NodeID)
 		case raftpb.ConfChangeRemoveNode:
 			voters = removeID(voters, cc.NodeID)
+		case raftpb.ConfChangeUpdateNode, raftpb.ConfChangeAddLearnerNode:
+			// no voter-set changes needed for updates or learner additions
 		}
 	}
 
