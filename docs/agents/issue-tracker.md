@@ -2,6 +2,9 @@
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+Current Phase 1 spike-store PRD scope is split across issues #250-#256. Those issue
+bodies are the task-level requirements source for the Phase 1 contract boundary.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.

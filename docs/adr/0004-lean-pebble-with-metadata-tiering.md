@@ -1,7 +1,7 @@
 # Lean Pebble projection with metadata tiering
 
-Pebble stores one entry per Transaction (not per Document), mapping
-`transaction_id` to `{block_ids, doc_count, completed}` (~27 bytes average).
+Pebble stores one versioned entry per Transaction (not per Document), mapping
+`transaction_id` to `{block_ids, doc_count, completed}`.
 A Transaction may span multiple Blocks when a seal triggers between Documents,
 so `block_ids` is a list. Per-Document metadata resolution uses the Block's `.idx`
 file on disk. Pebble entries are evicted after a configurable hot window (default
@@ -40,6 +40,14 @@ invisible on the ReadDocument path where block I/O (~1-15 ms) dominates.
   for recent blocks (page cache) but slower for cold blocks.
 - The `.idx` file format becomes load-bearing for reads, not just for block
   management. It must be versioned and stable.
+- In Phase 1, Pebble is the local visibility authority. If Block or `.idx` bytes
+  exist without a committed Pebble entry, the Document is invisible.
+- In Phase 2+, Raft metadata is the authority and Pebble returns to being a
+  rebuildable projection.
+- HeadDocument and FindDocuments fail closed on visible `.idx` header, entry, CRC,
+  or metadata corruption.
+- FindDocuments returns write order: ascending Block ID, then append order within
+  each `.idx`.
 - Metadata tiering adds an eviction process: after the hot window, a background
   job deletes Pebble entries for Transactions whose Blocks are confirmed uploaded
   to the Backend.

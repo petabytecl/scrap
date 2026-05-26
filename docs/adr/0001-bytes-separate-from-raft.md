@@ -1,5 +1,9 @@
 # Bytes separate from Raft
 
+This ADR governs Phase 2+ replicated storage. Phase 1 is a single-node spike-store:
+it uses the same API and binary storage contracts, but has no Raft, peer fan-out, or
+quorum ACK path.
+
 Document bytes flow peer-to-peer (leader fan-out to all followers via a separate gRPC
 peer service), not through Raft log entries. Raft carries only metadata commands
 (~330 bytes per document: identity, physical refs, whole-document SHA-256, content

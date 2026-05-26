@@ -69,7 +69,9 @@ _Avoid_: Cold storage, archive, remote storage
 
 **Pebble Projection**:
 A derived key-value store (CockroachDB's Pebble) indexing **Document** metadata for
-fast lookups. Fully rebuildable from Raft log replay + **Block** bytes. Not a source
+fast lookups. In the Phase 1 single-node spike-store, Pebble is the local visibility
+authority because Raft does not exist yet. In Phase 2+, Pebble returns to being a
+fully rebuildable projection from Raft log replay + **Block** bytes, not the source
 of truth for visibility or durability.
 _Avoid_: Index, cache, store
 
@@ -275,9 +277,10 @@ gc_cycles:        526 over ~1 GiB of writes
 These are orientation numbers only. Authoritative performance gates require pinned
 hardware with known disk class, kernel, GOMEMLIMIT, and container settings.
 
-## V1 API Shape (Starting Reference for V2 Discussion)
+## V2 API Contract (Resolved Phase 1 Boundary)
 
-V1 landed on this RPC surface. V2 should re-derive it, but this is the baseline:
+V2 keeps the DocumentService surface and deliberately excludes TransactionService from
+the Phase 1 spike-store milestone:
 
 ```
 DocumentService:
@@ -285,19 +288,52 @@ DocumentService:
   HeadDocument(HeadDocumentRequest) → HeadDocumentResponse
   ReadDocument(ReadDocumentRequest) → stream ReadDocumentResponse
   FindDocuments(FindDocumentsRequest) → FindDocumentsResponse   // transaction-scoped
-
-TransactionService:
-  CompleteTransaction(CompleteTransactionRequest) → CompleteTransactionResponse
-  GetTransaction(GetTransactionRequest) → GetTransactionResponse
 ```
 
-Document identity: `(tenant_id, transaction_id, document_name)` — all opaque strings
-validated but not parsed, trimmed, or case-folded by the gateway.
+Document identity: `(transaction_id, document_name)`.
 
-`WriteDocument` is client-streaming: first message = init metadata, rest = byte chunks.
-`ReadDocument` is server-streaming: first message = metadata + source, rest = byte chunks.
-`FindDocuments` is transaction-scoped only (not cross-tenant search).
-`CompleteTransaction` is a lifecycle marker — it does not affect document visibility.
+`tenant_id` is an optional request field reserved for future routing, federation,
+and quota features. It is validated when present, but it is not part of storage
+identity, not persisted as authoritative metadata, and not echoed as authoritative
+response state in Phase 1.
+
+`idempotency_key` is optional and validated, but is not authoritative in Phase 1.
+Duplicate `(transaction_id, document_name)` always returns `ALREADY_EXISTS`,
+regardless of idempotency key or content. Full idempotent retry semantics are deferred.
+
+`WriteDocumentRequest` uses an explicit `oneof`:
+
+- `init`: transaction/document metadata
+- `chunk_data`: raw bytes
+
+`ReadDocumentResponse` uses an explicit `oneof`:
+
+- `meta`: verified Document metadata
+- `chunk_data`: raw bytes
+
+The API exposes SHA-256 as lowercase 64-character hex. Store, Block, and Index code
+store SHA-256 as raw 32-byte digests.
+
+Boundary validation preserves exact text. The gateway must not trim, normalize, or
+case-fold identifiers.
+
+| Field | Rule |
+| --- | --- |
+| `transaction_id` | required, max 256 bytes |
+| `document_name` | required, max 512 bytes |
+| `content_type` | required, max 255 bytes |
+| `tenant_id` | optional, max 256 bytes |
+| `idempotency_key` | optional, max 256 bytes |
+
+NUL and other control characters are rejected in text fields. Zero-byte Documents are
+invalid. Max client chunk size is 1 MiB. Max Document size is 128 MiB.
+
+Store and server errors are typed and mapped centrally to gRPC status codes:
+`ALREADY_EXISTS`, `NOT_FOUND`, `INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED`, `DATA_LOSS`,
+and `UNAVAILABLE`. Substring-based error mapping is forbidden.
+
+`FindDocuments` is transaction-scoped only. Results are returned in write order:
+ascending Block ID, then append order within each `.idx`.
 
 ## V1 ADR Reasoning Summary
 
@@ -407,14 +443,18 @@ Each is the *what*; the *why* is in the V1 ADR reasoning table.
 
 ## V2 Phasing — Resolved Design Decisions
 
-Resolved through structured design session (2026-05-25). See `docs/adr/` for
-hard-to-reverse decisions with full rationale.
+Resolved through structured design sessions (2026-05-25 and 2026-05-26). See
+`docs/adr/` for hard-to-reverse decisions with full rationale.
 
 ### Scope
 
-Phase 1 is the single-node spike-store milestone: API, Store boundary, Block/Frame/.idx
-contracts, Pebble Projection shape, local read/write path, sealing, and integrity tests.
-It deliberately excludes Raft, byte replication, and quorum ACK semantics.
+Phase 1 is the single-node spike-store milestone: protobuf API, Store behavior,
+gRPC error/streaming behavior, Block/Frame/.idx formats, Pebble value encoding,
+local read/write path, sealing, resource limits, and integrity tests. Those parts
+are contract-grade. `internal/spike` is replaceable Phase 2 scaffolding.
+
+Phase 1 deliberately excludes Raft, byte replication, quorum ACK semantics, backend
+upload, TLS/auth, full idempotent retry, and repair/quarantine workflow.
 
 Phase 2 is the first V2 safety milestone: single Shard, multi-voter Raft, full
 write-through-ACK + read path. Deferred beyond that: backend upload, cell federation,
@@ -422,13 +462,27 @@ multi-tier write ACK, encryption (OpenBao).
 
 API: WriteDocument, HeadDocument, ReadDocument, FindDocuments (4 RPCs).
 
+### Phase 1 Read/Write Semantics
+
+`created_at` is assigned by the Store at Document commit time and persisted/returned
+consistently.
+
+`WriteDocumentResponse` returns only after Block bytes, `.idx` entry, and Pebble entry
+are locally durable. New `.blk`/`.idx` files require directory fsync for their entries.
+
+`ReadDocument` verifies the whole Document before sending any stream message. Corrupt
+reads send zero metadata/chunk messages and return `DATA_LOSS`. The read path is
+two-pass and bounded-memory: pass 1 verifies Frame headers, payload CRCs, sequence,
+frame count, and Document SHA-256; pass 2 streams verified bytes.
+
 ### Safety Invariants
 
 1. No acknowledged write may be lost
 2. No read may return corrupt bytes (all-or-error)
 3. No read may return an unacknowledged Document
 4. No silent data divergence between replicas
-5. Metadata is the authority for Document existence
+5. Metadata is the authority for Document existence: Pebble in Phase 1, Raft
+   metadata in Phase 2+
 
 ### Replication
 
@@ -450,15 +504,20 @@ commit. See ADR 0001.
 
 Leader-only reads for the Phase 2 safety milestone. ReadIndex from followers is a known extension.
 Client routing: smart Go client library with redirect-on-leader-change, no gateway.
-Document resolution: Pebble maps Transaction → Block ID; .idx file resolves per-Document
+Document resolution: Pebble maps Transaction → Block IDs; .idx file resolves per-Document
 metadata (offset, size, checksum). See ADR 0004.
 
 ### Pebble Projection Model
 
-Lean per-Transaction keys (Option D): Pebble stores `transaction_id` →
-`{block_ids, doc_count, completed}` (~27 bytes). A Transaction may span multiple
-Blocks when a seal triggers between Documents, so `block_ids` is a list.
+Lean per-Transaction keys (Option D): Pebble stores versioned `transaction_id` →
+`{block_ids, doc_count, completed}` values. A Transaction may span multiple Blocks
+when a seal triggers between Documents, so `block_ids` is a list.
 Per-Document resolution via .idx files.
+
+Phase 1 visibility authority is Pebble. If Block/.idx bytes exist but Pebble did not
+commit, the Document is invisible. Infrastructure write, fsync, and Pebble failures
+fail closed.
+
 Metadata tiering: Pebble holds a configurable hot window (default 6 months, ~60 GiB/shard
 at 50M tx/day). Eviction triggers: (1) entries older than the hot window (time-based),
 (2) operator-initiated on-demand eviction, (3) automatic eviction under disk pressure
@@ -475,14 +534,52 @@ transaction → block_id → .idx → bytes. Catalog granularity is a deployment
 
 Document identity: `(transaction_id, document_name)`. Transaction IDs are globally
 unique (enforced by billing services). `tenant_id` is an optional API field reserved
-for future routing, federation, and quota features — not stored in the data path.
+for future routing, federation, and quota features. It is accepted and validated,
+but ignored for storage identity and not returned as authoritative metadata.
 Shard routing: `hash(transaction_id) % 1024` → slot → Shard.
+
+### Phase 1 Resource Controls
+
+Default limits:
+
+- Max concurrent writes: 64
+- Max concurrent reads: 256
+- Block seal size: 64 MiB
+- Max client chunk: 1 MiB
+- Max Document: 128 MiB
+
+Excess read/write RPCs are rejected immediately with `RESOURCE_EXHAUSTED`.
+Size flags accept raw bytes and IEC suffixes such as `64MiB`.
 
 ### Block Format
 
-Shared Blocks (multiple Documents per Block). 64 MiB seal threshold. 64 KiB max
-Frame size. 18-byte self-describing frame headers: magic(2) + version(1) +
-flags(1) + doc_seq(4) + frame_seq(2) + payload_len(4) + crc32c(4).
+Shared Blocks (multiple Documents per Block). Default 64 MiB seal threshold.
+Seal triggers between Documents, never mid-Document. A single Document larger than
+the seal threshold completes in the current Block and then the Block seals.
+
+Block IDs are `uint64`, rendered as fixed-width lowercase hex:
+`000000000000002a.blk` and `000000000000002a.idx`. Startup scans valid Block
+filenames, allocates `max(existing_block_id) + 1`, never fills gaps, and fails on
+malformed `.blk` or `.idx` filenames. Restart always opens a new Block; existing
+Blocks are treated as closed.
+
+Block header: 40 bytes, little-endian:
+`magic(4) + version(2) + header_len(2) + shard_id(8) + block_id(8) +
+created_at_unix_micro(8) + reserved(4) + header_crc32c(4)`. `header_crc32c`
+covers bytes 0-35. Readers validate header CRC and filename/header Block ID agreement.
+
+Frame header: 32 bytes, little-endian:
+`magic(2) + version(1) + flags(1) + header_len(2) + reserved(2) + doc_seq(4) +
+frame_seq(4) + payload_len(4) + payload_crc32c(4) + reserved(4) +
+header_crc32c(4)`. `header_crc32c` covers bytes 0-27. Payload CRC uses CRC-32C
+Castagnoli.
+
+`.idx` files have a CRC-protected `SIDX` header. Each entry is framed as
+`entry_len + payload + entry_crc32c`. Entry payload includes version, reserved,
+transaction ID, document name, content type, created_at, first frame offset,
+frame count, total bytes, and raw SHA-256 digest. HeadDocument and FindDocuments
+fail closed on `.idx` CRC/header/entry corruption.
+
 Mirror layout: all replicas have identical Block files. See ADR 0003.
 Checksums: CRC-32C per Frame, SHA-256 per Document. See ADR 0002.
 
