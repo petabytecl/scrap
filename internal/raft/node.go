@@ -1,0 +1,400 @@
+package raft
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
+	"go.etcd.io/etcd/server/v3/storage/wal"
+	"go.etcd.io/etcd/server/v3/storage/wal/walpb"
+	"go.etcd.io/raft/v3"
+	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.uber.org/zap"
+)
+
+type ApplyFunc func(entries []raftpb.Entry) error
+
+type SnapshotFunc func() (data []byte, err error)
+
+type RestoreFunc func(data []byte) error
+
+type Config struct {
+	ID           uint64
+	Peers        map[uint64]string
+	DataDir      string
+	Apply        ApplyFunc
+	Snapshot     SnapshotFunc
+	Restore      RestoreFunc
+	Transport    Transport
+	TickInterval time.Duration
+
+	MaxSnapCount     uint64
+	MaxWALSize       int64
+	ElectionTick     int
+	HeartbeatTick    int
+	MaxSizePerMsg    uint64
+	MaxInflightMsgs  int
+}
+
+type RaftNode struct {
+	cfg       Config
+	node      raft.Node
+	storage   *raft.MemoryStorage
+	wal       *wal.WAL
+	snap      *snap.Snapshotter
+	transport Transport
+
+	appliedIndex  uint64
+	snapshotIndex uint64
+
+	leaderID atomic.Uint64
+	mu       sync.RWMutex
+	readMu   sync.Mutex
+	readMap  map[string]chan uint64
+
+	stopc chan struct{}
+	donec chan struct{}
+}
+
+func Open(cfg Config) (*RaftNode, error) {
+	if cfg.ID == 0 {
+		return nil, fmt.Errorf("raft: node ID must be non-zero")
+	}
+	if cfg.Apply == nil {
+		return nil, fmt.Errorf("raft: Apply function is required")
+	}
+	if cfg.Transport == nil {
+		return nil, fmt.Errorf("raft: Transport is required")
+	}
+	if cfg.TickInterval == 0 {
+		cfg.TickInterval = 100 * time.Millisecond
+	}
+	if cfg.ElectionTick == 0 {
+		cfg.ElectionTick = 10
+	}
+	if cfg.HeartbeatTick == 0 {
+		cfg.HeartbeatTick = 1
+	}
+	if cfg.MaxSizePerMsg == 0 {
+		cfg.MaxSizePerMsg = 1024 * 1024
+	}
+	if cfg.MaxInflightMsgs == 0 {
+		cfg.MaxInflightMsgs = 256
+	}
+	if cfg.MaxSnapCount == 0 {
+		cfg.MaxSnapCount = 10000
+	}
+
+	walDir := cfg.DataDir + "/wal"
+	snapDir := cfg.DataDir + "/snap"
+
+	for _, d := range []string{walDir, snapDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return nil, fmt.Errorf("raft: mkdir %s: %w", d, err)
+		}
+	}
+
+	lg := zap.NewNop()
+	snapshotter := snap.New(lg, snapDir)
+
+	walExists := wal.Exist(walDir)
+
+	n := &RaftNode{
+		cfg:       cfg,
+		snap:      snapshotter,
+		transport: cfg.Transport,
+		readMap:   make(map[string]chan uint64),
+		stopc:     make(chan struct{}),
+		donec:     make(chan struct{}),
+	}
+
+	if walExists {
+		if err := n.restartNode(lg, walDir); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := n.startNode(lg, walDir); err != nil {
+			return nil, err
+		}
+	}
+
+	go n.run()
+	return n, nil
+}
+
+func (n *RaftNode) startNode(lg *zap.Logger, walDir string) error {
+	w, err := wal.Create(lg, walDir, nil)
+	if err != nil {
+		return fmt.Errorf("raft: create WAL: %w", err)
+	}
+	n.wal = w
+
+	var peers []raft.Peer
+	for id := range n.cfg.Peers {
+		peers = append(peers, raft.Peer{ID: id})
+	}
+
+	n.storage = raft.NewMemoryStorage()
+	c := &raft.Config{
+		ID:              n.cfg.ID,
+		ElectionTick:    n.cfg.ElectionTick,
+		HeartbeatTick:   n.cfg.HeartbeatTick,
+		Storage:         n.storage,
+		MaxSizePerMsg:   n.cfg.MaxSizePerMsg,
+		MaxInflightMsgs: n.cfg.MaxInflightMsgs,
+	}
+
+	n.node = raft.StartNode(c, peers)
+	return nil
+}
+
+func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
+	snapshot, err := n.snap.Load()
+	if err != nil && err != snap.ErrNoSnapshot {
+		return fmt.Errorf("raft: load snapshot: %w", err)
+	}
+
+	var walSnap walpb.Snapshot
+	if snapshot != nil {
+		walSnap.Index = snapshot.Metadata.Index
+		walSnap.Term = snapshot.Metadata.Term
+	}
+
+	w, err := wal.Open(lg, walDir, walSnap)
+	if err != nil {
+		return fmt.Errorf("raft: open WAL: %w", err)
+	}
+
+	_, hardState, entries, err := w.ReadAll()
+	if err != nil {
+		w.Close()
+		return fmt.Errorf("raft: read WAL: %w", err)
+	}
+	n.wal = w
+
+	n.storage = raft.NewMemoryStorage()
+
+	if snapshot != nil {
+		if err := n.storage.ApplySnapshot(*snapshot); err != nil {
+			return fmt.Errorf("raft: apply snapshot to storage: %w", err)
+		}
+		n.snapshotIndex = snapshot.Metadata.Index
+		n.appliedIndex = snapshot.Metadata.Index
+
+		if n.cfg.Restore != nil {
+			if err := n.cfg.Restore(snapshot.Data); err != nil {
+				return fmt.Errorf("raft: restore snapshot: %w", err)
+			}
+		}
+	}
+
+	if err := n.storage.SetHardState(hardState); err != nil {
+		return fmt.Errorf("raft: set hard state: %w", err)
+	}
+	if err := n.storage.Append(entries); err != nil {
+		return fmt.Errorf("raft: append entries: %w", err)
+	}
+
+	cs := deriveConfState(entries, snapshot)
+	if cs != nil {
+		n.storage.ApplySnapshot(raftpb.Snapshot{
+			Metadata: raftpb.SnapshotMetadata{
+				Index:     hardState.Commit,
+				Term:      hardState.Term,
+				ConfState: *cs,
+			},
+		})
+	}
+
+	c := &raft.Config{
+		ID:              n.cfg.ID,
+		ElectionTick:    n.cfg.ElectionTick,
+		HeartbeatTick:   n.cfg.HeartbeatTick,
+		Storage:         n.storage,
+		MaxSizePerMsg:   n.cfg.MaxSizePerMsg,
+		MaxInflightMsgs: n.cfg.MaxInflightMsgs,
+		Applied:         n.appliedIndex,
+	}
+
+	n.node = raft.RestartNode(c)
+	return nil
+}
+
+func (n *RaftNode) run() {
+	defer close(n.donec)
+	ticker := time.NewTicker(n.cfg.TickInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			n.node.Tick()
+
+		case rd := <-n.node.Ready():
+			if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
+				panic(fmt.Sprintf("raft: WAL save: %v", err))
+			}
+
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
+					panic(fmt.Sprintf("raft: save snapshot: %v", err))
+				}
+				if err := n.wal.SaveSnapshot(walpb.Snapshot{
+					Index: rd.Snapshot.Metadata.Index,
+					Term:  rd.Snapshot.Metadata.Term,
+				}); err != nil {
+					panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
+				}
+				if err := n.storage.ApplySnapshot(rd.Snapshot); err != nil {
+					panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
+				}
+			}
+
+			if err := n.storage.Append(rd.Entries); err != nil {
+				panic(fmt.Sprintf("raft: storage append: %v", err))
+			}
+
+			n.transport.Send(rd.Messages)
+
+			if len(rd.CommittedEntries) > 0 {
+				if err := n.cfg.Apply(rd.CommittedEntries); err != nil {
+					panic(fmt.Sprintf("raft: apply: %v", err))
+				}
+				n.appliedIndex = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+			}
+
+			if rd.SoftState != nil {
+				n.leaderID.Store(rd.SoftState.Lead)
+			}
+
+			n.publishReadStates(rd.ReadStates)
+
+			n.node.Advance()
+
+		case <-n.stopc:
+			n.node.Stop()
+			n.wal.Close()
+			return
+		}
+	}
+}
+
+func (n *RaftNode) publishReadStates(states []raft.ReadState) {
+	n.readMu.Lock()
+	defer n.readMu.Unlock()
+
+	for _, rs := range states {
+		key := string(rs.RequestCtx)
+		if ch, ok := n.readMap[key]; ok {
+			ch <- rs.Index
+			delete(n.readMap, key)
+		}
+	}
+}
+
+func (n *RaftNode) Propose(ctx context.Context, data []byte) error {
+	return n.node.Propose(ctx, data)
+}
+
+func (n *RaftNode) ReadIndex(ctx context.Context) (uint64, error) {
+	rctx := fmt.Sprintf("ri-%d-%d", n.cfg.ID, time.Now().UnixNano())
+	ch := make(chan uint64, 1)
+
+	n.readMu.Lock()
+	n.readMap[rctx] = ch
+	n.readMu.Unlock()
+
+	if err := n.node.ReadIndex(ctx, []byte(rctx)); err != nil {
+		n.readMu.Lock()
+		delete(n.readMap, rctx)
+		n.readMu.Unlock()
+		return 0, err
+	}
+
+	select {
+	case idx := <-ch:
+		return idx, nil
+	case <-ctx.Done():
+		n.readMu.Lock()
+		delete(n.readMap, rctx)
+		n.readMu.Unlock()
+		return 0, ctx.Err()
+	}
+}
+
+func (n *RaftNode) Step(ctx context.Context, msg raftpb.Message) error {
+	return n.node.Step(ctx, msg)
+}
+
+func (n *RaftNode) IsLeader() bool {
+	return n.leaderID.Load() == n.cfg.ID
+}
+
+func (n *RaftNode) LeaderID() uint64 {
+	return n.leaderID.Load()
+}
+
+func (n *RaftNode) AppliedIndex() uint64 {
+	return atomic.LoadUint64(&n.appliedIndex)
+}
+
+func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.ConfState {
+	if snapshot != nil {
+		cs := snapshot.Metadata.ConfState
+		return &cs
+	}
+
+	var voters []uint64
+	for _, e := range entries {
+		if e.Type != raftpb.EntryConfChange {
+			continue
+		}
+		var cc raftpb.ConfChange
+		if err := cc.Unmarshal(e.Data); err != nil {
+			continue
+		}
+		switch cc.Type {
+		case raftpb.ConfChangeAddNode:
+			voters = appendUnique(voters, cc.NodeID)
+		case raftpb.ConfChangeRemoveNode:
+			voters = removeID(voters, cc.NodeID)
+		}
+	}
+
+	if len(voters) == 0 {
+		return nil
+	}
+	return &raftpb.ConfState{Voters: voters}
+}
+
+func appendUnique(ids []uint64, id uint64) []uint64 {
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
+func removeID(ids []uint64, id uint64) []uint64 {
+	result := ids[:0]
+	for _, existing := range ids {
+		if existing != id {
+			result = append(result, existing)
+		}
+	}
+	return result
+}
+
+func (n *RaftNode) Stop() {
+	select {
+	case n.stopc <- struct{}{}:
+	case <-n.donec:
+		return
+	}
+	<-n.donec
+}

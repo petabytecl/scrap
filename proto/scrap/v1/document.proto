@@ -82,3 +82,7 @@ message DocumentMeta {
   string sha256_checksum = 4;
   google.protobuf.Timestamp created_at = 5;
 }
+
+message LeaderHint {
+  string leader_addr = 1;
+}

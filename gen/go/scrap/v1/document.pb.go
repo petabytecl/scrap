@@ -758,6 +758,50 @@ func (x *DocumentMeta) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type LeaderHint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LeaderAddr    string                 `protobuf:"bytes,1,opt,name=leader_addr,json=leaderAddr,proto3" json:"leader_addr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LeaderHint) Reset() {
+	*x = LeaderHint{}
+	mi := &file_scrap_v1_document_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LeaderHint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LeaderHint) ProtoMessage() {}
+
+func (x *LeaderHint) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_document_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LeaderHint.ProtoReflect.Descriptor instead.
+func (*LeaderHint) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *LeaderHint) GetLeaderAddr() string {
+	if x != nil {
+		return x.LeaderAddr
+	}
+	return ""
+}
+
 var File_scrap_v1_document_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_document_proto_rawDesc = "" +
@@ -816,7 +860,11 @@ const file_scrap_v1_document_proto_rawDesc = "" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12'\n" +
 	"\x0fsha256_checksum\x18\x04 \x01(\tR\x0esha256Checksum\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt2\xd7\x02\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"-\n" +
+	"\n" +
+	"LeaderHint\x12\x1f\n" +
+	"\vleader_addr\x18\x01 \x01(\tR\n" +
+	"leaderAddr2\xd7\x02\n" +
 	"\x0fDocumentService\x12R\n" +
 	"\rWriteDocument\x12\x1e.scrap.v1.WriteDocumentRequest\x1a\x1f.scrap.v1.WriteDocumentResponse(\x01\x12M\n" +
 	"\fHeadDocument\x12\x1d.scrap.v1.HeadDocumentRequest\x1a\x1e.scrap.v1.HeadDocumentResponse\x12O\n" +
@@ -836,7 +884,7 @@ func file_scrap_v1_document_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_document_proto_rawDescData
 }
 
-var file_scrap_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_scrap_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_scrap_v1_document_proto_goTypes = []any{
 	(*WriteDocumentRequest)(nil),  // 0: scrap.v1.WriteDocumentRequest
 	(*WriteDocumentInit)(nil),     // 1: scrap.v1.WriteDocumentInit
@@ -849,16 +897,17 @@ var file_scrap_v1_document_proto_goTypes = []any{
 	(*FindDocumentsRequest)(nil),  // 8: scrap.v1.FindDocumentsRequest
 	(*FindDocumentsResponse)(nil), // 9: scrap.v1.FindDocumentsResponse
 	(*DocumentMeta)(nil),          // 10: scrap.v1.DocumentMeta
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*LeaderHint)(nil),            // 11: scrap.v1.LeaderHint
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_scrap_v1_document_proto_depIdxs = []int32{
 	1,  // 0: scrap.v1.WriteDocumentRequest.init:type_name -> scrap.v1.WriteDocumentInit
-	11, // 1: scrap.v1.WriteDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
-	11, // 2: scrap.v1.HeadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
+	12, // 1: scrap.v1.WriteDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
+	12, // 2: scrap.v1.HeadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
 	7,  // 3: scrap.v1.ReadDocumentResponse.meta:type_name -> scrap.v1.ReadDocumentMeta
-	11, // 4: scrap.v1.ReadDocumentMeta.created_at:type_name -> google.protobuf.Timestamp
+	12, // 4: scrap.v1.ReadDocumentMeta.created_at:type_name -> google.protobuf.Timestamp
 	10, // 5: scrap.v1.FindDocumentsResponse.documents:type_name -> scrap.v1.DocumentMeta
-	11, // 6: scrap.v1.DocumentMeta.created_at:type_name -> google.protobuf.Timestamp
+	12, // 6: scrap.v1.DocumentMeta.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 7: scrap.v1.DocumentService.WriteDocument:input_type -> scrap.v1.WriteDocumentRequest
 	3,  // 8: scrap.v1.DocumentService.HeadDocument:input_type -> scrap.v1.HeadDocumentRequest
 	5,  // 9: scrap.v1.DocumentService.ReadDocument:input_type -> scrap.v1.ReadDocumentRequest
@@ -893,7 +942,7 @@ func file_scrap_v1_document_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_document_proto_rawDesc), len(file_scrap_v1_document_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

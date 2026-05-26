@@ -173,6 +173,16 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 }
 
 func mapStoreError(err error) error {
+	var nle *storeapi.NotLeaderError
+	if errors.As(err, &nle) {
+		st, detailErr := status.New(codes.Unavailable, "not shard leader").
+			WithDetails(&scrapv1.LeaderHint{LeaderAddr: nle.LeaderAddr})
+		if detailErr != nil {
+			return status.Errorf(codes.Unavailable, "%v", err)
+		}
+		return st.Err()
+	}
+
 	switch {
 	case errors.Is(err, storeapi.ErrAlreadyExists):
 		return status.Errorf(codes.AlreadyExists, "%v", err)

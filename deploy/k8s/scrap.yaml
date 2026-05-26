@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scrap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scrap-headless
+  namespace: scrap
+spec:
+  clusterIP: None
+  selector:
+    app: scrap
+  ports:
+    - name: peer
+      port: 9091
+      targetPort: 9091
+    - name: client
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scrap
+  namespace: scrap
+spec:
+  type: ClusterIP
+  selector:
+    app: scrap
+  ports:
+    - name: client
+      port: 9090
+      targetPort: 9090
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  serviceName: scrap-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: scrap
+  template:
+    metadata:
+      labels:
+        app: scrap
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: scrapd
+          image: scrapd:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9090
+              name: client
+            - containerPort: 9091
+              name: peer
+            - containerPort: 9100
+              name: metrics
+          env:
+            - name: SCRAP_REPLICAS
+              value: "3"
+            - name: SCRAP_HEADLESS_SERVICE
+              value: "scrap-headless"
+            - name: SCRAP_CELL_ID
+              value: "kind-dev"
+            - name: SCRAP_PEER_PORT
+              value: "9091"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          args:
+            - "--data-dir=/data"
+            - "--listen-addr=:9090"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            tcpSocket:
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: scrap
+                topologyKey: kubernetes.io/hostname
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

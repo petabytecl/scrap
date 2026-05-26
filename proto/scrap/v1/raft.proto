@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+message RaftCommand {
+  oneof command {
+    CommitDocument commit_doc = 1;
+  }
+}
+
+message CommitDocument {
+  string transaction_id  = 1;
+  string document_name   = 2;
+  string content_type    = 3;
+  string idempotency_key = 4;
+  uint64 block_id        = 5;
+  uint64 first_frame_off = 6;
+  uint32 frame_count     = 7;
+  int64  total_bytes     = 8;
+  bytes  sha256          = 9;
+  int64  created_at_us   = 10;
+}
+
+message OpenlogEntry {
+  string transaction_id  = 1;
+  string document_name   = 2;
+  uint64 block_id        = 3;
+  uint64 start_offset    = 4;
+  string content_type    = 5;
+  string idempotency_key = 6;
+}

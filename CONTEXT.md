@@ -460,6 +460,17 @@ Phase 2 is the first V2 safety milestone: single Shard, multi-voter Raft, full
 write-through-ACK + read path. Deferred beyond that: backend upload, cell federation,
 multi-tier write ACK, encryption (OpenBao).
 
+Phase 2 splits into two sub-milestones:
+- **Phase 2a** (core replicated path): Raft bootstrap + apply loop, peer byte
+  replication, shard orchestrator (`store.Store` implementation), openlog, leader-only
+  reads via ReadIndex, client routing (leader hint), block transfer for recovery,
+  multi-member integration tests, Kind E2E harness.
+- **Phase 2b** (scrubbing + hardening): light scrub (Pebble checksum comparison),
+  deep scrub (block byte re-verification), ConsistencyCheck peer RPC, quarantine +
+  auto-repair, I/O budget throttling. Scrubbing detects latent divergence but does
+  not prevent it — the core path (Raft + frame checksums + apply-side idempotency)
+  prevents divergence.
+
 API: WriteDocument, HeadDocument, ReadDocument, FindDocuments (4 RPCs).
 
 ### Phase 1 Read/Write Semantics
@@ -494,16 +505,55 @@ commit. See ADR 0001.
 ### Phase 2 Write Path
 
 1. Client streams bytes to leader
-2. Leader writes to local Block + fsync
-3. Leader fans out bytes to all N-1 peers in parallel; waits for quorum-1 ACKs
-4. Leader proposes metadata to Raft; waits for quorum commit (~330 bytes)
-5. Leader applies to Pebble Projection
-6. Leader ACKs client → Document visible
+2. Leader writes openlog `.prep` file + fsync (crash-recovery intent record)
+3. Leader writes to local Block + fsync
+4. Leader fans out bytes to all N-1 peers in parallel; waits for quorum-1 ACKs
+5. Leader proposes metadata to Raft; waits for quorum commit (~330 bytes)
+6. Leader applies to Pebble Projection (apply-side conflict detection)
+7. Leader deletes `.prep` file, ACKs client → Document visible
+
+Leadership loss during write: the shard detects the term change, returns
+`ErrNotLeader` to the client, and does NOT clean up the `.prep` file or Block bytes.
+Openlog recovery handles all partial states uniformly — if no Raft commit exists for
+the `.prep` entry, the Block is truncated at the recorded start offset and the `.prep`
+is deleted.
+
+### Raft Metadata Command Format
+
+Raft log entries carry protobuf-encoded metadata commands (~330 bytes per document).
+A `RaftCommand` message wraps a `oneof command` for extensibility — Phase 2 uses
+`CommitDocument` (transaction/document identity, block ID, frame offset, frame count,
+total bytes, SHA-256, created_at, content type, idempotency key). Future commands:
+`CompleteTransaction`, tombstones, membership changes.
+
+### Apply-Side Conflict Detection
+
+Pre-proposal: optimistic check against Pebble for fast rejection of obvious duplicates.
+Apply loop (authoritative): check Pebble again before applying. If the document already
+exists, the committed entry is a deterministic no-op — don't update Pebble, reply
+`ALREADY_EXISTS` to the caller. First-writer-wins. All replicas execute the same
+deterministic apply function, producing identical Pebble state. Replay-safe: rebuilding
+Pebble from Raft log replay produces the same result. Prevents V1 lesson #2 (conflict
+checks on the apply side, not pre-batch).
+
+### Peer Byte Replication Service
+
+Separate gRPC service (`PeerService`) for inter-member byte transfer, distinct from the
+client-facing `DocumentService`. Two RPCs:
+- `ReplicateDocument` (client-streaming): hot-path write replication. Leader pushes
+  document frames to a follower during a write. Mirrors `WriteDocument`'s init + chunk
+  streaming shape. Follower writes to its local Block, verifies checksums, ACKs.
+- `TransferBlock` (server-streaming): recovery path. Transfers a sealed Block + `.idx`
+  to a new or lagging member. Used during snapshot catch-up and repair.
+
+ConsistencyCheck RPC for scrubbing is deferred to Phase 2b.
 
 ### Phase 2 Read Path
 
 Leader-only reads for the Phase 2 safety milestone. ReadIndex from followers is a known extension.
 Client routing: smart Go client library with redirect-on-leader-change, no gateway.
+Non-leader members return `UNAVAILABLE` with a `LeaderHint` gRPC status detail containing
+the current leader's address. The client extracts the hint and retries directly.
 Document resolution: Pebble maps Transaction → Block IDs; .idx file resolves per-Document
 metadata (offset, size, checksum). See ADR 0004.
 
@@ -599,12 +649,33 @@ Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
 ### Raft Operations
 
+Raft WAL and snapshots use the etcd WAL and snap libraries (`go.etcd.io/etcd/server/v3/wal`
+and `go.etcd.io/etcd/server/v3/snap`) — embedded Go libraries, no external etcd server.
+The `raft/` directory in the filesystem layout maps to these libraries' file structures.
+Raft state is separate from Pebble, preserving the "Pebble is rebuildable from Raft"
+invariant.
+
 Log truncation: two-mode heuristic (free truncation when all replicas healthy;
 size-capped at ~4 MiB when a replica is offline, then force snapshot). Always gate
 truncation on snapshot-in-progress status.
 
 Atomic batch apply: applied-index + Pebble state update in a single
 `Batch.Commit()`. Prevents V1 lesson #5 (appliedIndex vs durableLogIndex mismatch).
+
+### Openlog Lifecycle
+
+Each in-flight write creates a `{write_id}.prep` file in the openlog directory.
+`write_id` is a ULID (time-ordered, lexicographically sortable). The `.prep` file is
+a protobuf-encoded `OpenlogEntry` containing: transaction ID, document name, block ID,
+start offset in the Block, content type, and idempotency key. Size: ~200–300 bytes.
+
+Lifecycle: (1) write `.prep` + fsync file + fsync directory, (2) append document bytes
+to Block, (3) fan out to peers, (4) propose to Raft, (5) on Raft commit: delete `.prep`.
+
+Recovery on restart: scan `.prep` files in ULID order. For each: if Raft committed the
+document, delete the `.prep` (completed write). If not, truncate the Block at the
+recorded `start_offset` and delete the `.prep` (partial write). Processing in ULID order
+ensures correct handling when multiple `.prep` files target the same Block.
 
 ### Recovery
 
@@ -626,6 +697,22 @@ Two-tier scrubbing (Phase 2 safety milestone):
   entire Block, fetch from peer.
 - I/O budget: deep scrub limited to 25% of disk read bandwidth (configurable),
   pauses during high client load.
+
+### Cluster Bootstrap
+
+K8s-first auto-discovery. Members derive peer identity from StatefulSet primitives:
+
+- `hostname()` → pod ordinal (e.g. `scrapd-2` → ordinal 2)
+- Raft node ID = ordinal + 1 (Raft IDs are 1-based; ID 0 is reserved)
+- Peer list = `scrapd-{0..N-1}.<headless_service>.<namespace>.svc:<peer_port>`
+- Configuration via env vars: `SCRAP_REPLICAS`, `SCRAP_HEADLESS_SERVICE`,
+  `SCRAP_CELL_ID`, `SCRAP_PEER_PORT`
+
+Bootstrap: if WAL is empty (first boot) and ordinal is 0, bootstrap the Raft group
+with all peers. If WAL is empty and ordinal > 0, wait for the bootstrap leader to add
+this member. If WAL exists, resume from WAL state.
+
+Fallback for local dev: `--peers` flag overrides K8s DNS discovery.
 
 ### Filesystem Layout
 

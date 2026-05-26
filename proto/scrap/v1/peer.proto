@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+service PeerService {
+  rpc ReplicateDocument(stream ReplicateDocumentRequest) returns (ReplicateDocumentResponse);
+  rpc TransferBlock(TransferBlockRequest) returns (stream TransferBlockResponse);
+}
+
+message ReplicateDocumentRequest {
+  oneof part {
+    ReplicateDocumentInit init = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message ReplicateDocumentInit {
+  string transaction_id  = 1;
+  string document_name   = 2;
+  string content_type    = 3;
+  uint64 block_id        = 4;
+  uint64 start_offset    = 5;
+  uint32 frame_count     = 6;
+  int64  total_bytes     = 7;
+  bytes  sha256          = 8;
+}
+
+message ReplicateDocumentResponse {
+  bytes sha256 = 1;
+}
+
+message TransferBlockRequest {
+  uint64 shard_id = 1;
+  uint64 block_id = 2;
+}
+
+message TransferBlockResponse {
+  oneof part {
+    TransferBlockMeta meta = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message TransferBlockMeta {
+  uint64 block_id   = 1;
+  int64  block_size = 2;
+  int64  idx_size   = 3;
+}
