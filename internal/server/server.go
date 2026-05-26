@@ -51,6 +51,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 
 	go func() {
 		defer close(done)
+		defer pr.Close()
 		writeResult, writeErr = s.store.WriteDocument(stream.Context(), txID, docName, contentType, idempotencyKey, pr)
 	}()
 
@@ -69,6 +70,9 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 			if _, err := pw.Write(chunk); err != nil {
 				pw.Close()
 				<-done
+				if writeErr != nil {
+					return mapStoreError(writeErr)
+				}
 				return status.Errorf(codes.Internal, "write chunk: %v", err)
 			}
 		}
