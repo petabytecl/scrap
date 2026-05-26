@@ -27,25 +27,29 @@ import (
 )
 
 const DefaultBlockSealSize = 64 * 1024 * 1024
+const DefaultBootstrapGrace = 60 * time.Second
 
 type Config struct {
-	DataDir       string
-	ShardID       uint64
-	RaftID        uint64
-	Peers         map[uint64]string
-	BlockSealSize int64
-	TickInterval  time.Duration
+	DataDir        string
+	ShardID        uint64
+	RaftID         uint64
+	Peers          map[uint64]string
+	BlockSealSize  int64
+	TickInterval   time.Duration
+	BootstrapGrace time.Duration
 }
 
 type Shard struct {
-	dataDir       string
-	blocksDir     string
-	openlogDir    string
-	shardID       uint64
-	peers         map[uint64]string
-	idx           *index.Index
-	raft          *scrapraft.RaftNode
-	blockSealSize int64
+	dataDir        string
+	blocksDir      string
+	openlogDir     string
+	shardID        uint64
+	peers          map[uint64]string
+	idx            *index.Index
+	raft           *scrapraft.RaftNode
+	blockSealSize  int64
+	raftStartedAt  time.Time
+	bootstrapGrace time.Duration
 
 	mu          sync.Mutex
 	blockWriter *block.BlockWriter
@@ -78,6 +82,11 @@ func Open(cfg Config) (*Shard, error) {
 		sealSize = DefaultBlockSealSize
 	}
 
+	grace := cfg.BootstrapGrace
+	if grace == 0 {
+		grace = DefaultBootstrapGrace
+	}
+
 	nextID, err := scanMaxBlockID(blocksDir)
 	if err != nil {
 		_ = idx.Close() // best-effort cleanup on scan failure
@@ -85,15 +94,17 @@ func Open(cfg Config) (*Shard, error) {
 	}
 
 	s := &Shard{
-		dataDir:       cfg.DataDir,
-		blocksDir:     blocksDir,
-		openlogDir:    openlogDir,
-		shardID:       cfg.ShardID,
-		peers:         cfg.Peers,
-		idx:           idx,
-		blockSealSize: sealSize,
-		nextBlockID:   nextID,
-		proposals:     make(map[string]chan error),
+		dataDir:        cfg.DataDir,
+		blocksDir:      blocksDir,
+		openlogDir:     openlogDir,
+		shardID:        cfg.ShardID,
+		peers:          cfg.Peers,
+		idx:            idx,
+		blockSealSize:  sealSize,
+		nextBlockID:    nextID,
+		proposals:      make(map[string]chan error),
+		raftStartedAt:  time.Now(),
+		bootstrapGrace: grace,
 	}
 
 	if err := s.recoverOpenlog(); err != nil {
@@ -326,10 +337,13 @@ func (s *Shard) IsLeader() bool {
 }
 
 func (s *Shard) CheckReadiness(_ context.Context) error {
-	if s.raft.LeaderID() == 0 {
-		return errors.New("shard: no leader elected")
+	if s.raft.LeaderID() != 0 {
+		return nil
 	}
-	return nil
+	if time.Since(s.raftStartedAt) < s.bootstrapGrace {
+		return nil
+	}
+	return errors.New("shard: no leader elected")
 }
 
 func (s *Shard) requireLeader() error {

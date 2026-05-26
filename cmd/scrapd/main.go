@@ -118,7 +118,6 @@ func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
 		return peers, scrapraft.OrdinalToRaftID(ord), nil
 
 	case replicas > 0 && headlessSvc != "":
-		peers := scrapraft.BuildK8sPeers(replicas, headlessSvc, namespace, peerPort)
 		hostname, err := os.Hostname()
 		if err != nil {
 			return nil, 0, fmt.Errorf("hostname: %w", err)
@@ -127,7 +126,9 @@ func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
 		if err != nil {
 			return nil, 0, fmt.Errorf("parse ordinal from %q: %w", hostname, err)
 		}
-		return peers, scrapraft.OrdinalToRaftID(ord), nil
+		raftID := scrapraft.OrdinalToRaftID(ord)
+		selfAddr := fmt.Sprintf("scrapd-%d.%s.%s.svc:%d", ord, headlessSvc, namespace, peerPort)
+		return map[uint64]string{raftID: selfAddr}, raftID, nil
 
 	default:
 		return map[uint64]string{1: "localhost:9091"}, 1, nil
