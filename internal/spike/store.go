@@ -1,0 +1,270 @@
+package spike
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/index"
+	storeapi "github.com/petabytecl/scrap/internal/store"
+)
+
+type Store struct {
+	dataDir   string
+	blocksDir string
+	idx       *index.Index
+
+	mu          sync.Mutex
+	blockWriter *block.BlockWriter
+	idxWriter   *block.IndexWriter
+	nextBlockID atomic.Uint64
+	docs        map[string]bool // "txID\x00docName" → exists
+}
+
+func Open(dataDir string) (*Store, error) {
+	blocksDir := filepath.Join(dataDir, "blocks")
+	pebbleDir := filepath.Join(dataDir, "pebble")
+
+	for _, d := range []string{blocksDir, pebbleDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return nil, fmt.Errorf("spike: mkdir %s: %w", d, err)
+		}
+	}
+
+	idx, err := index.Open(pebbleDir)
+	if err != nil {
+		return nil, fmt.Errorf("spike: open index: %w", err)
+	}
+
+	s := &Store{
+		dataDir:   dataDir,
+		blocksDir: blocksDir,
+		idx:       idx,
+		docs:      make(map[string]bool),
+	}
+	s.nextBlockID.Store(1)
+
+	if err := s.openNewBlock(); err != nil {
+		idx.Close()
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ string, body io.Reader) (storeapi.WriteResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := txID + "\x00" + docName
+	if s.docs[key] {
+		return storeapi.WriteResult{}, fmt.Errorf("spike: document already exists: %s/%s", txID, docName)
+	}
+
+	now := time.Now()
+
+	result, err := s.blockWriter.AppendDocument(txID, docName, contentType, body)
+	if err != nil {
+		return storeapi.WriteResult{}, fmt.Errorf("spike: append document: %w", err)
+	}
+
+	if err := s.idxWriter.Append(block.IndexEntry{
+		TransactionID:  txID,
+		DocName:        docName,
+		ContentType:    contentType,
+		CreatedAt:      now,
+		FirstFrameOff:  result.FirstFrameOffset,
+		FrameCount:     result.FrameCount,
+		TotalBytes:     result.Size,
+		SHA256Checksum: result.SHA256Checksum,
+	}); err != nil {
+		return storeapi.WriteResult{}, fmt.Errorf("spike: write idx: %w", err)
+	}
+
+	blockID := s.blockWriter.BlockID()
+	existing, err := s.idx.Get(txID)
+	if err != nil {
+		if err := s.idx.Put(txID, blockID, 1, false); err != nil {
+			return storeapi.WriteResult{}, fmt.Errorf("spike: put index: %w", err)
+		}
+	} else {
+		lastBlockID := existing.BlockIDs[len(existing.BlockIDs)-1]
+		if blockID != lastBlockID {
+			if err := s.idx.AddBlockID(txID, blockID); err != nil {
+				return storeapi.WriteResult{}, fmt.Errorf("spike: add block id: %w", err)
+			}
+		}
+		if err := s.idx.IncrementDocCount(txID); err != nil {
+			return storeapi.WriteResult{}, fmt.Errorf("spike: increment doc count: %w", err)
+		}
+	}
+
+	s.docs[key] = true
+
+	return storeapi.WriteResult{
+		SHA256Checksum: result.SHA256Checksum,
+		Size:           result.Size,
+		CreatedAt:      now,
+	}, nil
+}
+
+func (s *Store) HeadDocument(_ context.Context, txID, docName string) (storeapi.DocumentMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.findDocEntry(txID, docName)
+	if err != nil {
+		return storeapi.DocumentMeta{}, err
+	}
+
+	return storeapi.DocumentMeta{
+		Name:           entry.DocName,
+		ContentType:    entry.ContentType,
+		Size:           entry.TotalBytes,
+		SHA256Checksum: entry.SHA256Checksum,
+		CreatedAt:      entry.CreatedAt,
+	}, nil
+}
+
+func (s *Store) ReadDocument(_ context.Context, txID, docName string) (io.ReadCloser, storeapi.DocumentMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.findDocEntry(txID, docName)
+	if err != nil {
+		return nil, storeapi.DocumentMeta{}, err
+	}
+
+	blkPath := s.blockPath(entry.blockID)
+	rc, err := block.ReadDocument(blkPath, entry.IndexEntry)
+	if err != nil {
+		return nil, storeapi.DocumentMeta{}, fmt.Errorf("spike: read document: %w", err)
+	}
+
+	meta := storeapi.DocumentMeta{
+		Name:           entry.DocName,
+		ContentType:    entry.ContentType,
+		Size:           entry.TotalBytes,
+		SHA256Checksum: entry.SHA256Checksum,
+		CreatedAt:      entry.CreatedAt,
+	}
+
+	return rc, meta, nil
+}
+
+func (s *Store) FindDocuments(_ context.Context, txID string) ([]storeapi.DocumentMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idxEntry, err := s.idx.Get(txID)
+	if err != nil {
+		return nil, nil
+	}
+
+	var docs []storeapi.DocumentMeta
+	for _, bid := range idxEntry.BlockIDs {
+		idxPath := s.idxPath(bid)
+		ir, err := block.OpenIndexReader(idxPath)
+		if err != nil {
+			return nil, fmt.Errorf("spike: open block index: %w", err)
+		}
+		entries := ir.FindByTransaction(txID)
+		ir.Close()
+
+		for _, e := range entries {
+			docs = append(docs, storeapi.DocumentMeta{
+				Name:           e.DocName,
+				ContentType:    e.ContentType,
+				Size:           e.TotalBytes,
+				SHA256Checksum: e.SHA256Checksum,
+				CreatedAt:      e.CreatedAt,
+			})
+		}
+	}
+
+	return docs, nil
+}
+
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var firstErr error
+	if s.idxWriter != nil {
+		if err := s.idxWriter.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if s.blockWriter != nil {
+		if err := s.blockWriter.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if err := s.idx.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+type docWithBlock struct {
+	block.IndexEntry
+	blockID uint64
+}
+
+func (s *Store) findDocEntry(txID, docName string) (docWithBlock, error) {
+	idxEntry, err := s.idx.Get(txID)
+	if err != nil {
+		return docWithBlock{}, fmt.Errorf("spike: transaction not found: %s", txID)
+	}
+
+	for _, bid := range idxEntry.BlockIDs {
+		idxPath := s.idxPath(bid)
+		ir, err := block.OpenIndexReader(idxPath)
+		if err != nil {
+			return docWithBlock{}, fmt.Errorf("spike: open block index: %w", err)
+		}
+
+		entry, err := ir.Find(txID, docName)
+		ir.Close()
+		if err == nil {
+			return docWithBlock{IndexEntry: entry, blockID: bid}, nil
+		}
+	}
+
+	return docWithBlock{}, fmt.Errorf("spike: document not found: %s/%s", txID, docName)
+}
+
+func (s *Store) openNewBlock() error {
+	id := s.nextBlockID.Add(1) - 1
+
+	blkPath := s.blockPath(id)
+	bw, err := block.NewBlockWriter(blkPath, 0, id)
+	if err != nil {
+		return fmt.Errorf("spike: new block: %w", err)
+	}
+
+	idxPath := s.idxPath(id)
+	iw, err := block.NewIndexWriter(idxPath)
+	if err != nil {
+		bw.Close()
+		return fmt.Errorf("spike: new index: %w", err)
+	}
+
+	s.blockWriter = bw
+	s.idxWriter = iw
+	return nil
+}
+
+func (s *Store) blockPath(id uint64) string {
+	return filepath.Join(s.blocksDir, fmt.Sprintf("%016x.blk", id))
+}
+
+func (s *Store) idxPath(id uint64) string {
+	return filepath.Join(s.blocksDir, fmt.Sprintf("%016x.idx", id))
+}

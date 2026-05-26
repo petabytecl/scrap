@@ -13,7 +13,8 @@ S.C.R.A.P. is a transaction-scoped document storage gateway for billing ETL work
 Billing services write and read immutable documents (XML, PDF, etc.) through a gRPC API.
 S.C.R.A.P. hides whether bytes come from local hot storage, peer replicas, or a backend
 object store (S3, GCS, Azure Blob, etc.). The corpus may reach billions of relatively small
-files. Documents are addressed by `(tenant_id, transaction_id, document_name)`.
+files. V2 Documents are addressed by `(transaction_id, document_name)`; `tenant_id`
+may appear on API requests for future routing but is not part of storage identity.
 
 This is not an S3-compatible API. It is a purpose-built gateway with strong consistency
 guarantees for the billing ETL use case.
@@ -404,15 +405,21 @@ Each is the *what*; the *why* is in the V1 ADR reasoning table.
   timing/fencing assumptions need explicit evidence first. ReadIndex protocol
   is the read freshness mechanism.
 
-## V2 First Slice — Resolved Design Decisions
+## V2 Phasing — Resolved Design Decisions
 
 Resolved through structured design session (2026-05-25). See `docs/adr/` for
 hard-to-reverse decisions with full rationale.
 
 ### Scope
 
-Single Shard, multi-voter Raft, full write-through-ACK + read path.
-Deferred: backend upload, cell federation, multi-tier write ACK, encryption (OpenBao).
+Phase 1 is the single-node spike-store milestone: API, Store boundary, Block/Frame/.idx
+contracts, Pebble Projection shape, local read/write path, sealing, and integrity tests.
+It deliberately excludes Raft, byte replication, and quorum ACK semantics.
+
+Phase 2 is the first V2 safety milestone: single Shard, multi-voter Raft, full
+write-through-ACK + read path. Deferred beyond that: backend upload, cell federation,
+multi-tier write ACK, encryption (OpenBao).
+
 API: WriteDocument, HeadDocument, ReadDocument, FindDocuments (4 RPCs).
 
 ### Safety Invariants
@@ -425,11 +432,12 @@ API: WriteDocument, HeadDocument, ReadDocument, FindDocuments (4 RPCs).
 
 ### Replication
 
-Voter-count-agnostic code. Deploy with 3 voters (dev) / 5 voters (prod).
-Byte replication: leader fan-out via separate gRPC peer service (not through Raft).
-Bytes on quorum Members before Raft metadata commit. See ADR 0001.
+Phase 1 has no replication. Phase 2 uses voter-count-agnostic code. Deploy with
+3 voters (dev) / 5 voters (prod). Byte replication: leader fan-out via separate
+gRPC peer service (not through Raft). Bytes on quorum Members before Raft metadata
+commit. See ADR 0001.
 
-### Write Path
+### Phase 2 Write Path
 
 1. Client streams bytes to leader
 2. Leader writes to local Block + fsync
@@ -438,9 +446,9 @@ Bytes on quorum Members before Raft metadata commit. See ADR 0001.
 5. Leader applies to Pebble Projection
 6. Leader ACKs client → Document visible
 
-### Read Path
+### Phase 2 Read Path
 
-Leader-only reads for first slice. ReadIndex from followers is a known extension.
+Leader-only reads for the Phase 2 safety milestone. ReadIndex from followers is a known extension.
 Client routing: smart Go client library with redirect-on-leader-change, no gateway.
 Document resolution: Pebble maps Transaction → Block ID; .idx file resolves per-Document
 metadata (offset, size, checksum). See ADR 0004.
@@ -478,7 +486,7 @@ flags(1) + doc_seq(4) + frame_seq(2) + payload_len(4) + crc32c(4).
 Mirror layout: all replicas have identical Block files. See ADR 0003.
 Checksums: CRC-32C per Frame, SHA-256 per Document. See ADR 0002.
 
-### Sharding (future, not in first slice)
+### Sharding (future, not in Phase 1)
 
 Fixed 1024 hash slots. `hash(transaction_id) % 1024` → slot → Shard.
 Shard count = deployment config (~3× node count). Placement: node labels (rack, AZ),
@@ -486,10 +494,11 @@ fail-closed when placement rules unsatisfiable.
 
 ### Data Lifecycle
 
-Phase 1 (first slice): Write ACK'd → local copies on all voters.
-Phase 2 (future): Backend upload → leader uploads sealed Blocks.
-Phase 3 (future): Partial eviction → followers evict uploaded Blocks.
-Phase 4 (future): Cold-only → all local copies evicted, Backend-only reads.
+Phase 1: single-node spike-store milestone; no replicated durability guarantee.
+Phase 2: write ACK'd → local copies on quorum voters.
+Phase 3 (future): Backend upload → leader uploads sealed Blocks.
+Phase 4 (future): Partial eviction → followers evict uploaded Blocks.
+Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
 ### Raft Operations
 
@@ -509,7 +518,7 @@ reserves ≥75% of I/O for client reads. Prevents recovery storms.
 
 ### Background Scrubbing
 
-Two-tier scrubbing (first slice):
+Two-tier scrubbing (Phase 2 safety milestone):
 - Light scrub (daily): leader proposes consistency-check via Raft, all voters
   compute Pebble state checksum at same applied index, leader compares. Mismatch
   triggers Pebble wipe + Raft replay on the divergent replica.
@@ -534,7 +543,7 @@ Two-tier scrubbing (first slice):
 └── tmp/
 ```
 
-### Open Questions (deferred beyond first slice)
+### Open Questions (deferred beyond Phase 2 safety milestone)
 
 - Cell federation model
 - Multi-tier write ACK (priority classes)
