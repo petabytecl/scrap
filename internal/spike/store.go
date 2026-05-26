@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/block"
@@ -15,19 +17,30 @@ import (
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
+const DefaultBlockSealSize = 64 * 1024 * 1024
+
+type Config struct {
+	BlockSealSize int64
+}
+
 type Store struct {
-	dataDir   string
-	blocksDir string
-	idx       *index.Index
+	dataDir       string
+	blocksDir     string
+	idx           *index.Index
+	blockSealSize int64
 
 	mu          sync.Mutex
 	blockWriter *block.BlockWriter
 	idxWriter   *block.IndexWriter
-	nextBlockID atomic.Uint64
+	nextBlockID uint64
 	docs        map[string]bool
 }
 
 func Open(dataDir string) (*Store, error) {
+	return OpenWithConfig(dataDir, Config{BlockSealSize: DefaultBlockSealSize})
+}
+
+func OpenWithConfig(dataDir string, cfg Config) (*Store, error) {
 	blocksDir := filepath.Join(dataDir, "blocks")
 	pebbleDir := filepath.Join(dataDir, "pebble")
 
@@ -42,13 +55,25 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("spike: open index: %w", err)
 	}
 
-	s := &Store{
-		dataDir:   dataDir,
-		blocksDir: blocksDir,
-		idx:       idx,
-		docs:      make(map[string]bool),
+	sealSize := cfg.BlockSealSize
+	if sealSize <= 0 {
+		sealSize = DefaultBlockSealSize
 	}
-	s.nextBlockID.Store(1)
+
+	nextID, err := scanMaxBlockID(blocksDir)
+	if err != nil {
+		idx.Close()
+		return nil, err
+	}
+
+	s := &Store{
+		dataDir:       dataDir,
+		blocksDir:     blocksDir,
+		idx:           idx,
+		blockSealSize: sealSize,
+		nextBlockID:   nextID,
+		docs:          make(map[string]bool),
+	}
 
 	if err := s.openNewBlock(); err != nil {
 		idx.Close()
@@ -65,6 +90,12 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 	key := txID + "\x00" + docName
 	if s.docs[key] {
 		return storeapi.WriteResult{}, fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, txID, docName)
+	}
+
+	if s.blockWriter.Offset() > block.BlockHeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
+		if err := s.sealAndOpenNew(); err != nil {
+			return storeapi.WriteResult{}, fmt.Errorf("spike: seal block: %w", err)
+		}
 	}
 
 	now := time.Now()
@@ -106,6 +137,12 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 	}
 
 	s.docs[key] = true
+
+	if s.blockWriter.Offset() >= s.blockSealSize {
+		if err := s.sealAndOpenNew(); err != nil {
+			return storeapi.WriteResult{}, fmt.Errorf("spike: seal after large doc: %w", err)
+		}
+	}
 
 	return storeapi.WriteResult{
 		SHA256:    result.SHA256,
@@ -240,8 +277,19 @@ func (s *Store) findDocEntry(txID, docName string) (docWithBlock, error) {
 	return docWithBlock{}, fmt.Errorf("%w: %s/%s", storeapi.ErrNotFound, txID, docName)
 }
 
+func (s *Store) sealAndOpenNew() error {
+	if err := s.idxWriter.Close(); err != nil {
+		return fmt.Errorf("spike: close idx: %w", err)
+	}
+	if err := s.blockWriter.Close(); err != nil {
+		return fmt.Errorf("spike: close block: %w", err)
+	}
+	return s.openNewBlock()
+}
+
 func (s *Store) openNewBlock() error {
-	id := s.nextBlockID.Add(1) - 1
+	id := s.nextBlockID
+	s.nextBlockID++
 
 	blkPath := s.blockPath(id)
 	bw, err := block.NewBlockWriter(blkPath, 0, id)
@@ -267,4 +315,33 @@ func (s *Store) blockPath(id uint64) string {
 
 func (s *Store) idxPath(id uint64) string {
 	return filepath.Join(s.blocksDir, fmt.Sprintf("%016x.idx", id))
+}
+
+func scanMaxBlockID(blocksDir string) (uint64, error) {
+	entries, err := os.ReadDir(blocksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 1, nil
+		}
+		return 0, fmt.Errorf("spike: read blocks dir: %w", err)
+	}
+
+	var maxID uint64
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".blk") {
+			continue
+		}
+		hexPart := strings.TrimSuffix(name, ".blk")
+		id, err := strconv.ParseUint(hexPart, 16, 64)
+		if err != nil {
+			return 0, fmt.Errorf("spike: malformed block filename: %s", name)
+		}
+		if id > maxID {
+			maxID = id
+		}
+	}
+
+	_ = sort.Search // keep import for future use
+	return maxID + 1, nil
 }

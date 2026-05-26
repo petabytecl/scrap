@@ -23,6 +23,7 @@ Thumbs.db
 /build/
 /dist/
 /tmp/
+/scrapd
 coverage.out
 test-results/
 *.coverprofile

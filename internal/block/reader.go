@@ -12,44 +12,69 @@ import (
 var ErrSHA256Mismatch = errors.New("block: SHA-256 mismatch")
 
 func ReadDocument(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
+	return ReadDocumentTwoPass(blkPath, entry)
+}
+
+func ReadDocumentTwoPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
+	if err := verifyPass(blkPath, entry); err != nil {
+		return nil, err
+	}
+	return streamPass(blkPath, entry)
+}
+
+func verifyPass(blkPath string, entry IndexEntry) error {
 	f, err := os.Open(blkPath)
 	if err != nil {
-		return nil, fmt.Errorf("block: open %s: %w", blkPath, err)
+		return fmt.Errorf("block: open %s: %w", blkPath, err)
 	}
+	defer f.Close()
 
 	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("block: seek to frame: %w", err)
+		return fmt.Errorf("block: seek: %w", err)
 	}
 
 	hasher := sha256.New()
-	var allPayloads [][]byte
-
 	for i := range int(entry.FrameCount) {
 		_, payload, err := ReadFrame(f)
 		if err != nil {
-			f.Close()
-			return nil, fmt.Errorf("block: read frame %d: %w", i, err)
+			return fmt.Errorf("block: verify frame %d: %w", i, err)
 		}
 		hasher.Write(payload)
-		allPayloads = append(allPayloads, payload)
 	}
-
-	f.Close()
 
 	var emptyDigest [32]byte
 	if entry.SHA256 != emptyDigest {
 		var gotDigest [32]byte
 		copy(gotDigest[:], hasher.Sum(nil))
 		if gotDigest != entry.SHA256 {
-			return nil, fmt.Errorf("%w: document integrity check failed", ErrSHA256Mismatch)
+			return fmt.Errorf("%w: document integrity check failed", ErrSHA256Mismatch)
 		}
 	}
 
-	var combined []byte
-	for _, p := range allPayloads {
-		combined = append(combined, p...)
+	return nil
+}
+
+func streamPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
+	f, err := os.Open(blkPath)
+	if err != nil {
+		return nil, fmt.Errorf("block: open %s for stream: %w", blkPath, err)
 	}
 
+	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("block: seek for stream: %w", err)
+	}
+
+	var combined []byte
+	for i := range int(entry.FrameCount) {
+		_, payload, err := ReadFrame(f)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("block: stream frame %d: %w", i, err)
+		}
+		combined = append(combined, payload...)
+	}
+
+	f.Close()
 	return io.NopCloser(bytes.NewReader(combined)), nil
 }
