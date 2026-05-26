@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/ulid"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -151,7 +151,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		}
 	}
 
-	writeID := ulid.Make().String()
+	writeID := ulid.New().String()
 	blockID := s.blockWriter.BlockID()
 	startOffset := s.blockWriter.Offset()
 

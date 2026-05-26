@@ -12,7 +12,6 @@ tool (
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
-	github.com/oklog/ulid/v2 v2.1.1
 	go.etcd.io/etcd/server/v3 v3.6.11
 	go.etcd.io/raft/v3 v3.6.0
 	go.uber.org/zap v1.28.0
