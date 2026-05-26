@@ -2,8 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"io"
-	"strings"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -28,10 +29,15 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 		return status.Errorf(codes.InvalidArgument, "receive init message: %v", err)
 	}
 
-	txID := first.GetTransactionId()
-	docName := first.GetDocumentName()
-	contentType := first.GetContentType()
-	idempotencyKey := first.GetIdempotencyKey()
+	init := first.GetInit()
+	if init == nil {
+		return status.Error(codes.InvalidArgument, "first message must be init")
+	}
+
+	txID := init.GetTransactionId()
+	docName := init.GetDocumentName()
+	contentType := init.GetContentType()
+	idempotencyKey := init.GetIdempotencyKey()
 
 	if txID == "" || docName == "" {
 		return status.Error(codes.InvalidArgument, "transaction_id and document_name are required")
@@ -48,14 +54,6 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 		writeResult, writeErr = s.store.WriteDocument(stream.Context(), txID, docName, contentType, idempotencyKey, pr)
 	}()
 
-	if len(first.GetChunkData()) > 0 {
-		if _, err := pw.Write(first.GetChunkData()); err != nil {
-			pw.Close()
-			<-done
-			return status.Errorf(codes.Internal, "write chunk: %v", err)
-		}
-	}
-
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
@@ -66,8 +64,9 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 			<-done
 			return status.Errorf(codes.Internal, "receive chunk: %v", err)
 		}
-		if len(msg.GetChunkData()) > 0 {
-			if _, err := pw.Write(msg.GetChunkData()); err != nil {
+		chunk := msg.GetChunkData()
+		if len(chunk) > 0 {
+			if _, err := pw.Write(chunk); err != nil {
 				pw.Close()
 				<-done
 				return status.Errorf(codes.Internal, "write chunk: %v", err)
@@ -83,7 +82,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	}
 
 	return stream.SendAndClose(&scrapv1.WriteDocumentResponse{
-		Sha256Checksum: writeResult.SHA256Checksum,
+		Sha256Checksum: hex.EncodeToString(writeResult.SHA256[:]),
 		Size:           writeResult.Size,
 		CreatedAt:      timestamppb.New(writeResult.CreatedAt),
 	})
@@ -99,7 +98,7 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 		Name:           meta.Name,
 		ContentType:    meta.ContentType,
 		Size:           meta.Size,
-		Sha256Checksum: meta.SHA256Checksum,
+		Sha256Checksum: hex.EncodeToString(meta.SHA256[:]),
 		CreatedAt:      timestamppb.New(meta.CreatedAt),
 	}, nil
 }
@@ -112,10 +111,14 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 	defer rc.Close()
 
 	if err := stream.Send(&scrapv1.ReadDocumentResponse{
-		ContentType:    meta.ContentType,
-		Size:           meta.Size,
-		Sha256Checksum: meta.SHA256Checksum,
-		CreatedAt:      timestamppb.New(meta.CreatedAt),
+		Part: &scrapv1.ReadDocumentResponse_Meta{
+			Meta: &scrapv1.ReadDocumentMeta{
+				ContentType:    meta.ContentType,
+				Size:           meta.Size,
+				Sha256Checksum: hex.EncodeToString(meta.SHA256[:]),
+				CreatedAt:      timestamppb.New(meta.CreatedAt),
+			},
+		},
 	}); err != nil {
 		return status.Errorf(codes.Internal, "send metadata: %v", err)
 	}
@@ -127,7 +130,9 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 			if err := stream.Send(&scrapv1.ReadDocumentResponse{
-				ChunkData: chunk,
+				Part: &scrapv1.ReadDocumentResponse_ChunkData{
+					ChunkData: chunk,
+				},
 			}); err != nil {
 				return status.Errorf(codes.Internal, "send chunk: %v", err)
 			}
@@ -155,7 +160,7 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 			Name:           d.Name,
 			ContentType:    d.ContentType,
 			Size:           d.Size,
-			Sha256Checksum: d.SHA256Checksum,
+			Sha256Checksum: hex.EncodeToString(d.SHA256[:]),
 			CreatedAt:      timestamppb.New(d.CreatedAt),
 		})
 	}
@@ -164,16 +169,18 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 }
 
 func mapStoreError(err error) error {
-	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "already exists"):
+	case errors.Is(err, storeapi.ErrAlreadyExists):
 		return status.Errorf(codes.AlreadyExists, "%v", err)
-	case strings.Contains(msg, "not found"):
+	case errors.Is(err, storeapi.ErrNotFound), errors.Is(err, storeapi.ErrTxNotFound):
 		return status.Errorf(codes.NotFound, "%v", err)
-	case strings.Contains(msg, "mismatch"), strings.Contains(msg, "corrupt"):
+	case errors.Is(err, storeapi.ErrInvalidArgument):
+		return status.Errorf(codes.InvalidArgument, "%v", err)
+	case errors.Is(err, storeapi.ErrResourceExhausted):
+		return status.Errorf(codes.ResourceExhausted, "%v", err)
+	case errors.Is(err, storeapi.ErrDataLoss):
 		return status.Errorf(codes.DataLoss, "%v", err)
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
 }
-

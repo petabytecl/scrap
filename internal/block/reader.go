@@ -3,16 +3,13 @@ package block
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 )
 
-var (
-	ErrSHA256Mismatch = errors.New("block: SHA-256 mismatch")
-)
+var ErrSHA256Mismatch = errors.New("block: SHA-256 mismatch")
 
 func ReadDocument(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
 	f, err := os.Open(blkPath)
@@ -40,9 +37,13 @@ func ReadDocument(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
 
 	f.Close()
 
-	gotChecksum := hex.EncodeToString(hasher.Sum(nil))
-	if entry.SHA256Checksum != "" && gotChecksum != entry.SHA256Checksum {
-		return nil, fmt.Errorf("%w: got %s, want %s", ErrSHA256Mismatch, gotChecksum, entry.SHA256Checksum)
+	var emptyDigest [32]byte
+	if entry.SHA256 != emptyDigest {
+		var gotDigest [32]byte
+		copy(gotDigest[:], hasher.Sum(nil))
+		if gotDigest != entry.SHA256 {
+			return nil, fmt.Errorf("%w: document integrity check failed", ErrSHA256Mismatch)
+		}
 	}
 
 	var combined []byte

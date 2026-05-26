@@ -23,15 +23,14 @@ const (
 )
 
 type WriteDocumentRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	TransactionId  string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
-	DocumentName   string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
-	ContentType    string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	IdempotencyKey string                 `protobuf:"bytes,4,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	ChunkData      []byte                 `protobuf:"bytes,5,opt,name=chunk_data,json=chunkData,proto3" json:"chunk_data,omitempty"`
-	TenantId       string                 `protobuf:"bytes,6,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*WriteDocumentRequest_Init
+	//	*WriteDocumentRequest_ChunkData
+	Part          isWriteDocumentRequest_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WriteDocumentRequest) Reset() {
@@ -64,42 +63,117 @@ func (*WriteDocumentRequest) Descriptor() ([]byte, []int) {
 	return file_scrap_v1_document_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *WriteDocumentRequest) GetTransactionId() string {
+func (x *WriteDocumentRequest) GetPart() isWriteDocumentRequest_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *WriteDocumentRequest) GetInit() *WriteDocumentInit {
+	if x != nil {
+		if x, ok := x.Part.(*WriteDocumentRequest_Init); ok {
+			return x.Init
+		}
+	}
+	return nil
+}
+
+func (x *WriteDocumentRequest) GetChunkData() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*WriteDocumentRequest_ChunkData); ok {
+			return x.ChunkData
+		}
+	}
+	return nil
+}
+
+type isWriteDocumentRequest_Part interface {
+	isWriteDocumentRequest_Part()
+}
+
+type WriteDocumentRequest_Init struct {
+	Init *WriteDocumentInit `protobuf:"bytes,1,opt,name=init,proto3,oneof"`
+}
+
+type WriteDocumentRequest_ChunkData struct {
+	ChunkData []byte `protobuf:"bytes,2,opt,name=chunk_data,json=chunkData,proto3,oneof"`
+}
+
+func (*WriteDocumentRequest_Init) isWriteDocumentRequest_Part() {}
+
+func (*WriteDocumentRequest_ChunkData) isWriteDocumentRequest_Part() {}
+
+type WriteDocumentInit struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TransactionId  string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	DocumentName   string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
+	ContentType    string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	IdempotencyKey string                 `protobuf:"bytes,4,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	TenantId       string                 `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *WriteDocumentInit) Reset() {
+	*x = WriteDocumentInit{}
+	mi := &file_scrap_v1_document_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WriteDocumentInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WriteDocumentInit) ProtoMessage() {}
+
+func (x *WriteDocumentInit) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_document_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WriteDocumentInit.ProtoReflect.Descriptor instead.
+func (*WriteDocumentInit) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *WriteDocumentInit) GetTransactionId() string {
 	if x != nil {
 		return x.TransactionId
 	}
 	return ""
 }
 
-func (x *WriteDocumentRequest) GetDocumentName() string {
+func (x *WriteDocumentInit) GetDocumentName() string {
 	if x != nil {
 		return x.DocumentName
 	}
 	return ""
 }
 
-func (x *WriteDocumentRequest) GetContentType() string {
+func (x *WriteDocumentInit) GetContentType() string {
 	if x != nil {
 		return x.ContentType
 	}
 	return ""
 }
 
-func (x *WriteDocumentRequest) GetIdempotencyKey() string {
+func (x *WriteDocumentInit) GetIdempotencyKey() string {
 	if x != nil {
 		return x.IdempotencyKey
 	}
 	return ""
 }
 
-func (x *WriteDocumentRequest) GetChunkData() []byte {
-	if x != nil {
-		return x.ChunkData
-	}
-	return nil
-}
-
-func (x *WriteDocumentRequest) GetTenantId() string {
+func (x *WriteDocumentInit) GetTenantId() string {
 	if x != nil {
 		return x.TenantId
 	}
@@ -117,7 +191,7 @@ type WriteDocumentResponse struct {
 
 func (x *WriteDocumentResponse) Reset() {
 	*x = WriteDocumentResponse{}
-	mi := &file_scrap_v1_document_proto_msgTypes[1]
+	mi := &file_scrap_v1_document_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -129,7 +203,7 @@ func (x *WriteDocumentResponse) String() string {
 func (*WriteDocumentResponse) ProtoMessage() {}
 
 func (x *WriteDocumentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[1]
+	mi := &file_scrap_v1_document_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -142,7 +216,7 @@ func (x *WriteDocumentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteDocumentResponse.ProtoReflect.Descriptor instead.
 func (*WriteDocumentResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{1}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *WriteDocumentResponse) GetSha256Checksum() string {
@@ -177,7 +251,7 @@ type HeadDocumentRequest struct {
 
 func (x *HeadDocumentRequest) Reset() {
 	*x = HeadDocumentRequest{}
-	mi := &file_scrap_v1_document_proto_msgTypes[2]
+	mi := &file_scrap_v1_document_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -189,7 +263,7 @@ func (x *HeadDocumentRequest) String() string {
 func (*HeadDocumentRequest) ProtoMessage() {}
 
 func (x *HeadDocumentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[2]
+	mi := &file_scrap_v1_document_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -202,7 +276,7 @@ func (x *HeadDocumentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeadDocumentRequest.ProtoReflect.Descriptor instead.
 func (*HeadDocumentRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{2}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HeadDocumentRequest) GetTransactionId() string {
@@ -239,7 +313,7 @@ type HeadDocumentResponse struct {
 
 func (x *HeadDocumentResponse) Reset() {
 	*x = HeadDocumentResponse{}
-	mi := &file_scrap_v1_document_proto_msgTypes[3]
+	mi := &file_scrap_v1_document_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -251,7 +325,7 @@ func (x *HeadDocumentResponse) String() string {
 func (*HeadDocumentResponse) ProtoMessage() {}
 
 func (x *HeadDocumentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[3]
+	mi := &file_scrap_v1_document_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -264,7 +338,7 @@ func (x *HeadDocumentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeadDocumentResponse.ProtoReflect.Descriptor instead.
 func (*HeadDocumentResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{3}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HeadDocumentResponse) GetName() string {
@@ -313,7 +387,7 @@ type ReadDocumentRequest struct {
 
 func (x *ReadDocumentRequest) Reset() {
 	*x = ReadDocumentRequest{}
-	mi := &file_scrap_v1_document_proto_msgTypes[4]
+	mi := &file_scrap_v1_document_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -325,7 +399,7 @@ func (x *ReadDocumentRequest) String() string {
 func (*ReadDocumentRequest) ProtoMessage() {}
 
 func (x *ReadDocumentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[4]
+	mi := &file_scrap_v1_document_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -338,7 +412,7 @@ func (x *ReadDocumentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDocumentRequest.ProtoReflect.Descriptor instead.
 func (*ReadDocumentRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{4}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ReadDocumentRequest) GetTransactionId() string {
@@ -363,19 +437,19 @@ func (x *ReadDocumentRequest) GetTenantId() string {
 }
 
 type ReadDocumentResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ContentType    string                 `protobuf:"bytes,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	Size           int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	Sha256Checksum string                 `protobuf:"bytes,3,opt,name=sha256_checksum,json=sha256Checksum,proto3" json:"sha256_checksum,omitempty"`
-	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	ChunkData      []byte                 `protobuf:"bytes,5,opt,name=chunk_data,json=chunkData,proto3" json:"chunk_data,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*ReadDocumentResponse_Meta
+	//	*ReadDocumentResponse_ChunkData
+	Part          isReadDocumentResponse_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReadDocumentResponse) Reset() {
 	*x = ReadDocumentResponse{}
-	mi := &file_scrap_v1_document_proto_msgTypes[5]
+	mi := &file_scrap_v1_document_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -387,7 +461,7 @@ func (x *ReadDocumentResponse) String() string {
 func (*ReadDocumentResponse) ProtoMessage() {}
 
 func (x *ReadDocumentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[5]
+	mi := &file_scrap_v1_document_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -400,40 +474,114 @@ func (x *ReadDocumentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDocumentResponse.ProtoReflect.Descriptor instead.
 func (*ReadDocumentResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{5}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *ReadDocumentResponse) GetContentType() string {
+func (x *ReadDocumentResponse) GetPart() isReadDocumentResponse_Part {
 	if x != nil {
-		return x.ContentType
+		return x.Part
 	}
-	return ""
+	return nil
 }
 
-func (x *ReadDocumentResponse) GetSize() int64 {
+func (x *ReadDocumentResponse) GetMeta() *ReadDocumentMeta {
 	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-func (x *ReadDocumentResponse) GetSha256Checksum() string {
-	if x != nil {
-		return x.Sha256Checksum
-	}
-	return ""
-}
-
-func (x *ReadDocumentResponse) GetCreatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.CreatedAt
+		if x, ok := x.Part.(*ReadDocumentResponse_Meta); ok {
+			return x.Meta
+		}
 	}
 	return nil
 }
 
 func (x *ReadDocumentResponse) GetChunkData() []byte {
 	if x != nil {
-		return x.ChunkData
+		if x, ok := x.Part.(*ReadDocumentResponse_ChunkData); ok {
+			return x.ChunkData
+		}
+	}
+	return nil
+}
+
+type isReadDocumentResponse_Part interface {
+	isReadDocumentResponse_Part()
+}
+
+type ReadDocumentResponse_Meta struct {
+	Meta *ReadDocumentMeta `protobuf:"bytes,1,opt,name=meta,proto3,oneof"`
+}
+
+type ReadDocumentResponse_ChunkData struct {
+	ChunkData []byte `protobuf:"bytes,2,opt,name=chunk_data,json=chunkData,proto3,oneof"`
+}
+
+func (*ReadDocumentResponse_Meta) isReadDocumentResponse_Part() {}
+
+func (*ReadDocumentResponse_ChunkData) isReadDocumentResponse_Part() {}
+
+type ReadDocumentMeta struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ContentType    string                 `protobuf:"bytes,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Size           int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	Sha256Checksum string                 `protobuf:"bytes,3,opt,name=sha256_checksum,json=sha256Checksum,proto3" json:"sha256_checksum,omitempty"`
+	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ReadDocumentMeta) Reset() {
+	*x = ReadDocumentMeta{}
+	mi := &file_scrap_v1_document_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadDocumentMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadDocumentMeta) ProtoMessage() {}
+
+func (x *ReadDocumentMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_document_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadDocumentMeta.ProtoReflect.Descriptor instead.
+func (*ReadDocumentMeta) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ReadDocumentMeta) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *ReadDocumentMeta) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *ReadDocumentMeta) GetSha256Checksum() string {
+	if x != nil {
+		return x.Sha256Checksum
+	}
+	return ""
+}
+
+func (x *ReadDocumentMeta) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
 	}
 	return nil
 }
@@ -448,7 +596,7 @@ type FindDocumentsRequest struct {
 
 func (x *FindDocumentsRequest) Reset() {
 	*x = FindDocumentsRequest{}
-	mi := &file_scrap_v1_document_proto_msgTypes[6]
+	mi := &file_scrap_v1_document_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -460,7 +608,7 @@ func (x *FindDocumentsRequest) String() string {
 func (*FindDocumentsRequest) ProtoMessage() {}
 
 func (x *FindDocumentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[6]
+	mi := &file_scrap_v1_document_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -473,7 +621,7 @@ func (x *FindDocumentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FindDocumentsRequest.ProtoReflect.Descriptor instead.
 func (*FindDocumentsRequest) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{6}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *FindDocumentsRequest) GetTransactionId() string {
@@ -499,7 +647,7 @@ type FindDocumentsResponse struct {
 
 func (x *FindDocumentsResponse) Reset() {
 	*x = FindDocumentsResponse{}
-	mi := &file_scrap_v1_document_proto_msgTypes[7]
+	mi := &file_scrap_v1_document_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -511,7 +659,7 @@ func (x *FindDocumentsResponse) String() string {
 func (*FindDocumentsResponse) ProtoMessage() {}
 
 func (x *FindDocumentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[7]
+	mi := &file_scrap_v1_document_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -524,7 +672,7 @@ func (x *FindDocumentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FindDocumentsResponse.ProtoReflect.Descriptor instead.
 func (*FindDocumentsResponse) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{7}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *FindDocumentsResponse) GetDocuments() []*DocumentMeta {
@@ -547,7 +695,7 @@ type DocumentMeta struct {
 
 func (x *DocumentMeta) Reset() {
 	*x = DocumentMeta{}
-	mi := &file_scrap_v1_document_proto_msgTypes[8]
+	mi := &file_scrap_v1_document_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -559,7 +707,7 @@ func (x *DocumentMeta) String() string {
 func (*DocumentMeta) ProtoMessage() {}
 
 func (x *DocumentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_document_proto_msgTypes[8]
+	mi := &file_scrap_v1_document_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -572,7 +720,7 @@ func (x *DocumentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DocumentMeta.ProtoReflect.Descriptor instead.
 func (*DocumentMeta) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_document_proto_rawDescGZIP(), []int{8}
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DocumentMeta) GetName() string {
@@ -614,15 +762,18 @@ var File_scrap_v1_document_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_document_proto_rawDesc = "" +
 	"\n" +
-	"\x17scrap/v1/document.proto\x12\bscrap.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xea\x01\n" +
-	"\x14WriteDocumentRequest\x12%\n" +
+	"\x17scrap/v1/document.proto\x12\bscrap.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"r\n" +
+	"\x14WriteDocumentRequest\x121\n" +
+	"\x04init\x18\x01 \x01(\v2\x1b.scrap.v1.WriteDocumentInitH\x00R\x04init\x12\x1f\n" +
+	"\n" +
+	"chunk_data\x18\x02 \x01(\fH\x00R\tchunkDataB\x06\n" +
+	"\x04part\"\xc8\x01\n" +
+	"\x11WriteDocumentInit\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
 	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\x12'\n" +
-	"\x0fidempotency_key\x18\x04 \x01(\tR\x0eidempotencyKey\x12\x1d\n" +
-	"\n" +
-	"chunk_data\x18\x05 \x01(\fR\tchunkData\x12\x1b\n" +
-	"\ttenant_id\x18\x06 \x01(\tR\btenantId\"\x8f\x01\n" +
+	"\x0fidempotency_key\x18\x04 \x01(\tR\x0eidempotencyKey\x12\x1b\n" +
+	"\ttenant_id\x18\x05 \x01(\tR\btenantId\"\x8f\x01\n" +
 	"\x15WriteDocumentResponse\x12'\n" +
 	"\x0fsha256_checksum\x18\x01 \x01(\tR\x0esha256Checksum\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\x129\n" +
@@ -642,15 +793,18 @@ const file_scrap_v1_document_proto_rawDesc = "" +
 	"\x13ReadDocumentRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x1b\n" +
-	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"\xd0\x01\n" +
-	"\x14ReadDocumentResponse\x12!\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"q\n" +
+	"\x14ReadDocumentResponse\x120\n" +
+	"\x04meta\x18\x01 \x01(\v2\x1a.scrap.v1.ReadDocumentMetaH\x00R\x04meta\x12\x1f\n" +
+	"\n" +
+	"chunk_data\x18\x02 \x01(\fH\x00R\tchunkDataB\x06\n" +
+	"\x04part\"\xad\x01\n" +
+	"\x10ReadDocumentMeta\x12!\n" +
 	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\x12'\n" +
 	"\x0fsha256_checksum\x18\x03 \x01(\tR\x0esha256Checksum\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1d\n" +
-	"\n" +
-	"chunk_data\x18\x05 \x01(\fR\tchunkData\"Z\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"Z\n" +
 	"\x14FindDocumentsRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"M\n" +
@@ -682,38 +836,42 @@ func file_scrap_v1_document_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_document_proto_rawDescData
 }
 
-var file_scrap_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_scrap_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_scrap_v1_document_proto_goTypes = []any{
 	(*WriteDocumentRequest)(nil),  // 0: scrap.v1.WriteDocumentRequest
-	(*WriteDocumentResponse)(nil), // 1: scrap.v1.WriteDocumentResponse
-	(*HeadDocumentRequest)(nil),   // 2: scrap.v1.HeadDocumentRequest
-	(*HeadDocumentResponse)(nil),  // 3: scrap.v1.HeadDocumentResponse
-	(*ReadDocumentRequest)(nil),   // 4: scrap.v1.ReadDocumentRequest
-	(*ReadDocumentResponse)(nil),  // 5: scrap.v1.ReadDocumentResponse
-	(*FindDocumentsRequest)(nil),  // 6: scrap.v1.FindDocumentsRequest
-	(*FindDocumentsResponse)(nil), // 7: scrap.v1.FindDocumentsResponse
-	(*DocumentMeta)(nil),          // 8: scrap.v1.DocumentMeta
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(*WriteDocumentInit)(nil),     // 1: scrap.v1.WriteDocumentInit
+	(*WriteDocumentResponse)(nil), // 2: scrap.v1.WriteDocumentResponse
+	(*HeadDocumentRequest)(nil),   // 3: scrap.v1.HeadDocumentRequest
+	(*HeadDocumentResponse)(nil),  // 4: scrap.v1.HeadDocumentResponse
+	(*ReadDocumentRequest)(nil),   // 5: scrap.v1.ReadDocumentRequest
+	(*ReadDocumentResponse)(nil),  // 6: scrap.v1.ReadDocumentResponse
+	(*ReadDocumentMeta)(nil),      // 7: scrap.v1.ReadDocumentMeta
+	(*FindDocumentsRequest)(nil),  // 8: scrap.v1.FindDocumentsRequest
+	(*FindDocumentsResponse)(nil), // 9: scrap.v1.FindDocumentsResponse
+	(*DocumentMeta)(nil),          // 10: scrap.v1.DocumentMeta
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_scrap_v1_document_proto_depIdxs = []int32{
-	9, // 0: scrap.v1.WriteDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
-	9, // 1: scrap.v1.HeadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
-	9, // 2: scrap.v1.ReadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
-	8, // 3: scrap.v1.FindDocumentsResponse.documents:type_name -> scrap.v1.DocumentMeta
-	9, // 4: scrap.v1.DocumentMeta.created_at:type_name -> google.protobuf.Timestamp
-	0, // 5: scrap.v1.DocumentService.WriteDocument:input_type -> scrap.v1.WriteDocumentRequest
-	2, // 6: scrap.v1.DocumentService.HeadDocument:input_type -> scrap.v1.HeadDocumentRequest
-	4, // 7: scrap.v1.DocumentService.ReadDocument:input_type -> scrap.v1.ReadDocumentRequest
-	6, // 8: scrap.v1.DocumentService.FindDocuments:input_type -> scrap.v1.FindDocumentsRequest
-	1, // 9: scrap.v1.DocumentService.WriteDocument:output_type -> scrap.v1.WriteDocumentResponse
-	3, // 10: scrap.v1.DocumentService.HeadDocument:output_type -> scrap.v1.HeadDocumentResponse
-	5, // 11: scrap.v1.DocumentService.ReadDocument:output_type -> scrap.v1.ReadDocumentResponse
-	7, // 12: scrap.v1.DocumentService.FindDocuments:output_type -> scrap.v1.FindDocumentsResponse
-	9, // [9:13] is the sub-list for method output_type
-	5, // [5:9] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	1,  // 0: scrap.v1.WriteDocumentRequest.init:type_name -> scrap.v1.WriteDocumentInit
+	11, // 1: scrap.v1.WriteDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
+	11, // 2: scrap.v1.HeadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 3: scrap.v1.ReadDocumentResponse.meta:type_name -> scrap.v1.ReadDocumentMeta
+	11, // 4: scrap.v1.ReadDocumentMeta.created_at:type_name -> google.protobuf.Timestamp
+	10, // 5: scrap.v1.FindDocumentsResponse.documents:type_name -> scrap.v1.DocumentMeta
+	11, // 6: scrap.v1.DocumentMeta.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 7: scrap.v1.DocumentService.WriteDocument:input_type -> scrap.v1.WriteDocumentRequest
+	3,  // 8: scrap.v1.DocumentService.HeadDocument:input_type -> scrap.v1.HeadDocumentRequest
+	5,  // 9: scrap.v1.DocumentService.ReadDocument:input_type -> scrap.v1.ReadDocumentRequest
+	8,  // 10: scrap.v1.DocumentService.FindDocuments:input_type -> scrap.v1.FindDocumentsRequest
+	2,  // 11: scrap.v1.DocumentService.WriteDocument:output_type -> scrap.v1.WriteDocumentResponse
+	4,  // 12: scrap.v1.DocumentService.HeadDocument:output_type -> scrap.v1.HeadDocumentResponse
+	6,  // 13: scrap.v1.DocumentService.ReadDocument:output_type -> scrap.v1.ReadDocumentResponse
+	9,  // 14: scrap.v1.DocumentService.FindDocuments:output_type -> scrap.v1.FindDocumentsResponse
+	11, // [11:15] is the sub-list for method output_type
+	7,  // [7:11] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_scrap_v1_document_proto_init() }
@@ -721,13 +879,21 @@ func file_scrap_v1_document_proto_init() {
 	if File_scrap_v1_document_proto != nil {
 		return
 	}
+	file_scrap_v1_document_proto_msgTypes[0].OneofWrappers = []any{
+		(*WriteDocumentRequest_Init)(nil),
+		(*WriteDocumentRequest_ChunkData)(nil),
+	}
+	file_scrap_v1_document_proto_msgTypes[6].OneofWrappers = []any{
+		(*ReadDocumentResponse_Meta)(nil),
+		(*ReadDocumentResponse_ChunkData)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_document_proto_rawDesc), len(file_scrap_v1_document_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

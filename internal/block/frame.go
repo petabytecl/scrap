@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	FrameHeaderSize = 18
+	FrameHeaderSize = 32
 	MaxFramePayload = 64 * 1024
 
 	frameMagic   = 0x5343 // "SC"
@@ -25,7 +25,8 @@ const (
 var (
 	ErrBadMagic     = errors.New("block: invalid frame magic")
 	ErrBadVersion   = errors.New("block: unsupported frame version")
-	ErrCRCMismatch  = errors.New("block: CRC-32C mismatch")
+	ErrCRCMismatch  = errors.New("block: payload CRC-32C mismatch")
+	ErrHeaderCRC    = errors.New("block: header CRC-32C mismatch")
 	ErrTruncated    = errors.New("block: truncated frame")
 	ErrPayloadLimit = errors.New("block: payload exceeds 64 KiB")
 
@@ -33,13 +34,18 @@ var (
 )
 
 type FrameHeader struct {
-	DocSeq   uint32
-	FrameSeq uint16
-	Flags    byte
+	Flags      byte
+	DocSeq     uint32
+	FrameSeq   uint32
+	PayloadLen uint32
+	PayloadCRC uint32
 }
 
-// WriteFrame writes a frame header + payload to w.
-// Layout (18 bytes): magic(2) + version(1) + flags(1) + doc_seq(4) + frame_seq(2) + payload_len(4) + crc32c(4)
+// WriteFrame writes a 32-byte frame header + payload.
+// Layout: magic(2) + version(1) + flags(1) + header_len(2) + reserved(2) +
+//
+//	doc_seq(4) + frame_seq(4) + payload_len(4) + payload_crc32c(4) +
+//	reserved(4) + header_crc32c(4)
 func WriteFrame(w io.Writer, hdr FrameHeader, payload []byte) error {
 	if len(payload) > MaxFramePayload {
 		return ErrPayloadLimit
@@ -49,10 +55,14 @@ func WriteFrame(w io.Writer, hdr FrameHeader, payload []byte) error {
 	binary.LittleEndian.PutUint16(buf[0:2], frameMagic)
 	buf[2] = frameVersion
 	buf[3] = hdr.Flags
-	binary.LittleEndian.PutUint32(buf[4:8], hdr.DocSeq)
-	binary.LittleEndian.PutUint16(buf[8:10], hdr.FrameSeq)
-	binary.LittleEndian.PutUint32(buf[10:14], uint32(len(payload)))
-	binary.LittleEndian.PutUint32(buf[14:18], crc32.Checksum(payload, crcTable))
+	binary.LittleEndian.PutUint16(buf[4:6], FrameHeaderSize)
+	// buf[6:8] reserved
+	binary.LittleEndian.PutUint32(buf[8:12], hdr.DocSeq)
+	binary.LittleEndian.PutUint32(buf[12:16], hdr.FrameSeq)
+	binary.LittleEndian.PutUint32(buf[16:20], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(buf[20:24], crc32.Checksum(payload, crcTable))
+	// buf[24:28] reserved
+	binary.LittleEndian.PutUint32(buf[28:32], crc32.Checksum(buf[0:28], crcTable))
 
 	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("block: write frame header: %w", err)
@@ -65,7 +75,7 @@ func WriteFrame(w io.Writer, hdr FrameHeader, payload []byte) error {
 	return nil
 }
 
-// ReadFrame reads a single frame from r, verifying magic, version, and CRC-32C.
+// ReadFrame reads a 32-byte frame header + payload, verifying both header and payload CRC.
 func ReadFrame(r io.Reader) (FrameHeader, []byte, error) {
 	var buf [FrameHeaderSize]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
@@ -73,6 +83,11 @@ func ReadFrame(r io.Reader) (FrameHeader, []byte, error) {
 			return FrameHeader{}, nil, ErrTruncated
 		}
 		return FrameHeader{}, nil, fmt.Errorf("block: read frame header: %w", err)
+	}
+
+	headerCRC := binary.LittleEndian.Uint32(buf[28:32])
+	if crc32.Checksum(buf[0:28], crcTable) != headerCRC {
+		return FrameHeader{}, nil, ErrHeaderCRC
 	}
 
 	magic := binary.LittleEndian.Uint16(buf[0:2])
@@ -87,12 +102,15 @@ func ReadFrame(r io.Reader) (FrameHeader, []byte, error) {
 
 	hdr := FrameHeader{
 		Flags:    buf[3],
-		DocSeq:   binary.LittleEndian.Uint32(buf[4:8]),
-		FrameSeq: binary.LittleEndian.Uint16(buf[8:10]),
+		DocSeq:   binary.LittleEndian.Uint32(buf[8:12]),
+		FrameSeq: binary.LittleEndian.Uint32(buf[12:16]),
 	}
 
-	payloadLen := binary.LittleEndian.Uint32(buf[10:14])
-	expectedCRC := binary.LittleEndian.Uint32(buf[14:18])
+	payloadLen := binary.LittleEndian.Uint32(buf[16:20])
+	payloadCRC := binary.LittleEndian.Uint32(buf[20:24])
+
+	hdr.PayloadLen = payloadLen
+	hdr.PayloadCRC = payloadCRC
 
 	payload := make([]byte, payloadLen)
 	if payloadLen > 0 {
@@ -104,7 +122,7 @@ func ReadFrame(r io.Reader) (FrameHeader, []byte, error) {
 		}
 	}
 
-	if crc32.Checksum(payload, crcTable) != expectedCRC {
+	if crc32.Checksum(payload, crcTable) != payloadCRC {
 		return FrameHeader{}, nil, ErrCRCMismatch
 	}
 

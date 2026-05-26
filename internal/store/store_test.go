@@ -38,12 +38,12 @@ func TestStoreInterfaceCompliance(t *testing.T) {
 
 func TestWriteResultFields(t *testing.T) {
 	r := store.WriteResult{
-		SHA256Checksum: "abc123",
-		Size:           1024,
-		CreatedAt:      time.Now(),
+		SHA256:    [32]byte{0xAA},
+		Size:      1024,
+		CreatedAt: time.Now(),
 	}
-	if r.SHA256Checksum == "" {
-		t.Fatal("SHA256Checksum should be set")
+	if r.SHA256 == [32]byte{} {
+		t.Fatal("SHA256 should be set")
 	}
 	if r.Size != 1024 {
 		t.Fatal("Size should be 1024")
@@ -55,11 +55,11 @@ func TestWriteResultFields(t *testing.T) {
 
 func TestDocumentMetaFields(t *testing.T) {
 	m := store.DocumentMeta{
-		Name:           "invoice.xml",
-		ContentType:    "application/xml",
-		Size:           2048,
-		SHA256Checksum: "def456",
-		CreatedAt:      time.Now(),
+		Name:        "invoice.xml",
+		ContentType: "application/xml",
+		Size:        2048,
+		SHA256:      [32]byte{0xBB},
+		CreatedAt:   time.Now(),
 	}
 	if m.Name == "" {
 		t.Fatal("Name should be set")
@@ -70,8 +70,8 @@ func TestDocumentMetaFields(t *testing.T) {
 	if m.Size != 2048 {
 		t.Fatal("Size should be 2048")
 	}
-	if m.SHA256Checksum == "" {
-		t.Fatal("SHA256Checksum should be set")
+	if m.SHA256 == [32]byte{} {
+		t.Fatal("SHA256 should be set")
 	}
 	if m.CreatedAt.IsZero() {
 		t.Fatal("CreatedAt should be set")

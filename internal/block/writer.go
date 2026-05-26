@@ -3,19 +3,19 @@ package block
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"time"
 )
 
-const BlockHeaderSize = 32
+const BlockHeaderSize = 40
 
 type AppendResult struct {
-	SHA256Checksum   string
+	SHA256           [32]byte
 	Size             int64
-	FrameCount       uint16
+	FrameCount       uint32
 	FirstFrameOffset int64
 }
 
@@ -30,6 +30,10 @@ type BlockWriter struct {
 	closed   bool
 }
 
+// NewBlockWriter creates a new block file with a 40-byte CRC-protected header.
+// Layout: magic(4)="SCRP" + version(2) + header_len(2) + shard_id(8) + block_id(8) +
+//
+//	created_at_unix_micro(8) + reserved(4) + header_crc32c(4)
 func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) {
 	f, err := os.Create(path)
 	if err != nil {
@@ -39,9 +43,12 @@ func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) 
 	var hdr [BlockHeaderSize]byte
 	copy(hdr[0:4], "SCRP")
 	binary.LittleEndian.PutUint16(hdr[4:6], 1)
-	binary.LittleEndian.PutUint64(hdr[6:14], shardID)
-	binary.LittleEndian.PutUint64(hdr[14:22], blockID)
-	binary.LittleEndian.PutUint64(hdr[22:30], uint64(time.Now().UnixMicro()))
+	binary.LittleEndian.PutUint16(hdr[6:8], BlockHeaderSize)
+	binary.LittleEndian.PutUint64(hdr[8:16], shardID)
+	binary.LittleEndian.PutUint64(hdr[16:24], blockID)
+	binary.LittleEndian.PutUint64(hdr[24:32], uint64(time.Now().UnixMicro()))
+	// hdr[32:36] reserved
+	binary.LittleEndian.PutUint32(hdr[36:40], crc32.Checksum(hdr[0:36], crcTable))
 
 	if _, err := f.Write(hdr[:]); err != nil {
 		f.Close()
@@ -65,7 +72,7 @@ func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.
 	firstOffset := w.offset
 	hasher := sha256.New()
 	buf := make([]byte, MaxFramePayload)
-	var frameSeq uint16
+	var frameSeq uint32
 	var totalSize int64
 
 	for {
@@ -111,8 +118,11 @@ func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.
 	w.docSeq++
 	w.docCount++
 
+	var digest [32]byte
+	copy(digest[:], hasher.Sum(nil))
+
 	return AppendResult{
-		SHA256Checksum:   hex.EncodeToString(hasher.Sum(nil)),
+		SHA256:           digest,
 		Size:             totalSize,
 		FrameCount:       frameSeq,
 		FirstFrameOffset: firstOffset,

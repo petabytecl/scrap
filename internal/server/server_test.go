@@ -55,21 +55,24 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	}
 
 	if err := stream.Send(&scrapv1.WriteDocumentRequest{
-		TransactionId: "tx-grpc-001",
-		DocumentName:  "test.xml",
-		ContentType:   "text/xml",
+		Part: &scrapv1.WriteDocumentRequest_Init{
+			Init: &scrapv1.WriteDocumentInit{
+				TransactionId: "tx-grpc-001",
+				DocumentName:  "test.xml",
+				ContentType:   "text/xml",
+			},
+		},
 	}); err != nil {
 		t.Fatalf("Send init: %v", err)
 	}
 
 	chunkSize := 1024
 	for i := 0; i < len(content); i += chunkSize {
-		end := i + chunkSize
-		if end > len(content) {
-			end = len(content)
-		}
+		end := min(i+chunkSize, len(content))
 		if err := stream.Send(&scrapv1.WriteDocumentRequest{
-			ChunkData: content[i:end],
+			Part: &scrapv1.WriteDocumentRequest_ChunkData{
+				ChunkData: content[i:end],
+			},
 		}); err != nil {
 			t.Fatalf("Send chunk: %v", err)
 		}
@@ -83,6 +86,9 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	if resp.GetSha256Checksum() == "" {
 		t.Fatal("checksum should not be empty")
 	}
+	if len(resp.GetSha256Checksum()) != 64 {
+		t.Fatalf("checksum should be 64 hex chars, got %d", len(resp.GetSha256Checksum()))
+	}
 	if resp.GetSize() != int64(len(content)) {
 		t.Fatalf("size: got %d, want %d", resp.GetSize(), len(content))
 	}
@@ -93,6 +99,21 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("ReadDocument: %v", err)
+	}
+
+	firstMsg, err := readStream.Recv()
+	if err != nil {
+		t.Fatalf("Recv first: %v", err)
+	}
+	meta := firstMsg.GetMeta()
+	if meta == nil {
+		t.Fatal("first message should be meta")
+	}
+	if meta.GetContentType() != "text/xml" {
+		t.Fatalf("ContentType: got %q", meta.GetContentType())
+	}
+	if len(meta.GetSha256Checksum()) != 64 {
+		t.Fatalf("meta checksum should be 64 hex chars, got %d", len(meta.GetSha256Checksum()))
 	}
 
 	var readContent []byte

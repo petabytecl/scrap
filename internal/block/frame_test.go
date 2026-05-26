@@ -69,43 +69,29 @@ func TestFrameCorruptPayload(t *testing.T) {
 	payload := []byte("valid data")
 
 	var buf bytes.Buffer
-	err := block.WriteFrame(&buf, block.FrameHeader{
-		DocSeq:   0,
-		FrameSeq: 0,
-		Flags:    block.FlagSingleFrame,
-	}, payload)
-	if err != nil {
-		t.Fatalf("WriteFrame: %v", err)
-	}
+	_ = block.WriteFrame(&buf, block.FrameHeader{Flags: block.FlagSingleFrame}, payload)
 
 	data := buf.Bytes()
-	data[block.FrameHeaderSize+2] ^= 0xFF // flip a bit in payload
+	data[block.FrameHeaderSize+2] ^= 0xFF
 
-	_, _, err = block.ReadFrame(bytes.NewReader(data))
+	_, _, err := block.ReadFrame(bytes.NewReader(data))
 	if err == nil {
 		t.Fatal("expected CRC error on corrupt payload")
 	}
 }
 
-func TestFrameCorruptHeader(t *testing.T) {
+func TestFrameCorruptHeaderCRC(t *testing.T) {
 	payload := []byte("some bytes")
 
 	var buf bytes.Buffer
-	err := block.WriteFrame(&buf, block.FrameHeader{
-		DocSeq:   0,
-		FrameSeq: 0,
-		Flags:    block.FlagSingleFrame,
-	}, payload)
-	if err != nil {
-		t.Fatalf("WriteFrame: %v", err)
-	}
+	_ = block.WriteFrame(&buf, block.FrameHeader{Flags: block.FlagSingleFrame}, payload)
 
 	data := buf.Bytes()
-	data[0] = 0x00 // corrupt magic byte
+	data[3] ^= 0xFF // corrupt flags byte in header
 
-	_, _, err = block.ReadFrame(bytes.NewReader(data))
+	_, _, err := block.ReadFrame(bytes.NewReader(data))
 	if err == nil {
-		t.Fatal("expected error on corrupt magic")
+		t.Fatal("expected header CRC error")
 	}
 }
 
@@ -113,17 +99,10 @@ func TestFrameTruncated(t *testing.T) {
 	payload := []byte("truncated")
 
 	var buf bytes.Buffer
-	err := block.WriteFrame(&buf, block.FrameHeader{
-		DocSeq:   0,
-		FrameSeq: 0,
-		Flags:    block.FlagSingleFrame,
-	}, payload)
-	if err != nil {
-		t.Fatalf("WriteFrame: %v", err)
-	}
+	_ = block.WriteFrame(&buf, block.FrameHeader{Flags: block.FlagSingleFrame}, payload)
 
 	truncated := buf.Bytes()[:block.FrameHeaderSize+3]
-	_, _, err = block.ReadFrame(bytes.NewReader(truncated))
+	_, _, err := block.ReadFrame(bytes.NewReader(truncated))
 	if err == nil {
 		t.Fatal("expected error on truncated frame")
 	}
@@ -131,11 +110,7 @@ func TestFrameTruncated(t *testing.T) {
 
 func TestFrameEmptyPayload(t *testing.T) {
 	var buf bytes.Buffer
-	err := block.WriteFrame(&buf, block.FrameHeader{
-		DocSeq:   0,
-		FrameSeq: 0,
-		Flags:    block.FlagSingleFrame,
-	}, []byte{})
+	err := block.WriteFrame(&buf, block.FrameHeader{Flags: block.FlagSingleFrame}, []byte{})
 	if err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}
@@ -150,26 +125,22 @@ func TestFrameEmptyPayload(t *testing.T) {
 }
 
 func TestFrameHeaderSize(t *testing.T) {
-	if block.FrameHeaderSize != 18 {
-		t.Fatalf("FrameHeaderSize: got %d, want 18", block.FrameHeaderSize)
+	if block.FrameHeaderSize != 32 {
+		t.Fatalf("FrameHeaderSize: got %d, want 32", block.FrameHeaderSize)
 	}
 }
 
-func TestFrameCRC32CIsHardwareAccelerated(t *testing.T) {
+func TestFrameCRC32CCastagnoli(t *testing.T) {
 	tab := crc32.MakeTable(crc32.Castagnoli)
 	data := []byte("test crc")
 	want := crc32.Checksum(data, tab)
 
 	var buf bytes.Buffer
-	_ = block.WriteFrame(&buf, block.FrameHeader{
-		DocSeq:   0,
-		FrameSeq: 0,
-		Flags:    block.FlagSingleFrame,
-	}, data)
+	_ = block.WriteFrame(&buf, block.FrameHeader{Flags: block.FlagSingleFrame}, data)
 
 	raw := buf.Bytes()
-	gotCRC := binary.LittleEndian.Uint32(raw[14:18])
+	gotCRC := binary.LittleEndian.Uint32(raw[20:24])
 	if gotCRC != want {
-		t.Fatalf("CRC-32C mismatch: got %08x, want %08x", gotCRC, want)
+		t.Fatalf("payload CRC-32C mismatch: got %08x, want %08x", gotCRC, want)
 	}
 }

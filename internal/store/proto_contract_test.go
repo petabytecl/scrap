@@ -6,55 +6,71 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
-func TestProtoWriteDocumentRequestFields(t *testing.T) {
+func TestProtoWriteDocumentOneofInit(t *testing.T) {
 	req := &scrapv1.WriteDocumentRequest{
-		TransactionId:  "tx-001",
-		DocumentName:   "invoice.xml",
-		ContentType:    "application/xml",
-		IdempotencyKey: "idem-001",
-		ChunkData:      []byte("test"),
+		Part: &scrapv1.WriteDocumentRequest_Init{
+			Init: &scrapv1.WriteDocumentInit{
+				TransactionId:  "tx-001",
+				DocumentName:   "invoice.xml",
+				ContentType:    "application/xml",
+				IdempotencyKey: "idem-001",
+				TenantId:       "tenant-001",
+			},
+		},
 	}
-	if req.GetTransactionId() == "" {
-		t.Fatal("TransactionId should be set")
+	init := req.GetInit()
+	if init == nil {
+		t.Fatal("Init should not be nil")
 	}
-	if req.GetDocumentName() == "" {
-		t.Fatal("DocumentName should be set")
-	}
-	if req.GetContentType() == "" {
-		t.Fatal("ContentType should be set")
-	}
-	if req.GetIdempotencyKey() == "" {
-		t.Fatal("IdempotencyKey should be set")
-	}
-}
-
-func TestProtoWriteDocumentResponseFields(t *testing.T) {
-	resp := &scrapv1.WriteDocumentResponse{
-		Sha256Checksum: "abc123",
-		Size:           1024,
-	}
-	if resp.GetSha256Checksum() == "" {
-		t.Fatal("Sha256Checksum should be set")
-	}
-	if resp.GetSize() != 1024 {
-		t.Fatal("Size should be 1024")
+	if init.GetTransactionId() != "tx-001" {
+		t.Fatalf("TransactionId: got %q", init.GetTransactionId())
 	}
 }
 
-func TestProtoHeadDocumentResponseFields(t *testing.T) {
-	resp := &scrapv1.HeadDocumentResponse{
-		ContentType:    "application/xml",
-		Size:           2048,
-		Sha256Checksum: "def456",
+func TestProtoWriteDocumentOneofChunk(t *testing.T) {
+	req := &scrapv1.WriteDocumentRequest{
+		Part: &scrapv1.WriteDocumentRequest_ChunkData{
+			ChunkData: []byte("test data"),
+		},
 	}
-	if resp.GetContentType() == "" {
-		t.Fatal("ContentType should be set")
+	if req.GetInit() != nil {
+		t.Fatal("Init should be nil for chunk message")
 	}
-	if resp.GetSize() != 2048 {
-		t.Fatal("Size should be 2048")
+	if len(req.GetChunkData()) == 0 {
+		t.Fatal("ChunkData should not be empty")
 	}
-	if resp.GetSha256Checksum() == "" {
-		t.Fatal("Sha256Checksum should be set")
+}
+
+func TestProtoReadDocumentOneofMeta(t *testing.T) {
+	resp := &scrapv1.ReadDocumentResponse{
+		Part: &scrapv1.ReadDocumentResponse_Meta{
+			Meta: &scrapv1.ReadDocumentMeta{
+				ContentType:    "application/xml",
+				Size:           2048,
+				Sha256Checksum: "aabbccdd",
+			},
+		},
+	}
+	meta := resp.GetMeta()
+	if meta == nil {
+		t.Fatal("Meta should not be nil")
+	}
+	if meta.GetContentType() != "application/xml" {
+		t.Fatalf("ContentType: got %q", meta.GetContentType())
+	}
+}
+
+func TestProtoReadDocumentOneofChunk(t *testing.T) {
+	resp := &scrapv1.ReadDocumentResponse{
+		Part: &scrapv1.ReadDocumentResponse_ChunkData{
+			ChunkData: []byte("bytes"),
+		},
+	}
+	if resp.GetMeta() != nil {
+		t.Fatal("Meta should be nil for chunk message")
+	}
+	if len(resp.GetChunkData()) == 0 {
+		t.Fatal("ChunkData should not be empty")
 	}
 }
 

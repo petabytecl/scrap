@@ -36,8 +36,8 @@ func TestWriteAndRead(t *testing.T) {
 	if result.Size != int64(len(content)) {
 		t.Fatalf("Size: got %d, want %d", result.Size, len(content))
 	}
-	if result.SHA256Checksum == "" {
-		t.Fatal("SHA256Checksum should not be empty")
+	if result.SHA256 == [32]byte{} {
+		t.Fatal("SHA256 should not be zero")
 	}
 
 	rc, meta, err := s.ReadDocument(ctx, "tx-001", "invoice.xml")
@@ -54,8 +54,8 @@ func TestWriteAndRead(t *testing.T) {
 	if !bytes.Equal(got, content) {
 		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(content))
 	}
-	if meta.SHA256Checksum != result.SHA256Checksum {
-		t.Fatalf("checksum mismatch: read %q vs write %q", meta.SHA256Checksum, result.SHA256Checksum)
+	if meta.SHA256 != result.SHA256 {
+		t.Fatal("SHA256 mismatch between write and read")
 	}
 	if meta.ContentType != "application/xml" {
 		t.Fatalf("ContentType: got %q, want application/xml", meta.ContentType)

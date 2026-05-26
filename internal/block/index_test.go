@@ -21,26 +21,27 @@ func TestIndexRoundTrip(t *testing.T) {
 		t.Fatalf("NewIndexWriter: %v", err)
 	}
 
+	sha := [32]byte{0xAA, 0xBB, 0xCC}
 	entries := []block.IndexEntry{
 		{
-			TransactionID:  "tx-001",
-			DocName:        "invoice.xml",
-			ContentType:    "application/xml",
-			CreatedAt:      now,
-			FirstFrameOff:  32,
-			FrameCount:     1,
-			TotalBytes:     1024,
-			SHA256Checksum: "aabbccdd",
+			TransactionID: "tx-001",
+			DocName:       "invoice.xml",
+			ContentType:   "application/xml",
+			CreatedAt:     now,
+			FirstFrameOff: 40,
+			FrameCount:    1,
+			TotalBytes:    1024,
+			SHA256:        sha,
 		},
 		{
-			TransactionID:  "tx-001",
-			DocName:        "receipt.pdf",
-			ContentType:    "application/pdf",
-			CreatedAt:      now,
-			FirstFrameOff:  1074,
-			FrameCount:     3,
-			TotalBytes:     196608,
-			SHA256Checksum: "11223344",
+			TransactionID: "tx-001",
+			DocName:       "receipt.pdf",
+			ContentType:   "application/pdf",
+			CreatedAt:     now,
+			FirstFrameOff: 1074,
+			FrameCount:    3,
+			TotalBytes:    196608,
+			SHA256:        [32]byte{0x11, 0x22},
 		},
 	}
 
@@ -69,8 +70,8 @@ func TestIndexRoundTrip(t *testing.T) {
 	if got.ContentType != "application/xml" {
 		t.Fatalf("ContentType: got %q, want application/xml", got.ContentType)
 	}
-	if got.SHA256Checksum != "aabbccdd" {
-		t.Fatalf("SHA256Checksum: got %q, want aabbccdd", got.SHA256Checksum)
+	if got.SHA256 != sha {
+		t.Fatalf("SHA256 mismatch")
 	}
 	if !got.CreatedAt.Equal(now) {
 		t.Fatalf("CreatedAt: got %v, want %v", got.CreatedAt, now)
@@ -90,7 +91,7 @@ func TestIndexFindNotFound(t *testing.T) {
 		DocName:       "a.xml",
 		ContentType:   "text/xml",
 		CreatedAt:     time.Now(),
-		FirstFrameOff: 32,
+		FirstFrameOff: 40,
 		FrameCount:    1,
 		TotalBytes:    100,
 	}); err != nil {
@@ -157,16 +158,54 @@ func TestIndexAllEntries(t *testing.T) {
 	}
 }
 
-func TestIndexCorrupt(t *testing.T) {
+func TestIndexCorruptHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.idx")
 
-	if err := os.WriteFile(path, []byte("garbage"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("garbage_data"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	_, err := block.OpenIndexReader(path)
 	if err == nil {
 		t.Fatal("expected error for corrupt idx file")
+	}
+}
+
+func TestIndexCorruptEntryCRC(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+
+	iw, err := block.NewIndexWriter(path)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{
+		TransactionID: "tx-001",
+		DocName:       "a.xml",
+		ContentType:   "text/xml",
+		CreatedAt:     time.Now(),
+		FirstFrameOff: 40,
+		FrameCount:    1,
+		TotalBytes:    100,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	data[20] ^= 0xFF // corrupt entry payload
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err = block.OpenIndexReader(path)
+	if err == nil {
+		t.Fatal("expected CRC error for corrupt entry")
 	}
 }

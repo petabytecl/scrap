@@ -14,15 +14,15 @@ type Store interface {
 }
 
 type WriteResult struct {
-	SHA256Checksum string
-	Size           int64
-	CreatedAt      time.Time
+	SHA256    [32]byte
+	Size      int64
+	CreatedAt time.Time
 }
 
 type DocumentMeta struct {
-	Name           string
-	ContentType    string
-	Size           int64
-	SHA256Checksum string
-	CreatedAt      time.Time
+	Name        string
+	ContentType string
+	Size        int64
+	SHA256      [32]byte
+	CreatedAt   time.Time
 }

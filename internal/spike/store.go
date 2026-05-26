@@ -24,7 +24,7 @@ type Store struct {
 	blockWriter *block.BlockWriter
 	idxWriter   *block.IndexWriter
 	nextBlockID atomic.Uint64
-	docs        map[string]bool // "txID\x00docName" → exists
+	docs        map[string]bool
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -64,7 +64,7 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 
 	key := txID + "\x00" + docName
 	if s.docs[key] {
-		return storeapi.WriteResult{}, fmt.Errorf("spike: document already exists: %s/%s", txID, docName)
+		return storeapi.WriteResult{}, fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, txID, docName)
 	}
 
 	now := time.Now()
@@ -75,14 +75,14 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 	}
 
 	if err := s.idxWriter.Append(block.IndexEntry{
-		TransactionID:  txID,
-		DocName:        docName,
-		ContentType:    contentType,
-		CreatedAt:      now,
-		FirstFrameOff:  result.FirstFrameOffset,
-		FrameCount:     result.FrameCount,
-		TotalBytes:     result.Size,
-		SHA256Checksum: result.SHA256Checksum,
+		TransactionID: txID,
+		DocName:       docName,
+		ContentType:   contentType,
+		CreatedAt:     now,
+		FirstFrameOff: result.FirstFrameOffset,
+		FrameCount:    result.FrameCount,
+		TotalBytes:    result.Size,
+		SHA256:        result.SHA256,
 	}); err != nil {
 		return storeapi.WriteResult{}, fmt.Errorf("spike: write idx: %w", err)
 	}
@@ -108,9 +108,9 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 	s.docs[key] = true
 
 	return storeapi.WriteResult{
-		SHA256Checksum: result.SHA256Checksum,
-		Size:           result.Size,
-		CreatedAt:      now,
+		SHA256:    result.SHA256,
+		Size:      result.Size,
+		CreatedAt: now,
 	}, nil
 }
 
@@ -124,11 +124,11 @@ func (s *Store) HeadDocument(_ context.Context, txID, docName string) (storeapi.
 	}
 
 	return storeapi.DocumentMeta{
-		Name:           entry.DocName,
-		ContentType:    entry.ContentType,
-		Size:           entry.TotalBytes,
-		SHA256Checksum: entry.SHA256Checksum,
-		CreatedAt:      entry.CreatedAt,
+		Name:        entry.DocName,
+		ContentType: entry.ContentType,
+		Size:        entry.TotalBytes,
+		SHA256:      entry.SHA256,
+		CreatedAt:   entry.CreatedAt,
 	}, nil
 }
 
@@ -144,15 +144,15 @@ func (s *Store) ReadDocument(_ context.Context, txID, docName string) (io.ReadCl
 	blkPath := s.blockPath(entry.blockID)
 	rc, err := block.ReadDocument(blkPath, entry.IndexEntry)
 	if err != nil {
-		return nil, storeapi.DocumentMeta{}, fmt.Errorf("spike: read document: %w", err)
+		return nil, storeapi.DocumentMeta{}, fmt.Errorf("%w: %v", storeapi.ErrDataLoss, err)
 	}
 
 	meta := storeapi.DocumentMeta{
-		Name:           entry.DocName,
-		ContentType:    entry.ContentType,
-		Size:           entry.TotalBytes,
-		SHA256Checksum: entry.SHA256Checksum,
-		CreatedAt:      entry.CreatedAt,
+		Name:        entry.DocName,
+		ContentType: entry.ContentType,
+		Size:        entry.TotalBytes,
+		SHA256:      entry.SHA256,
+		CreatedAt:   entry.CreatedAt,
 	}
 
 	return rc, meta, nil
@@ -172,18 +172,18 @@ func (s *Store) FindDocuments(_ context.Context, txID string) ([]storeapi.Docume
 		idxPath := s.idxPath(bid)
 		ir, err := block.OpenIndexReader(idxPath)
 		if err != nil {
-			return nil, fmt.Errorf("spike: open block index: %w", err)
+			return nil, fmt.Errorf("%w: %v", storeapi.ErrDataLoss, err)
 		}
 		entries := ir.FindByTransaction(txID)
 		ir.Close()
 
 		for _, e := range entries {
 			docs = append(docs, storeapi.DocumentMeta{
-				Name:           e.DocName,
-				ContentType:    e.ContentType,
-				Size:           e.TotalBytes,
-				SHA256Checksum: e.SHA256Checksum,
-				CreatedAt:      e.CreatedAt,
+				Name:        e.DocName,
+				ContentType: e.ContentType,
+				Size:        e.TotalBytes,
+				SHA256:      e.SHA256,
+				CreatedAt:   e.CreatedAt,
 			})
 		}
 	}
@@ -220,14 +220,14 @@ type docWithBlock struct {
 func (s *Store) findDocEntry(txID, docName string) (docWithBlock, error) {
 	idxEntry, err := s.idx.Get(txID)
 	if err != nil {
-		return docWithBlock{}, fmt.Errorf("spike: transaction not found: %s", txID)
+		return docWithBlock{}, fmt.Errorf("%w: %s", storeapi.ErrTxNotFound, txID)
 	}
 
 	for _, bid := range idxEntry.BlockIDs {
 		idxPath := s.idxPath(bid)
 		ir, err := block.OpenIndexReader(idxPath)
 		if err != nil {
-			return docWithBlock{}, fmt.Errorf("spike: open block index: %w", err)
+			return docWithBlock{}, fmt.Errorf("%w: %v", storeapi.ErrDataLoss, err)
 		}
 
 		entry, err := ir.Find(txID, docName)
@@ -237,7 +237,7 @@ func (s *Store) findDocEntry(txID, docName string) (docWithBlock, error) {
 		}
 	}
 
-	return docWithBlock{}, fmt.Errorf("spike: document not found: %s/%s", txID, docName)
+	return docWithBlock{}, fmt.Errorf("%w: %s/%s", storeapi.ErrNotFound, txID, docName)
 }
 
 func (s *Store) openNewBlock() error {

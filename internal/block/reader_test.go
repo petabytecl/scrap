@@ -41,14 +41,14 @@ func writeTestBlock(t *testing.T, dir string) (blkPath, idxPath string) {
 			t.Fatalf("AppendDocument %s: %v", d.name, err)
 		}
 		if err := iw.Append(block.IndexEntry{
-			TransactionID:  d.txID,
-			DocName:        d.name,
-			ContentType:    d.ct,
-			CreatedAt:      time.Now(),
-			FirstFrameOff:  result.FirstFrameOffset,
-			FrameCount:     result.FrameCount,
-			TotalBytes:     result.Size,
-			SHA256Checksum: result.SHA256Checksum,
+			TransactionID: d.txID,
+			DocName:       d.name,
+			ContentType:   d.ct,
+			CreatedAt:     time.Now(),
+			FirstFrameOff: result.FirstFrameOffset,
+			FrameCount:    result.FrameCount,
+			TotalBytes:    result.Size,
+			SHA256:        result.SHA256,
 		}); err != nil {
 			t.Fatalf("Append index %s: %v", d.name, err)
 		}

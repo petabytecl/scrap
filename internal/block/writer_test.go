@@ -3,6 +3,7 @@ package block_test
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,8 +31,8 @@ func TestBlockWriterHeader(t *testing.T) {
 	if len(data) < block.BlockHeaderSize {
 		t.Fatalf("block too small: %d bytes", len(data))
 	}
-	if block.BlockHeaderSize != 32 {
-		t.Fatalf("BlockHeaderSize: got %d, want 32", block.BlockHeaderSize)
+	if block.BlockHeaderSize != 40 {
+		t.Fatalf("BlockHeaderSize: got %d, want 40", block.BlockHeaderSize)
 	}
 
 	magic := string(data[0:4])
@@ -42,6 +43,18 @@ func TestBlockWriterHeader(t *testing.T) {
 	version := binary.LittleEndian.Uint16(data[4:6])
 	if version != 1 {
 		t.Fatalf("version: got %d, want 1", version)
+	}
+
+	headerLen := binary.LittleEndian.Uint16(data[6:8])
+	if headerLen != 40 {
+		t.Fatalf("header_len: got %d, want 40", headerLen)
+	}
+
+	tab := crc32.MakeTable(crc32.Castagnoli)
+	headerCRC := binary.LittleEndian.Uint32(data[36:40])
+	expectedCRC := crc32.Checksum(data[0:36], tab)
+	if headerCRC != expectedCRC {
+		t.Fatalf("header CRC mismatch: got %08x, want %08x", headerCRC, expectedCRC)
 	}
 }
 
@@ -63,8 +76,8 @@ func TestBlockWriterAppendDocument(t *testing.T) {
 	if result.Size != 1024 {
 		t.Fatalf("Size: got %d, want 1024", result.Size)
 	}
-	if result.SHA256Checksum == "" {
-		t.Fatal("SHA256Checksum should not be empty")
+	if result.SHA256 == [32]byte{} {
+		t.Fatal("SHA256 should not be empty")
 	}
 	if result.FrameCount == 0 {
 		t.Fatal("FrameCount should be > 0")
@@ -84,7 +97,7 @@ func TestBlockWriterMultipleDocuments(t *testing.T) {
 		t.Fatalf("NewBlockWriter: %v", err)
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		doc := bytes.Repeat([]byte{byte('A' + i)}, 512)
 		_, err := w.AppendDocument("tx-001", "doc-"+string(rune('a'+i)), "text/plain", bytes.NewReader(doc))
 		if err != nil {

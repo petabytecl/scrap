@@ -12,12 +12,18 @@ service DocumentService {
 }
 
 message WriteDocumentRequest {
+  oneof part {
+    WriteDocumentInit init = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message WriteDocumentInit {
   string transaction_id = 1;
   string document_name = 2;
   string content_type = 3;
   string idempotency_key = 4;
-  bytes chunk_data = 5;
-  string tenant_id = 6;
+  string tenant_id = 5;
 }
 
 message WriteDocumentResponse {
@@ -47,11 +53,17 @@ message ReadDocumentRequest {
 }
 
 message ReadDocumentResponse {
+  oneof part {
+    ReadDocumentMeta meta = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message ReadDocumentMeta {
   string content_type = 1;
   int64 size = 2;
   string sha256_checksum = 3;
   google.protobuf.Timestamp created_at = 4;
-  bytes chunk_data = 5;
 }
 
 message FindDocumentsRequest {
