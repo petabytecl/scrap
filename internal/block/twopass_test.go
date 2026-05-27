@@ -78,12 +78,12 @@ func TestTwoPassCorruptPayload(t *testing.T) {
 	data := bytes.Repeat([]byte("A"), 512)
 	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
 
-	raw, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
+	raw, err := os.ReadFile(blkPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	raw[block.BlockHeaderSize+block.FrameHeaderSize+10] ^= 0xFF
-	if err := os.WriteFile(blkPath, raw, 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
+	if err := os.WriteFile(blkPath, raw, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -111,11 +111,11 @@ func TestTwoPassTruncatedBlock(t *testing.T) {
 	data := bytes.Repeat([]byte("C"), 512)
 	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
 
-	raw, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
+	raw, err := os.ReadFile(blkPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if err := os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
+	if err := os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

@@ -85,12 +85,12 @@ func TestVerifyBlock_FrameCRCCorruption(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created
+	data, err := os.ReadFile(blkPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	data[block.BlockHeaderSize+block.FrameHeaderSize+5] ^= 0xFF
-	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test writes to temp dir
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestVerifyBlock_DocSHA256Mismatch(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created
+	data, err := os.ReadFile(blkPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestVerifyBlock_DocSHA256Mismatch(t *testing.T) {
 	data[payloadOff] ^= 0xFF
 	block.RecomputeFramePayloadCRC(data, block.BlockHeaderSize)
 
-	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test writes to temp dir
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestVerifyBlock_OversizedPayloadLen(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created
+	data, err := os.ReadFile(blkPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestVerifyBlock_OversizedPayloadLen(t *testing.T) {
 	headerCRC := crc32.Checksum(data[frameStart:frameStart+28], crc32.MakeTable(crc32.Castagnoli))
 	binary.LittleEndian.PutUint32(data[frameStart+28:frameStart+32], headerCRC)
 
-	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test writes to temp dir
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

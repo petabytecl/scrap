@@ -226,7 +226,7 @@ func TestCorruptBlockDataLoss(t *testing.T) {
 	}
 	data, _ := os.ReadFile(blks[0])
 	data[100] ^= 0xFF
-	_ = os.WriteFile(blks[0], data, 0o600) //nolint:gosec // test intentionally corrupts a known block file
+	_ = os.WriteFile(blks[0], data, 0o600)
 
 	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
 		TransactionId: "tx-corrupt",
