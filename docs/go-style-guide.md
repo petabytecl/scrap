@@ -18,7 +18,8 @@ adapted to the S.C.R.A.P. codebase.
 ---
 
 - [Design](#design)
-  - [Package Structure](#package-structure)
+  - [Repository Layout](#repository-layout)
+  - [Happy Path](#happy-path)
   - [Interfaces](#interfaces)
   - [Initialization](#initialization)
   - [Receiver Types](#receiver-types)
@@ -62,18 +63,69 @@ adapted to the S.C.R.A.P. codebase.
 
 ## Design
 
-### Package Structure
+### Repository Layout
 
-All domain logic lives under `internal/`. Stable API contracts and reusable
-types live under `pkg/`.
+The full top-level directory structure. All domain logic lives under
+`internal/`. Stable API contracts and reusable types live under `pkg/`.
 
 | Directory | Purpose | Rule |
 |-----------|---------|------|
+| `cmd/` | Executable entry points | Thin `main()` that delegates to a `run()` function. |
 | `internal/` | Domain logic, subsystem implementations | One package per domain concept. No `util` or `common` packages. |
 | `pkg/` | Stable interfaces, value types, error sentinels | Only packages with no concrete business logic. Must be safe for external consumers to import. |
-| `cmd/` | Executable entry points | Thin `main()` that delegates to a `run()` function. |
 | `proto/` | Protocol Buffer definitions | Source of truth for wire formats. |
 | `gen/` | Generated code | Never edit by hand. Excluded from linting. |
+| `deploy/` | Deployment manifests | Kustomize bases/overlays and Kind cluster configs. |
+| `scripts/` | Shell helpers | Build validation, local dev automation. Not shipped. |
+| `test/` | Out-of-package test suites | Integration and E2E tests that span multiple packages. |
+| `docs/` | Project documentation | Style guides, ADRs, agent docs. |
+| `bin/` | Compiled binaries | Gitignored. Output of `go build`. |
+
+### Happy Path
+
+Keep the happy path left-aligned. Return early on errors and precondition
+failures to avoid deep nesting. The main logic should never be inside an
+`else` block.
+
+<table>
+<thead><tr><th>Bad</th><th>Good</th></tr></thead>
+<tbody>
+<tr><td>
+
+```go
+func (s *Shard) Write(ctx context.Context, doc []byte) error {
+  if s.IsLeader() {
+    if len(doc) > 0 {
+      err := s.append(ctx, doc)
+      if err != nil {
+        return err
+      }
+      return nil
+    } else {
+      return errors.New("empty document")
+    }
+  } else {
+    return &NotLeaderError{}
+  }
+}
+```
+
+</td><td>
+
+```go
+func (s *Shard) Write(ctx context.Context, doc []byte) error {
+  if !s.IsLeader() {
+    return &NotLeaderError{}
+  }
+  if len(doc) == 0 {
+    return errors.New("empty document")
+  }
+  return s.append(ctx, doc)
+}
+```
+
+</td></tr>
+</tbody></table>
 
 ### Interfaces
 
@@ -130,6 +182,11 @@ Always return concrete types, not interfaces. Let callers define the interface
 they need.
 
 ### Initialization
+
+Make the zero value useful. A freshly declared value should be safe to use
+without explicit initialization whenever possible. Config structs achieve
+this through `applyDefaults()`, which fills in sensible values for any
+zero-valued fields.
 
 Use config structs with a constructor as the default initialization pattern.
 Reserve functional options for utility types with many optional knobs.
@@ -392,8 +449,10 @@ func (e *NotLeaderError) Error() string { ... }
 
 ### Wrapping Convention
 
-Always wrap errors with `%w`. Format: `"package: operation: %w"`. Avoid
-`"failed to"` — it adds noise as errors propagate up the stack.
+Always wrap errors with `%w`. Format: `"package: operation: %w"`. Error
+strings are lowercase and do not end with punctuation, so they compose
+cleanly when chained. Avoid `"failed to"` — it adds noise as errors
+propagate up the stack.
 
 <table>
 <thead><tr><th>Bad</th><th>Good</th></tr></thead>
@@ -508,6 +567,12 @@ func (s *Light) loop(ctx context.Context) {
 
 </td></tr>
 </tbody></table>
+
+For new code where `Add`/`Done` would appear in the same scope, prefer
+`wg.Go` (Go 1.25+). It eliminates the `Add`/`Done` boilerplate and makes
+it impossible to forget `Done()`. The classic `Add`/`Done` pattern is still
+acceptable when the goroutine launch and wait span different methods (e.g.,
+`Start`/`Stop` lifecycle).
 
 ### Channel Sizing
 
