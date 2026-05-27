@@ -55,6 +55,7 @@ type DeepScrubberConfig struct {
 	Checkpoint        CheckpointStore
 	LatencySignal     LatencySignal
 	BlockRepairer     BlockRepairer
+	Logger            *slog.Logger
 	IOBudget          *TokenBucket
 	PeerAddrs         []string
 	OpenBlockID       uint64
@@ -84,6 +85,9 @@ func NewDeepScrubber(cfg DeepScrubberConfig) *DeepScrubber {
 	}
 	if cfg.PauseCooldown <= 0 {
 		cfg.PauseCooldown = DefaultPauseCooldown
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
 	}
 	return &DeepScrubber{cfg: cfg}
 }
@@ -195,7 +199,7 @@ func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
 	}
 	quarantined, err := ds.cfg.QuarantineManager.ListQuarantined()
 	if err != nil {
-		slog.Warn("scrub: list quarantined", "err", err) //nolint:sloglint // scrub has no injected logger yet
+		ds.cfg.Logger.WarnContext(ctx, "scrub: list quarantined", "err", err)
 		return
 	}
 	if len(quarantined) == 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,8 @@ import (
 	"go.etcd.io/raft/v3"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+
+	"github.com/petabytecl/scrap/internal/logbridge"
 )
 
 const (
@@ -41,6 +44,7 @@ type Config struct {
 	Restore      RestoreFunc
 	Transport    Transport
 	TickInterval time.Duration
+	Logger       *slog.Logger
 
 	MaxSnapCount    uint64
 	MaxWALSize      int64
@@ -52,6 +56,7 @@ type Config struct {
 
 type RaftNode struct {
 	cfg       Config
+	logger    *slog.Logger
 	node      raft.Node
 	storage   *raft.MemoryStorage
 	wal       *wal.WAL
@@ -108,13 +113,18 @@ func Open(cfg Config) (*RaftNode, error) {
 		}
 	}
 
-	lg := zap.NewNop()
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	lg := logbridge.NewZapLogger(logger)
 	snapshotter := snap.New(lg, snapDir)
 
 	walExists := wal.Exist(walDir)
 
 	n := &RaftNode{
 		cfg:       cfg,
+		logger:    logger,
 		snap:      snapshotter,
 		transport: cfg.Transport,
 		readMap:   make(map[string]chan uint64),
@@ -156,6 +166,7 @@ func (n *RaftNode) startNode(lg *zap.Logger, walDir string) error {
 		Storage:         n.storage,
 		MaxSizePerMsg:   n.cfg.MaxSizePerMsg,
 		MaxInflightMsgs: n.cfg.MaxInflightMsgs,
+		Logger:          logbridge.NewRaftLogger(n.logger),
 	}
 
 	n.node = raft.StartNode(c, peers)
@@ -231,6 +242,7 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 		MaxSizePerMsg:   n.cfg.MaxSizePerMsg,
 		MaxInflightMsgs: n.cfg.MaxInflightMsgs,
 		Applied:         n.appliedIndex,
+		Logger:          logbridge.NewRaftLogger(n.logger),
 	}
 
 	n.node = raft.RestartNode(c)

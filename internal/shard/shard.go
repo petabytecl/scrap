@@ -44,6 +44,7 @@ type Config struct {
 	BootstrapGrace time.Duration
 	Scrub          scrub.ScrubConfig
 	Transport      scrapraft.Transport
+	Logger         *slog.Logger
 
 	ConsistencyChecker scrub.ConsistencyChecker
 	ScrubMetrics       scrub.ScrubMetrics
@@ -59,6 +60,8 @@ type Shard struct {
 	peers          map[uint64]string
 	idx            *index.Index
 	raft           *scrapraft.RaftNode
+	baseLogger     *slog.Logger
+	logger         *slog.Logger
 	blockSealSize  int64
 	raftStartedAt  time.Time
 	bootstrapGrace time.Duration
@@ -94,6 +97,12 @@ func (c *Config) applyDefaults() {
 func Open(cfg Config) (*Shard, error) {
 	cfg.applyDefaults()
 
+	baseLogger := cfg.Logger
+	if baseLogger == nil {
+		baseLogger = slog.Default()
+	}
+	logger := baseLogger.With("component", "shard")
+
 	blocksDir := filepath.Join(cfg.DataDir, "blocks")
 	pebbleDir := filepath.Join(cfg.DataDir, "pebble")
 	openlogDir := filepath.Join(cfg.DataDir, "openlog")
@@ -123,6 +132,8 @@ func Open(cfg Config) (*Shard, error) {
 		shardID:        cfg.ShardID,
 		peers:          cfg.Peers,
 		idx:            idx,
+		baseLogger:     baseLogger,
+		logger:         logger,
 		blockSealSize:  cfg.BlockSealSize,
 		nextBlockID:    nextID,
 		proposals:      make(map[string]chan error),
@@ -155,6 +166,7 @@ func Open(cfg Config) (*Shard, error) {
 		TickInterval: cfg.TickInterval,
 		Transport:    transport,
 		Apply:        s.applyEntries,
+		Logger:       baseLogger.With("component", "raft"),
 	})
 	if err != nil {
 		s.closeBlockAndIdx()
@@ -180,6 +192,7 @@ func (s *Shard) startScrubber(cfg Config) {
 		LeaderChecker:      s,
 		Metrics:            cfg.ScrubMetrics,
 		Rebuilder:          cfg.Rebuilder,
+		Logger:             s.baseLogger.With("component", "scrub"),
 		PeerAddrs:          cfg.PeerAddrs,
 		Interval:           cfg.Scrub.LightScrubInterval,
 		Jitter:             cfg.Scrub.Jitter,
@@ -434,7 +447,7 @@ func (s *Shard) doRebuild(done chan struct{}) {
 	oldDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.previous-%d", time.Now().UnixNano()))
 
 	if err := s.prepareRebuildProjection(tempDir); err != nil {
-		slog.Error("rebuild: prepare projection failed", "err", err) //nolint:sloglint // shard has no injected logger yet
+		s.logger.Error("rebuild: prepare projection failed", "err", err)
 		_ = os.RemoveAll(tempDir)
 		s.rebuilding.Store(false)
 		return
@@ -448,9 +461,9 @@ func (s *Shard) doRebuild(done chan struct{}) {
 	_ = os.RemoveAll(tempDir)
 
 	if err != nil {
-		slog.Error("rebuild: swap projection failed", "err", err) //nolint:sloglint // shard has no injected logger yet
+		s.logger.Error("rebuild: swap projection failed", "err", err, "shard_id", s.shardID)
 		if idxNil {
-			slog.Error("rebuild: index is nil after failed swap; shard degraded") //nolint:sloglint // shard has no injected logger yet
+			s.logger.Error("rebuild: index is nil after failed swap; shard degraded", "err", err, "shard_id", s.shardID)
 			return
 		}
 	}

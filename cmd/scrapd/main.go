@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/logbridge"
 	"github.com/petabytecl/scrap/internal/peer"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	"github.com/petabytecl/scrap/internal/scrub"
@@ -51,6 +52,8 @@ func run() error {
 	peersFlag := flag.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
 	flag.Parse()
 
+	logger := logbridge.NewLoggerFromEnv(os.Stderr)
+
 	scrubCfg := scrub.ParseScrubConfig()
 	registry := prometheus.NewRegistry()
 
@@ -82,6 +85,7 @@ func run() error {
 		BlockSealSize:      *blockSealSize,
 		Scrub:              scrubCfg,
 		Transport:          shardTransport,
+		Logger:             logger,
 		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
 		ScrubMetrics:       scrubMetrics,
 		Rebuilder:          peer.NewClientRebuilder(peerClient),
@@ -123,17 +127,25 @@ func run() error {
 	go func() { _ = peerGS.Serve(peerLis) }()
 	go func() { _ = gs.Serve(clientLis) }()
 
-	fmt.Fprintf(os.Stderr, "scrapd starting: client=%s peer=%s admin=%s data-dir=%s raft-id=%d cell=%s peers=%d scrub=%v\n",
-		*listenAddr, *peerAddr, *adminAddr, *dataDir, raftID, cellID, len(peers), scrubCfg.Enabled)
+	logger.Info("scrapd starting",
+		"client_addr", *listenAddr,
+		"peer_addr", *peerAddr,
+		"admin_addr", *adminAddr,
+		"data_dir", *dataDir,
+		"raft_id", raftID,
+		"cell_id", cellID,
+		"peers", len(peers),
+		"scrub_enabled", scrubCfg.Enabled,
+	)
 
 	<-ctx.Done()
-	fmt.Fprintln(os.Stderr, "shutting down")
+	logger.Info("shutting down")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
 	if err := adminSrv.Shutdown(shutdownCtx); err != nil {
-		fmt.Fprintf(os.Stderr, "admin shutdown: %v\n", err)
+		logger.Error("admin shutdown failed", "err", err)
 	}
 	peerGS.GracefulStop()
 	gs.GracefulStop()

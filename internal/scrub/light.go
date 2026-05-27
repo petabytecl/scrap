@@ -36,6 +36,7 @@ type LightScrubberConfig struct {
 	LeaderChecker      LeaderChecker
 	Metrics            ScrubMetrics
 	Rebuilder          Rebuilder
+	Logger             *slog.Logger
 	PeerAddrs          []string
 	Interval           time.Duration
 	Jitter             float64
@@ -50,6 +51,9 @@ type LightScrubber struct {
 func NewLightScrubber(cfg LightScrubberConfig) *LightScrubber {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultLightScrubInterval
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
 	}
 	return &LightScrubber{cfg: cfg}
 }
@@ -122,7 +126,7 @@ func (ls *LightScrubber) RunOnce(ctx context.Context) error { //nolint:gocognit 
 		if ls.cfg.Rebuilder != nil {
 			for _, addr := range divergent {
 				if err := ls.cfg.Rebuilder.RequestRebuild(ctx, addr, scrubID); err != nil {
-					slog.Warn("scrub: rebuild request failed", "addr", addr, "scrub_id", scrubID, "err", err) //nolint:sloglint // scrub has no injected logger yet
+					ls.cfg.Logger.WarnContext(ctx, "scrub: rebuild request failed", "addr", addr, "scrub_id", scrubID, "err", err)
 				}
 			}
 		}
