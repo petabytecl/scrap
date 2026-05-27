@@ -89,7 +89,7 @@ func (ps *peerSender) run(ctx context.Context) {
 	}
 }
 
-func (ps *peerSender) openStream(ctx context.Context) (grpc.BidiStreamingClient[scrapv1.RaftMessageRequest, scrapv1.RaftMessageResponse], error) {
+func (ps *peerSender) openStream(ctx context.Context) (grpc.BidiStreamingClient[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse], error) {
 	client := scrapv1.NewPeerServiceClient(ps.conn)
 	stream, err := client.ForwardRaftStream(ctx)
 	if err != nil {
@@ -98,14 +98,14 @@ func (ps *peerSender) openStream(ctx context.Context) (grpc.BidiStreamingClient[
 	return stream, nil
 }
 
-func (ps *peerSender) sendLoop(ctx context.Context, stream grpc.BidiStreamingClient[scrapv1.RaftMessageRequest, scrapv1.RaftMessageResponse]) bool {
+func (ps *peerSender) sendLoop(ctx context.Context, stream grpc.BidiStreamingClient[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse]) bool {
 	for {
 		select {
 		case msg, ok := <-ps.ch:
 			if !ok {
 				return false
 			}
-			if err := stream.Send(&scrapv1.RaftMessageRequest{
+			if err := stream.Send(&scrapv1.ForwardRaftStreamRequest{
 				ShardId: msg.shardID,
 				Message: msg.data,
 			}); err != nil {

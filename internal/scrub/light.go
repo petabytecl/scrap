@@ -2,6 +2,7 @@ package scrub
 
 import (
 	"context"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -25,11 +26,16 @@ type ScrubMetrics interface {
 	RecordRun(result string, durationSec float64)
 }
 
+type Rebuilder interface {
+	RequestRebuild(ctx context.Context, addr, scrubID string) error
+}
+
 type LightScrubberConfig struct {
 	Proposer           Proposer
 	ConsistencyChecker ConsistencyChecker
 	LeaderChecker      LeaderChecker
 	Metrics            ScrubMetrics
+	Rebuilder          Rebuilder
 	PeerAddrs          []string
 	Interval           time.Duration
 	Jitter             float64
@@ -84,7 +90,7 @@ func (ls *LightScrubber) jitteredInterval() time.Duration {
 	return ls.cfg.Interval + time.Duration(offset)
 }
 
-func (ls *LightScrubber) RunOnce(ctx context.Context) error {
+func (ls *LightScrubber) RunOnce(ctx context.Context) error { //nolint:gocognit // rebuild error handling adds necessary branches
 	if !ls.cfg.LeaderChecker.IsLeader() {
 		return nil
 	}
@@ -98,7 +104,7 @@ func (ls *LightScrubber) RunOnce(ctx context.Context) error {
 		return err
 	}
 
-	mismatch := false
+	var divergent []string
 	for _, addr := range ls.cfg.PeerAddrs {
 		peerResult, err := ls.cfg.ConsistencyChecker.CheckConsistency(ctx, addr, scrubID)
 		if err != nil {
@@ -106,13 +112,20 @@ func (ls *LightScrubber) RunOnce(ctx context.Context) error {
 			return err
 		}
 		if peerResult.SHA256 != leaderResult.SHA256 {
-			mismatch = true
+			divergent = append(divergent, addr)
 		}
 	}
 
 	duration := time.Since(start).Seconds()
-	if mismatch {
+	if len(divergent) > 0 {
 		ls.cfg.Metrics.RecordRun("mismatch", duration)
+		if ls.cfg.Rebuilder != nil {
+			for _, addr := range divergent {
+				if err := ls.cfg.Rebuilder.RequestRebuild(ctx, addr, scrubID); err != nil {
+					slog.Warn("scrub: rebuild request failed", "addr", addr, "scrub_id", scrubID, "err", err) //nolint:sloglint // scrub has no injected logger yet
+				}
+			}
+		}
 	} else {
 		ls.cfg.Metrics.RecordRun("ok", duration)
 	}

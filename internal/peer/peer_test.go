@@ -216,6 +216,92 @@ func TestConsistencyCheckReturnsCache(t *testing.T) {
 	}
 }
 
+type mockRebuildHandler struct {
+	called     bool
+	inProgress bool
+	err        error
+}
+
+func (m *mockRebuildHandler) TriggerRebuild(_ context.Context) (bool, error) {
+	m.called = true
+	return m.inProgress, m.err
+}
+
+func TestRequestIndexRebuild_TriggersRebuild(t *testing.T) {
+	dir := t.TempDir()
+	handler := &mockRebuildHandler{}
+	addr := startPeerServer(t, dir, peer.WithRebuildHandler(handler))
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := scrapv1.NewPeerServiceClient(conn)
+	resp, err := client.RequestIndexRebuild(context.Background(), &scrapv1.RequestIndexRebuildRequest{
+		ScrubId: "scrub-rebuild-1",
+	})
+	if err != nil {
+		t.Fatalf("RequestIndexRebuild: %v", err)
+	}
+	if !handler.called {
+		t.Fatal("expected rebuild handler to be called")
+	}
+	if resp.AlreadyInProgress {
+		t.Fatal("expected already_in_progress=false")
+	}
+}
+
+func TestRequestIndexRebuild_AlreadyInProgress(t *testing.T) {
+	dir := t.TempDir()
+	handler := &mockRebuildHandler{inProgress: true}
+	addr := startPeerServer(t, dir, peer.WithRebuildHandler(handler))
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := scrapv1.NewPeerServiceClient(conn)
+	resp, err := client.RequestIndexRebuild(context.Background(), &scrapv1.RequestIndexRebuildRequest{
+		ScrubId: "scrub-rebuild-2",
+	})
+	if err != nil {
+		t.Fatalf("RequestIndexRebuild: %v", err)
+	}
+	if !resp.AlreadyInProgress {
+		t.Fatal("expected already_in_progress=true")
+	}
+}
+
+func TestRequestIndexRebuild_NotConfigured(t *testing.T) {
+	dir := t.TempDir()
+	addr := startPeerServer(t, dir) // no rebuild handler
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := scrapv1.NewPeerServiceClient(conn)
+	_, err = client.RequestIndexRebuild(context.Background(), &scrapv1.RequestIndexRebuildRequest{
+		ScrubId: "scrub-rebuild-3",
+	})
+	if err == nil {
+		t.Fatal("expected error when rebuild handler not configured")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status: %v", err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FAILED_PRECONDITION, got %v", st.Code())
+	}
+}
+
 func TestConsistencyCheckNotFound(t *testing.T) {
 	dir := t.TempDir()
 	cache := &mockScrubCache{result: nil}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
@@ -23,6 +24,10 @@ import (
 // sha256DigestLen is the byte length of a SHA-256 digest.
 const sha256DigestLen = sha256.Size
 
+type RebuildHandler interface {
+	TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error)
+}
+
 type ServerOption func(*Server)
 
 func WithScrubCache(cache scrub.ResultCache) ServerOption {
@@ -31,17 +36,24 @@ func WithScrubCache(cache scrub.ResultCache) ServerOption {
 	}
 }
 
+func WithRebuildHandler(handler RebuildHandler) ServerOption {
+	return func(s *Server) {
+		s.rebuildHandler = handler
+	}
+}
+
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
-	blocksDir  string
-	scrubCache scrub.ResultCache
-	raftRouter RaftRouter
-	mu         sync.Mutex
-	writers    map[uint64]*blockState
+	blocksDir      string
+	scrubCache     scrub.ResultCache
+	rebuildHandler RebuildHandler
+	raftRouter     atomic.Pointer[RaftRouter]
+	mu             sync.Mutex
+	writers        map[uint64]*blockState
 }
 
 func (s *Server) SetRaftRouter(router RaftRouter) {
-	s.raftRouter = router
+	s.raftRouter.Store(&router)
 }
 
 type blockState struct {
@@ -178,22 +190,24 @@ func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateD
 	}
 }
 
-func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.RaftMessageRequest) (*scrapv1.RaftMessageResponse, error) {
-	if s.raftRouter == nil {
+func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftRequest) (*scrapv1.ForwardRaftResponse, error) {
+	router := s.raftRouter.Load()
+	if router == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft router not configured")
 	}
 	var msg raftpb.Message
 	if err := msg.Unmarshal(req.Message); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "unmarshal raft message: %v", err)
 	}
-	if err := s.raftRouter.RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
+	if err := (*router).RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
 		return nil, status.Errorf(codes.Internal, "route raft message: %v", err)
 	}
-	return &scrapv1.RaftMessageResponse{}, nil
+	return &scrapv1.ForwardRaftResponse{}, nil
 }
 
-func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.RaftMessageRequest, scrapv1.RaftMessageResponse]) error {
-	if s.raftRouter == nil {
+func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse]) error {
+	router := s.raftRouter.Load()
+	if router == nil {
 		return status.Error(codes.FailedPrecondition, "raft router not configured")
 	}
 	for {
@@ -205,8 +219,21 @@ func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.RaftM
 		if err := msg.Unmarshal(req.Message); err != nil {
 			continue
 		}
-		_ = s.raftRouter.RouteRaftMessage(stream.Context(), req.ShardId, msg)
+		_ = (*router).RouteRaftMessage(stream.Context(), req.ShardId, msg)
 	}
+}
+
+func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestIndexRebuildRequest) (*scrapv1.RequestIndexRebuildResponse, error) {
+	if s.rebuildHandler == nil {
+		return nil, status.Error(codes.FailedPrecondition, "rebuild handler not configured")
+	}
+	alreadyInProgress, err := s.rebuildHandler.TriggerRebuild(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rebuild: %v", err)
+	}
+	return &scrapv1.RequestIndexRebuildResponse{
+		AlreadyInProgress: alreadyInProgress,
+	}, nil
 }
 
 func (s *Server) ConsistencyCheck(_ context.Context, req *scrapv1.ConsistencyCheckRequest) (*scrapv1.ConsistencyCheckResponse, error) {

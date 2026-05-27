@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -45,6 +47,7 @@ type Config struct {
 
 	ConsistencyChecker scrub.ConsistencyChecker
 	ScrubMetrics       scrub.ScrubMetrics
+	Rebuilder          scrub.Rebuilder
 	PeerAddrs          []string
 }
 
@@ -74,6 +77,9 @@ type Shard struct {
 
 	scrubber    *scrub.LightScrubber
 	scrubCancel context.CancelFunc
+
+	rebuilding  atomic.Bool
+	rebuildDone atomic.Pointer[chan struct{}]
 }
 
 func (c *Config) applyDefaults() {
@@ -124,6 +130,9 @@ func Open(cfg Config) (*Shard, error) {
 		raftStartedAt:  time.Now(),
 		bootstrapGrace: cfg.BootstrapGrace,
 	}
+	done := make(chan struct{})
+	close(done)
+	s.rebuildDone.Store(&done)
 
 	if err := s.recoverOpenlog(); err != nil {
 		_ = idx.Close()
@@ -170,6 +179,7 @@ func (s *Shard) startScrubber(cfg Config) {
 		ConsistencyChecker: cfg.ConsistencyChecker,
 		LeaderChecker:      s,
 		Metrics:            cfg.ScrubMetrics,
+		Rebuilder:          cfg.Rebuilder,
 		PeerAddrs:          cfg.PeerAddrs,
 		Interval:           cfg.Scrub.LightScrubInterval,
 		Jitter:             cfg.Scrub.Jitter,
@@ -383,6 +393,9 @@ func (s *Shard) CheckReadiness(_ context.Context) error {
 }
 
 func (s *Shard) requireLeader() error {
+	if s.rebuilding.Load() {
+		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
+	}
 	if s.raft.IsLeader() {
 		return nil
 	}
@@ -390,6 +403,9 @@ func (s *Shard) requireLeader() error {
 }
 
 func (s *Shard) requireLeaderRead(ctx context.Context) error {
+	if s.rebuilding.Load() {
+		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
+	}
 	if !s.raft.IsLeader() {
 		return s.notLeaderError()
 	}
@@ -398,6 +414,201 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 		return fmt.Errorf("shard: read index: %w", err)
 	}
 	return nil
+}
+
+func (s *Shard) TriggerRebuild(_ context.Context) (alreadyInProgress bool, err error) {
+	if !s.rebuilding.CompareAndSwap(false, true) {
+		return true, nil
+	}
+	done := make(chan struct{})
+	s.rebuildDone.Store(&done)
+	go s.doRebuild(done)
+	return false, nil
+}
+
+func (s *Shard) doRebuild(done chan struct{}) {
+	defer close(done)
+
+	pebbleDir := filepath.Join(s.dataDir, "pebble")
+	tempDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.rebuild-%d", time.Now().UnixNano()))
+	oldDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.previous-%d", time.Now().UnixNano()))
+
+	if err := s.prepareRebuildProjection(tempDir); err != nil {
+		slog.Error("rebuild: prepare projection failed", "err", err) //nolint:sloglint // shard has no injected logger yet
+		_ = os.RemoveAll(tempDir)
+		s.rebuilding.Store(false)
+		return
+	}
+
+	s.mu.Lock()
+	err := s.swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir)
+	idxNil := s.idx == nil
+	s.mu.Unlock()
+
+	_ = os.RemoveAll(tempDir)
+
+	if err != nil {
+		slog.Error("rebuild: swap projection failed", "err", err) //nolint:sloglint // shard has no injected logger yet
+		if idxNil {
+			slog.Error("rebuild: index is nil after failed swap; shard degraded") //nolint:sloglint // shard has no injected logger yet
+			return
+		}
+	}
+
+	_ = os.RemoveAll(oldDir)
+	s.rebuilding.Store(false)
+}
+
+func (s *Shard) prepareRebuildProjection(tempDir string) error {
+	if err := os.RemoveAll(tempDir); err != nil {
+		return fmt.Errorf("shard: remove stale rebuild dir: %w", err)
+	}
+
+	newIdx, err := index.Open(tempDir)
+	if err != nil {
+		return fmt.Errorf("shard: open rebuild index: %w", err)
+	}
+	if err := s.rebuildProjectionInto(newIdx); err != nil {
+		_ = newIdx.Close()
+		return err
+	}
+	if err := newIdx.Close(); err != nil {
+		return fmt.Errorf("shard: close rebuild index: %w", err)
+	}
+	return nil
+}
+
+func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) error {
+	if err := s.idx.Close(); err != nil {
+		return fmt.Errorf("shard: close current index: %w", err)
+	}
+	s.idx = nil
+
+	if err := s.moveCurrentProjectionLocked(pebbleDir, oldDir); err != nil {
+		return err
+	}
+	if err := s.installRebuiltProjectionLocked(pebbleDir, tempDir, oldDir); err != nil {
+		return err
+	}
+	if err := s.reopenInstalledProjectionLocked(pebbleDir, oldDir); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(oldDir)
+	return nil
+}
+
+func (s *Shard) moveCurrentProjectionLocked(pebbleDir, oldDir string) error {
+	if err := os.Rename(pebbleDir, oldDir); err != nil {
+		if reopenErr := s.reopenProjectionLocked(pebbleDir); reopenErr != nil {
+			return fmt.Errorf("shard: rename current index: %w; reopen current index: %w", err, reopenErr)
+		}
+		return fmt.Errorf("shard: rename current index: %w", err)
+	}
+	return nil
+}
+
+func (s *Shard) installRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) error {
+	if err := os.Rename(tempDir, pebbleDir); err != nil {
+		_ = os.Rename(oldDir, pebbleDir)
+		if reopenErr := s.reopenProjectionLocked(pebbleDir); reopenErr != nil {
+			return fmt.Errorf("shard: install rebuild index: %w; reopen current index: %w", err, reopenErr)
+		}
+		return fmt.Errorf("shard: install rebuild index: %w", err)
+	}
+	return nil
+}
+
+func (s *Shard) reopenInstalledProjectionLocked(pebbleDir, oldDir string) error {
+	if err := s.reopenProjectionLocked(pebbleDir); err != nil {
+		_ = os.RemoveAll(pebbleDir)
+		_ = os.Rename(oldDir, pebbleDir)
+		if reopenErr := s.reopenProjectionLocked(pebbleDir); reopenErr != nil {
+			return fmt.Errorf("shard: reopen rebuilt index: %w; restore current index: %w", err, reopenErr)
+		}
+		return fmt.Errorf("shard: reopen rebuilt index: %w", err)
+	}
+	return nil
+}
+
+func (s *Shard) reopenProjectionLocked(pebbleDir string) error {
+	idx, err := index.Open(pebbleDir)
+	if err != nil {
+		return err
+	}
+	s.idx = idx
+	return nil
+}
+
+func (s *Shard) rebuildProjectionInto(projection *index.Index) error {
+	blockIDs, err := s.listBlockIndexIDs()
+	if err != nil {
+		return err
+	}
+
+	for _, blockID := range blockIDs {
+		ir, err := block.OpenIndexReader(s.idxPath(blockID))
+		if err != nil {
+			return fmt.Errorf("shard: open block index %d: %w", blockID, err)
+		}
+		entries := ir.Entries()
+		if err := ir.Close(); err != nil {
+			return fmt.Errorf("shard: close block index %d: %w", blockID, err)
+		}
+
+		for _, entry := range entries {
+			if err := addProjectionDocument(projection, entry.TransactionID, blockID); err != nil {
+				return fmt.Errorf("shard: rebuild projection %s/%s: %w", entry.TransactionID, entry.DocName, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Shard) listBlockIndexIDs() ([]uint64, error) {
+	entries, err := os.ReadDir(s.blocksDir)
+	if err != nil {
+		return nil, fmt.Errorf("shard: read blocks dir: %w", err)
+	}
+
+	var blockIDs []uint64
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".idx") {
+			continue
+		}
+		hexPart := strings.TrimSuffix(name, ".idx")
+		id, err := strconv.ParseUint(hexPart, 16, 64)
+		if err != nil {
+			continue
+		}
+		blockIDs = append(blockIDs, id)
+	}
+	sort.Slice(blockIDs, func(i, j int) bool {
+		return blockIDs[i] < blockIDs[j]
+	})
+	return blockIDs, nil
+}
+
+func (s *Shard) WaitRebuild() {
+	if p := s.rebuildDone.Load(); p != nil {
+		<-*p
+	}
+}
+
+func (s *Shard) DataDirForTest() string {
+	return s.dataDir
+}
+
+func (s *Shard) SetRebuildingForTest(v bool) {
+	s.rebuilding.Store(v)
+	if v {
+		done := make(chan struct{})
+		s.rebuildDone.Store(&done)
+	} else {
+		done := make(chan struct{})
+		close(done)
+		s.rebuildDone.Store(&done)
+	}
 }
 
 func (s *Shard) notLeaderError() error {
@@ -423,6 +634,7 @@ func (s *Shard) Close() error {
 		s.scrubber.Stop()
 	}
 	s.raft.Stop()
+	s.WaitRebuild()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -436,8 +648,10 @@ func (s *Shard) Close() error {
 			firstErr = err
 		}
 	}
-	if err := s.idx.Close(); err != nil && firstErr == nil {
-		firstErr = err
+	if s.idx != nil {
+		if err := s.idx.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }
@@ -467,7 +681,6 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 			s.proposalMu.Unlock()
 
 		case *scrapv1.RaftCommand_ConsistencyCheck:
-			s.idx.SetAppliedIndex(e.Index)
 			result := s.applyConsistencyCheck(c.ConsistencyCheck, e.Index)
 
 			s.proposalMu.Lock()
@@ -482,7 +695,11 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 }
 
 func (s *Shard) applyConsistencyCheck(cc *scrapv1.RequestConsistencyCheck, entryIndex uint64) scrub.Result {
+	s.mu.Lock()
+	s.idx.SetAppliedIndex(entryIndex)
 	_, hash, err := s.idx.StreamingHash()
+	s.mu.Unlock()
+
 	result := scrub.Result{
 		ScrubID:      cc.ScrubId,
 		AppliedIndex: entryIndex,
@@ -578,24 +795,33 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 		}
 	}
 
-	blockID := doc.BlockId
-	existing, err := s.idx.Get(doc.TransactionId)
-	if err != nil {
-		if err := s.idx.Put(doc.TransactionId, blockID, 1, false); err != nil {
-			return fmt.Errorf("shard: put index: %w", err)
-		}
-	} else {
-		lastBlockID := existing.BlockIDs[len(existing.BlockIDs)-1]
-		if blockID != lastBlockID {
-			if err := s.idx.AddBlockID(doc.TransactionId, blockID); err != nil {
-				return fmt.Errorf("shard: add block id: %w", err)
-			}
-		}
-		if err := s.idx.IncrementDocCount(doc.TransactionId); err != nil {
-			return fmt.Errorf("shard: increment doc count: %w", err)
-		}
+	if err := addProjectionDocument(s.idx, doc.TransactionId, doc.BlockId); err != nil {
+		return err
 	}
 
+	return nil
+}
+
+func addProjectionDocument(projection *index.Index, txID string, blockID uint64) error {
+	existing, err := projection.Get(txID)
+	if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			if err := projection.Put(txID, blockID, 1, false); err != nil {
+				return fmt.Errorf("shard: put index: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("shard: get index: %w", err)
+	}
+
+	if len(existing.BlockIDs) == 0 || blockID != existing.BlockIDs[len(existing.BlockIDs)-1] {
+		if err := projection.AddBlockID(txID, blockID); err != nil {
+			return fmt.Errorf("shard: add block id: %w", err)
+		}
+	}
+	if err := projection.IncrementDocCount(txID); err != nil {
+		return fmt.Errorf("shard: increment doc count: %w", err)
+	}
 	return nil
 }
 

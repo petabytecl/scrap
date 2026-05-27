@@ -35,8 +35,8 @@ type PeerServiceClient interface {
 	TransferBlock(ctx context.Context, in *TransferBlockRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TransferBlockResponse], error)
 	ConsistencyCheck(ctx context.Context, in *ConsistencyCheckRequest, opts ...grpc.CallOption) (*ConsistencyCheckResponse, error)
 	RequestIndexRebuild(ctx context.Context, in *RequestIndexRebuildRequest, opts ...grpc.CallOption) (*RequestIndexRebuildResponse, error)
-	ForwardRaft(ctx context.Context, in *RaftMessageRequest, opts ...grpc.CallOption) (*RaftMessageResponse, error)
-	ForwardRaftStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RaftMessageRequest, RaftMessageResponse], error)
+	ForwardRaft(ctx context.Context, in *ForwardRaftRequest, opts ...grpc.CallOption) (*ForwardRaftResponse, error)
+	ForwardRaftStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardRaftStreamRequest, ForwardRaftStreamResponse], error)
 }
 
 type peerServiceClient struct {
@@ -99,9 +99,9 @@ func (c *peerServiceClient) RequestIndexRebuild(ctx context.Context, in *Request
 	return out, nil
 }
 
-func (c *peerServiceClient) ForwardRaft(ctx context.Context, in *RaftMessageRequest, opts ...grpc.CallOption) (*RaftMessageResponse, error) {
+func (c *peerServiceClient) ForwardRaft(ctx context.Context, in *ForwardRaftRequest, opts ...grpc.CallOption) (*ForwardRaftResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RaftMessageResponse)
+	out := new(ForwardRaftResponse)
 	err := c.cc.Invoke(ctx, PeerService_ForwardRaft_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -109,18 +109,18 @@ func (c *peerServiceClient) ForwardRaft(ctx context.Context, in *RaftMessageRequ
 	return out, nil
 }
 
-func (c *peerServiceClient) ForwardRaftStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RaftMessageRequest, RaftMessageResponse], error) {
+func (c *peerServiceClient) ForwardRaftStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardRaftStreamRequest, ForwardRaftStreamResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &PeerService_ServiceDesc.Streams[2], PeerService_ForwardRaftStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[RaftMessageRequest, RaftMessageResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[ForwardRaftStreamRequest, ForwardRaftStreamResponse]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PeerService_ForwardRaftStreamClient = grpc.BidiStreamingClient[RaftMessageRequest, RaftMessageResponse]
+type PeerService_ForwardRaftStreamClient = grpc.BidiStreamingClient[ForwardRaftStreamRequest, ForwardRaftStreamResponse]
 
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
@@ -130,8 +130,8 @@ type PeerServiceServer interface {
 	TransferBlock(*TransferBlockRequest, grpc.ServerStreamingServer[TransferBlockResponse]) error
 	ConsistencyCheck(context.Context, *ConsistencyCheckRequest) (*ConsistencyCheckResponse, error)
 	RequestIndexRebuild(context.Context, *RequestIndexRebuildRequest) (*RequestIndexRebuildResponse, error)
-	ForwardRaft(context.Context, *RaftMessageRequest) (*RaftMessageResponse, error)
-	ForwardRaftStream(grpc.BidiStreamingServer[RaftMessageRequest, RaftMessageResponse]) error
+	ForwardRaft(context.Context, *ForwardRaftRequest) (*ForwardRaftResponse, error)
+	ForwardRaftStream(grpc.BidiStreamingServer[ForwardRaftStreamRequest, ForwardRaftStreamResponse]) error
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -154,10 +154,10 @@ func (UnimplementedPeerServiceServer) ConsistencyCheck(context.Context, *Consist
 func (UnimplementedPeerServiceServer) RequestIndexRebuild(context.Context, *RequestIndexRebuildRequest) (*RequestIndexRebuildResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestIndexRebuild not implemented")
 }
-func (UnimplementedPeerServiceServer) ForwardRaft(context.Context, *RaftMessageRequest) (*RaftMessageResponse, error) {
+func (UnimplementedPeerServiceServer) ForwardRaft(context.Context, *ForwardRaftRequest) (*ForwardRaftResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForwardRaft not implemented")
 }
-func (UnimplementedPeerServiceServer) ForwardRaftStream(grpc.BidiStreamingServer[RaftMessageRequest, RaftMessageResponse]) error {
+func (UnimplementedPeerServiceServer) ForwardRaftStream(grpc.BidiStreamingServer[ForwardRaftStreamRequest, ForwardRaftStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method ForwardRaftStream not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
@@ -236,7 +236,7 @@ func _PeerService_RequestIndexRebuild_Handler(srv interface{}, ctx context.Conte
 }
 
 func _PeerService_ForwardRaft_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RaftMessageRequest)
+	in := new(ForwardRaftRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -248,17 +248,17 @@ func _PeerService_ForwardRaft_Handler(srv interface{}, ctx context.Context, dec 
 		FullMethod: PeerService_ForwardRaft_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PeerServiceServer).ForwardRaft(ctx, req.(*RaftMessageRequest))
+		return srv.(PeerServiceServer).ForwardRaft(ctx, req.(*ForwardRaftRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _PeerService_ForwardRaftStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(PeerServiceServer).ForwardRaftStream(&grpc.GenericServerStream[RaftMessageRequest, RaftMessageResponse]{ServerStream: stream})
+	return srv.(PeerServiceServer).ForwardRaftStream(&grpc.GenericServerStream[ForwardRaftStreamRequest, ForwardRaftStreamResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PeerService_ForwardRaftStreamServer = grpc.BidiStreamingServer[RaftMessageRequest, RaftMessageResponse]
+type PeerService_ForwardRaftStreamServer = grpc.BidiStreamingServer[ForwardRaftStreamRequest, ForwardRaftStreamResponse]
 
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,

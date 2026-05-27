@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -255,6 +257,186 @@ func TestConsistencyCheckEmptyProjection(t *testing.T) {
 	}
 	if result.AppliedIndex == 0 {
 		t.Fatal("AppliedIndex should be non-zero even for empty projection")
+	}
+}
+
+func TestTriggerRebuild_CompletesAndReturnsToServing(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	alreadyInProgress, err := s.TriggerRebuild(ctx)
+	if err != nil {
+		t.Fatalf("TriggerRebuild: %v", err)
+	}
+	if alreadyInProgress {
+		t.Fatal("expected alreadyInProgress=false on first call")
+	}
+
+	s.WaitRebuild()
+
+	_, err = s.WriteDocument(ctx, "tx-post-rebuild", "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+	if err != nil {
+		t.Fatalf("WriteDocument after rebuild should succeed: %v", err)
+	}
+}
+
+func TestTriggerRebuild_PreservesCommittedProjection(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	content := []byte("survives rebuild")
+	_, err := s.WriteDocument(ctx, "tx-rebuild", "doc.xml", "text/xml", "", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("WriteDocument doc.xml: %v", err)
+	}
+	_, err = s.WriteDocument(ctx, "tx-rebuild", "other.xml", "text/xml", "", bytes.NewReader([]byte("other")))
+	if err != nil {
+		t.Fatalf("WriteDocument other.xml: %v", err)
+	}
+
+	triggerRebuildAndWait(ctx, t, s)
+	assertHeadDocumentSize(ctx, t, s, "tx-rebuild", "doc.xml", int64(len(content)))
+	assertReadDocumentContent(ctx, t, s, "tx-rebuild", "doc.xml", content)
+	assertFindDocumentCount(ctx, t, s, "tx-rebuild", 2)
+	assertDuplicateWriteRejected(ctx, t, s, "tx-rebuild", "doc.xml")
+}
+
+func assertFindDocumentCount(ctx context.Context, t *testing.T, s *shard.Shard, txID string, want int) {
+	t.Helper()
+	docs, err := s.FindDocuments(ctx, txID)
+	if err != nil {
+		t.Fatalf("FindDocuments after rebuild: %v", err)
+	}
+	if len(docs) != want {
+		t.Fatalf("FindDocuments after rebuild: got %d docs, want %d", len(docs), want)
+	}
+}
+
+func assertDuplicateWriteRejected(ctx context.Context, t *testing.T, s *shard.Shard, txID, docName string) {
+	t.Helper()
+	_, err := s.WriteDocument(ctx, txID, docName, "text/xml", "", bytes.NewReader([]byte("duplicate")))
+	if err == nil {
+		t.Fatal("expected duplicate write to fail after rebuild")
+	}
+	if !storeapi.IsAlreadyExists(err) {
+		t.Fatalf("expected ErrAlreadyExists after rebuild, got: %v", err)
+	}
+}
+
+func assertHeadDocumentSize(ctx context.Context, t *testing.T, s *shard.Shard, txID, docName string, want int64) {
+	t.Helper()
+	meta, err := s.HeadDocument(ctx, txID, docName)
+	if err != nil {
+		t.Fatalf("HeadDocument after rebuild: %v", err)
+	}
+	if meta.Size != want {
+		t.Fatalf("Size after rebuild: got %d, want %d", meta.Size, want)
+	}
+}
+
+func assertReadDocumentContent(ctx context.Context, t *testing.T, s *shard.Shard, txID, docName string, want []byte) {
+	t.Helper()
+	rc, _, err := s.ReadDocument(ctx, txID, docName)
+	if err != nil {
+		t.Fatalf("ReadDocument after rebuild: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	readBack, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll after rebuild: %v", err)
+	}
+	if !bytes.Equal(readBack, want) {
+		t.Fatalf("content after rebuild: got %q, want %q", readBack, want)
+	}
+}
+
+func triggerRebuildAndWait(ctx context.Context, t *testing.T, s *shard.Shard) {
+	t.Helper()
+	alreadyInProgress, err := s.TriggerRebuild(ctx)
+	if err != nil {
+		t.Fatalf("TriggerRebuild: %v", err)
+	}
+	if alreadyInProgress {
+		t.Fatal("expected alreadyInProgress=false on first call")
+	}
+	s.WaitRebuild()
+}
+
+func TestTriggerRebuild_AlreadyInProgress(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	s.SetRebuildingForTest(true)
+	alreadyInProgress, err := s.TriggerRebuild(ctx)
+	if err != nil {
+		t.Fatalf("TriggerRebuild: %v", err)
+	}
+	if !alreadyInProgress {
+		t.Fatal("expected alreadyInProgress=true when already rebuilding")
+	}
+	s.SetRebuildingForTest(false)
+}
+
+func TestRebuilding_RejectsWrites(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	s.SetRebuildingForTest(true)
+	_, err := s.WriteDocument(ctx, "tx-blocked", "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+	s.SetRebuildingForTest(false)
+
+	if err == nil {
+		t.Fatal("expected error during rebuild")
+	}
+	if !storeapi.IsRebuilding(err) {
+		t.Fatalf("expected ErrRebuilding, got: %v", err)
+	}
+}
+
+func TestRebuilding_RejectsReads(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	_, err := s.WriteDocument(ctx, "tx-before", "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+	if err != nil {
+		t.Fatalf("pre-write: %v", err)
+	}
+
+	s.SetRebuildingForTest(true)
+	_, _, err = s.ReadDocument(ctx, "tx-before", "doc.xml")
+	s.SetRebuildingForTest(false)
+
+	if err == nil {
+		t.Fatal("expected error during rebuild")
+	}
+	if !storeapi.IsRebuilding(err) {
+		t.Fatalf("expected ErrRebuilding, got: %v", err)
+	}
+}
+
+func TestRebuildPrepareFailure_ShardRecovers(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := os.Chmod(blocksDir, 0o000); err != nil {
+		t.Skipf("cannot restrict blocks dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocksDir, 0o750) }) //nolint:gosec // test cleanup needs dir traversal
+
+	alreadyInProgress, err := s.TriggerRebuild(ctx)
+	if err != nil {
+		t.Fatalf("TriggerRebuild: %v", err)
+	}
+	if alreadyInProgress {
+		t.Fatal("expected alreadyInProgress=false")
+	}
+	s.WaitRebuild()
+
+	_ = os.Chmod(blocksDir, 0o750) //nolint:gosec // test needs dir traversal for write recovery
+	_, err = s.WriteDocument(ctx, "tx-after-fail", "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+	if err != nil {
+		t.Fatalf("expected shard to recover after prepare failure: %v", err)
 	}
 }
 

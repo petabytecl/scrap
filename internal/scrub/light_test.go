@@ -200,3 +200,104 @@ func (c *countingProposer) ProposeConsistencyCheck(ctx context.Context, scrubID 
 	c.count.Add(1)
 	return c.inner.ProposeConsistencyCheck(ctx, scrubID)
 }
+
+type mockRebuilder struct {
+	requested []string
+	err       error
+}
+
+func (m *mockRebuilder) RequestRebuild(_ context.Context, addr, _ string) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.requested = append(m.requested, addr)
+	return nil
+}
+
+func TestLightScrubber_MismatchTriggersRebuild(t *testing.T) {
+	leaderHash := [32]byte{0xaa, 0xbb}
+	peerHash := [32]byte{0xcc, 0xdd}
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: leaderHash}}
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {AppliedIndex: 10, SHA256: leaderHash},
+		"peer-2:9091": {AppliedIndex: 10, SHA256: peerHash},
+	}}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+
+	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+	})
+
+	err := ls.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if len(rebuilder.requested) != 1 {
+		t.Fatalf("expected 1 rebuild request, got %d: %v", len(rebuilder.requested), rebuilder.requested)
+	}
+	if rebuilder.requested[0] != "peer-2:9091" {
+		t.Fatalf("expected rebuild for peer-2:9091, got %s", rebuilder.requested[0])
+	}
+}
+
+func TestLightScrubber_MultipleMismatchesRebuildAll(t *testing.T) {
+	leaderHash := [32]byte{0xaa}
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: leaderHash}}
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {AppliedIndex: 10, SHA256: [32]byte{0xbb}},
+		"peer-2:9091": {AppliedIndex: 10, SHA256: [32]byte{0xcc}},
+	}}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+
+	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+	})
+
+	err := ls.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if len(rebuilder.requested) != 2 {
+		t.Fatalf("expected 2 rebuild requests, got %d", len(rebuilder.requested))
+	}
+}
+
+func TestLightScrubber_NoRebuildOnMatch(t *testing.T) {
+	hash := [32]byte{0xaa}
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: hash}}
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {AppliedIndex: 10, SHA256: hash},
+	}}
+	rebuilder := &mockRebuilder{}
+
+	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            &mockMetrics{},
+		Rebuilder:          rebuilder,
+		PeerAddrs:          []string{"peer-1:9091"},
+	})
+
+	if err := ls.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if len(rebuilder.requested) != 0 {
+		t.Fatalf("expected 0 rebuild requests, got %d", len(rebuilder.requested))
+	}
+}

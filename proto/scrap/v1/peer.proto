@@ -7,8 +7,8 @@ service PeerService {
   rpc TransferBlock(TransferBlockRequest) returns (stream TransferBlockResponse);
   rpc ConsistencyCheck(ConsistencyCheckRequest) returns (ConsistencyCheckResponse);
   rpc RequestIndexRebuild(RequestIndexRebuildRequest) returns (RequestIndexRebuildResponse);
-  rpc ForwardRaft(RaftMessageRequest) returns (RaftMessageResponse);
-  rpc ForwardRaftStream(stream RaftMessageRequest) returns (stream RaftMessageResponse);
+  rpc ForwardRaft(ForwardRaftRequest) returns (ForwardRaftResponse);
+  rpc ForwardRaftStream(stream ForwardRaftStreamRequest) returns (stream ForwardRaftStreamResponse);
 }
 
 message ReplicateDocumentRequest {
@@ -69,9 +69,16 @@ message RequestIndexRebuildResponse {
   bool already_in_progress = 1;
 }
 
-message RaftMessageRequest {
+message ForwardRaftRequest {
   uint64 shard_id = 1;
   bytes  message  = 2;
 }
 
-message RaftMessageResponse {}
+message ForwardRaftResponse {}
+
+message ForwardRaftStreamRequest {
+  uint64 shard_id = 1;
+  bytes  message  = 2;
+}
+
+message ForwardRaftStreamResponse {}

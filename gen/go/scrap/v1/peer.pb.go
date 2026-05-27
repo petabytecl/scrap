@@ -633,7 +633,7 @@ func (x *RequestIndexRebuildResponse) GetAlreadyInProgress() bool {
 	return false
 }
 
-type RaftMessageRequest struct {
+type ForwardRaftRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ShardId       uint64                 `protobuf:"varint,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	Message       []byte                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
@@ -641,20 +641,20 @@ type RaftMessageRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RaftMessageRequest) Reset() {
-	*x = RaftMessageRequest{}
+func (x *ForwardRaftRequest) Reset() {
+	*x = ForwardRaftRequest{}
 	mi := &file_scrap_v1_peer_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RaftMessageRequest) String() string {
+func (x *ForwardRaftRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RaftMessageRequest) ProtoMessage() {}
+func (*ForwardRaftRequest) ProtoMessage() {}
 
-func (x *RaftMessageRequest) ProtoReflect() protoreflect.Message {
+func (x *ForwardRaftRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_scrap_v1_peer_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -666,45 +666,45 @@ func (x *RaftMessageRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RaftMessageRequest.ProtoReflect.Descriptor instead.
-func (*RaftMessageRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ForwardRaftRequest.ProtoReflect.Descriptor instead.
+func (*ForwardRaftRequest) Descriptor() ([]byte, []int) {
 	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *RaftMessageRequest) GetShardId() uint64 {
+func (x *ForwardRaftRequest) GetShardId() uint64 {
 	if x != nil {
 		return x.ShardId
 	}
 	return 0
 }
 
-func (x *RaftMessageRequest) GetMessage() []byte {
+func (x *ForwardRaftRequest) GetMessage() []byte {
 	if x != nil {
 		return x.Message
 	}
 	return nil
 }
 
-type RaftMessageResponse struct {
+type ForwardRaftResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RaftMessageResponse) Reset() {
-	*x = RaftMessageResponse{}
+func (x *ForwardRaftResponse) Reset() {
+	*x = ForwardRaftResponse{}
 	mi := &file_scrap_v1_peer_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RaftMessageResponse) String() string {
+func (x *ForwardRaftResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RaftMessageResponse) ProtoMessage() {}
+func (*ForwardRaftResponse) ProtoMessage() {}
 
-func (x *RaftMessageResponse) ProtoReflect() protoreflect.Message {
+func (x *ForwardRaftResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_scrap_v1_peer_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -716,9 +716,97 @@ func (x *RaftMessageResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RaftMessageResponse.ProtoReflect.Descriptor instead.
-func (*RaftMessageResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ForwardRaftResponse.ProtoReflect.Descriptor instead.
+func (*ForwardRaftResponse) Descriptor() ([]byte, []int) {
 	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{11}
+}
+
+type ForwardRaftStreamRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ShardId       uint64                 `protobuf:"varint,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	Message       []byte                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardRaftStreamRequest) Reset() {
+	*x = ForwardRaftStreamRequest{}
+	mi := &file_scrap_v1_peer_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardRaftStreamRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardRaftStreamRequest) ProtoMessage() {}
+
+func (x *ForwardRaftStreamRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_peer_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardRaftStreamRequest.ProtoReflect.Descriptor instead.
+func (*ForwardRaftStreamRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ForwardRaftStreamRequest) GetShardId() uint64 {
+	if x != nil {
+		return x.ShardId
+	}
+	return 0
+}
+
+func (x *ForwardRaftStreamRequest) GetMessage() []byte {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+type ForwardRaftStreamResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardRaftStreamResponse) Reset() {
+	*x = ForwardRaftStreamResponse{}
+	mi := &file_scrap_v1_peer_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardRaftStreamResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardRaftStreamResponse) ProtoMessage() {}
+
+func (x *ForwardRaftStreamResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_peer_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardRaftStreamResponse.ProtoReflect.Descriptor instead.
+func (*ForwardRaftStreamResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{13}
 }
 
 var File_scrap_v1_peer_proto protoreflect.FileDescriptor
@@ -767,17 +855,21 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\"M\n" +
 	"\x1bRequestIndexRebuildResponse\x12.\n" +
 	"\x13already_in_progress\x18\x01 \x01(\bR\x11alreadyInProgress\"I\n" +
-	"\x12RaftMessageRequest\x12\x19\n" +
+	"\x12ForwardRaftRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\x04R\ashardId\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\fR\amessage\"\x15\n" +
-	"\x13RaftMessageResponse2\xa2\x04\n" +
+	"\x13ForwardRaftResponse\"O\n" +
+	"\x18ForwardRaftStreamRequest\x12\x19\n" +
+	"\bshard_id\x18\x01 \x01(\x04R\ashardId\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\fR\amessage\"\x1b\n" +
+	"\x19ForwardRaftStreamResponse2\xae\x04\n" +
 	"\vPeerService\x12^\n" +
 	"\x11ReplicateDocument\x12\".scrap.v1.ReplicateDocumentRequest\x1a#.scrap.v1.ReplicateDocumentResponse(\x01\x12R\n" +
 	"\rTransferBlock\x12\x1e.scrap.v1.TransferBlockRequest\x1a\x1f.scrap.v1.TransferBlockResponse0\x01\x12Y\n" +
 	"\x10ConsistencyCheck\x12!.scrap.v1.ConsistencyCheckRequest\x1a\".scrap.v1.ConsistencyCheckResponse\x12b\n" +
 	"\x13RequestIndexRebuild\x12$.scrap.v1.RequestIndexRebuildRequest\x1a%.scrap.v1.RequestIndexRebuildResponse\x12J\n" +
-	"\vForwardRaft\x12\x1c.scrap.v1.RaftMessageRequest\x1a\x1d.scrap.v1.RaftMessageResponse\x12T\n" +
-	"\x11ForwardRaftStream\x12\x1c.scrap.v1.RaftMessageRequest\x1a\x1d.scrap.v1.RaftMessageResponse(\x010\x01B\x8c\x01\n" +
+	"\vForwardRaft\x12\x1c.scrap.v1.ForwardRaftRequest\x1a\x1d.scrap.v1.ForwardRaftResponse\x12`\n" +
+	"\x11ForwardRaftStream\x12\".scrap.v1.ForwardRaftStreamRequest\x1a#.scrap.v1.ForwardRaftStreamResponse(\x010\x01B\x8c\x01\n" +
 	"\fcom.scrap.v1B\tPeerProtoP\x01Z0github.com/petabytecl/scrap/gen/scrap/v1;scrapv1\xa2\x02\x03SXX\xaa\x02\bScrap.V1\xca\x02\bScrap\\V1\xe2\x02\x14Scrap\\V1\\GPBMetadata\xea\x02\tScrap::V1b\x06proto3"
 
 var (
@@ -792,7 +884,7 @@ func file_scrap_v1_peer_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_peer_proto_rawDescData
 }
 
-var file_scrap_v1_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_scrap_v1_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_scrap_v1_peer_proto_goTypes = []any{
 	(*ReplicateDocumentRequest)(nil),    // 0: scrap.v1.ReplicateDocumentRequest
 	(*ReplicateDocumentInit)(nil),       // 1: scrap.v1.ReplicateDocumentInit
@@ -804,8 +896,10 @@ var file_scrap_v1_peer_proto_goTypes = []any{
 	(*ConsistencyCheckResponse)(nil),    // 7: scrap.v1.ConsistencyCheckResponse
 	(*RequestIndexRebuildRequest)(nil),  // 8: scrap.v1.RequestIndexRebuildRequest
 	(*RequestIndexRebuildResponse)(nil), // 9: scrap.v1.RequestIndexRebuildResponse
-	(*RaftMessageRequest)(nil),          // 10: scrap.v1.RaftMessageRequest
-	(*RaftMessageResponse)(nil),         // 11: scrap.v1.RaftMessageResponse
+	(*ForwardRaftRequest)(nil),          // 10: scrap.v1.ForwardRaftRequest
+	(*ForwardRaftResponse)(nil),         // 11: scrap.v1.ForwardRaftResponse
+	(*ForwardRaftStreamRequest)(nil),    // 12: scrap.v1.ForwardRaftStreamRequest
+	(*ForwardRaftStreamResponse)(nil),   // 13: scrap.v1.ForwardRaftStreamResponse
 }
 var file_scrap_v1_peer_proto_depIdxs = []int32{
 	1,  // 0: scrap.v1.ReplicateDocumentRequest.init:type_name -> scrap.v1.ReplicateDocumentInit
@@ -814,14 +908,14 @@ var file_scrap_v1_peer_proto_depIdxs = []int32{
 	3,  // 3: scrap.v1.PeerService.TransferBlock:input_type -> scrap.v1.TransferBlockRequest
 	6,  // 4: scrap.v1.PeerService.ConsistencyCheck:input_type -> scrap.v1.ConsistencyCheckRequest
 	8,  // 5: scrap.v1.PeerService.RequestIndexRebuild:input_type -> scrap.v1.RequestIndexRebuildRequest
-	10, // 6: scrap.v1.PeerService.ForwardRaft:input_type -> scrap.v1.RaftMessageRequest
-	10, // 7: scrap.v1.PeerService.ForwardRaftStream:input_type -> scrap.v1.RaftMessageRequest
+	10, // 6: scrap.v1.PeerService.ForwardRaft:input_type -> scrap.v1.ForwardRaftRequest
+	12, // 7: scrap.v1.PeerService.ForwardRaftStream:input_type -> scrap.v1.ForwardRaftStreamRequest
 	2,  // 8: scrap.v1.PeerService.ReplicateDocument:output_type -> scrap.v1.ReplicateDocumentResponse
 	4,  // 9: scrap.v1.PeerService.TransferBlock:output_type -> scrap.v1.TransferBlockResponse
 	7,  // 10: scrap.v1.PeerService.ConsistencyCheck:output_type -> scrap.v1.ConsistencyCheckResponse
 	9,  // 11: scrap.v1.PeerService.RequestIndexRebuild:output_type -> scrap.v1.RequestIndexRebuildResponse
-	11, // 12: scrap.v1.PeerService.ForwardRaft:output_type -> scrap.v1.RaftMessageResponse
-	11, // 13: scrap.v1.PeerService.ForwardRaftStream:output_type -> scrap.v1.RaftMessageResponse
+	11, // 12: scrap.v1.PeerService.ForwardRaft:output_type -> scrap.v1.ForwardRaftResponse
+	13, // 13: scrap.v1.PeerService.ForwardRaftStream:output_type -> scrap.v1.ForwardRaftStreamResponse
 	8,  // [8:14] is the sub-list for method output_type
 	2,  // [2:8] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
@@ -848,7 +942,7 @@ func file_scrap_v1_peer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_peer_proto_rawDesc), len(file_scrap_v1_peer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

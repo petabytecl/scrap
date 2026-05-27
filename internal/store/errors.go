@@ -9,10 +9,15 @@ var (
 	ErrInvalidArgument   = errors.New("invalid argument")
 	ErrResourceExhausted = errors.New("resource exhausted")
 	ErrDataLoss          = errors.New("data corruption detected")
+	ErrRebuilding        = errors.New("projection rebuild in progress")
 )
 
 func IsAlreadyExists(err error) bool {
 	return errors.Is(err, ErrAlreadyExists)
+}
+
+func IsRebuilding(err error) bool {
+	return errors.Is(err, ErrRebuilding)
 }
 
 type NotLeaderError struct {

@@ -203,6 +203,10 @@ func (r *IndexReader) FindByTransaction(txID string) []IndexEntry {
 	return result
 }
 
+func (r *IndexReader) Entries() []IndexEntry {
+	return r.entries
+}
+
 func (r *IndexReader) Close() error {
 	return r.f.Close()
 }

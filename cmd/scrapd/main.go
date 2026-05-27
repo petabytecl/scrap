@@ -65,19 +65,33 @@ func run() error {
 	defer sharedTransport.Close()
 	shardTransport := sharedTransport.ForShard(0, peers)
 
+	peerClient := peer.NewClient()
+
+	var peerAddrs []string
+	for _, addr := range peers {
+		peerAddrs = append(peerAddrs, addr)
+	}
+
+	scrubMetrics := scrub.NewPrometheusMetrics(registry)
+
 	s, err := shard.Open(shard.Config{
-		DataDir:       *dataDir,
-		ShardID:       0,
-		RaftID:        raftID,
-		Peers:         peers,
-		BlockSealSize: *blockSealSize,
-		Scrub:         scrubCfg,
-		Transport:     shardTransport,
+		DataDir:            *dataDir,
+		ShardID:            0,
+		RaftID:             raftID,
+		Peers:              peers,
+		BlockSealSize:      *blockSealSize,
+		Scrub:              scrubCfg,
+		Transport:          shardTransport,
+		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
+		ScrubMetrics:       scrubMetrics,
+		Rebuilder:          peer.NewClientRebuilder(peerClient),
+		PeerAddrs:          peerAddrs,
 	})
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
 	}
 	defer func() { _ = s.Close() }()
+	defer peerClient.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -98,7 +112,7 @@ func run() error {
 		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
 	peerGS := grpc.NewServer()
-	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s))
+	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s))
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)
 	}))

@@ -85,6 +85,21 @@ func (c *Client) ConsistencyCheck(ctx context.Context, addr, scrubID string) (*s
 	return resp, nil
 }
 
+func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) (*scrapv1.RequestIndexRebuildResponse, error) {
+	conn, err := c.getConn(addr)
+	if err != nil {
+		return nil, err
+	}
+	client := scrapv1.NewPeerServiceClient(conn)
+	resp, err := client.RequestIndexRebuild(ctx, &scrapv1.RequestIndexRebuildRequest{
+		ScrubId: scrubID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("peer: request rebuild %s: %w", addr, err)
+	}
+	return resp, nil
+}
+
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
