@@ -81,6 +81,31 @@ before bytes are committed to Raft. On recovery, entries are compared against co
 Raft state to identify completed vs. partial writes.
 _Avoid_: WAL (ambiguous with Raft WAL), prepare log, journal
 
+**Block Quarantine**:
+A filesystem-level isolation of a corrupt **Block**. The `.blk` and `.idx` files are
+renamed to `.blk.quarantine` / `.idx.quarantine`. Triggered by **Deep Scrub** when
+Frame CRC or Document SHA-256 verification fails. The Block is replaced from a peer
+via `TransferBlock`. All **Documents** in a Block-quarantined Block become unreadable
+until repair completes.
+_Avoid_: Content Quarantine (different mechanism)
+
+**Content Quarantine**:
+A metadata-level gate on a single **Document** flagged by the **Content Scanner** as
+potentially malicious. A dedicated Pebble key prefix records quarantined Document
+identities, replicated via a `QuarantineDocument` Raft command. `ReadDocument` returns
+`FAILED_PRECONDITION`; `HeadDocument` and `FindDocuments` return metadata with a
+`scan_status` field. Block bytes are untouched. An operator can confirm (permanent
+quarantine) or release (false positive) via the **Admin Service**.
+_Avoid_: Block Quarantine (different mechanism), flag, hold
+
+**Content Scanner**:
+A background process on the **Shard** leader that scans sealed **Block** bytes for
+malware using ClamAV signatures and YARA rules. Runs asynchronously after Document
+ACK — never in the write path. Tracks progress via a block-ID watermark and a
+signature-version watermark. Shares I/O budget with **Deep Scrub** to avoid starving
+client reads.
+_Avoid_: AV scanner, virus scanner, malware scanner
+
 ### Example dialogue
 
 > **Dev:** "A billing service just wrote 5 invoices for the same order."
