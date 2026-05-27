@@ -75,7 +75,7 @@ func WriteFrame(w io.Writer, hdr FrameHeader, payload []byte) error {
 	return nil
 }
 
-// ReadFrame reads a 32-byte frame header + payload, verifying both header and payload CRC.
+//nolint:cyclop // payloadLen bounds check is a necessary safety guard
 func ReadFrame(r io.Reader) (FrameHeader, []byte, error) {
 	var buf [FrameHeaderSize]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
@@ -107,6 +107,9 @@ func ReadFrame(r io.Reader) (FrameHeader, []byte, error) {
 	}
 
 	payloadLen := binary.LittleEndian.Uint32(buf[16:20])
+	if payloadLen > MaxFramePayload {
+		return FrameHeader{}, nil, ErrPayloadLimit
+	}
 	payloadCRC := binary.LittleEndian.Uint32(buf[20:24])
 
 	hdr.PayloadLen = payloadLen

@@ -13,3 +13,7 @@ Default label vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-h
 ### Domain docs
 
 Single-context repo — one `CONTEXT.md` at the root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
+## Code style
+
+All Go code must follow `docs/go-style-guide.md`. The guide covers design decisions, naming, error handling, concurrency, testing, performance, metrics, and documentation conventions. Mechanical formatting is enforced by `.golangci.yml`.

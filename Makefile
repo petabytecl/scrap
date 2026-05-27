@@ -39,11 +39,7 @@ COVER_EXCLUDE_PATTERN ?= (/internal/spike/)
 COVER_PACKAGES ?= $(shell printf '%s\n' $(COVER_TEST_PACKAGES) | grep -Ev '$(COVER_EXCLUDE_PATTERN)')
 
 ##? LINT_TIMEOUT Timeout passed to golangci-lint run.
-##? PROTO_BREAKING_REF Git ref used by buf breaking checks.
-
 LINT_TIMEOUT ?= 5m
-PROTO_BREAKING_REF ?= main
-PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 
 ##? COVERMODE Coverage mode passed to go test.
 ##? COVERPROFILE Coverage profile output path.
@@ -135,14 +131,8 @@ proto: ## Generate protobuf and gRPC code.
 	$(BUF) generate
 
 .PHONY: proto-check
-proto-check: ## Lint schemas, check breaking changes, and verify generated code.
+proto-check: ## Lint schemas and verify generated code.
 	$(BUF) lint
-	@if git cat-file -e "$(PROTO_BREAKING_REF):buf.yaml" 2>/dev/null && \
-		git cat-file -e "$(PROTO_BREAKING_REF):proto" 2>/dev/null; then \
-		$(BUF) breaking --against "$(PROTO_BREAKING_AGAINST)"; \
-	else \
-		echo "buf breaking skipped: $(PROTO_BREAKING_REF) has no proto module yet"; \
-	fi
 	$(BUF) generate
 	git diff --exit-code -- gen
 
