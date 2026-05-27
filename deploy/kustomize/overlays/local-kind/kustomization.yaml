@@ -3,9 +3,11 @@ kind: Kustomization
 
 resources:
   - ../../base
+  - localstack.yaml
 
 patches:
   - path: service-client-nodeport-patch.yaml
+  - path: statefulset-upload-patch.yaml
 
 images:
   - name: ghcr.io/petabytecl/scrap/scrapd
