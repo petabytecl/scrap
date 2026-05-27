@@ -18,6 +18,13 @@ const (
 	idxMinEntryLen    = 2  // version + reserved
 	idxLenPrefixSize  = 2  // uint16 length prefix for strings
 	idxFixedFieldSize = 60 // created_at(8) + first_frame_off(8) + frame_count(4) + total_bytes(8) + sha256(32)
+
+	sha256Size = 32 // SHA-256 digest length in bytes
+	uint64Size = 8  // encoded uint64 length in bytes
+	uint32Size = 4  // encoded uint32 length in bytes
+	uint16Size = 2  // encoded uint16 length in bytes
+
+	paddingByte = 0x00 // reserved byte in index entry header
 )
 
 var (
@@ -206,11 +213,11 @@ func encodeIndexEntry(e IndexEntry) []byte {
 	docNameBytes := []byte(e.DocName)
 	ctBytes := []byte(e.ContentType)
 
-	size := 2 + (2 + len(txIDBytes)) + (2 + len(docNameBytes)) + (2 + len(ctBytes)) + 8 + 8 + 4 + 8 + 32
+	size := idxMinEntryLen + (uint16Size + len(txIDBytes)) + (uint16Size + len(docNameBytes)) + (uint16Size + len(ctBytes)) + uint64Size + uint64Size + uint32Size + uint64Size + sha256Size
 	buf := make([]byte, 0, size)
 
 	buf = append(buf, idxEntryVersion) // version
-	buf = append(buf, 0x00)            // reserved
+	buf = append(buf, paddingByte)     // reserved
 
 	buf = appendLenPrefixed(buf, txIDBytes)
 	buf = appendLenPrefixed(buf, docNameBytes)

@@ -11,8 +11,17 @@ import (
 var ErrNotFound = errors.New("index: transaction not found")
 
 const (
-	valueVersion  byte = 0x01
-	minEncodedLen int  = 6 // version(1) + block_count(2) + doc_count(2) + completed(1)
+	valueVersion byte = 0x01
+
+	sizeVersion    = 1
+	sizeBlockCount = 2
+	sizeBlockID    = 8
+	sizeDocCount   = 2
+	sizeCompleted  = 1
+
+	headerLen     = sizeVersion + sizeBlockCount // version(1) + block_count(2)
+	trailerLen    = sizeDocCount + sizeCompleted // doc_count(2) + completed(1)
+	minEncodedLen = headerLen + trailerLen       // 6 bytes with zero blocks
 )
 
 type Entry struct {
@@ -92,18 +101,17 @@ func (idx *Index) put(txID string, entry Entry) error {
 }
 
 func encodeEntry(e Entry) []byte {
-	// version(1) + block_count(2) + block_ids(8*N) + doc_count(2) + completed(1)
-	n := 1 + 2 + 8*len(e.BlockIDs) + 2 + 1
+	n := headerLen + sizeBlockID*len(e.BlockIDs) + trailerLen
 	buf := make([]byte, n)
 	buf[0] = valueVersion
-	binary.LittleEndian.PutUint16(buf[1:3], uint16(len(e.BlockIDs))) //nolint:gosec // block count bounded by shard design
-	off := 3
+	binary.LittleEndian.PutUint16(buf[sizeVersion:headerLen], uint16(len(e.BlockIDs))) //nolint:gosec // block count bounded by shard design
+	off := headerLen
 	for _, id := range e.BlockIDs {
-		binary.LittleEndian.PutUint64(buf[off:off+8], id)
-		off += 8
+		binary.LittleEndian.PutUint64(buf[off:off+sizeBlockID], id)
+		off += sizeBlockID
 	}
-	binary.LittleEndian.PutUint16(buf[off:off+2], e.DocCount)
-	off += 2
+	binary.LittleEndian.PutUint16(buf[off:off+sizeDocCount], e.DocCount)
+	off += sizeDocCount
 	if e.Completed {
 		buf[off] = 1
 	}
@@ -118,21 +126,21 @@ func decodeEntry(val []byte) (Entry, error) {
 		return Entry{}, fmt.Errorf("index: unknown value version: %d", val[0])
 	}
 
-	blockCount := binary.LittleEndian.Uint16(val[1:3])
-	expected := 3 + 8*int(blockCount) + 3
+	blockCount := binary.LittleEndian.Uint16(val[sizeVersion:headerLen])
+	expected := headerLen + sizeBlockID*int(blockCount) + trailerLen
 	if len(val) < expected {
 		return Entry{}, fmt.Errorf("index: value truncated: need %d, got %d", expected, len(val))
 	}
 
 	blockIDs := make([]uint64, blockCount)
-	off := 3
+	off := headerLen
 	for i := range blockCount {
-		blockIDs[i] = binary.LittleEndian.Uint64(val[off : off+8])
-		off += 8
+		blockIDs[i] = binary.LittleEndian.Uint64(val[off : off+sizeBlockID])
+		off += sizeBlockID
 	}
 
-	docCount := binary.LittleEndian.Uint16(val[off : off+2])
-	off += 2
+	docCount := binary.LittleEndian.Uint16(val[off : off+sizeDocCount])
+	off += sizeDocCount
 	completed := val[off] == 1
 
 	return Entry{

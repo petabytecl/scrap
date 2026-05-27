@@ -15,6 +15,8 @@ import (
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
+const readBufSize = 64 * 1024 // 64 KiB read buffer for streaming document chunks
+
 type documentServer struct {
 	scrapv1.UnimplementedDocumentServiceServer
 	store storeapi.Store
@@ -136,7 +138,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 		return status.Errorf(codes.Internal, "send metadata: %v", err)
 	}
 
-	buf := make([]byte, 64*1024)
+	buf := make([]byte, readBufSize)
 	for {
 		n, readErr := rc.Read(buf)
 		if n > 0 {

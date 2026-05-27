@@ -17,6 +17,15 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultTickInterval  = 100 * time.Millisecond
+	defaultMaxSizePerMsg = 1024 * 1024 // 1 MiB
+	defaultMaxInflight   = 256
+	defaultMaxSnapCount  = 10000
+	defaultElectionTick  = 10
+	defaultHeartbeatTick = 1
+)
+
 type ApplyFunc func(entries []raftpb.Entry) error
 
 type SnapshotFunc func() (data []byte, err error)
@@ -72,22 +81,22 @@ func Open(cfg Config) (*RaftNode, error) {
 		return nil, errors.New("raft: Transport is required")
 	}
 	if cfg.TickInterval == 0 {
-		cfg.TickInterval = 100 * time.Millisecond
+		cfg.TickInterval = defaultTickInterval
 	}
 	if cfg.ElectionTick == 0 {
-		cfg.ElectionTick = 10
+		cfg.ElectionTick = defaultElectionTick
 	}
 	if cfg.HeartbeatTick == 0 {
-		cfg.HeartbeatTick = 1
+		cfg.HeartbeatTick = defaultHeartbeatTick
 	}
 	if cfg.MaxSizePerMsg == 0 {
-		cfg.MaxSizePerMsg = 1024 * 1024
+		cfg.MaxSizePerMsg = defaultMaxSizePerMsg
 	}
 	if cfg.MaxInflightMsgs == 0 {
-		cfg.MaxInflightMsgs = 256
+		cfg.MaxInflightMsgs = defaultMaxInflight
 	}
 	if cfg.MaxSnapCount == 0 {
-		cfg.MaxSnapCount = 10000
+		cfg.MaxSnapCount = defaultMaxSnapCount
 	}
 
 	walDir := cfg.DataDir + "/wal"

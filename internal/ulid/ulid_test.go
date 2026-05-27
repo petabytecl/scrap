@@ -51,7 +51,7 @@ func TestMonotonicSameMillisecond(t *testing.T) {
 	gen := ulid.NewGenerator(ulid.WithClock(clock))
 
 	prev := gen.New()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		next := gen.New()
 		if next.String() <= prev.String() {
 			t.Fatalf("iteration %d: %s is not > %s", i, next.String(), prev.String())
@@ -96,8 +96,9 @@ func TestCompare(t *testing.T) {
 	a := gen.New()
 	b := gen.New()
 
-	if a.Compare(a) != 0 {
-		t.Fatalf("Compare(self): got %d, want 0", a.Compare(a))
+	selfCmp := a.Compare(a) //nolint:gocritic // intentional self-comparison to test reflexivity
+	if selfCmp != 0 {
+		t.Fatalf("Compare(self): got %d, want 0", selfCmp)
 	}
 	if a.Compare(b) != -1 {
 		t.Fatalf("Compare(a, b): got %d, want -1", a.Compare(b))
@@ -239,14 +240,15 @@ func TestParseCaseInsensitive(t *testing.T) {
 	id := gen.New()
 
 	upper := id.String()
-	lower := ""
+	var buf []byte
 	for _, c := range upper {
 		if c >= 'A' && c <= 'Z' {
-			lower += string(rune(c + 32))
+			buf = append(buf, byte(c+32))
 		} else {
-			lower += string(c)
+			buf = append(buf, byte(c)) //nolint:gosec // c is in Crockford Base32, fits in byte
 		}
 	}
+	lower := string(buf)
 
 	parsed, err := ulid.Parse(lower)
 	if err != nil {

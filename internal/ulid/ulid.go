@@ -7,7 +7,13 @@ import (
 	"time"
 )
 
-type ULID [16]byte
+const (
+	ulidSize      = 16
+	encodedLength = 26
+	invalidByte   = 0xFF
+)
+
+type ULID [ulidSize]byte
 
 func (u ULID) Time() uint64 {
 	return uint64(u[0])<<40 | uint64(u[1])<<32 |
@@ -20,7 +26,7 @@ func (u ULID) IsZero() bool {
 }
 
 func (u ULID) Bytes() []byte {
-	b := make([]byte, 16)
+	b := make([]byte, ulidSize)
 	copy(b, u[:])
 	return b
 }
@@ -43,7 +49,7 @@ func (u ULID) MarshalBinary() ([]byte, error) {
 }
 
 func (u *ULID) UnmarshalBinary(data []byte) error {
-	if len(data) != 16 {
+	if len(data) != ulidSize {
 		return errors.New("ulid: invalid binary length")
 	}
 	copy(u[:], data)
@@ -68,16 +74,17 @@ var decodeTable [256]byte
 
 func init() {
 	for i := range decodeTable {
-		decodeTable[i] = 0xFF
+		decodeTable[i] = invalidByte
 	}
 	for i, c := range encodingChars {
-		decodeTable[c] = byte(i)
+		decodeTable[c] = byte(i) //nolint:gosec // i is bounded by len(encodingChars)=32, fits in byte
 		if c >= 'A' && c <= 'Z' {
-			decodeTable[c+32] = byte(i) // lowercase
+			decodeTable[c+32] = byte(i) //nolint:gosec // same bound
 		}
 	}
 }
 
+//nolint:mnd // Crockford Base32 bitmask constants are the encoding algorithm
 func (u ULID) String() string {
 	var buf [26]byte
 	buf[0] = encodingChars[(u[0]&224)>>5]
@@ -111,16 +118,17 @@ func (u ULID) String() string {
 	return string(buf[:])
 }
 
+//nolint:mnd // Crockford Base32 bit-shift constants are the decoding algorithm
 func Parse(s string) (ULID, error) {
-	if len(s) != 26 {
+	if len(s) != encodedLength {
 		return ULID{}, errors.New("ulid: invalid length")
 	}
 
 	var u ULID
-	var d [26]byte
-	for i := 0; i < 26; i++ {
+	var d [encodedLength]byte
+	for i := range encodedLength {
 		v := decodeTable[s[i]]
-		if v == 0xFF {
+		if v == invalidByte {
 			return ULID{}, errors.New("ulid: invalid character")
 		}
 		d[i] = v
@@ -191,12 +199,12 @@ func (g *Generator) New() ULID {
 	}
 
 	var id ULID
-	id[0] = byte(now >> 40)
-	id[1] = byte(now >> 32)
-	id[2] = byte(now >> 24)
-	id[3] = byte(now >> 16)
-	id[4] = byte(now >> 8)
-	id[5] = byte(now)
+	id[0] = byte(now >> 40) //nolint:gosec,mnd // intentional truncation for 48-bit big-endian timestamp
+	id[1] = byte(now >> 32) //nolint:gosec,mnd // same
+	id[2] = byte(now >> 24) //nolint:gosec,mnd // same
+	id[3] = byte(now >> 16) //nolint:gosec,mnd // same
+	id[4] = byte(now >> 8)  //nolint:gosec,mnd // same
+	id[5] = byte(now)       //nolint:gosec // same
 	copy(id[6:], g.lastRandom[:])
 	return id
 }

@@ -102,7 +102,7 @@ func (c *Client) FanOut(ctx context.Context, peerAddrs []string, init *scrapv1.R
 }
 
 func QuorumMet(totalVoters, successfulPeers int) bool {
-	quorum := totalVoters/2 + 1
+	quorum := totalVoters/2 + 1 //nolint:mnd // majority quorum formula: ⌊n/2⌋+1
 	leaderPlusSuccessful := 1 + successfulPeers
 	return leaderPlusSuccessful >= quorum
 }

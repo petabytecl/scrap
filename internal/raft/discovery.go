@@ -47,7 +47,7 @@ func ParsePeersFlag(flag string) (map[uint64]string, error) {
 
 	peers := make(map[uint64]string)
 	for _, part := range strings.Split(flag, ",") {
-		kv := strings.SplitN(part, "=", 2)
+		kv := strings.SplitN(part, "=", peerEntryParts)
 		if len(kv) != peerEntryParts {
 			return nil, fmt.Errorf("raft: invalid peer entry %q (want id=host:port)", part)
 		}
