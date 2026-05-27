@@ -2,6 +2,8 @@ package store
 
 import "errors"
 
+const ResourceExhaustedReasonUploadPressure = "upload_pressure"
+
 var (
 	ErrAlreadyExists     = errors.New("document already exists")
 	ErrNotFound          = errors.New("document not found")
@@ -11,6 +13,37 @@ var (
 	ErrDataLoss          = errors.New("data corruption detected")
 	ErrRebuilding        = errors.New("projection rebuild in progress")
 )
+
+type ResourceExhaustedError struct {
+	Reason  string
+	Message string
+}
+
+func NewResourceExhausted(reason, message string) *ResourceExhaustedError {
+	return &ResourceExhaustedError{
+		Reason:  reason,
+		Message: message,
+	}
+}
+
+func (e *ResourceExhaustedError) Error() string {
+	if e.Message == "" {
+		return ErrResourceExhausted.Error()
+	}
+	return ErrResourceExhausted.Error() + ": " + e.Message
+}
+
+func (e *ResourceExhaustedError) Unwrap() error {
+	return ErrResourceExhausted
+}
+
+func ResourceExhaustedReason(err error) (string, bool) {
+	var resourceErr *ResourceExhaustedError
+	if !errors.As(err, &resourceErr) || resourceErr.Reason == "" {
+		return "", false
+	}
+	return resourceErr.Reason, true
+}
 
 func IsAlreadyExists(err error) bool {
 	return errors.Is(err, ErrAlreadyExists)

@@ -81,6 +81,36 @@ func (s *stubBlockRepairer) RepairFromPeer(_ context.Context, blockID uint64, pe
 	return s.err
 }
 
+type controlledPause struct {
+	waiting chan struct{}
+	resume  chan struct{}
+}
+
+func newControlledPause() *controlledPause {
+	return &controlledPause{
+		waiting: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+}
+
+func (p *controlledPause) IsPaused() bool {
+	return true
+}
+
+func (p *controlledPause) Wait(ctx context.Context) error {
+	close(p.waiting)
+	select {
+	case <-p.resume:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *controlledPause) Resume() {
+	close(p.resume)
+}
+
 type deepScrubMetrics struct {
 	mu              sync.Mutex
 	runsOK          int
@@ -461,6 +491,57 @@ func TestDeepScrubber_LatencyPauseFires(t *testing.T) {
 	}
 	if metrics.pauses != 1 {
 		t.Fatalf("expected 1 pause, got %d", metrics.pauses)
+	}
+}
+
+func TestDeepScrubber_PressurePauseWaitsUntilResume(t *testing.T) {
+	lister := &stubBlockLister{blocks: []block.BlockInfo{
+		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
+	}}
+	verifier := &orderedVerifier{results: []block.VerifyResult{
+		{FramesVerified: 5},
+	}}
+	metrics := &deepScrubMetrics{}
+	pause := newControlledPause()
+
+	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+		BlockLister:       lister,
+		BlockVerifier:     verifier,
+		QuarantineManager: &stubQuarantineManager{},
+		Metrics:           metrics,
+		PauseController:   pause,
+		OpenBlockID:       99,
+		CorruptCap:        5,
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ds.RunOnce(context.Background())
+	}()
+
+	select {
+	case <-pause.waiting:
+	case <-time.After(time.Second):
+		t.Fatal("deep scrubber did not wait on pressure pause")
+	}
+	if metrics.framesVerified != 0 {
+		t.Fatalf("frames verified while paused = %d, want 0", metrics.framesVerified)
+	}
+
+	pause.Resume()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunOnce: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deep scrubber did not resume after pressure pause cleared")
+	}
+	if metrics.pauses != 1 {
+		t.Fatalf("expected 1 pause metric, got %d", metrics.pauses)
+	}
+	if metrics.framesVerified != 5 {
+		t.Fatalf("frames verified = %d, want 5", metrics.framesVerified)
 	}
 }
 

@@ -36,6 +36,8 @@ type UploadConfig struct {
 	Backend     backend.Backend
 	CellID      string
 	Concurrency int
+	Pressure    UploadPressureConfig
+	Metrics     UploadMetrics
 
 	RetryBaseDelay time.Duration
 	AuthRetryDelay time.Duration
@@ -99,6 +101,9 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.refreshUploadPressureLocked(); err != nil {
+		return err
+	}
 	s.notifyUploadProcessor()
 	return nil
 }
@@ -107,7 +112,10 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.idx.DeletePendingUpload(confirm.GetBlockId())
+	if err := s.idx.DeletePendingUpload(confirm.GetBlockId()); err != nil {
+		return err
+	}
+	return s.refreshUploadPressureLocked()
 }
 
 func (s *Shard) PendingUploadsForTest() ([]PendingUpload, error) {
@@ -125,7 +133,6 @@ func (s *Shard) startUploadProcessor() {
 	if !s.upload.Enabled || s.upload.Backend == nil {
 		return
 	}
-	s.resetUploadConcurrency()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.uploadCancel = cancel
@@ -224,20 +231,24 @@ func collectPendingUploads(idx *index.Index) ([]PendingUpload, error) {
 }
 
 func (s *Shard) uploadAndConfirmWithRetry(ctx context.Context, upload PendingUpload) error {
+	start := time.Now()
 	state := newUploadRetryState(s.uploadRetryBaseDelay())
 
 	for {
 		err := s.uploadAndConfirm(ctx, upload)
 		if err == nil {
 			s.recordUploadSuccess()
+			s.recordUploadMetric("success", time.Since(start))
 			return nil
 		}
 
 		retry, retryErr := s.handleUploadRetry(ctx, err, &state)
 		if retryErr != nil {
+			s.recordUploadMetric(uploadMetricStatus(retryErr), time.Since(start))
 			return retryErr
 		}
 		if !retry {
+			s.recordUploadMetric(uploadMetricStatus(err), time.Since(start))
 			return err
 		}
 	}
@@ -337,11 +348,14 @@ func (s *Shard) uploadObject(ctx context.Context, blockID uint64, prefix, ext st
 
 	meta, err := s.upload.Backend.HeadObject(ctx, key)
 	if err != nil {
+		s.recordUploadVerifyMetric("fail")
 		return backend.PutResult{}, err
 	}
 	if meta.Size != result.Size || meta.ETag != result.ETag {
+		s.recordUploadVerifyMetric("fail")
 		return backend.PutResult{}, fmt.Errorf("%w: upload verification mismatch for %s", backend.ErrCorrupt, key)
 	}
+	s.recordUploadVerifyMetric("pass")
 	return result, nil
 }
 
@@ -364,15 +378,16 @@ func (s *Shard) configuredUploadConcurrency() int {
 
 func (s *Shard) resetUploadConcurrency() {
 	s.uploadMu.Lock()
-	defer s.uploadMu.Unlock()
-
 	s.uploadCurrentConcurrency = s.configuredUploadConcurrency()
 	s.uploadSuccesses = 0
+	concurrency := s.uploadCurrentConcurrency
+	s.uploadMu.Unlock()
+
+	s.setUploadConcurrencyMetric(concurrency)
 }
 
 func (s *Shard) recordUploadThrottle() {
 	s.uploadMu.Lock()
-	defer s.uploadMu.Unlock()
 
 	if s.uploadCurrentConcurrency == 0 {
 		s.uploadCurrentConcurrency = s.configuredUploadConcurrency()
@@ -380,18 +395,25 @@ func (s *Shard) recordUploadThrottle() {
 	if s.uploadCurrentConcurrency > 1 {
 		s.uploadCurrentConcurrency--
 	}
+	concurrency := s.uploadCurrentConcurrency
 	s.uploadSuccesses = 0
+	s.uploadMu.Unlock()
+
+	s.setUploadConcurrencyMetric(concurrency)
 }
 
 func (s *Shard) recordUploadSuccess() {
 	s.uploadMu.Lock()
-	defer s.uploadMu.Unlock()
 
 	if s.uploadCurrentConcurrency == 0 {
 		s.uploadCurrentConcurrency = s.configuredUploadConcurrency()
 	}
-	if s.uploadCurrentConcurrency >= s.configuredUploadConcurrency() {
+	target := s.uploadConcurrencyTargetLocked()
+	if s.uploadCurrentConcurrency >= target {
 		s.uploadSuccesses = 0
+		concurrency := s.uploadCurrentConcurrency
+		s.uploadMu.Unlock()
+		s.setUploadConcurrencyMetric(concurrency)
 		return
 	}
 
@@ -400,6 +422,10 @@ func (s *Shard) recordUploadSuccess() {
 		s.uploadCurrentConcurrency++
 		s.uploadSuccesses = 0
 	}
+	concurrency := s.uploadCurrentConcurrency
+	s.uploadMu.Unlock()
+
+	s.setUploadConcurrencyMetric(concurrency)
 }
 
 func (s *Shard) markUploadRequeued(blockID uint64) {
@@ -435,16 +461,26 @@ func (s *Shard) orderPendingUploads(uploads []PendingUpload) []PendingUpload {
 
 func (s *Shard) pauseUploads(delay time.Duration) {
 	s.uploadMu.Lock()
-	defer s.uploadMu.Unlock()
-
 	s.uploadPausedUntil = time.Now().Add(delay)
+	s.uploadAuthPaused = true
+	s.uploadMu.Unlock()
+
+	s.setUploadAuthPausedMetric(true)
 }
 
 func (s *Shard) uploadPaused() bool {
 	s.uploadMu.Lock()
-	defer s.uploadMu.Unlock()
+	paused := time.Now().Before(s.uploadPausedUntil)
+	wasAuthPaused := s.uploadAuthPaused
+	if !paused {
+		s.uploadAuthPaused = false
+	}
+	s.uploadMu.Unlock()
 
-	return time.Now().Before(s.uploadPausedUntil)
+	if !paused && wasAuthPaused {
+		s.setUploadAuthPausedMetric(false)
+	}
+	return paused
 }
 
 func (s *Shard) uploadCellID() string {
@@ -499,4 +535,25 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+func uploadMetricStatus(err error) string {
+	switch backend.ErrorClass(err) {
+	case backend.ClassThrottled:
+		return "throttled"
+	case backend.ClassTransient:
+		return "transient"
+	case backend.ClassAuth:
+		return "auth"
+	case backend.ClassNotFound:
+		return "not_found"
+	case backend.ClassConflict:
+		return "conflict"
+	case backend.ClassCorrupt:
+		return "corrupt"
+	case backend.ClassPermanent:
+		return "permanent"
+	default:
+		return "unknown"
+	}
 }
