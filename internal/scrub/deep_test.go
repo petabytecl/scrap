@@ -45,8 +45,9 @@ func (v *orderedVerifier) VerifyBlock(_, _ string) (block.VerifyResult, error) {
 }
 
 type stubQuarantineManager struct {
-	quarantined []string
-	err         error
+	quarantined    []string
+	quarantinedIDs []uint64
+	err            error
 }
 
 func (s *stubQuarantineManager) Quarantine(blkPath string) error {
@@ -58,7 +59,22 @@ func (s *stubQuarantineManager) Quarantine(blkPath string) error {
 }
 
 func (s *stubQuarantineManager) ListQuarantined() ([]uint64, error) {
-	return nil, nil
+	return s.quarantinedIDs, nil
+}
+
+type repairCall struct {
+	blockID  uint64
+	peerAddr string
+}
+
+type stubBlockRepairer struct {
+	calls []repairCall
+	err   error
+}
+
+func (s *stubBlockRepairer) RepairFromPeer(_ context.Context, blockID uint64, peerAddr string) error {
+	s.calls = append(s.calls, repairCall{blockID: blockID, peerAddr: peerAddr})
+	return s.err
 }
 
 type deepScrubMetrics struct {
@@ -73,6 +89,9 @@ type deepScrubMetrics struct {
 	pauses          int
 	progressRatio   float64
 	durationSeconds float64
+	repairsOK       int
+	repairsFailed   int
+	decremented     int
 }
 
 func (m *deepScrubMetrics) RecordDeepRun(result string, durationSec float64) {
@@ -126,6 +145,23 @@ func (m *deepScrubMetrics) SetProgressRatio(v float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.progressRatio = v
+}
+
+func (m *deepScrubMetrics) RecordRepair(result string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch result {
+	case "ok":
+		m.repairsOK++
+	case "failed":
+		m.repairsFailed++
+	}
+}
+
+func (m *deepScrubMetrics) DecrementQuarantined() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.decremented++
 }
 
 type stubCheckpointStore struct {
@@ -472,4 +508,101 @@ type stubLatencySignal struct {
 
 func (s *stubLatencySignal) ReadP99() time.Duration {
 	return s.p99
+}
+
+// --- Repair tests ---
+
+func newRepairScrubber(qm *stubQuarantineManager, repairer *stubBlockRepairer, metrics *deepScrubMetrics, peers []string) *scrub.DeepScrubber {
+	return scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+		BlockLister:       &stubBlockLister{},
+		BlockVerifier:     &orderedVerifier{},
+		QuarantineManager: qm,
+		Metrics:           metrics,
+		BlockRepairer:     repairer,
+		PeerAddrs:         peers,
+		OpenBlockID:       99,
+		CorruptCap:        5,
+	})
+}
+
+func TestDeepScrubber_RepairsQuarantinedBeforeScan(t *testing.T) {
+	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
+	repairer := &stubBlockRepairer{}
+	metrics := &deepScrubMetrics{}
+	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-1:9091", "peer-2:9091"})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(repairer.calls) != 1 {
+		t.Fatalf("expected 1 repair call, got %d", len(repairer.calls))
+	}
+	if repairer.calls[0].blockID != 5 {
+		t.Fatalf("expected repair for block 5, got %d", repairer.calls[0].blockID)
+	}
+	if metrics.repairsOK != 1 {
+		t.Fatalf("expected 1 repair ok, got %d", metrics.repairsOK)
+	}
+	if metrics.decremented != 1 {
+		t.Fatalf("expected 1 gauge decrement, got %d", metrics.decremented)
+	}
+}
+
+func TestDeepScrubber_FailedRepairEmitsMetric(t *testing.T) {
+	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
+	repairer := &stubBlockRepairer{err: errors.New("peer unreachable")}
+	metrics := &deepScrubMetrics{}
+	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-1:9091"})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if metrics.repairsFailed != 1 {
+		t.Fatalf("expected 1 failed repair, got %d", metrics.repairsFailed)
+	}
+	if metrics.repairsOK != 0 {
+		t.Fatalf("expected 0 ok repairs, got %d", metrics.repairsOK)
+	}
+	if metrics.decremented != 0 {
+		t.Fatalf("expected 0 gauge decrements, got %d", metrics.decremented)
+	}
+}
+
+func TestDeepScrubber_RoundRobinPeerRotation(t *testing.T) {
+	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
+	repairer := &stubBlockRepairer{}
+	metrics := &deepScrubMetrics{}
+	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-A", "peer-B", "peer-C"})
+
+	_ = ds.RunOnce(context.Background())
+	_ = ds.RunOnce(context.Background())
+	_ = ds.RunOnce(context.Background())
+
+	if len(repairer.calls) != 3 {
+		t.Fatalf("expected 3 repair calls, got %d", len(repairer.calls))
+	}
+	peers := []string{repairer.calls[0].peerAddr, repairer.calls[1].peerAddr, repairer.calls[2].peerAddr}
+	if peers[0] == peers[1] || peers[1] == peers[2] {
+		t.Fatalf("expected rotating peers, got %v", peers)
+	}
+}
+
+func TestDeepScrubber_NilRepairerSkipsGracefully(t *testing.T) {
+	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
+	metrics := &deepScrubMetrics{}
+	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+		BlockLister:       &stubBlockLister{},
+		BlockVerifier:     &orderedVerifier{},
+		QuarantineManager: qm,
+		Metrics:           metrics,
+		OpenBlockID:       99,
+		CorruptCap:        5,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if metrics.repairsOK+metrics.repairsFailed != 0 {
+		t.Fatal("expected no repair attempts without repairer")
+	}
 }

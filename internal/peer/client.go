@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -98,6 +99,55 @@ func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) 
 		return nil, fmt.Errorf("peer: request rebuild %s: %w", addr, err)
 	}
 	return resp, nil
+}
+
+func (c *Client) TransferBlock(ctx context.Context, addr string, blockID uint64) ([]byte, []byte, error) {
+	conn, err := c.getConn(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	client := scrapv1.NewPeerServiceClient(conn)
+	stream, err := client.TransferBlock(ctx, &scrapv1.TransferBlockRequest{
+		BlockId: blockID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("peer: transfer block %d from %s: %w", blockID, addr, err)
+	}
+
+	msg, err := stream.Recv()
+	if err != nil {
+		return nil, nil, fmt.Errorf("peer: transfer block meta: %w", err)
+	}
+	meta := msg.GetMeta()
+	if meta == nil {
+		return nil, nil, errors.New("peer: expected meta, got chunk")
+	}
+
+	return recvBlockData(stream, meta.BlockSize, meta.IdxSize)
+}
+
+func recvBlockData(stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse], blkSize, idxSize int64) ([]byte, []byte, error) {
+	blkData := make([]byte, 0, blkSize)
+	idxData := make([]byte, 0, idxSize)
+	remaining := blkSize
+
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			return blkData, idxData, nil //nolint:nilerr // io.EOF is the normal termination
+		}
+		chunk := msg.GetChunkData()
+		if remaining <= 0 {
+			idxData = append(idxData, chunk...)
+			continue
+		}
+		take := min(int64(len(chunk)), remaining)
+		blkData = append(blkData, chunk[:take]...)
+		if take < int64(len(chunk)) {
+			idxData = append(idxData, chunk[take:]...)
+		}
+		remaining -= take
+	}
 }
 
 func (c *Client) Close() {

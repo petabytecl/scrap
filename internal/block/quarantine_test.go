@@ -80,3 +80,41 @@ func TestQuarantine_ListSealedExcludes(t *testing.T) {
 		t.Fatalf("quarantined file missing: %v", err)
 	}
 }
+
+func TestUnquarantine_RestoresFiles(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	blkPath := block.BlockFilePath(dir, 5)
+	if err := block.Quarantine(blkPath); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	if err := block.Unquarantine(dir, 5); err != nil {
+		t.Fatalf("Unquarantine: %v", err)
+	}
+
+	if _, err := os.Stat(blkPath); err != nil {
+		t.Fatalf("expected .blk restored: %v", err)
+	}
+	idxPath := block.IdxFilePath(dir, 5)
+	if _, err := os.Stat(idxPath); err != nil {
+		t.Fatalf("expected .idx restored: %v", err)
+	}
+	if _, err := os.Stat(blkPath + ".quarantine"); !os.IsNotExist(err) {
+		t.Fatal("expected .blk.quarantine removed")
+	}
+	if _, err := os.Stat(idxPath + ".quarantine"); !os.IsNotExist(err) {
+		t.Fatal("expected .idx.quarantine removed")
+	}
+}
+
+func TestUnquarantine_NotQuarantinedReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	err := block.Unquarantine(dir, 5)
+	if err == nil {
+		t.Fatal("expected error when block is not quarantined")
+	}
+}

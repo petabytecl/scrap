@@ -24,6 +24,10 @@ type QuarantineManager interface {
 	ListQuarantined() ([]uint64, error)
 }
 
+type BlockRepairer interface {
+	RepairFromPeer(ctx context.Context, blockID uint64, peerAddr string) error
+}
+
 type CheckpointStore interface {
 	GetDeepScrubCheckpoint() (uint64, bool)
 	SetDeepScrubCheckpoint(blockID uint64)
@@ -38,6 +42,8 @@ type DeepScrubMetrics interface {
 	SetBadDiskSuspected(v bool)
 	RecordPause()
 	SetProgressRatio(v float64)
+	RecordRepair(result string)
+	DecrementQuarantined()
 }
 
 type DeepScrubberConfig struct {
@@ -47,7 +53,9 @@ type DeepScrubberConfig struct {
 	Metrics           DeepScrubMetrics
 	Checkpoint        CheckpointStore
 	LatencySignal     LatencySignal
+	BlockRepairer     BlockRepairer
 	IOBudget          *TokenBucket
+	PeerAddrs         []string
 	OpenBlockID       uint64
 	CorruptCap        int
 	PauseThreshold    time.Duration
@@ -57,9 +65,10 @@ type DeepScrubberConfig struct {
 }
 
 type DeepScrubber struct {
-	cfg    DeepScrubberConfig
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cfg     DeepScrubberConfig
+	peerIdx int
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 }
 
 func NewDeepScrubber(cfg DeepScrubberConfig) *DeepScrubber {
@@ -116,6 +125,8 @@ func (ds *DeepScrubber) jitteredInterval() time.Duration {
 
 func (ds *DeepScrubber) RunOnce(ctx context.Context) error {
 	start := time.Now()
+
+	ds.repairQuarantined(ctx)
 
 	blocks, err := ds.cfg.BlockLister.ListSealedBlocks(ds.cfg.OpenBlockID)
 	if err != nil {
@@ -174,6 +185,29 @@ func (ds *DeepScrubber) saveCheckpoint(blockID uint64) {
 func (ds *DeepScrubber) clearCheckpoint() {
 	if ds.cfg.Checkpoint != nil {
 		ds.cfg.Checkpoint.ClearDeepScrubCheckpoint()
+	}
+}
+
+func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
+	if ds.cfg.BlockRepairer == nil || len(ds.cfg.PeerAddrs) == 0 {
+		return
+	}
+	quarantined, err := ds.cfg.QuarantineManager.ListQuarantined()
+	if err != nil || len(quarantined) == 0 {
+		return
+	}
+	for _, blockID := range quarantined {
+		if ctx.Err() != nil {
+			return
+		}
+		peer := ds.cfg.PeerAddrs[ds.peerIdx%len(ds.cfg.PeerAddrs)]
+		ds.peerIdx++
+		if err := ds.cfg.BlockRepairer.RepairFromPeer(ctx, blockID, peer); err != nil {
+			ds.cfg.Metrics.RecordRepair("failed")
+			continue
+		}
+		ds.cfg.Metrics.RecordRepair("ok")
+		ds.cfg.Metrics.DecrementQuarantined()
 	}
 }
 

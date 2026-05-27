@@ -125,6 +125,9 @@ func TestDeepScrubPrometheusMetrics_AllRegistered(t *testing.T) {
 	m.SetBadDiskSuspected(true)
 	m.RecordPause()
 	m.SetProgressRatio(0.5)
+	m.RecordRepair("ok")
+	m.RecordRepair("failed")
+	m.DecrementQuarantined()
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -141,6 +144,7 @@ func TestDeepScrubPrometheusMetrics_AllRegistered(t *testing.T) {
 		"scrap_scrub_bad_disk_suspected":         false,
 		"scrap_scrub_paused_total":               false,
 		"scrap_scrub_deep_duration_seconds":      false,
+		"scrap_scrub_repairs_total":              false,
 	}
 
 	for _, f := range families {

@@ -68,6 +68,7 @@ type DeepScrubPrometheusMetrics struct {
 	badDiskSuspected  prometheus.Gauge
 	pausedTotal       prometheus.Counter
 	deepDuration      prometheus.Observer
+	repairsTotal      *prometheus.CounterVec
 }
 
 func NewDeepScrubPrometheusMetrics(reg prometheus.Registerer) *DeepScrubPrometheusMetrics {
@@ -117,7 +118,12 @@ func NewDeepScrubPrometheusMetrics(reg prometheus.Registerer) *DeepScrubPromethe
 		Buckets: prometheus.ExponentialBuckets(histBucketStart, histBucketFactor, histBucketCount),
 	})
 
-	reg.MustRegister(deepRuns, frames, corruptions, quarantines, blocksQ, progress, badDisk, paused, duration)
+	repairs := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "scrap_scrub_repairs_total",
+		Help: "Total number of block repair attempts by result.",
+	}, []string{"result"})
+
+	reg.MustRegister(deepRuns, frames, corruptions, quarantines, blocksQ, progress, badDisk, paused, duration, repairs)
 
 	return &DeepScrubPrometheusMetrics{
 		deepRunsTotal:     deepRuns,
@@ -129,6 +135,7 @@ func NewDeepScrubPrometheusMetrics(reg prometheus.Registerer) *DeepScrubPromethe
 		badDiskSuspected:  badDisk,
 		pausedTotal:       paused,
 		deepDuration:      duration,
+		repairsTotal:      repairs,
 	}
 }
 
@@ -164,4 +171,12 @@ func (m *DeepScrubPrometheusMetrics) RecordPause() {
 
 func (m *DeepScrubPrometheusMetrics) SetProgressRatio(v float64) {
 	m.progressRatio.Set(v)
+}
+
+func (m *DeepScrubPrometheusMetrics) RecordRepair(result string) {
+	m.repairsTotal.WithLabelValues(result).Inc()
+}
+
+func (m *DeepScrubPrometheusMetrics) DecrementQuarantined() {
+	m.blocksQuarantined.Dec()
 }
