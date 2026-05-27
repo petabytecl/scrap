@@ -24,6 +24,8 @@ const (
 	headerLen     = sizeVersion + sizeBlockCount // version(1) + block_count(2)
 	trailerLen    = sizeDocCount + sizeCompleted // doc_count(2) + completed(1)
 	minEncodedLen = headerLen + trailerLen       // 6 bytes with zero blocks
+
+	txKeyPrefix = "\x00tx\x00"
 )
 
 type Entry struct {
@@ -55,7 +57,7 @@ func (idx *Index) Put(txID string, blockID uint64, docCount uint16, completed bo
 }
 
 func (idx *Index) Get(txID string) (Entry, error) {
-	val, closer, err := idx.db.Get([]byte(txID))
+	val, closer, err := idx.db.Get(txKey(txID))
 	if err != nil {
 		if errors.Is(err, pebble.ErrNotFound) {
 			return Entry{}, ErrNotFound
@@ -68,7 +70,7 @@ func (idx *Index) Get(txID string) (Entry, error) {
 }
 
 func (idx *Index) Exists(txID string) bool {
-	_, closer, err := idx.db.Get([]byte(txID))
+	_, closer, err := idx.db.Get(txKey(txID))
 	if err != nil {
 		return false
 	}
@@ -129,7 +131,14 @@ func (idx *Index) StreamingHash() (appliedIndex uint64, hash [32]byte, err error
 
 func (idx *Index) put(txID string, entry Entry) error {
 	val := encodeEntry(entry)
-	return idx.db.Set([]byte(txID), val, pebble.Sync)
+	return idx.db.Set(txKey(txID), val, pebble.Sync)
+}
+
+func txKey(txID string) []byte {
+	key := make([]byte, len(txKeyPrefix)+len(txID))
+	copy(key, txKeyPrefix)
+	copy(key[len(txKeyPrefix):], txID)
+	return key
 }
 
 func encodeEntry(e Entry) []byte {

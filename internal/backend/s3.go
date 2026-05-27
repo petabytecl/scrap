@@ -205,21 +205,7 @@ func (b *s3Backend) ListObjects(ctx context.Context, prefix string, _ ListOpts) 
 		Bucket: aws.String(b.bucket),
 		Prefix: aws.String(prefix),
 	})
-	objects := make([]ObjectInfo, 0)
-	for paginator.HasMorePages() {
-		out, err := paginator.NextPage(ctx)
-		if err != nil {
-			return nil, classifyS3Error("list objects", err)
-		}
-		for _, obj := range out.Contents {
-			info, err := objectInfoFromS3(obj)
-			if err != nil {
-				return nil, fmt.Errorf("list objects: %w", err)
-			}
-			objects = append(objects, info)
-		}
-	}
-	return &sliceIterator{objects: objects}, nil
+	return &s3PaginatedIterator{ctx: ctx, paginator: paginator}, nil
 }
 
 func (b *s3Backend) validateRequest(op, key string) error {
@@ -259,16 +245,12 @@ func objectMetaFromS3Head(out *awss3.HeadObjectOutput) (ObjectMeta, error) {
 		return ObjectMeta{}, fmt.Errorf("negative content length %d: %w", *out.ContentLength, ErrCorrupt)
 	}
 
-	etag, err := normalizeS3ETag(out.ETag)
-	if err != nil {
-		return ObjectMeta{}, err
-	}
 	contentType := aws.ToString(out.ContentType)
 	if contentType == "" {
 		contentType = DefaultContentType
 	}
 	return ObjectMeta{
-		ETag:        etag,
+		ETag:        normalizeS3ETag(out.ETag),
 		Size:        *out.ContentLength,
 		ContentType: contentType,
 	}, nil
@@ -281,22 +263,18 @@ func objectInfoFromS3(obj types.Object) (ObjectInfo, error) {
 	if obj.Size == nil || *obj.Size < 0 {
 		return ObjectInfo{}, fmt.Errorf("object %q has invalid size: %w", *obj.Key, ErrCorrupt)
 	}
-	etag, err := normalizeS3ETag(obj.ETag)
-	if err != nil {
-		return ObjectInfo{}, err
-	}
 	return ObjectInfo{
 		Key:         *obj.Key,
-		ETag:        etag,
+		ETag:        normalizeS3ETag(obj.ETag),
 		Size:        *obj.Size,
 		ContentType: DefaultContentType,
 	}, nil
 }
 
 func verifiedS3ETag(raw *string, wantMD5Hex string) (string, error) {
-	etag, err := normalizeS3ETag(raw)
-	if err != nil {
-		return "", err
+	etag := normalizeS3ETag(raw)
+	if !isMD5Hex(etag) {
+		return etag, nil
 	}
 	if !strings.EqualFold(etag, wantMD5Hex) {
 		return "", fmt.Errorf("etag %q did not match MD5 %q: %w", etag, wantMD5Hex, ErrCorrupt)
@@ -304,15 +282,16 @@ func verifiedS3ETag(raw *string, wantMD5Hex string) (string, error) {
 	return strings.ToLower(etag), nil
 }
 
-func normalizeS3ETag(raw *string) (string, error) {
-	etag := strings.Trim(aws.ToString(raw), `"`)
+func normalizeS3ETag(raw *string) string {
+	return strings.Trim(aws.ToString(raw), `"`)
+}
+
+func isMD5Hex(etag string) bool {
 	if len(etag) != md5HexLen {
-		return "", fmt.Errorf("invalid S3 ETag %q: %w", etag, ErrCorrupt)
+		return false
 	}
-	if _, err := hex.DecodeString(etag); err != nil {
-		return "", fmt.Errorf("invalid S3 ETag %q: %w", etag, ErrCorrupt)
-	}
-	return strings.ToLower(etag), nil
+	_, err := hex.DecodeString(etag)
+	return err == nil
 }
 
 const md5HexLen = 32
@@ -382,9 +361,9 @@ func classForS3Code(code string) error {
 
 func classForS3Status(status int) error {
 	switch status {
-	case http.StatusServiceUnavailable:
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
 		return ErrThrottled
-	case http.StatusInternalServerError:
+	case http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
 		return ErrTransient
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return ErrAuth
@@ -399,4 +378,36 @@ func classForS3Status(status int) error {
 
 func wrapS3Error(op string, class, err error) error {
 	return fmt.Errorf("%s: %w: %w", op, class, err)
+}
+
+type s3PaginatedIterator struct {
+	ctx       context.Context
+	paginator *awss3.ListObjectsV2Paginator
+	page      []types.Object
+	pageIdx   int
+	done      bool
+}
+
+func (it *s3PaginatedIterator) Next() (ObjectInfo, error) {
+	for {
+		if it.pageIdx < len(it.page) {
+			obj := it.page[it.pageIdx]
+			it.pageIdx++
+			return objectInfoFromS3(obj)
+		}
+		if it.done || !it.paginator.HasMorePages() {
+			return ObjectInfo{}, io.EOF
+		}
+		out, err := it.paginator.NextPage(it.ctx)
+		if err != nil {
+			it.done = true
+			return ObjectInfo{}, classifyS3Error("list objects", err)
+		}
+		it.page = out.Contents
+		it.pageIdx = 0
+		if len(it.page) == 0 {
+			it.done = true
+			return ObjectInfo{}, io.EOF
+		}
+	}
 }

@@ -207,6 +207,9 @@ func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
 	if ds.cfg.BlockRepairer == nil || len(ds.cfg.PeerAddrs) == 0 {
 		return
 	}
+	if err := ds.waitPressurePause(ctx); err != nil {
+		return
+	}
 	quarantined, err := ds.cfg.QuarantineManager.ListQuarantined()
 	if err != nil {
 		ds.cfg.Logger.WarnContext(ctx, "scrub: list quarantined", "err", err)

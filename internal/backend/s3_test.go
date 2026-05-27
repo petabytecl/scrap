@@ -141,10 +141,6 @@ func TestS3BackendHeadObjectRejectsInvalidMetadata(t *testing.T) {
 			ContentLength: aws.Int64(-1),
 			ETag:          aws.String(`"0123456789abcdef0123456789abcdef"`),
 		}},
-		{name: "invalid etag", out: &awss3.HeadObjectOutput{
-			ContentLength: aws.Int64(16),
-			ETag:          aws.String(`"not-md5"`),
-		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,6 +155,25 @@ func TestS3BackendHeadObjectRejectsInvalidMetadata(t *testing.T) {
 				t.Fatalf("HeadObject error = %v, want ErrCorrupt", err)
 			}
 		})
+	}
+}
+
+func TestS3BackendHeadObjectAcceptsNonMD5ETag(t *testing.T) {
+	client := &mockS3Client{}
+	client.headObject = func(context.Context, *awss3.HeadObjectInput, ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error) {
+		return &awss3.HeadObjectOutput{
+			ContentLength: aws.Int64(16),
+			ETag:          aws.String(`"not-md5-etag"`),
+		}, nil
+	}
+	store := NewS3(client, "bucket-a")
+
+	meta, err := store.HeadObject(context.Background(), "cell/shard/block.blk")
+	if err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+	if meta.ETag != "not-md5-etag" {
+		t.Fatalf("ETag = %q, want %q", meta.ETag, "not-md5-etag")
 	}
 }
 
@@ -329,11 +344,6 @@ func TestS3BackendListObjectsRejectsInvalidResponses(t *testing.T) {
 			Key:  aws.String("cell/shard/a.blk"),
 			ETag: aws.String(`"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`),
 		}},
-		{name: "invalid etag", object: types.Object{
-			Key:  aws.String("cell/shard/a.blk"),
-			ETag: aws.String(`"not-md5"`),
-			Size: aws.Int64(10),
-		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -343,11 +353,39 @@ func TestS3BackendListObjectsRejectsInvalidResponses(t *testing.T) {
 			}
 			store := NewS3(client, "bucket-a")
 
-			_, err := store.ListObjects(context.Background(), "cell/shard/", ListOpts{})
+			iter, err := store.ListObjects(context.Background(), "cell/shard/", ListOpts{})
+			if err != nil {
+				t.Fatalf("ListObjects should not fail for lazy iterator: %v", err)
+			}
+			_, err = iter.Next()
 			if !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("ListObjects error = %v, want ErrCorrupt", err)
+				t.Fatalf("Next error = %v, want ErrCorrupt", err)
 			}
 		})
+	}
+}
+
+func TestS3BackendListObjectsAcceptsNonMD5ETag(t *testing.T) {
+	client := &mockS3Client{}
+	client.listObjectsV2 = func(context.Context, *awss3.ListObjectsV2Input, ...func(*awss3.Options)) (*awss3.ListObjectsV2Output, error) {
+		return &awss3.ListObjectsV2Output{Contents: []types.Object{{
+			Key:  aws.String("cell/shard/a.blk"),
+			ETag: aws.String(`"not-md5"`),
+			Size: aws.Int64(10),
+		}}}, nil
+	}
+	store := NewS3(client, "bucket-a")
+
+	iter, err := store.ListObjects(context.Background(), "cell/shard/", ListOpts{})
+	if err != nil {
+		t.Fatalf("ListObjects: %v", err)
+	}
+	obj, err := iter.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if obj.ETag != "not-md5" {
+		t.Fatalf("ETag = %q, want %q", obj.ETag, "not-md5")
 	}
 }
 
@@ -403,8 +441,12 @@ func TestClassifyS3Error(t *testing.T) {
 	}{
 		{name: "slow down", err: apiErr("SlowDown"), want: ErrThrottled},
 		{name: "service unavailable", err: responseErr(http.StatusServiceUnavailable), want: ErrThrottled},
+		{name: "too many requests", err: responseErr(http.StatusTooManyRequests), want: ErrThrottled},
 		{name: "internal error", err: apiErr("InternalError"), want: ErrTransient},
 		{name: "internal error status", err: responseErr(http.StatusInternalServerError), want: ErrTransient},
+		{name: "bad gateway", err: responseErr(http.StatusBadGateway), want: ErrTransient},
+		{name: "gateway timeout", err: responseErr(http.StatusGatewayTimeout), want: ErrTransient},
+		{name: "request timeout", err: responseErr(http.StatusRequestTimeout), want: ErrTransient},
 		{name: "timeout", err: timeoutError{}, want: ErrTransient},
 		{name: "cancelled", err: context.Canceled, want: ErrTransient},
 		{name: "expired token", err: apiErr("ExpiredToken"), want: ErrAuth},

@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
@@ -653,6 +654,54 @@ func (s *Shard) rebuildProjectionInto(projection *index.Index) error {
 			if err := addProjectionDocument(projection, entry.TransactionID, blockID); err != nil {
 				return fmt.Errorf("shard: rebuild projection %s/%s: %w", entry.TransactionID, entry.DocName, err)
 			}
+		}
+	}
+
+	if err := s.rebuildUploadOutbox(projection, blockIDs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) error {
+	be := s.upload.Backend
+	if !s.upload.Enabled || be == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	openBlockID := uint64(0)
+	if s.blockWriter != nil {
+		openBlockID = s.blockWriter.BlockID()
+	}
+	s.mu.Unlock()
+
+	ctx := context.Background()
+	cellID := s.upload.CellID
+	for _, blockID := range blockIDs {
+		if blockID == openBlockID {
+			continue
+		}
+		prefix := fmt.Sprintf("%s/shards/%016x/%016x", cellID, s.shardID, blockID)
+		blkKey := prefix + ".blk"
+		_, err := be.HeadObject(ctx, blkKey)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, backend.ErrNotFound) {
+			return fmt.Errorf("shard: rebuild check block %d: %w", blockID, err)
+		}
+		blkPath := s.blockPath(blockID)
+		info, statErr := os.Stat(blkPath)
+		if statErr != nil {
+			continue
+		}
+		if err := projection.PutPendingUpload(index.PendingUpload{
+			BlockID:         blockID,
+			ShardID:         s.shardID,
+			SealedSizeBytes: info.Size(),
+		}); err != nil {
+			return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
 		}
 	}
 	return nil
