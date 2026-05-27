@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,8 +35,13 @@ type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
 	blocksDir  string
 	scrubCache scrub.ResultCache
+	raftRouter RaftRouter
 	mu         sync.Mutex
 	writers    map[uint64]*blockState
+}
+
+func (s *Server) SetRaftRouter(router RaftRouter) {
+	s.raftRouter = router
 }
 
 type blockState struct {
@@ -169,6 +175,37 @@ func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateD
 				return status.Errorf(codes.Internal, "write chunk: %v", err)
 			}
 		}
+	}
+}
+
+func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.RaftMessageRequest) (*scrapv1.RaftMessageResponse, error) {
+	if s.raftRouter == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft router not configured")
+	}
+	var msg raftpb.Message
+	if err := msg.Unmarshal(req.Message); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "unmarshal raft message: %v", err)
+	}
+	if err := s.raftRouter.RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
+		return nil, status.Errorf(codes.Internal, "route raft message: %v", err)
+	}
+	return &scrapv1.RaftMessageResponse{}, nil
+}
+
+func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.RaftMessageRequest, scrapv1.RaftMessageResponse]) error {
+	if s.raftRouter == nil {
+		return status.Error(codes.FailedPrecondition, "raft router not configured")
+	}
+	for {
+		req, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		var msg raftpb.Message
+		if err := msg.Unmarshal(req.Message); err != nil {
+			continue
+		}
+		_ = s.raftRouter.RouteRaftMessage(stream.Context(), req.ShardId, msg)
 	}
 }
 

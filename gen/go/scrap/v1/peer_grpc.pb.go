@@ -23,6 +23,8 @@ const (
 	PeerService_TransferBlock_FullMethodName       = "/scrap.v1.PeerService/TransferBlock"
 	PeerService_ConsistencyCheck_FullMethodName    = "/scrap.v1.PeerService/ConsistencyCheck"
 	PeerService_RequestIndexRebuild_FullMethodName = "/scrap.v1.PeerService/RequestIndexRebuild"
+	PeerService_ForwardRaft_FullMethodName         = "/scrap.v1.PeerService/ForwardRaft"
+	PeerService_ForwardRaftStream_FullMethodName   = "/scrap.v1.PeerService/ForwardRaftStream"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -33,6 +35,8 @@ type PeerServiceClient interface {
 	TransferBlock(ctx context.Context, in *TransferBlockRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TransferBlockResponse], error)
 	ConsistencyCheck(ctx context.Context, in *ConsistencyCheckRequest, opts ...grpc.CallOption) (*ConsistencyCheckResponse, error)
 	RequestIndexRebuild(ctx context.Context, in *RequestIndexRebuildRequest, opts ...grpc.CallOption) (*RequestIndexRebuildResponse, error)
+	ForwardRaft(ctx context.Context, in *RaftMessageRequest, opts ...grpc.CallOption) (*RaftMessageResponse, error)
+	ForwardRaftStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RaftMessageRequest, RaftMessageResponse], error)
 }
 
 type peerServiceClient struct {
@@ -95,6 +99,29 @@ func (c *peerServiceClient) RequestIndexRebuild(ctx context.Context, in *Request
 	return out, nil
 }
 
+func (c *peerServiceClient) ForwardRaft(ctx context.Context, in *RaftMessageRequest, opts ...grpc.CallOption) (*RaftMessageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RaftMessageResponse)
+	err := c.cc.Invoke(ctx, PeerService_ForwardRaft_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) ForwardRaftStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RaftMessageRequest, RaftMessageResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PeerService_ServiceDesc.Streams[2], PeerService_ForwardRaftStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RaftMessageRequest, RaftMessageResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PeerService_ForwardRaftStreamClient = grpc.BidiStreamingClient[RaftMessageRequest, RaftMessageResponse]
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -103,6 +130,8 @@ type PeerServiceServer interface {
 	TransferBlock(*TransferBlockRequest, grpc.ServerStreamingServer[TransferBlockResponse]) error
 	ConsistencyCheck(context.Context, *ConsistencyCheckRequest) (*ConsistencyCheckResponse, error)
 	RequestIndexRebuild(context.Context, *RequestIndexRebuildRequest) (*RequestIndexRebuildResponse, error)
+	ForwardRaft(context.Context, *RaftMessageRequest) (*RaftMessageResponse, error)
+	ForwardRaftStream(grpc.BidiStreamingServer[RaftMessageRequest, RaftMessageResponse]) error
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -124,6 +153,12 @@ func (UnimplementedPeerServiceServer) ConsistencyCheck(context.Context, *Consist
 }
 func (UnimplementedPeerServiceServer) RequestIndexRebuild(context.Context, *RequestIndexRebuildRequest) (*RequestIndexRebuildResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestIndexRebuild not implemented")
+}
+func (UnimplementedPeerServiceServer) ForwardRaft(context.Context, *RaftMessageRequest) (*RaftMessageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForwardRaft not implemented")
+}
+func (UnimplementedPeerServiceServer) ForwardRaftStream(grpc.BidiStreamingServer[RaftMessageRequest, RaftMessageResponse]) error {
+	return status.Error(codes.Unimplemented, "method ForwardRaftStream not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -200,6 +235,31 @@ func _PeerService_RequestIndexRebuild_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_ForwardRaft_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RaftMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ForwardRaft(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ForwardRaft_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ForwardRaft(ctx, req.(*RaftMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_ForwardRaftStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(PeerServiceServer).ForwardRaftStream(&grpc.GenericServerStream[RaftMessageRequest, RaftMessageResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PeerService_ForwardRaftStreamServer = grpc.BidiStreamingServer[RaftMessageRequest, RaftMessageResponse]
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -215,6 +275,10 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RequestIndexRebuild",
 			Handler:    _PeerService_RequestIndexRebuild_Handler,
 		},
+		{
+			MethodName: "ForwardRaft",
+			Handler:    _PeerService_ForwardRaft_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -226,6 +290,12 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "TransferBlock",
 			Handler:       _PeerService_TransferBlock_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "ForwardRaftStream",
+			Handler:       _PeerService_ForwardRaftStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "scrap/v1/peer.proto",

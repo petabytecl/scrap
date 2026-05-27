@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -60,6 +61,10 @@ func run() error {
 		return err
 	}
 
+	sharedTransport := peer.NewSharedTransport(peers)
+	defer sharedTransport.Close()
+	shardTransport := sharedTransport.ForShard(0, peers)
+
 	s, err := shard.Open(shard.Config{
 		DataDir:       *dataDir,
 		ShardID:       0,
@@ -67,6 +72,7 @@ func run() error {
 		Peers:         peers,
 		BlockSealSize: *blockSealSize,
 		Scrub:         scrubCfg,
+		Transport:     shardTransport,
 	})
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
@@ -93,6 +99,9 @@ func run() error {
 	}
 	peerGS := grpc.NewServer()
 	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s))
+	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
+		return s.RaftStep(ctx, msg)
+	}))
 	peer.RegisterServer(peerGS, peerSrv)
 
 	adminSrv := admin.New(registry)
