@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -11,6 +12,8 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
+
+const maxTransferBytes int64 = 4 << 30 // 4 GiB safety limit for block transfers
 
 type Client struct {
 	mu    sync.Mutex
@@ -126,15 +129,32 @@ func (c *Client) TransferBlock(ctx context.Context, addr string, blockID uint64)
 	return recvBlockData(stream, meta.BlockSize, meta.IdxSize)
 }
 
+func validateTransferSizes(blkSize, idxSize int64) error {
+	if blkSize < 0 || blkSize > maxTransferBytes {
+		return fmt.Errorf("peer: invalid block size %d", blkSize)
+	}
+	if idxSize < 0 || idxSize > maxTransferBytes {
+		return fmt.Errorf("peer: invalid index size %d", idxSize)
+	}
+	return nil
+}
+
 func recvBlockData(stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse], blkSize, idxSize int64) ([]byte, []byte, error) {
+	if err := validateTransferSizes(blkSize, idxSize); err != nil {
+		return nil, nil, err
+	}
+
 	blkData := make([]byte, 0, blkSize)
 	idxData := make([]byte, 0, idxSize)
 	remaining := blkSize
 
 	for {
 		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			return blkData, idxData, nil //nolint:nilerr // io.EOF is the normal termination
+			return nil, nil, fmt.Errorf("peer: recv block data: %w", err)
 		}
 		chunk := msg.GetChunkData()
 		if remaining <= 0 {
@@ -148,6 +168,14 @@ func recvBlockData(stream grpc.ServerStreamingClient[scrapv1.TransferBlockRespon
 		}
 		remaining -= take
 	}
+
+	if int64(len(blkData)) != blkSize {
+		return nil, nil, fmt.Errorf("peer: block size mismatch: got %d, expected %d", len(blkData), blkSize)
+	}
+	if int64(len(idxData)) != idxSize {
+		return nil, nil, fmt.Errorf("peer: index size mismatch: got %d, expected %d", len(idxData), idxSize)
+	}
+	return blkData, idxData, nil
 }
 
 func (c *Client) Close() {

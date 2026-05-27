@@ -38,11 +38,13 @@ func Unquarantine(dir string, blockID uint64) error {
 	}
 	idxQ := IdxFilePath(dir, blockID) + QuarantineSuffix
 
-	if err := os.Rename(blkQ, BlockFilePath(dir, blockID)); err != nil {
+	blkDest := BlockFilePath(dir, blockID)
+	if err := os.Rename(blkQ, blkDest); err != nil {
 		return fmt.Errorf("block: unquarantine blk: %w", err)
 	}
 	if _, err := os.Stat(idxQ); err == nil {
 		if err := os.Rename(idxQ, IdxFilePath(dir, blockID)); err != nil {
+			_ = os.Rename(blkDest, blkQ)
 			return fmt.Errorf("block: unquarantine idx: %w", err)
 		}
 	}

@@ -47,6 +47,7 @@ func (v *orderedVerifier) VerifyBlock(_, _ string) (block.VerifyResult, error) {
 type stubQuarantineManager struct {
 	quarantined    []string
 	quarantinedIDs []uint64
+	listErr        error
 	err            error
 }
 
@@ -59,6 +60,9 @@ func (s *stubQuarantineManager) Quarantine(blkPath string) error {
 }
 
 func (s *stubQuarantineManager) ListQuarantined() ([]uint64, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return s.quarantinedIDs, nil
 }
 
@@ -604,5 +608,28 @@ func TestDeepScrubber_NilRepairerSkipsGracefully(t *testing.T) {
 	}
 	if metrics.repairsOK+metrics.repairsFailed != 0 {
 		t.Fatal("expected no repair attempts without repairer")
+	}
+}
+
+func TestDeepScrubber_ListQuarantinedErrorSkipsRepair(t *testing.T) {
+	qm := &stubQuarantineManager{
+		quarantinedIDs: []uint64{5},
+		listErr:        errors.New("permission denied"),
+	}
+	repairer := &stubBlockRepairer{}
+	metrics := &deepScrubMetrics{}
+	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-1:9091"})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(repairer.calls) != 0 {
+		t.Fatalf("expected 0 repair calls when list fails, got %d", len(repairer.calls))
+	}
+	if metrics.repairsOK+metrics.repairsFailed != 0 {
+		t.Fatal("expected no repair metrics when list fails")
+	}
+	if metrics.runsOK != 1 {
+		t.Fatalf("expected scan to complete ok, got %d ok runs", metrics.runsOK)
 	}
 }

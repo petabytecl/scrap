@@ -118,3 +118,34 @@ func TestUnquarantine_NotQuarantinedReturnsError(t *testing.T) {
 		t.Fatal("expected error when block is not quarantined")
 	}
 }
+
+func TestUnquarantine_RollsBackBlkOnIdxFailure(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	blkPath := block.BlockFilePath(dir, 5)
+	if err := block.Quarantine(blkPath); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	idxDest := block.IdxFilePath(dir, 5)
+	if err := os.MkdirAll(idxDest, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(idxDest, "blocker"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err := block.Unquarantine(dir, 5)
+	if err == nil {
+		t.Fatal("expected error when idx rename fails")
+	}
+
+	blkQ := blkPath + ".quarantine"
+	if _, statErr := os.Stat(blkQ); statErr != nil {
+		t.Fatalf("expected blk to be rolled back to quarantine: %v", statErr)
+	}
+	if _, statErr := os.Stat(blkPath); !os.IsNotExist(statErr) {
+		t.Fatal("expected blk not to exist after rollback")
+	}
+}

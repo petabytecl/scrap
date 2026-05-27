@@ -3,6 +3,7 @@ package scrub
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"sync"
@@ -124,9 +125,9 @@ func (ds *DeepScrubber) jitteredInterval() time.Duration {
 }
 
 func (ds *DeepScrubber) RunOnce(ctx context.Context) error {
-	start := time.Now()
-
 	ds.repairQuarantined(ctx)
+
+	start := time.Now()
 
 	blocks, err := ds.cfg.BlockLister.ListSealedBlocks(ds.cfg.OpenBlockID)
 	if err != nil {
@@ -193,7 +194,11 @@ func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
 		return
 	}
 	quarantined, err := ds.cfg.QuarantineManager.ListQuarantined()
-	if err != nil || len(quarantined) == 0 {
+	if err != nil {
+		slog.Warn("scrub: list quarantined", "err", err) //nolint:sloglint // scrub has no injected logger yet
+		return
+	}
+	if len(quarantined) == 0 {
 		return
 	}
 	for _, blockID := range quarantined {
