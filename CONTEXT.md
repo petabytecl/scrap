@@ -81,6 +81,14 @@ before bytes are committed to Raft. On recovery, entries are compared against co
 Raft state to identify completed vs. partial writes.
 _Avoid_: WAL (ambiguous with Raft WAL), prepare log, journal
 
+**Upload Outbox**:
+A per-**Shard** durable record of sealed **Blocks** pending upload to the
+**Backend**. Tracked via Raft commands (`SealBlock` on seal, `ConfirmUpload` after
+verified upload). A new leader scans the outbox and resumes uploads. The outbox
+drives admission pressure: when pending upload bytes exceed the configured budget,
+the **Shard** rejects new writes to prevent local disk exhaustion.
+_Avoid_: Upload queue (implies in-memory), upload log (ambiguous with Raft log)
+
 **Block Quarantine**:
 A filesystem-level isolation of a corrupt **Block**. The `.blk` and `.idx` files are
 renamed to `.blk.quarantine` / `.idx.quarantine`. Triggered by **Deep Scrub** when
@@ -673,7 +681,10 @@ fail-closed when placement rules unsatisfiable.
 
 Phase 1: single-node spike-store milestone; no replicated durability guarantee.
 Phase 2: write ACK'd → local copies on quorum voters.
-Phase 3 (future): Backend upload → leader uploads sealed Blocks.
+Phase 3: Backend upload → leader uploads sealed Blocks (.blk + .idx as separate
+objects) to the Backend, verifies via HEAD + size/ETag, proposes `ConfirmUpload`
+via Raft. Upload Outbox tracks obligations. Three-level admission pressure
+(WARN/PRESSURE/CRITICAL) prevents unbounded upload lag from filling local disk.
 Phase 4 (future): Partial eviction → followers evict uploaded Blocks.
 Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
@@ -756,6 +767,38 @@ Phase 2b configuration (env vars, all with defaults):
 | `SCRAP_SCRUB_CORRUPT_CAP`    | `5`         | count     |
 | `SCRAP_SCRUB_JITTER`         | `0.1`       | fraction  |
 
+### Backend Upload
+
+Leader-only upload of sealed Blocks to the Backend. The leader watches the Upload
+Outbox (materialized from `SealBlock` Raft commands without matching `ConfirmUpload`)
+and uploads `.blk` + `.idx` as separate objects. Upload is verified via HEAD +
+size/ETag check before proposing `ConfirmUpload` (see ADR 0010). Retry policy is
+error-class-specific: `throttled` reduces upload concurrency, `auth` pauses all
+uploads, `transient` retries with exponential backoff. Admission pressure prevents
+unbounded upload lag from filling local disk.
+
+Backend adapter: provider-neutral `Backend` interface with 5 operations (Put, Head,
+Get with byte range, Delete, List). Error taxonomy: `throttled`, `transient`, `auth`,
+`not-found`, `conflict`, `corrupt`, `permanent`. Each class drives a distinct
+retry/admission decision.
+
+Object key format: `{cell_id}/shards/{shard_id}/{block_id}.blk|.idx` (see ADR 0009).
+
+Phase 3 package: `internal/backend/` with `Backend` interface and provider adapters.
+Upload processor owned and scheduled by the shard orchestrator (`internal/shard/`).
+Dependency direction: `shard → backend`.
+
+Phase 3 configuration (env vars, all with defaults):
+
+| Env var                       | Default      | Unit      |
+| ----------------------------- | ------------ | --------- |
+| `SCRAP_UPLOAD_ENABLED`        | `true`       | bool      |
+| `SCRAP_UPLOAD_CONCURRENCY`    | `2`          | count     |
+| `SCRAP_UPLOAD_BUDGET`         | `10737418240`| bytes     |
+| `SCRAP_UPLOAD_WARN_PCT`       | `80`         | percent   |
+| `SCRAP_UPLOAD_PRESSURE_PCT`   | `90`         | percent   |
+| `SCRAP_UPLOAD_CRITICAL_PCT`   | `95`         | percent   |
+
 ### Cluster Bootstrap
 
 K8s-first auto-discovery. Members derive peer identity from StatefulSet primitives:
@@ -785,11 +828,10 @@ Fallback for local dev: `--peers` flag overrides K8s DNS discovery.
 └── tmp/
 ```
 
-### Open Questions (deferred beyond Phase 2 safety milestone)
+### Open Questions (deferred beyond current milestone)
 
 - Cell federation model
 - Multi-tier write ACK (priority classes)
-- Backend capacity profiles and admission pressure
 - Encryption (OpenBao Transit integration)
 - Group commit optimization
 - Shard rebalancing and slot transfer protocol
