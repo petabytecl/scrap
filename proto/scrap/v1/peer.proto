@@ -5,6 +5,8 @@ package scrap.v1;
 service PeerService {
   rpc ReplicateDocument(stream ReplicateDocumentRequest) returns (ReplicateDocumentResponse);
   rpc TransferBlock(TransferBlockRequest) returns (stream TransferBlockResponse);
+  rpc ConsistencyCheck(ConsistencyCheckRequest) returns (ConsistencyCheckResponse);
+  rpc RequestIndexRebuild(RequestIndexRebuildRequest) returns (RequestIndexRebuildResponse);
 }
 
 message ReplicateDocumentRequest {
@@ -45,4 +47,22 @@ message TransferBlockMeta {
   uint64 block_id   = 1;
   int64  block_size = 2;
   int64  idx_size   = 3;
+}
+
+message ConsistencyCheckRequest {
+  string scrub_id = 1;
+}
+
+message ConsistencyCheckResponse {
+  string scrub_id      = 1;
+  uint64 applied_index = 2;
+  bytes  sha256        = 3;
+}
+
+message RequestIndexRebuildRequest {
+  string scrub_id = 1;
+}
+
+message RequestIndexRebuildResponse {
+  bool already_in_progress = 1;
 }

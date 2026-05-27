@@ -19,8 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PeerService_ReplicateDocument_FullMethodName = "/scrap.v1.PeerService/ReplicateDocument"
-	PeerService_TransferBlock_FullMethodName     = "/scrap.v1.PeerService/TransferBlock"
+	PeerService_ReplicateDocument_FullMethodName   = "/scrap.v1.PeerService/ReplicateDocument"
+	PeerService_TransferBlock_FullMethodName       = "/scrap.v1.PeerService/TransferBlock"
+	PeerService_ConsistencyCheck_FullMethodName    = "/scrap.v1.PeerService/ConsistencyCheck"
+	PeerService_RequestIndexRebuild_FullMethodName = "/scrap.v1.PeerService/RequestIndexRebuild"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -29,6 +31,8 @@ const (
 type PeerServiceClient interface {
 	ReplicateDocument(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateDocumentRequest, ReplicateDocumentResponse], error)
 	TransferBlock(ctx context.Context, in *TransferBlockRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TransferBlockResponse], error)
+	ConsistencyCheck(ctx context.Context, in *ConsistencyCheckRequest, opts ...grpc.CallOption) (*ConsistencyCheckResponse, error)
+	RequestIndexRebuild(ctx context.Context, in *RequestIndexRebuildRequest, opts ...grpc.CallOption) (*RequestIndexRebuildResponse, error)
 }
 
 type peerServiceClient struct {
@@ -71,12 +75,34 @@ func (c *peerServiceClient) TransferBlock(ctx context.Context, in *TransferBlock
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PeerService_TransferBlockClient = grpc.ServerStreamingClient[TransferBlockResponse]
 
+func (c *peerServiceClient) ConsistencyCheck(ctx context.Context, in *ConsistencyCheckRequest, opts ...grpc.CallOption) (*ConsistencyCheckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConsistencyCheckResponse)
+	err := c.cc.Invoke(ctx, PeerService_ConsistencyCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) RequestIndexRebuild(ctx context.Context, in *RequestIndexRebuildRequest, opts ...grpc.CallOption) (*RequestIndexRebuildResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestIndexRebuildResponse)
+	err := c.cc.Invoke(ctx, PeerService_RequestIndexRebuild_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
 type PeerServiceServer interface {
 	ReplicateDocument(grpc.ClientStreamingServer[ReplicateDocumentRequest, ReplicateDocumentResponse]) error
 	TransferBlock(*TransferBlockRequest, grpc.ServerStreamingServer[TransferBlockResponse]) error
+	ConsistencyCheck(context.Context, *ConsistencyCheckRequest) (*ConsistencyCheckResponse, error)
+	RequestIndexRebuild(context.Context, *RequestIndexRebuildRequest) (*RequestIndexRebuildResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -92,6 +118,12 @@ func (UnimplementedPeerServiceServer) ReplicateDocument(grpc.ClientStreamingServ
 }
 func (UnimplementedPeerServiceServer) TransferBlock(*TransferBlockRequest, grpc.ServerStreamingServer[TransferBlockResponse]) error {
 	return status.Error(codes.Unimplemented, "method TransferBlock not implemented")
+}
+func (UnimplementedPeerServiceServer) ConsistencyCheck(context.Context, *ConsistencyCheckRequest) (*ConsistencyCheckResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConsistencyCheck not implemented")
+}
+func (UnimplementedPeerServiceServer) RequestIndexRebuild(context.Context, *RequestIndexRebuildRequest) (*RequestIndexRebuildResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestIndexRebuild not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -132,13 +164,58 @@ func _PeerService_TransferBlock_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PeerService_TransferBlockServer = grpc.ServerStreamingServer[TransferBlockResponse]
 
+func _PeerService_ConsistencyCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConsistencyCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ConsistencyCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ConsistencyCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ConsistencyCheck(ctx, req.(*ConsistencyCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_RequestIndexRebuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestIndexRebuildRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).RequestIndexRebuild(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_RequestIndexRebuild_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).RequestIndexRebuild(ctx, req.(*RequestIndexRebuildRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var PeerService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "scrap.v1.PeerService",
 	HandlerType: (*PeerServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ConsistencyCheck",
+			Handler:    _PeerService_ConsistencyCheck_Handler,
+		},
+		{
+			MethodName: "RequestIndexRebuild",
+			Handler:    _PeerService_RequestIndexRebuild_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ReplicateDocument",

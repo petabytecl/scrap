@@ -26,6 +26,7 @@ type RaftCommand struct {
 	// Types that are valid to be assigned to Command:
 	//
 	//	*RaftCommand_CommitDoc
+	//	*RaftCommand_ConsistencyCheck
 	Command       isRaftCommand_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -77,6 +78,15 @@ func (x *RaftCommand) GetCommitDoc() *CommitDocument {
 	return nil
 }
 
+func (x *RaftCommand) GetConsistencyCheck() *RequestConsistencyCheck {
+	if x != nil {
+		if x, ok := x.Command.(*RaftCommand_ConsistencyCheck); ok {
+			return x.ConsistencyCheck
+		}
+	}
+	return nil
+}
+
 type isRaftCommand_Command interface {
 	isRaftCommand_Command()
 }
@@ -85,7 +95,65 @@ type RaftCommand_CommitDoc struct {
 	CommitDoc *CommitDocument `protobuf:"bytes,1,opt,name=commit_doc,json=commitDoc,proto3,oneof"`
 }
 
+type RaftCommand_ConsistencyCheck struct {
+	ConsistencyCheck *RequestConsistencyCheck `protobuf:"bytes,2,opt,name=consistency_check,json=consistencyCheck,proto3,oneof"`
+}
+
 func (*RaftCommand_CommitDoc) isRaftCommand_Command() {}
+
+func (*RaftCommand_ConsistencyCheck) isRaftCommand_Command() {}
+
+type RequestConsistencyCheck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ScrubId       string                 `protobuf:"bytes,1,opt,name=scrub_id,json=scrubId,proto3" json:"scrub_id,omitempty"`
+	RequestedAtUs int64                  `protobuf:"varint,2,opt,name=requested_at_us,json=requestedAtUs,proto3" json:"requested_at_us,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestConsistencyCheck) Reset() {
+	*x = RequestConsistencyCheck{}
+	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestConsistencyCheck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestConsistencyCheck) ProtoMessage() {}
+
+func (x *RequestConsistencyCheck) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestConsistencyCheck.ProtoReflect.Descriptor instead.
+func (*RequestConsistencyCheck) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RequestConsistencyCheck) GetScrubId() string {
+	if x != nil {
+		return x.ScrubId
+	}
+	return ""
+}
+
+func (x *RequestConsistencyCheck) GetRequestedAtUs() int64 {
+	if x != nil {
+		return x.RequestedAtUs
+	}
+	return 0
+}
 
 type CommitDocument struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -105,7 +173,7 @@ type CommitDocument struct {
 
 func (x *CommitDocument) Reset() {
 	*x = CommitDocument{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	mi := &file_scrap_v1_raft_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -117,7 +185,7 @@ func (x *CommitDocument) String() string {
 func (*CommitDocument) ProtoMessage() {}
 
 func (x *CommitDocument) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	mi := &file_scrap_v1_raft_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -130,7 +198,7 @@ func (x *CommitDocument) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitDocument.ProtoReflect.Descriptor instead.
 func (*CommitDocument) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{1}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CommitDocument) GetTransactionId() string {
@@ -217,7 +285,7 @@ type OpenlogEntry struct {
 
 func (x *OpenlogEntry) Reset() {
 	*x = OpenlogEntry{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	mi := &file_scrap_v1_raft_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -229,7 +297,7 @@ func (x *OpenlogEntry) String() string {
 func (*OpenlogEntry) ProtoMessage() {}
 
 func (x *OpenlogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	mi := &file_scrap_v1_raft_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -242,7 +310,7 @@ func (x *OpenlogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenlogEntry.ProtoReflect.Descriptor instead.
 func (*OpenlogEntry) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{2}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *OpenlogEntry) GetTransactionId() string {
@@ -291,11 +359,15 @@ var File_scrap_v1_raft_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\n" +
-	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"S\n" +
+	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\xa5\x01\n" +
 	"\vRaftCommand\x129\n" +
 	"\n" +
-	"commit_doc\x18\x01 \x01(\v2\x18.scrap.v1.CommitDocumentH\x00R\tcommitDocB\t\n" +
-	"\acommand\"\xe9\x02\n" +
+	"commit_doc\x18\x01 \x01(\v2\x18.scrap.v1.CommitDocumentH\x00R\tcommitDoc\x12P\n" +
+	"\x11consistency_check\x18\x02 \x01(\v2!.scrap.v1.RequestConsistencyCheckH\x00R\x10consistencyCheckB\t\n" +
+	"\acommand\"\\\n" +
+	"\x17RequestConsistencyCheck\x12\x19\n" +
+	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12&\n" +
+	"\x0frequested_at_us\x18\x02 \x01(\x03R\rrequestedAtUs\"\xe9\x02\n" +
 	"\x0eCommitDocument\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
@@ -331,19 +403,21 @@ func file_scrap_v1_raft_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_raft_proto_rawDescData
 }
 
-var file_scrap_v1_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_scrap_v1_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_scrap_v1_raft_proto_goTypes = []any{
-	(*RaftCommand)(nil),    // 0: scrap.v1.RaftCommand
-	(*CommitDocument)(nil), // 1: scrap.v1.CommitDocument
-	(*OpenlogEntry)(nil),   // 2: scrap.v1.OpenlogEntry
+	(*RaftCommand)(nil),             // 0: scrap.v1.RaftCommand
+	(*RequestConsistencyCheck)(nil), // 1: scrap.v1.RequestConsistencyCheck
+	(*CommitDocument)(nil),          // 2: scrap.v1.CommitDocument
+	(*OpenlogEntry)(nil),            // 3: scrap.v1.OpenlogEntry
 }
 var file_scrap_v1_raft_proto_depIdxs = []int32{
-	1, // 0: scrap.v1.RaftCommand.commit_doc:type_name -> scrap.v1.CommitDocument
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 0: scrap.v1.RaftCommand.commit_doc:type_name -> scrap.v1.CommitDocument
+	1, // 1: scrap.v1.RaftCommand.consistency_check:type_name -> scrap.v1.RequestConsistencyCheck
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_scrap_v1_raft_proto_init() }
@@ -353,6 +427,7 @@ func file_scrap_v1_raft_proto_init() {
 	}
 	file_scrap_v1_raft_proto_msgTypes[0].OneofWrappers = []any{
 		(*RaftCommand_CommitDoc)(nil),
+		(*RaftCommand_ConsistencyCheck)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -360,7 +435,7 @@ func file_scrap_v1_raft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_raft_proto_rawDesc), len(file_scrap_v1_raft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

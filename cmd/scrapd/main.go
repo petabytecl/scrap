@@ -8,11 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 
+	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/peer"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
+	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
 )
@@ -32,13 +36,22 @@ func main() {
 	}
 }
 
+const (
+	shutdownTimeout = 5 * time.Second
+	defaultPeerPort = 9091
+)
+
 func run() error {
 	dataDir := flag.String("data-dir", "/data", "storage root directory")
 	listenAddr := flag.String("listen-addr", ":9090", "gRPC client listen address")
 	peerAddr := flag.String("peer-addr", ":9091", "gRPC peer listen address")
+	adminAddr := flag.String("admin-addr", ":8080", "HTTP admin listen address (metrics)")
 	blockSealSize := flag.Int64("block-seal-size", shard.DefaultBlockSealSize, "block seal threshold in bytes")
 	peersFlag := flag.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
 	flag.Parse()
+
+	scrubCfg := scrub.ParseScrubConfig()
+	registry := prometheus.NewRegistry()
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
 
@@ -53,6 +66,7 @@ func run() error {
 		RaftID:        raftID,
 		Peers:         peers,
 		BlockSealSize: *blockSealSize,
+		Scrub:         scrubCfg,
 	})
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
@@ -81,14 +95,23 @@ func run() error {
 	peerSrv := peer.NewServer(*dataDir + "/blocks")
 	peer.RegisterServer(peerGS, peerSrv)
 
+	adminSrv := admin.New(registry)
+	go func() { _ = adminSrv.ListenAndServe(*adminAddr) }()
 	go func() { _ = peerGS.Serve(peerLis) }()
 	go func() { _ = gs.Serve(clientLis) }()
 
-	fmt.Fprintf(os.Stderr, "scrapd starting: client=%s peer=%s data-dir=%s raft-id=%d cell=%s peers=%d\n",
-		*listenAddr, *peerAddr, *dataDir, raftID, cellID, len(peers))
+	fmt.Fprintf(os.Stderr, "scrapd starting: client=%s peer=%s admin=%s data-dir=%s raft-id=%d cell=%s peers=%d scrub=%v\n",
+		*listenAddr, *peerAddr, *adminAddr, *dataDir, raftID, cellID, len(peers), scrubCfg.Enabled)
 
 	<-ctx.Done()
 	fmt.Fprintln(os.Stderr, "shutting down")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+
+	if err := adminSrv.Shutdown(shutdownCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "admin shutdown: %v\n", err)
+	}
 	peerGS.GracefulStop()
 	gs.GracefulStop()
 
@@ -98,7 +121,7 @@ func run() error {
 func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
 	replicas := envInt("SCRAP_REPLICAS", 0)
 	headlessSvc := os.Getenv("SCRAP_HEADLESS_SERVICE")
-	peerPort := envInt("SCRAP_PEER_PORT", 9091)
+	peerPort := envInt("SCRAP_PEER_PORT", defaultPeerPort)
 	namespace := os.Getenv("POD_NAMESPACE")
 	if namespace == "" {
 		namespace = "default"

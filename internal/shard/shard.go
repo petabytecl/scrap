@@ -20,14 +20,17 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
-	"github.com/petabytecl/scrap/internal/ulid"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
+	"github.com/petabytecl/scrap/internal/scrub"
 	storeapi "github.com/petabytecl/scrap/internal/store"
+	"github.com/petabytecl/scrap/internal/ulid"
 )
 
-const DefaultBlockSealSize = 64 * 1024 * 1024
-const DefaultBootstrapGrace = 60 * time.Second
+const (
+	DefaultBlockSealSize  = 64 * 1024 * 1024
+	DefaultBootstrapGrace = 60 * time.Second
+)
 
 type Config struct {
 	DataDir        string
@@ -37,6 +40,7 @@ type Config struct {
 	BlockSealSize  int64
 	TickInterval   time.Duration
 	BootstrapGrace time.Duration
+	Scrub          scrub.ScrubConfig
 }
 
 type Shard struct {
@@ -60,7 +64,18 @@ type Shard struct {
 	proposals  map[string]chan error
 }
 
+func (c *Config) applyDefaults() {
+	if c.BlockSealSize <= 0 {
+		c.BlockSealSize = DefaultBlockSealSize
+	}
+	if c.BootstrapGrace == 0 {
+		c.BootstrapGrace = DefaultBootstrapGrace
+	}
+}
+
 func Open(cfg Config) (*Shard, error) {
+	cfg.applyDefaults()
+
 	blocksDir := filepath.Join(cfg.DataDir, "blocks")
 	pebbleDir := filepath.Join(cfg.DataDir, "pebble")
 	openlogDir := filepath.Join(cfg.DataDir, "openlog")
@@ -77,19 +92,9 @@ func Open(cfg Config) (*Shard, error) {
 		return nil, fmt.Errorf("shard: open index: %w", err)
 	}
 
-	sealSize := cfg.BlockSealSize
-	if sealSize <= 0 {
-		sealSize = DefaultBlockSealSize
-	}
-
-	grace := cfg.BootstrapGrace
-	if grace == 0 {
-		grace = DefaultBootstrapGrace
-	}
-
 	nextID, err := scanMaxBlockID(blocksDir)
 	if err != nil {
-		_ = idx.Close() // best-effort cleanup on scan failure
+		_ = idx.Close()
 		return nil, err
 	}
 
@@ -100,26 +105,21 @@ func Open(cfg Config) (*Shard, error) {
 		shardID:        cfg.ShardID,
 		peers:          cfg.Peers,
 		idx:            idx,
-		blockSealSize:  sealSize,
+		blockSealSize:  cfg.BlockSealSize,
 		nextBlockID:    nextID,
 		proposals:      make(map[string]chan error),
 		raftStartedAt:  time.Now(),
-		bootstrapGrace: grace,
+		bootstrapGrace: cfg.BootstrapGrace,
 	}
 
 	if err := s.recoverOpenlog(); err != nil {
-		_ = idx.Close() // best-effort cleanup on recovery failure
+		_ = idx.Close()
 		return nil, fmt.Errorf("shard: openlog recovery: %w", err)
 	}
 
 	if err := s.openNewBlock(); err != nil {
-		_ = idx.Close() // best-effort cleanup on block open failure
+		_ = idx.Close()
 		return nil, fmt.Errorf("shard: open block: %w", err)
-	}
-
-	tickInterval := cfg.TickInterval
-	if tickInterval == 0 {
-		tickInterval = 100 * time.Millisecond
 	}
 
 	transport := &noopTransport{}
@@ -127,13 +127,13 @@ func Open(cfg Config) (*Shard, error) {
 		ID:           cfg.RaftID,
 		Peers:        cfg.Peers,
 		DataDir:      raftDir,
-		TickInterval: tickInterval,
+		TickInterval: cfg.TickInterval,
 		Transport:    transport,
 		Apply:        s.applyEntries,
 	})
 	if err != nil {
 		s.closeBlockAndIdx()
-		_ = idx.Close() // best-effort cleanup on raft open failure
+		_ = idx.Close()
 		return nil, fmt.Errorf("shard: open raft: %w", err)
 	}
 	s.raft = raftNode

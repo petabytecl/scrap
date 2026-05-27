@@ -227,15 +227,15 @@ Implementation ordering (spike-validated, preserves the state machine above):
 2. .openlog prepare record → fsync   (→ state 2 sealed)
 3. required peer prepare             (→ state 3)
 4. Raft metadata command on quorum   (→ state 4)
-5. Pebble projection commit          (derived; still state 4)
+5. Projection commit                  (derived; still state 4)
 6. client ACK + read visibility      (→ state 5)
 ```
 
 ### Key Spike Conclusions
 
 - The write path is viable **without whole-document heap buffering** by design.
-- **Consensus metadata is the authority** for visibility and physical refs. Pebble is a
-  derived projection that must be rebuildable from Raft state alone.
+- **Consensus metadata is the authority** for visibility and physical refs. The projection
+  is derived and must be rebuildable from Raft state alone.
 - **`ReadDocument` must be all-or-error.** Verify all touched frame checksums before
   streaming any bytes. Returning a clean prefix and failing later weakens the API into
   a partial-success contract. Acceptable tradeoff because p50 doc size is ~16–128 KiB.
@@ -243,7 +243,7 @@ Implementation ordering (spike-validated, preserves the state machine above):
   checksum alone is too coarse — one clean frame doesn't prove another frame is clean.
 - **Corruption behavior:** quarantine the bad source, retry from a verified alternate
   source, schedule repair, never return least-bad bytes.
-- If Pebble projection is deleted, it can be fully rebuilt from replayed Raft state +
+- If the projection is deleted, it can be fully rebuilt from replayed Raft state +
   existing block bytes. This was tested in the spike (durable single-node Raft).
 
 ### Schema Evolution (V1 Long-Lived Contracts)
@@ -449,7 +449,7 @@ Resolved through structured design sessions (2026-05-25 and 2026-05-26). See
 ### Scope
 
 Phase 1 is the single-node spike-store milestone: protobuf API, Store behavior,
-gRPC error/streaming behavior, Block/Frame/.idx formats, Pebble value encoding,
+gRPC error/streaming behavior, Block/Frame/.idx formats, projection value encoding,
 local read/write path, sealing, resource limits, and integrity tests. Those parts
 are contract-grade. `internal/spike` is replaceable Phase 2 scaffolding.
 
@@ -465,7 +465,7 @@ Phase 2 splits into two sub-milestones:
   replication, shard orchestrator (`store.Store` implementation), openlog, leader-only
   reads via ReadIndex, client routing (leader hint), block transfer for recovery,
   multi-member integration tests, Kind E2E harness.
-- **Phase 2b** (scrubbing + hardening): light scrub (Pebble checksum comparison),
+- **Phase 2b** (scrubbing + hardening): light scrub (projection checksum comparison),
   deep scrub (block byte re-verification), ConsistencyCheck peer RPC, quarantine +
   auto-repair, I/O budget throttling. Scrubbing detects latent divergence but does
   not prevent it — the core path (Raft + frame checksums + apply-side idempotency)
@@ -478,7 +478,7 @@ API: WriteDocument, HeadDocument, ReadDocument, FindDocuments (4 RPCs).
 `created_at` is assigned by the Store at Document commit time and persisted/returned
 consistently.
 
-`WriteDocumentResponse` returns only after Block bytes, `.idx` entry, and Pebble entry
+`WriteDocumentResponse` returns only after Block bytes, `.idx` entry, and projection entry
 are locally durable. New `.blk`/`.idx` files require directory fsync for their entries.
 
 `ReadDocument` verifies the whole Document before sending any stream message. Corrupt
@@ -492,8 +492,8 @@ frame count, and Document SHA-256; pass 2 streams verified bytes.
 2. No read may return corrupt bytes (all-or-error)
 3. No read may return an unacknowledged Document
 4. No silent data divergence between replicas
-5. Metadata is the authority for Document existence: Pebble in Phase 1, Raft
-   metadata in Phase 2+
+5. Metadata is the authority for Document existence: the projection in Phase 1,
+   Raft metadata in Phase 2+
 
 ### Replication
 
@@ -509,7 +509,7 @@ commit. See ADR 0001.
 3. Leader writes to local Block + fsync
 4. Leader fans out bytes to all N-1 peers in parallel; waits for quorum-1 ACKs
 5. Leader proposes metadata to Raft; waits for quorum commit (~330 bytes)
-6. Leader applies to Pebble Projection (apply-side conflict detection)
+6. Leader applies to projection (apply-side conflict detection)
 7. Leader deletes `.prep` file, ACKs client → Document visible
 
 Leadership loss during write: the shard detects the term change, returns
@@ -528,12 +528,12 @@ total bytes, SHA-256, created_at, content type, idempotency key). Future command
 
 ### Apply-Side Conflict Detection
 
-Pre-proposal: optimistic check against Pebble for fast rejection of obvious duplicates.
-Apply loop (authoritative): check Pebble again before applying. If the document already
-exists, the committed entry is a deterministic no-op — don't update Pebble, reply
-`ALREADY_EXISTS` to the caller. First-writer-wins. All replicas execute the same
-deterministic apply function, producing identical Pebble state. Replay-safe: rebuilding
-Pebble from Raft log replay produces the same result. Prevents V1 lesson #2 (conflict
+Pre-proposal: optimistic check against the projection for fast rejection of obvious duplicates.
+Apply loop (authoritative): check the projection again before applying. If the document
+already exists, the committed entry is a deterministic no-op — don't update the
+projection, reply `ALREADY_EXISTS` to the caller. First-writer-wins. All replicas execute
+the same deterministic apply function, producing identical projection state. Replay-safe:
+rebuilding the projection from Raft log replay produces the same result. Prevents V1 lesson #2 (conflict
 checks on the apply side, not pre-batch).
 
 ### Peer Byte Replication Service
@@ -546,7 +546,10 @@ client-facing `DocumentService`. Two RPCs:
 - `TransferBlock` (server-streaming): recovery path. Transfers a sealed Block + `.idx`
   to a new or lagging member. Used during snapshot catch-up and repair.
 
-ConsistencyCheck RPC for scrubbing is deferred to Phase 2b.
+Phase 2b adds two peer RPCs: `ConsistencyCheck` (leader pulls projection checksum from
+voters) and `RequestIndexRebuild` (leader instructs divergent voter to wipe + rebuild
+projection from Raft state). Phase 2b also adds `RequestConsistencyCheck` to the
+`RaftCommand` oneof (fields: `scrub_id` ULID, `requested_at_us`).
 
 ### Phase 2 Read Path
 
@@ -554,21 +557,21 @@ Leader-only reads for the Phase 2 safety milestone. ReadIndex from followers is 
 Client routing: smart Go client library with redirect-on-leader-change, no gateway.
 Non-leader members return `UNAVAILABLE` with a `LeaderHint` gRPC status detail containing
 the current leader's address. The client extracts the hint and retries directly.
-Document resolution: Pebble maps Transaction → Block IDs; .idx file resolves per-Document
-metadata (offset, size, checksum). See ADR 0004.
+Document resolution: the projection maps Transaction → Block IDs; .idx file resolves
+per-Document metadata (offset, size, checksum). See ADR 0004.
 
-### Pebble Projection Model
+### Projection Model
 
-Lean per-Transaction keys (Option D): Pebble stores versioned `transaction_id` →
+Lean per-Transaction keys (Option D): the projection stores versioned `transaction_id` →
 `{block_ids, doc_count, completed}` values. A Transaction may span multiple Blocks
 when a seal triggers between Documents, so `block_ids` is a list.
 Per-Document resolution via .idx files.
 
-Phase 1 visibility authority is Pebble. If Block/.idx bytes exist but Pebble did not
-commit, the Document is invisible. Infrastructure write, fsync, and Pebble failures
-fail closed.
+Phase 1 visibility authority is the projection. If Block/.idx bytes exist but the
+projection did not commit, the Document is invisible. Infrastructure write, fsync, and
+projection failures fail closed.
 
-Metadata tiering: Pebble holds a configurable hot window (default 6 months, ~60 GiB/shard
+Metadata tiering: the projection holds a configurable hot window (default 6 months, ~60 GiB/shard
 at 50M tx/day). Eviction triggers: (1) entries older than the hot window (time-based),
 (2) operator-initiated on-demand eviction, (3) automatic eviction under disk pressure
 (when local metadata exceeds a configurable threshold). Evicted entries go into monthly
@@ -652,14 +655,14 @@ Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 Raft WAL and snapshots use the etcd WAL and snap libraries (`go.etcd.io/etcd/server/v3/wal`
 and `go.etcd.io/etcd/server/v3/snap`) — embedded Go libraries, no external etcd server.
 The `raft/` directory in the filesystem layout maps to these libraries' file structures.
-Raft state is separate from Pebble, preserving the "Pebble is rebuildable from Raft"
-invariant.
+Raft state is separate from the projection, preserving the "projection is rebuildable
+from Raft" invariant.
 
 Log truncation: two-mode heuristic (free truncation when all replicas healthy;
 size-capped at ~4 MiB when a replica is offline, then force snapshot). Always gate
 truncation on snapshot-in-progress status.
 
-Atomic batch apply: applied-index + Pebble state update in a single
+Atomic batch apply: applied-index + projection state update in a single
 `Batch.Commit()`. Prevents V1 lesson #5 (appliedIndex vs durableLogIndex mismatch).
 
 ### Openlog Lifecycle
@@ -679,7 +682,7 @@ ensures correct handling when multiple `.prep` files target the same Block.
 
 ### Recovery
 
-Raft snapshot = Pebble Projection only (small). Block files transfer separately
+Raft snapshot = projection state only (small). Block files transfer separately
 via peer service. New Members catch up via snapshot + block transfer + log replay.
 Repair throttling: concurrent block-file repairs limited per node, bandwidth budget
 reserves ≥75% of I/O for client reads. Prevents recovery storms.
@@ -687,16 +690,43 @@ reserves ≥75% of I/O for client reads. Prevents recovery storms.
 ### Background Scrubbing
 
 Two-tier scrubbing (Phase 2 safety milestone):
-- Light scrub (daily): leader proposes consistency-check via Raft, all voters
-  compute Pebble state checksum at same applied index, leader compares. Mismatch
-  triggers Pebble wipe + Raft replay on the divergent replica.
-- Deep scrub (weekly): sequentially read all local Block bytes, re-verify all Frame
-  CRC-32C and Document SHA-256 against Raft metadata. Corrupt → quarantine + fetch
-  from peer.
-- Auto-repair cap: >5 corrupt Frames per Block → treat as bad disk, quarantine
-  entire Block, fetch from peer.
-- I/O budget: deep scrub limited to 25% of disk read bandwidth (configurable),
-  pauses during high client load.
+- Light scrub (daily): leader proposes `RequestConsistencyCheck` via Raft, all voters
+  compute a streaming SHA-256 over all projection keys at the same applied index,
+  leader pulls results via `ConsistencyCheck` peer RPC and compares. Mismatch triggers
+  projection wipe + Raft replay on the divergent replica (leader sends
+  `RequestIndexRebuild` peer RPC to the divergent voter).
+- Deep scrub (weekly): each voter independently reads all sealed Block bytes
+  oldest-first, re-verifies all Frame CRC-32C and Document SHA-256 against projection
+  metadata. Corrupt → rename `.blk` → `.blk.quarantine`, fetch from peer via
+  `TransferBlock`. Open (unsealed) Blocks are skipped.
+- Auto-repair cap: >5 corrupt Frames per Block in a single scrub run → treat as bad
+  disk, quarantine entire Block, fetch from peer. Emit `scrap_scrub_bad_disk_suspected`
+  metric.
+- I/O budget: deep scrub rate-limited via token bucket (default 125 MB/s, configurable).
+  Pauses when client read p99 latency exceeds threshold (default 10ms, 30s cooldown).
+- Failed repair: retry per deep scrub cycle, round-robin peers. No permanent give-up —
+  quarantined blocks stay quarantined until a peer provides a good copy.
+- Scheduling: ticker + jitter (10%). Leader runs light scrub, all voters run deep scrub
+  independently. Deep scrub progress (last-scanned block_id) checkpointed in projection;
+  resets on projection rebuild (intentional — re-scan after divergence).
+
+Phase 2b package: `internal/scrub/` with `LightScrubber` and `DeepScrubber` types.
+Dependencies injected via interfaces (projection, block reader, peer client). Owned
+and scheduled by the shard orchestrator (`internal/shard/`). Dependency direction:
+`shard → scrub → {index, block, peer}`.
+
+Phase 2b configuration (env vars, all with defaults):
+
+| Env var | Default | Unit |
+| --- | --- | --- |
+| `SCRAP_SCRUB_ENABLED` | `true` | bool |
+| `SCRAP_LIGHT_SCRUB_INTERVAL` | `24h` | duration |
+| `SCRAP_DEEP_SCRUB_INTERVAL` | `168h` | duration |
+| `SCRAP_DEEP_SCRUB_IO_RATE` | `125000000` | bytes/sec |
+| `SCRAP_SCRUB_PAUSE_LATENCY` | `10ms` | duration |
+| `SCRAP_SCRUB_PAUSE_COOLDOWN` | `30s` | duration |
+| `SCRAP_SCRUB_CORRUPT_CAP` | `5` | count |
+| `SCRAP_SCRUB_JITTER` | `0.1` | fraction |
 
 ### Cluster Bootstrap
 

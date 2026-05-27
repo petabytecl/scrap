@@ -441,6 +441,198 @@ func (x *TransferBlockMeta) GetIdxSize() int64 {
 	return 0
 }
 
+type ConsistencyCheckRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ScrubId       string                 `protobuf:"bytes,1,opt,name=scrub_id,json=scrubId,proto3" json:"scrub_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsistencyCheckRequest) Reset() {
+	*x = ConsistencyCheckRequest{}
+	mi := &file_scrap_v1_peer_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsistencyCheckRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsistencyCheckRequest) ProtoMessage() {}
+
+func (x *ConsistencyCheckRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_peer_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsistencyCheckRequest.ProtoReflect.Descriptor instead.
+func (*ConsistencyCheckRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ConsistencyCheckRequest) GetScrubId() string {
+	if x != nil {
+		return x.ScrubId
+	}
+	return ""
+}
+
+type ConsistencyCheckResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ScrubId       string                 `protobuf:"bytes,1,opt,name=scrub_id,json=scrubId,proto3" json:"scrub_id,omitempty"`
+	AppliedIndex  uint64                 `protobuf:"varint,2,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"`
+	Sha256        []byte                 `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsistencyCheckResponse) Reset() {
+	*x = ConsistencyCheckResponse{}
+	mi := &file_scrap_v1_peer_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsistencyCheckResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsistencyCheckResponse) ProtoMessage() {}
+
+func (x *ConsistencyCheckResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_peer_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsistencyCheckResponse.ProtoReflect.Descriptor instead.
+func (*ConsistencyCheckResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ConsistencyCheckResponse) GetScrubId() string {
+	if x != nil {
+		return x.ScrubId
+	}
+	return ""
+}
+
+func (x *ConsistencyCheckResponse) GetAppliedIndex() uint64 {
+	if x != nil {
+		return x.AppliedIndex
+	}
+	return 0
+}
+
+func (x *ConsistencyCheckResponse) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+type RequestIndexRebuildRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ScrubId       string                 `protobuf:"bytes,1,opt,name=scrub_id,json=scrubId,proto3" json:"scrub_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestIndexRebuildRequest) Reset() {
+	*x = RequestIndexRebuildRequest{}
+	mi := &file_scrap_v1_peer_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestIndexRebuildRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestIndexRebuildRequest) ProtoMessage() {}
+
+func (x *RequestIndexRebuildRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_peer_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestIndexRebuildRequest.ProtoReflect.Descriptor instead.
+func (*RequestIndexRebuildRequest) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RequestIndexRebuildRequest) GetScrubId() string {
+	if x != nil {
+		return x.ScrubId
+	}
+	return ""
+}
+
+type RequestIndexRebuildResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AlreadyInProgress bool                   `protobuf:"varint,1,opt,name=already_in_progress,json=alreadyInProgress,proto3" json:"already_in_progress,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RequestIndexRebuildResponse) Reset() {
+	*x = RequestIndexRebuildResponse{}
+	mi := &file_scrap_v1_peer_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestIndexRebuildResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestIndexRebuildResponse) ProtoMessage() {}
+
+func (x *RequestIndexRebuildResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_peer_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestIndexRebuildResponse.ProtoReflect.Descriptor instead.
+func (*RequestIndexRebuildResponse) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_peer_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RequestIndexRebuildResponse) GetAlreadyInProgress() bool {
+	if x != nil {
+		return x.AlreadyInProgress
+	}
+	return false
+}
+
 var File_scrap_v1_peer_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_peer_proto_rawDesc = "" +
@@ -476,10 +668,22 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"\bblock_id\x18\x01 \x01(\x04R\ablockId\x12\x1d\n" +
 	"\n" +
 	"block_size\x18\x02 \x01(\x03R\tblockSize\x12\x19\n" +
-	"\bidx_size\x18\x03 \x01(\x03R\aidxSize2\xc1\x01\n" +
+	"\bidx_size\x18\x03 \x01(\x03R\aidxSize\"4\n" +
+	"\x17ConsistencyCheckRequest\x12\x19\n" +
+	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\"r\n" +
+	"\x18ConsistencyCheckResponse\x12\x19\n" +
+	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12#\n" +
+	"\rapplied_index\x18\x02 \x01(\x04R\fappliedIndex\x12\x16\n" +
+	"\x06sha256\x18\x03 \x01(\fR\x06sha256\"7\n" +
+	"\x1aRequestIndexRebuildRequest\x12\x19\n" +
+	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\"M\n" +
+	"\x1bRequestIndexRebuildResponse\x12.\n" +
+	"\x13already_in_progress\x18\x01 \x01(\bR\x11alreadyInProgress2\x80\x03\n" +
 	"\vPeerService\x12^\n" +
 	"\x11ReplicateDocument\x12\".scrap.v1.ReplicateDocumentRequest\x1a#.scrap.v1.ReplicateDocumentResponse(\x01\x12R\n" +
-	"\rTransferBlock\x12\x1e.scrap.v1.TransferBlockRequest\x1a\x1f.scrap.v1.TransferBlockResponse0\x01B\x8c\x01\n" +
+	"\rTransferBlock\x12\x1e.scrap.v1.TransferBlockRequest\x1a\x1f.scrap.v1.TransferBlockResponse0\x01\x12Y\n" +
+	"\x10ConsistencyCheck\x12!.scrap.v1.ConsistencyCheckRequest\x1a\".scrap.v1.ConsistencyCheckResponse\x12b\n" +
+	"\x13RequestIndexRebuild\x12$.scrap.v1.RequestIndexRebuildRequest\x1a%.scrap.v1.RequestIndexRebuildResponseB\x8c\x01\n" +
 	"\fcom.scrap.v1B\tPeerProtoP\x01Z0github.com/petabytecl/scrap/gen/scrap/v1;scrapv1\xa2\x02\x03SXX\xaa\x02\bScrap.V1\xca\x02\bScrap\\V1\xe2\x02\x14Scrap\\V1\\GPBMetadata\xea\x02\tScrap::V1b\x06proto3"
 
 var (
@@ -494,24 +698,32 @@ func file_scrap_v1_peer_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_peer_proto_rawDescData
 }
 
-var file_scrap_v1_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_scrap_v1_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_scrap_v1_peer_proto_goTypes = []any{
-	(*ReplicateDocumentRequest)(nil),  // 0: scrap.v1.ReplicateDocumentRequest
-	(*ReplicateDocumentInit)(nil),     // 1: scrap.v1.ReplicateDocumentInit
-	(*ReplicateDocumentResponse)(nil), // 2: scrap.v1.ReplicateDocumentResponse
-	(*TransferBlockRequest)(nil),      // 3: scrap.v1.TransferBlockRequest
-	(*TransferBlockResponse)(nil),     // 4: scrap.v1.TransferBlockResponse
-	(*TransferBlockMeta)(nil),         // 5: scrap.v1.TransferBlockMeta
+	(*ReplicateDocumentRequest)(nil),    // 0: scrap.v1.ReplicateDocumentRequest
+	(*ReplicateDocumentInit)(nil),       // 1: scrap.v1.ReplicateDocumentInit
+	(*ReplicateDocumentResponse)(nil),   // 2: scrap.v1.ReplicateDocumentResponse
+	(*TransferBlockRequest)(nil),        // 3: scrap.v1.TransferBlockRequest
+	(*TransferBlockResponse)(nil),       // 4: scrap.v1.TransferBlockResponse
+	(*TransferBlockMeta)(nil),           // 5: scrap.v1.TransferBlockMeta
+	(*ConsistencyCheckRequest)(nil),     // 6: scrap.v1.ConsistencyCheckRequest
+	(*ConsistencyCheckResponse)(nil),    // 7: scrap.v1.ConsistencyCheckResponse
+	(*RequestIndexRebuildRequest)(nil),  // 8: scrap.v1.RequestIndexRebuildRequest
+	(*RequestIndexRebuildResponse)(nil), // 9: scrap.v1.RequestIndexRebuildResponse
 }
 var file_scrap_v1_peer_proto_depIdxs = []int32{
 	1, // 0: scrap.v1.ReplicateDocumentRequest.init:type_name -> scrap.v1.ReplicateDocumentInit
 	5, // 1: scrap.v1.TransferBlockResponse.meta:type_name -> scrap.v1.TransferBlockMeta
 	0, // 2: scrap.v1.PeerService.ReplicateDocument:input_type -> scrap.v1.ReplicateDocumentRequest
 	3, // 3: scrap.v1.PeerService.TransferBlock:input_type -> scrap.v1.TransferBlockRequest
-	2, // 4: scrap.v1.PeerService.ReplicateDocument:output_type -> scrap.v1.ReplicateDocumentResponse
-	4, // 5: scrap.v1.PeerService.TransferBlock:output_type -> scrap.v1.TransferBlockResponse
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
+	6, // 4: scrap.v1.PeerService.ConsistencyCheck:input_type -> scrap.v1.ConsistencyCheckRequest
+	8, // 5: scrap.v1.PeerService.RequestIndexRebuild:input_type -> scrap.v1.RequestIndexRebuildRequest
+	2, // 6: scrap.v1.PeerService.ReplicateDocument:output_type -> scrap.v1.ReplicateDocumentResponse
+	4, // 7: scrap.v1.PeerService.TransferBlock:output_type -> scrap.v1.TransferBlockResponse
+	7, // 8: scrap.v1.PeerService.ConsistencyCheck:output_type -> scrap.v1.ConsistencyCheckResponse
+	9, // 9: scrap.v1.PeerService.RequestIndexRebuild:output_type -> scrap.v1.RequestIndexRebuildResponse
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
 	2, // [2:2] is the sub-list for extension extendee
 	0, // [0:2] is the sub-list for field type_name
@@ -536,7 +748,7 @@ func file_scrap_v1_peer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_peer_proto_rawDesc), len(file_scrap_v1_peer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -4,8 +4,14 @@ package scrap.v1;
 
 message RaftCommand {
   oneof command {
-    CommitDocument commit_doc = 1;
+    CommitDocument              commit_doc        = 1;
+    RequestConsistencyCheck     consistency_check = 2;
   }
+}
+
+message RequestConsistencyCheck {
+  string scrub_id        = 1;
+  int64  requested_at_us = 2;
 }
 
 message CommitDocument {
