@@ -12,7 +12,7 @@ spec:
             - name: SCRAP_BACKEND_TYPE
               value: s3
             - name: SCRAP_S3_BUCKET
-              value: scrap-e2e
+              value: scrap-e2e # keep in sync with SCRAP_E2E_S3_BUCKET in Makefile
             - name: SCRAP_S3_REGION
               value: us-east-1
             - name: SCRAP_S3_ENDPOINT
