@@ -27,6 +27,8 @@ type RaftCommand struct {
 	//
 	//	*RaftCommand_CommitDoc
 	//	*RaftCommand_ConsistencyCheck
+	//	*RaftCommand_SealBlock
+	//	*RaftCommand_ConfirmUpload
 	Command       isRaftCommand_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -87,6 +89,24 @@ func (x *RaftCommand) GetConsistencyCheck() *RequestConsistencyCheck {
 	return nil
 }
 
+func (x *RaftCommand) GetSealBlock() *SealBlock {
+	if x != nil {
+		if x, ok := x.Command.(*RaftCommand_SealBlock); ok {
+			return x.SealBlock
+		}
+	}
+	return nil
+}
+
+func (x *RaftCommand) GetConfirmUpload() *ConfirmUpload {
+	if x != nil {
+		if x, ok := x.Command.(*RaftCommand_ConfirmUpload); ok {
+			return x.ConfirmUpload
+		}
+	}
+	return nil
+}
+
 type isRaftCommand_Command interface {
 	isRaftCommand_Command()
 }
@@ -99,9 +119,21 @@ type RaftCommand_ConsistencyCheck struct {
 	ConsistencyCheck *RequestConsistencyCheck `protobuf:"bytes,2,opt,name=consistency_check,json=consistencyCheck,proto3,oneof"`
 }
 
+type RaftCommand_SealBlock struct {
+	SealBlock *SealBlock `protobuf:"bytes,3,opt,name=seal_block,json=sealBlock,proto3,oneof"`
+}
+
+type RaftCommand_ConfirmUpload struct {
+	ConfirmUpload *ConfirmUpload `protobuf:"bytes,4,opt,name=confirm_upload,json=confirmUpload,proto3,oneof"`
+}
+
 func (*RaftCommand_CommitDoc) isRaftCommand_Command() {}
 
 func (*RaftCommand_ConsistencyCheck) isRaftCommand_Command() {}
+
+func (*RaftCommand_SealBlock) isRaftCommand_Command() {}
+
+func (*RaftCommand_ConfirmUpload) isRaftCommand_Command() {}
 
 type RequestConsistencyCheck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -155,6 +187,150 @@ func (x *RequestConsistencyCheck) GetRequestedAtUs() int64 {
 	return 0
 }
 
+type SealBlock struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	BlockId         uint64                 `protobuf:"varint,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	ShardId         uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	SealedSizeBytes int64                  `protobuf:"varint,3,opt,name=sealed_size_bytes,json=sealedSizeBytes,proto3" json:"sealed_size_bytes,omitempty"`
+	SealedAtUs      int64                  `protobuf:"varint,4,opt,name=sealed_at_us,json=sealedAtUs,proto3" json:"sealed_at_us,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SealBlock) Reset() {
+	*x = SealBlock{}
+	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SealBlock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SealBlock) ProtoMessage() {}
+
+func (x *SealBlock) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SealBlock.ProtoReflect.Descriptor instead.
+func (*SealBlock) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SealBlock) GetBlockId() uint64 {
+	if x != nil {
+		return x.BlockId
+	}
+	return 0
+}
+
+func (x *SealBlock) GetShardId() uint64 {
+	if x != nil {
+		return x.ShardId
+	}
+	return 0
+}
+
+func (x *SealBlock) GetSealedSizeBytes() int64 {
+	if x != nil {
+		return x.SealedSizeBytes
+	}
+	return 0
+}
+
+func (x *SealBlock) GetSealedAtUs() int64 {
+	if x != nil {
+		return x.SealedAtUs
+	}
+	return 0
+}
+
+type ConfirmUpload struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	BlockId          uint64                 `protobuf:"varint,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	ShardId          uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	BackendKeyPrefix string                 `protobuf:"bytes,3,opt,name=backend_key_prefix,json=backendKeyPrefix,proto3" json:"backend_key_prefix,omitempty"`
+	ConfirmedAtUs    int64                  `protobuf:"varint,4,opt,name=confirmed_at_us,json=confirmedAtUs,proto3" json:"confirmed_at_us,omitempty"`
+	Etag             string                 `protobuf:"bytes,5,opt,name=etag,proto3" json:"etag,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ConfirmUpload) Reset() {
+	*x = ConfirmUpload{}
+	mi := &file_scrap_v1_raft_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmUpload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmUpload) ProtoMessage() {}
+
+func (x *ConfirmUpload) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_raft_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmUpload.ProtoReflect.Descriptor instead.
+func (*ConfirmUpload) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ConfirmUpload) GetBlockId() uint64 {
+	if x != nil {
+		return x.BlockId
+	}
+	return 0
+}
+
+func (x *ConfirmUpload) GetShardId() uint64 {
+	if x != nil {
+		return x.ShardId
+	}
+	return 0
+}
+
+func (x *ConfirmUpload) GetBackendKeyPrefix() string {
+	if x != nil {
+		return x.BackendKeyPrefix
+	}
+	return ""
+}
+
+func (x *ConfirmUpload) GetConfirmedAtUs() int64 {
+	if x != nil {
+		return x.ConfirmedAtUs
+	}
+	return 0
+}
+
+func (x *ConfirmUpload) GetEtag() string {
+	if x != nil {
+		return x.Etag
+	}
+	return ""
+}
+
 type CommitDocument struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	TransactionId  string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
@@ -173,7 +349,7 @@ type CommitDocument struct {
 
 func (x *CommitDocument) Reset() {
 	*x = CommitDocument{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	mi := &file_scrap_v1_raft_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -185,7 +361,7 @@ func (x *CommitDocument) String() string {
 func (*CommitDocument) ProtoMessage() {}
 
 func (x *CommitDocument) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	mi := &file_scrap_v1_raft_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -198,7 +374,7 @@ func (x *CommitDocument) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitDocument.ProtoReflect.Descriptor instead.
 func (*CommitDocument) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{2}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CommitDocument) GetTransactionId() string {
@@ -285,7 +461,7 @@ type OpenlogEntry struct {
 
 func (x *OpenlogEntry) Reset() {
 	*x = OpenlogEntry{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[3]
+	mi := &file_scrap_v1_raft_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -297,7 +473,7 @@ func (x *OpenlogEntry) String() string {
 func (*OpenlogEntry) ProtoMessage() {}
 
 func (x *OpenlogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[3]
+	mi := &file_scrap_v1_raft_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -310,7 +486,7 @@ func (x *OpenlogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenlogEntry.ProtoReflect.Descriptor instead.
 func (*OpenlogEntry) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{3}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *OpenlogEntry) GetTransactionId() string {
@@ -359,15 +535,30 @@ var File_scrap_v1_raft_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\n" +
-	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\xa5\x01\n" +
+	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\x9d\x02\n" +
 	"\vRaftCommand\x129\n" +
 	"\n" +
 	"commit_doc\x18\x01 \x01(\v2\x18.scrap.v1.CommitDocumentH\x00R\tcommitDoc\x12P\n" +
-	"\x11consistency_check\x18\x02 \x01(\v2!.scrap.v1.RequestConsistencyCheckH\x00R\x10consistencyCheckB\t\n" +
+	"\x11consistency_check\x18\x02 \x01(\v2!.scrap.v1.RequestConsistencyCheckH\x00R\x10consistencyCheck\x124\n" +
+	"\n" +
+	"seal_block\x18\x03 \x01(\v2\x13.scrap.v1.SealBlockH\x00R\tsealBlock\x12@\n" +
+	"\x0econfirm_upload\x18\x04 \x01(\v2\x17.scrap.v1.ConfirmUploadH\x00R\rconfirmUploadB\t\n" +
 	"\acommand\"\\\n" +
 	"\x17RequestConsistencyCheck\x12\x19\n" +
 	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12&\n" +
-	"\x0frequested_at_us\x18\x02 \x01(\x03R\rrequestedAtUs\"\xe9\x02\n" +
+	"\x0frequested_at_us\x18\x02 \x01(\x03R\rrequestedAtUs\"\x8f\x01\n" +
+	"\tSealBlock\x12\x19\n" +
+	"\bblock_id\x18\x01 \x01(\x04R\ablockId\x12\x19\n" +
+	"\bshard_id\x18\x02 \x01(\x04R\ashardId\x12*\n" +
+	"\x11sealed_size_bytes\x18\x03 \x01(\x03R\x0fsealedSizeBytes\x12 \n" +
+	"\fsealed_at_us\x18\x04 \x01(\x03R\n" +
+	"sealedAtUs\"\xaf\x01\n" +
+	"\rConfirmUpload\x12\x19\n" +
+	"\bblock_id\x18\x01 \x01(\x04R\ablockId\x12\x19\n" +
+	"\bshard_id\x18\x02 \x01(\x04R\ashardId\x12,\n" +
+	"\x12backend_key_prefix\x18\x03 \x01(\tR\x10backendKeyPrefix\x12&\n" +
+	"\x0fconfirmed_at_us\x18\x04 \x01(\x03R\rconfirmedAtUs\x12\x12\n" +
+	"\x04etag\x18\x05 \x01(\tR\x04etag\"\xe9\x02\n" +
 	"\x0eCommitDocument\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
@@ -403,21 +594,25 @@ func file_scrap_v1_raft_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_raft_proto_rawDescData
 }
 
-var file_scrap_v1_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_scrap_v1_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_scrap_v1_raft_proto_goTypes = []any{
 	(*RaftCommand)(nil),             // 0: scrap.v1.RaftCommand
 	(*RequestConsistencyCheck)(nil), // 1: scrap.v1.RequestConsistencyCheck
-	(*CommitDocument)(nil),          // 2: scrap.v1.CommitDocument
-	(*OpenlogEntry)(nil),            // 3: scrap.v1.OpenlogEntry
+	(*SealBlock)(nil),               // 2: scrap.v1.SealBlock
+	(*ConfirmUpload)(nil),           // 3: scrap.v1.ConfirmUpload
+	(*CommitDocument)(nil),          // 4: scrap.v1.CommitDocument
+	(*OpenlogEntry)(nil),            // 5: scrap.v1.OpenlogEntry
 }
 var file_scrap_v1_raft_proto_depIdxs = []int32{
-	2, // 0: scrap.v1.RaftCommand.commit_doc:type_name -> scrap.v1.CommitDocument
+	4, // 0: scrap.v1.RaftCommand.commit_doc:type_name -> scrap.v1.CommitDocument
 	1, // 1: scrap.v1.RaftCommand.consistency_check:type_name -> scrap.v1.RequestConsistencyCheck
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 2: scrap.v1.RaftCommand.seal_block:type_name -> scrap.v1.SealBlock
+	3, // 3: scrap.v1.RaftCommand.confirm_upload:type_name -> scrap.v1.ConfirmUpload
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_scrap_v1_raft_proto_init() }
@@ -428,6 +623,8 @@ func file_scrap_v1_raft_proto_init() {
 	file_scrap_v1_raft_proto_msgTypes[0].OneofWrappers = []any{
 		(*RaftCommand_CommitDoc)(nil),
 		(*RaftCommand_ConsistencyCheck)(nil),
+		(*RaftCommand_SealBlock)(nil),
+		(*RaftCommand_ConfirmUpload)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -435,7 +632,7 @@ func file_scrap_v1_raft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_raft_proto_rawDesc), len(file_scrap_v1_raft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
