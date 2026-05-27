@@ -135,6 +135,67 @@ func TestOrphanedSeals_RetryOnNextSeal(t *testing.T) {
 	}
 }
 
+func TestSealAndOpenNew_NoOrphanedSealsOnSuccess(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	if _, err := s.WriteDocument(ctx, "tx-no-orphan-1", "doc.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-no-orphan-2", "doc2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	waitPendingUploads(t, s, 1)
+
+	if got := s.OrphanedSealsForTest(); got != 0 {
+		t.Fatalf("OrphanedSeals = %d, want 0 on successful seal", got)
+	}
+}
+
+func TestSealAndOpenNew_BlockAdvancesAfterMultipleSeals(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	for i := 1; i <= 6; i++ {
+		txID := fmt.Sprintf("tx-multi-seal-%d", i)
+		docName := fmt.Sprintf("doc-%d.bin", i)
+		if _, err := s.WriteDocument(ctx, txID, docName, "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte{byte(i)}, 64))); err != nil {
+			t.Fatalf("WriteDocument %s: %v", docName, err)
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.CurrentBlockIDForTest() >= 4 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected block ID >= 4, got %d", s.CurrentBlockIDForTest())
+}
+
+func TestApplySealBlock_PendingUploadHasCorrectMetadata(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	payload := bytes.Repeat([]byte("x"), 64)
+	if _, err := s.WriteDocument(ctx, "tx-seal-meta", "doc.bin", "application/octet-stream", "", bytes.NewReader(payload)); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-seal-meta-2", "doc2.bin", "application/octet-stream", "", bytes.NewReader([]byte("y"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	uploads := waitPendingUploads(t, s, 1)
+	if uploads[0].SealedSizeBytes <= 0 {
+		t.Fatalf("SealedSizeBytes = %d, want > 0", uploads[0].SealedSizeBytes)
+	}
+	if uploads[0].BlockID == 0 {
+		t.Fatal("BlockID should not be zero")
+	}
+}
+
 func openReplicatingTestShard(t *testing.T, dataDir string, replicator shard.DocumentReplicator) *shard.Shard {
 	t.Helper()
 	s, err := shard.Open(shard.Config{
