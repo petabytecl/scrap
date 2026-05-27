@@ -108,11 +108,18 @@ func (s *Shard) AppendReplicatedDocument(_ context.Context, init *scrapv1.Replic
 		return nil, fmt.Errorf("shard: replica block %d is not open", init.GetBlockId())
 	}
 
+	// Validate offset before appending to prevent poisoning the follower block with data at the wrong position.
+	currentOffset := s.blockWriter.Offset()
+	wantOffset := safeUint64ToInt64(init.GetStartOffset())
+	if currentOffset != wantOffset {
+		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
+	}
+
 	result, err := s.blockWriter.AppendDocument(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), body)
 	if err != nil {
 		return nil, fmt.Errorf("shard: append replicated document: %w", err)
 	}
-	if result.FirstFrameOffset != safeUint64ToInt64(init.GetStartOffset()) {
+	if result.FirstFrameOffset != wantOffset {
 		return nil, fmt.Errorf("shard: replicated first frame offset %d, want %d", result.FirstFrameOffset, init.GetStartOffset())
 	}
 	if result.FrameCount != init.GetFrameCount() {

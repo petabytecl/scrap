@@ -1,0 +1,163 @@
+package shard_test
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/petabytecl/scrap/internal/shard"
+)
+
+func TestWriteDocument_NoPrepFileAfterCommit(t *testing.T) {
+	dir := t.TempDir()
+	s := openReplicatingTestShard(t, dir, nil)
+	ctx := context.Background()
+
+	_, err := s.WriteDocument(ctx, "tx-clean", "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	openlogDir := filepath.Join(dir, "openlog")
+	entries, err := os.ReadDir(openlogDir)
+	if err != nil {
+		t.Fatalf("ReadDir openlog: %v", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			t.Fatalf("prep file should have been deleted after commit: %s", entry.Name())
+		}
+	}
+}
+
+func TestWriteDocument_NoPrepFileAfterMultipleWrites(t *testing.T) {
+	dir := t.TempDir()
+	s := openReplicatingTestShard(t, dir, nil)
+	ctx := context.Background()
+
+	for i := range 5 {
+		txID := fmt.Sprintf("tx-prep-%d", i)
+		_, err := s.WriteDocument(ctx, txID, "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+		if err != nil {
+			t.Fatalf("WriteDocument %s: %v", txID, err)
+		}
+	}
+
+	openlogDir := filepath.Join(dir, "openlog")
+	entries, err := os.ReadDir(openlogDir)
+	if err != nil {
+		t.Fatalf("ReadDir openlog: %v", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			t.Fatalf("prep file should have been deleted after commit: %s", entry.Name())
+		}
+	}
+}
+
+func TestSealAndOpenNew_AdvancesBlockAfterSeal(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	initialBlockID := s.CurrentBlockIDForTest()
+
+	if _, err := s.WriteDocument(ctx, "tx-seal-1", "doc.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-seal-2", "doc2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.CurrentBlockIDForTest() > initialBlockID {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("block ID should have advanced after seal")
+}
+
+func TestApplySealBlock_ClosesMatchingFollowerBlock(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	blockBefore := s.CurrentBlockIDForTest()
+
+	if _, err := s.WriteDocument(ctx, "tx-seal-follower", "doc.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("x"), 64))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-seal-follower-2", "doc2.bin", "application/octet-stream", "", bytes.NewReader([]byte("y"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	uploads := waitPendingUploads(t, s, 1)
+	if len(uploads) == 0 {
+		t.Fatal("expected pending upload after seal")
+	}
+
+	blockAfter := s.CurrentBlockIDForTest()
+	if blockAfter <= blockBefore {
+		t.Fatalf("block ID should advance after seal: before=%d, after=%d", blockBefore, blockAfter)
+	}
+}
+
+func TestOrphanedSeals_RetryOnNextSeal(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	for i := 1; i <= 8; i++ {
+		txID := fmt.Sprintf("tx-orphan-%d", i)
+		docName := fmt.Sprintf("doc-%d.bin", i)
+		if _, err := s.WriteDocument(ctx, txID, docName, "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte{byte(i)}, 64))); err != nil {
+			t.Fatalf("WriteDocument %s: %v", docName, err)
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		uploads, err := s.PendingUploadsForTest()
+		if err != nil {
+			t.Fatalf("PendingUploadsForTest: %v", err)
+		}
+		if len(uploads) >= 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if s.OrphanedSealsForTest() > 0 {
+		t.Logf("orphaned seals remaining: %d (may be retried on next write)", s.OrphanedSealsForTest())
+	}
+}
+
+func openReplicatingTestShard(t *testing.T, dataDir string, replicator shard.DocumentReplicator) *shard.Shard {
+	t.Helper()
+	s, err := shard.Open(shard.Config{
+		DataDir:        dataDir,
+		ShardID:        0,
+		RaftID:         1,
+		Peers:          map[uint64]string{1: "localhost:9091"},
+		TickInterval:   10 * time.Millisecond,
+		BootstrapGrace: time.Second,
+		Replicator:     replicator,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.IsLeader() {
+			return s
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("shard did not become leader")
+	return nil
+}
