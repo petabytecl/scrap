@@ -243,7 +243,7 @@ func TestParseCaseInsensitive(t *testing.T) {
 	var buf []byte
 	for _, c := range upper {
 		if c >= 'A' && c <= 'Z' {
-			buf = append(buf, byte(c+32)) //nolint:gosec // c is 'A'-'Z', c+32 fits in byte
+			buf = append(buf, byte(c+32))
 		} else {
 			buf = append(buf, byte(c)) //nolint:gosec // c is in Crockford Base32, fits in byte
 		}

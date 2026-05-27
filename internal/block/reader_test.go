@@ -137,7 +137,7 @@ func TestBlockReaderCorruptPayload(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	data[block.BlockHeaderSize+block.FrameHeaderSize+5] ^= 0xFF
-	if err := os.WriteFile(blkPath, data, 0o600); err != nil {
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
 

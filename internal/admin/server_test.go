@@ -32,7 +32,7 @@ func TestServer_MetricsEndpoint(t *testing.T) {
 		t.Fatalf("new request: %v", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // test server URL from httptest
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /metrics: %v", err)
 	}

@@ -83,7 +83,7 @@ func TestTwoPassCorruptPayload(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	raw[block.BlockHeaderSize+block.FrameHeaderSize+10] ^= 0xFF
-	if err := os.WriteFile(blkPath, raw, 0o600); err != nil {
+	if err := os.WriteFile(blkPath, raw, 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestTwoPassTruncatedBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if err := os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0o600); err != nil {
+	if err := os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
 

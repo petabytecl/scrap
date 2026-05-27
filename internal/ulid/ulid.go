@@ -58,10 +58,10 @@ func (u *ULID) UnmarshalBinary(data []byte) error {
 
 func (u ULID) Compare(other ULID) int {
 	for i := range u {
-		if u[i] < other[i] { //nolint:gosec // both u and other are fixed [16]byte arrays
+		if u[i] < other[i] {
 			return -1
 		}
-		if u[i] > other[i] { //nolint:gosec // both u and other are fixed [16]byte arrays
+		if u[i] > other[i] {
 			return 1
 		}
 	}
