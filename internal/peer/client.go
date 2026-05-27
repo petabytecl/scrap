@@ -70,6 +70,21 @@ func (c *Client) ReplicateDocument(ctx context.Context, addr string, init *scrap
 	return resp.GetSha256(), nil
 }
 
+func (c *Client) ConsistencyCheck(ctx context.Context, addr, scrubID string) (*scrapv1.ConsistencyCheckResponse, error) {
+	conn, err := c.getConn(addr)
+	if err != nil {
+		return nil, err
+	}
+	client := scrapv1.NewPeerServiceClient(conn)
+	resp, err := client.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{
+		ScrubId: scrubID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("peer: consistency check %s: %w", addr, err)
+	}
+	return resp, nil
+}
+
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

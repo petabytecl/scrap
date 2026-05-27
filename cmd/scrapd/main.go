@@ -92,7 +92,7 @@ func run() error {
 		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
 	peerGS := grpc.NewServer()
-	peerSrv := peer.NewServer(*dataDir + "/blocks")
+	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s))
 	peer.RegisterServer(peerGS, peerSrv)
 
 	adminSrv := admin.New(registry)

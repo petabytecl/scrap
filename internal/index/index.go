@@ -1,9 +1,11 @@
 package index
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -31,7 +33,8 @@ type Entry struct {
 }
 
 type Index struct {
-	db *pebble.DB
+	db           *pebble.DB
+	appliedIndex atomic.Uint64
 }
 
 func Open(dir string) (*Index, error) {
@@ -93,6 +96,35 @@ func (idx *Index) IncrementDocCount(txID string) error {
 
 func (idx *Index) Close() error {
 	return idx.db.Close()
+}
+
+func (idx *Index) SetAppliedIndex(ai uint64) {
+	idx.appliedIndex.Store(ai)
+}
+
+func (idx *Index) StreamingHash() (appliedIndex uint64, hash [32]byte, err error) {
+	appliedIndex = idx.appliedIndex.Load()
+
+	snap := idx.db.NewSnapshot()
+	defer func() { _ = snap.Close() }()
+
+	iter, iterErr := snap.NewIter(nil)
+	if iterErr != nil {
+		return 0, [32]byte{}, fmt.Errorf("index: new iter: %w", iterErr)
+	}
+	defer func() { _ = iter.Close() }()
+
+	h := sha256.New()
+	for iter.First(); iter.Valid(); iter.Next() {
+		h.Write(iter.Key())
+		h.Write(iter.Value())
+	}
+	if err := iter.Error(); err != nil {
+		return 0, [32]byte{}, fmt.Errorf("index: iter: %w", err)
+	}
+
+	copy(hash[:], h.Sum(nil))
+	return appliedIndex, hash, nil
 }
 
 func (idx *Index) put(txID string, entry Entry) error {

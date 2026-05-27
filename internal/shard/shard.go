@@ -41,6 +41,11 @@ type Config struct {
 	TickInterval   time.Duration
 	BootstrapGrace time.Duration
 	Scrub          scrub.ScrubConfig
+	Transport      scrapraft.Transport
+
+	ConsistencyChecker scrub.ConsistencyChecker
+	ScrubMetrics       scrub.ScrubMetrics
+	PeerAddrs          []string
 }
 
 type Shard struct {
@@ -60,8 +65,15 @@ type Shard struct {
 	idxWriter   *block.IndexWriter
 	nextBlockID uint64
 
-	proposalMu sync.Mutex
-	proposals  map[string]chan error
+	proposalMu     sync.Mutex
+	proposals      map[string]chan error
+	scrubProposals map[string]chan scrub.Result
+
+	scrubMu     sync.RWMutex
+	scrubResult *scrub.Result
+
+	scrubber    *scrub.LightScrubber
+	scrubCancel context.CancelFunc
 }
 
 func (c *Config) applyDefaults() {
@@ -108,6 +120,7 @@ func Open(cfg Config) (*Shard, error) {
 		blockSealSize:  cfg.BlockSealSize,
 		nextBlockID:    nextID,
 		proposals:      make(map[string]chan error),
+		scrubProposals: make(map[string]chan scrub.Result),
 		raftStartedAt:  time.Now(),
 		bootstrapGrace: cfg.BootstrapGrace,
 	}
@@ -122,7 +135,10 @@ func Open(cfg Config) (*Shard, error) {
 		return nil, fmt.Errorf("shard: open block: %w", err)
 	}
 
-	transport := &noopTransport{}
+	transport := cfg.Transport
+	if transport == nil {
+		transport = &noopTransport{}
+	}
 	raftNode, err := scrapraft.Open(scrapraft.Config{
 		ID:           cfg.RaftID,
 		Peers:        cfg.Peers,
@@ -138,7 +154,27 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
+	s.startScrubber(cfg)
+
 	return s, nil
+}
+
+func (s *Shard) startScrubber(cfg Config) {
+	if !cfg.Scrub.Enabled || cfg.ConsistencyChecker == nil || cfg.ScrubMetrics == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.scrubCancel = cancel
+	s.scrubber = scrub.NewLightScrubber(scrub.LightScrubberConfig{
+		Proposer:           s,
+		ConsistencyChecker: cfg.ConsistencyChecker,
+		LeaderChecker:      s,
+		Metrics:            cfg.ScrubMetrics,
+		PeerAddrs:          cfg.PeerAddrs,
+		Interval:           cfg.Scrub.LightScrubInterval,
+		Jitter:             cfg.Scrub.Jitter,
+	})
+	s.scrubber.Start(ctx)
 }
 
 //nolint:cyclop // orchestration function managing seal check, prep file, block append, raft propose, and apply
@@ -375,7 +411,17 @@ func (s *Shard) notLeaderError() error {
 	return &storeapi.NotLeaderError{LeaderAddr: leaderAddr}
 }
 
+func (s *Shard) RaftStep(ctx context.Context, msg raftpb.Message) error {
+	return s.raft.Step(ctx, msg)
+}
+
 func (s *Shard) Close() error {
+	if s.scrubCancel != nil {
+		s.scrubCancel()
+	}
+	if s.scrubber != nil {
+		s.scrubber.Stop()
+	}
 	s.raft.Stop()
 
 	s.mu.Lock()
@@ -407,22 +453,101 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 			return fmt.Errorf("shard: unmarshal raft command: %w", err)
 		}
 
-		doc := cmd.GetCommitDoc()
-		if doc == nil {
-			continue
-		}
+		switch c := cmd.Command.(type) {
+		case *scrapv1.RaftCommand_CommitDoc:
+			doc := c.CommitDoc
+			key := doc.TransactionId + "\x00" + doc.DocumentName
+			applyErr := s.applyCommitDocument(doc)
 
-		key := doc.TransactionId + "\x00" + doc.DocumentName
-		applyErr := s.applyCommitDocument(doc)
+			s.proposalMu.Lock()
+			if ch, ok := s.proposals[key]; ok {
+				ch <- applyErr
+				delete(s.proposals, key)
+			}
+			s.proposalMu.Unlock()
 
-		s.proposalMu.Lock()
-		if ch, ok := s.proposals[key]; ok {
-			ch <- applyErr
-			delete(s.proposals, key)
+		case *scrapv1.RaftCommand_ConsistencyCheck:
+			s.idx.SetAppliedIndex(e.Index)
+			result := s.applyConsistencyCheck(c.ConsistencyCheck, e.Index)
+
+			s.proposalMu.Lock()
+			if ch, ok := s.scrubProposals[result.ScrubID]; ok {
+				ch <- result
+				delete(s.scrubProposals, result.ScrubID)
+			}
+			s.proposalMu.Unlock()
 		}
-		s.proposalMu.Unlock()
 	}
 	return nil
+}
+
+func (s *Shard) applyConsistencyCheck(cc *scrapv1.RequestConsistencyCheck, entryIndex uint64) scrub.Result {
+	_, hash, err := s.idx.StreamingHash()
+	result := scrub.Result{
+		ScrubID:      cc.ScrubId,
+		AppliedIndex: entryIndex,
+	}
+	if err == nil {
+		result.SHA256 = hash
+	}
+
+	s.scrubMu.Lock()
+	s.scrubResult = &result
+	s.scrubMu.Unlock()
+
+	return result
+}
+
+func (s *Shard) ProposeConsistencyCheck(ctx context.Context, scrubID string) (scrub.Result, error) {
+	if err := s.requireLeader(); err != nil {
+		return scrub.Result{}, err
+	}
+
+	cmd := &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ConsistencyCheck{
+			ConsistencyCheck: &scrapv1.RequestConsistencyCheck{
+				ScrubId:       scrubID,
+				RequestedAtUs: time.Now().UnixMicro(),
+			},
+		},
+	}
+
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		return scrub.Result{}, fmt.Errorf("shard: marshal consistency check: %w", err)
+	}
+
+	doneCh := make(chan scrub.Result, 1)
+	s.proposalMu.Lock()
+	s.scrubProposals[scrubID] = doneCh
+	s.proposalMu.Unlock()
+
+	if err := s.raft.Propose(ctx, data); err != nil {
+		s.proposalMu.Lock()
+		delete(s.scrubProposals, scrubID)
+		s.proposalMu.Unlock()
+		return scrub.Result{}, fmt.Errorf("shard: propose consistency check: %w", err)
+	}
+
+	select {
+	case result := <-doneCh:
+		return result, nil
+	case <-ctx.Done():
+		s.proposalMu.Lock()
+		delete(s.scrubProposals, scrubID)
+		s.proposalMu.Unlock()
+		return scrub.Result{}, ctx.Err()
+	}
+}
+
+func (s *Shard) GetScrubResult(scrubID string) (scrub.Result, bool) {
+	s.scrubMu.RLock()
+	defer s.scrubMu.RUnlock()
+
+	if s.scrubResult == nil || s.scrubResult.ScrubID != scrubID {
+		return scrub.Result{}, false
+	}
+	return *s.scrubResult, true
 }
 
 func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
@@ -707,12 +832,21 @@ func scanMaxBlockID(blocksDir string) (uint64, error) {
 	return maxID + 1, nil
 }
 
+func (s *Shard) CorruptProjectionForTest(txID string, blockID uint64, docCount uint16, completed bool) {
+	_ = s.idx.Put(txID, blockID, docCount, completed)
+}
+
 type noopTransport struct{}
 
 func (t *noopTransport) Send(_ []raftpb.Message) {}
 
-// Ensure Shard satisfies store.Store at compile time.
-var _ storeapi.Store = (*Shard)(nil)
+// Ensure Shard satisfies store.Store and scrub interfaces at compile time.
+var (
+	_ storeapi.Store      = (*Shard)(nil)
+	_ scrub.ResultCache   = (*Shard)(nil)
+	_ scrub.Proposer      = (*Shard)(nil)
+	_ scrub.LeaderChecker = (*Shard)(nil)
+)
 
 // Suppress unused import.
 var _ = bytes.NewReader

@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -15,16 +16,26 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/scrub"
 )
 
 // sha256DigestLen is the byte length of a SHA-256 digest.
 const sha256DigestLen = sha256.Size
 
+type ServerOption func(*Server)
+
+func WithScrubCache(cache scrub.ResultCache) ServerOption {
+	return func(s *Server) {
+		s.scrubCache = cache
+	}
+}
+
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
-	blocksDir string
-	mu        sync.Mutex
-	writers   map[uint64]*blockState
+	blocksDir  string
+	scrubCache scrub.ResultCache
+	mu         sync.Mutex
+	writers    map[uint64]*blockState
 }
 
 type blockState struct {
@@ -32,11 +43,15 @@ type blockState struct {
 	idxWriter *block.IndexWriter
 }
 
-func NewServer(blocksDir string) *Server {
-	return &Server{
+func NewServer(blocksDir string, opts ...ServerOption) *Server {
+	s := &Server{
 		blocksDir: blocksDir,
 		writers:   make(map[uint64]*blockState),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func RegisterServer(gs *grpc.Server, s *Server) {
@@ -155,6 +170,21 @@ func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateD
 			}
 		}
 	}
+}
+
+func (s *Server) ConsistencyCheck(_ context.Context, req *scrapv1.ConsistencyCheckRequest) (*scrapv1.ConsistencyCheckResponse, error) {
+	if s.scrubCache == nil {
+		return nil, status.Error(codes.NotFound, "scrub cache not configured")
+	}
+	result, ok := s.scrubCache.GetScrubResult(req.ScrubId)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no result for scrub_id %q", req.ScrubId)
+	}
+	return &scrapv1.ConsistencyCheckResponse{
+		ScrubId:      result.ScrubID,
+		AppliedIndex: result.AppliedIndex,
+		Sha256:       result.SHA256[:],
+	}, nil
 }
 
 func (s *Server) Close() {

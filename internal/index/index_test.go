@@ -1,6 +1,7 @@
 package index_test
 
 import (
+	"crypto/sha256"
 	"path/filepath"
 	"testing"
 
@@ -124,5 +125,98 @@ func TestExists(t *testing.T) {
 
 	if !idx.Exists("tx-new") {
 		t.Fatal("Exists should return true after Put")
+	}
+}
+
+func TestStreamingHash_Determinism(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(filepath.Join(dir, "pebble"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	if err := idx.Put("tx-a", 1, 2, false); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := idx.Put("tx-b", 3, 1, true); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	idx.SetAppliedIndex(42)
+
+	ai1, hash1, err := idx.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash: %v", err)
+	}
+	if ai1 != 42 {
+		t.Fatalf("appliedIndex: got %d, want 42", ai1)
+	}
+	if hash1 == [32]byte{} {
+		t.Fatal("hash should not be zero for non-empty projection")
+	}
+
+	ai2, hash2, err := idx.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash: %v", err)
+	}
+	if hash1 != hash2 {
+		t.Fatalf("hashes differ on same data: %x vs %x", hash1, hash2)
+	}
+	if ai2 != 42 {
+		t.Fatalf("appliedIndex: got %d, want 42", ai2)
+	}
+}
+
+func TestStreamingHash_EmptyProjection(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(filepath.Join(dir, "pebble"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	_, hash, err := idx.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash: %v", err)
+	}
+
+	emptyHash := sha256.Sum256(nil)
+	if hash != emptyHash {
+		t.Fatalf("empty hash: got %x, want %x", hash, emptyHash)
+	}
+}
+
+func TestStreamingHash_DifferentData(t *testing.T) {
+	dir := t.TempDir()
+
+	idx1, err := index.Open(filepath.Join(dir, "pebble1"))
+	if err != nil {
+		t.Fatalf("Open idx1: %v", err)
+	}
+	defer func() { _ = idx1.Close() }()
+	if err := idx1.Put("tx-a", 1, 2, false); err != nil {
+		t.Fatalf("Put idx1: %v", err)
+	}
+
+	idx2, err := index.Open(filepath.Join(dir, "pebble2"))
+	if err != nil {
+		t.Fatalf("Open idx2: %v", err)
+	}
+	defer func() { _ = idx2.Close() }()
+	if err := idx2.Put("tx-b", 3, 1, true); err != nil {
+		t.Fatalf("Put idx2: %v", err)
+	}
+
+	_, hash1, err := idx1.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash idx1: %v", err)
+	}
+	_, hash2, err := idx2.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash idx2: %v", err)
+	}
+
+	if hash1 == hash2 {
+		t.Fatal("different data should produce different hashes")
 	}
 }

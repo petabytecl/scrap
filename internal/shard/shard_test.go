@@ -204,6 +204,60 @@ func TestOpenlogRecoveryDeletesCompletedPrep(t *testing.T) {
 	}
 }
 
+func TestConsistencyCheckApplyAndCache(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	_, err := s.WriteDocument(ctx, "tx-scrub", "doc.xml", "text/xml", "", bytes.NewReader([]byte("payload")))
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	result, err := s.ProposeConsistencyCheck(ctx, "scrub-001")
+	if err != nil {
+		t.Fatalf("ProposeConsistencyCheck: %v", err)
+	}
+	if result.ScrubID != "scrub-001" {
+		t.Fatalf("ScrubID: got %q", result.ScrubID)
+	}
+	if result.AppliedIndex == 0 {
+		t.Fatal("AppliedIndex should be non-zero")
+	}
+	if result.SHA256 == [32]byte{} {
+		t.Fatal("SHA256 should not be zero for non-empty projection")
+	}
+
+	cached, ok := s.GetScrubResult("scrub-001")
+	if !ok {
+		t.Fatal("expected cached result for scrub-001")
+	}
+	if cached.SHA256 != result.SHA256 {
+		t.Fatal("cached hash should match proposal result")
+	}
+
+	_, ok = s.GetScrubResult("nonexistent")
+	if ok {
+		t.Fatal("expected no result for nonexistent scrub_id")
+	}
+}
+
+func TestConsistencyCheckEmptyProjection(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	result, err := s.ProposeConsistencyCheck(ctx, "scrub-empty")
+	if err != nil {
+		t.Fatalf("ProposeConsistencyCheck: %v", err)
+	}
+
+	if result.SHA256 == [32]byte{} {
+		t.Log("empty projection hash is the SHA-256 of empty input, which is non-zero")
+	}
+	if result.AppliedIndex == 0 {
+		t.Fatal("AppliedIndex should be non-zero even for empty projection")
+	}
+}
+
 func TestFindEmptyTransaction(t *testing.T) {
 	s := openTestShard(t)
 	ctx := context.Background()
