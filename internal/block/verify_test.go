@@ -85,7 +85,7 @@ func TestVerifyBlock_FrameCRCCorruption(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath)
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestVerifyBlock_DocSHA256Mismatch(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath)
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestVerifyBlock_OversizedPayloadLen(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath)
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

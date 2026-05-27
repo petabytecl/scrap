@@ -132,12 +132,12 @@ func TestBlockReaderCorruptPayload(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeTestBlock(t, dir)
 
-	data, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	data[block.BlockHeaderSize+block.FrameHeaderSize+5] ^= 0xFF
-	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

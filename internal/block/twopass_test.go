@@ -78,7 +78,7 @@ func TestTwoPassCorruptPayload(t *testing.T) {
 	data := bytes.Repeat([]byte("A"), 512)
 	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
 
-	raw, err := os.ReadFile(blkPath)
+	raw, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestTwoPassTruncatedBlock(t *testing.T) {
 	data := bytes.Repeat([]byte("C"), 512)
 	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
 
-	raw, err := os.ReadFile(blkPath)
+	raw, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

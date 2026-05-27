@@ -195,12 +195,12 @@ func TestIndexCorruptEntryCRC(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	data, err := os.ReadFile(path) //nolint:gosec // test reads file it just created in a temp dir
+	data, err := os.ReadFile(path) //nolint:gosec // test file path from temp dir
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	data[20] ^= 0xFF                                        // corrupt entry payload
-	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // test writes to file it created in a temp dir
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
