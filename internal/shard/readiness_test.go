@@ -2,10 +2,12 @@ package shard_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/shard"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func TestCheckReadinessWithinGracePeriod(t *testing.T) {
@@ -65,5 +67,16 @@ func TestCheckReadinessSucceedsWithLeader(t *testing.T) {
 
 	if err := s.CheckReadiness(context.Background()); err != nil {
 		t.Fatalf("CheckReadiness with leader: %v", err)
+	}
+}
+
+func TestCheckReadinessFailsWhileRebuilding(t *testing.T) {
+	s := openTestShard(t)
+	s.SetRebuildingForTest(true)
+	defer s.SetRebuildingForTest(false)
+
+	err := s.CheckReadiness(context.Background())
+	if !errors.Is(err, storeapi.ErrRebuilding) {
+		t.Fatalf("CheckReadiness error: got %v, want ErrRebuilding", err)
 	}
 }

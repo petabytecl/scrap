@@ -48,7 +48,11 @@ type Config struct {
 
 	ConsistencyChecker scrub.ConsistencyChecker
 	ScrubMetrics       scrub.ScrubMetrics
+	DeepScrubMetrics   scrub.DeepScrubMetrics
 	Rebuilder          scrub.Rebuilder
+	BlockRepairer      scrub.BlockRepairer
+	LatencySignal      scrub.LatencySignal
+	Replicator         DocumentReplicator
 	PeerAddrs          []string
 }
 
@@ -57,9 +61,11 @@ type Shard struct {
 	blocksDir      string
 	openlogDir     string
 	shardID        uint64
+	raftID         uint64
 	peers          map[uint64]string
 	idx            *index.Index
 	raft           *scrapraft.RaftNode
+	replicator     DocumentReplicator
 	baseLogger     *slog.Logger
 	logger         *slog.Logger
 	blockSealSize  int64
@@ -78,8 +84,9 @@ type Shard struct {
 	scrubMu     sync.RWMutex
 	scrubResult *scrub.Result
 
-	scrubber    *scrub.LightScrubber
-	scrubCancel context.CancelFunc
+	scrubber     *scrub.LightScrubber
+	deepScrubber *scrub.DeepScrubber
+	scrubCancel  context.CancelFunc
 
 	rebuilding  atomic.Bool
 	rebuildDone atomic.Pointer[chan struct{}]
@@ -130,10 +137,12 @@ func Open(cfg Config) (*Shard, error) {
 		blocksDir:      blocksDir,
 		openlogDir:     openlogDir,
 		shardID:        cfg.ShardID,
+		raftID:         cfg.RaftID,
 		peers:          cfg.Peers,
 		idx:            idx,
 		baseLogger:     baseLogger,
 		logger:         logger,
+		replicator:     cfg.Replicator,
 		blockSealSize:  cfg.BlockSealSize,
 		nextBlockID:    nextID,
 		proposals:      make(map[string]chan error),
@@ -181,23 +190,44 @@ func Open(cfg Config) (*Shard, error) {
 }
 
 func (s *Shard) startScrubber(cfg Config) {
-	if !cfg.Scrub.Enabled || cfg.ConsistencyChecker == nil || cfg.ScrubMetrics == nil {
+	if !cfg.Scrub.Enabled {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.scrubCancel = cancel
-	s.scrubber = scrub.NewLightScrubber(scrub.LightScrubberConfig{
-		Proposer:           s,
-		ConsistencyChecker: cfg.ConsistencyChecker,
-		LeaderChecker:      s,
-		Metrics:            cfg.ScrubMetrics,
-		Rebuilder:          cfg.Rebuilder,
-		Logger:             s.baseLogger.With("component", "scrub"),
-		PeerAddrs:          cfg.PeerAddrs,
-		Interval:           cfg.Scrub.LightScrubInterval,
-		Jitter:             cfg.Scrub.Jitter,
-	})
-	s.scrubber.Start(ctx)
+	if cfg.ConsistencyChecker != nil && cfg.ScrubMetrics != nil {
+		s.scrubber = scrub.NewLightScrubber(scrub.LightScrubberConfig{
+			Proposer:           s,
+			ConsistencyChecker: cfg.ConsistencyChecker,
+			LeaderChecker:      s,
+			Metrics:            cfg.ScrubMetrics,
+			Rebuilder:          cfg.Rebuilder,
+			Logger:             s.baseLogger.With("component", "scrub"),
+			PeerAddrs:          cfg.PeerAddrs,
+			Interval:           cfg.Scrub.LightScrubInterval,
+			Jitter:             cfg.Scrub.Jitter,
+		})
+		s.scrubber.Start(ctx)
+	}
+	if cfg.DeepScrubMetrics != nil {
+		s.deepScrubber = scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+			BlockLister:       s,
+			BlockVerifier:     s,
+			QuarantineManager: s,
+			Metrics:           cfg.DeepScrubMetrics,
+			LatencySignal:     cfg.LatencySignal,
+			BlockRepairer:     cfg.BlockRepairer,
+			Logger:            s.baseLogger.With("component", "deep_scrub"),
+			IOBudget:          scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
+			PeerAddrs:         cfg.PeerAddrs,
+			CorruptCap:        cfg.Scrub.CorruptCap,
+			PauseThreshold:    cfg.Scrub.PauseLatency,
+			PauseCooldown:     cfg.Scrub.PauseCooldown,
+			Interval:          cfg.Scrub.DeepScrubInterval,
+			Jitter:            cfg.Scrub.Jitter,
+		})
+		s.deepScrubber.Start(ctx)
+	}
 }
 
 //nolint:cyclop // orchestration function managing seal check, prep file, block append, raft propose, and apply
@@ -244,13 +274,17 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 
 	now := time.Now()
 
-	result, err := s.blockWriter.AppendDocument(txID, docName, contentType, body)
+	var bodyCopy bytes.Buffer
+	result, err := s.blockWriter.AppendDocument(txID, docName, contentType, io.TeeReader(body, &bodyCopy))
 	if err != nil {
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, fmt.Errorf("shard: append document: %w", err)
 	}
 
 	s.mu.Unlock()
+	if err := s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes()); err != nil {
+		return storeapi.WriteResult{}, err
+	}
 
 	cmd := &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_CommitDoc{
@@ -396,6 +430,9 @@ func (s *Shard) IsLeader() bool {
 }
 
 func (s *Shard) CheckReadiness(_ context.Context) error {
+	if s.rebuilding.Load() {
+		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
+	}
 	if s.raft.LeaderID() != 0 {
 		return nil
 	}
@@ -646,27 +683,36 @@ func (s *Shard) Close() error {
 	if s.scrubber != nil {
 		s.scrubber.Stop()
 	}
+	if s.deepScrubber != nil {
+		s.deepScrubber.Stop()
+	}
 	s.raft.Stop()
 	s.WaitRebuild()
 
+	return s.closeStorage()
+}
+
+func (s *Shard) closeStorage() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var firstErr error
 	if s.idxWriter != nil {
-		firstErr = s.idxWriter.Close()
+		captureFirstErr(&firstErr, s.idxWriter.Close())
 	}
 	if s.blockWriter != nil {
-		if err := s.blockWriter.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		captureFirstErr(&firstErr, s.blockWriter.Close())
 	}
 	if s.idx != nil {
-		if err := s.idx.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		captureFirstErr(&firstErr, s.idx.Close())
 	}
 	return firstErr
+}
+
+func captureFirstErr(firstErr *error, err error) {
+	if err != nil && *firstErr == nil {
+		*firstErr = err
+	}
 }
 
 func (s *Shard) applyEntries(entries []raftpb.Entry) error {

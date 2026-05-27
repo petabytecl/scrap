@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -28,6 +29,10 @@ type RebuildHandler interface {
 	TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error)
 }
 
+type ReplicationSink interface {
+	AppendReplicatedDocument(ctx context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) ([]byte, error)
+}
+
 type ServerOption func(*Server)
 
 func WithScrubCache(cache scrub.ResultCache) ServerOption {
@@ -42,14 +47,21 @@ func WithRebuildHandler(handler RebuildHandler) ServerOption {
 	}
 }
 
+func WithReplicationSink(sink ReplicationSink) ServerOption {
+	return func(s *Server) {
+		s.replicationSink = sink
+	}
+}
+
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
-	blocksDir      string
-	scrubCache     scrub.ResultCache
-	rebuildHandler RebuildHandler
-	raftRouter     atomic.Pointer[RaftRouter]
-	mu             sync.Mutex
-	writers        map[uint64]*blockState
+	blocksDir       string
+	scrubCache      scrub.ResultCache
+	rebuildHandler  RebuildHandler
+	replicationSink ReplicationSink
+	raftRouter      atomic.Pointer[RaftRouter]
+	mu              sync.Mutex
+	writers         map[uint64]*blockState
 }
 
 func (s *Server) SetRaftRouter(router RaftRouter) {
@@ -117,6 +129,9 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 	if init == nil {
 		return status.Error(codes.InvalidArgument, "first message must be init")
 	}
+	if s.replicationSink != nil {
+		return s.replicateToSink(stream, init)
+	}
 
 	pr, pw := io.Pipe()
 	hasher := sha256.New()
@@ -163,6 +178,33 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 
 	return stream.SendAndClose(&scrapv1.ReplicateDocumentResponse{
 		Sha256: computedSHA,
+	})
+}
+
+func (s *Server) replicateToSink(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], init *scrapv1.ReplicateDocumentInit) error {
+	var body bytes.Buffer
+	for {
+		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+		}
+		chunk := msg.GetChunkData()
+		if len(chunk) > 0 {
+			if _, err := body.Write(chunk); err != nil {
+				return status.Errorf(codes.Internal, "buffer chunk: %v", err)
+			}
+		}
+	}
+
+	sha, err := s.replicationSink.AppendReplicatedDocument(stream.Context(), init, bytes.NewReader(body.Bytes()))
+	if err != nil {
+		return status.Errorf(codes.Internal, "append replicated document: %v", err)
+	}
+	return stream.SendAndClose(&scrapv1.ReplicateDocumentResponse{
+		Sha256: sha,
 	})
 }
 

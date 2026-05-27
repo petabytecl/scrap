@@ -42,6 +42,7 @@ spec:
           args:
             - "--data-dir=/data"
             - "--listen-addr=:9090"
+            - "--admin-addr=:9100"
           volumeMounts:
             - name: data
               mountPath: /data

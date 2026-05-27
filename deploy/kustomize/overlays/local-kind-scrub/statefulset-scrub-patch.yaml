@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  template:
+    spec:
+      containers:
+        - name: scrapd
+          env:
+            - name: SCRAP_SCRUB_ENABLED
+              value: "true"
+            - name: SCRAP_LIGHT_SCRUB_INTERVAL
+              value: "30s"
+            - name: SCRAP_DEEP_SCRUB_INTERVAL
+              value: "30s"
+            - name: SCRAP_DEEP_SCRUB_IO_RATE
+              value: "10000000"
+            - name: SCRAP_SCRUB_PAUSE_LATENCY
+              value: "100ms"
+            - name: SCRAP_SCRUB_PAUSE_COOLDOWN
+              value: "1s"
+            - name: SCRAP_SCRUB_JITTER
+              value: "0"
+            - name: SCRAP_TEST_HOOKS
+              value: "1"
+          args:
+            - "--data-dir=/data"
+            - "--listen-addr=:9090"
+            - "--admin-addr=:9100"
+            - "--block-seal-size=65536"
