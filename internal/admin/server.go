@@ -23,6 +23,10 @@ type ProjectionInjector interface {
 	InjectProjectionKey(ctx context.Context, txID string, blockID uint64, docCount uint16, completed bool) error
 }
 
+type UploadPressureProvider interface {
+	UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int)
+}
+
 type Option func(*Server)
 
 type Server struct {
@@ -31,11 +35,18 @@ type Server struct {
 	handler            http.Handler
 	registry           *prometheus.Registry
 	projectionInjector ProjectionInjector
+	uploadPressure     UploadPressureProvider
 }
 
 func WithProjectionInjector(injector ProjectionInjector) Option {
 	return func(s *Server) {
 		s.projectionInjector = injector
+	}
+}
+
+func WithUploadPressureProvider(provider UploadPressureProvider) Option {
+	return func(s *Server) {
+		s.uploadPressure = provider
 	}
 }
 
@@ -47,6 +58,7 @@ func New(registry *prometheus.Registry, opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	mux.HandleFunc("/healthz", s.handleHealth)
 	if s.projectionInjector != nil {
 		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
 	}
@@ -125,4 +137,33 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type healthResponse struct {
+	Status              string `json:"status"`
+	UploadPressure      string `json:"upload_pressure"`
+	UploadPressureLevel int    `json:"upload_pressure_level"`
+	UploadPendingBytes  int64  `json:"upload_pending_bytes"`
+	UploadPendingBlocks int    `json:"upload_pending_blocks"`
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	resp := healthResponse{
+		Status:              "ok",
+		UploadPressure:      "ok",
+		UploadPressureLevel: 0,
+	}
+	if s.uploadPressure != nil {
+		level, levelName, pendingBytes, pendingBlocks := s.uploadPressure.UploadPressureSnapshot()
+		resp.UploadPressureLevel = level
+		resp.UploadPressure = levelName
+		resp.UploadPendingBytes = pendingBytes
+		resp.UploadPendingBlocks = pendingBlocks
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "encode health response failed", http.StatusInternalServerError)
+		return
+	}
 }

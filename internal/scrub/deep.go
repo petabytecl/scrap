@@ -29,6 +29,11 @@ type BlockRepairer interface {
 	RepairFromPeer(ctx context.Context, blockID uint64, peerAddr string) error
 }
 
+type PauseController interface {
+	IsPaused() bool
+	Wait(ctx context.Context) error
+}
+
 type CheckpointStore interface {
 	GetDeepScrubCheckpoint() (uint64, bool)
 	SetDeepScrubCheckpoint(blockID uint64)
@@ -55,6 +60,7 @@ type DeepScrubberConfig struct {
 	Checkpoint        CheckpointStore
 	LatencySignal     LatencySignal
 	BlockRepairer     BlockRepairer
+	PauseController   PauseController
 	Logger            *slog.Logger
 	IOBudget          *TokenBucket
 	PeerAddrs         []string
@@ -147,6 +153,10 @@ func (ds *DeepScrubber) RunOnce(ctx context.Context) error {
 			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
 			return ctx.Err()
 		}
+		if err := ds.waitPressurePause(ctx); err != nil {
+			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
+			return err
+		}
 		ds.pauseIfLatencyExceeded(ctx)
 		if err := ds.waitIOBudget(ctx, blk.BlkPath); err != nil {
 			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
@@ -218,6 +228,14 @@ func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
 		ds.cfg.Metrics.RecordRepair("ok")
 		ds.cfg.Metrics.DecrementQuarantined()
 	}
+}
+
+func (ds *DeepScrubber) waitPressurePause(ctx context.Context) error {
+	if ds.cfg.PauseController == nil || !ds.cfg.PauseController.IsPaused() {
+		return nil
+	}
+	ds.cfg.Metrics.RecordPause()
+	return ds.cfg.PauseController.Wait(ctx)
 }
 
 func (ds *DeepScrubber) pauseIfLatencyExceeded(ctx context.Context) {

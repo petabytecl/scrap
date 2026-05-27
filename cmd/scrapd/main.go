@@ -57,12 +57,15 @@ func run() error {
 
 	scrubCfg := scrub.ParseScrubConfig()
 	registry := prometheus.NewRegistry()
+	uploadMetrics := shard.NewUploadPrometheusMetrics(registry)
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
 	uploadCfg := shard.UploadConfig{
 		Enabled:     envBool("SCRAP_UPLOAD_ENABLED", true),
 		CellID:      cellID,
 		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),
+		Pressure:    shard.ParseUploadPressureConfigFromEnv(),
+		Metrics:     uploadMetrics,
 	}
 
 	peers, raftID, err := resolvePeers(*peersFlag)
@@ -131,6 +134,7 @@ func run() error {
 	peer.RegisterServer(peerGS, peerSrv)
 
 	adminOpts := []admin.Option{}
+	adminOpts = append(adminOpts, admin.WithUploadPressureProvider(s))
 	if envBool("SCRAP_TEST_HOOKS", false) {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
 	}
@@ -150,6 +154,7 @@ func run() error {
 		"scrub_enabled", scrubCfg.Enabled,
 		"upload_enabled", uploadCfg.Enabled,
 		"upload_concurrency", uploadCfg.Concurrency,
+		"upload_budget_bytes", uploadCfg.Pressure.BudgetBytes,
 	)
 
 	<-ctx.Done()

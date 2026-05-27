@@ -97,6 +97,11 @@ type Shard struct {
 	uploadSuccesses          int
 	uploadRequeued           map[uint64]struct{}
 	uploadPausedUntil        time.Time
+	uploadAuthPaused         bool
+	uploadPressureLevel      UploadPressureLevel
+	uploadPendingBytes       int64
+	uploadPendingBlocks      int
+	uploadPressureScrubGate  *pressurePauseGate
 
 	rebuilding  atomic.Bool
 	rebuildDone atomic.Pointer[chan struct{}]
@@ -125,10 +130,8 @@ func Open(cfg Config) (*Shard, error) {
 	openlogDir := filepath.Join(cfg.DataDir, "openlog")
 	raftDir := filepath.Join(cfg.DataDir, "raft")
 
-	for _, d := range []string{blocksDir, pebbleDir, openlogDir, raftDir} {
-		if err := os.MkdirAll(d, 0o750); err != nil {
-			return nil, fmt.Errorf("shard: mkdir %s: %w", d, err)
-		}
+	if err := ensureShardDirs(blocksDir, pebbleDir, openlogDir, raftDir); err != nil {
+		return nil, err
 	}
 
 	idx, err := index.Open(pebbleDir)
@@ -143,25 +146,26 @@ func Open(cfg Config) (*Shard, error) {
 	}
 
 	s := &Shard{
-		dataDir:        cfg.DataDir,
-		blocksDir:      blocksDir,
-		openlogDir:     openlogDir,
-		shardID:        cfg.ShardID,
-		raftID:         cfg.RaftID,
-		peers:          cfg.Peers,
-		idx:            idx,
-		baseLogger:     baseLogger,
-		logger:         logger,
-		replicator:     cfg.Replicator,
-		upload:         cfg.Upload,
-		blockSealSize:  cfg.BlockSealSize,
-		nextBlockID:    nextID,
-		proposals:      make(map[string]chan error),
-		scrubProposals: make(map[string]chan scrub.Result),
-		uploadNotify:   make(chan struct{}, 1),
-		uploadRequeued: make(map[uint64]struct{}),
-		raftStartedAt:  time.Now(),
-		bootstrapGrace: cfg.BootstrapGrace,
+		dataDir:                 cfg.DataDir,
+		blocksDir:               blocksDir,
+		openlogDir:              openlogDir,
+		shardID:                 cfg.ShardID,
+		raftID:                  cfg.RaftID,
+		peers:                   cfg.Peers,
+		idx:                     idx,
+		baseLogger:              baseLogger,
+		logger:                  logger,
+		replicator:              cfg.Replicator,
+		upload:                  cfg.Upload,
+		blockSealSize:           cfg.BlockSealSize,
+		nextBlockID:             nextID,
+		proposals:               make(map[string]chan error),
+		scrubProposals:          make(map[string]chan scrub.Result),
+		uploadNotify:            make(chan struct{}, 1),
+		uploadRequeued:          make(map[uint64]struct{}),
+		uploadPressureScrubGate: newPressurePauseGate(),
+		raftStartedAt:           time.Now(),
+		bootstrapGrace:          cfg.BootstrapGrace,
 	}
 	done := make(chan struct{})
 	close(done)
@@ -197,10 +201,28 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
+	s.resetUploadConcurrency()
+	if err := s.refreshUploadPressureLocked(); err != nil {
+		raftNode.Stop()
+		s.closeBlockAndIdx()
+		_ = idx.Close()
+		return nil, fmt.Errorf("shard: refresh upload pressure: %w", err)
+	}
+	s.setUploadAuthPausedMetric(false)
+
 	s.startScrubber(cfg)
 	s.startUploadProcessor()
 
 	return s, nil
+}
+
+func ensureShardDirs(dirs ...string) error {
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("shard: mkdir %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 func (s *Shard) startScrubber(cfg Config) {
@@ -231,6 +253,7 @@ func (s *Shard) startScrubber(cfg Config) {
 			Metrics:           cfg.DeepScrubMetrics,
 			LatencySignal:     cfg.LatencySignal,
 			BlockRepairer:     cfg.BlockRepairer,
+			PauseController:   s.uploadPressureScrubGate,
 			Logger:            s.baseLogger.With("component", "deep_scrub"),
 			IOBudget:          scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
 			PeerAddrs:         cfg.PeerAddrs,
@@ -246,7 +269,7 @@ func (s *Shard) startScrubber(cfg Config) {
 
 //nolint:cyclop // orchestration function managing seal check, prep file, block append, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
-	if err := s.requireLeader(); err != nil {
+	if err := s.requireWritableLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
 
@@ -464,6 +487,13 @@ func (s *Shard) requireLeader() error {
 		return nil
 	}
 	return s.notLeaderError()
+}
+
+func (s *Shard) requireWritableLeader() error {
+	if err := s.requireLeader(); err != nil {
+		return err
+	}
+	return s.rejectWriteForUploadPressure()
 }
 
 func (s *Shard) requireLeaderRead(ctx context.Context) error {

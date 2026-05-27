@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -202,10 +204,24 @@ func mapStoreError(err error) error {
 	case errors.Is(err, storeapi.ErrInvalidArgument):
 		return status.Errorf(codes.InvalidArgument, "%v", err)
 	case errors.Is(err, storeapi.ErrResourceExhausted):
-		return status.Errorf(codes.ResourceExhausted, "%v", err)
+		return resourceExhaustedStatus(err)
 	case errors.Is(err, storeapi.ErrDataLoss):
 		return status.Errorf(codes.DataLoss, "%v", err)
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
+}
+
+func resourceExhaustedStatus(err error) error {
+	reason, ok := storeapi.ResourceExhaustedReason(err)
+	if !ok {
+		return status.Errorf(codes.ResourceExhausted, "%v", err)
+	}
+
+	st, detailErr := status.New(codes.ResourceExhausted, fmt.Sprintf("%v", err)).
+		WithDetails(&errdetails.ErrorInfo{Reason: reason})
+	if detailErr != nil {
+		return status.Errorf(codes.ResourceExhausted, "%v", err)
+	}
+	return st.Err()
 }

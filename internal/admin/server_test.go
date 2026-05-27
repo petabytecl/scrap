@@ -22,12 +22,18 @@ type projectionInjectorStub struct {
 	completed bool
 }
 
+type uploadPressureProviderStub struct{}
+
 func (s *projectionInjectorStub) InjectProjectionKey(_ context.Context, txID string, blockID uint64, docCount uint16, completed bool) error {
 	s.txID = txID
 	s.blockID = blockID
 	s.docCount = docCount
 	s.completed = completed
 	return nil
+}
+
+func (uploadPressureProviderStub) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
+	return 2, "pressure", 1024, 3
 }
 
 func TestServer_MetricsEndpoint(t *testing.T) {
@@ -70,6 +76,44 @@ func TestServer_MetricsEndpoint(t *testing.T) {
 
 	if !strings.Contains(string(body), "test_scrub_runs_total 1") {
 		t.Errorf("expected test_scrub_runs_total in body, got:\n%s", string(body))
+	}
+}
+
+func TestServer_HealthEndpointReportsUploadPressure(t *testing.T) {
+	srv := admin.New(prometheus.NewRegistry(), admin.WithUploadPressureProvider(uploadPressureProviderStub{}))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if got["upload_pressure_level"] != float64(2) {
+		t.Fatalf("upload_pressure_level = %v, want 2", got["upload_pressure_level"])
+	}
+	if got["upload_pressure"] != "pressure" {
+		t.Fatalf("upload_pressure = %v, want pressure", got["upload_pressure"])
+	}
+	if got["upload_pending_bytes"] != float64(1024) {
+		t.Fatalf("upload_pending_bytes = %v, want 1024", got["upload_pending_bytes"])
+	}
+	if got["upload_pending_blocks"] != float64(3) {
+		t.Fatalf("upload_pending_blocks = %v, want 3", got["upload_pending_blocks"])
 	}
 }
 
