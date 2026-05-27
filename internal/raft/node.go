@@ -278,7 +278,7 @@ func (n *RaftNode) run() {
 				if err := n.cfg.Apply(rd.CommittedEntries); err != nil {
 					panic(fmt.Sprintf("raft: apply: %v", err))
 				}
-				n.appliedIndex = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+				atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
 			}
 
 			if rd.SoftState != nil {
