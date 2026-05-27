@@ -2,8 +2,8 @@
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
-Current Phase 1 spike-store PRD scope is split across issues #250-#256. Those issue
-bodies are the task-level requirements source for the Phase 1 contract boundary.
+Query the `storage-gateway-v2` milestone for current open issues:
+`gh issue list --state open --milestone "storage-gateway-v2" --json number,title,labels`.
 
 ## Conventions
 

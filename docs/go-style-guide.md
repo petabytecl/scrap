@@ -41,6 +41,7 @@ adapted to the S.C.R.A.P. codebase.
   - [Close, Stop, and Shutdown](#close-stop-and-shutdown)
   - [Defer for Cleanup](#defer-for-cleanup)
 - [Testing](#testing)
+  - [Test Location](#test-location)
   - [Table-Driven Tests](#table-driven-tests)
   - [No Assertion Libraries](#no-assertion-libraries)
   - [Test Helpers](#test-helpers)
@@ -68,18 +69,18 @@ adapted to the S.C.R.A.P. codebase.
 The full top-level directory structure. All domain logic lives under
 `internal/`. Stable API contracts and reusable types live under `pkg/`.
 
-| Directory | Purpose | Rule |
-|-----------|---------|------|
-| `cmd/` | Executable entry points | Thin `main()` that delegates to a `run()` function. |
-| `internal/` | Domain logic, subsystem implementations | One package per domain concept. No `util` or `common` packages. |
-| `pkg/` | Stable interfaces, value types, error sentinels | Only packages with no concrete business logic. Must be safe for external consumers to import. |
-| `proto/` | Protocol Buffer definitions | Source of truth for wire formats. |
-| `gen/` | Generated code | Never edit by hand. Excluded from linting. |
-| `deploy/` | Deployment manifests | Kustomize bases/overlays and Kind cluster configs. |
-| `scripts/` | Shell helpers | Build validation, local dev automation. Not shipped. |
-| `test/` | Out-of-package test suites | Integration and E2E tests that span multiple packages. |
-| `docs/` | Project documentation | Style guides, ADRs, agent docs. |
-| `bin/` | Compiled binaries | Gitignored. Output of `go build`. |
+| Directory   | Purpose                                         | Rule                                                                                          |
+| ----------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `cmd/`      | Executable entry points                         | Thin `main()` that delegates to a `run()` function.                                           |
+| `internal/` | Domain logic, subsystem implementations         | One package per domain concept. No `util` or `common` packages.                               |
+| `pkg/`      | Stable interfaces, value types, error sentinels | Only packages with no concrete business logic. Must be safe for external consumers to import. |
+| `proto/`    | Protocol Buffer definitions                     | Source of truth for wire formats.                                                             |
+| `gen/`      | Generated code                                  | Never edit by hand. Excluded from linting.                                                    |
+| `deploy/`   | Deployment manifests                            | Kustomize bases/overlays and Kind cluster configs.                                            |
+| `scripts/`  | Shell helpers                                   | Build validation, local dev automation. Not shipped.                                          |
+| `test/`     | Out-of-package test suites                      | Integration and E2E tests that span multiple packages.                                        |
+| `docs/`     | Project documentation                           | Style guides, ADRs, agent docs.                                                               |
+| `bin/`      | Compiled binaries                               | Gitignored. Output of `go build`.                                                             |
 
 ### Happy Path
 
@@ -700,11 +701,11 @@ type Shard struct {
 Types that own resources (files, connections, goroutines) must provide a
 lifecycle method:
 
-| Method | Use when |
-|--------|----------|
-| `Close() error` | Type owns I/O resources (files, DB handles, network connections). |
-| `Stop()` | Type owns goroutines but no I/O that can fail on close. |
-| `Shutdown(ctx context.Context) error` | Type needs a graceful drain period (e.g., HTTP server). |
+| Method                                | Use when                                                          |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `Close() error`                       | Type owns I/O resources (files, DB handles, network connections). |
+| `Stop()`                              | Type owns goroutines but no I/O that can fail on close.           |
+| `Shutdown(ctx context.Context) error` | Type needs a graceful drain period (e.g., HTTP server).           |
 
 `Close()` must be idempotent. Closing an already-closed resource must not
 panic.
@@ -792,6 +793,17 @@ func writeBlock(path string, data []byte) (err error) {
 ---
 
 ## Testing
+
+### Test Location
+
+| Test type         | Location                                     | Run command        |
+| ----------------- | -------------------------------------------- | ------------------ |
+| Unit tests        | Next to the code: `internal/<pkg>/*_test.go` | `make test`        |
+| Integration tests | `test/integration/`                          | `make integration` |
+| E2E tests         | `test/e2e/`                                  | `make e2e-setup`   |
+
+Unit tests use the same package (white-box). Integration and E2E tests use
+a separate `_test` package and exercise the system through its public API.
 
 ### Table-Driven Tests
 
@@ -1060,12 +1072,12 @@ All Prometheus metrics follow the pattern:
 scrap_<subsystem>_<metric>_<unit>
 ```
 
-| Component | Rule | Examples |
-|-----------|------|---------|
-| Prefix | Always `scrap_` | |
-| Subsystem | Domain concept, snake_case | `scrub`, `scrub_deep`, `block` |
-| Metric | What is measured | `runs`, `duration`, `corruptions_detected` |
-| Unit | Prometheus base unit | `_total` (counter), `_seconds` (duration), `_bytes` (size), `_ratio` (0-1 gauge) |
+| Component | Rule                       | Examples                                                                         |
+| --------- | -------------------------- | -------------------------------------------------------------------------------- |
+| Prefix    | Always `scrap_`            |                                                                                  |
+| Subsystem | Domain concept, snake_case | `scrub`, `scrub_deep`, `block`                                                   |
+| Metric    | What is measured           | `runs`, `duration`, `corruptions_detected`                                       |
+| Unit      | Prometheus base unit       | `_total` (counter), `_seconds` (duration), `_bytes` (size), `_ratio` (0-1 gauge) |
 
 Examples from the codebase:
 

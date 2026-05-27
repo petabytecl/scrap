@@ -7,8 +7,8 @@ How the engineering skills should consume this repo's domain documentation when 
 - **`CONTEXT.md`** at the repo root — the single-context domain document for S.C.R.A.P.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 - **GitHub issues** — PRDs and task-level acceptance criteria live in GitHub issues,
-  not local PRD files. For the Phase 1 spike-store contract, read issues #250-#256
-  and their audit comments with `gh issue view <number> --comments`.
+  not local PRD files. Query the `storage-gateway-v2` milestone for current scope:
+  `gh issue list --state open --milestone "storage-gateway-v2"`.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The producer skill (`/grill-with-docs`) creates them lazily when terms or decisions actually get resolved.
 
@@ -22,7 +22,8 @@ Single-context repo:
 ├── docs/adr/
 │   ├── 0001-*.md
 │   └── 0002-*.md
-└── src/
+├── cmd/
+└── internal/
 ```
 
 ## Use the glossary's vocabulary

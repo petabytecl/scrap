@@ -1,19 +1,3 @@
-# S.C.R.A.P. — Project Rules
+# S.C.R.A.P. — for Claude
 
-## Agent skills
-
-### Issue tracker
-
-Issues are tracked in GitHub Issues on `petabytecl/scrap` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default label vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context repo — one `CONTEXT.md` at the root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
-
-## Code style
-
-All Go code must follow `docs/go-style-guide.md`. The guide covers design decisions, naming, error handling, concurrency, testing, performance, metrics, and documentation conventions. Mechanical formatting is enforced by `.golangci.yml`.
+READ @AGENTS.md

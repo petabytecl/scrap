@@ -156,11 +156,11 @@ These anchor every design decision:
 V1 landed on a 3-level identity model because conflating any two of these created
 silent-divergence bugs. V2 should accept this as the starting point.
 
-| Level | Source | Lifetime | Purpose |
-| --- | --- | --- | --- |
-| `cell_id` | Operator-assigned config | Permanent for one deployment | Stable identity of one authoritative SCRAP cell; safe in keys, logs, metrics |
-| `member_slot_id` | K8s pod hostname (`scrapd-0`) | Lifetime of the StatefulSet slot | Stable peer DNS + operator messages ("pod scrapd-0 is missing") |
-| `member_id` | Durable identity record on the member's PVC | Lifetime of the data volume | The actual storage member identity in cluster metadata |
+| Level            | Source                                      | Lifetime                         | Purpose                                                                      |
+| ---------------- | ------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- |
+| `cell_id`        | Operator-assigned config                    | Permanent for one deployment     | Stable identity of one authoritative SCRAP cell; safe in keys, logs, metrics |
+| `member_slot_id` | K8s pod hostname (`scrapd-0`)               | Lifetime of the StatefulSet slot | Stable peer DNS + operator messages ("pod scrapd-0 is missing")              |
+| `member_id`      | Durable identity record on the member's PVC | Lifetime of the data volume      | The actual storage member identity in cluster metadata                       |
 
 Rules that came out of V1:
 
@@ -255,11 +255,11 @@ equivalent rules should expect to repay this debt later.
 **Compatibility guarantee:** a document written with schema version N must be
 readable by software version N+5 or later.
 
-| Layer | V1 Policy |
-| --- | --- |
+| Layer             | V1 Policy                                                                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Proto wire format | Fields added, never removed or renumbered. No field type changes without a major version increment. 2-release deprecation notice before any zeroing. |
-| Pebble key schema | 1-byte version prefix on every key: `<version:1byte><existing-key-bytes>`. `PebbleKeySchemaV1 = 0x01`. Legacy unversioned keys detected on open. |
-| Raft log format | Reads accept all versions V1..current. Writes use current. Snapshot restore re-encodes to current. |
+| Pebble key schema | 1-byte version prefix on every key: `<version:1byte><existing-key-bytes>`. `PebbleKeySchemaV1 = 0x01`. Legacy unversioned keys detected on open.     |
+| Raft log format   | Reads accept all versions V1..current. Writes use current. Snapshot restore re-encodes to current.                                                   |
 
 ### Spike Reference Numbers (Developer Laptop, Not Production Targets)
 
@@ -317,12 +317,12 @@ store SHA-256 as raw 32-byte digests.
 Boundary validation preserves exact text. The gateway must not trim, normalize, or
 case-fold identifiers.
 
-| Field | Rule |
-| --- | --- |
-| `transaction_id` | required, max 256 bytes |
-| `document_name` | required, max 512 bytes |
-| `content_type` | required, max 255 bytes |
-| `tenant_id` | optional, max 256 bytes |
+| Field             | Rule                    |
+| ----------------- | ----------------------- |
+| `transaction_id`  | required, max 256 bytes |
+| `document_name`   | required, max 512 bytes |
+| `content_type`    | required, max 255 bytes |
+| `tenant_id`       | optional, max 256 bytes |
 | `idempotency_key` | optional, max 256 bytes |
 
 NUL and other control characters are rejected in text fields. Zero-byte Documents are
@@ -407,7 +407,7 @@ load-bearing for visibility breaks this invariant.
 ## Other V1 Decisions Worth Remembering
 
 Compact appendix of decisions/contracts from V1 not otherwise captured above.
-Each is the *what*; the *why* is in the V1 ADR reasoning table.
+Each is the _what_; the _why_ is in the V1 ADR reasoning table.
 
 - **Backend error taxonomy (provider-neutral)**: `throttled`, `transient`,
   `auth`, `not-found`, `conflict`, `corrupt`, `permanent`. Every backend
@@ -461,6 +461,7 @@ write-through-ACK + read path. Deferred beyond that: backend upload, cell federa
 multi-tier write ACK, encryption (OpenBao).
 
 Phase 2 splits into two sub-milestones:
+
 - **Phase 2a** (core replicated path): Raft bootstrap + apply loop, peer byte
   replication, shard orchestrator (`store.Store` implementation), openlog, leader-only
   reads via ReadIndex, client routing (leader hint), block transfer for recovery,
@@ -540,6 +541,7 @@ checks on the apply side, not pre-batch).
 
 Separate gRPC service (`PeerService`) for inter-member byte transfer, distinct from the
 client-facing `DocumentService`. Two RPCs:
+
 - `ReplicateDocument` (client-streaming): hot-path write replication. Leader pushes
   document frames to a follower during a write. Mirrors `WriteDocument`'s init + chunk
   streaming shape. Follower writes to its local Block, verifies checksums, ACKs.
@@ -690,6 +692,7 @@ reserves ≥75% of I/O for client reads. Prevents recovery storms.
 ### Background Scrubbing
 
 Two-tier scrubbing (Phase 2 safety milestone):
+
 - Light scrub (daily): leader proposes `RequestConsistencyCheck` via Raft, all voters
   compute a streaming SHA-256 over all projection keys at the same applied index,
   leader pulls results via `ConsistencyCheck` peer RPC and compares. Mismatch triggers
@@ -717,16 +720,16 @@ and scheduled by the shard orchestrator (`internal/shard/`). Dependency directio
 
 Phase 2b configuration (env vars, all with defaults):
 
-| Env var | Default | Unit |
-| --- | --- | --- |
-| `SCRAP_SCRUB_ENABLED` | `true` | bool |
-| `SCRAP_LIGHT_SCRUB_INTERVAL` | `24h` | duration |
-| `SCRAP_DEEP_SCRUB_INTERVAL` | `168h` | duration |
-| `SCRAP_DEEP_SCRUB_IO_RATE` | `125000000` | bytes/sec |
-| `SCRAP_SCRUB_PAUSE_LATENCY` | `10ms` | duration |
-| `SCRAP_SCRUB_PAUSE_COOLDOWN` | `30s` | duration |
-| `SCRAP_SCRUB_CORRUPT_CAP` | `5` | count |
-| `SCRAP_SCRUB_JITTER` | `0.1` | fraction |
+| Env var                      | Default     | Unit      |
+| ---------------------------- | ----------- | --------- |
+| `SCRAP_SCRUB_ENABLED`        | `true`      | bool      |
+| `SCRAP_LIGHT_SCRUB_INTERVAL` | `24h`       | duration  |
+| `SCRAP_DEEP_SCRUB_INTERVAL`  | `168h`      | duration  |
+| `SCRAP_DEEP_SCRUB_IO_RATE`   | `125000000` | bytes/sec |
+| `SCRAP_SCRUB_PAUSE_LATENCY`  | `10ms`      | duration  |
+| `SCRAP_SCRUB_PAUSE_COOLDOWN` | `30s`       | duration  |
+| `SCRAP_SCRUB_CORRUPT_CAP`    | `5`         | count     |
+| `SCRAP_SCRUB_JITTER`         | `0.1`       | fraction  |
 
 ### Cluster Bootstrap
 
