@@ -59,6 +59,11 @@ func run() error {
 	registry := prometheus.NewRegistry()
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
+	uploadCfg := shard.UploadConfig{
+		Enabled:     envBool("SCRAP_UPLOAD_ENABLED", true),
+		CellID:      cellID,
+		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),
+	}
 
 	peers, raftID, err := resolvePeers(*peersFlag)
 	if err != nil {
@@ -92,6 +97,7 @@ func run() error {
 		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, filepath.Join(*dataDir, "blocks")),
 		Replicator:         peerClient,
 		PeerAddrs:          peerAddrs,
+		Upload:             uploadCfg,
 	})
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
@@ -142,6 +148,8 @@ func run() error {
 		"cell_id", cellID,
 		"peers", len(peers),
 		"scrub_enabled", scrubCfg.Enabled,
+		"upload_enabled", uploadCfg.Enabled,
+		"upload_concurrency", uploadCfg.Concurrency,
 	)
 
 	<-ctx.Done()

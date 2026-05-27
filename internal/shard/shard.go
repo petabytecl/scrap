@@ -54,6 +54,7 @@ type Config struct {
 	LatencySignal      scrub.LatencySignal
 	Replicator         DocumentReplicator
 	PeerAddrs          []string
+	Upload             UploadConfig
 }
 
 type Shard struct {
@@ -66,6 +67,7 @@ type Shard struct {
 	idx            *index.Index
 	raft           *scrapraft.RaftNode
 	replicator     DocumentReplicator
+	upload         UploadConfig
 	baseLogger     *slog.Logger
 	logger         *slog.Logger
 	blockSealSize  int64
@@ -84,9 +86,17 @@ type Shard struct {
 	scrubMu     sync.RWMutex
 	scrubResult *scrub.Result
 
-	scrubber     *scrub.LightScrubber
-	deepScrubber *scrub.DeepScrubber
-	scrubCancel  context.CancelFunc
+	scrubber                 *scrub.LightScrubber
+	deepScrubber             *scrub.DeepScrubber
+	scrubCancel              context.CancelFunc
+	uploadCancel             context.CancelFunc
+	uploadDone               chan struct{}
+	uploadNotify             chan struct{}
+	uploadMu                 sync.Mutex
+	uploadCurrentConcurrency int
+	uploadSuccesses          int
+	uploadRequeued           map[uint64]struct{}
+	uploadPausedUntil        time.Time
 
 	rebuilding  atomic.Bool
 	rebuildDone atomic.Pointer[chan struct{}]
@@ -143,10 +153,13 @@ func Open(cfg Config) (*Shard, error) {
 		baseLogger:     baseLogger,
 		logger:         logger,
 		replicator:     cfg.Replicator,
+		upload:         cfg.Upload,
 		blockSealSize:  cfg.BlockSealSize,
 		nextBlockID:    nextID,
 		proposals:      make(map[string]chan error),
 		scrubProposals: make(map[string]chan scrub.Result),
+		uploadNotify:   make(chan struct{}, 1),
+		uploadRequeued: make(map[uint64]struct{}),
 		raftStartedAt:  time.Now(),
 		bootstrapGrace: cfg.BootstrapGrace,
 	}
@@ -185,6 +198,7 @@ func Open(cfg Config) (*Shard, error) {
 	s.raft = raftNode
 
 	s.startScrubber(cfg)
+	s.startUploadProcessor()
 
 	return s, nil
 }
@@ -245,7 +259,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	}
 
 	if s.blockWriter.Offset() > block.BlockHeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
-		if err := s.sealAndOpenNew(); err != nil {
+		if err := s.sealAndOpenNew(ctx); err != nil {
 			s.mu.Unlock()
 			return storeapi.WriteResult{}, fmt.Errorf("shard: seal block: %w", err)
 		}
@@ -686,6 +700,12 @@ func (s *Shard) Close() error {
 	if s.deepScrubber != nil {
 		s.deepScrubber.Stop()
 	}
+	if s.uploadCancel != nil {
+		s.uploadCancel()
+	}
+	if s.uploadDone != nil {
+		<-s.uploadDone
+	}
 	s.raft.Stop()
 	s.WaitRebuild()
 
@@ -726,31 +746,50 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 			return fmt.Errorf("shard: unmarshal raft command: %w", err)
 		}
 
-		switch c := cmd.Command.(type) {
-		case *scrapv1.RaftCommand_CommitDoc:
-			doc := c.CommitDoc
-			key := doc.TransactionId + "\x00" + doc.DocumentName
-			applyErr := s.applyCommitDocument(doc)
-
-			s.proposalMu.Lock()
-			if ch, ok := s.proposals[key]; ok {
-				ch <- applyErr
-				delete(s.proposals, key)
-			}
-			s.proposalMu.Unlock()
-
-		case *scrapv1.RaftCommand_ConsistencyCheck:
-			result := s.applyConsistencyCheck(c.ConsistencyCheck, e.Index)
-
-			s.proposalMu.Lock()
-			if ch, ok := s.scrubProposals[result.ScrubID]; ok {
-				ch <- result
-				delete(s.scrubProposals, result.ScrubID)
-			}
-			s.proposalMu.Unlock()
+		if err := s.applyEntryCommand(cmd, e.Index); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) error {
+	switch c := cmd.Command.(type) {
+	case *scrapv1.RaftCommand_CommitDoc:
+		s.applyCommitDocumentCommand(c.CommitDoc)
+	case *scrapv1.RaftCommand_ConsistencyCheck:
+		s.applyConsistencyCheckCommand(c.ConsistencyCheck, entryIndex)
+	case *scrapv1.RaftCommand_SealBlock:
+		return s.applySealBlock(c.SealBlock)
+	case *scrapv1.RaftCommand_ConfirmUpload:
+		return s.applyConfirmUpload(c.ConfirmUpload)
+	}
+	return nil
+}
+
+func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument) {
+	key := doc.TransactionId + "\x00" + doc.DocumentName
+	applyErr := s.applyCommitDocument(doc)
+
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
+	if ch, ok := s.proposals[key]; ok {
+		ch <- applyErr
+		delete(s.proposals, key)
+	}
+}
+
+func (s *Shard) applyConsistencyCheckCommand(cc *scrapv1.RequestConsistencyCheck, entryIndex uint64) {
+	result := s.applyConsistencyCheck(cc, entryIndex)
+
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
+	if ch, ok := s.scrubProposals[result.ScrubID]; ok {
+		ch <- result
+		delete(s.scrubProposals, result.ScrubID)
+	}
 }
 
 func (s *Shard) applyConsistencyCheck(cc *scrapv1.RequestConsistencyCheck, entryIndex uint64) scrub.Result {
@@ -1010,14 +1049,25 @@ func (s *Shard) findDocEntry(txID, docName string) (docWithBlock, error) {
 	return docWithBlock{}, fmt.Errorf("%w: %s/%s", storeapi.ErrNotFound, txID, docName)
 }
 
-func (s *Shard) sealAndOpenNew() error {
+func (s *Shard) sealAndOpenNew(ctx context.Context) error {
+	blockID := s.blockWriter.BlockID()
+	sealedSize := s.blockWriter.Offset()
 	if err := s.idxWriter.Close(); err != nil {
 		return err
 	}
 	if err := s.blockWriter.Close(); err != nil {
 		return err
 	}
-	return s.openNewBlock()
+	sealErr := s.proposeSealBlock(ctx, index.PendingUpload{
+		BlockID:         blockID,
+		ShardID:         s.shardID,
+		SealedSizeBytes: sealedSize,
+		SealedAtUs:      time.Now().UnixMicro(),
+	})
+	if err := s.openNewBlock(); err != nil {
+		return err
+	}
+	return sealErr
 }
 
 func (s *Shard) openNewBlock() error {
