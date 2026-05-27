@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/logbridge"
 	"github.com/petabytecl/scrap/internal/peer"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
@@ -58,10 +59,15 @@ func run() error {
 	scrubCfg := scrub.ParseScrubConfig()
 	registry := prometheus.NewRegistry()
 	uploadMetrics := shard.NewUploadPrometheusMetrics(registry)
+	uploadBackend, backendType, err := openUploadBackend(context.Background(), *dataDir)
+	if err != nil {
+		return err
+	}
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
 	uploadCfg := shard.UploadConfig{
 		Enabled:     envBool("SCRAP_UPLOAD_ENABLED", true),
+		Backend:     uploadBackend,
 		CellID:      cellID,
 		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),
 		Pressure:    shard.ParseUploadPressureConfigFromEnv(),
@@ -152,6 +158,7 @@ func run() error {
 		"cell_id", cellID,
 		"peers", len(peers),
 		"scrub_enabled", scrubCfg.Enabled,
+		"backend_type", backendType,
 		"upload_enabled", uploadCfg.Enabled,
 		"upload_concurrency", uploadCfg.Concurrency,
 		"upload_budget_bytes", uploadCfg.Pressure.BudgetBytes,
@@ -170,6 +177,30 @@ func run() error {
 	gs.GracefulStop()
 
 	return nil
+}
+
+func openUploadBackend(ctx context.Context, dataDir string) (backend.Backend, string, error) {
+	backendType := os.Getenv("SCRAP_BACKEND_TYPE")
+	if backendType == "" {
+		backendType = "fs"
+	}
+
+	switch backendType {
+	case "fs":
+		return backend.NewFS(filepath.Join(dataDir, "backend")), backendType, nil
+	case "s3":
+		cfg, err := backend.ParseS3ConfigFromEnv()
+		if err != nil {
+			return nil, "", fmt.Errorf("parse S3 backend config: %w", err)
+		}
+		store, err := backend.NewS3FromConfig(ctx, cfg)
+		if err != nil {
+			return nil, "", fmt.Errorf("open S3 backend: %w", err)
+		}
+		return store, backendType, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported SCRAP_BACKEND_TYPE %q", backendType)
+	}
 }
 
 func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
