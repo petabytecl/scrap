@@ -108,6 +108,8 @@ linters:
           allow:
             - $gostd
             - github.com/petabytecl/scrap
+            - github.com/aws/aws-sdk-go-v2
+            - github.com/aws/smithy-go
             - github.com/cockroachdb/pebble
             - github.com/prometheus/client_golang
             - go.etcd.io/etcd
