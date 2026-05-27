@@ -3,8 +3,6 @@ package e2e_test
 import (
 	"bytes"
 	"context"
-	"errors"
-	"io"
 	"os"
 	"testing"
 	"time"
@@ -34,16 +32,17 @@ func connect(t *testing.T) scrapv1.DocumentServiceClient {
 	return scrapv1.NewDocumentServiceClient(conn)
 }
 
-//nolint:gocognit // test helper with exhaustive retry and streaming logic
+//nolint:gocognit,cyclop // test helper with exhaustive retry, streaming, and leader redirect logic
 func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, data []byte) *scrapv1.WriteDocumentResponse {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var lastErr error
+	activeClient := client
 
 	for attempt := range 10 {
-		stream, err := client.WriteDocument(ctx)
+		stream, err := activeClient.WriteDocument(ctx)
 		if err != nil {
 			lastErr = err
 			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
@@ -88,6 +87,9 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 
 		st, ok := status.FromError(lastErr)
 		if ok && st.Code() == codes.Unavailable {
+			if leaderClient, redirected := clientForLeaderHint(t, lastErr); redirected {
+				activeClient = leaderClient
+			}
 			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
 			continue
 		}
@@ -97,7 +99,6 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 	return nil
 }
 
-//nolint:cyclop // test function with exhaustive write-then-read flow
 func TestE2EWriteAndRead(t *testing.T) {
 	if os.Getenv("SCRAP_E2E") == "" {
 		t.Skip("set SCRAP_E2E=1 to run E2E tests")
@@ -111,39 +112,7 @@ func TestE2EWriteAndRead(t *testing.T) {
 		t.Fatalf("checksum should be 64 hex chars, got %d", len(resp.GetSha256Checksum()))
 	}
 
-	ctx := context.Background()
-	readStream, err := client.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{
-		TransactionId: "tx-e2e-001",
-		DocumentName:  "invoice.xml",
-	})
-	if err != nil {
-		t.Fatalf("ReadDocument: %v", err)
-	}
-
-	firstMsg, err := readStream.Recv()
-	if err != nil {
-		t.Fatalf("Recv meta: %v", err)
-	}
-	meta := firstMsg.GetMeta()
-	if meta == nil {
-		t.Fatal("first message should be meta")
-	}
-	if meta.GetSize() != int64(len(content)) {
-		t.Fatalf("Size: got %d, want %d", meta.GetSize(), len(content))
-	}
-
-	var readBack []byte
-	for {
-		msg, err := readStream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("Recv: %v", err)
-		}
-		readBack = append(readBack, msg.GetChunkData()...)
-	}
-
+	readBack := readDocE2E(t, client, "tx-e2e-001", "invoice.xml")
 	if !bytes.Equal(readBack, content) {
 		t.Fatalf("content mismatch: got %d bytes", len(readBack))
 	}
@@ -162,14 +131,7 @@ func TestE2ELeaderFailover(t *testing.T) {
 	t.Log("Document written. To test failover: delete the leader pod, then verify read.")
 	t.Log("kubectl -n scrap delete pod <leader-pod>")
 
-	ctx := context.Background()
-	headResp, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
-		TransactionId: "tx-e2e-failover",
-		DocumentName:  "doc.xml",
-	})
-	if err != nil {
-		t.Fatalf("HeadDocument: %v", err)
-	}
+	headResp := headDocE2E(t, client, "tx-e2e-failover", "doc.xml")
 	if headResp.GetSize() != int64(len(content)) {
 		t.Fatalf("Size: got %d", headResp.GetSize())
 	}

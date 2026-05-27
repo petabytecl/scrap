@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,22 +14,44 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const readHeaderTimeout = 10 * time.Second
+const (
+	readHeaderTimeout    = 10 * time.Second
+	maxTestHookBodyBytes = 1024
+)
 
-type Server struct {
-	mu       sync.Mutex
-	httpSrv  *http.Server
-	handler  http.Handler
-	registry *prometheus.Registry
+type ProjectionInjector interface {
+	InjectProjectionKey(ctx context.Context, txID string, blockID uint64, docCount uint16, completed bool) error
 }
 
-func New(registry *prometheus.Registry) *Server {
+type Option func(*Server)
+
+type Server struct {
+	mu                 sync.Mutex
+	httpSrv            *http.Server
+	handler            http.Handler
+	registry           *prometheus.Registry
+	projectionInjector ProjectionInjector
+}
+
+func WithProjectionInjector(injector ProjectionInjector) Option {
+	return func(s *Server) {
+		s.projectionInjector = injector
+	}
+}
+
+func New(registry *prometheus.Registry, opts ...Option) *Server {
+	s := &Server{registry: registry}
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	return &Server{
-		registry: registry,
-		handler:  mux,
+	if s.projectionInjector != nil {
+		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
 	}
+	s.handler = mux
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -70,4 +93,36 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return fmt.Errorf("admin shutdown: %w", err)
 	}
 	return nil
+}
+
+type projectionKeyRequest struct {
+	TransactionID string `json:"transaction_id"`
+	BlockID       uint64 `json:"block_id"`
+	DocCount      uint16 `json:"doc_count"`
+	Completed     bool   `json:"completed"`
+}
+
+func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req projectionKeyRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTestHookBodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "invalid JSON request", http.StatusBadRequest)
+		return
+	}
+	if req.TransactionID == "" || req.BlockID == 0 || req.DocCount == 0 {
+		http.Error(w, "transaction_id, block_id, and doc_count are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.projectionInjector.InjectProjectionKey(r.Context(), req.TransactionID, req.BlockID, req.DocCount, req.Completed); err != nil {
+		http.Error(w, "projection injection failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

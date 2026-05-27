@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -70,12 +71,10 @@ func run() error {
 
 	peerClient := peer.NewClient()
 
-	var peerAddrs []string
-	for _, addr := range peers {
-		peerAddrs = append(peerAddrs, addr)
-	}
+	peerAddrs := peerAddrsExceptSelf(peers, raftID)
 
 	scrubMetrics := scrub.NewPrometheusMetrics(registry)
+	deepScrubMetrics := scrub.NewDeepScrubPrometheusMetrics(registry)
 
 	s, err := shard.Open(shard.Config{
 		DataDir:            *dataDir,
@@ -88,7 +87,10 @@ func run() error {
 		Logger:             logger,
 		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
 		ScrubMetrics:       scrubMetrics,
+		DeepScrubMetrics:   deepScrubMetrics,
 		Rebuilder:          peer.NewClientRebuilder(peerClient),
+		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, filepath.Join(*dataDir, "blocks")),
+		Replicator:         peerClient,
 		PeerAddrs:          peerAddrs,
 	})
 	if err != nil {
@@ -116,13 +118,17 @@ func run() error {
 		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
 	peerGS := grpc.NewServer()
-	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s))
+	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)
 	}))
 	peer.RegisterServer(peerGS, peerSrv)
 
-	adminSrv := admin.New(registry)
+	adminOpts := []admin.Option{}
+	if envBool("SCRAP_TEST_HOOKS", false) {
+		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
+	}
+	adminSrv := admin.New(registry, adminOpts...)
 	go func() { _ = adminSrv.ListenAndServe(*adminAddr) }()
 	go func() { _ = peerGS.Serve(peerLis) }()
 	go func() { _ = gs.Serve(clientLis) }()
@@ -204,4 +210,30 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "TRUE", "True":
+		return true
+	case "0", "false", "FALSE", "False":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func peerAddrsExceptSelf(peers map[uint64]string, selfID uint64) []string {
+	addrs := make([]string, 0, len(peers))
+	for id, addr := range peers {
+		if id == selfID {
+			continue
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs
 }
