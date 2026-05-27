@@ -196,6 +196,67 @@ func TestApplySealBlock_PendingUploadHasCorrectMetadata(t *testing.T) {
 	}
 }
 
+func TestRetryOrphanedSeals_ClearsOnSuccess(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	s.AddOrphanedSealForTest(shard.PendingUpload{
+		BlockID: 999,
+		ShardID: testShardID,
+	})
+	if got := s.OrphanedSealsForTest(); got != 1 {
+		t.Fatalf("OrphanedSeals = %d, want 1", got)
+	}
+
+	if _, err := s.WriteDocument(ctx, "tx-retry-1", "doc.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-retry-2", "doc2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.OrphanedSealsForTest() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("orphaned seals should have been retried and cleared, got %d", s.OrphanedSealsForTest())
+}
+
+func TestRetryOrphanedSeals_DirectCall(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	s.AddOrphanedSealForTest(shard.PendingUpload{
+		BlockID:         42,
+		ShardID:         testShardID,
+		SealedSizeBytes: 1024,
+		SealedAtUs:      time.Now().UnixMicro(),
+	})
+
+	s.RetryOrphanedSealsForTest(ctx)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		uploads, err := s.PendingUploadsForTest()
+		if err != nil {
+			t.Fatalf("PendingUploadsForTest: %v", err)
+		}
+		for _, u := range uploads {
+			if u.BlockID == 42 {
+				if s.OrphanedSealsForTest() != 0 {
+					t.Fatalf("orphaned seal should be cleared after successful retry")
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("orphaned seal block 42 should appear in pending uploads after retry")
+}
+
 func openReplicatingTestShard(t *testing.T, dataDir string, replicator shard.DocumentReplicator) *shard.Shard {
 	t.Helper()
 	s, err := shard.Open(shard.Config{

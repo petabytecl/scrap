@@ -145,6 +145,18 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	return s.refreshUploadPressureLocked()
 }
 
+func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.orphanedSeals = append(s.orphanedSeals, seal)
+}
+
+func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retryOrphanedSeals(ctx)
+}
+
 func (s *Shard) PendingUploadsForTest() ([]PendingUpload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
