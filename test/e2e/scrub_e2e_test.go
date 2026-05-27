@@ -218,13 +218,18 @@ func clientForLeaderHint(t *testing.T, err error) (scrapv1.DocumentServiceClient
 
 func startPodPortForward(t *testing.T, pod string, remotePort int) (string, func()) {
 	t.Helper()
+	return startResourcePortForward(t, "pod/"+pod, remotePort)
+}
+
+func startResourcePortForward(t *testing.T, resource string, remotePort int) (string, func()) {
+	t.Helper()
 	localPort := freeLocalPort(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	//nolint:gosec // E2E tests intentionally execute the configured kubectl binary against the test cluster.
 	cmd := exec.CommandContext(ctx, kubectlBin(),
 		"-n", namespace(),
 		"port-forward",
-		"pod/"+pod,
+		resource,
 		fmt.Sprintf("%d:%d", localPort, remotePort),
 	)
 	var output bytes.Buffer
@@ -232,7 +237,7 @@ func startPodPortForward(t *testing.T, pod string, remotePort int) (string, func
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("start port-forward %s:%d: %v", pod, remotePort, err)
+		t.Fatalf("start port-forward %s:%d: %v", resource, remotePort, err)
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
@@ -413,14 +418,17 @@ func lineContainsLabels(metricToken string, labels []string) bool {
 	return true
 }
 
-//nolint:gocognit // test helper handles streaming reads plus leader redirects.
+//nolint:gocognit,cyclop // test helper handles streaming reads, retry deadlines, and leader redirects.
 func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName string) []byte {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	activeClient := client
-	for attempt := range 5 {
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			break
+		}
 		stream, err := activeClient.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{
 			TransactionId: txID,
 			DocumentName:  docName,
@@ -428,7 +436,11 @@ func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 		if err != nil {
 			if leaderClient, redirected := clientForLeaderHint(t, err); redirected {
 				activeClient = leaderClient
-				time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+				waitBeforeRetry(ctx, attempt)
+				continue
+			}
+			if status.Code(err) == codes.Unavailable {
+				waitBeforeRetry(ctx, attempt)
 				continue
 			}
 			t.Fatalf("ReadDocument: %v", err)
@@ -438,7 +450,11 @@ func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 		if err != nil {
 			if leaderClient, redirected := clientForLeaderHint(t, err); redirected {
 				activeClient = leaderClient
-				time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+				waitBeforeRetry(ctx, attempt)
+				continue
+			}
+			if status.Code(err) == codes.Unavailable {
+				waitBeforeRetry(ctx, attempt)
 				continue
 			}
 			t.Fatalf("Recv meta: %v", err)
@@ -469,7 +485,10 @@ func headDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 	defer cancel()
 
 	activeClient := client
-	for attempt := range 5 {
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			break
+		}
 		resp, err := activeClient.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
 			TransactionId: txID,
 			DocumentName:  docName,
@@ -479,7 +498,11 @@ func headDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 		}
 		if leaderClient, redirected := clientForLeaderHint(t, err); redirected {
 			activeClient = leaderClient
-			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+			waitBeforeRetry(ctx, attempt)
+			continue
+		}
+		if status.Code(err) == codes.Unavailable {
+			waitBeforeRetry(ctx, attempt)
 			continue
 		}
 		t.Fatalf("HeadDocument: %v", err)

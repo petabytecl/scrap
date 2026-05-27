@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -32,20 +33,32 @@ func connect(t *testing.T) scrapv1.DocumentServiceClient {
 	return scrapv1.NewDocumentServiceClient(conn)
 }
 
-//nolint:gocognit,cyclop // test helper with exhaustive retry, streaming, and leader redirect logic
 func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, data []byte) *scrapv1.WriteDocumentResponse {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	resp, err := tryWriteDocE2E(t, client, txID, docName, contentType, data)
+	if err != nil {
+		t.Fatalf("WriteDocument failed after retries: %v", err)
+	}
+	return resp
+}
+
+//nolint:gocognit,cyclop // test helper with exhaustive retry, streaming, and leader redirect logic
+func tryWriteDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, data []byte) (*scrapv1.WriteDocumentResponse, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	var lastErr error
 	activeClient := client
 
-	for attempt := range 10 {
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			break
+		}
 		stream, err := activeClient.WriteDocument(ctx)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+			waitBeforeRetry(ctx, attempt)
 			continue
 		}
 
@@ -82,7 +95,7 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 		var resp *scrapv1.WriteDocumentResponse
 		resp, lastErr = stream.CloseAndRecv()
 		if lastErr == nil {
-			return resp
+			return resp, nil
 		}
 
 		st, ok := status.FromError(lastErr)
@@ -90,13 +103,28 @@ func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNa
 			if leaderClient, redirected := clientForLeaderHint(t, lastErr); redirected {
 				activeClient = leaderClient
 			}
-			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+			waitBeforeRetry(ctx, attempt)
 			continue
 		}
 		break
 	}
-	t.Fatalf("WriteDocument failed after retries: %v", lastErr)
-	return nil
+	if lastErr == nil {
+		lastErr = fmt.Errorf("write document %s/%s did not complete", txID, docName)
+	}
+	return nil, lastErr
+}
+
+func waitBeforeRetry(ctx context.Context, attempt int) {
+	delay := time.Duration(attempt+1) * 200 * time.Millisecond
+	if delay > time.Second {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 func TestE2EWriteAndRead(t *testing.T) {

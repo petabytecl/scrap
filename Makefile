@@ -117,10 +117,16 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_ADDR gRPC address used by E2E tests.
 ##? SCRAP_E2E_METRICS_URL HTTP metrics URL used by E2E tests.
 ##? SCRAP_E2E_NAMESPACE Kubernetes namespace used by E2E tests.
+##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
+##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
+##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
 
 SCRAP_E2E_ADDR ?= 127.0.0.1:18090
 SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
+SCRAP_E2E_S3_BUCKET ?= scrap-e2e
+E2E_TEST_RUN ?= TestE2E(WriteAndRead|LeaderFailover|BackendUpload)
+SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 
 ##@ Help
 
@@ -235,6 +241,15 @@ manifests-check: ## Validate rendered manifests and deployment hardening invaria
 local-kind-create: ## Create the local kind cluster.
 	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml
 
+.PHONY: local-kind-ensure
+local-kind-ensure: ## Create the local kind cluster if it does not exist.
+	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(KIND_CLUSTER)" >/dev/null 2>&1; then \
+		printf 'kind cluster already exists: %s\n' "$(KIND_CLUSTER)"; \
+	else \
+		$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml; \
+	fi
+	$(KIND) export kubeconfig --name "$(KIND_CLUSTER)" >/dev/null
+
 .PHONY: local-kind-delete
 local-kind-delete: ## Delete the local kind cluster.
 	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
@@ -268,7 +283,10 @@ local-dev-stop-forwards: ## Stop only local dev port-forwards.
 ##@ E2E
 
 .PHONY: e2e-setup
-e2e-setup: local-kind-load local-kind-deploy ## Build image, load into Kind, and deploy manifests.
+e2e-setup: local-kind-ensure local-kind-load local-kind-deploy ## Create Kind cluster, load image, and deploy manifests.
+	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
 	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
@@ -278,9 +296,10 @@ e2e: e2e-setup ## Run E2E tests against a Kind cluster.
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -v -timeout 300s
+		$(GO) test ./test/e2e/ -run '$(E2E_TEST_RUN)' -v -timeout 300s
 
 .PHONY: e2e-scrub
 e2e-scrub: LOCAL_KIND_OVERLAY=deploy/kustomize/overlays/local-kind-scrub
@@ -290,6 +309,7 @@ e2e-scrub: e2e-setup ## Run scrub E2E tests with the local Kind scrub overlay an
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -v -timeout 600s
+		$(GO) test ./test/e2e/ -run '$(SCRUB_E2E_TEST_RUN)' -v -timeout 600s
