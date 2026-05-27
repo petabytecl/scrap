@@ -98,6 +98,85 @@ func TestRaftCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRaftCommandSealBlockRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_SealBlock{
+			SealBlock: &scrapv1.SealBlock{
+				BlockId:         42,
+				ShardId:         7,
+				SealedSizeBytes: 67108864,
+				SealedAtUs:      1716700000000000,
+			},
+		},
+	})
+
+	seal := decoded.GetSealBlock()
+	if seal == nil {
+		t.Fatal("decoded SealBlock should not be nil")
+	}
+	if seal.GetBlockId() != 42 {
+		t.Fatalf("BlockId: got %d", seal.GetBlockId())
+	}
+	if seal.GetShardId() != 7 {
+		t.Fatalf("ShardId: got %d", seal.GetShardId())
+	}
+	if seal.GetSealedSizeBytes() != 67108864 {
+		t.Fatalf("SealedSizeBytes: got %d", seal.GetSealedSizeBytes())
+	}
+	if seal.GetSealedAtUs() != 1716700000000000 {
+		t.Fatalf("SealedAtUs: got %d", seal.GetSealedAtUs())
+	}
+}
+
+func TestRaftCommandConfirmUploadRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ConfirmUpload{
+			ConfirmUpload: &scrapv1.ConfirmUpload{
+				BlockId:          42,
+				ShardId:          7,
+				BackendKeyPrefix: "cell-a/shards/0000000000000007/000000000000002a",
+				ConfirmedAtUs:    1716700001000000,
+				Etag:             "etag-42",
+			},
+		},
+	})
+
+	confirm := decoded.GetConfirmUpload()
+	if confirm == nil {
+		t.Fatal("decoded ConfirmUpload should not be nil")
+	}
+	if confirm.GetBlockId() != 42 {
+		t.Fatalf("BlockId: got %d", confirm.GetBlockId())
+	}
+	if confirm.GetShardId() != 7 {
+		t.Fatalf("ShardId: got %d", confirm.GetShardId())
+	}
+	if confirm.GetBackendKeyPrefix() != "cell-a/shards/0000000000000007/000000000000002a" {
+		t.Fatalf("BackendKeyPrefix: got %q", confirm.GetBackendKeyPrefix())
+	}
+	if confirm.GetConfirmedAtUs() != 1716700001000000 {
+		t.Fatalf("ConfirmedAtUs: got %d", confirm.GetConfirmedAtUs())
+	}
+	if confirm.GetEtag() != "etag-42" {
+		t.Fatalf("ETag: got %q", confirm.GetEtag())
+	}
+}
+
+func roundTripRaftCommand(t *testing.T, original *scrapv1.RaftCommand) *scrapv1.RaftCommand {
+	t.Helper()
+
+	data, err := proto.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	decoded := &scrapv1.RaftCommand{}
+	if err := proto.Unmarshal(data, decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	return decoded
+}
+
 func TestOpenlogEntryRoundTrip(t *testing.T) {
 	original := &scrapv1.OpenlogEntry{
 		TransactionId:  "tx-prep",

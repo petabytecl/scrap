@@ -6,12 +6,29 @@ message RaftCommand {
   oneof command {
     CommitDocument              commit_doc        = 1;
     RequestConsistencyCheck     consistency_check = 2;
+    SealBlock                   seal_block        = 3;
+    ConfirmUpload               confirm_upload    = 4;
   }
 }
 
 message RequestConsistencyCheck {
   string scrub_id        = 1;
   int64  requested_at_us = 2;
+}
+
+message SealBlock {
+  uint64 block_id          = 1;
+  uint64 shard_id          = 2;
+  int64  sealed_size_bytes = 3;
+  int64  sealed_at_us      = 4;
+}
+
+message ConfirmUpload {
+  uint64 block_id            = 1;
+  uint64 shard_id            = 2;
+  string backend_key_prefix  = 3;
+  int64  confirmed_at_us     = 4;
+  string etag                = 5;
 }
 
 message CommitDocument {
