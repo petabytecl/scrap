@@ -9,7 +9,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
 	github.com/aws/smithy-go v1.25.1
 	github.com/cockroachdb/pebble v1.1.5
-	github.com/prometheus/client_golang v1.20.5
 	go.etcd.io/etcd/server/v3 v3.6.11
 	go.etcd.io/raft/v3 v3.6.0
 	go.opentelemetry.io/otel v1.43.0
@@ -63,6 +62,7 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/prometheus/client_golang v1.20.5 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect

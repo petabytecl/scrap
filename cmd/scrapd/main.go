@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 
@@ -45,11 +44,12 @@ const (
 	defaultPeerPort = 9091
 )
 
+//nolint:cyclop // main startup function wiring all subsystems
 func run() error {
 	dataDir := flag.String("data-dir", "/data", "storage root directory")
 	listenAddr := flag.String("listen-addr", ":9090", "gRPC client listen address")
 	peerAddr := flag.String("peer-addr", ":9091", "gRPC peer listen address")
-	adminAddr := flag.String("admin-addr", ":8080", "HTTP admin listen address (metrics)")
+	adminAddr := flag.String("admin-addr", ":8080", "HTTP admin listen address (health)")
 	blockSealSize := flag.Int64("block-seal-size", shard.DefaultBlockSealSize, "block seal threshold in bytes")
 	peersFlag := flag.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
 	flag.Parse()
@@ -57,8 +57,6 @@ func run() error {
 	logger := logbridge.NewLoggerFromEnv(os.Stderr)
 
 	scrubCfg := scrub.ParseScrubConfig()
-	registry := prometheus.NewRegistry()
-	uploadMetrics := shard.NewUploadPrometheusMetrics(registry)
 	uploadEnabled := envBool("SCRAP_UPLOAD_ENABLED", true)
 
 	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), *dataDir, uploadEnabled)
@@ -67,14 +65,6 @@ func run() error {
 	}
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
-	uploadCfg := shard.UploadConfig{
-		Enabled:     uploadEnabled,
-		Backend:     uploadBackend,
-		CellID:      cellID,
-		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),
-		Pressure:    shard.ParseUploadPressureConfigFromEnv(),
-		Metrics:     uploadMetrics,
-	}
 
 	peers, raftID, err := resolvePeers(*peersFlag)
 	if err != nil {
@@ -87,6 +77,20 @@ func run() error {
 	}
 	defer func() { _ = telemetryRuntime.Shutdown(context.Background()) }()
 
+	shardTel, err := telemetryRuntime.newShardTelemetry()
+	if err != nil {
+		return fmt.Errorf("create shard telemetry: %w", err)
+	}
+
+	uploadCfg := shard.UploadConfig{
+		Enabled:     uploadEnabled,
+		Backend:     uploadBackend,
+		CellID:      cellID,
+		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),
+		Pressure:    shard.ParseUploadPressureConfigFromEnv(),
+		Metrics:     shardTel.uploadMetrics,
+	}
+
 	sharedTransport := peer.NewSharedTransport(peers)
 	defer sharedTransport.Close()
 	shardTransport := sharedTransport.ForShard(0, peers)
@@ -94,9 +98,6 @@ func run() error {
 	peerClient := peer.NewClient()
 
 	peerAddrs := peerAddrsExceptSelf(peers, raftID)
-
-	scrubMetrics := scrub.NewPrometheusMetrics(registry)
-	deepScrubMetrics := scrub.NewDeepScrubPrometheusMetrics(registry)
 
 	s, err := shard.Open(shard.Config{
 		DataDir:            *dataDir,
@@ -108,19 +109,24 @@ func run() error {
 		Transport:          shardTransport,
 		Logger:             logger,
 		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
-		ScrubMetrics:       scrubMetrics,
-		DeepScrubMetrics:   deepScrubMetrics,
+		ScrubMetrics:       shardTel.scrubMetrics,
+		DeepScrubMetrics:   shardTel.deepScrubMetrics,
 		Rebuilder:          peer.NewClientRebuilder(peerClient),
 		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, filepath.Join(*dataDir, "blocks")),
 		Replicator:         peerClient,
 		PeerAddrs:          peerAddrs,
 		Upload:             uploadCfg,
+		WriteTelemetry:     shardTel.writeTelemetry,
 	})
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 	defer peerClient.Close()
+
+	if err := telemetryRuntime.registerRaftMetrics(s); err != nil {
+		return fmt.Errorf("register raft metrics: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -152,7 +158,7 @@ func run() error {
 	if envBool("SCRAP_TEST_HOOKS", false) {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
 	}
-	adminSrv := admin.New(registry, adminOpts...)
+	adminSrv := admin.New(adminOpts...)
 	go func() { _ = adminSrv.ListenAndServe(*adminAddr) }()
 	go func() { _ = peerGS.Serve(peerLis) }()
 	go func() { _ = gs.Serve(clientLis) }()
