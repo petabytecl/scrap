@@ -677,19 +677,14 @@ func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) 
 	s.mu.Unlock()
 
 	ctx := context.Background()
-	cellID := s.upload.CellID
+	cellID := s.uploadCellID()
 	for _, blockID := range blockIDs {
 		if blockID == openBlockID {
 			continue
 		}
 		prefix := fmt.Sprintf("%s/shards/%016x/%016x", cellID, s.shardID, blockID)
-		blkKey := prefix + ".blk"
-		_, err := be.HeadObject(ctx, blkKey)
-		if err == nil {
+		if blockFullyUploaded(ctx, be, prefix) {
 			continue
-		}
-		if !errors.Is(err, backend.ErrNotFound) {
-			return fmt.Errorf("shard: rebuild check block %d: %w", blockID, err)
 		}
 		blkPath := s.blockPath(blockID)
 		info, statErr := os.Stat(blkPath)
@@ -705,6 +700,15 @@ func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) 
 		}
 	}
 	return nil
+}
+
+func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) bool {
+	for _, ext := range []string{".blk", ".idx"} {
+		if _, err := be.HeadObject(ctx, prefix+ext); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Shard) listBlockIndexIDs() ([]uint64, error) {

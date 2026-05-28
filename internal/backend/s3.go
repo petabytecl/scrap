@@ -405,9 +405,5 @@ func (it *s3PaginatedIterator) Next() (ObjectInfo, error) {
 		}
 		it.page = out.Contents
 		it.pageIdx = 0
-		if len(it.page) == 0 {
-			it.done = true
-			return ObjectInfo{}, io.EOF
-		}
 	}
 }

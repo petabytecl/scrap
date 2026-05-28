@@ -256,10 +256,7 @@ func rangedReader(file *os.File, size int64, byteRange ByteRange) (io.ReadCloser
 }
 
 func listObjects(ctx context.Context, root, prefix string) ([]ObjectInfo, error) {
-	walkRoot := root
-	if prefix != "" {
-		walkRoot = filepath.Join(root, filepath.FromSlash(prefix))
-	}
+	walkRoot := listWalkRoot(root, prefix)
 
 	objects := make([]ObjectInfo, 0)
 	err := filepath.WalkDir(walkRoot, func(path string, entry os.DirEntry, walkErr error) error {
@@ -293,6 +290,20 @@ func listObjects(ctx context.Context, root, prefix string) ([]ObjectInfo, error)
 		return objects[i].Key < objects[j].Key
 	})
 	return objects, nil
+}
+
+func listWalkRoot(root, prefix string) string {
+	if prefix == "" {
+		return root
+	}
+	candidate := filepath.Join(root, filepath.FromSlash(prefix))
+	for candidate != root {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		candidate = filepath.Dir(candidate)
+	}
+	return root
 }
 
 func skipListEntry(entry os.DirEntry) bool {
