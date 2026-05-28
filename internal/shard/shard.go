@@ -321,6 +321,10 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 
 	s.mu.Unlock()
 	if err := s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes()); err != nil {
+		// Orphaned bytes past the last committed offset are unreachable: VerifyBlock
+		// reads by index entry offsets, not sequential scan, so they don't cause
+		// SHA corruption. Keeping the prep would risk truncating committed data on
+		// restart if a later write lands in the same block.
 		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, err
 	}
@@ -1116,6 +1120,8 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 		SealedAtUs:      time.Now().UnixMicro(),
 	}
 	if err := s.proposeSealBlock(ctx, seal); err != nil {
+		// In-memory only: on restart, the rebuild path reconstructs the upload outbox
+		// from block state + backend HeadObject, catching any sealed blocks missed here.
 		s.orphanedSeals = append(s.orphanedSeals, seal)
 		s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", blockID, "err", err)
 	}
