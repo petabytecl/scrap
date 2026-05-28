@@ -24,6 +24,7 @@ Thumbs.db
 /dist/
 /tmp/
 /scrapd
+/stress
 coverage.out
 test-results/
 *.coverprofile
