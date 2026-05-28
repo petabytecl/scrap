@@ -349,21 +349,28 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(KIND) export kubeconfig --name "$(STRESS_KIND_CLUSTER)" >/dev/null
 	$(MAKE) image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(STRESS_KIND_CLUSTER)"
-	$(KUSTOMIZE) build "$(STRESS_OVERLAY)" | $(KUBECTL) apply -f -
+	@printf '\n== Phase 1: observability stack (log pipeline up before any app starts) ==\n'
+	# Ensure the scrap namespace exists so the evidence overlay's scrap-namespace
+	# NetworkPolicy applies; the app workload (Phase 2) re-applies it idempotently.
+	$(KUBECTL) create namespace scrap --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" | $(KUBECTL) apply -f -
+	# Gate on the log pipeline first (Loki sink, gateway, per-node agent) so that
+	# when apps deploy in Phase 2 their logs are captured from the first line.
+	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
+	$(KUBECTL) -n monitoring rollout status daemonset/otel-agent --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/alloy --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
+	@printf '\n== Phase 2: application workload (logs captured from startup) ==\n'
+	$(KUSTOMIZE) build "$(STRESS_OVERLAY)" | $(KUBECTL) apply -f -
 	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
 	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
 	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/alloy --timeout=120s
-	$(KUBECTL) -n monitoring rollout status daemonset/otel-agent --timeout=120s
 	@printf '\nStress environment ready.\n'
 	@printf '  gRPC:      127.0.0.1:18090\n'
 	@printf '  Grafana:   http://127.0.0.1:13000\n'
