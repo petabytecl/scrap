@@ -138,6 +138,95 @@ func TestWriteDocumentRPCSpanUsesHashedDocumentIdentity(t *testing.T) {
 	assertSpanAttrAbsent(t, attrs, "scrap.document_name")
 }
 
+func TestWriteDocumentTelemetryRecordsInvalidArgumentWhenInitMissing(t *testing.T) {
+	ctx := context.Background()
+	reader := metric.NewManualReader()
+	meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(context.Background()) })
+
+	tel, err := server.NewOTelTelemetry(
+		meterProvider.Meter("scrapd-test"),
+		tracerProvider.Tracer("scrapd-test"),
+	)
+	if err != nil {
+		t.Fatalf("NewOTelTelemetry: %v", err)
+	}
+
+	client := startTelemetryServer(t, server.WithTelemetry(tel))
+	stream, err := client.WriteDocument(ctx)
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	_, err = stream.CloseAndRecv()
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CloseAndRecv status = %v, want %v", status.Code(err), codes.InvalidArgument)
+	}
+
+	span := spanByName(t, spanRecorder.Ended(), "scrap.v1.DocumentService/WriteDocument")
+	attrs := spanAttrMap(span.Attributes())
+	assertSpanAttr(t, attrs, "rpc.grpc.status_code", codes.InvalidArgument.String())
+	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
+	assertSpanAttrAbsent(t, attrs, "scrap.document_name")
+}
+
+func TestWriteDocumentTelemetryRecordsInvalidArgumentForNonInitFirstMessage(t *testing.T) {
+	client := startTelemetryServer(t)
+	stream, err := client.WriteDocument(context.Background())
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if err := stream.Send(&scrapv1.WriteDocumentRequest{
+		Part: &scrapv1.WriteDocumentRequest_ChunkData{ChunkData: []byte("payload")},
+	}); err != nil {
+		t.Fatalf("Send chunk: %v", err)
+	}
+
+	_, err = stream.CloseAndRecv()
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CloseAndRecv status = %v, want %v", status.Code(err), codes.InvalidArgument)
+	}
+}
+
+func TestWriteDocumentTelemetryRecordsInvalidArgumentForMissingIdentity(t *testing.T) {
+	client := startTelemetryServer(t)
+	stream, err := client.WriteDocument(context.Background())
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if err := stream.Send(&scrapv1.WriteDocumentRequest{
+		Part: &scrapv1.WriteDocumentRequest_Init{
+			Init: &scrapv1.WriteDocumentInit{DocumentName: "invoice.xml"},
+		},
+	}); err != nil {
+		t.Fatalf("Send init: %v", err)
+	}
+
+	_, err = stream.CloseAndRecv()
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CloseAndRecv status = %v, want %v", status.Code(err), codes.InvalidArgument)
+	}
+}
+
+func TestNewOTelTelemetryRequiresMeterAndTracer(t *testing.T) {
+	_, err := server.NewOTelTelemetry(nil, sdktrace.NewTracerProvider().Tracer("scrapd-test"))
+	if err == nil || !strings.Contains(err.Error(), "meter is required") {
+		t.Fatalf("missing meter error = %v", err)
+	}
+
+	reader := metric.NewManualReader()
+	meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+
+	_, err = server.NewOTelTelemetry(meterProvider.Meter("scrapd-test"), nil)
+	if err == nil || !strings.Contains(err.Error(), "tracer is required") {
+		t.Fatalf("missing tracer error = %v", err)
+	}
+}
+
 func startTelemetryServer(t *testing.T, opts ...server.Option) scrapv1.DocumentServiceClient {
 	t.Helper()
 

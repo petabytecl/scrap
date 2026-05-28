@@ -54,6 +54,14 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID string, raftID, shardI
 	}, nil
 }
 
+func newScrapdTelemetryForHost(ctx context.Context, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
+	memberSlotID, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("hostname: %w", err)
+	}
+	return newScrapdTelemetry(ctx, memberSlotID, raftID, shardID)
+}
+
 func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil

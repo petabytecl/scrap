@@ -81,11 +81,7 @@ func run() error {
 		return err
 	}
 
-	memberSlotID, err := os.Hostname()
-	if err != nil {
-		return fmt.Errorf("hostname: %w", err)
-	}
-	telemetryRuntime, err := newScrapdTelemetry(context.Background(), memberSlotID, raftID, 0)
+	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), raftID, 0)
 	if err != nil {
 		return err
 	}

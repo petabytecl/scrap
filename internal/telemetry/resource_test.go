@@ -45,6 +45,23 @@ func TestNewResourceIncludesScrapIdentityAndBuildAttributes(t *testing.T) {
 	}
 }
 
+func TestNewResourceDefaultsServiceNameAndAcceptsNilContext(t *testing.T) {
+	//nolint:staticcheck // Verifies NewResource handles a nil context defensively.
+	res, err := telemetry.NewResource(nil, telemetry.ResourceConfig{})
+	if err != nil {
+		t.Fatalf("NewResource: %v", err)
+	}
+
+	attrs := attrMap(res.Attributes())
+	assertAttr(t, attrs, "service.name", "scrapd")
+	if _, ok := attrs[attribute.Key("scrap.build.sha")]; ok {
+		t.Fatal("empty build SHA should not be emitted")
+	}
+	if _, ok := attrs[attribute.Key("scrap.build.time")]; ok {
+		t.Fatal("empty build time should not be emitted")
+	}
+}
+
 func attrMap(kvs []attribute.KeyValue) map[attribute.Key]attribute.Value {
 	attrs := make(map[attribute.Key]attribute.Value, len(kvs))
 	for _, kv := range kvs {
