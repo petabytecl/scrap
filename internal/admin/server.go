@@ -9,9 +9,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -33,7 +30,6 @@ type Server struct {
 	mu                 sync.Mutex
 	httpSrv            *http.Server
 	handler            http.Handler
-	registry           *prometheus.Registry
 	projectionInjector ProjectionInjector
 	uploadPressure     UploadPressureProvider
 }
@@ -50,14 +46,13 @@ func WithUploadPressureProvider(provider UploadPressureProvider) Option {
 	}
 }
 
-func New(registry *prometheus.Registry, opts ...Option) *Server {
-	s := &Server{registry: registry}
+func New(opts ...Option) *Server {
+	s := &Server{}
 	for _, opt := range opts {
 		opt(s)
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", s.handleHealth)
 	if s.projectionInjector != nil {
 		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)

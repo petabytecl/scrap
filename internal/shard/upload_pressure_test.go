@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -107,9 +105,12 @@ func TestUploadPressureCriticalPausesDeepScrubAndResumes(t *testing.T) {
 	}
 }
 
-func TestUploadPrometheusMetricsRegistersAndEmits(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	metrics := shard.NewUploadPrometheusMetrics(reg)
+func TestUploadOTelMetricsRegistersAndEmits(t *testing.T) {
+	provider, reader := newTestMeter(t)
+	metrics, err := shard.NewUploadOTelMetrics(provider.Meter("test"))
+	if err != nil {
+		t.Fatalf("new upload otel metrics: %v", err)
+	}
 
 	metrics.SetPending(7, 123, 2)
 	metrics.RecordUpload(7, "success", time.Second)
@@ -118,27 +119,19 @@ func TestUploadPrometheusMetricsRegistersAndEmits(t *testing.T) {
 	metrics.SetConcurrency(7, 4)
 	metrics.SetAuthPaused(7, true)
 
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-
-	found := map[string]bool{}
-	for _, family := range families {
-		found[family.GetName()] = true
-	}
+	rm := collectMetrics(t, reader)
 	for _, name := range []string{
-		"scrap_upload_pending_bytes",
-		"scrap_upload_pending_blocks",
-		"scrap_upload_total",
-		"scrap_upload_duration_seconds",
-		"scrap_upload_verify_total",
-		"scrap_upload_pressure_level",
-		"scrap_upload_concurrency",
-		"scrap_upload_auth_paused",
+		"scrap.upload.pending_bytes",
+		"scrap.upload.pending_blocks",
+		"scrap.upload.total",
+		"scrap.upload.duration",
+		"scrap.upload.verify_total",
+		"scrap.upload.pressure_level",
+		"scrap.upload.concurrency",
+		"scrap.upload.auth_paused",
 	} {
-		if !found[name] {
-			t.Fatalf("metric %s was not gathered", name)
+		if findMetric(rm, name) == nil {
+			t.Fatalf("metric %s not found", name)
 		}
 	}
 }

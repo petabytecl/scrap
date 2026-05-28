@@ -56,6 +56,7 @@ type Config struct {
 	Replicator         DocumentReplicator
 	PeerAddrs          []string
 	Upload             UploadConfig
+	WriteTelemetry     WriteStageRecorder
 }
 
 type Shard struct {
@@ -69,6 +70,7 @@ type Shard struct {
 	raft           *scrapraft.RaftNode
 	replicator     DocumentReplicator
 	upload         UploadConfig
+	writeTelemetry WriteStageRecorder
 	baseLogger     *slog.Logger
 	logger         *slog.Logger
 	blockSealSize  int64
@@ -116,6 +118,9 @@ func (c *Config) applyDefaults() {
 	if c.BootstrapGrace == 0 {
 		c.BootstrapGrace = DefaultBootstrapGrace
 	}
+	if c.WriteTelemetry == nil {
+		c.WriteTelemetry = noopWriteTelemetry{}
+	}
 }
 
 func Open(cfg Config) (*Shard, error) {
@@ -159,6 +164,7 @@ func Open(cfg Config) (*Shard, error) {
 		logger:                  logger,
 		replicator:              cfg.Replicator,
 		upload:                  cfg.Upload,
+		writeTelemetry:          cfg.WriteTelemetry,
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
@@ -310,8 +316,6 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, fmt.Errorf("shard: write prep: %w", err)
 	}
-	// Prep files protect against incomplete writes on crash. Remove on every
-	// exit path to prevent recoverOpenlog from truncating committed data.
 	prepCleaned := false
 	defer func() {
 		if !prepCleaned {
@@ -321,15 +325,21 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 
 	now := time.Now()
 
+	ctx, appendStage := s.writeTelemetry.StartStage(ctx, "block_append")
 	var bodyCopy bytes.Buffer
 	result, err := s.blockWriter.AppendDocument(txID, docName, contentType, io.TeeReader(body, &bodyCopy))
+	appendStage.End(err)
 	if err != nil {
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, fmt.Errorf("shard: append document: %w", err)
 	}
 
 	s.mu.Unlock()
-	if err := s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes()); err != nil {
+
+	ctx, replicateStage := s.writeTelemetry.StartStage(ctx, "peer_replicate")
+	err = s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes())
+	replicateStage.End(err)
+	if err != nil {
 		return storeapi.WriteResult{}, err
 	}
 
@@ -360,19 +370,25 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	s.proposals[key] = doneCh
 	s.proposalMu.Unlock()
 
-	if err := s.raft.Propose(ctx, data); err != nil {
+	ctx, proposeStage := s.writeTelemetry.StartStage(ctx, "raft_propose")
+	proposeErr := s.raft.Propose(ctx, data)
+	proposeStage.End(proposeErr)
+	if proposeErr != nil {
 		s.proposalMu.Lock()
 		delete(s.proposals, key)
 		s.proposalMu.Unlock()
-		return storeapi.WriteResult{}, fmt.Errorf("shard: propose: %w", err)
+		return storeapi.WriteResult{}, fmt.Errorf("shard: propose: %w", proposeErr)
 	}
 
+	_, applyStage := s.writeTelemetry.StartStage(ctx, "raft_apply")
 	select {
 	case applyErr := <-doneCh:
+		applyStage.End(applyErr)
 		if applyErr != nil {
 			return storeapi.WriteResult{}, applyErr
 		}
 	case <-ctx.Done():
+		applyStage.End(ctx.Err())
 		return storeapi.WriteResult{}, ctx.Err()
 	}
 
@@ -475,6 +491,14 @@ func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.Docu
 
 func (s *Shard) IsLeader() bool {
 	return s.raft.IsLeader()
+}
+
+func (s *Shard) LeaderID() uint64 {
+	return s.raft.LeaderID()
+}
+
+func (s *Shard) AppliedIndex() uint64 {
+	return s.raft.AppliedIndex()
 }
 
 func (s *Shard) CheckReadiness(_ context.Context) error {

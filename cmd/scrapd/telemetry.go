@@ -15,7 +15,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/server"
+	"github.com/petabytecl/scrap/internal/shard"
 	scraptelemetry "github.com/petabytecl/scrap/internal/telemetry"
 	"github.com/petabytecl/scrap/internal/ulid"
 )
@@ -30,6 +32,7 @@ const (
 	localTelemetryIdentity = "local"
 	memberIdentityDirMode  = 0o700
 	memberIdentityFileMode = 0o600
+	instrumentationScope   = "github.com/petabytecl/scrap/cmd/scrapd"
 )
 
 type scrapdTelemetryPipelineFactory struct {
@@ -58,6 +61,8 @@ type scrapdTelemetryRuntime struct {
 	meterProvider  *sdkmetric.MeterProvider
 	tracerProvider *sdktrace.TracerProvider
 	server         server.Telemetry
+	runtimeMetrics *scraptelemetry.RuntimeMetrics
+	raftMetrics    *scraptelemetry.RaftMetrics
 }
 
 func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
@@ -95,20 +100,28 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 	otel.SetMeterProvider(meterProvider)
 	otel.SetTracerProvider(tracerProvider)
 
-	serverTelemetry, err := server.NewOTelTelemetry(
-		meterProvider.Meter("github.com/petabytecl/scrap/cmd/scrapd"),
-		tracerProvider.Tracer("github.com/petabytecl/scrap/cmd/scrapd"),
-	)
+	m := meterProvider.Meter(instrumentationScope)
+	t := tracerProvider.Tracer(instrumentationScope)
+
+	serverTelemetry, err := server.NewOTelTelemetry(m, t)
 	if err != nil {
 		_ = meterProvider.Shutdown(ctx)
 		_ = tracerProvider.Shutdown(ctx)
 		return nil, fmt.Errorf("create server telemetry: %w", err)
 	}
 
+	runtimeMetrics, err := scraptelemetry.NewRuntimeMetrics(m)
+	if err != nil {
+		_ = meterProvider.Shutdown(ctx)
+		_ = tracerProvider.Shutdown(ctx)
+		return nil, fmt.Errorf("create runtime metrics: %w", err)
+	}
+
 	return &scrapdTelemetryRuntime{
 		meterProvider:  meterProvider,
 		tracerProvider: tracerProvider,
 		server:         serverTelemetry,
+		runtimeMetrics: runtimeMetrics,
 	}, nil
 }
 
@@ -124,11 +137,58 @@ func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shar
 	return newScrapdTelemetry(ctx, memberSlotID, memberID, raftID, shardID)
 }
 
+type shardTelemetryBundle struct {
+	uploadMetrics    *shard.UploadOTelMetrics
+	scrubMetrics     *scrub.OTelScrubMetrics
+	deepScrubMetrics *scrub.OTelDeepScrubMetrics
+	writeTelemetry   *shard.WriteTelemetry
+}
+
+func (r *scrapdTelemetryRuntime) newShardTelemetry() (*shardTelemetryBundle, error) {
+	m := r.meterProvider.Meter(instrumentationScope)
+	t := r.tracerProvider.Tracer(instrumentationScope)
+
+	um, err := shard.NewUploadOTelMetrics(m)
+	if err != nil {
+		return nil, fmt.Errorf("create upload metrics: %w", err)
+	}
+	sm, err := scrub.NewOTelScrubMetrics(m)
+	if err != nil {
+		return nil, fmt.Errorf("create scrub metrics: %w", err)
+	}
+	dsm, err := scrub.NewOTelDeepScrubMetrics(m)
+	if err != nil {
+		return nil, fmt.Errorf("create deep scrub metrics: %w", err)
+	}
+	wt, err := shard.NewWriteTelemetry(m, t)
+	if err != nil {
+		return nil, fmt.Errorf("create write telemetry: %w", err)
+	}
+	return &shardTelemetryBundle{
+		uploadMetrics:    um,
+		scrubMetrics:     sm,
+		deepScrubMetrics: dsm,
+		writeTelemetry:   wt,
+	}, nil
+}
+
+func (r *scrapdTelemetryRuntime) registerRaftMetrics(provider scraptelemetry.RaftStateProvider) error {
+	m := r.meterProvider.Meter(instrumentationScope)
+	rm, err := scraptelemetry.NewRaftMetrics(m, provider)
+	if err != nil {
+		return err
+	}
+	r.raftMetrics = rm
+	return nil
+}
+
 func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
 	return errors.Join(
+		r.runtimeMetrics.Unregister(),
+		r.raftMetrics.Unregister(),
 		r.meterProvider.Shutdown(ctx),
 		r.tracerProvider.Shutdown(ctx),
 	)
