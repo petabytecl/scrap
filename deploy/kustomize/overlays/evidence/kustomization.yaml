@@ -8,6 +8,7 @@ resources:
   - loki.yaml
   - tempo.yaml
   - pyroscope.yaml
+  - alloy.yaml
   - grafana.yaml
   - grafana-datasources.yaml
   - grafana-dashboard-provider.yaml

@@ -5,6 +5,8 @@ metadata:
   namespace: monitoring
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mimir
@@ -19,6 +21,12 @@ spec:
           args:
             - -target=all
             - -auth.multitenancy-enabled=false
+            # Single-node evidence backend: one ingester in the ring, so the
+            # default replication factor of 3 would reject every OTLP write.
+            - -ingester.ring.replication-factor=1
+            # Emit type/unit suffixes (_total, _seconds, _bytes) so the OTLP→Mimir
+            # names match the otelprom /metrics convention used by monitoring/scrapd.json.
+            - -distributor.otel-metric-suffixes-enabled=true
             - -server.http-listen-port=9009
             - -blocks-storage.backend=filesystem
             - -blocks-storage.filesystem.dir=/data/blocks

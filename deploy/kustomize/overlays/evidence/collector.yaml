@@ -41,6 +41,16 @@ data:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
+      # Tail scrapd container stdout/stderr (slog JSON) from the node so logs
+      # reach Loki. Scoped to the scrap namespace by the pod log path layout
+      # (/var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log).
+      filelog:
+        include: [/var/log/pods/scrap_*/*/*.log]
+        include_file_path: true
+        start_at: end
+        operators:
+          - type: container
+            id: container-parser
 
     processors:
       batch:
@@ -63,11 +73,24 @@ data:
           - sources:
               - from: connection
 
-      filter/high_cardinality:
+      # Strip per-transaction/per-block identifiers from metric datapoints so
+      # they never become Mimir series labels (issue #314 high-cardinality guard).
+      transform/strip_high_cardinality:
         error_mode: ignore
-        metrics:
-          metric:
-            - 'HasAttrOnDatapoint("scrap.transaction_id", "")  == false and HasAttrOnDatapoint("scrap.transaction_id", "") == false'
+        metric_statements:
+          - context: datapoint
+            statements:
+              - delete_key(attributes, "scrap.transaction_id")
+              - delete_key(attributes, "scrap.block_id")
+
+      # Give filelog-sourced logs a service.name so Loki indexes them like the
+      # OTLP-sourced telemetry (loki.yaml indexes service.name as a label).
+      transform/log_service_name:
+        error_mode: ignore
+        log_statements:
+          - context: resource
+            statements:
+              - set(attributes["service.name"], attributes["k8s.container.name"]) where attributes["service.name"] == nil
 
       tail_sampling:
         decision_wait: 10s
@@ -101,21 +124,20 @@ data:
         tls:
           insecure: true
 
-      otlphttp/pyroscope:
-        endpoint: http://pyroscope.monitoring.svc:4040
-        tls:
-          insecure: true
-
     service:
       pipelines:
         metrics:
           receivers: [otlp]
-          processors: [k8sattributes, batch]
+          processors: [transform/strip_high_cardinality, k8sattributes, batch]
           exporters: [otlphttp/mimir]
         traces:
           receivers: [otlp]
           processors: [k8sattributes, tail_sampling, batch]
           exporters: [otlp/tempo]
+        logs:
+          receivers: [filelog]
+          processors: [k8sattributes, transform/log_service_name, batch]
+          exporters: [otlphttp/loki]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -124,6 +146,8 @@ metadata:
   namespace: monitoring
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: otel-collector
@@ -133,6 +157,9 @@ spec:
         app: otel-collector
     spec:
       serviceAccountName: otel-collector
+      # Read root-owned node pod logs for the filelog receiver.
+      securityContext:
+        runAsUser: 0
       containers:
         - name: collector
           image: otel/opentelemetry-collector-contrib:0.122.1
@@ -150,10 +177,17 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/otel
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
       volumes:
         - name: config
           configMap:
             name: otel-collector-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
 ---
 apiVersion: v1
 kind: Service
