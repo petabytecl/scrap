@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"sync"
 	"time"
 )
@@ -32,6 +33,7 @@ type Server struct {
 	handler            http.Handler
 	projectionInjector ProjectionInjector
 	uploadPressure     UploadPressureProvider
+	pprofEnabled       bool
 }
 
 func WithProjectionInjector(injector ProjectionInjector) Option {
@@ -46,6 +48,12 @@ func WithUploadPressureProvider(provider UploadPressureProvider) Option {
 	}
 }
 
+func WithPprof() Option {
+	return func(s *Server) {
+		s.pprofEnabled = true
+	}
+}
+
 func New(opts ...Option) *Server {
 	s := &Server{}
 	for _, opt := range opts {
@@ -56,6 +64,13 @@ func New(opts ...Option) *Server {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	if s.projectionInjector != nil {
 		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
+	}
+	if s.pprofEnabled {
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	}
 	s.handler = mux
 	return s
