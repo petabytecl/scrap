@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -178,7 +179,11 @@ func writeTempObject(path string, body io.Reader, size int64) (string, error) {
 		}
 	}()
 
-	written, err := io.Copy(tmp, io.LimitReader(body, size+1))
+	limit := size + 1
+	if size == math.MaxInt64 {
+		limit = size
+	}
+	written, err := io.Copy(tmp, io.LimitReader(body, limit))
 	if err != nil {
 		_ = tmp.Close()
 		return "", classifyFSError("write object", err)

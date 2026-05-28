@@ -19,6 +19,8 @@ import (
 
 const DefaultUploadConcurrency = 2
 
+const maxOrphanedSeals = 64
+
 const (
 	uploadPollInterval        = 50 * time.Millisecond
 	defaultUploadRetryBase    = time.Second
@@ -78,18 +80,20 @@ func (s *Shard) proposeConfirmUpload(ctx context.Context, blockID uint64, backen
 	return s.proposeUploadCommand(ctx, "confirm upload", cmd)
 }
 
-func (s *Shard) retryOrphanedSeals(ctx context.Context) {
-	if len(s.orphanedSeals) == 0 {
-		return
-	}
+// proposeSeals proposes seal commands outside s.mu. Returns any that failed.
+func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) []index.PendingUpload {
 	var remaining []index.PendingUpload
-	for _, seal := range s.orphanedSeals {
+	for _, seal := range seals {
 		if err := s.proposeSealBlock(ctx, seal); err != nil {
 			remaining = append(remaining, seal)
-			s.logger.WarnContext(ctx, "shard: orphaned seal retry failed", "block_id", seal.BlockID, "err", err)
+			s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", seal.BlockID, "err", err)
 		}
 	}
-	s.orphanedSeals = remaining
+	if len(remaining) > maxOrphanedSeals {
+		s.logger.WarnContext(ctx, "shard: dropping oldest orphaned seals", "dropped", len(remaining)-maxOrphanedSeals)
+		remaining = remaining[len(remaining)-maxOrphanedSeals:]
+	}
+	return remaining
 }
 
 func (s *Shard) proposeUploadCommand(ctx context.Context, op string, cmd *scrapv1.RaftCommand) error {
@@ -116,7 +120,7 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 		return err
 	}
 
-	if s.blockWriter != nil && s.blockWriter.BlockID() == seal.GetBlockId() {
+	if s.blockWriter != nil && s.idxWriter != nil && s.blockWriter.BlockID() == seal.GetBlockId() {
 		if err := s.idxWriter.Close(); err != nil {
 			return fmt.Errorf("shard: close sealed block index: %w", err)
 		}
@@ -153,8 +157,15 @@ func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 
 func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.retryOrphanedSeals(ctx)
+	orphans := s.orphanedSeals
+	s.orphanedSeals = nil
+	s.mu.Unlock()
+
+	remaining := s.proposeSeals(ctx, orphans)
+
+	s.mu.Lock()
+	s.orphanedSeals = remaining
+	s.mu.Unlock()
 }
 
 func (s *Shard) PendingUploadsForTest() ([]PendingUpload, error) {

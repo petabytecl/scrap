@@ -276,14 +276,14 @@ func verifiedS3ETag(raw *string, wantMD5Hex string) (string, error) {
 	if !isMD5Hex(etag) {
 		return etag, nil
 	}
-	if !strings.EqualFold(etag, wantMD5Hex) {
+	if etag != strings.ToLower(wantMD5Hex) {
 		return "", fmt.Errorf("etag %q did not match MD5 %q: %w", etag, wantMD5Hex, ErrCorrupt)
 	}
-	return strings.ToLower(etag), nil
+	return etag, nil
 }
 
 func normalizeS3ETag(raw *string) string {
-	return strings.Trim(aws.ToString(raw), `"`)
+	return strings.ToLower(strings.Trim(aws.ToString(raw), `"`))
 }
 
 func isMD5Hex(etag string) bool {

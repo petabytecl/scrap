@@ -269,7 +269,7 @@ func (s *Shard) startScrubber(cfg Config) {
 	}
 }
 
-//nolint:cyclop // orchestration function managing seal check, prep file, block append, raft propose, and apply
+//nolint:cyclop,gocognit // orchestration function managing seal check, prep file, block append, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
 	if err := s.requireWritableLeader(); err != nil {
 		return storeapi.WriteResult{}, err
@@ -310,6 +310,14 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, fmt.Errorf("shard: write prep: %w", err)
 	}
+	// Prep files protect against incomplete writes on crash. Remove on every
+	// exit path to prevent recoverOpenlog from truncating committed data.
+	prepCleaned := false
+	defer func() {
+		if !prepCleaned {
+			_ = os.Remove(s.prepPath(writeID))
+		}
+	}()
 
 	now := time.Now()
 
@@ -322,11 +330,6 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 
 	s.mu.Unlock()
 	if err := s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes()); err != nil {
-		// Orphaned bytes past the last committed offset are unreachable: VerifyBlock
-		// reads by index entry offsets, not sequential scan, so they don't cause
-		// SHA corruption. Keeping the prep would risk truncating committed data on
-		// restart if a later write lands in the same block.
-		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, err
 	}
 
@@ -361,7 +364,6 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.proposalMu.Lock()
 		delete(s.proposals, key)
 		s.proposalMu.Unlock()
-		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, fmt.Errorf("shard: propose: %w", err)
 	}
 
@@ -371,11 +373,11 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 			return storeapi.WriteResult{}, applyErr
 		}
 	case <-ctx.Done():
-		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, ctx.Err()
 	}
 
-	_ = os.Remove(s.prepPath(writeID)) // best-effort cleanup of prep file after commit
+	prepCleaned = true
+	_ = os.Remove(s.prepPath(writeID))
 
 	return storeapi.WriteResult{
 		SHA256:    result.SHA256,
@@ -690,8 +692,13 @@ func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) 
 		if blockID == openBlockID {
 			continue
 		}
-		prefix := fmt.Sprintf("%s/shards/%016x/%016x", cellID, s.shardID, blockID)
-		if blockFullyUploaded(ctx, be, prefix) {
+		prefix := backendKeyPrefix(cellID, s.shardID, blockID)
+		uploaded, err := blockFullyUploaded(ctx, be, prefix)
+		if err != nil {
+			s.logger.WarnContext(ctx, "shard: rebuild upload check skipped (transient)", "block_id", blockID, "err", err)
+			continue
+		}
+		if uploaded {
 			continue
 		}
 		blkPath := s.blockPath(blockID)
@@ -703,6 +710,7 @@ func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) 
 			BlockID:         blockID,
 			ShardID:         s.shardID,
 			SealedSizeBytes: info.Size(),
+			SealedAtUs:      info.ModTime().UnixMicro(),
 		}); err != nil {
 			return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
 		}
@@ -710,13 +718,21 @@ func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) 
 	return nil
 }
 
-func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) bool {
+// blockFullyUploaded returns true when both .blk and .idx exist in the backend,
+// false when either is definitively missing. Returns an error for transient/auth
+// failures so the caller can avoid incorrectly re-queuing already-uploaded blocks.
+func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) (bool, error) {
 	for _, ext := range []string{".blk", ".idx"} {
-		if _, err := be.HeadObject(ctx, prefix+ext); err != nil {
-			return false
+		_, err := be.HeadObject(ctx, prefix+ext)
+		if err == nil {
+			continue
 		}
+		if errors.Is(err, backend.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
 func (s *Shard) listBlockIndexIDs() ([]uint64, error) {
@@ -1156,7 +1172,9 @@ func (s *Shard) findDocEntry(txID, docName string) (docWithBlock, error) {
 }
 
 func (s *Shard) sealAndOpenNew(ctx context.Context) error {
-	s.retryOrphanedSeals(ctx)
+	// Collect orphans under s.mu, then release to avoid holding s.mu during Raft I/O.
+	orphans := s.orphanedSeals
+	s.orphanedSeals = nil
 
 	blockID := s.blockWriter.BlockID()
 	sealedSize := s.blockWriter.Offset()
@@ -1166,19 +1184,24 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 	if err := s.blockWriter.Close(); err != nil {
 		return err
 	}
+	if err := s.openNewBlock(); err != nil {
+		return err
+	}
+
 	seal := index.PendingUpload{
 		BlockID:         blockID,
 		ShardID:         s.shardID,
 		SealedSizeBytes: sealedSize,
 		SealedAtUs:      time.Now().UnixMicro(),
 	}
-	if err := s.proposeSealBlock(ctx, seal); err != nil {
-		// In-memory only: on restart, the rebuild path reconstructs the upload outbox
-		// from block state + backend HeadObject, catching any sealed blocks missed here.
-		s.orphanedSeals = append(s.orphanedSeals, seal)
-		s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", blockID, "err", err)
-	}
-	return s.openNewBlock()
+	orphans = append(orphans, seal)
+
+	s.mu.Unlock()
+	remaining := s.proposeSeals(ctx, orphans)
+	s.mu.Lock()
+
+	s.orphanedSeals = remaining
+	return nil
 }
 
 func (s *Shard) openNewBlock() error {

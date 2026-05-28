@@ -158,15 +158,17 @@ func TestParseUploadPressureConfigFromEnv(t *testing.T) {
 	}
 }
 
-func TestParseUploadPressureConfigFromEnv_WholePercentages(t *testing.T) {
+func TestParseUploadPressureConfigFromEnv_WholePercentagesResetToDefaults(t *testing.T) {
 	t.Setenv("SCRAP_UPLOAD_BUDGET", "2048")
 	t.Setenv("SCRAP_UPLOAD_WARN_PCT", "70")
 	t.Setenv("SCRAP_UPLOAD_PRESSURE_PCT", "85")
 	t.Setenv("SCRAP_UPLOAD_CRITICAL_PCT", "95")
 
 	cfg := shard.ParseUploadPressureConfigFromEnv()
-	if cfg.WarnPct != 0.70 || cfg.PressurePct != 0.85 || cfg.CriticalPct != 0.95 {
-		t.Fatalf("thresholds = %.2f/%.2f/%.2f, want 0.70/0.85/0.95", cfg.WarnPct, cfg.PressurePct, cfg.CriticalPct)
+	if cfg.WarnPct != shard.DefaultUploadWarnPct || cfg.PressurePct != shard.DefaultUploadPressurePct || cfg.CriticalPct != shard.DefaultUploadCriticalPct {
+		t.Fatalf("thresholds = %.2f/%.2f/%.2f, want defaults %.2f/%.2f/%.2f",
+			cfg.WarnPct, cfg.PressurePct, cfg.CriticalPct,
+			shard.DefaultUploadWarnPct, shard.DefaultUploadPressurePct, shard.DefaultUploadCriticalPct)
 	}
 }
 
