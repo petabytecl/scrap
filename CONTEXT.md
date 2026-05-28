@@ -149,7 +149,8 @@ but nothing is assumed correct until re-derived and questioned.
 - Metadata KV: Pebble
 - API: gRPC + protobuf (buf)
 - Envelope encryption: OpenBao Transit
-- Observability: Prometheus (`client_golang`, service-local registry, `/metrics`)
+- Observability: OpenTelemetry producer contract (OTLP telemetry, collector-routed
+  metrics/logs/traces/profiles, self-hosted evidence stack for stress runs)
 
 Everything else — replica count, block format, sharding model, cell federation, write ACK
 contract, scope, phasing — is an open question for V2 to re-derive.
@@ -798,6 +799,35 @@ Phase 3 configuration (env vars, all with defaults):
 | `SCRAP_UPLOAD_WARN_PCT`       | `80`         | percent   |
 | `SCRAP_UPLOAD_PRESSURE_PCT`   | `90`         | percent   |
 | `SCRAP_UPLOAD_CRITICAL_PCT`   | `95`         | percent   |
+
+### Phase 3.6 Telemetry Evidence Plane
+
+Phase 3.6 is a required evidence milestone before Phase 4. It replaces the
+earlier Prometheus-only observability contract with an OpenTelemetry producer
+contract for `scrapd`.
+
+Required signals: low-cardinality metrics, structured logs, traces, and runtime
+profiles. The local evidence stack is self-hosted Grafana with OTLP-capable
+metrics, log, trace, and profile storage. A collector layer enriches Kubernetes
+and S.C.R.A.P. resource attributes, batches exports, and tail-samples traces so
+slow/error paths are retained under stress.
+
+Logs remain structured `slog` JSON on stdout/stderr and are collected by the
+telemetry pipeline; `scrapd` must not block request handling on log-export
+backpressure. Go pprof is exposed only on the admin listener, disabled by
+default, explicitly enabled for evidence environments, and network-restricted to
+telemetry collectors and operators.
+
+Telemetry must not use raw `transaction_id` or `document_name` as metric
+attributes. Logs and traces carry stable hashed identifiers by default. Raw
+identifiers are allowed only behind an explicit local debug override and must
+not be enabled in production-like evidence runs.
+
+Phase 4 cannot begin until throughput, mixed read/write/head, and upload-pressure
+stress scenarios produce a timestamped evidence bundle containing run
+configuration, load results, selected metric snapshots, log/trace/profile
+exports or stable query references, and pass/fail checks. Alerting policy,
+runbooks, and incident workflows are deferred beyond this milestone.
 
 ### Cluster Bootstrap
 

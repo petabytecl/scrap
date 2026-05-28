@@ -1064,78 +1064,109 @@ func BenchmarkWriteFrame(b *testing.B) {
 
 ## Metrics
 
-### Naming Convention
+ADR-0012 makes OpenTelemetry the `scrapd` application telemetry producer
+contract. New metrics must use OpenTelemetry instruments and OTLP export.
+Prometheus `client_golang` metrics and `/metrics` scraping are legacy migration
+surfaces only; do not add new Prometheus instrumentation except to preserve
+existing behavior while an OTel replacement is being implemented.
 
-All Prometheus metrics follow the pattern:
+### Metric Names
 
-```
-scrap_<subsystem>_<metric>_<unit>
-```
-
-| Component | Rule                       | Examples                                                                         |
-| --------- | -------------------------- | -------------------------------------------------------------------------------- |
-| Prefix    | Always `scrap_`            |                                                                                  |
-| Subsystem | Domain concept, snake_case | `scrub`, `scrub_deep`, `block`                                                   |
-| Metric    | What is measured           | `runs`, `duration`, `corruptions_detected`                                       |
-| Unit      | Prometheus base unit       | `_total` (counter), `_seconds` (duration), `_bytes` (size), `_ratio` (0-1 gauge) |
-
-Examples from the codebase:
+Custom S.C.R.A.P. metric names use a dot-separated OpenTelemetry namespace:
 
 ```
-scrap_scrub_light_runs_total
-scrap_scrub_light_duration_seconds
-scrap_scrub_deep_progress_ratio
-scrap_scrub_corruptions_detected_total
-scrap_scrub_bad_disk_suspected
+scrap.<subsystem>.<measurement>
 ```
+
+| Component   | Rule                                    | Examples                                 |
+| ----------- | --------------------------------------- | ---------------------------------------- |
+| Namespace   | Always `scrap`                          |                                          |
+| Subsystem   | Domain concept, lowercase snake segment | `rpc`, `write_path`, `upload`, `scrub`   |
+| Measurement | What is measured                        | `requests`, `duration`, `pending_bytes`  |
+
+Use OpenTelemetry instrument units instead of encoding units into names. Use
+`By` for bytes and `s` for durations. Counters should describe counted events;
+histograms should describe distributions such as latency, size, or stage
+duration.
+
+Examples:
+
+```
+scrap.rpc.server.duration
+scrap.write_path.stage.duration
+scrap.upload.pending_bytes
+scrap.upload.attempts
+scrap.scrub.deep.frames_verified
+```
+
+### Attributes And Cardinality
+
+Telemetry attributes must be bounded and useful for aggregation.
+
+- Good attributes: `scrap.cell_id`, `scrap.member_slot_id`, `scrap.member_id`,
+  `scrap.shard_id`, `scrap.role`, `rpc.service`, `rpc.method`, `rpc.grpc.status_code`,
+  `scrap.write_stage`, `scrap.upload.status`, `scrap.scrub.result`.
+- Never use raw `transaction_id`, `document_name`, idempotency keys, Backend
+  object keys, file paths, trace IDs, or request IDs as metric attributes.
+- Logs and traces may carry stable hashed Document identifiers by default. Raw
+  identifiers are allowed only behind an explicit local debug override and must
+  not be enabled in production-like evidence runs.
+- If an attribute value can grow with traffic volume, user input, file count, or
+  request count, it does not belong on a metric. Put it in a sampled trace or
+  structured log instead.
 
 ### Interface Injection
 
 Define a metrics interface at the consumer with only the recording methods that
-subsystem needs. Implement it with a concrete Prometheus type.
+subsystem needs. Implement it with a concrete OpenTelemetry type.
 
 ```go
 // Consumer defines what it needs.
 type ScrubMetrics interface {
-  RecordRun(result string, durationSec float64)
+  RecordRun(ctx context.Context, result string, duration time.Duration)
 }
 
 // Producer implements it.
-type PrometheusMetrics struct {
-  runsTotal *prometheus.CounterVec
-  duration  prometheus.Observer
+type OTelScrubMetrics struct {
+  runs     metric.Int64Counter
+  duration metric.Float64Histogram
 }
 
-func (m *PrometheusMetrics) RecordRun(result string, durationSec float64) {
-  m.runsTotal.WithLabelValues(result).Inc()
-  m.duration.Observe(durationSec)
+func (m *OTelScrubMetrics) RecordRun(ctx context.Context, result string, duration time.Duration) {
+  attrs := metric.WithAttributes(attribute.String("scrap.scrub.result", result))
+  m.runs.Add(ctx, 1, attrs)
+  m.duration.Record(ctx, duration.Seconds(), attrs)
 }
 ```
 
-This decouples subsystems from Prometheus and makes testing trivial (pass a
+This decouples subsystems from OpenTelemetry and makes testing trivial (pass a
 no-op or recording stub).
 
-### Registration
+### Initialization
 
-Register all metrics at startup in the constructor. Use `MustRegister` since
-registration failures at startup should crash the process. Use exponential
-buckets for histogram durations.
+Create instruments at startup from a `metric.Meter`. Instrument creation errors
+are startup failures. Do not hide them behind nil metrics.
 
 ```go
-func NewPrometheusMetrics(reg prometheus.Registerer) *PrometheusMetrics {
-  runs := prometheus.NewCounterVec(prometheus.CounterOpts{
-    Name: "scrap_scrub_light_runs_total",
-    Help: "Total number of light scrub runs by result.",
-  }, []string{"result"})
+func NewOTelScrubMetrics(meter metric.Meter) (*OTelScrubMetrics, error) {
+  runs, err := meter.Int64Counter(
+    "scrap.scrub.light.runs",
+    metric.WithDescription("Total number of light scrub runs."),
+  )
+  if err != nil {
+    return nil, fmt.Errorf("create scrub run counter: %w", err)
+  }
 
-  duration := prometheus.NewHistogram(prometheus.HistogramOpts{
-    Name:    "scrap_scrub_light_duration_seconds",
-    Help:    "Duration of light scrub runs in seconds.",
-    Buckets: prometheus.ExponentialBuckets(1, 2, 8),
-  })
+  duration, err := meter.Float64Histogram(
+    "scrap.scrub.light.duration",
+    metric.WithDescription("Duration of light scrub runs."),
+    metric.WithUnit("s"),
+  )
+  if err != nil {
+    return nil, fmt.Errorf("create scrub duration histogram: %w", err)
+  }
 
-  reg.MustRegister(runs, duration)
-  return &PrometheusMetrics{runsTotal: runs, duration: duration}
+  return &OTelScrubMetrics{runs: runs, duration: duration}, nil
 }
 ```
 

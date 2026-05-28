@@ -19,7 +19,7 @@ synonyms the glossary explicitly avoids.
 | `internal/peer/`   | Peer           | gRPC peer transport, replication, consistency checks |
 | `internal/store/`  | Store          | Store interface contract and error sentinels         |
 | `internal/server/` | Server         | gRPC client-facing API server                        |
-| `internal/admin/`  | Admin          | HTTP admin server (metrics, health)                  |
+| `internal/admin/`  | Admin          | HTTP admin server (health, gated diagnostics)         |
 | `internal/ulid/`   | ULID           | Custom ULID generator (ADR-0007)                     |
 
 ## Development
