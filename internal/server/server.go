@@ -15,27 +15,41 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	storeapi "github.com/petabytecl/scrap/internal/store"
+	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
 const readBufSize = 64 * 1024 // 64 KiB read buffer for streaming document chunks
 
 type documentServer struct {
 	scrapv1.UnimplementedDocumentServiceServer
-	store storeapi.Store
+	store     storeapi.Store
+	telemetry Telemetry
 }
 
-func Register(gs *grpc.Server, s storeapi.Store) {
-	scrapv1.RegisterDocumentServiceServer(gs, &documentServer{store: s})
+func Register(gs *grpc.Server, s storeapi.Store, opts ...Option) {
+	srv := &documentServer{store: s, telemetry: noopTelemetry{}}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(srv)
+		}
+	}
+	scrapv1.RegisterDocumentServiceServer(gs, srv)
 }
 
 func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse]) error {
+	ctx, rpc := s.telemetry.StartRPC(stream.Context(), "WriteDocument")
+	rpcCode := codes.OK
+	defer func() { rpc.Finish(rpcCode) }()
+
 	first, err := stream.Recv()
 	if err != nil {
+		rpcCode = codes.InvalidArgument
 		return status.Errorf(codes.InvalidArgument, "receive init message: %v", err)
 	}
 
 	init := first.GetInit()
 	if init == nil {
+		rpcCode = codes.InvalidArgument
 		return status.Error(codes.InvalidArgument, "first message must be init")
 	}
 
@@ -43,8 +57,14 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	docName := init.GetDocumentName()
 	contentType := init.GetContentType()
 	idempotencyKey := init.GetIdempotencyKey()
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
+		txID,
+		docName,
+		telemetry.HashIdentifiers,
+	)...)
 
 	if txID == "" || docName == "" {
+		rpcCode = codes.InvalidArgument
 		return status.Error(codes.InvalidArgument, "transaction_id and document_name are required")
 	}
 
@@ -57,10 +77,11 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	go func() {
 		defer close(done)
 		defer func() { _ = pr.Close() }()
-		writeResult, writeErr = s.store.WriteDocument(stream.Context(), txID, docName, contentType, idempotencyKey, pr)
+		writeResult, writeErr = s.store.WriteDocument(ctx, txID, docName, contentType, idempotencyKey, pr)
 	}()
 
 	if recvErr := s.recvChunks(stream, pw, done, &writeErr); recvErr != nil {
+		rpcCode = status.Code(recvErr)
 		return recvErr
 	}
 
@@ -68,14 +89,20 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	<-done
 
 	if writeErr != nil {
-		return mapStoreError(writeErr)
+		mappedErr := mapStoreError(writeErr)
+		rpcCode = status.Code(mappedErr)
+		return mappedErr
 	}
 
-	return stream.SendAndClose(&scrapv1.WriteDocumentResponse{
+	if err := stream.SendAndClose(&scrapv1.WriteDocumentResponse{
 		Sha256Checksum: hex.EncodeToString(writeResult.SHA256[:]),
 		Size:           writeResult.Size,
 		CreatedAt:      timestamppb.New(writeResult.CreatedAt),
-	})
+	}); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
+	return nil
 }
 
 // recvChunks reads chunk messages from the stream and writes them into pw.
@@ -106,9 +133,20 @@ func (s *documentServer) recvChunks(stream grpc.ClientStreamingServer[scrapv1.Wr
 }
 
 func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocumentRequest) (*scrapv1.HeadDocumentResponse, error) {
+	ctx, rpc := s.telemetry.StartRPC(ctx, "HeadDocument")
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
+		req.GetTransactionId(),
+		req.GetDocumentName(),
+		telemetry.HashIdentifiers,
+	)...)
+	rpcCode := codes.OK
+	defer func() { rpc.Finish(rpcCode) }()
+
 	meta, err := s.store.HeadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
-		return nil, mapStoreError(err)
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return nil, mappedErr
 	}
 
 	return &scrapv1.HeadDocumentResponse{
@@ -121,9 +159,20 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 }
 
 func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream grpc.ServerStreamingServer[scrapv1.ReadDocumentResponse]) error {
-	rc, meta, err := s.store.ReadDocument(stream.Context(), req.GetTransactionId(), req.GetDocumentName())
+	ctx, rpc := s.telemetry.StartRPC(stream.Context(), "ReadDocument")
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
+		req.GetTransactionId(),
+		req.GetDocumentName(),
+		telemetry.HashIdentifiers,
+	)...)
+	rpcCode := codes.OK
+	defer func() { rpc.Finish(rpcCode) }()
+
+	rc, meta, err := s.store.ReadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
-		return mapStoreError(err)
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return mappedErr
 	}
 	defer func() { _ = rc.Close() }()
 
@@ -137,6 +186,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 			},
 		},
 	}); err != nil {
+		rpcCode = codes.Internal
 		return status.Errorf(codes.Internal, "send metadata: %v", err)
 	}
 
@@ -151,6 +201,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 					ChunkData: chunk,
 				},
 			}); err != nil {
+				rpcCode = codes.Internal
 				return status.Errorf(codes.Internal, "send chunk: %v", err)
 			}
 		}
@@ -158,6 +209,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 			break
 		}
 		if readErr != nil {
+			rpcCode = codes.Internal
 			return status.Errorf(codes.Internal, "read document: %v", readErr)
 		}
 	}
@@ -166,9 +218,20 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 }
 
 func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDocumentsRequest) (*scrapv1.FindDocumentsResponse, error) {
+	ctx, rpc := s.telemetry.StartRPC(ctx, "FindDocuments")
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
+		req.GetTransactionId(),
+		"",
+		telemetry.HashIdentifiers,
+	)...)
+	rpcCode := codes.OK
+	defer func() { rpc.Finish(rpcCode) }()
+
 	docs, err := s.store.FindDocuments(ctx, req.GetTransactionId())
 	if err != nil {
-		return nil, mapStoreError(err)
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return nil, mappedErr
 	}
 
 	var pbDocs []*scrapv1.DocumentMeta
