@@ -378,6 +378,10 @@ stress: ## Run the stress test binary against the Kind cluster.
 		-duration=$(STRESS_DURATION) \
 		-doc-size=$(STRESS_DOC_SIZE)
 
+.PHONY: evidence-bundle
+evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
+	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
+
 .PHONY: stress-teardown
 stress-teardown: ## Delete the stress Kind cluster.
 	$(KIND) delete cluster --name "$(STRESS_KIND_CLUSTER)"
