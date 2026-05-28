@@ -81,6 +81,7 @@ BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY_TREE ?= $(shell git diff --quiet && git diff --cached --quiet && echo clean || echo dirty)
 RELEASE_SHA ?= $(shell git rev-parse HEAD)
 RELEASE_VERSION ?= dev
+SCRAPD_LDFLAGS = -X main.version=$(RELEASE_VERSION) -X main.buildSHA=$(RELEASE_SHA) -X main.buildTime=$(BUILD_TIME)
 
 ##@ Container Variables
 
@@ -217,7 +218,7 @@ integration: ## Run integration tests.
 
 .PHONY: build
 build: ## Build all supported command binaries.
-	$(GO) build ./cmd/scrapd
+	$(GO) build -ldflags "$(SCRAPD_LDFLAGS)" ./cmd/scrapd
 
 .PHONY: static
 static: $(STATIC_TARGETS) ## Run all static analysis and format checks.
@@ -235,7 +236,7 @@ image: ## Build the local scrapd container image.
 	mkdir -p "$(dir $(SCRAPD_IMAGE_BINARY))"
 	$(CROSS_BUILD_ENV) $(GO) build \
 		-trimpath \
-		-ldflags "-s -w" \
+		-ldflags "-s -w $(SCRAPD_LDFLAGS)" \
 		-o "$(SCRAPD_IMAGE_BINARY)" \
 		./cmd/scrapd
 	$(DOCKER) build \

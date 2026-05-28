@@ -61,14 +61,9 @@ func run() error {
 	uploadMetrics := shard.NewUploadPrometheusMetrics(registry)
 	uploadEnabled := envBool("SCRAP_UPLOAD_ENABLED", true)
 
-	var uploadBackend backend.Backend
-	var backendType string
-	if uploadEnabled {
-		var err error
-		uploadBackend, backendType, err = openUploadBackend(context.Background(), *dataDir)
-		if err != nil {
-			return err
-		}
+	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), *dataDir, uploadEnabled)
+	if err != nil {
+		return err
 	}
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
@@ -85,6 +80,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	memberSlotID, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("hostname: %w", err)
+	}
+	telemetryRuntime, err := newScrapdTelemetry(context.Background(), memberSlotID, raftID, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = telemetryRuntime.Shutdown(context.Background()) }()
 
 	sharedTransport := peer.NewSharedTransport(peers)
 	defer sharedTransport.Close()
@@ -132,7 +137,7 @@ func run() error {
 	}
 
 	gs := grpc.NewServer()
-	server.Register(gs, s)
+	server.Register(gs, s, server.WithTelemetry(telemetryRuntime.server))
 	server.RegisterHealth(gs, s)
 
 	peerLis, err := lc.Listen(ctx, "tcp", *peerAddr)
@@ -184,6 +189,13 @@ func run() error {
 	gs.GracefulStop()
 
 	return nil
+}
+
+func openConfiguredUploadBackend(ctx context.Context, dataDir string, enabled bool) (backend.Backend, string, error) {
+	if !enabled {
+		return nil, "", nil
+	}
+	return openUploadBackend(ctx, dataDir)
 }
 
 func openUploadBackend(ctx context.Context, dataDir string) (backend.Backend, string, error) {
