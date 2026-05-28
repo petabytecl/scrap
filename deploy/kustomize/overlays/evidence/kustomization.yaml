@@ -10,4 +10,13 @@ resources:
   - pyroscope.yaml
   - grafana.yaml
   - grafana-datasources.yaml
+  - grafana-dashboard-provider.yaml
   - networkpolicy-pprof.yaml
+
+configMapGenerator:
+  - name: grafana-evidence-dashboard
+    namespace: monitoring
+    files:
+      - scrapd-evidence.json
+    options:
+      disableNameSuffixHash: true
