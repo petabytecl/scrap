@@ -28,6 +28,8 @@ Scenarios: throughput, mixed, pressure
 Environment variables:
   BUNDLE_DIR       Output directory (default: ./evidence)
   GRAFANA_URL      Grafana base URL (default: http://127.0.0.1:13000)
+  MIMIR_PROXY      Mimir query base URL (default: \$GRAFANA_URL's datasource
+                   proxy for uid=mimir, i.e. \$GRAFANA_URL/api/datasources/proxy/uid/mimir)
   STRESS_ADDR      Stress target address (default: 127.0.0.1:18090)
   STRESS_WORKERS   Worker count (default: 8)
   STRESS_DURATION  Run duration (default: 60s)
@@ -91,12 +93,21 @@ mkdir -p "$METRICS_DIR"
 # (Mimir runs with -distributor.otel-metric-suffixes-enabled=true): counters end
 # in _total, duration histograms in _seconds_*, byte gauges in _bytes.
 METRIC_QUERY_FAILURES=0
+METRIC_EMPTY_REQUIRED=0
 
+# query_metric NAME QUERY [required]
+# A "required" metric that returns a valid-but-empty result is treated as a
+# capture failure: a reachable Mimir with miswired collectors or wrong metric
+# names yields [] with no HTTP error, which must not pass the evidence gate.
 query_metric() {
-  local name="$1" query="$2" resp out="$METRICS_DIR/$1.json"
+  local name="$1" query="$2" required="${3:-}" resp out="$METRICS_DIR/$1.json"
   if resp=$(curl -sf "$MIMIR_PROXY/api/v1/query?query=$(printf '%s' "$query" | jq -sRr @uri)" 2>/dev/null) \
       && printf '%s' "$resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
     printf '%s' "$resp" | jq '.data.result' > "$out"
+    if [[ "$required" == "required" && "$(jq 'length' "$out")" == "0" ]]; then
+      METRIC_EMPTY_REQUIRED=$((METRIC_EMPTY_REQUIRED + 1))
+      log "WARNING: required metric returned no series: $name"
+    fi
   else
     echo '[]' > "$out"
     METRIC_QUERY_FAILURES=$((METRIC_QUERY_FAILURES + 1))
@@ -104,7 +115,9 @@ query_metric() {
   fi
 }
 
-query_metric "rpc_requests" 'sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)'
+# rpc_requests is required: any write stress must produce RPC counters, so an
+# empty result here means telemetry never reached Mimir.
+query_metric "rpc_requests" 'sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)' required
 # 5m rate window: the OTel SDK PeriodicReader exports every 60s, so rate[1m]
 # would often see a single sample and return empty for a point-in-time snapshot.
 query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m])) by (le, rpc_method))'
@@ -114,7 +127,7 @@ query_metric "upload_pending_bytes" 'scrap_upload_pending_bytes'
 query_metric "raft_is_leader" 'scrap_raft_is_leader'
 query_metric "goroutines" 'process_runtime_go_goroutines'
 query_metric "heap_alloc" 'process_runtime_go_mem_heap_alloc_bytes'
-log "Wrote metric snapshots ($METRIC_QUERY_FAILURES query failure(s))"
+log "Wrote metric snapshots ($METRIC_QUERY_FAILURES query failure(s), $METRIC_EMPTY_REQUIRED required-empty)"
 
 # --- 4. Trace and profile references ---
 log "Capturing trace/profile query references..."
@@ -143,8 +156,8 @@ GATES_FILE="$BUNDLE_PATH/gates.json"
 #   mixed      -> nested write.total_ops / write.failed_ops
 #   pressure   -> total_writes / other_errors (pressure_rejections are intentional)
 # error_rate is derived (no scenario emits it directly); metrics_captured fails
-# the bundle when any Mimir snapshot query failed.
-jq --argjson metric_failures "$METRIC_QUERY_FAILURES" '
+# the bundle when any Mimir snapshot query failed OR a required metric was empty.
+jq --argjson metric_failures "$METRIC_QUERY_FAILURES" --argjson metric_empty_required "$METRIC_EMPTY_REQUIRED" '
   def writes:
     if .scenario == "throughput" then (.total_ops // 0)
     elif .scenario == "mixed" then (.write.total_ops // 0)
@@ -158,7 +171,7 @@ jq --argjson metric_failures "$METRIC_QUERY_FAILURES" '
   (has("error") | not) as $completed |
   writes as $w | errors as $e |
   (if $w > 0 then ($e / $w) else 1 end) as $rate |
-  ($metric_failures == 0) as $metrics_ok |
+  (($metric_failures == 0) and ($metric_empty_required == 0)) as $metrics_ok |
   {
     pass: ($completed and ($w > 0) and ($rate < 0.01) and $metrics_ok),
     scenario: (.scenario // "unknown"),
@@ -169,7 +182,7 @@ jq --argjson metric_failures "$METRIC_QUERY_FAILURES" '
       {name: "error_rate_below_1pct", pass: ($w > 0 and $rate < 0.01),
        reason: "error_rate=\((($rate * 10000) | floor) / 10000) errors=\($e) writes=\($w)"},
       {name: "metrics_captured", pass: $metrics_ok,
-       reason: "\($metric_failures) metric query failure(s)"}
+       reason: "\($metric_failures) query failure(s), \($metric_empty_required) required-empty"}
     ]
   }
 ' "$STRESS_OUTPUT" > "$GATES_FILE" 2>/dev/null \

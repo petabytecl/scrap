@@ -29,6 +29,9 @@ subjects:
     name: otel-collector
     namespace: monitoring
 ---
+# Gateway: single instance so tail_sampling sees whole traces. Receives OTLP
+# metrics/traces from scrapd and forwards to Mimir/Tempo. (Logs are handled by
+# the per-node agent DaemonSet below, since /var/log/pods is node-local.)
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -41,16 +44,6 @@ data:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
-      # Tail scrapd container stdout/stderr (slog JSON) from the node so logs
-      # reach Loki. Scoped to the scrap namespace by the pod log path layout
-      # (/var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log).
-      filelog:
-        include: [/var/log/pods/scrap_*/*/*.log]
-        include_file_path: true
-        start_at: end
-        operators:
-          - type: container
-            id: container-parser
 
     processors:
       batch:
@@ -73,8 +66,8 @@ data:
           - sources:
               - from: connection
 
-      # Strip per-transaction/per-block identifiers from metric datapoints so
-      # they never become Mimir series labels (issue #314 high-cardinality guard).
+      # Strip per-transaction/per-block ids from metric datapoints so they never
+      # become Mimir series labels (issue #314 high-cardinality guard).
       transform/strip_high_cardinality:
         error_mode: ignore
         metric_statements:
@@ -82,15 +75,6 @@ data:
             statements:
               - delete_key(datapoint.attributes, "scrap.transaction_id")
               - delete_key(datapoint.attributes, "scrap.block_id")
-
-      # Give filelog-sourced logs a service.name so Loki indexes them like the
-      # OTLP-sourced telemetry (loki.yaml indexes service.name as a label).
-      transform/log_service_name:
-        error_mode: ignore
-        log_statements:
-          - context: resource
-            statements:
-              - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"]) where resource.attributes["service.name"] == nil
 
       tail_sampling:
         decision_wait: 10s
@@ -119,11 +103,6 @@ data:
         tls:
           insecure: true
 
-      otlphttp/loki:
-        endpoint: http://loki.monitoring.svc:3100/otlp
-        tls:
-          insecure: true
-
     service:
       pipelines:
         metrics:
@@ -134,9 +113,53 @@ data:
           receivers: [otlp]
           processors: [k8sattributes, tail_sampling, batch]
           exporters: [otlp/tempo]
+---
+# Agent: per-node DaemonSet. Tails the node-local /var/log/pods so scrapd logs
+# are collected from every node (a single Deployment would only see logs on its
+# own node). Logs-only; no OTLP receiver.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    receivers:
+      filelog:
+        include: [/var/log/pods/scrap_*/*/*.log]
+        include_file_path: true
+        start_at: end
+        operators:
+          # The container operator parses the CRI/containerd format and sets
+          # k8s.pod.name / k8s.namespace.name / k8s.container.name from the path.
+          - type: container
+            id: container-parser
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+      # Give filelog-sourced logs a service.name (from the container name set by
+      # the container operator) so Loki indexes them like OTLP-sourced telemetry.
+      transform/log_service_name:
+        error_mode: ignore
+        log_statements:
+          - context: resource
+            statements:
+              - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"]) where resource.attributes["service.name"] == nil
+
+    exporters:
+      otlphttp/loki:
+        endpoint: http://loki.monitoring.svc:3100/otlp
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
         logs:
           receivers: [filelog]
-          processors: [k8sattributes, transform/log_service_name, batch]
+          processors: [transform/log_service_name, batch]
           exporters: [otlphttp/loki]
 ---
 apiVersion: apps/v1
@@ -146,8 +169,6 @@ metadata:
   namespace: monitoring
 spec:
   replicas: 1
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app: otel-collector
@@ -157,9 +178,6 @@ spec:
         app: otel-collector
     spec:
       serviceAccountName: otel-collector
-      # Read root-owned node pod logs for the filelog receiver.
-      securityContext:
-        runAsUser: 0
       containers:
         - name: collector
           image: otel/opentelemetry-collector-contrib:0.122.1
@@ -177,13 +195,55 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+    spec:
+      # Read root-owned node pod logs for the filelog receiver.
+      securityContext:
+        runAsUser: 0
+      # Cover every node, including a tainted control-plane, so no scrapd pod's
+      # logs are missed regardless of scheduling.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: agent
+          image: otel/opentelemetry-collector-contrib:0.122.1
+          args: ["--config=/etc/otel/config.yaml"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
             - name: varlogpods
               mountPath: /var/log/pods
               readOnly: true
       volumes:
         - name: config
           configMap:
-            name: otel-collector-config
+            name: otel-agent-config
         - name: varlogpods
           hostPath:
             path: /var/log/pods

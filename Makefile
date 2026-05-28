@@ -362,6 +362,8 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/alloy --timeout=120s
+	$(KUBECTL) -n monitoring rollout status daemonset/otel-agent --timeout=120s
 	@printf '\nStress environment ready.\n'
 	@printf '  gRPC:      127.0.0.1:18090\n'
 	@printf '  Grafana:   http://127.0.0.1:13000\n'

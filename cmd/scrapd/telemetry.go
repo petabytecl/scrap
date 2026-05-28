@@ -61,39 +61,39 @@ var scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{
 	},
 }
 
-// build creates the OTLP metric reader and span processor together, shutting the
-// reader down if the span processor fails so a partial init never leaks.
-func (f scrapdTelemetryPipelineFactory) build(ctx context.Context) (sdkmetric.Reader, sdktrace.SpanProcessor, error) {
-	metricReader, err := f.newMetricReader(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	if metricReader == nil {
-		return nil, nil, errors.New("metric reader is required")
-	}
+// buildEnabled creates the OTLP metric reader and/or span processor, but only for
+// the signals whose endpoint is configured. Each signal is gated independently:
+// configuring only OTEL_EXPORTER_OTLP_METRICS_ENDPOINT must not also build a trace
+// exporter (which would fall back to localhost:4317). A nil return for a signal
+// means it is disabled. The reader is shut down if the span processor then fails.
+func (f scrapdTelemetryPipelineFactory) buildEnabled(ctx context.Context) (sdkmetric.Reader, sdktrace.SpanProcessor, error) {
+	var (
+		metricReader  sdkmetric.Reader
+		spanProcessor sdktrace.SpanProcessor
+		err           error
+	)
 
-	spanProcessor, err := f.newSpanProcessor(ctx)
-	if err != nil {
-		_ = metricReader.Shutdown(ctx)
-		return nil, nil, err
+	if otlpSignalEnabled("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") {
+		if metricReader, err = f.newMetricReader(ctx); err != nil {
+			return nil, nil, err
+		}
 	}
-	if spanProcessor == nil {
-		_ = metricReader.Shutdown(ctx)
-		return nil, nil, errors.New("span processor is required")
+	if otlpSignalEnabled("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") {
+		if spanProcessor, err = f.newSpanProcessor(ctx); err != nil {
+			if metricReader != nil {
+				_ = metricReader.Shutdown(ctx)
+			}
+			return nil, nil, err
+		}
 	}
-
 	return metricReader, spanProcessor, nil
 }
 
-// otlpTelemetryEnabled reports whether an OTLP collector endpoint is configured.
-// When false, scrapd exports no OTLP metrics/traces and relies on the Prometheus
-// /metrics endpoint only, instead of defaulting to localhost:4317.
-func otlpTelemetryEnabled() bool {
-	for _, key := range []string{
-		"OTEL_EXPORTER_OTLP_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-	} {
+// otlpSignalEnabled reports whether the given signal-specific OTLP endpoint, or
+// the common OTEL_EXPORTER_OTLP_ENDPOINT, is configured. When neither is set the
+// signal is not exported, so scrapd never defaults to localhost:4317.
+func otlpSignalEnabled(signalEnv string) bool {
+	for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", signalEnv} {
 		if strings.TrimSpace(os.Getenv(key)) != "" {
 			return true
 		}
@@ -132,15 +132,17 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 		sdktrace.WithResource(otelResource),
 	}
 
-	// Only export over OTLP when an endpoint is configured. Without this guard the
-	// OTLP exporters default to localhost:4317 and silently ship metrics and spans
-	// to a non-existent collector on every deployment that has not wired one up.
-	if otlpTelemetryEnabled() {
-		metricReader, spanProcessor, otlpErr := scrapdTelemetryPipeline.build(ctx)
-		if otlpErr != nil {
-			return nil, otlpErr
-		}
+	// Only export over OTLP for signals whose endpoint is configured. Without this
+	// guard the OTLP exporters default to localhost:4317 and silently ship to a
+	// non-existent collector on every deployment that has not wired one up.
+	metricReader, spanProcessor, err := scrapdTelemetryPipeline.buildEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if metricReader != nil {
 		meterOpts = append(meterOpts, sdkmetric.WithReader(metricReader))
+	}
+	if spanProcessor != nil {
 		tracerOpts = append(tracerOpts, sdktrace.WithSpanProcessor(spanProcessor))
 	}
 
