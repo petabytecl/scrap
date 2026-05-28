@@ -72,33 +72,6 @@ func TestRaftMetrics_ObservesState(t *testing.T) {
 	}
 }
 
-func TestRaftMetrics_RecordProposal(t *testing.T) {
-	provider, reader := newTestMeter(t)
-	state := &stubRaftState{}
-
-	rm, err := telemetry.NewRaftMetrics(provider.Meter("test"), state)
-	if err != nil {
-		t.Fatalf("new raft metrics: %v", err)
-	}
-	defer func() { _ = rm.Unregister() }()
-
-	rm.RecordProposal()
-	rm.RecordProposal()
-
-	metrics := collectMetrics(t, reader)
-	proposals := findMetric(metrics, "scrap.raft.proposals")
-	if proposals == nil {
-		t.Fatal("scrap.raft.proposals not found")
-	}
-	sum, ok := proposals.Data.(metricdata.Sum[int64])
-	if !ok {
-		t.Fatalf("expected Sum[int64], got %T", proposals.Data)
-	}
-	if len(sum.DataPoints) == 0 || sum.DataPoints[0].Value != 2 {
-		t.Fatalf("proposals: want 2, got %v", sum.DataPoints)
-	}
-}
-
 func TestRaftMetrics_NilUnregister(t *testing.T) {
 	var rm *telemetry.RaftMetrics
 	if err := rm.Unregister(); err != nil {

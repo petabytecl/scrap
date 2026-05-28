@@ -16,7 +16,6 @@ type RaftStateProvider interface {
 }
 
 type RaftMetrics struct {
-	proposals    metric.Int64Counter
 	registration metric.Registration
 }
 
@@ -49,13 +48,6 @@ func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider) (*RaftMetric
 		return nil, fmt.Errorf("create raft applied_index gauge: %w", err)
 	}
 
-	proposals, err := meter.Int64Counter("scrap.raft.proposals",
-		metric.WithDescription("Total Raft proposals submitted."),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create raft proposals counter: %w", err)
-	}
-
 	reg, err := meter.RegisterCallback(
 		func(_ context.Context, o metric.Observer) error {
 			leader := int64(0)
@@ -74,7 +66,6 @@ func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider) (*RaftMetric
 	}
 
 	return &RaftMetrics{
-		proposals:    proposals,
 		registration: reg,
 	}, nil
 }
@@ -84,10 +75,6 @@ func clampUint64(v uint64) int64 {
 		return math.MaxInt64
 	}
 	return int64(v)
-}
-
-func (r *RaftMetrics) RecordProposal() {
-	r.proposals.Add(context.Background(), 1)
 }
 
 func (r *RaftMetrics) Unregister() error {
