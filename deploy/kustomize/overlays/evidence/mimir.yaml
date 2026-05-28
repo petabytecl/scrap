@@ -18,6 +18,7 @@ spec:
           image: grafana/mimir:2.17.0
           args:
             - -target=all
+            - -auth.multitenancy-enabled=false
             - -server.http-listen-port=9009
             - -blocks-storage.backend=filesystem
             - -blocks-storage.filesystem.dir=/data/blocks
