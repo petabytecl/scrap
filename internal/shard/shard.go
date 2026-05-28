@@ -103,6 +103,7 @@ type Shard struct {
 	uploadPendingBytes       int64
 	uploadPendingBlocks      int
 	uploadPressureScrubGate  *pressurePauseGate
+	orphanedSeals            []index.PendingUpload
 
 	rebuilding  atomic.Bool
 	rebuildDone atomic.Pointer[chan struct{}]
@@ -321,6 +322,11 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 
 	s.mu.Unlock()
 	if err := s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes()); err != nil {
+		// Orphaned bytes past the last committed offset are unreachable: VerifyBlock
+		// reads by index entry offsets, not sequential scan, so they don't cause
+		// SHA corruption. Keeping the prep would risk truncating committed data on
+		// restart if a later write lands in the same block.
+		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, err
 	}
 
@@ -355,6 +361,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.proposalMu.Lock()
 		delete(s.proposals, key)
 		s.proposalMu.Unlock()
+		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, fmt.Errorf("shard: propose: %w", err)
 	}
 
@@ -364,6 +371,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 			return storeapi.WriteResult{}, applyErr
 		}
 	case <-ctx.Done():
+		_ = os.Remove(s.prepPath(writeID))
 		return storeapi.WriteResult{}, ctx.Err()
 	}
 
@@ -744,6 +752,21 @@ func (s *Shard) WaitRebuild() {
 
 func (s *Shard) DataDirForTest() string {
 	return s.dataDir
+}
+
+func (s *Shard) CurrentBlockIDForTest() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blockWriter == nil {
+		return 0
+	}
+	return s.blockWriter.BlockID()
+}
+
+func (s *Shard) OrphanedSealsForTest() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.orphanedSeals)
 }
 
 func (s *Shard) SetRebuildingForTest(v bool) {
@@ -1133,6 +1156,8 @@ func (s *Shard) findDocEntry(txID, docName string) (docWithBlock, error) {
 }
 
 func (s *Shard) sealAndOpenNew(ctx context.Context) error {
+	s.retryOrphanedSeals(ctx)
+
 	blockID := s.blockWriter.BlockID()
 	sealedSize := s.blockWriter.Offset()
 	if err := s.idxWriter.Close(); err != nil {
@@ -1141,16 +1166,19 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 	if err := s.blockWriter.Close(); err != nil {
 		return err
 	}
-	sealErr := s.proposeSealBlock(ctx, index.PendingUpload{
+	seal := index.PendingUpload{
 		BlockID:         blockID,
 		ShardID:         s.shardID,
 		SealedSizeBytes: sealedSize,
 		SealedAtUs:      time.Now().UnixMicro(),
-	})
-	if err := s.openNewBlock(); err != nil {
-		return err
 	}
-	return sealErr
+	if err := s.proposeSealBlock(ctx, seal); err != nil {
+		// In-memory only: on restart, the rebuild path reconstructs the upload outbox
+		// from block state + backend HeadObject, catching any sealed blocks missed here.
+		s.orphanedSeals = append(s.orphanedSeals, seal)
+		s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", blockID, "err", err)
+	}
+	return s.openNewBlock()
 }
 
 func (s *Shard) openNewBlock() error {

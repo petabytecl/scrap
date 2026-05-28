@@ -78,6 +78,20 @@ func (s *Shard) proposeConfirmUpload(ctx context.Context, blockID uint64, backen
 	return s.proposeUploadCommand(ctx, "confirm upload", cmd)
 }
 
+func (s *Shard) retryOrphanedSeals(ctx context.Context) {
+	if len(s.orphanedSeals) == 0 {
+		return
+	}
+	var remaining []index.PendingUpload
+	for _, seal := range s.orphanedSeals {
+		if err := s.proposeSealBlock(ctx, seal); err != nil {
+			remaining = append(remaining, seal)
+			s.logger.WarnContext(ctx, "shard: orphaned seal retry failed", "block_id", seal.BlockID, "err", err)
+		}
+	}
+	s.orphanedSeals = remaining
+}
+
 func (s *Shard) proposeUploadCommand(ctx context.Context, op string, cmd *scrapv1.RaftCommand) error {
 	data, err := proto.Marshal(cmd)
 	if err != nil {
@@ -101,6 +115,19 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 	}); err != nil {
 		return err
 	}
+
+	if s.blockWriter != nil && s.blockWriter.BlockID() == seal.GetBlockId() {
+		if err := s.idxWriter.Close(); err != nil {
+			return fmt.Errorf("shard: close sealed block index: %w", err)
+		}
+		if err := s.blockWriter.Close(); err != nil {
+			return fmt.Errorf("shard: close sealed block: %w", err)
+		}
+		if err := s.openNewBlock(); err != nil {
+			return fmt.Errorf("shard: open block after seal apply: %w", err)
+		}
+	}
+
 	if err := s.refreshUploadPressureLocked(); err != nil {
 		return err
 	}
@@ -116,6 +143,18 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 		return err
 	}
 	return s.refreshUploadPressureLocked()
+}
+
+func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.orphanedSeals = append(s.orphanedSeals, seal)
+}
+
+func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retryOrphanedSeals(ctx)
 }
 
 func (s *Shard) PendingUploadsForTest() ([]PendingUpload, error) {
