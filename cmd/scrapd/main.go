@@ -59,14 +59,21 @@ func run() error {
 	scrubCfg := scrub.ParseScrubConfig()
 	registry := prometheus.NewRegistry()
 	uploadMetrics := shard.NewUploadPrometheusMetrics(registry)
-	uploadBackend, backendType, err := openUploadBackend(context.Background(), *dataDir)
-	if err != nil {
-		return err
+	uploadEnabled := envBool("SCRAP_UPLOAD_ENABLED", true)
+
+	var uploadBackend backend.Backend
+	var backendType string
+	if uploadEnabled {
+		var err error
+		uploadBackend, backendType, err = openUploadBackend(context.Background(), *dataDir)
+		if err != nil {
+			return err
+		}
 	}
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
 	uploadCfg := shard.UploadConfig{
-		Enabled:     envBool("SCRAP_UPLOAD_ENABLED", true),
+		Enabled:     uploadEnabled,
 		Backend:     uploadBackend,
 		CellID:      cellID,
 		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),

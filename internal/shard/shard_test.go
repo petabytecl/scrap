@@ -3,12 +3,14 @@ package shard_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -450,5 +452,46 @@ func TestFindEmptyTransaction(t *testing.T) {
 	}
 	if len(docs) != 0 {
 		t.Fatalf("expected empty, got %d", len(docs))
+	}
+}
+
+func TestTriggerRebuild_PreservesPendingUploads(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	s := openUploadTestShardInDir(t, t.TempDir(), shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+	defer func() { _ = s.Close() }()
+
+	for i := 1; i <= 4; i++ {
+		txID := fmt.Sprintf("tx-rebuild-upload-%d", i)
+		docName := fmt.Sprintf("doc-%d.bin", i)
+		if _, err := s.WriteDocument(ctx, txID, docName, "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte{byte(i)}, 64))); err != nil {
+			t.Fatalf("WriteDocument %s: %v", docName, err)
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		uploads, err := s.PendingUploadsForTest()
+		if err != nil {
+			t.Fatalf("PendingUploadsForTest: %v", err)
+		}
+		if len(uploads) >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	waitPendingUploads(t, s, 0)
+
+	triggerRebuildAndWait(ctx, t, s)
+
+	_, err := s.WriteDocument(ctx, "tx-post-rebuild", "doc.xml", "text/xml", "", bytes.NewReader([]byte("after rebuild")))
+	if err != nil {
+		t.Fatalf("WriteDocument after rebuild: %v", err)
 	}
 }

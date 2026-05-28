@@ -297,5 +297,8 @@ func envFloat64(key string, fallback float64) float64 {
 	if err != nil {
 		return fallback
 	}
+	if n > 1.0 {
+		n /= 100
+	}
 	return n
 }

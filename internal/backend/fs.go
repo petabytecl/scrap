@@ -178,7 +178,7 @@ func writeTempObject(path string, body io.Reader, size int64) (string, error) {
 		}
 	}()
 
-	written, err := io.Copy(tmp, body)
+	written, err := io.Copy(tmp, io.LimitReader(body, size+1))
 	if err != nil {
 		_ = tmp.Close()
 		return "", classifyFSError("write object", err)
@@ -256,21 +256,19 @@ func rangedReader(file *os.File, size int64, byteRange ByteRange) (io.ReadCloser
 }
 
 func listObjects(ctx context.Context, root, prefix string) ([]ObjectInfo, error) {
+	walkRoot := listWalkRoot(root, prefix)
+
 	objects := make([]ObjectInfo, 0)
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(walkRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return classifyFSError("walk object", walkErr)
 		}
 		if err := ctx.Err(); err != nil {
 			return classifyFSError("list objects", err)
 		}
-		if entry.IsDir() {
+		if skipListEntry(entry) {
 			return nil
 		}
-		if entry.Type()&iofs.ModeType != 0 {
-			return nil
-		}
-
 		info, err := objectInfo(root, path, prefix)
 		if err != nil {
 			return err
@@ -292,6 +290,24 @@ func listObjects(ctx context.Context, root, prefix string) ([]ObjectInfo, error)
 		return objects[i].Key < objects[j].Key
 	})
 	return objects, nil
+}
+
+func listWalkRoot(root, prefix string) string {
+	if prefix == "" {
+		return root
+	}
+	candidate := filepath.Join(root, filepath.FromSlash(prefix))
+	for candidate != root {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		candidate = filepath.Dir(candidate)
+	}
+	return root
+}
+
+func skipListEntry(entry os.DirEntry) bool {
+	return entry.IsDir() || entry.Type()&iofs.ModeType != 0 || strings.HasPrefix(entry.Name(), ".scrap-put-")
 }
 
 func objectInfo(root, path, prefix string) (ObjectInfo, error) {

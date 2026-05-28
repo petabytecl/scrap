@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
@@ -655,7 +656,59 @@ func (s *Shard) rebuildProjectionInto(projection *index.Index) error {
 			}
 		}
 	}
+
+	if err := s.rebuildUploadOutbox(projection, blockIDs); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) error {
+	be := s.upload.Backend
+	if !s.upload.Enabled || be == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	openBlockID := uint64(0)
+	if s.blockWriter != nil {
+		openBlockID = s.blockWriter.BlockID()
+	}
+	s.mu.Unlock()
+
+	ctx := context.Background()
+	cellID := s.uploadCellID()
+	for _, blockID := range blockIDs {
+		if blockID == openBlockID {
+			continue
+		}
+		prefix := fmt.Sprintf("%s/shards/%016x/%016x", cellID, s.shardID, blockID)
+		if blockFullyUploaded(ctx, be, prefix) {
+			continue
+		}
+		blkPath := s.blockPath(blockID)
+		info, statErr := os.Stat(blkPath)
+		if statErr != nil {
+			continue
+		}
+		if err := projection.PutPendingUpload(index.PendingUpload{
+			BlockID:         blockID,
+			ShardID:         s.shardID,
+			SealedSizeBytes: info.Size(),
+		}); err != nil {
+			return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
+		}
+	}
+	return nil
+}
+
+func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) bool {
+	for _, ext := range []string{".blk", ".idx"} {
+		if _, err := be.HeadObject(ctx, prefix+ext); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Shard) listBlockIndexIDs() ([]uint64, error) {

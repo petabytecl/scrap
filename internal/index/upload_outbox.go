@@ -1,7 +1,6 @@
 package index
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 
 const (
 	pendingUploadPrefix       = "\x00upload\x00"
+	pendingUploadUpperBound   = "\x00upload\x01"
 	pendingUploadValueVersion = 0x01
 	pendingUploadKeyLen       = len(pendingUploadPrefix) + sizeBlockID
 	pendingUploadValueLen     = 1 + sizeBlockID + 8 + 8 // version + shard_id + sealed_size + sealed_at_us
@@ -50,7 +50,10 @@ func (idx *Index) DeletePendingUpload(blockID uint64) error {
 }
 
 func (idx *Index) PendingUploads() (PendingUploadIterator, error) {
-	iter, err := idx.db.NewIter(nil)
+	iter, err := idx.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(pendingUploadPrefix),
+		UpperBound: []byte(pendingUploadUpperBound),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("index: pending upload iter: %w", err)
 	}
@@ -59,12 +62,7 @@ func (idx *Index) PendingUploads() (PendingUploadIterator, error) {
 	}()
 
 	uploads := make([]PendingUpload, 0)
-	prefix := []byte(pendingUploadPrefix)
 	for iter.First(); iter.Valid(); iter.Next() {
-		if !bytes.HasPrefix(iter.Key(), prefix) {
-			continue
-		}
-
 		upload, err := decodePendingUpload(iter.Key(), iter.Value())
 		if err != nil {
 			return nil, err
