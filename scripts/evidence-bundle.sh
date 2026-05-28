@@ -105,8 +105,10 @@ query_metric() {
 }
 
 query_metric "rpc_requests" 'sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)'
-query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[1m])) by (le, rpc_method))'
-query_metric "write_stage_duration" 'sum(rate(scrap_write_stage_duration_seconds_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[1m])) by (scrap_write_stage)'
+# 5m rate window: the OTel SDK PeriodicReader exports every 60s, so rate[1m]
+# would often see a single sample and return empty for a point-in-time snapshot.
+query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m])) by (le, rpc_method))'
+query_metric "write_stage_duration" 'sum(rate(scrap_write_stage_duration_seconds_sum[5m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_write_stage)'
 query_metric "upload_pressure" 'scrap_upload_pressure_level'
 query_metric "upload_pending_bytes" 'scrap_upload_pending_bytes'
 query_metric "raft_is_leader" 'scrap_raft_is_leader'

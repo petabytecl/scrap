@@ -80,8 +80,8 @@ data:
         metric_statements:
           - context: datapoint
             statements:
-              - delete_key(attributes, "scrap.transaction_id")
-              - delete_key(attributes, "scrap.block_id")
+              - delete_key(datapoint.attributes, "scrap.transaction_id")
+              - delete_key(datapoint.attributes, "scrap.block_id")
 
       # Give filelog-sourced logs a service.name so Loki indexes them like the
       # OTLP-sourced telemetry (loki.yaml indexes service.name as a label).
@@ -90,7 +90,7 @@ data:
         log_statements:
           - context: resource
             statements:
-              - set(attributes["service.name"], attributes["k8s.container.name"]) where attributes["service.name"] == nil
+              - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"]) where resource.attributes["service.name"] == nil
 
       tail_sampling:
         decision_wait: 10s
