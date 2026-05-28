@@ -135,6 +135,7 @@ SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 ##? STRESS_KIND_CONFIG Kind cluster config with Grafana NodePort.
 ##? STRESS_OVERLAY Kustomize overlay used for stress manifests.
 ##? MONITORING_OVERLAY Kustomize overlay for Prometheus and Grafana.
+##? EVIDENCE_OVERLAY Kustomize overlay for OTel evidence stack (stress runs).
 ##? STRESS_ADDR gRPC address for the stress test binary.
 ##? STRESS_SCENARIO Stress scenario to run: throughput, mixed, pressure.
 ##? STRESS_WORKERS Concurrent worker goroutines for the stress test.
@@ -145,6 +146,7 @@ STRESS_KIND_CLUSTER ?= scrap-stress
 STRESS_KIND_CONFIG ?= deploy/kind/cluster-stress.yaml
 STRESS_OVERLAY ?= deploy/kustomize/overlays/local-stress
 MONITORING_OVERLAY ?= deploy/kustomize/overlays/monitoring
+EVIDENCE_OVERLAY ?= deploy/kustomize/overlays/evidence
 STRESS_ADDR ?= 127.0.0.1:18090
 STRESS_SCENARIO ?= throughput
 STRESS_WORKERS ?= 8
@@ -350,18 +352,22 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(MAKE) image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(STRESS_KIND_CLUSTER)"
 	$(KUSTOMIZE) build "$(STRESS_OVERLAY)" | $(KUBECTL) apply -f -
-	$(KUSTOMIZE) build "$(MONITORING_OVERLAY)" | $(KUBECTL) apply -f -
+	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" | $(KUBECTL) apply -f -
 	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
 	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
 	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/prometheus --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
 	@printf '\nStress environment ready.\n'
-	@printf '  gRPC:    127.0.0.1:18090\n'
-	@printf '  Metrics: http://127.0.0.1:18100/metrics\n'
-	@printf '  Grafana: http://127.0.0.1:13000\n\n'
+	@printf '  gRPC:      127.0.0.1:18090\n'
+	@printf '  Grafana:   http://127.0.0.1:13000\n'
+	@printf '  Collector: 127.0.0.1:14317 (OTLP gRPC)\n\n'
 
 .PHONY: stress
 stress: ## Run the stress test binary against the Kind cluster.

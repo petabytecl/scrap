@@ -29,6 +29,12 @@ spec:
               value: test
             - name: AWS_EC2_METADATA_DISABLED
               value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.monitoring.svc:4317
+            - name: SCRAP_ENVIRONMENT
+              value: stress
+            - name: SCRAP_CELL_ID
+              value: kind-stress
           args:
             - "--data-dir=/data"
             - "--listen-addr=:9090"

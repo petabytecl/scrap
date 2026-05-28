@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mimir
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mimir
+  template:
+    metadata:
+      labels:
+        app: mimir
+    spec:
+      containers:
+        - name: mimir
+          image: grafana/mimir:2.17.0
+          args:
+            - -target=all
+            - -auth.multitenancy-enabled=false
+            - -server.http-listen-port=9009
+            - -blocks-storage.backend=filesystem
+            - -blocks-storage.filesystem.dir=/data/blocks
+            - -compactor.data-dir=/data/compactor
+            - -alertmanager-storage.backend=filesystem
+            - -alertmanager-storage.filesystem.dir=/data/alertmanager
+            - -ruler-storage.backend=filesystem
+            - -ruler-storage.filesystem.dir=/data/ruler
+            - -compactor.ring.store=memberlist
+            - -distributor.ring.store=memberlist
+            - -ingester.ring.store=memberlist
+            - -store-gateway.sharding-ring.store=memberlist
+          ports:
+            - containerPort: 9009
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mimir-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mimir-data
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mimir
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: mimir
+  ports:
+    - port: 9009
+      targetPort: 9009

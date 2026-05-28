@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pyroscope
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pyroscope
+  template:
+    metadata:
+      labels:
+        app: pyroscope
+    spec:
+      containers:
+        - name: pyroscope
+          image: grafana/pyroscope:1.13.3
+          ports:
+            - containerPort: 4040
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pyroscope-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pyroscope-data
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pyroscope
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: pyroscope
+  ports:
+    - port: 4040
+      targetPort: 4040
