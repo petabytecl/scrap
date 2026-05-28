@@ -81,7 +81,7 @@ func run() error {
 		return err
 	}
 
-	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), raftID, 0)
+	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), *dataDir, raftID, 0)
 	if err != nil {
 		return err
 	}

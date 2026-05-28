@@ -20,7 +20,13 @@ type Option func(*documentServer)
 
 // Telemetry records Document gRPC server telemetry.
 type Telemetry interface {
-	StartRPC(ctx context.Context, method string, spanAttrs ...attribute.KeyValue) (context.Context, func(grpccodes.Code))
+	StartRPC(ctx context.Context, method string) (context.Context, ActiveRPC)
+}
+
+// ActiveRPC records attributes and completion state for one in-flight RPC.
+type ActiveRPC interface {
+	AddSpanAttributes(attrs ...attribute.KeyValue)
+	Finish(code grpccodes.Code)
 }
 
 // WithTelemetry records Document gRPC server telemetry through tel.
@@ -34,9 +40,15 @@ func WithTelemetry(tel Telemetry) Option {
 
 type noopTelemetry struct{}
 
-func (noopTelemetry) StartRPC(ctx context.Context, _ string, _ ...attribute.KeyValue) (context.Context, func(grpccodes.Code)) {
-	return ctx, func(grpccodes.Code) {}
+func (noopTelemetry) StartRPC(ctx context.Context, _ string) (context.Context, ActiveRPC) {
+	return ctx, noopRPC{}
 }
+
+type noopRPC struct{}
+
+func (noopRPC) AddSpanAttributes(...attribute.KeyValue) {}
+
+func (noopRPC) Finish(grpccodes.Code) {}
 
 // OTelTelemetry records Document gRPC server telemetry with OpenTelemetry.
 type OTelTelemetry struct {
@@ -80,35 +92,53 @@ func NewOTelTelemetry(meter metric.Meter, tracer trace.Tracer) (*OTelTelemetry, 
 	}, nil
 }
 
-// StartRPC starts a server span and returns a completion function that records
-// the final status code and duration.
-func (t *OTelTelemetry) StartRPC(ctx context.Context, method string, spanAttrs ...attribute.KeyValue) (context.Context, func(grpccodes.Code)) {
+// StartRPC starts a server span and returns the active RPC recorder.
+func (t *OTelTelemetry) StartRPC(ctx context.Context, method string) (context.Context, ActiveRPC) {
 	start := t.now()
-	attrs := append(rpcSpanAttributes(method), spanAttrs...)
 	ctx, span := t.tracer.Start(ctx, documentServiceName+"/"+method,
 		trace.WithSpanKind(trace.SpanKindServer),
-		trace.WithAttributes(attrs...),
+		trace.WithAttributes(rpcSpanAttributes(method)...),
 	)
 
-	return ctx, func(code grpccodes.Code) {
-		attrs := rpcAttributes(method, code)
-		t.requests.Add(ctx, 1, metric.WithAttributes(attrs...))
-		t.duration.Record(ctx, t.now().Sub(start).Seconds(), metric.WithAttributes(attrs...))
-		span.SetAttributes(attribute.String("rpc.grpc.status_code", code.String()))
-		if code == grpccodes.OK {
-			span.SetStatus(otelcodes.Ok, "")
-		} else {
-			span.SetStatus(otelcodes.Error, code.String())
-		}
-		span.End()
+	return ctx, &otelRPC{
+		telemetry: t,
+		ctx:       ctx,
+		method:    method,
+		span:      span,
+		start:     start,
 	}
+}
+
+type otelRPC struct {
+	telemetry *OTelTelemetry
+	ctx       context.Context
+	method    string
+	span      trace.Span
+	start     time.Time
+}
+
+func (r *otelRPC) AddSpanAttributes(attrs ...attribute.KeyValue) {
+	r.span.SetAttributes(attrs...)
+}
+
+func (r *otelRPC) Finish(code grpccodes.Code) {
+	attrs := rpcAttributes(r.method, code)
+	r.telemetry.requests.Add(r.ctx, 1, metric.WithAttributes(attrs...))
+	r.telemetry.duration.Record(r.ctx, r.telemetry.now().Sub(r.start).Seconds(), metric.WithAttributes(attrs...))
+	r.span.SetAttributes(attribute.Int("rpc.grpc.status_code", int(code)))
+	if code == grpccodes.OK {
+		r.span.SetStatus(otelcodes.Ok, "")
+	} else {
+		r.span.SetStatus(otelcodes.Error, code.String())
+	}
+	r.span.End()
 }
 
 func rpcAttributes(method string, code grpccodes.Code) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		attribute.String("rpc.service", documentServiceName),
 		attribute.String("rpc.method", method),
-		attribute.String("rpc.grpc.status_code", code.String()),
+		attribute.Int("rpc.grpc.status_code", int(code)),
 	}
 }
 

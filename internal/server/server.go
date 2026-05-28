@@ -37,17 +37,19 @@ func Register(gs *grpc.Server, s storeapi.Store, opts ...Option) {
 }
 
 func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse]) error {
+	ctx, rpc := s.telemetry.StartRPC(stream.Context(), "WriteDocument")
+	rpcCode := codes.OK
+	defer func() { rpc.Finish(rpcCode) }()
+
 	first, err := stream.Recv()
 	if err != nil {
-		_, finishRPC := s.telemetry.StartRPC(stream.Context(), "WriteDocument")
-		finishRPC(codes.InvalidArgument)
+		rpcCode = codes.InvalidArgument
 		return status.Errorf(codes.InvalidArgument, "receive init message: %v", err)
 	}
 
 	init := first.GetInit()
 	if init == nil {
-		_, finishRPC := s.telemetry.StartRPC(stream.Context(), "WriteDocument")
-		finishRPC(codes.InvalidArgument)
+		rpcCode = codes.InvalidArgument
 		return status.Error(codes.InvalidArgument, "first message must be init")
 	}
 
@@ -55,14 +57,11 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	docName := init.GetDocumentName()
 	contentType := init.GetContentType()
 	idempotencyKey := init.GetIdempotencyKey()
-
-	ctx, finishRPC := s.telemetry.StartRPC(stream.Context(), "WriteDocument", telemetry.DocumentIdentityAttributes(
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		txID,
 		docName,
 		telemetry.HashIdentifiers,
 	)...)
-	rpcCode := codes.OK
-	defer func() { finishRPC(rpcCode) }()
 
 	if txID == "" || docName == "" {
 		rpcCode = codes.InvalidArgument
@@ -134,13 +133,14 @@ func (s *documentServer) recvChunks(stream grpc.ClientStreamingServer[scrapv1.Wr
 }
 
 func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocumentRequest) (*scrapv1.HeadDocumentResponse, error) {
-	ctx, finishRPC := s.telemetry.StartRPC(ctx, "HeadDocument", telemetry.DocumentIdentityAttributes(
+	ctx, rpc := s.telemetry.StartRPC(ctx, "HeadDocument")
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		req.GetTransactionId(),
 		req.GetDocumentName(),
 		telemetry.HashIdentifiers,
 	)...)
 	rpcCode := codes.OK
-	defer func() { finishRPC(rpcCode) }()
+	defer func() { rpc.Finish(rpcCode) }()
 
 	meta, err := s.store.HeadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
@@ -159,13 +159,14 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 }
 
 func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream grpc.ServerStreamingServer[scrapv1.ReadDocumentResponse]) error {
-	ctx, finishRPC := s.telemetry.StartRPC(stream.Context(), "ReadDocument", telemetry.DocumentIdentityAttributes(
+	ctx, rpc := s.telemetry.StartRPC(stream.Context(), "ReadDocument")
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		req.GetTransactionId(),
 		req.GetDocumentName(),
 		telemetry.HashIdentifiers,
 	)...)
 	rpcCode := codes.OK
-	defer func() { finishRPC(rpcCode) }()
+	defer func() { rpc.Finish(rpcCode) }()
 
 	rc, meta, err := s.store.ReadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
@@ -217,13 +218,14 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 }
 
 func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDocumentsRequest) (*scrapv1.FindDocumentsResponse, error) {
-	ctx, finishRPC := s.telemetry.StartRPC(ctx, "FindDocuments", telemetry.DocumentIdentityAttributes(
+	ctx, rpc := s.telemetry.StartRPC(ctx, "FindDocuments")
+	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		req.GetTransactionId(),
 		"",
 		telemetry.HashIdentifiers,
 	)...)
 	rpcCode := codes.OK
-	defer func() { finishRPC(rpcCode) }()
+	defer func() { rpc.Finish(rpcCode) }()
 
 	docs, err := s.store.FindDocuments(ctx, req.GetTransactionId())
 	if err != nil {

@@ -55,7 +55,7 @@ func TestDocumentRPCRecordsOTelMetrics(t *testing.T) {
 	}
 	assertMetricAttr(t, requests.Attributes, "rpc.service", "scrap.v1.DocumentService")
 	assertMetricAttr(t, requests.Attributes, "rpc.method", "HeadDocument")
-	assertMetricAttr(t, requests.Attributes, "rpc.grpc.status_code", codes.NotFound.String())
+	assertMetricAttrInt(t, requests.Attributes, "rpc.grpc.status_code", int64(codes.NotFound))
 	assertNoMetricAttr(t, requests.Attributes, "transaction_id")
 	assertNoMetricAttr(t, requests.Attributes, "document_name")
 
@@ -65,7 +65,7 @@ func TestDocumentRPCRecordsOTelMetrics(t *testing.T) {
 	}
 	assertMetricAttr(t, duration.Attributes, "rpc.service", "scrap.v1.DocumentService")
 	assertMetricAttr(t, duration.Attributes, "rpc.method", "HeadDocument")
-	assertMetricAttr(t, duration.Attributes, "rpc.grpc.status_code", codes.NotFound.String())
+	assertMetricAttrInt(t, duration.Attributes, "rpc.grpc.status_code", int64(codes.NotFound))
 }
 
 func TestDocumentRPCRecordsOTelSpansWithHashedDocumentIdentity(t *testing.T) {
@@ -99,7 +99,7 @@ func TestDocumentRPCRecordsOTelSpansWithHashedDocumentIdentity(t *testing.T) {
 	attrs := spanAttrMap(span.Attributes())
 	assertSpanAttr(t, attrs, "rpc.service", "scrap.v1.DocumentService")
 	assertSpanAttr(t, attrs, "rpc.method", "HeadDocument")
-	assertSpanAttr(t, attrs, "rpc.grpc.status_code", codes.NotFound.String())
+	assertSpanAttrInt(t, attrs, "rpc.grpc.status_code", int64(codes.NotFound))
 	assertSpanAttrNotContaining(t, attrs, "scrap.transaction.hash", "tx-123")
 	assertSpanAttrNotContaining(t, attrs, "scrap.document.hash", "invoice.xml")
 	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
@@ -131,7 +131,7 @@ func TestWriteDocumentRPCSpanUsesHashedDocumentIdentity(t *testing.T) {
 	attrs := spanAttrMap(span.Attributes())
 	assertSpanAttr(t, attrs, "rpc.service", "scrap.v1.DocumentService")
 	assertSpanAttr(t, attrs, "rpc.method", "WriteDocument")
-	assertSpanAttr(t, attrs, "rpc.grpc.status_code", codes.OK.String())
+	assertSpanAttrInt(t, attrs, "rpc.grpc.status_code", int64(codes.OK))
 	assertSpanAttrNotContaining(t, attrs, "scrap.transaction.hash", "tx-write-123")
 	assertSpanAttrNotContaining(t, attrs, "scrap.document.hash", "invoice.xml")
 	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
@@ -168,7 +168,7 @@ func TestWriteDocumentTelemetryRecordsInvalidArgumentWhenInitMissing(t *testing.
 
 	span := spanByName(t, spanRecorder.Ended(), "scrap.v1.DocumentService/WriteDocument")
 	attrs := spanAttrMap(span.Attributes())
-	assertSpanAttr(t, attrs, "rpc.grpc.status_code", codes.InvalidArgument.String())
+	assertSpanAttrInt(t, attrs, "rpc.grpc.status_code", int64(codes.InvalidArgument))
 	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
 	assertSpanAttrAbsent(t, attrs, "scrap.document_name")
 }
@@ -312,6 +312,18 @@ func assertMetricAttr(t *testing.T, attrs attribute.Set, key, want string) {
 	}
 }
 
+func assertMetricAttrInt(t *testing.T, attrs attribute.Set, key string, want int64) {
+	t.Helper()
+
+	got, ok := attrs.Value(attribute.Key(key))
+	if !ok {
+		t.Fatalf("missing metric attribute %q", key)
+	}
+	if got.AsInt64() != want {
+		t.Fatalf("metric attribute %q = %d, want %d", key, got.AsInt64(), want)
+	}
+}
+
 func assertNoMetricAttr(t *testing.T, attrs attribute.Set, key string) {
 	t.Helper()
 
@@ -351,6 +363,18 @@ func assertSpanAttr(t *testing.T, attrs map[attribute.Key]attribute.Value, key, 
 	}
 	if got.AsString() != want {
 		t.Fatalf("span attribute %q = %q, want %q", key, got.AsString(), want)
+	}
+}
+
+func assertSpanAttrInt(t *testing.T, attrs map[attribute.Key]attribute.Value, key string, want int64) {
+	t.Helper()
+
+	got, ok := attrs[attribute.Key(key)]
+	if !ok {
+		t.Fatalf("missing span attribute %q", key)
+	}
+	if got.AsInt64() != want {
+		t.Fatalf("span attribute %q = %d, want %d", key, got.AsInt64(), want)
 	}
 }
 

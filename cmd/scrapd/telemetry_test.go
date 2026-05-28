@@ -2,7 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
@@ -20,7 +28,7 @@ func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
 		buildTime = oldBuildTime
 	})
 
-	cfg := scrapdTelemetryResourceConfig("scrapd-0", 3, 7)
+	cfg := scrapdTelemetryResourceConfig("scrapd-0", "member-123", 3, 7)
 
 	assertString(t, "ServiceName", cfg.ServiceName, "scrapd")
 	assertString(t, "Environment", cfg.Environment, "stress")
@@ -43,7 +51,7 @@ func TestScrapdTelemetryResourceConfigDefaultsLocalIdentity(t *testing.T) {
 	t.Setenv("SCRAP_MEMBER_ID", "")
 	t.Setenv("SCRAP_ENVIRONMENT", "")
 
-	cfg := scrapdTelemetryResourceConfig("", 1, 0)
+	cfg := scrapdTelemetryResourceConfig("", "", 1, 0)
 
 	assertString(t, "Environment", cfg.Environment, "local")
 	assertString(t, "CellID", cfg.CellID, "local")
@@ -57,8 +65,87 @@ func TestScrapdTelemetryResourceConfigDefaultsLocalIdentity(t *testing.T) {
 	}
 }
 
+func TestResolveScrapdTelemetryMemberIDUsesEnvOverride(t *testing.T) {
+	t.Setenv("SCRAP_CELL_ID", "cell-a")
+	t.Setenv("SCRAP_MEMBER_ID", "member-override")
+
+	dir := t.TempDir()
+	got, err := resolveScrapdTelemetryMemberID(dir)
+	if err != nil {
+		t.Fatalf("resolveScrapdTelemetryMemberID: %v", err)
+	}
+	assertString(t, "memberID", got, "member-override")
+
+	path := filepath.Join(dir, "identity", "member.json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("member identity file err = %v, want not exist", err)
+	}
+}
+
+func TestResolveScrapdTelemetryMemberIDDefaultsLocalOnlyForLocalCell(t *testing.T) {
+	t.Setenv("SCRAP_CELL_ID", "")
+	t.Setenv("SCRAP_MEMBER_ID", "")
+
+	got, err := resolveScrapdTelemetryMemberID(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveScrapdTelemetryMemberID: %v", err)
+	}
+	assertString(t, "memberID", got, "local")
+}
+
+func TestResolveScrapdTelemetryMemberIDCreatesDurableRecordForNonLocalCell(t *testing.T) {
+	t.Setenv("SCRAP_CELL_ID", "cell-a")
+	t.Setenv("SCRAP_MEMBER_ID", "")
+
+	dir := t.TempDir()
+	memberID, err := resolveScrapdTelemetryMemberID(dir)
+	if err != nil {
+		t.Fatalf("resolveScrapdTelemetryMemberID: %v", err)
+	}
+	if memberID == "" || memberID == "local" {
+		t.Fatalf("memberID = %q, want durable non-local identity", memberID)
+	}
+
+	path := filepath.Join(dir, "identity", "member.json")
+	data, err := os.ReadFile(path) //nolint:gosec // test reads the identity file it just resolved under t.TempDir.
+	if err != nil {
+		t.Fatalf("ReadFile member identity: %v", err)
+	}
+	var record memberIdentityRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("Unmarshal member identity: %v", err)
+	}
+	assertString(t, "record.MemberID", record.MemberID, memberID)
+
+	second, err := resolveScrapdTelemetryMemberID(dir)
+	if err != nil {
+		t.Fatalf("resolveScrapdTelemetryMemberID second call: %v", err)
+	}
+	assertString(t, "second memberID", second, memberID)
+}
+
+func TestResolveScrapdTelemetryMemberIDRejectsInvalidDurableRecord(t *testing.T) {
+	t.Setenv("SCRAP_CELL_ID", "cell-a")
+	t.Setenv("SCRAP_MEMBER_ID", "")
+
+	path := filepath.Join(t.TempDir(), "identity", "member.json")
+	if err := os.MkdirAll(filepath.Dir(path), memberIdentityDirMode); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"member_id":""}`), memberIdentityFileMode); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := resolveScrapdTelemetryMemberID(filepath.Dir(filepath.Dir(path)))
+	if err == nil || !strings.Contains(err.Error(), "member_id is required") {
+		t.Fatalf("invalid member identity error = %v, want member_id is required", err)
+	}
+}
+
 func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", 1, 0)
+	stubScrapdTelemetryPipeline(t)
+
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0)
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -77,7 +164,9 @@ func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 }
 
 func TestNewScrapdTelemetryForHostInitializesRuntime(t *testing.T) {
-	rt, err := newScrapdTelemetryForHost(context.Background(), 1, 0)
+	stubScrapdTelemetryPipeline(t)
+
+	rt, err := newScrapdTelemetryForHost(context.Background(), t.TempDir(), 1, 0)
 	if err != nil {
 		t.Fatalf("newScrapdTelemetryForHost: %v", err)
 	}
@@ -94,6 +183,21 @@ func TestScrapdTelemetryRuntimeShutdownNilReceiver(t *testing.T) {
 	if err := rt.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown nil receiver: %v", err)
 	}
+}
+
+func stubScrapdTelemetryPipeline(t *testing.T) {
+	t.Helper()
+
+	previous := scrapdTelemetryPipeline
+	scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{
+		newMetricReader: func(context.Context) (sdkmetric.Reader, error) {
+			return sdkmetric.NewManualReader(), nil
+		},
+		newSpanProcessor: func(context.Context) (sdktrace.SpanProcessor, error) {
+			return tracetest.NewSpanRecorder(), nil
+		},
+	}
+	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 }
 
 func assertString(t *testing.T, field, got, want string) {
