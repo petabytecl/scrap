@@ -34,6 +34,7 @@ type Server struct {
 	projectionInjector ProjectionInjector
 	uploadPressure     UploadPressureProvider
 	pprofEnabled       bool
+	metricsHandler     http.Handler
 }
 
 func WithProjectionInjector(injector ProjectionInjector) Option {
@@ -54,6 +55,12 @@ func WithPprof() Option {
 	}
 }
 
+func WithMetrics(handler http.Handler) Option {
+	return func(s *Server) {
+		s.metricsHandler = handler
+	}
+}
+
 func New(opts ...Option) *Server {
 	s := &Server{}
 	for _, opt := range opts {
@@ -64,6 +71,9 @@ func New(opts ...Option) *Server {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	if s.projectionInjector != nil {
 		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
+	}
+	if s.metricsHandler != nil {
+		mux.Handle("/metrics", s.metricsHandler)
 	}
 	if s.pprofEnabled {
 		mux.HandleFunc("/debug/pprof/", pprof.Index)

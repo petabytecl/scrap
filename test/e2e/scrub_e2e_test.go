@@ -61,13 +61,13 @@ func TestE2EDeepScrubDetectsAndRepairsBlock(t *testing.T) {
 	defer stopMetrics()
 	metricsEndpoint := "http://" + metricsURL + "/metrics"
 
-	quarantinesBefore := fetchMetricValue(t, metricsEndpoint, "scrap_scrub_quarantines_total")
-	repairsBefore := fetchMetricValueWithLabels(t, metricsEndpoint, "scrap_scrub_repairs_total", []string{`result="ok"`})
+	quarantinesBefore := fetchMetricValue(t, metricsEndpoint, "scrap_scrub_deep_quarantines_total")
+	repairsBefore := fetchMetricValueWithLabels(t, metricsEndpoint, "scrap_scrub_deep_repairs_total", []string{`result="ok"`})
 
 	corruptFirstBlock(t, leader)
 
-	waitMetricAbove(t, metricsEndpoint, "scrap_scrub_quarantines_total", nil, quarantinesBefore, scrubE2ETimeout)
-	waitMetricAbove(t, metricsEndpoint, "scrap_scrub_repairs_total", []string{`result="ok"`}, repairsBefore, scrubE2ETimeout)
+	waitMetricAbove(t, metricsEndpoint, "scrap_scrub_deep_quarantines_total", nil, quarantinesBefore, scrubE2ETimeout)
+	waitMetricAbove(t, metricsEndpoint, "scrap_scrub_deep_repairs_total", []string{`result="ok"`}, repairsBefore, scrubE2ETimeout)
 
 	leaderAddr, stopClient := startPodPortForward(t, leader, 9090)
 	defer stopClient()

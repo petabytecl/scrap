@@ -155,6 +155,7 @@ func run() error {
 
 	adminOpts := []admin.Option{}
 	adminOpts = append(adminOpts, admin.WithUploadPressureProvider(s))
+	adminOpts = append(adminOpts, admin.WithMetrics(telemetryRuntime.metricsHandler))
 	if envBool("SCRAP_TEST_HOOKS", false) {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
 	}
