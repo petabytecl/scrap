@@ -82,8 +82,12 @@ func New(opts ...Option) *Server {
 		mux.HandleFunc("/debug/pprof/", getOnly(pprof.Index))
 		mux.HandleFunc("/debug/pprof/cmdline", getOnly(pprof.Cmdline))
 		mux.HandleFunc("/debug/pprof/profile", getOnly(pprof.Profile))
-		mux.HandleFunc("/debug/pprof/symbol", getOnly(pprof.Symbol))
 		mux.HandleFunc("/debug/pprof/trace", getOnly(pprof.Trace))
+		// /symbol is exempt from getOnly: unlike the endpoints above it has no side
+		// effects (it's a stateless PC→name lookup), and `go tool pprof` POSTs the
+		// address list in the request body whenever it exceeds URL length limits.
+		// Gating it to GET would return 405 and silently break symbolization.
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	}
 	s.handler = mux
 	return s

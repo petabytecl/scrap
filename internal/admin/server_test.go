@@ -195,6 +195,28 @@ func TestServer_PprofRejectsNonGet(t *testing.T) {
 	}
 }
 
+func TestServer_PprofSymbolAcceptsPost(t *testing.T) {
+	srv := admin.New(admin.WithPprof())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// `go tool pprof` POSTs the address list in the request body whenever it
+	// exceeds URL length limits; /symbol must not be gated to GET. An empty body
+	// is a valid request that the stdlib handler answers with 200.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/debug/pprof/symbol", http.NoBody)
+	if err != nil {
+		t.Fatalf("new POST request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /debug/pprof/symbol: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /debug/pprof/symbol should be 200, got %d", resp.StatusCode)
+	}
+}
+
 func TestServer_MetricsEndpoint(t *testing.T) {
 	const want = "scrap_test_metric 1\n"
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
