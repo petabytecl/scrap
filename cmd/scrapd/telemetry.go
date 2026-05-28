@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -63,6 +67,7 @@ type scrapdTelemetryRuntime struct {
 	server         server.Telemetry
 	runtimeMetrics *scraptelemetry.RuntimeMetrics
 	raftMetrics    *scraptelemetry.RaftMetrics
+	metricsHandler http.Handler
 }
 
 func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
@@ -89,9 +94,18 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 		return nil, errors.New("span processor is required")
 	}
 
+	promRegistry := prometheus.NewRegistry()
+	promExporter, err := otelprom.New(otelprom.WithRegisterer(promRegistry))
+	if err != nil {
+		_ = metricReader.Shutdown(ctx)
+		_ = spanProcessor.Shutdown(ctx)
+		return nil, fmt.Errorf("create prometheus exporter: %w", err)
+	}
+
 	meterProvider := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(otelResource),
 		sdkmetric.WithReader(metricReader),
+		sdkmetric.WithReader(promExporter),
 	)
 	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(otelResource),
@@ -122,6 +136,7 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 		tracerProvider: tracerProvider,
 		server:         serverTelemetry,
 		runtimeMetrics: runtimeMetrics,
+		metricsHandler: promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}),
 	}, nil
 }
 
