@@ -176,19 +176,22 @@ func TestServer_PprofRejectsNonGet(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// A POST must not be able to start a CPU profile on the admin listener.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/debug/pprof/profile", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST /debug/pprof/profile: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("POST pprof should be 405, got %d", resp.StatusCode)
+	// Neither POST nor HEAD may invoke a profiling handler. HEAD is the subtle
+	// one: net/http's ServeMux routes it to a GET handler, so without an explicit
+	// guard HEAD /debug/pprof/profile would still start CPU collection.
+	for _, method := range []string{http.MethodPost, http.MethodHead} {
+		req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+"/debug/pprof/profile", nil)
+		if err != nil {
+			t.Fatalf("new %s request: %v", method, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s /debug/pprof/profile: %v", method, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s pprof should be 405, got %d", method, resp.StatusCode)
+		}
 	}
 }
 

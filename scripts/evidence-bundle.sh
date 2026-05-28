@@ -158,29 +158,37 @@ GATES_FILE="$BUNDLE_PATH/gates.json"
 # error_rate is derived (no scenario emits it directly); metrics_captured fails
 # the bundle when any Mimir snapshot query failed OR a required metric was empty.
 jq --argjson metric_failures "$METRIC_QUERY_FAILURES" --argjson metric_empty_required "$METRIC_EMPTY_REQUIRED" '
+  # writes drives the "writes produced" gate; ops/errors drive the error rate.
+  # For mixed, ops and errors span write+read+head so failing reads or heads are
+  # not masked by healthy writes.
   def writes:
     if .scenario == "throughput" then (.total_ops // 0)
     elif .scenario == "mixed" then (.write.total_ops // 0)
     elif .scenario == "pressure" then (.total_writes // 0)
     else 0 end;
+  def ops:
+    if .scenario == "throughput" then (.total_ops // 0)
+    elif .scenario == "mixed" then ((.write.total_ops // 0) + (.read.total_ops // 0) + (.head.total_ops // 0))
+    elif .scenario == "pressure" then (.total_writes // 0)
+    else 0 end;
   def errors:
     if .scenario == "throughput" then (.failed_ops // 0)
-    elif .scenario == "mixed" then (.write.failed_ops // 0)
+    elif .scenario == "mixed" then ((.write.failed_ops // 0) + (.read.failed_ops // 0) + (.head.failed_ops // 0))
     elif .scenario == "pressure" then (.other_errors // 0)
     else 0 end;
   (has("error") | not) as $completed |
-  writes as $w | errors as $e |
-  (if $w > 0 then ($e / $w) else 1 end) as $rate |
+  writes as $w | ops as $o | errors as $e |
+  (if $o > 0 then ($e / $o) else 1 end) as $rate |
   (($metric_failures == 0) and ($metric_empty_required == 0)) as $metrics_ok |
   {
-    pass: ($completed and ($w > 0) and ($rate < 0.01) and $metrics_ok),
+    pass: ($completed and ($w > 0) and ($o > 0) and ($rate < 0.01) and $metrics_ok),
     scenario: (.scenario // "unknown"),
     checks: [
       {name: "stress_completed", pass: $completed,
        reason: (if $completed then "stress run completed" else "stress run reported error / no JSON" end)},
       {name: "writes_nonzero", pass: ($w > 0), reason: "writes=\($w)"},
-      {name: "error_rate_below_1pct", pass: ($w > 0 and $rate < 0.01),
-       reason: "error_rate=\((($rate * 10000) | floor) / 10000) errors=\($e) writes=\($w)"},
+      {name: "error_rate_below_1pct", pass: ($o > 0 and $rate < 0.01),
+       reason: "error_rate=\((($rate * 10000) | floor) / 10000) errors=\($e) ops=\($o)"},
       {name: "metrics_captured", pass: $metrics_ok,
        reason: "\($metric_failures) query failure(s), \($metric_empty_required) required-empty"}
     ]
