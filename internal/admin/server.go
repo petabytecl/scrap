@@ -76,11 +76,14 @@ func New(opts ...Option) *Server {
 		mux.Handle("/metrics", s.metricsHandler)
 	}
 	if s.pprofEnabled {
-		mux.HandleFunc("/debug/pprof/", pprof.Index)
-		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		// GET-only: profiling is a read-only diagnostic. Method-qualified patterns
+		// reject e.g. POST /debug/pprof/profile, which would otherwise start a CPU
+		// profile from any source allowed to reach the admin listener.
+		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
 	}
 	s.handler = mux
 	return s

@@ -61,6 +61,46 @@ var scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{
 	},
 }
 
+// build creates the OTLP metric reader and span processor together, shutting the
+// reader down if the span processor fails so a partial init never leaks.
+func (f scrapdTelemetryPipelineFactory) build(ctx context.Context) (sdkmetric.Reader, sdktrace.SpanProcessor, error) {
+	metricReader, err := f.newMetricReader(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if metricReader == nil {
+		return nil, nil, errors.New("metric reader is required")
+	}
+
+	spanProcessor, err := f.newSpanProcessor(ctx)
+	if err != nil {
+		_ = metricReader.Shutdown(ctx)
+		return nil, nil, err
+	}
+	if spanProcessor == nil {
+		_ = metricReader.Shutdown(ctx)
+		return nil, nil, errors.New("span processor is required")
+	}
+
+	return metricReader, spanProcessor, nil
+}
+
+// otlpTelemetryEnabled reports whether an OTLP collector endpoint is configured.
+// When false, scrapd exports no OTLP metrics/traces and relies on the Prometheus
+// /metrics endpoint only, instead of defaulting to localhost:4317.
+func otlpTelemetryEnabled() bool {
+	for _, key := range []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+	} {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type scrapdTelemetryRuntime struct {
 	meterProvider  *sdkmetric.MeterProvider
 	tracerProvider *sdktrace.TracerProvider
@@ -76,41 +116,36 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 		return nil, err
 	}
 
-	metricReader, err := scrapdTelemetryPipeline.newMetricReader(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if metricReader == nil {
-		return nil, errors.New("metric reader is required")
-	}
-
-	spanProcessor, err := scrapdTelemetryPipeline.newSpanProcessor(ctx)
-	if err != nil {
-		_ = metricReader.Shutdown(ctx)
-		return nil, err
-	}
-	if spanProcessor == nil {
-		_ = metricReader.Shutdown(ctx)
-		return nil, errors.New("span processor is required")
-	}
-
+	// The Prometheus reader is always present: it backs the admin /metrics
+	// endpoint regardless of whether an OTLP collector is configured.
 	promRegistry := prometheus.NewRegistry()
 	promExporter, err := otelprom.New(otelprom.WithRegisterer(promRegistry))
 	if err != nil {
-		_ = metricReader.Shutdown(ctx)
-		_ = spanProcessor.Shutdown(ctx)
 		return nil, fmt.Errorf("create prometheus exporter: %w", err)
 	}
 
-	meterProvider := sdkmetric.NewMeterProvider(
+	meterOpts := []sdkmetric.Option{
 		sdkmetric.WithResource(otelResource),
-		sdkmetric.WithReader(metricReader),
 		sdkmetric.WithReader(promExporter),
-	)
-	tracerProvider := sdktrace.NewTracerProvider(
+	}
+	tracerOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(otelResource),
-		sdktrace.WithSpanProcessor(spanProcessor),
-	)
+	}
+
+	// Only export over OTLP when an endpoint is configured. Without this guard the
+	// OTLP exporters default to localhost:4317 and silently ship metrics and spans
+	// to a non-existent collector on every deployment that has not wired one up.
+	if otlpTelemetryEnabled() {
+		metricReader, spanProcessor, otlpErr := scrapdTelemetryPipeline.build(ctx)
+		if otlpErr != nil {
+			return nil, otlpErr
+		}
+		meterOpts = append(meterOpts, sdkmetric.WithReader(metricReader))
+		tracerOpts = append(tracerOpts, sdktrace.WithSpanProcessor(spanProcessor))
+	}
+
+	meterProvider := sdkmetric.NewMeterProvider(meterOpts...)
+	tracerProvider := sdktrace.NewTracerProvider(tracerOpts...)
 	otel.SetMeterProvider(meterProvider)
 	otel.SetTracerProvider(tracerProvider)
 
