@@ -129,3 +129,43 @@ func TestServer_TestHookProjectionInjection(t *testing.T) {
 		t.Fatalf("injected payload mismatch: %+v", injector)
 	}
 }
+
+func TestServer_PprofDisabledByDefault(t *testing.T) {
+	srv := admin.New()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/debug/pprof/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /debug/pprof/: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("pprof should be 404 when disabled, got %d", resp.StatusCode)
+	}
+}
+
+func TestServer_PprofEnabledWithOption(t *testing.T) {
+	srv := admin.New(admin.WithPprof())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/debug/pprof/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /debug/pprof/: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pprof should be 200 when enabled, got %d", resp.StatusCode)
+	}
+}

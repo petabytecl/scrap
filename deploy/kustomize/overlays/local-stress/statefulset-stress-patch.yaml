@@ -35,6 +35,8 @@ spec:
               value: stress
             - name: SCRAP_CELL_ID
               value: kind-stress
+            - name: SCRAP_PPROF_ENABLED
+              value: "true"
           args:
             - "--data-dir=/data"
             - "--listen-addr=:9090"

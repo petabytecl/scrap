@@ -158,6 +158,9 @@ func run() error {
 	if envBool("SCRAP_TEST_HOOKS", false) {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
 	}
+	if envBool("SCRAP_PPROF_ENABLED", false) {
+		adminOpts = append(adminOpts, admin.WithPprof())
+	}
 	adminSrv := admin.New(adminOpts...)
 	go func() { _ = adminSrv.ListenAndServe(*adminAddr) }()
 	go func() { _ = peerGS.Serve(peerLis) }()

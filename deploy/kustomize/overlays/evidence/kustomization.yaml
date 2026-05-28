@@ -10,3 +10,4 @@ resources:
   - pyroscope.yaml
   - grafana.yaml
   - grafana-datasources.yaml
+  - networkpolicy-pprof.yaml

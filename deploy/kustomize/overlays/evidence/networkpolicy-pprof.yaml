@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scrapd-admin-restrict
+  namespace: scrap
+spec:
+  podSelector:
+    matchLabels:
+      app: scrap
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app: otel-collector
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app: pyroscope
+      ports:
+        - port: 9100
+          protocol: TCP
+    - ports:
+        - port: 9090
+          protocol: TCP
+        - port: 9091
+          protocol: TCP
