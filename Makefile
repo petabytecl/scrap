@@ -134,7 +134,6 @@ SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 ##? STRESS_KIND_CLUSTER Kind cluster name used by stress targets.
 ##? STRESS_KIND_CONFIG Kind cluster config with Grafana NodePort.
 ##? STRESS_OVERLAY Kustomize overlay used for stress manifests.
-##? MONITORING_OVERLAY Kustomize overlay for Prometheus and Grafana.
 ##? EVIDENCE_OVERLAY Kustomize overlay for OTel evidence stack (stress runs).
 ##? STRESS_ADDR gRPC address for the stress test binary.
 ##? STRESS_SCENARIO Stress scenario to run: throughput, mixed, pressure.
@@ -145,7 +144,6 @@ SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 STRESS_KIND_CLUSTER ?= scrap-stress
 STRESS_KIND_CONFIG ?= deploy/kind/cluster-stress.yaml
 STRESS_OVERLAY ?= deploy/kustomize/overlays/local-stress
-MONITORING_OVERLAY ?= deploy/kustomize/overlays/monitoring
 EVIDENCE_OVERLAY ?= deploy/kustomize/overlays/evidence
 STRESS_ADDR ?= 127.0.0.1:18090
 STRESS_SCENARIO ?= throughput
@@ -380,6 +378,10 @@ stress: ## Run the stress test binary against the Kind cluster.
 
 .PHONY: evidence-bundle
 evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
+	STRESS_ADDR="$(STRESS_ADDR)" \
+	STRESS_WORKERS="$(STRESS_WORKERS)" \
+	STRESS_DURATION="$(STRESS_DURATION)" \
+	STRESS_DOC_SIZE="$(STRESS_DOC_SIZE)" \
 	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
 
 .PHONY: stress-teardown

@@ -6,7 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUNDLE_DIR="${BUNDLE_DIR:-$REPO_ROOT/evidence}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:13000}"
-MIMIR_URL="${MIMIR_URL:-http://127.0.0.1:13000/api/datasources/proxy/uid/mimir}"
+# Query Mimir through Grafana's datasource proxy, addressed by stable uid (grafana-datasources.yaml).
+MIMIR_PROXY="${MIMIR_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/mimir}"
 STRESS_ADDR="${STRESS_ADDR:-127.0.0.1:18090}"
 SCENARIO="${1:-throughput}"
 WORKERS="${STRESS_WORKERS:-8}"
@@ -86,21 +87,32 @@ log "Querying metric snapshots..."
 METRICS_DIR="$BUNDLE_PATH/metrics"
 mkdir -p "$METRICS_DIR"
 
+# Metric names follow the otelprom/Mimir convention with type+unit suffixes
+# (Mimir runs with -distributor.otel-metric-suffixes-enabled=true): counters end
+# in _total, duration histograms in _seconds_*, byte gauges in _bytes.
+METRIC_QUERY_FAILURES=0
+
 query_metric() {
-  local name="$1" query="$2"
-  curl -sf "$GRAFANA_URL/api/datasources/proxy/1/api/v1/query?query=$(printf '%s' "$query" | jq -sRr @uri)" 2>/dev/null \
-    | jq '.data.result' > "$METRICS_DIR/$name.json" 2>/dev/null || echo '[]' > "$METRICS_DIR/$name.json"
+  local name="$1" query="$2" resp out="$METRICS_DIR/$1.json"
+  if resp=$(curl -sf "$MIMIR_PROXY/api/v1/query?query=$(printf '%s' "$query" | jq -sRr @uri)" 2>/dev/null) \
+      && printf '%s' "$resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
+    printf '%s' "$resp" | jq '.data.result' > "$out"
+  else
+    echo '[]' > "$out"
+    METRIC_QUERY_FAILURES=$((METRIC_QUERY_FAILURES + 1))
+    log "WARNING: metric query failed (no data envelope): $name"
+  fi
 }
 
-query_metric "rpc_requests" 'sum(scrap_rpc_server_requests) by (rpc_method, rpc_grpc_status_code)'
-query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_bucket[1m])) by (le, rpc_method))'
-query_metric "write_stage_duration" 'sum(rate(scrap_write_stage_duration_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_count[1m])) by (scrap_write_stage)'
+query_metric "rpc_requests" 'sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)'
+query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[1m])) by (le, rpc_method))'
+query_metric "write_stage_duration" 'sum(rate(scrap_write_stage_duration_seconds_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[1m])) by (scrap_write_stage)'
 query_metric "upload_pressure" 'scrap_upload_pressure_level'
 query_metric "upload_pending_bytes" 'scrap_upload_pending_bytes'
 query_metric "raft_is_leader" 'scrap_raft_is_leader'
 query_metric "goroutines" 'process_runtime_go_goroutines'
-query_metric "heap_alloc" 'process_runtime_go_mem_heap_alloc'
-log "Wrote metric snapshots"
+query_metric "heap_alloc" 'process_runtime_go_mem_heap_alloc_bytes'
+log "Wrote metric snapshots ($METRIC_QUERY_FAILURES query failure(s))"
 
 # --- 4. Trace and profile references ---
 log "Capturing trace/profile query references..."
@@ -124,39 +136,42 @@ log "Wrote queries.json"
 log "Evaluating evidence gates..."
 GATES_FILE="$BUNDLE_PATH/gates.json"
 
-evaluate_gates() {
-  local pass=true
-  local checks=()
-
-  if [[ -f "$STRESS_OUTPUT" ]] && jq -e '.error' "$STRESS_OUTPUT" >/dev/null 2>&1; then
-    checks+=('{"name":"stress_completed","pass":false,"reason":"stress test reported error"}')
-    pass=false
-  else
-    checks+=('{"name":"stress_completed","pass":true,"reason":"stress test completed"}')
-  fi
-
-  if [[ -f "$STRESS_OUTPUT" ]] && jq -e '.total_writes > 0' "$STRESS_OUTPUT" >/dev/null 2>&1; then
-    checks+=('{"name":"writes_nonzero","pass":true,"reason":"writes were produced"}')
-  else
-    checks+=('{"name":"writes_nonzero","pass":false,"reason":"no writes recorded"}')
-    pass=false
-  fi
-
-  if [[ -f "$STRESS_OUTPUT" ]] && jq -e '.error_rate < 0.01' "$STRESS_OUTPUT" >/dev/null 2>&1; then
-    checks+=('{"name":"error_rate_below_1pct","pass":true,"reason":"error rate < 1%"}')
-  else
-    checks+=('{"name":"error_rate_below_1pct","pass":false,"reason":"error rate >= 1% or unavailable"}')
-    pass=false
-  fi
-
-  local joined
-  joined=$(printf '%s,' "${checks[@]}")
-  joined="${joined%,}"
-
-  printf '{"pass":%s,"checks":[%s]}\n' "$pass" "$joined"
-}
-
-evaluate_gates > "$GATES_FILE"
+# Scenario-aware gates. Each scenario emits a different schema:
+#   throughput -> total_ops / failed_ops
+#   mixed      -> nested write.total_ops / write.failed_ops
+#   pressure   -> total_writes / other_errors (pressure_rejections are intentional)
+# error_rate is derived (no scenario emits it directly); metrics_captured fails
+# the bundle when any Mimir snapshot query failed.
+jq --argjson metric_failures "$METRIC_QUERY_FAILURES" '
+  def writes:
+    if .scenario == "throughput" then (.total_ops // 0)
+    elif .scenario == "mixed" then (.write.total_ops // 0)
+    elif .scenario == "pressure" then (.total_writes // 0)
+    else 0 end;
+  def errors:
+    if .scenario == "throughput" then (.failed_ops // 0)
+    elif .scenario == "mixed" then (.write.failed_ops // 0)
+    elif .scenario == "pressure" then (.other_errors // 0)
+    else 0 end;
+  (has("error") | not) as $completed |
+  writes as $w | errors as $e |
+  (if $w > 0 then ($e / $w) else 1 end) as $rate |
+  ($metric_failures == 0) as $metrics_ok |
+  {
+    pass: ($completed and ($w > 0) and ($rate < 0.01) and $metrics_ok),
+    scenario: (.scenario // "unknown"),
+    checks: [
+      {name: "stress_completed", pass: $completed,
+       reason: (if $completed then "stress run completed" else "stress run reported error / no JSON" end)},
+      {name: "writes_nonzero", pass: ($w > 0), reason: "writes=\($w)"},
+      {name: "error_rate_below_1pct", pass: ($w > 0 and $rate < 0.01),
+       reason: "error_rate=\((($rate * 10000) | floor) / 10000) errors=\($e) writes=\($w)"},
+      {name: "metrics_captured", pass: $metrics_ok,
+       reason: "\($metric_failures) metric query failure(s)"}
+    ]
+  }
+' "$STRESS_OUTPUT" > "$GATES_FILE" 2>/dev/null \
+  || printf '{"pass":false,"scenario":"unknown","checks":[{"name":"gates_evaluated","pass":false,"reason":"failed to parse stress output"}]}\n' > "$GATES_FILE"
 log "Wrote gates.json"
 
 # --- 6. Summary ---

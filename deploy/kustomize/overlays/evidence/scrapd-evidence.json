@@ -37,15 +37,15 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(scrap_rpc_server_duration_bucket[1m])) by (le, rpc_method))",
+          "expr": "histogram_quantile(0.50, sum(rate(scrap_rpc_server_duration_seconds_bucket[1m])) by (le, rpc_method))",
           "legendFormat": "p50 {{rpc_method}}"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(scrap_rpc_server_duration_bucket[1m])) by (le, rpc_method))",
+          "expr": "histogram_quantile(0.95, sum(rate(scrap_rpc_server_duration_seconds_bucket[1m])) by (le, rpc_method))",
           "legendFormat": "p95 {{rpc_method}}"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_bucket[1m])) by (le, rpc_method))",
+          "expr": "histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[1m])) by (le, rpc_method))",
           "legendFormat": "p99 {{rpc_method}}"
         }
       ],
@@ -93,7 +93,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
-          "expr": "sum(rate(scrap_write_stage_duration_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_count[1m])) by (scrap_write_stage)",
+          "expr": "sum(rate(scrap_write_stage_duration_seconds_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[1m])) by (scrap_write_stage)",
           "legendFormat": "{{scrap_write_stage}}"
         }
       ],
@@ -109,7 +109,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_bucket[1m])) by (le, scrap_write_stage))",
+          "expr": "histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_seconds_bucket[1m])) by (le, scrap_write_stage))",
           "legendFormat": "p99 {{scrap_write_stage}}"
         }
       ],
@@ -303,11 +303,11 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
-          "expr": "process_runtime_go_mem_heap_alloc",
+          "expr": "process_runtime_go_mem_heap_alloc_bytes",
           "legendFormat": "heap_alloc"
         },
         {
-          "expr": "process_runtime_go_mem_heap_sys",
+          "expr": "process_runtime_go_mem_heap_sys_bytes",
           "legendFormat": "heap_sys"
         }
       ],
@@ -323,7 +323,7 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
-          "expr": "rate(process_runtime_go_gc_pause_total[1m])",
+          "expr": "rate(process_runtime_go_gc_pause_seconds_total[1m])",
           "legendFormat": "gc_pause_rate"
         }
       ],

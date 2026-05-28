@@ -10,7 +10,7 @@ Saved queries for Phase 3 stress evidence review.
 sum(rate(scrap_rpc_server_requests_total[1m])) by (rpc_method, rpc_grpc_status_code)
 
 # p99 latency by method
-histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_bucket[1m])) by (le, rpc_method))
+histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[1m])) by (le, rpc_method))
 
 # Error rate
 sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code!="0"}[5m])) / sum(rate(scrap_rpc_server_requests_total[5m]))
@@ -19,10 +19,10 @@ sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code!="0"}[5m])) / sum(
 ### Write Path Stages
 ```promql
 # Average stage latency
-sum(rate(scrap_write_stage_duration_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_count[1m])) by (scrap_write_stage)
+sum(rate(scrap_write_stage_duration_seconds_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[1m])) by (scrap_write_stage)
 
 # p99 stage latency
-histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_bucket[1m])) by (le, scrap_write_stage))
+histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_seconds_bucket[1m])) by (le, scrap_write_stage))
 ```
 
 ### Upload Pipeline
@@ -53,10 +53,10 @@ rate(scrap_raft_applied_index[1m])
 process_runtime_go_goroutines
 
 # Heap memory
-process_runtime_go_mem_heap_alloc
+process_runtime_go_mem_heap_alloc_bytes
 
 # GC pause rate
-rate(process_runtime_go_gc_pause_total[1m])
+rate(process_runtime_go_gc_pause_seconds_total[1m])
 ```
 
 ## Traces (TraceQL via Tempo)
