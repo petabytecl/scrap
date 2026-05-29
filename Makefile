@@ -381,9 +381,10 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 	@printf '\nStress environment ready.\n'
-	@printf '  gRPC:      127.0.0.1:18090\n'
-	@printf '  Grafana:   http://127.0.0.1:13000\n'
-	@printf '  Collector: 127.0.0.1:14317 (OTLP gRPC)\n\n'
+	@printf '  gRPC:       127.0.0.1:18090\n'
+	@printf '  Grafana:    http://127.0.0.1:13000\n'
+	@printf '  Collector:  127.0.0.1:14317 (OTLP gRPC)\n'
+	@printf '  LocalStack: http://127.0.0.1:18566 (S3, e.g. aws --endpoint-url http://127.0.0.1:18566 s3 ls)\n\n'
 
 .PHONY: stress-setup-lowrate
 stress-setup-lowrate: ## Bring up the stress env with a production-like low baseline trace-sampling rate.

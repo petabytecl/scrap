@@ -57,4 +57,7 @@ spec:
     - name: edge
       port: 4566
       targetPort: 4566
+      # Exposed on the host via the Kind cluster's 30566->18566 extraPortMapping
+      # so S3 tooling can reach LocalStack from outside the cluster
+      # (e.g. aws --endpoint-url http://127.0.0.1:18566 s3 ls).
       nodePort: 30566
