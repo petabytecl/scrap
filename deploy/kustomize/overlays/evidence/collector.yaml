@@ -90,7 +90,10 @@ data:
           - name: baseline
             type: probabilistic
             probabilistic:
-              sampling_percentage: 10
+              # Evidence env keeps everything (ADR 0013 / showcase): the whole point
+              # is maximum trace resolution. Pair with a low-rate capture scenario so
+              # 100% never floods the single gateway. Production overlays lower this.
+              sampling_percentage: 100
 
     exporters:
       otlphttp/mimir:
