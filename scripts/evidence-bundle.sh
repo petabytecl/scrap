@@ -6,13 +6,21 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUNDLE_DIR="${BUNDLE_DIR:-$REPO_ROOT/evidence}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:13000}"
+SCRAP_ADMIN_URL="${SCRAP_ADMIN_URL:-http://127.0.0.1:18100}"
+KUBECTL="${KUBECTL:-kubectl}"
+SCRAP_NAMESPACE="${SCRAP_NAMESPACE:-scrap}"
 # Query Mimir through Grafana's datasource proxy, addressed by stable uid (grafana-datasources.yaml).
 MIMIR_PROXY="${MIMIR_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/mimir}"
+TEMPO_PROXY="${TEMPO_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/tempo}"
+LOKI_PROXY="${LOKI_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/loki}"
+PYROSCOPE_PROXY="${PYROSCOPE_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/pyroscope}"
 STRESS_ADDR="${STRESS_ADDR:-127.0.0.1:18090}"
 SCENARIO="${1:-throughput}"
 WORKERS="${STRESS_WORKERS:-8}"
 DURATION="${STRESS_DURATION:-60s}"
 DOC_SIZE="${STRESS_DOC_SIZE:-16384}"
+EVIDENCE_SETTLE_SECONDS="${EVIDENCE_SETTLE_SECONDS:-75}"
+EVIDENCE_PROBE_TIMEOUT_SECONDS="${EVIDENCE_PROBE_TIMEOUT_SECONDS:-5}"
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -28,12 +36,23 @@ Scenarios: throughput, mixed, pressure
 Environment variables:
   BUNDLE_DIR       Output directory (default: ./evidence)
   GRAFANA_URL      Grafana base URL (default: http://127.0.0.1:13000)
+  SCRAP_ADMIN_URL  scrapd admin HTTP base URL (default: http://127.0.0.1:18100)
+  KUBECTL          kubectl binary (default: kubectl)
+  SCRAP_NAMESPACE  Kubernetes namespace for scrapd (default: scrap)
   MIMIR_PROXY      Mimir query base URL (default: \$GRAFANA_URL's datasource
                    proxy for uid=mimir, i.e. \$GRAFANA_URL/api/datasources/proxy/uid/mimir)
+  TEMPO_PROXY      Tempo query base URL (default: \$GRAFANA_URL/api/datasources/proxy/uid/tempo)
+  LOKI_PROXY       Loki query base URL (default: \$GRAFANA_URL/api/datasources/proxy/uid/loki)
+  PYROSCOPE_PROXY  Pyroscope query base URL (default: \$GRAFANA_URL/api/datasources/proxy/uid/pyroscope)
   STRESS_ADDR      Stress target address (default: 127.0.0.1:18090)
   STRESS_WORKERS   Worker count (default: 8)
   STRESS_DURATION  Run duration (default: 60s)
   STRESS_DOC_SIZE  Document size in bytes (default: 16384)
+  EVIDENCE_SETTLE_SECONDS
+                   Seconds to wait after stress before querying telemetry
+                   (default: 75; set to 0 only in tests)
+  EVIDENCE_PROBE_TIMEOUT_SECONDS
+                   Per-attempt timeout for the admin log probe (default: 5)
 EOF
   exit 1
 }
@@ -44,10 +63,117 @@ fi
 
 log() { printf '[evidence] %s\n' "$*" >&2; }
 
+if ! [[ "$EVIDENCE_SETTLE_SECONDS" =~ ^[0-9]+$ ]]; then
+  log "ERROR: EVIDENCE_SETTLE_SECONDS must be a non-negative integer"
+  exit 2
+fi
+if ! [[ "$EVIDENCE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  log "ERROR: EVIDENCE_PROBE_TIMEOUT_SECONDS must be a positive integer"
+  exit 2
+fi
+
 mkdir -p "$BUNDLE_PATH"
+METRICS_DIR="$BUNDLE_PATH/metrics"
+TRACES_DIR="$BUNDLE_PATH/traces"
+LOGS_DIR="$BUNDLE_PATH/logs"
+PROFILES_DIR="$BUNDLE_PATH/profiles"
+mkdir -p "$METRICS_DIR" "$TRACES_DIR" "$LOGS_DIR" "$PROFILES_DIR"
+
+LOG_MARKER="scrap-evidence-${TIMESTAMP}-${GIT_SHA}"
 
 log "Bundle: $BUNDLE_NAME"
 log "Scenario: $SCENARIO (workers=$WORKERS, duration=$DURATION, doc_size=$DOC_SIZE)"
+
+RPC_COUNTER_QUERY='sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)'
+RPC_BASELINE_OUT="$METRICS_DIR/rpc_requests_baseline.json"
+RPC_AFTER_OUT="$METRICS_DIR/rpc_requests_cumulative_after.json"
+ADMIN_PORT_FORWARD_PID=""
+ADMIN_PORT_FORWARD_URL=""
+
+cleanup() {
+  if [[ -n "$ADMIN_PORT_FORWARD_PID" ]] && kill -0 "$ADMIN_PORT_FORWARD_PID" >/dev/null 2>&1; then
+    kill "$ADMIN_PORT_FORWARD_PID" >/dev/null 2>&1 || true
+    wait "$ADMIN_PORT_FORWARD_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+query_rpc_counter_snapshot() {
+  local out="$1" at="$2" resp
+  if resp=$(curl -G -sf "$MIMIR_PROXY/api/v1/query" \
+      --data-urlencode "query=$RPC_COUNTER_QUERY" \
+      --data-urlencode "time=$at" 2>/dev/null) \
+      && printf '%s' "$resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
+    printf '%s' "$resp" | jq '.data.result' > "$out"
+    return 0
+  fi
+  echo '[]' > "$out"
+  return 1
+}
+
+compute_rpc_counter_delta() {
+  local out="$1"
+  jq -n \
+    --argjson at "$RUN_QUERY_EPOCH" \
+    --slurpfile before "$RPC_BASELINE_OUT" \
+    --slurpfile after "$RPC_AFTER_OUT" '
+    def series_key:
+      ((.metric.rpc_method // "") + "\u0000" + (.metric.rpc_grpc_status_code // ""));
+    def sample_value:
+      ((.value[1]? // "0") | tonumber? // 0);
+    (($before[0] // []) | map({key: series_key, value: sample_value}) | from_entries) as $before_by_key |
+    [
+      ($after[0] // [])[]? as $row |
+      ($row | series_key) as $key |
+      ($row | sample_value) as $after_value |
+      ($before_by_key[$key] // 0) as $before_value |
+      (if $after_value >= $before_value then $after_value - $before_value else $after_value end) as $delta |
+      select($delta > 0) |
+      {metric: $row.metric, value: [$at, ($delta | tostring)]}
+    ]
+  ' > "$out"
+}
+
+curl_log_probe() {
+  local base_url="$1" out="$2"
+  if curl -sf \
+      --max-time "$EVIDENCE_PROBE_TIMEOUT_SECONDS" \
+      -H "X-Scrap-Evidence-Marker: $LOG_MARKER" \
+      "${base_url%/}/healthz" > "$out" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+start_admin_port_forward() {
+  local log_file="$LOGS_DIR/admin-port-forward.log" port
+  "$KUBECTL" -n "$SCRAP_NAMESPACE" port-forward svc/scrap ":9100" > "$log_file" 2>&1 &
+  ADMIN_PORT_FORWARD_PID=$!
+  for _ in {1..50}; do
+    if ! kill -0 "$ADMIN_PORT_FORWARD_PID" >/dev/null 2>&1; then
+      return 1
+    fi
+    port="$(sed -n 's/.*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$log_file" | head -n1)"
+    if [[ -n "$port" ]]; then
+      ADMIN_PORT_FORWARD_URL="http://127.0.0.1:$port"
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+emit_log_probe() {
+  local out="$LOGS_DIR/evidence-probe-health.json"
+  if curl_log_probe "$SCRAP_ADMIN_URL" "$out"; then
+    return 0
+  fi
+  if start_admin_port_forward && curl_log_probe "$ADMIN_PORT_FORWARD_URL" "$out"; then
+    return 0
+  fi
+  echo '{"error":"admin evidence log probe failed"}' > "$out"
+  return 1
+}
 
 # --- 1. Capture run configuration ---
 cat > "$BUNDLE_PATH/config.json" <<CONF
@@ -69,6 +195,17 @@ log "Wrote config.json"
 
 # --- 2. Run stress test ---
 log "Running stress test..."
+RUN_START_EPOCH="$(date -u +%s)"
+RPC_BASELINE_QUERY_FAILED=0
+if ! query_rpc_counter_snapshot "$RPC_BASELINE_OUT" "$RUN_START_EPOCH"; then
+  RPC_BASELINE_QUERY_FAILED=1
+  log "WARNING: required metric baseline query failed: rpc_requests"
+fi
+LOG_PROBE_EMIT_FAILED=0
+if ! emit_log_probe; then
+  LOG_PROBE_EMIT_FAILED=1
+  log "WARNING: admin evidence log probe failed"
+fi
 STRESS_OUTPUT="$BUNDLE_PATH/stress-results.json"
 go run "$REPO_ROOT/test/stress/" \
   -addr="$STRESS_ADDR" \
@@ -84,15 +221,44 @@ if [[ ! -s "$STRESS_OUTPUT" ]]; then
 fi
 log "Wrote stress-results.json"
 
+RUN_END_EPOCH="$(date -u +%s)"
+if ((RUN_END_EPOCH <= RUN_START_EPOCH)); then
+  RUN_END_EPOCH=$((RUN_START_EPOCH + 1))
+fi
+
+if ((EVIDENCE_SETTLE_SECONDS > 0)); then
+  log "Waiting ${EVIDENCE_SETTLE_SECONDS}s for telemetry export..."
+  sleep "$EVIDENCE_SETTLE_SECONDS"
+fi
+
+RUN_QUERY_EPOCH="$(date -u +%s)"
+if ((RUN_QUERY_EPOCH <= RUN_END_EPOCH)); then
+  RUN_QUERY_EPOCH=$((RUN_END_EPOCH + 1))
+fi
+
+RUN_WINDOW_SECONDS=$((RUN_QUERY_EPOCH - RUN_START_EPOCH))
+RUN_PROM_WINDOW="${RUN_WINDOW_SECONDS}s"
+RUN_START_NANO=$((RUN_START_EPOCH * 1000000000))
+RUN_QUERY_NANO=$((RUN_QUERY_EPOCH * 1000000000))
+
+cat > "$BUNDLE_PATH/run-window.json" <<WINDOW
+{
+  "start_unix_seconds": $RUN_START_EPOCH,
+  "stress_end_unix_seconds": $RUN_END_EPOCH,
+  "query_unix_seconds": $RUN_QUERY_EPOCH,
+  "query_window_seconds": $RUN_WINDOW_SECONDS,
+  "prometheus_range": "$RUN_PROM_WINDOW"
+}
+WINDOW
+log "Wrote run-window.json"
+
 # --- 3. Metric snapshots ---
 log "Querying metric snapshots..."
-METRICS_DIR="$BUNDLE_PATH/metrics"
-mkdir -p "$METRICS_DIR"
 
 # Metric names follow the otelprom/Mimir convention with type+unit suffixes
 # (Mimir runs with -distributor.otel-metric-suffixes-enabled=true): counters end
 # in _total, duration histograms in _seconds_*, byte gauges in _bytes.
-METRIC_QUERY_FAILURES=0
+METRIC_QUERY_FAILURES=$RPC_BASELINE_QUERY_FAILED
 METRIC_EMPTY_REQUIRED=0
 
 # query_metric NAME QUERY [required]
@@ -101,12 +267,14 @@ METRIC_EMPTY_REQUIRED=0
 # names yields [] with no HTTP error, which must not pass the evidence gate.
 query_metric() {
   local name="$1" query="$2" required="${3:-}" resp out="$METRICS_DIR/$1.json"
-  if resp=$(curl -sf "$MIMIR_PROXY/api/v1/query?query=$(printf '%s' "$query" | jq -sRr @uri)" 2>/dev/null) \
+  if resp=$(curl -G -sf "$MIMIR_PROXY/api/v1/query" \
+      --data-urlencode "query=$query" \
+      --data-urlencode "time=$RUN_QUERY_EPOCH" 2>/dev/null) \
       && printf '%s' "$resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
     printf '%s' "$resp" | jq '.data.result' > "$out"
-    if [[ "$required" == "required" && "$(jq 'length' "$out")" == "0" ]]; then
+    if [[ "$required" == "required" ]] && ! jq -e '[.[]? | ((.value[1]? // "0") | tonumber? // 0)] | any(. > 0)' "$out" >/dev/null; then
       METRIC_EMPTY_REQUIRED=$((METRIC_EMPTY_REQUIRED + 1))
-      log "WARNING: required metric returned no series: $name"
+      log "WARNING: required metric returned no positive current-run value: $name"
     fi
   else
     echo '[]' > "$out"
@@ -115,9 +283,22 @@ query_metric() {
   fi
 }
 
-# rpc_requests is required: any write stress must produce RPC counters, so an
-# empty result here means telemetry never reached Mimir.
-query_metric "rpc_requests" 'sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)' required
+# rpc_requests is required for the current run: any write stress must produce a
+# counter increase between the pre-stress baseline sample and the post-settle
+# sample. A single instant cumulative query can pass on stale series from a reused
+# cluster, while a PromQL range that starts exactly at RUN_START_EPOCH can miss
+# runs whose first in-window export already contains the whole increase.
+if query_rpc_counter_snapshot "$RPC_AFTER_OUT" "$RUN_QUERY_EPOCH"; then
+  compute_rpc_counter_delta "$METRICS_DIR/rpc_requests.json"
+  if ! jq -e '[.[]? | ((.value[1]? // "0") | tonumber? // 0)] | any(. > 0)' "$METRICS_DIR/rpc_requests.json" >/dev/null; then
+    METRIC_EMPTY_REQUIRED=$((METRIC_EMPTY_REQUIRED + 1))
+    log "WARNING: required metric returned no positive current-run delta: rpc_requests"
+  fi
+else
+  echo '[]' > "$METRICS_DIR/rpc_requests.json"
+  METRIC_QUERY_FAILURES=$((METRIC_QUERY_FAILURES + 1))
+  log "WARNING: required metric query failed (no data envelope): rpc_requests"
+fi
 # 5m rate window: the OTel SDK PeriodicReader exports every 60s, so rate[1m]
 # would often see a single sample and return empty for a point-in-time snapshot.
 query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m])) by (le, rpc_method))'
@@ -129,23 +310,138 @@ query_metric "goroutines" 'process_runtime_go_goroutines'
 query_metric "heap_alloc" 'process_runtime_go_mem_heap_alloc_bytes'
 log "Wrote metric snapshots ($METRIC_QUERY_FAILURES query failure(s), $METRIC_EMPTY_REQUIRED required-empty)"
 
-# --- 4. Trace and profile references ---
-log "Capturing trace/profile query references..."
+# --- 4. Trace, log, and profile evidence ---
+log "Capturing trace/log/profile query references..."
 cat > "$BUNDLE_PATH/queries.json" <<QUERIES
 {
   "traces": {
     "grafana_explore_url": "$GRAFANA_URL/explore?orgId=1&left=%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22queryType%22%3A%22traceqlSearch%22%7D%5D%7D",
+    "gate_query": "service.name=scrapd",
     "slow_writes": "{ span.scrap.write.stage = \"raft_propose\" } | duration > 100ms",
     "errors": "{ status = error }"
   },
+  "logs": {
+    "grafana_explore_url": "$GRAFANA_URL/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%7D",
+    "gate_query": "{service_name=\"scrapd\"} |= \"$LOG_MARKER\"",
+    "marker": "$LOG_MARKER",
+    "probe_url": "${SCRAP_ADMIN_URL%/}/healthz"
+  },
   "profiles": {
     "grafana_explore_url": "$GRAFANA_URL/explore?orgId=1&left=%7B%22datasource%22%3A%22pyroscope%22%7D",
-    "cpu_query": "process_cpu{service_name=\"scrapd\"}",
-    "heap_query": "memory{service_name=\"scrapd\"}"
+    "cpu_query": "process_cpu:cpu:nanoseconds:cpu:nanoseconds{service_name=\"scrapd\"}",
+    "heap_queries": [
+      "memory:inuse_space:bytes:space:bytes{service_name=\"scrapd\"}",
+      "memory:alloc_space:bytes:space:bytes{service_name=\"scrapd\"}"
+    ]
   }
 }
 QUERIES
 log "Wrote queries.json"
+
+TRACE_EVIDENCE_OK=false
+TRACE_EVIDENCE_REASON="Tempo query failed"
+LOG_EVIDENCE_OK=false
+LOG_EVIDENCE_REASON="Loki query failed"
+CPU_PROFILE_OK=false
+CPU_PROFILE_REASON="Pyroscope CPU profile query failed"
+HEAP_PROFILE_OK=false
+HEAP_PROFILE_REASON="Pyroscope heap profile query failed"
+
+log "Querying trace evidence..."
+TRACE_OUT="$TRACES_DIR/scrapd.json"
+if trace_resp=$(curl -G -sf "$TEMPO_PROXY/api/search" \
+    --data-urlencode "tags=service.name=scrapd" \
+    --data-urlencode "start=$RUN_START_EPOCH" \
+    --data-urlencode "end=$RUN_QUERY_EPOCH" \
+    --data-urlencode "limit=20" 2>/dev/null) \
+    && printf '%s' "$trace_resp" | jq -e 'has("traces")' >/dev/null 2>&1; then
+  printf '%s' "$trace_resp" | jq . > "$TRACE_OUT"
+  trace_count="$(jq '(.traces // []) | length' "$TRACE_OUT")"
+  if ((trace_count > 0)); then
+    TRACE_EVIDENCE_OK=true
+    TRACE_EVIDENCE_REASON="$trace_count trace(s) found for service.name=scrapd"
+  else
+    TRACE_EVIDENCE_REASON="no Tempo traces found for service.name=scrapd in current run window"
+  fi
+else
+  echo '{"traces":[]}' > "$TRACE_OUT"
+fi
+
+log "Querying log evidence..."
+LOG_OUT="$LOGS_DIR/scrapd.json"
+LOG_QUERY="{service_name=\"scrapd\"} |= \"$LOG_MARKER\""
+if log_resp=$(curl -G -sf "$LOKI_PROXY/loki/api/v1/query_range" \
+    --data-urlencode "query=$LOG_QUERY" \
+    --data-urlencode "start=$RUN_START_NANO" \
+    --data-urlencode "end=$RUN_QUERY_NANO" \
+    --data-urlencode "limit=20" \
+    --data-urlencode "direction=forward" 2>/dev/null) \
+    && printf '%s' "$log_resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
+  printf '%s' "$log_resp" | jq . > "$LOG_OUT"
+  log_count="$(jq '[.data.result[]?.values[]?] | length' "$LOG_OUT")"
+  if ((LOG_PROBE_EMIT_FAILED > 0)); then
+    LOG_EVIDENCE_REASON="admin evidence log probe failed before Loki query"
+  elif ((log_count > 0)); then
+    LOG_EVIDENCE_OK=true
+    LOG_EVIDENCE_REASON="$log_count log line(s) found for evidence marker $LOG_MARKER"
+  else
+    LOG_EVIDENCE_REASON="no Loki log line found for evidence marker $LOG_MARKER in current run window"
+  fi
+else
+  echo '{"status":"error","data":{"result":[]}}' > "$LOG_OUT"
+  if ((LOG_PROBE_EMIT_FAILED > 0)); then
+    LOG_EVIDENCE_REASON="admin evidence log probe failed before Loki query"
+  fi
+fi
+
+profile_has_data() {
+  jq -e '((.timeline.samples // []) | length > 0) or
+         ((.flamebearer.levels // []) | length > 0) or
+         ((.groups // {}) | length > 0)' >/dev/null 2>&1
+}
+
+query_profile() {
+  local name="$1" query="$2" out="$PROFILES_DIR/$1.json" resp
+  if resp=$(curl -G -sf "$PYROSCOPE_PROXY/pyroscope/render" \
+      --data-urlencode "query=$query" \
+      --data-urlencode "from=$RUN_START_EPOCH" \
+      --data-urlencode "until=$RUN_QUERY_EPOCH" \
+      --data-urlencode "format=json" \
+      --data-urlencode "maxNodes=64" 2>/dev/null) \
+      && printf '%s' "$resp" | jq . >/dev/null 2>&1; then
+    printf '%s' "$resp" | jq . > "$out"
+    if profile_has_data < "$out"; then
+      return 0
+    fi
+    return 1
+  fi
+  echo '{"timeline":{"samples":[]}}' > "$out"
+  return 1
+}
+
+log "Querying profile evidence..."
+CPU_PROFILE_QUERY='process_cpu:cpu:nanoseconds:cpu:nanoseconds{service_name="scrapd"}'
+if query_profile "cpu" "$CPU_PROFILE_QUERY"; then
+  CPU_PROFILE_OK=true
+  CPU_PROFILE_REASON="CPU profile data found for service_name=scrapd"
+else
+  CPU_PROFILE_REASON="no Pyroscope CPU profile data found for service_name=scrapd in current run window"
+fi
+
+for heap_spec in \
+  'heap_inuse_space|memory:inuse_space:bytes:space:bytes{service_name="scrapd"}' \
+  'heap_alloc_space|memory:alloc_space:bytes:space:bytes{service_name="scrapd"}'; do
+  heap_name="${heap_spec%%|*}"
+  heap_query="${heap_spec#*|}"
+  if query_profile "$heap_name" "$heap_query"; then
+    HEAP_PROFILE_OK=true
+    HEAP_PROFILE_REASON="heap profile data found via $heap_name for service_name=scrapd"
+    break
+  fi
+  HEAP_PROFILE_REASON="no Pyroscope heap profile data found for service_name=scrapd in current run window"
+done
+
+log "Wrote trace/log/profile evidence"
 
 # --- 5. Pass/fail evidence gate checks ---
 log "Evaluating evidence gates..."
@@ -157,7 +453,17 @@ GATES_FILE="$BUNDLE_PATH/gates.json"
 #   pressure   -> total_writes / other_errors (pressure_rejections are intentional)
 # error_rate is derived (no scenario emits it directly); metrics_captured fails
 # the bundle when any Mimir snapshot query failed OR a required metric was empty.
-jq --argjson metric_failures "$METRIC_QUERY_FAILURES" --argjson metric_empty_required "$METRIC_EMPTY_REQUIRED" '
+jq \
+  --argjson metric_failures "$METRIC_QUERY_FAILURES" \
+  --argjson metric_empty_required "$METRIC_EMPTY_REQUIRED" \
+  --argjson traces_ok "$TRACE_EVIDENCE_OK" \
+  --arg trace_reason "$TRACE_EVIDENCE_REASON" \
+  --argjson logs_ok "$LOG_EVIDENCE_OK" \
+  --arg log_reason "$LOG_EVIDENCE_REASON" \
+  --argjson cpu_profile_ok "$CPU_PROFILE_OK" \
+  --arg cpu_profile_reason "$CPU_PROFILE_REASON" \
+  --argjson heap_profile_ok "$HEAP_PROFILE_OK" \
+  --arg heap_profile_reason "$HEAP_PROFILE_REASON" '
   # writes drives the "writes produced" gate; ops/errors drive the error rate.
   # For mixed, ops and errors span write+read+head so failing reads or heads are
   # not masked by healthy writes.
@@ -181,7 +487,8 @@ jq --argjson metric_failures "$METRIC_QUERY_FAILURES" --argjson metric_empty_req
   (if $o > 0 then ($e / $o) else 1 end) as $rate |
   (($metric_failures == 0) and ($metric_empty_required == 0)) as $metrics_ok |
   {
-    pass: ($completed and ($w > 0) and ($o > 0) and ($rate < 0.01) and $metrics_ok),
+    pass: ($completed and ($w > 0) and ($o > 0) and ($rate < 0.01) and $metrics_ok and
+      $traces_ok and $logs_ok and $cpu_profile_ok and $heap_profile_ok),
     scenario: (.scenario // "unknown"),
     checks: [
       {name: "stress_completed", pass: $completed,
@@ -190,7 +497,11 @@ jq --argjson metric_failures "$METRIC_QUERY_FAILURES" --argjson metric_empty_req
       {name: "error_rate_below_1pct", pass: ($o > 0 and $rate < 0.01),
        reason: "error_rate=\((($rate * 10000) | floor) / 10000) errors=\($e) ops=\($o)"},
       {name: "metrics_captured", pass: $metrics_ok,
-       reason: "\($metric_failures) query failure(s), \($metric_empty_required) required-empty"}
+       reason: "\($metric_failures) query failure(s), \($metric_empty_required) required-empty"},
+      {name: "traces_captured", pass: $traces_ok, reason: $trace_reason},
+      {name: "logs_captured", pass: $logs_ok, reason: $log_reason},
+      {name: "cpu_profile_captured", pass: $cpu_profile_ok, reason: $cpu_profile_reason},
+      {name: "heap_profile_captured", pass: $heap_profile_ok, reason: $heap_profile_reason}
     ]
   }
 ' "$STRESS_OUTPUT" > "$GATES_FILE" 2>/dev/null \

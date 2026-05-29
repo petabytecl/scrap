@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,6 +70,64 @@ func TestServer_HealthEndpointReportsUploadPressure(t *testing.T) {
 	}
 	if got["upload_pending_blocks"] != float64(3) {
 		t.Fatalf("upload_pending_blocks = %v, want 3", got["upload_pending_blocks"])
+	}
+}
+
+func TestServer_HealthEndpointLogsEvidenceMarker(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	srv := admin.New(admin.WithLogger(logger))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Scrap-Evidence-Marker", "scrap-evidence-20260529T120000Z-abc1234")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+	got := logs.String()
+	if !strings.Contains(got, `"msg":"evidence log probe"`) {
+		t.Fatalf("missing evidence log probe message: %s", got)
+	}
+	if !strings.Contains(got, `"evidence_marker":"scrap-evidence-20260529T120000Z-abc1234"`) {
+		t.Fatalf("missing evidence marker attribute: %s", got)
+	}
+}
+
+func TestServer_HealthEndpointRejectsInvalidEvidenceMarker(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	srv := admin.New(admin.WithLogger(logger))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Scrap-Evidence-Marker", "bad marker with spaces")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400", resp.StatusCode)
+	}
+	if logs.Len() > 0 {
+		t.Fatalf("invalid marker should not be logged: %s", logs.String())
 	}
 }
 

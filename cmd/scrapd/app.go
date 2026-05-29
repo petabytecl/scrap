@@ -163,6 +163,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger) (*App, error) 
 	peer.RegisterServer(peerGS, peerSrv)
 
 	adminOpts := []admin.Option{
+		admin.WithLogger(logger),
 		admin.WithUploadPressureProvider(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
 	}

@@ -44,6 +44,7 @@ data:
 
       - name: Pyroscope
         type: grafana-pyroscope-datasource
+        uid: pyroscope
         access: proxy
         url: http://pyroscope.monitoring.svc:4040
         editable: false
