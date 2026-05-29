@@ -88,17 +88,10 @@ type Shard struct {
 	idxWriter   *block.IndexWriter
 	nextBlockID uint64
 
-	proposalMu     sync.Mutex
-	proposals      map[string]chan error
-	scrubProposals map[string]chan scrub.Result
+	proposalMu sync.Mutex
+	proposals  map[string]chan error
 
-	scrubMu     sync.RWMutex
-	scrubResult *scrub.Result
-
-	scrubber     *scrub.Light
-	deepScrubber *scrub.Deep
-	scrubCancel  context.CancelFunc
-
+	scrubs                  *scrubCoordinator
 	uploads                 *uploadController
 	uploadPressureScrubGate *pressurePauseGate
 	orphanedSeals           []index.PendingUpload
@@ -165,11 +158,11 @@ func Open(cfg Config) (*Shard, error) {
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
-		scrubProposals:          make(map[string]chan scrub.Result),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
 		bootstrapGrace:          cfg.BootstrapGrace,
 	}
+	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressureScrubGate)
 	done := make(chan struct{})
 	close(done)
 	s.rebuildDone.Store(&done)
@@ -214,7 +207,7 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.uploads.setAuthPausedMetric(false)
 
-	s.startScrubber(cfg)
+	s.scrubs.Start(cfg)
 	s.uploads.Start()
 
 	return s, nil
@@ -227,48 +220,6 @@ func ensureShardDirs(dirs ...string) error {
 		}
 	}
 	return nil
-}
-
-func (s *Shard) startScrubber(cfg Config) {
-	if !cfg.Scrub.Enabled {
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.scrubCancel = cancel
-	if cfg.ConsistencyChecker != nil && cfg.Metrics != nil {
-		s.scrubber = scrub.NewLight(scrub.LightConfig{
-			Proposer:           s,
-			ConsistencyChecker: cfg.ConsistencyChecker,
-			LeaderChecker:      s,
-			Metrics:            cfg.Metrics,
-			Rebuilder:          cfg.Rebuilder,
-			Logger:             s.baseLogger.With("component", "scrub"),
-			PeerAddrs:          cfg.PeerAddrs,
-			Interval:           cfg.Scrub.LightScrubInterval,
-			Jitter:             cfg.Scrub.Jitter,
-		})
-		s.scrubber.Start(ctx)
-	}
-	if cfg.DeepMetrics != nil {
-		s.deepScrubber = scrub.NewDeep(scrub.DeepConfig{
-			BlockLister:       s,
-			BlockVerifier:     s,
-			QuarantineManager: s,
-			Metrics:           cfg.DeepMetrics,
-			LatencySignal:     cfg.LatencySignal,
-			BlockRepairer:     cfg.BlockRepairer,
-			PauseController:   s.uploadPressureScrubGate,
-			Logger:            s.baseLogger.With("component", "deep_scrub"),
-			IOBudget:          scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
-			PeerAddrs:         cfg.PeerAddrs,
-			CorruptCap:        cfg.Scrub.CorruptCap,
-			PauseThreshold:    cfg.Scrub.PauseLatency,
-			PauseCooldown:     cfg.Scrub.PauseCooldown,
-			Interval:          cfg.Scrub.DeepScrubInterval,
-			Jitter:            cfg.Scrub.Jitter,
-		})
-		s.deepScrubber.Start(ctx)
-	}
 }
 
 //nolint:cyclop,gocognit // orchestration function managing seal check, prep file, block append, raft propose, and apply
@@ -874,15 +825,7 @@ func (s *Shard) RaftStep(ctx context.Context, msg raftpb.Message) error {
 }
 
 func (s *Shard) Close() error {
-	if s.scrubCancel != nil {
-		s.scrubCancel()
-	}
-	if s.scrubber != nil {
-		s.scrubber.Stop()
-	}
-	if s.deepScrubber != nil {
-		s.deepScrubber.Stop()
-	}
+	s.scrubs.Stop()
 	s.uploads.Stop()
 	s.raft.Stop()
 	s.WaitRebuild()
@@ -1004,7 +947,7 @@ func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) e
 	case *scrapv1.RaftCommand_CommitDoc:
 		s.applyCommitDocumentCommand(c.CommitDoc)
 	case *scrapv1.RaftCommand_ConsistencyCheck:
-		s.applyConsistencyCheckCommand(c.ConsistencyCheck, entryIndex)
+		s.scrubs.applyConsistencyCheck(c.ConsistencyCheck, entryIndex)
 	case *scrapv1.RaftCommand_SealBlock:
 		return s.applySealBlock(c.SealBlock)
 	case *scrapv1.RaftCommand_ConfirmUpload:
@@ -1026,89 +969,38 @@ func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument) {
 	}
 }
 
-func (s *Shard) applyConsistencyCheckCommand(cc *scrapv1.RequestConsistencyCheck, entryIndex uint64) {
-	result := s.applyConsistencyCheck(cc, entryIndex)
-
-	s.proposalMu.Lock()
-	defer s.proposalMu.Unlock()
-
-	if ch, ok := s.scrubProposals[result.ScrubID]; ok {
-		ch <- result
-		delete(s.scrubProposals, result.ScrubID)
-	}
-}
-
-func (s *Shard) applyConsistencyCheck(cc *scrapv1.RequestConsistencyCheck, entryIndex uint64) scrub.Result {
+func (s *Shard) scrubProjectionResult(scrubID string, entryIndex uint64) scrub.Result {
 	s.mu.Lock()
 	s.idx.SetAppliedIndex(entryIndex)
 	_, hash, err := s.idx.StreamingHash()
 	s.mu.Unlock()
 
 	result := scrub.Result{
-		ScrubID:      cc.ScrubId,
+		ScrubID:      scrubID,
 		AppliedIndex: entryIndex,
 	}
 	if err == nil {
 		result.SHA256 = hash
 	}
-
-	s.scrubMu.Lock()
-	s.scrubResult = &result
-	s.scrubMu.Unlock()
-
 	return result
 }
 
 func (s *Shard) ProposeConsistencyCheck(ctx context.Context, scrubID string) (scrub.Result, error) {
-	if err := s.requireLeader(); err != nil {
-		return scrub.Result{}, err
-	}
-
-	cmd := &scrapv1.RaftCommand{
-		Command: &scrapv1.RaftCommand_ConsistencyCheck{
-			ConsistencyCheck: &scrapv1.RequestConsistencyCheck{
-				ScrubId:       scrubID,
-				RequestedAtUs: time.Now().UnixMicro(),
-			},
-		},
-	}
-
-	data, err := proto.Marshal(cmd)
-	if err != nil {
-		return scrub.Result{}, fmt.Errorf("shard: marshal consistency check: %w", err)
-	}
-
-	doneCh := make(chan scrub.Result, 1)
-	s.proposalMu.Lock()
-	s.scrubProposals[scrubID] = doneCh
-	s.proposalMu.Unlock()
-
-	if err := s.raft.Propose(ctx, data); err != nil {
-		s.proposalMu.Lock()
-		delete(s.scrubProposals, scrubID)
-		s.proposalMu.Unlock()
-		return scrub.Result{}, fmt.Errorf("shard: propose consistency check: %w", err)
-	}
-
-	select {
-	case result := <-doneCh:
-		return result, nil
-	case <-ctx.Done():
-		s.proposalMu.Lock()
-		delete(s.scrubProposals, scrubID)
-		s.proposalMu.Unlock()
-		return scrub.Result{}, ctx.Err()
-	}
+	return s.scrubs.ProposeConsistencyCheck(ctx, scrubID)
 }
 
 func (s *Shard) GetScrubResult(scrubID string) (scrub.Result, bool) {
-	s.scrubMu.RLock()
-	defer s.scrubMu.RUnlock()
+	return s.scrubs.GetScrubResult(scrubID)
+}
 
-	if s.scrubResult == nil || s.scrubResult.ScrubID != scrubID {
-		return scrub.Result{}, false
+func (s *Shard) currentOpenBlockID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.blockWriter == nil {
+		return 0
 	}
-	return *s.scrubResult, true
+	return s.blockWriter.BlockID()
 }
 
 func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
@@ -1437,7 +1329,6 @@ func (t *noopTransport) Send(_ []raftpb.Message) {}
 var (
 	_ storeapi.Store      = (*Shard)(nil)
 	_ scrub.ResultCache   = (*Shard)(nil)
-	_ scrub.Proposer      = (*Shard)(nil)
 	_ scrub.LeaderChecker = (*Shard)(nil)
 )
 
