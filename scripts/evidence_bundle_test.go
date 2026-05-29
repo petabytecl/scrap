@@ -61,6 +61,15 @@ func TestEvidenceBundleFailsWhenLogEvidenceIsMissing(t *testing.T) {
 	assertCheck(t, gate, "logs_captured", false)
 }
 
+func TestEvidenceBundleFailsWhenLogProbeCannotBeEmitted(t *testing.T) {
+	gate := runEvidenceBundle(t, "log-probe")
+
+	if gate.Pass {
+		t.Fatalf("expected gate to fail when the evidence log probe cannot be emitted")
+	}
+	assertCheck(t, gate, "logs_captured", false)
+}
+
 func TestEvidenceBundleFailsWhenProfileEvidenceIsMissing(t *testing.T) {
 	gate := runEvidenceBundle(t, "profile")
 
@@ -187,27 +196,39 @@ if [[ "$args" == *"/api/search"* ]]; then
   exit 0
 fi
 
+if [[ "$args" == *"/healthz"* ]]; then
+  if [[ "$missing" == "log-probe" ]]; then
+    exit 22
+  fi
+  echo '{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}'
+  exit 0
+fi
+
 if [[ "$args" == *"/loki/api/v1/query_range"* ]]; then
   if [[ "$missing" == "log" ]]; then
     echo '{"status":"success","data":{"resultType":"streams","result":[]}}'
   else
-    echo '{"status":"success","data":{"resultType":"streams","result":[{"stream":{"service_name":"scrapd"},"values":[["1780056000000000000","scrapd starting"]]}]}}'
+    echo '{"status":"success","data":{"resultType":"streams","result":[{"stream":{"service_name":"scrapd"},"values":[["1780056000000000000","evidence_marker=scrap-evidence-20260529T120000Z-abc1234"]]}]}}'
   fi
   exit 0
 fi
 
 if [[ "$args" == *"/api/v1/query"* ]]; then
-  if [[ "$args" == *"scrap_rpc_server_requests_total"* && "$args" != *"increase(scrap_rpc_server_requests_total"* ]]; then
-    echo "rpc metric did not use increase()" >&2
-    exit 22
-  fi
-  if [[ "$args" == *"scrap_rpc_server_requests_total"* && "$args" == *"[60s]"* ]]; then
-    echo "rpc metric window was expanded before the run start" >&2
-    exit 22
+  if [[ "$args" == *"scrap_rpc_server_requests_total"* && "$args" == *"time=1780056000"* ]]; then
+    cat <<'JSON'
+{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056000,"100"]}]}}
+JSON
+    exit 0
   fi
   if [[ "$missing" == "metric" && "$args" == *"scrap_rpc_server_requests_total"* ]]; then
     cat <<'JSON'
-{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056000,"0"]}]}}
+{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056002,"100"]}]}}
+JSON
+    exit 0
+  fi
+  if [[ "$args" == *"scrap_rpc_server_requests_total"* ]]; then
+    cat <<'JSON'
+{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056002,"120"]}]}}
 JSON
     exit 0
   fi

@@ -5,17 +5,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"regexp"
 	"sync"
 	"time"
 )
 
 const (
-	readHeaderTimeout    = 10 * time.Second
-	maxTestHookBodyBytes = 1024
+	readHeaderTimeout         = 10 * time.Second
+	maxTestHookBodyBytes      = 1024
+	evidenceMarkerHeader      = "X-Scrap-Evidence-Marker"
+	maxEvidenceMarkerLen      = 96
+	evidenceLogProbeMessage   = "evidence log probe"
+	evidenceLogProbeAttribute = "evidence_marker"
 )
+
+var evidenceMarkerChars = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
 
 type ProjectionInjector interface {
 	InjectProjectionKey(ctx context.Context, txID string, blockID uint64, docCount uint16, completed bool) error
@@ -35,6 +43,7 @@ type Server struct {
 	uploadPressure     UploadPressureProvider
 	pprofEnabled       bool
 	metricsHandler     http.Handler
+	logger             *slog.Logger
 }
 
 func WithProjectionInjector(injector ProjectionInjector) Option {
@@ -58,6 +67,12 @@ func WithPprof() Option {
 func WithMetrics(handler http.Handler) Option {
 	return func(s *Server) {
 		s.metricsHandler = handler
+	}
+}
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(s *Server) {
+		s.logger = logger
 	}
 }
 
@@ -187,7 +202,17 @@ type healthResponse struct {
 	UploadPendingBlocks int    `json:"upload_pending_blocks"`
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if marker := r.Header.Get(evidenceMarkerHeader); marker != "" {
+		if !validEvidenceMarker(marker) {
+			http.Error(w, "invalid evidence marker", http.StatusBadRequest)
+			return
+		}
+		if s.logger != nil {
+			s.logger.InfoContext(r.Context(), evidenceLogProbeMessage, evidenceLogProbeAttribute, marker)
+		}
+	}
+
 	resp := healthResponse{
 		Status:              "ok",
 		UploadPressure:      "ok",
@@ -206,4 +231,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "encode health response failed", http.StatusInternalServerError)
 		return
 	}
+}
+
+func validEvidenceMarker(marker string) bool {
+	if len(marker) == 0 || len(marker) > maxEvidenceMarkerLen {
+		return false
+	}
+	return evidenceMarkerChars.MatchString(marker)
 }

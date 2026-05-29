@@ -6,6 +6,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUNDLE_DIR="${BUNDLE_DIR:-$REPO_ROOT/evidence}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:13000}"
+SCRAP_ADMIN_URL="${SCRAP_ADMIN_URL:-http://127.0.0.1:18100}"
+KUBECTL="${KUBECTL:-kubectl}"
+SCRAP_NAMESPACE="${SCRAP_NAMESPACE:-scrap}"
 # Query Mimir through Grafana's datasource proxy, addressed by stable uid (grafana-datasources.yaml).
 MIMIR_PROXY="${MIMIR_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/mimir}"
 TEMPO_PROXY="${TEMPO_PROXY:-${GRAFANA_URL%/}/api/datasources/proxy/uid/tempo}"
@@ -17,6 +20,7 @@ WORKERS="${STRESS_WORKERS:-8}"
 DURATION="${STRESS_DURATION:-60s}"
 DOC_SIZE="${STRESS_DOC_SIZE:-16384}"
 EVIDENCE_SETTLE_SECONDS="${EVIDENCE_SETTLE_SECONDS:-75}"
+EVIDENCE_PROBE_TIMEOUT_SECONDS="${EVIDENCE_PROBE_TIMEOUT_SECONDS:-5}"
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -32,6 +36,9 @@ Scenarios: throughput, mixed, pressure
 Environment variables:
   BUNDLE_DIR       Output directory (default: ./evidence)
   GRAFANA_URL      Grafana base URL (default: http://127.0.0.1:13000)
+  SCRAP_ADMIN_URL  scrapd admin HTTP base URL (default: http://127.0.0.1:18100)
+  KUBECTL          kubectl binary (default: kubectl)
+  SCRAP_NAMESPACE  Kubernetes namespace for scrapd (default: scrap)
   MIMIR_PROXY      Mimir query base URL (default: \$GRAFANA_URL's datasource
                    proxy for uid=mimir, i.e. \$GRAFANA_URL/api/datasources/proxy/uid/mimir)
   TEMPO_PROXY      Tempo query base URL (default: \$GRAFANA_URL/api/datasources/proxy/uid/tempo)
@@ -44,6 +51,8 @@ Environment variables:
   EVIDENCE_SETTLE_SECONDS
                    Seconds to wait after stress before querying telemetry
                    (default: 75; set to 0 only in tests)
+  EVIDENCE_PROBE_TIMEOUT_SECONDS
+                   Per-attempt timeout for the admin log probe (default: 5)
 EOF
   exit 1
 }
@@ -58,11 +67,113 @@ if ! [[ "$EVIDENCE_SETTLE_SECONDS" =~ ^[0-9]+$ ]]; then
   log "ERROR: EVIDENCE_SETTLE_SECONDS must be a non-negative integer"
   exit 2
 fi
+if ! [[ "$EVIDENCE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  log "ERROR: EVIDENCE_PROBE_TIMEOUT_SECONDS must be a positive integer"
+  exit 2
+fi
 
 mkdir -p "$BUNDLE_PATH"
+METRICS_DIR="$BUNDLE_PATH/metrics"
+TRACES_DIR="$BUNDLE_PATH/traces"
+LOGS_DIR="$BUNDLE_PATH/logs"
+PROFILES_DIR="$BUNDLE_PATH/profiles"
+mkdir -p "$METRICS_DIR" "$TRACES_DIR" "$LOGS_DIR" "$PROFILES_DIR"
+
+LOG_MARKER="scrap-evidence-${TIMESTAMP}-${GIT_SHA}"
 
 log "Bundle: $BUNDLE_NAME"
 log "Scenario: $SCENARIO (workers=$WORKERS, duration=$DURATION, doc_size=$DOC_SIZE)"
+
+RPC_COUNTER_QUERY='sum(scrap_rpc_server_requests_total) by (rpc_method, rpc_grpc_status_code)'
+RPC_BASELINE_OUT="$METRICS_DIR/rpc_requests_baseline.json"
+RPC_AFTER_OUT="$METRICS_DIR/rpc_requests_cumulative_after.json"
+ADMIN_PORT_FORWARD_PID=""
+ADMIN_PORT_FORWARD_URL=""
+
+cleanup() {
+  if [[ -n "$ADMIN_PORT_FORWARD_PID" ]] && kill -0 "$ADMIN_PORT_FORWARD_PID" >/dev/null 2>&1; then
+    kill "$ADMIN_PORT_FORWARD_PID" >/dev/null 2>&1 || true
+    wait "$ADMIN_PORT_FORWARD_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+query_rpc_counter_snapshot() {
+  local out="$1" at="$2" resp
+  if resp=$(curl -G -sf "$MIMIR_PROXY/api/v1/query" \
+      --data-urlencode "query=$RPC_COUNTER_QUERY" \
+      --data-urlencode "time=$at" 2>/dev/null) \
+      && printf '%s' "$resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
+    printf '%s' "$resp" | jq '.data.result' > "$out"
+    return 0
+  fi
+  echo '[]' > "$out"
+  return 1
+}
+
+compute_rpc_counter_delta() {
+  local out="$1"
+  jq -n \
+    --argjson at "$RUN_QUERY_EPOCH" \
+    --slurpfile before "$RPC_BASELINE_OUT" \
+    --slurpfile after "$RPC_AFTER_OUT" '
+    def series_key:
+      ((.metric.rpc_method // "") + "\u0000" + (.metric.rpc_grpc_status_code // ""));
+    def sample_value:
+      ((.value[1]? // "0") | tonumber? // 0);
+    (($before[0] // []) | map({key: series_key, value: sample_value}) | from_entries) as $before_by_key |
+    [
+      ($after[0] // [])[]? as $row |
+      ($row | series_key) as $key |
+      ($row | sample_value) as $after_value |
+      ($before_by_key[$key] // 0) as $before_value |
+      (if $after_value >= $before_value then $after_value - $before_value else $after_value end) as $delta |
+      select($delta > 0) |
+      {metric: $row.metric, value: [$at, ($delta | tostring)]}
+    ]
+  ' > "$out"
+}
+
+curl_log_probe() {
+  local base_url="$1" out="$2"
+  if curl -sf \
+      --max-time "$EVIDENCE_PROBE_TIMEOUT_SECONDS" \
+      -H "X-Scrap-Evidence-Marker: $LOG_MARKER" \
+      "${base_url%/}/healthz" > "$out" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+start_admin_port_forward() {
+  local log_file="$LOGS_DIR/admin-port-forward.log" port
+  "$KUBECTL" -n "$SCRAP_NAMESPACE" port-forward svc/scrap ":9100" > "$log_file" 2>&1 &
+  ADMIN_PORT_FORWARD_PID=$!
+  for _ in {1..50}; do
+    if ! kill -0 "$ADMIN_PORT_FORWARD_PID" >/dev/null 2>&1; then
+      return 1
+    fi
+    port="$(sed -n 's/.*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$log_file" | head -n1)"
+    if [[ -n "$port" ]]; then
+      ADMIN_PORT_FORWARD_URL="http://127.0.0.1:$port"
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+emit_log_probe() {
+  local out="$LOGS_DIR/evidence-probe-health.json"
+  if curl_log_probe "$SCRAP_ADMIN_URL" "$out"; then
+    return 0
+  fi
+  if start_admin_port_forward && curl_log_probe "$ADMIN_PORT_FORWARD_URL" "$out"; then
+    return 0
+  fi
+  echo '{"error":"admin evidence log probe failed"}' > "$out"
+  return 1
+}
 
 # --- 1. Capture run configuration ---
 cat > "$BUNDLE_PATH/config.json" <<CONF
@@ -85,6 +196,16 @@ log "Wrote config.json"
 # --- 2. Run stress test ---
 log "Running stress test..."
 RUN_START_EPOCH="$(date -u +%s)"
+RPC_BASELINE_QUERY_FAILED=0
+if ! query_rpc_counter_snapshot "$RPC_BASELINE_OUT" "$RUN_START_EPOCH"; then
+  RPC_BASELINE_QUERY_FAILED=1
+  log "WARNING: required metric baseline query failed: rpc_requests"
+fi
+LOG_PROBE_EMIT_FAILED=0
+if ! emit_log_probe; then
+  LOG_PROBE_EMIT_FAILED=1
+  log "WARNING: admin evidence log probe failed"
+fi
 STRESS_OUTPUT="$BUNDLE_PATH/stress-results.json"
 go run "$REPO_ROOT/test/stress/" \
   -addr="$STRESS_ADDR" \
@@ -133,13 +254,11 @@ log "Wrote run-window.json"
 
 # --- 3. Metric snapshots ---
 log "Querying metric snapshots..."
-METRICS_DIR="$BUNDLE_PATH/metrics"
-mkdir -p "$METRICS_DIR"
 
 # Metric names follow the otelprom/Mimir convention with type+unit suffixes
 # (Mimir runs with -distributor.otel-metric-suffixes-enabled=true): counters end
 # in _total, duration histograms in _seconds_*, byte gauges in _bytes.
-METRIC_QUERY_FAILURES=0
+METRIC_QUERY_FAILURES=$RPC_BASELINE_QUERY_FAILED
 METRIC_EMPTY_REQUIRED=0
 
 # query_metric NAME QUERY [required]
@@ -165,9 +284,21 @@ query_metric() {
 }
 
 # rpc_requests is required for the current run: any write stress must produce a
-# counter increase during this bundle's run window. An instant cumulative query
-# can pass on stale series from a reused cluster, so this gate must use increase().
-query_metric "rpc_requests" "sum(increase(scrap_rpc_server_requests_total[$RUN_PROM_WINDOW])) by (rpc_method, rpc_grpc_status_code)" required
+# counter increase between the pre-stress baseline sample and the post-settle
+# sample. A single instant cumulative query can pass on stale series from a reused
+# cluster, while a PromQL range that starts exactly at RUN_START_EPOCH can miss
+# runs whose first in-window export already contains the whole increase.
+if query_rpc_counter_snapshot "$RPC_AFTER_OUT" "$RUN_QUERY_EPOCH"; then
+  compute_rpc_counter_delta "$METRICS_DIR/rpc_requests.json"
+  if ! jq -e '[.[]? | ((.value[1]? // "0") | tonumber? // 0)] | any(. > 0)' "$METRICS_DIR/rpc_requests.json" >/dev/null; then
+    METRIC_EMPTY_REQUIRED=$((METRIC_EMPTY_REQUIRED + 1))
+    log "WARNING: required metric returned no positive current-run delta: rpc_requests"
+  fi
+else
+  echo '[]' > "$METRICS_DIR/rpc_requests.json"
+  METRIC_QUERY_FAILURES=$((METRIC_QUERY_FAILURES + 1))
+  log "WARNING: required metric query failed (no data envelope): rpc_requests"
+fi
 # 5m rate window: the OTel SDK PeriodicReader exports every 60s, so rate[1m]
 # would often see a single sample and return empty for a point-in-time snapshot.
 query_metric "rpc_duration_p99" 'histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m])) by (le, rpc_method))'
@@ -191,7 +322,9 @@ cat > "$BUNDLE_PATH/queries.json" <<QUERIES
   },
   "logs": {
     "grafana_explore_url": "$GRAFANA_URL/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%7D",
-    "gate_query": "{service_name=\"scrapd\"}"
+    "gate_query": "{service_name=\"scrapd\"} |= \"$LOG_MARKER\"",
+    "marker": "$LOG_MARKER",
+    "probe_url": "${SCRAP_ADMIN_URL%/}/healthz"
   },
   "profiles": {
     "grafana_explore_url": "$GRAFANA_URL/explore?orgId=1&left=%7B%22datasource%22%3A%22pyroscope%22%7D",
@@ -204,11 +337,6 @@ cat > "$BUNDLE_PATH/queries.json" <<QUERIES
 }
 QUERIES
 log "Wrote queries.json"
-
-TRACES_DIR="$BUNDLE_PATH/traces"
-LOGS_DIR="$BUNDLE_PATH/logs"
-PROFILES_DIR="$BUNDLE_PATH/profiles"
-mkdir -p "$TRACES_DIR" "$LOGS_DIR" "$PROFILES_DIR"
 
 TRACE_EVIDENCE_OK=false
 TRACE_EVIDENCE_REASON="Tempo query failed"
@@ -241,8 +369,9 @@ fi
 
 log "Querying log evidence..."
 LOG_OUT="$LOGS_DIR/scrapd.json"
+LOG_QUERY="{service_name=\"scrapd\"} |= \"$LOG_MARKER\""
 if log_resp=$(curl -G -sf "$LOKI_PROXY/loki/api/v1/query_range" \
-    --data-urlencode 'query={service_name="scrapd"}' \
+    --data-urlencode "query=$LOG_QUERY" \
     --data-urlencode "start=$RUN_START_NANO" \
     --data-urlencode "end=$RUN_QUERY_NANO" \
     --data-urlencode "limit=20" \
@@ -250,14 +379,19 @@ if log_resp=$(curl -G -sf "$LOKI_PROXY/loki/api/v1/query_range" \
     && printf '%s' "$log_resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
   printf '%s' "$log_resp" | jq . > "$LOG_OUT"
   log_count="$(jq '[.data.result[]?.values[]?] | length' "$LOG_OUT")"
-  if ((log_count > 0)); then
+  if ((LOG_PROBE_EMIT_FAILED > 0)); then
+    LOG_EVIDENCE_REASON="admin evidence log probe failed before Loki query"
+  elif ((log_count > 0)); then
     LOG_EVIDENCE_OK=true
-    LOG_EVIDENCE_REASON="$log_count log line(s) found for service_name=scrapd"
+    LOG_EVIDENCE_REASON="$log_count log line(s) found for evidence marker $LOG_MARKER"
   else
-    LOG_EVIDENCE_REASON="no Loki log lines found for service_name=scrapd in current run window"
+    LOG_EVIDENCE_REASON="no Loki log line found for evidence marker $LOG_MARKER in current run window"
   fi
 else
   echo '{"status":"error","data":{"result":[]}}' > "$LOG_OUT"
+  if ((LOG_PROBE_EMIT_FAILED > 0)); then
+    LOG_EVIDENCE_REASON="admin evidence log probe failed before Loki query"
+  fi
 fi
 
 profile_has_data() {
