@@ -750,10 +750,15 @@ Two-tier scrubbing (Phase 2 safety milestone):
   independently. Deep scrub progress (last-scanned block_id) checkpointed in projection;
   resets on projection rebuild (intentional — re-scan after divergence).
 
-Phase 2b package: `internal/scrub/` with `LightScrubber` and `DeepScrubber` types.
-Dependencies injected via interfaces (projection, block reader, peer client). Owned
-and scheduled by the shard orchestrator (`internal/shard/`). Dependency direction:
-`shard → scrub → {index, block, peer}`.
+Phase 2b package: `internal/scrub/` with `Light` and `Deep` types.
+Dependencies are injected via interfaces that `scrub` itself defines (consistency
+checker/proposer, block lister/verifier, quarantine manager, peer repairer/
+rebuilder); the concrete projection, peer, and metrics implementations are supplied
+by the shard orchestrator (`internal/shard/`), which owns and schedules the
+scrubbers. Compile-time dependency direction: `shard → scrub → {block, ulid}`.
+Access to the projection (`index`) and peers (`peer`) is inverted — `scrub` defines
+the ports and `shard` injects the adapters — so `scrub` does **not** import `index`
+or `peer`.
 
 Phase 2b configuration (env vars, all with defaults):
 
