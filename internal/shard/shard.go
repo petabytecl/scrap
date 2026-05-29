@@ -18,6 +18,7 @@ import (
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
@@ -27,6 +28,7 @@ import (
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	"github.com/petabytecl/scrap/internal/scrub"
 	storeapi "github.com/petabytecl/scrap/internal/store"
+	"github.com/petabytecl/scrap/internal/telemetry"
 	"github.com/petabytecl/scrap/internal/ulid"
 )
 
@@ -360,17 +362,23 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		},
 	}
 
-	data, err := proto.Marshal(cmd)
-	if err != nil {
-		return storeapi.WriteResult{}, fmt.Errorf("shard: marshal command: %w", err)
-	}
-
 	doneCh := make(chan error, 1)
 	s.proposalMu.Lock()
 	s.proposals[key] = doneCh
 	s.proposalMu.Unlock()
 
 	ctx, proposeStage := s.writeTelemetry.StartStage(ctx, "raft_propose")
+	// Stamp the active propose span into the command so every voter's apply loop
+	// recovers it and emits a child apply span on all replicas. See ADR 0013.
+	injectTraceContext(ctx, cmd)
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		proposeStage.End(err)
+		s.proposalMu.Lock()
+		delete(s.proposals, key)
+		s.proposalMu.Unlock()
+		return storeapi.WriteResult{}, fmt.Errorf("shard: marshal command: %w", err)
+	}
 	proposeErr := s.raft.Propose(ctx, data)
 	proposeStage.End(proposeErr)
 	if proposeErr != nil {
@@ -882,6 +890,10 @@ func captureFirstErr(firstErr *error, err error) {
 }
 
 func (s *Shard) applyEntries(entries []raftpb.Entry) error {
+	var replayUntil uint64
+	if s.raft != nil {
+		replayUntil = s.raft.ReplayCommitIndex()
+	}
 	for _, e := range entries {
 		if e.Type != raftpb.EntryNormal || len(e.Data) == 0 {
 			continue
@@ -892,11 +904,63 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 			return fmt.Errorf("shard: unmarshal raft command: %w", err)
 		}
 
-		if err := s.applyEntryCommand(cmd, e.Index); err != nil {
+		// Entries at or below the startup commit watermark are re-applied replay on
+		// restart; their trace context is stale, so apply spans are suppressed.
+		live := e.Index > replayUntil
+		if err := s.applyEntryTraced(cmd, e.Index, live); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyEntryTraced wraps applyEntryCommand in a per-voter apply span when the entry
+// is a live commit (not startup replay) and the command is span-worthy. The span's
+// parent is recovered from the command's W3C trace context, so it nests under the
+// originating write trace on every replica. See ADR 0013.
+func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, live bool) error {
+	operation, attrs := applySpanInfo(cmd)
+	if !live || operation == "" || s.writeTelemetry == nil {
+		return s.applyEntryCommand(cmd, entryIndex)
+	}
+	ctx := extractTraceContext(context.Background(), cmd)
+	_, applyEnd := s.writeTelemetry.StartApply(ctx, operation, attrs...)
+	err := s.applyEntryCommand(cmd, entryIndex)
+	applyEnd.End(err)
+	return err
+}
+
+// applySpanInfo maps a RaftCommand to an apply-span operation name and attributes.
+// Identity is hashed (ADR 0012); scrap.block_id is a low-cardinality attribute used
+// to correlate the write trace with the block.upload trace (ADR 0013).
+func applySpanInfo(cmd *scrapv1.RaftCommand) (string, []attribute.KeyValue) {
+	switch c := cmd.Command.(type) {
+	case *scrapv1.RaftCommand_CommitDoc:
+		attrs := telemetry.DocumentIdentityAttributes(
+			c.CommitDoc.GetTransactionId(),
+			c.CommitDoc.GetDocumentName(),
+			telemetry.HashIdentifiers,
+		)
+		attrs = append(attrs, blockIDAttribute(c.CommitDoc.GetBlockId()))
+		return "commit_document", attrs
+	case *scrapv1.RaftCommand_SealBlock:
+		return "seal_block", []attribute.KeyValue{blockIDAttribute(c.SealBlock.GetBlockId())}
+	case *scrapv1.RaftCommand_ConfirmUpload:
+		return "confirm_upload", []attribute.KeyValue{blockIDAttribute(c.ConfirmUpload.GetBlockId())}
+	case *scrapv1.RaftCommand_ConsistencyCheck:
+		return "consistency_check", nil
+	}
+	return "", nil
+}
+
+// blockIDAttribute renders a block ID as a clamped int64 span attribute, matching
+// the uint64->int64 guard used for shard_id (avoids overflow on absurd inputs).
+func blockIDAttribute(blockID uint64) attribute.KeyValue {
+	v := int64(math.MaxInt64)
+	if blockID <= math.MaxInt64 {
+		v = int64(blockID)
+	}
+	return attribute.Int64("scrap.block_id", v)
 }
 
 func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) error {

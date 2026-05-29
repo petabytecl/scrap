@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -99,4 +101,46 @@ func TestWriteTelemetry_ImplementsInterface(t *testing.T) {
 		t.Fatalf("new write telemetry: %v", err)
 	}
 	var _ shard.WriteStageRecorder = wt
+}
+
+func TestWriteTelemetry_StartApplyCreatesSpanOnly(t *testing.T) {
+	provider, reader := newTestMeter(t)
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
+	defer func() { _ = tp.Shutdown(t.Context()) }()
+
+	wt, err := shard.NewWriteTelemetry(provider.Meter("test"), tp.Tracer("test"))
+	if err != nil {
+		t.Fatalf("new write telemetry: %v", err)
+	}
+
+	_, apply := wt.StartApply(context.Background(), "commit_document", attribute.Int64("scrap.block_id", 42))
+	apply.End(errors.New("apply failed"))
+
+	spans := spanRecorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	span := spans[0]
+	if span.Name() != "scrap.apply/commit_document" {
+		t.Fatalf("span name: got %q, want scrap.apply/commit_document", span.Name())
+	}
+	if span.Status().Code != otelcodes.Error {
+		t.Fatalf("expected error status, got %v", span.Status().Code)
+	}
+	var blockID int64 = -1
+	for _, a := range span.Attributes() {
+		if string(a.Key) == "scrap.block_id" {
+			blockID = a.Value.AsInt64()
+		}
+	}
+	if blockID != 42 {
+		t.Fatalf("scrap.block_id attribute: got %d, want 42", blockID)
+	}
+
+	// Apply spans are span-only: they must NOT record the write-stage duration metric.
+	rm := collectMetrics(t, reader)
+	if findMetric(rm, "scrap.write.stage.duration") != nil {
+		t.Fatal("StartApply must not record scrap.write.stage.duration")
+	}
 }

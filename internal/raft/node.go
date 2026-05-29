@@ -63,8 +63,9 @@ type RaftNode struct {
 	snap      *snap.Snapshotter
 	transport Transport
 
-	appliedIndex  uint64
-	snapshotIndex uint64
+	appliedIndex      uint64
+	snapshotIndex     uint64
+	replayCommitIndex uint64
 
 	leaderID atomic.Uint64
 	readMu   sync.Mutex
@@ -217,6 +218,10 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 	if err := n.storage.SetHardState(hardState); err != nil {
 		return fmt.Errorf("raft: set hard state: %w", err)
 	}
+	// Commit watermark loaded from the WAL. On restart, raft re-delivers committed
+	// entries up to this index; they were applied before the crash, so the apply
+	// loop treats Index <= this as replay and suppresses live trace spans (ADR 0013).
+	n.replayCommitIndex = hardState.Commit
 	if err := n.storage.Append(entries); err != nil {
 		return fmt.Errorf("raft: append entries: %w", err)
 	}
@@ -366,6 +371,14 @@ func (n *RaftNode) LeaderID() uint64 {
 
 func (n *RaftNode) AppliedIndex() uint64 {
 	return atomic.LoadUint64(&n.appliedIndex)
+}
+
+// ReplayCommitIndex returns the commit index loaded from the WAL at startup.
+// Entries with Index <= this value are re-applied replay (already applied before a
+// restart), so the apply loop suppresses live trace spans for them. Zero on a
+// fresh bootstrap. Set once during Open before the run loop starts. See ADR 0013.
+func (n *RaftNode) ReplayCommitIndex() uint64 {
+	return n.replayCommitIndex
 }
 
 func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.ConfState {
