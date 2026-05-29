@@ -7,6 +7,27 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
+func assertApplySpan(t *testing.T, cmd *scrapv1.RaftCommand, wantOp string, wantKeys []string) {
+	t.Helper()
+	op, attrs := applySpanInfo(cmd)
+	if op != wantOp {
+		t.Fatalf("op: got %q want %q", op, wantOp)
+	}
+	gotKeys := make(map[string]bool, len(attrs))
+	for _, a := range attrs {
+		gotKeys[string(a.Key)] = true
+	}
+	for _, k := range wantKeys {
+		if !gotKeys[k] {
+			t.Fatalf("missing attr %q in %v", k, gotKeys)
+		}
+	}
+	// Raw identifiers must never leak onto apply spans (ADR 0012: hashed by default).
+	if gotKeys["scrap.transaction_id"] || gotKeys["scrap.document_name"] {
+		t.Fatalf("raw identifier leaked into apply span attrs: %v", gotKeys)
+	}
+}
+
 func TestApplySpanInfo(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -53,23 +74,7 @@ func TestApplySpanInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op, attrs := applySpanInfo(tt.cmd)
-			if op != tt.wantOp {
-				t.Fatalf("op: got %q want %q", op, tt.wantOp)
-			}
-			gotKeys := make(map[string]bool, len(attrs))
-			for _, a := range attrs {
-				gotKeys[string(a.Key)] = true
-			}
-			for _, k := range tt.wantKeys {
-				if !gotKeys[k] {
-					t.Fatalf("missing attr %q in %v", k, gotKeys)
-				}
-			}
-			// Raw identifiers must never leak onto apply spans (ADR 0012: hashed by default).
-			if gotKeys["scrap.transaction_id"] || gotKeys["scrap.document_name"] {
-				t.Fatalf("raw identifier leaked into apply span attrs: %v", gotKeys)
-			}
+			assertApplySpan(t, tt.cmd, tt.wantOp, tt.wantKeys)
 		})
 	}
 }

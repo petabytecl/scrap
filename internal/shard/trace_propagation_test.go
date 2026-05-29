@@ -10,7 +10,8 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 )
 
-func TestInjectExtractTraceContextRoundTrip(t *testing.T) {
+func newSampledRemoteParent(t *testing.T) trace.SpanContext {
+	t.Helper()
 	traceID, err := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
 	if err != nil {
 		t.Fatalf("trace id: %v", err)
@@ -19,12 +20,16 @@ func TestInjectExtractTraceContextRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("span id: %v", err)
 	}
-	parent := trace.NewSpanContext(trace.SpanContextConfig{
+	return trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    traceID,
 		SpanID:     spanID,
 		TraceFlags: trace.FlagsSampled,
 		Remote:     true,
 	})
+}
+
+func TestInjectExtractTraceContextRoundTrip(t *testing.T) {
+	parent := newSampledRemoteParent(t)
 	ctx := trace.ContextWithSpanContext(context.Background(), parent)
 
 	cmd := &scrapv1.RaftCommand{
@@ -51,18 +56,11 @@ func TestInjectExtractTraceContextRoundTrip(t *testing.T) {
 		t.Fatal("oneof command lost across marshal")
 	}
 
+	// SpanContext.Equal compares trace id, span id, flags (sampled), trace state, and
+	// the remote bit, so one assertion covers the full round-trip fidelity.
 	got := trace.SpanContextFromContext(extractTraceContext(context.Background(), decoded))
-	if got.TraceID() != traceID {
-		t.Fatalf("trace id: got %s want %s", got.TraceID(), traceID)
-	}
-	if got.SpanID() != spanID {
-		t.Fatalf("span id: got %s want %s", got.SpanID(), spanID)
-	}
-	if !got.IsRemote() {
-		t.Fatal("extracted span context should be remote")
-	}
-	if !got.IsSampled() {
-		t.Fatal("sampled flag should propagate")
+	if !got.Equal(parent) {
+		t.Fatalf("round-trip span context mismatch: got %+v want %+v", got, parent)
 	}
 }
 

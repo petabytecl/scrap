@@ -114,6 +114,7 @@ linters:
             - github.com/prometheus/client_golang
             - go.etcd.io/etcd
             - go.etcd.io/raft/v3
+            - go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
             - go.opentelemetry.io/otel
             - go.uber.org/zap
             - google.golang.org/genproto

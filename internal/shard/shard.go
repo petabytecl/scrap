@@ -79,6 +79,12 @@ type Shard struct {
 	raftStartedAt  time.Time
 	bootstrapGrace time.Duration
 
+	// replayCommitIndex is the Raft commit watermark captured at startup. Entries at
+	// or below it are re-applied replay on restart and emit no live trace spans. It is
+	// read from the apply loop (a separate goroutine), so it is atomic rather than read
+	// through s.raft, which is assigned only after the loop has already started.
+	replayCommitIndex atomic.Uint64
+
 	mu          sync.Mutex
 	blockWriter *block.BlockWriter
 	idxWriter   *block.IndexWriter
@@ -210,6 +216,9 @@ func Open(cfg Config) (*Shard, error) {
 		return nil, fmt.Errorf("shard: open raft: %w", err)
 	}
 	s.raft = raftNode
+	// Capture the startup commit watermark for the apply loop. raftNode's run loop
+	// started inside Open, so this is read via the atomic field, not s.raft.
+	s.replayCommitIndex.Store(raftNode.ReplayCommitIndex())
 
 	s.resetUploadConcurrency()
 	if err := s.refreshUploadPressureLocked(); err != nil {
@@ -890,10 +899,7 @@ func captureFirstErr(firstErr *error, err error) {
 }
 
 func (s *Shard) applyEntries(entries []raftpb.Entry) error {
-	var replayUntil uint64
-	if s.raft != nil {
-		replayUntil = s.raft.ReplayCommitIndex()
-	}
+	replayUntil := s.replayCommitIndex.Load()
 	for _, e := range entries {
 		if e.Type != raftpb.EntryNormal || len(e.Data) == 0 {
 			continue
