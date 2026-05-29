@@ -2,42 +2,49 @@ package shard
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
 )
 
-func TestUploadThrottleReducesAndSuccessesRestoreConcurrency(t *testing.T) {
-	s := &Shard{upload: UploadConfig{Concurrency: 3}}
-	s.resetUploadConcurrency()
+// newTestUploadController builds a controller for the concurrency/retry unit
+// tests. These methods never touch the core seam, so a nil core is fine.
+func newTestUploadController(cfg UploadConfig) *uploadController {
+	return newUploadController(nil, cfg, 0, slog.New(slog.DiscardHandler), nil, nil)
+}
 
-	s.recordUploadThrottle()
-	if got := s.uploadConcurrency(); got != 2 {
+func TestUploadThrottleReducesAndSuccessesRestoreConcurrency(t *testing.T) {
+	c := newTestUploadController(UploadConfig{Concurrency: 3})
+	c.resetConcurrency()
+
+	c.recordThrottle()
+	if got := c.concurrency(); got != 2 {
 		t.Fatalf("concurrency after first throttle = %d, want 2", got)
 	}
-	s.recordUploadThrottle()
-	if got := s.uploadConcurrency(); got != 1 {
+	c.recordThrottle()
+	if got := c.concurrency(); got != 1 {
 		t.Fatalf("concurrency after second throttle = %d, want 1", got)
 	}
-	s.recordUploadThrottle()
-	if got := s.uploadConcurrency(); got != 1 {
+	c.recordThrottle()
+	if got := c.concurrency(); got != 1 {
 		t.Fatalf("concurrency floor after third throttle = %d, want 1", got)
 	}
 
 	for range successesToRestoreUpload {
-		s.recordUploadSuccess()
+		c.recordSuccess()
 	}
-	if got := s.uploadConcurrency(); got != 2 {
+	if got := c.concurrency(); got != 2 {
 		t.Fatalf("concurrency after five successes = %d, want 2", got)
 	}
 }
 
 func TestUploadRequeueMovesFailedBlocksToBack(t *testing.T) {
-	s := &Shard{uploadRequeued: make(map[uint64]struct{})}
-	s.markUploadRequeued(1)
+	c := newTestUploadController(UploadConfig{})
+	c.markRequeued(1)
 
-	ordered := s.orderPendingUploads([]PendingUpload{
+	ordered := c.orderPending([]PendingUpload{
 		{BlockID: 1},
 		{BlockID: 2},
 		{BlockID: 3},
@@ -54,30 +61,30 @@ func TestUploadRequeueMovesFailedBlocksToBack(t *testing.T) {
 
 func TestHandleUploadRetryThrottled(t *testing.T) {
 	ctx := context.Background()
-	s := newRetryTestShard()
-	s.resetUploadConcurrency()
+	c := newRetryTestController()
+	c.resetConcurrency()
 
 	throttled := newUploadRetryState(time.Nanosecond)
-	retry, err := s.handleUploadRetry(ctx, backend.ErrThrottled, &throttled)
+	retry, err := c.handleRetry(ctx, backend.ErrThrottled, &throttled)
 	if err != nil || !retry {
 		t.Fatalf("throttled retry = %v, err = %v; want retry without error", retry, err)
 	}
-	if got := s.uploadConcurrency(); got != 1 {
+	if got := c.concurrency(); got != 1 {
 		t.Fatalf("throttled concurrency = %d, want 1", got)
 	}
 }
 
 func TestHandleUploadRetryTransient(t *testing.T) {
 	ctx := context.Background()
-	s := newRetryTestShard()
+	c := newRetryTestController()
 
 	transient := newUploadRetryState(time.Nanosecond)
-	retry, err := s.handleUploadRetry(ctx, backend.ErrTransient, &transient)
+	retry, err := c.handleRetry(ctx, backend.ErrTransient, &transient)
 	if err != nil || !retry {
 		t.Fatalf("transient retry = %v, err = %v; want retry without error", retry, err)
 	}
 	transient.transientAttempts = maxTransientUploadRetries
-	retry, err = s.handleUploadRetry(ctx, backend.ErrTransient, &transient)
+	retry, err = c.handleRetry(ctx, backend.ErrTransient, &transient)
 	if err != nil || retry {
 		t.Fatalf("exhausted transient retry = %v, err = %v; want no retry without error", retry, err)
 	}
@@ -85,14 +92,14 @@ func TestHandleUploadRetryTransient(t *testing.T) {
 
 func TestHandleUploadRetryCorrupt(t *testing.T) {
 	ctx := context.Background()
-	s := newRetryTestShard()
+	c := newRetryTestController()
 
 	corrupt := newUploadRetryState(time.Nanosecond)
-	retry, err := s.handleUploadRetry(ctx, backend.ErrCorrupt, &corrupt)
+	retry, err := c.handleRetry(ctx, backend.ErrCorrupt, &corrupt)
 	if err != nil || !retry {
 		t.Fatalf("first corrupt retry = %v, err = %v; want retry without error", retry, err)
 	}
-	retry, err = s.handleUploadRetry(ctx, backend.ErrCorrupt, &corrupt)
+	retry, err = c.handleRetry(ctx, backend.ErrCorrupt, &corrupt)
 	if err != nil || retry {
 		t.Fatalf("second corrupt retry = %v, err = %v; want no retry without error", retry, err)
 	}
@@ -100,48 +107,48 @@ func TestHandleUploadRetryCorrupt(t *testing.T) {
 
 func TestHandleUploadRetryAuthAndPermanent(t *testing.T) {
 	ctx := context.Background()
-	s := newRetryTestShard()
+	c := newRetryTestController()
 	state := newUploadRetryState(time.Nanosecond)
 
-	retry, err := s.handleUploadRetry(ctx, backend.ErrAuth, &state)
+	retry, err := c.handleRetry(ctx, backend.ErrAuth, &state)
 	if err != nil || retry {
 		t.Fatalf("auth retry = %v, err = %v; want pause without retry error", retry, err)
 	}
 
-	retry, err = s.handleUploadRetry(ctx, backend.ErrPermanent, &state)
+	retry, err = c.handleRetry(ctx, backend.ErrPermanent, &state)
 	if err != nil || retry {
 		t.Fatalf("permanent retry = %v, err = %v; want no retry without error", retry, err)
 	}
 }
 
-func newRetryTestShard() *Shard {
-	return &Shard{upload: UploadConfig{
+func newRetryTestController() *uploadController {
+	return newTestUploadController(UploadConfig{
 		Concurrency:    2,
 		RetryBaseDelay: time.Nanosecond,
 		AuthRetryDelay: time.Nanosecond,
-	}}
+	})
 }
 
 func TestUploadConfigDefaults(t *testing.T) {
-	s := &Shard{}
+	c := newTestUploadController(UploadConfig{})
 
-	if got := s.configuredUploadConcurrency(); got != DefaultUploadConcurrency {
-		t.Fatalf("configuredUploadConcurrency = %d, want %d", got, DefaultUploadConcurrency)
+	if got := c.configuredConcurrency(); got != DefaultUploadConcurrency {
+		t.Fatalf("configuredConcurrency = %d, want %d", got, DefaultUploadConcurrency)
 	}
-	if got := s.uploadCellID(); got != "local" {
-		t.Fatalf("uploadCellID = %q, want local", got)
+	if got := c.cellID(); got != "local" {
+		t.Fatalf("cellID = %q, want local", got)
 	}
-	if got := s.uploadRetryBaseDelay(); got != defaultUploadRetryBase {
-		t.Fatalf("uploadRetryBaseDelay = %s, want %s", got, defaultUploadRetryBase)
+	if got := c.retryBaseDelay(); got != defaultUploadRetryBase {
+		t.Fatalf("retryBaseDelay = %s, want %s", got, defaultUploadRetryBase)
 	}
-	if got := s.uploadAuthRetryDelay(); got != defaultUploadAuthDelay {
-		t.Fatalf("uploadAuthRetryDelay = %s, want %s", got, defaultUploadAuthDelay)
+	if got := c.authRetryDelay(); got != defaultUploadAuthDelay {
+		t.Fatalf("authRetryDelay = %s, want %s", got, defaultUploadAuthDelay)
 	}
 	if got := minDuration(time.Second, time.Minute); got != time.Second {
 		t.Fatalf("minDuration = %s, want 1s", got)
 	}
-	s.pauseUploads(time.Minute)
-	if !s.uploadPaused() {
-		t.Fatal("pauseUploads should pause uploads")
+	c.pause(time.Minute)
+	if !c.paused() {
+		t.Fatal("pause should pause uploads")
 	}
 }

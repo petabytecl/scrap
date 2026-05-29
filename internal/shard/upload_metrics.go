@@ -11,35 +11,6 @@ type UploadMetrics interface {
 	SetAuthPaused(shardID uint64, paused bool)
 }
 
-func (s *Shard) recordUploadPressureMetrics(stats uploadPressureStats, level UploadPressureLevel, concurrency int) {
-	if s.upload.Metrics == nil {
-		return
-	}
-	s.upload.Metrics.SetPending(s.shardID, stats.pendingBytes, stats.pendingBlocks)
-	s.upload.Metrics.SetPressureLevel(s.shardID, level)
-	s.upload.Metrics.SetConcurrency(s.shardID, concurrency)
-}
-
-func (s *Shard) recordUploadMetric(status string, duration time.Duration) {
-	if s.upload.Metrics != nil {
-		s.upload.Metrics.RecordUpload(s.shardID, status, duration)
-	}
-}
-
-func (s *Shard) recordUploadVerifyMetric(status string) {
-	if s.upload.Metrics != nil {
-		s.upload.Metrics.RecordVerify(s.shardID, status)
-	}
-}
-
-func (s *Shard) setUploadConcurrencyMetric(concurrency int) {
-	if s.upload.Metrics != nil {
-		s.upload.Metrics.SetConcurrency(s.shardID, concurrency)
-	}
-}
-
-func (s *Shard) setUploadAuthPausedMetric(paused bool) {
-	if s.upload.Metrics != nil {
-		s.upload.Metrics.SetAuthPaused(s.shardID, paused)
-	}
-}
+// The recordUpload*/setUpload* helpers and the upload processor moved to
+// uploadController (upload_controller.go). This file now declares only the
+// metrics contract the controller implements against.
