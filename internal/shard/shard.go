@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,7 +23,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
@@ -96,8 +94,7 @@ type Shard struct {
 	uploadPressureScrubGate *pressurePauseGate
 	orphanedSeals           []index.PendingUpload
 
-	rebuilding  atomic.Bool
-	rebuildDone atomic.Pointer[chan struct{}]
+	rebuilder *projectionRebuilder
 }
 
 func (c *Config) applyDefaults() {
@@ -163,9 +160,7 @@ func Open(cfg Config) (*Shard, error) {
 		bootstrapGrace:          cfg.BootstrapGrace,
 	}
 	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressureScrubGate)
-	done := make(chan struct{})
-	close(done)
-	s.rebuildDone.Store(&done)
+	s.rebuilder = newProjectionRebuilder(s, cfg.DataDir, blocksDir, cfg.ShardID, cfg.Upload, logger)
 
 	if err := s.recoverOpenlog(); err != nil {
 		_ = idx.Close()
@@ -487,7 +482,7 @@ func clampUint64ToInt64(v uint64) int64 {
 }
 
 func (s *Shard) CheckReadiness(_ context.Context) error {
-	if s.rebuilding.Load() {
+	if s.rebuilder.InProgress() {
 		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
 	}
 	if s.raft.LeaderID() != 0 {
@@ -500,7 +495,7 @@ func (s *Shard) CheckReadiness(_ context.Context) error {
 }
 
 func (s *Shard) requireLeader() error {
-	if s.rebuilding.Load() {
+	if s.rebuilder.InProgress() {
 		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
 	}
 	if s.raft.IsLeader() {
@@ -517,7 +512,7 @@ func (s *Shard) requireWritableLeader() error {
 }
 
 func (s *Shard) requireLeaderRead(ctx context.Context) error {
-	if s.rebuilding.Load() {
+	if s.rebuilder.InProgress() {
 		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
 	}
 	if !s.raft.IsLeader() {
@@ -531,68 +526,7 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 }
 
 func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error) {
-	if !s.rebuilding.CompareAndSwap(false, true) {
-		return true, nil
-	}
-	done := make(chan struct{})
-	s.rebuildDone.Store(&done)
-	// The rebuild is detached: it outlives the triggering RPC. WithoutCancel keeps
-	// the caller's trace/values for log correlation while dropping cancellation and
-	// any deadline, so returning from this RPC does not abort the rebuild.
-	go s.doRebuild(context.WithoutCancel(ctx), done)
-	return false, nil
-}
-
-func (s *Shard) doRebuild(ctx context.Context, done chan struct{}) {
-	defer close(done)
-
-	pebbleDir := filepath.Join(s.dataDir, "pebble")
-	tempDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.rebuild-%d", time.Now().UnixNano()))
-	oldDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.previous-%d", time.Now().UnixNano()))
-
-	if err := s.prepareRebuildProjection(tempDir); err != nil {
-		s.logger.ErrorContext(ctx, "rebuild: prepare projection failed", "err", err)
-		_ = os.RemoveAll(tempDir)
-		s.rebuilding.Store(false)
-		return
-	}
-
-	s.mu.Lock()
-	err := s.swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir)
-	idxNil := s.idx == nil
-	s.mu.Unlock()
-
-	_ = os.RemoveAll(tempDir)
-
-	if err != nil {
-		s.logger.ErrorContext(ctx, "rebuild: swap projection failed", "err", err, "shard_id", s.shardID)
-		if idxNil {
-			s.logger.ErrorContext(ctx, "rebuild: index is nil after failed swap; shard degraded", "err", err, "shard_id", s.shardID)
-			return
-		}
-	}
-
-	_ = os.RemoveAll(oldDir)
-	s.rebuilding.Store(false)
-}
-
-func (s *Shard) prepareRebuildProjection(tempDir string) error {
-	if err := os.RemoveAll(tempDir); err != nil {
-		return fmt.Errorf("shard: remove stale rebuild dir: %w", err)
-	}
-
-	newIdx, err := index.Open(tempDir)
-	if err != nil {
-		return fmt.Errorf("shard: open rebuild index: %w", err)
-	}
-	if err := s.rebuildProjectionInto(newIdx); err != nil {
-		_ = newIdx.Close()
-		return err
-	}
-	if err := newIdx.Close(); err != nil {
-		return fmt.Errorf("shard: close rebuild index: %w", err)
-	}
-	return nil
+	return s.rebuilder.Trigger(ctx)
 }
 
 func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) error {
@@ -656,126 +590,26 @@ func (s *Shard) reopenProjectionLocked(pebbleDir string) error {
 	return nil
 }
 
-func (s *Shard) rebuildProjectionInto(projection *index.Index) error {
-	blockIDs, err := s.listBlockIndexIDs()
-	if err != nil {
-		return err
-	}
-
-	for _, blockID := range blockIDs {
-		ir, err := block.OpenIndexReader(s.idxPath(blockID))
-		if err != nil {
-			return fmt.Errorf("shard: open block index %d: %w", blockID, err)
-		}
-		entries := ir.Entries()
-		if err := ir.Close(); err != nil {
-			return fmt.Errorf("shard: close block index %d: %w", blockID, err)
-		}
-
-		for _, entry := range entries {
-			if err := addProjectionDocument(projection, entry.TransactionID, blockID); err != nil {
-				return fmt.Errorf("shard: rebuild projection %s/%s: %w", entry.TransactionID, entry.DocName, err)
-			}
-		}
-	}
-
-	if err := s.rebuildUploadOutbox(projection, blockIDs); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) error {
-	be := s.upload.Backend
-	if !s.upload.Enabled || be == nil {
-		return nil
-	}
-
+func (s *Shard) swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (bool, error) {
 	s.mu.Lock()
-	openBlockID := uint64(0)
-	if s.blockWriter != nil {
-		openBlockID = s.blockWriter.BlockID()
-	}
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	ctx := context.Background()
-	cellID := cellIDOrLocal(s.upload.CellID)
-	for _, blockID := range blockIDs {
-		if blockID == openBlockID {
-			continue
-		}
-		prefix := backendKeyPrefix(cellID, s.shardID, blockID)
-		uploaded, err := blockFullyUploaded(ctx, be, prefix)
-		if err != nil {
-			s.logger.WarnContext(ctx, "shard: rebuild upload check skipped (transient)", "block_id", blockID, "err", err)
-			continue
-		}
-		if uploaded {
-			continue
-		}
-		blkPath := s.blockPath(blockID)
-		info, statErr := os.Stat(blkPath)
-		if statErr != nil {
-			continue
-		}
-		if err := projection.PutPendingUpload(index.PendingUpload{
-			BlockID:         blockID,
-			ShardID:         s.shardID,
-			SealedSizeBytes: info.Size(),
-			SealedAtUs:      info.ModTime().UnixMicro(),
-		}); err != nil {
-			return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
-		}
-	}
-	return nil
+	err := s.swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir)
+	return s.idx == nil, err
 }
 
-// blockFullyUploaded returns true when both .blk and .idx exist in the backend,
-// false when either is definitively missing. Returns an error for transient/auth
-// failures so the caller can avoid incorrectly re-queuing already-uploaded blocks.
-func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) (bool, error) {
-	for _, ext := range []string{".blk", ".idx"} {
-		_, err := be.HeadObject(ctx, prefix+ext)
-		if err == nil {
-			continue
-		}
-		if errors.Is(err, backend.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+func (s *Shard) currentOpenBlockID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-func (s *Shard) listBlockIndexIDs() ([]uint64, error) {
-	entries, err := os.ReadDir(s.blocksDir)
-	if err != nil {
-		return nil, fmt.Errorf("shard: read blocks dir: %w", err)
+	if s.blockWriter == nil {
+		return 0
 	}
-
-	var blockIDs []uint64
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".idx") {
-			continue
-		}
-		hexPart := strings.TrimSuffix(name, ".idx")
-		id, err := strconv.ParseUint(hexPart, 16, 64)
-		if err != nil {
-			continue
-		}
-		blockIDs = append(blockIDs, id)
-	}
-	sort.Slice(blockIDs, func(i, j int) bool {
-		return blockIDs[i] < blockIDs[j]
-	})
-	return blockIDs, nil
+	return s.blockWriter.BlockID()
 }
 
 func (s *Shard) WaitRebuild() {
-	if p := s.rebuildDone.Load(); p != nil {
-		<-*p
-	}
+	s.rebuilder.Wait()
 }
 
 func (s *Shard) DataDirForTest() string {
@@ -798,15 +632,7 @@ func (s *Shard) OrphanedSealsForTest() int {
 }
 
 func (s *Shard) SetRebuildingForTest(v bool) {
-	s.rebuilding.Store(v)
-	if v {
-		done := make(chan struct{})
-		s.rebuildDone.Store(&done)
-	} else {
-		done := make(chan struct{})
-		close(done)
-		s.rebuildDone.Store(&done)
-	}
+	s.rebuilder.setInProgressForTest(v)
 }
 
 func (s *Shard) notLeaderError() error {
@@ -991,16 +817,6 @@ func (s *Shard) ProposeConsistencyCheck(ctx context.Context, scrubID string) (sc
 
 func (s *Shard) GetScrubResult(scrubID string) (scrub.Result, bool) {
 	return s.scrubs.GetScrubResult(scrubID)
-}
-
-func (s *Shard) currentOpenBlockID() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.blockWriter == nil {
-		return 0
-	}
-	return s.blockWriter.BlockID()
 }
 
 func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
