@@ -95,23 +95,13 @@ type Shard struct {
 	scrubMu     sync.RWMutex
 	scrubResult *scrub.Result
 
-	scrubber                 *scrub.Light
-	deepScrubber             *scrub.Deep
-	scrubCancel              context.CancelFunc
-	uploadCancel             context.CancelFunc
-	uploadDone               chan struct{}
-	uploadNotify             chan struct{}
-	uploadMu                 sync.Mutex
-	uploadCurrentConcurrency int
-	uploadSuccesses          int
-	uploadRequeued           map[uint64]struct{}
-	uploadPausedUntil        time.Time
-	uploadAuthPaused         bool
-	uploadPressureLevel      UploadPressureLevel
-	uploadPendingBytes       int64
-	uploadPendingBlocks      int
-	uploadPressureScrubGate  *pressurePauseGate
-	orphanedSeals            []index.PendingUpload
+	scrubber     *scrub.Light
+	deepScrubber *scrub.Deep
+	scrubCancel  context.CancelFunc
+
+	uploads                 *uploadController
+	uploadPressureScrubGate *pressurePauseGate
+	orphanedSeals           []index.PendingUpload
 
 	rebuilding  atomic.Bool
 	rebuildDone atomic.Pointer[chan struct{}]
@@ -176,8 +166,6 @@ func Open(cfg Config) (*Shard, error) {
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
 		scrubProposals:          make(map[string]chan scrub.Result),
-		uploadNotify:            make(chan struct{}, 1),
-		uploadRequeued:          make(map[uint64]struct{}),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
 		bootstrapGrace:          cfg.BootstrapGrace,
@@ -216,17 +204,18 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
-	s.resetUploadConcurrency()
+	s.uploads = newUploadController(s, cfg.Upload, s.shardID, s.logger, s.writeTelemetry, s.uploadPressureScrubGate)
+	s.uploads.resetConcurrency()
 	if err := s.refreshUploadPressureLocked(); err != nil {
 		raftNode.Stop()
 		s.closeBlockAndIdx()
 		_ = idx.Close()
 		return nil, fmt.Errorf("shard: refresh upload pressure: %w", err)
 	}
-	s.setUploadAuthPausedMetric(false)
+	s.uploads.setAuthPausedMetric(false)
 
 	s.startScrubber(cfg)
-	s.startUploadProcessor()
+	s.uploads.Start()
 
 	return s, nil
 }
@@ -573,7 +562,7 @@ func (s *Shard) requireWritableLeader() error {
 	if err := s.requireLeader(); err != nil {
 		return err
 	}
-	return s.rejectWriteForUploadPressure()
+	return s.uploads.rejectWrite()
 }
 
 func (s *Shard) requireLeaderRead(ctx context.Context) error {
@@ -759,7 +748,7 @@ func (s *Shard) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) 
 	s.mu.Unlock()
 
 	ctx := context.Background()
-	cellID := s.uploadCellID()
+	cellID := cellIDOrLocal(s.upload.CellID)
 	for _, blockID := range blockIDs {
 		if blockID == openBlockID {
 			continue
@@ -894,12 +883,7 @@ func (s *Shard) Close() error {
 	if s.deepScrubber != nil {
 		s.deepScrubber.Stop()
 	}
-	if s.uploadCancel != nil {
-		s.uploadCancel()
-	}
-	if s.uploadDone != nil {
-		<-s.uploadDone
-	}
+	s.uploads.Stop()
 	s.raft.Stop()
 	s.WaitRebuild()
 
@@ -967,7 +951,7 @@ func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, li
 	// leader failover because the block trace_id is deterministic (ADR 0013).
 	if c, ok := cmd.Command.(*scrapv1.RaftCommand_CommitDoc); ok {
 		opts = append(opts, trace.WithLinks(trace.Link{
-			SpanContext: blockTraceContext(s.uploadCellID(), s.shardID, c.CommitDoc.GetBlockId()),
+			SpanContext: blockTraceContext(cellIDOrLocal(s.upload.CellID), s.shardID, c.CommitDoc.GetBlockId()),
 			Attributes:  []attribute.KeyValue{attribute.String("scrap.link", "block.upload")},
 		}))
 	}

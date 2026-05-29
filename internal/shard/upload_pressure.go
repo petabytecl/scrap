@@ -6,8 +6,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-
-	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 const (
@@ -66,11 +64,11 @@ func (l UploadPressureLevel) String() string {
 }
 
 func (s *Shard) UploadPressureForTest() UploadPressureSnapshot {
-	return s.uploadPressureSnapshot()
+	return s.uploads.snapshot()
 }
 
 func (s *Shard) UploadConcurrencyForTest() int {
-	return s.uploadConcurrency()
+	return s.uploads.concurrency()
 }
 
 func (s *Shard) DeepScrubPausedForTest() bool {
@@ -81,85 +79,19 @@ func (s *Shard) DeepScrubPausedForTest() bool {
 }
 
 func (s *Shard) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
-	snapshot := s.uploadPressureSnapshot()
+	snapshot := s.uploads.snapshot()
 	return int(snapshot.Level), snapshot.Level.String(), snapshot.PendingBytes, snapshot.PendingBlocks
 }
 
-func (s *Shard) uploadPressureSnapshot() UploadPressureSnapshot {
-	s.uploadMu.Lock()
-	defer s.uploadMu.Unlock()
-
-	return UploadPressureSnapshot{
-		Level:         s.uploadPressureLevel,
-		PendingBytes:  s.uploadPendingBytes,
-		PendingBlocks: s.uploadPendingBlocks,
-	}
-}
-
-func (s *Shard) rejectWriteForUploadPressure() error {
-	s.uploadMu.Lock()
-	level := s.uploadPressureLevel
-	s.uploadMu.Unlock()
-
-	if level < UploadPressureLevelPressure {
-		return nil
-	}
-	return storeapi.NewResourceExhausted(storeapi.ResourceExhaustedReasonUploadPressure, "upload pressure")
-}
-
+// refreshUploadPressureLocked reads the pending-upload outbox under s.mu and
+// pushes the resulting stats to the upload controller (the "pressure push" seam).
 func (s *Shard) refreshUploadPressureLocked() error {
 	uploads, err := collectPendingUploads(s.idx)
 	if err != nil {
 		return err
 	}
-	s.applyUploadPressureStats(pendingUploadStats(uploads))
+	s.uploads.SetPressure(pendingUploadStats(uploads))
 	return nil
-}
-
-func (s *Shard) applyUploadPressureStats(stats uploadPressureStats) {
-	cfg := normalizeUploadPressureConfig(s.upload.Pressure)
-	level := cfg.levelFor(stats.pendingBytes)
-
-	s.uploadMu.Lock()
-	previousLevel := s.uploadPressureLevel
-	s.uploadPressureLevel = level
-	s.uploadPendingBytes = stats.pendingBytes
-	s.uploadPendingBlocks = stats.pendingBlocks
-	concurrency := s.applyUploadPressureConcurrencyLocked(previousLevel, level)
-	s.uploadMu.Unlock()
-
-	if s.uploadPressureScrubGate != nil {
-		s.uploadPressureScrubGate.SetPaused(level == UploadPressureLevelCritical)
-	}
-	s.recordUploadPressureMetrics(stats, level, concurrency)
-}
-
-func (s *Shard) applyUploadPressureConcurrencyLocked(previousLevel, level UploadPressureLevel) int {
-	configured := s.configuredUploadConcurrency()
-	if s.uploadCurrentConcurrency == 0 {
-		s.uploadCurrentConcurrency = configured
-	}
-
-	switch {
-	case level >= UploadPressureLevelWarn:
-		target := s.uploadConcurrencyTargetLocked()
-		if s.uploadCurrentConcurrency < target {
-			s.uploadCurrentConcurrency = target
-			s.uploadSuccesses = 0
-		}
-	case previousLevel >= UploadPressureLevelWarn && s.uploadCurrentConcurrency > configured:
-		s.uploadCurrentConcurrency = configured
-		s.uploadSuccesses = 0
-	}
-	return s.uploadCurrentConcurrency
-}
-
-func (s *Shard) uploadConcurrencyTargetLocked() int {
-	configured := s.configuredUploadConcurrency()
-	if s.uploadPressureLevel >= UploadPressureLevelWarn {
-		return configured * uploadPressureConcurrencyMultiplier
-	}
-	return configured
 }
 
 func (cfg UploadPressureConfig) levelFor(pendingBytes int64) UploadPressureLevel {
