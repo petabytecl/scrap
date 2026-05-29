@@ -210,6 +210,11 @@ func run() error {
 		logger.Error("admin shutdown failed", "err", err)
 	}
 	peerGS.GracefulStop()
+	// peerGS has stopped accepting RPCs, so no new peer writers can be created;
+	// flush and close any block/index writers the peer server still owns.
+	if err := peerSrv.Close(); err != nil {
+		logger.Error("peer writer close failed", "err", err)
+	}
 	gs.GracefulStop()
 
 	return nil
