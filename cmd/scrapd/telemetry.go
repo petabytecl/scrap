@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -150,6 +151,14 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 	tracerProvider := sdktrace.NewTracerProvider(tracerOpts...)
 	otel.SetMeterProvider(meterProvider)
 	otel.SetTracerProvider(tracerProvider)
+	// W3C trace context + baggage on every gRPC hop (client<->server and
+	// leader<->peer). The otelgrpc handlers default to the global propagator, so
+	// without this every WriteDocument starts a disconnected root span and the
+	// client's trace_id is dropped at the boundary. See ADR 0013.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	m := meterProvider.Meter(instrumentationScope)
 	t := tracerProvider.Tracer(instrumentationScope)

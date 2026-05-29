@@ -7,6 +7,7 @@ import (
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -168,6 +169,7 @@ func (t *SharedTransport) getSender(addr string) *peerSender {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: reconnectBackoff}),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
 		return nil

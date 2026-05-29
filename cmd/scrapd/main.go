@@ -12,6 +12,7 @@ import (
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -138,7 +139,7 @@ func run() error {
 		return fmt.Errorf("listen client %s: %w", *listenAddr, err)
 	}
 
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	server.Register(gs, s, server.WithTelemetry(telemetryRuntime.server))
 	server.RegisterHealth(gs, s)
 
@@ -146,7 +147,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
-	peerGS := grpc.NewServer()
+	peerGS := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)
