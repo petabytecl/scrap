@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const BlockHeaderSize = 40
+const HeaderSize = 40
 
 type AppendResult struct {
 	SHA256           [32]byte
@@ -21,7 +21,7 @@ type AppendResult struct {
 	FirstFrameOffset int64
 }
 
-type BlockWriter struct {
+type Writer struct {
 	f        *os.File
 	path     string
 	shardID  uint64
@@ -32,20 +32,20 @@ type BlockWriter struct {
 	closed   bool
 }
 
-// NewBlockWriter creates a new block file with a 40-byte CRC-protected header.
+// NewWriter creates a new block file with a 40-byte CRC-protected header.
 // Layout: magic(4)="SCRP" + version(2) + header_len(2) + shard_id(8) + block_id(8) +
 //
 //	created_at_unix_micro(8) + reserved(4) + header_crc32c(4)
-func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) {
+func NewWriter(path string, shardID, blockID uint64) (*Writer, error) {
 	f, err := os.Create(path) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: create %s: %w", path, err)
 	}
 
-	var hdr [BlockHeaderSize]byte
+	var hdr [HeaderSize]byte
 	copy(hdr[0:4], "SCRP")
 	binary.LittleEndian.PutUint16(hdr[4:6], 1)
-	binary.LittleEndian.PutUint16(hdr[6:8], BlockHeaderSize)
+	binary.LittleEndian.PutUint16(hdr[6:8], HeaderSize)
 	binary.LittleEndian.PutUint64(hdr[8:16], shardID)
 	binary.LittleEndian.PutUint64(hdr[16:24], blockID)
 	binary.LittleEndian.PutUint64(hdr[24:32], uint64(time.Now().UnixMicro()))
@@ -57,17 +57,17 @@ func NewBlockWriter(path string, shardID, blockID uint64) (*BlockWriter, error) 
 		return nil, fmt.Errorf("block: write header: %w", err)
 	}
 
-	return &BlockWriter{
+	return &Writer{
 		f:       f,
 		path:    path,
 		shardID: shardID,
 		blockID: blockID,
-		offset:  BlockHeaderSize,
+		offset:  HeaderSize,
 	}, nil
 }
 
 //nolint:revive // txID, docName, contentType are part of the public API contract; callers pass document metadata
-func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.Reader) (AppendResult, error) {
+func (w *Writer) AppendDocument(txID, docName, contentType string, body io.Reader) (AppendResult, error) {
 	if w.closed {
 		return AppendResult{}, errors.New("block: writer is closed")
 	}
@@ -96,7 +96,7 @@ func (w *BlockWriter) AppendDocument(txID, docName, contentType string, body io.
 	}, nil
 }
 
-func (w *BlockWriter) writeDocFrames(body io.Reader) (uint32, int64, hash.Hash, error) {
+func (w *Writer) writeDocFrames(body io.Reader) (uint32, int64, hash.Hash, error) {
 	hasher := sha256.New()
 	buf := make([]byte, MaxFramePayload)
 	var frameSeq uint32
@@ -147,23 +147,23 @@ func frameFlags(seq uint32, isLast bool) byte {
 	}
 }
 
-func (w *BlockWriter) DocCount() uint32 {
+func (w *Writer) DocCount() uint32 {
 	return w.docCount
 }
 
-func (w *BlockWriter) Offset() int64 {
+func (w *Writer) Offset() int64 {
 	return w.offset
 }
 
-func (w *BlockWriter) BlockID() uint64 {
+func (w *Writer) BlockID() uint64 {
 	return w.blockID
 }
 
-func (w *BlockWriter) Path() string {
+func (w *Writer) Path() string {
 	return w.path
 }
 
-func (w *BlockWriter) Close() error {
+func (w *Writer) Close() error {
 	if w.closed {
 		return nil
 	}

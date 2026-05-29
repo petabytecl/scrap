@@ -17,7 +17,7 @@ import (
 )
 
 type grpcTestCluster struct {
-	nodes     []*scrapraft.RaftNode
+	nodes     []*scrapraft.Node
 	servers   []*grpc.Server
 	transport *peer.SharedTransport
 }
@@ -100,7 +100,7 @@ func startGRPCCluster(t *testing.T) *grpcTestCluster {
 	return tc
 }
 
-func (tc *grpcTestCluster) waitForLeader(t *testing.T) *scrapraft.RaftNode {
+func (tc *grpcTestCluster) waitForLeader(t *testing.T) *scrapraft.Node {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

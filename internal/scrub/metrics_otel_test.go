@@ -38,7 +38,7 @@ func findOTelMetric(rm metricdata.ResourceMetrics, name string) *metricdata.Metr
 }
 
 func TestOTelScrubMetrics_NilMeter(t *testing.T) {
-	_, err := scrub.NewOTelScrubMetrics(nil)
+	_, err := scrub.NewOTelMetrics(nil)
 	if err == nil {
 		t.Fatal("expected error for nil meter")
 	}
@@ -46,7 +46,7 @@ func TestOTelScrubMetrics_NilMeter(t *testing.T) {
 
 func TestOTelScrubMetrics_RecordRun(t *testing.T) {
 	provider, reader := newTestMeter(t)
-	m, err := scrub.NewOTelScrubMetrics(provider.Meter("test"))
+	m, err := scrub.NewOTelMetrics(provider.Meter("test"))
 	if err != nil {
 		t.Fatalf("new otel scrub metrics: %v", err)
 	}
@@ -76,15 +76,15 @@ func TestOTelScrubMetrics_RecordRun(t *testing.T) {
 
 func TestOTelScrubMetrics_ImplementsInterface(t *testing.T) {
 	provider, _ := newTestMeter(t)
-	m, err := scrub.NewOTelScrubMetrics(provider.Meter("test"))
+	m, err := scrub.NewOTelMetrics(provider.Meter("test"))
 	if err != nil {
 		t.Fatalf("new otel scrub metrics: %v", err)
 	}
-	var _ scrub.ScrubMetrics = m
+	var _ scrub.Metrics = m
 }
 
 func TestOTelDeepScrubMetrics_NilMeter(t *testing.T) {
-	_, err := scrub.NewOTelDeepScrubMetrics(nil)
+	_, err := scrub.NewOTelDeepMetrics(nil)
 	if err == nil {
 		t.Fatal("expected error for nil meter")
 	}
@@ -92,7 +92,7 @@ func TestOTelDeepScrubMetrics_NilMeter(t *testing.T) {
 
 func TestOTelDeepScrubMetrics_AllInstruments(t *testing.T) {
 	provider, reader := newTestMeter(t)
-	m, err := scrub.NewOTelDeepScrubMetrics(provider.Meter("test"))
+	m, err := scrub.NewOTelDeepMetrics(provider.Meter("test"))
 	if err != nil {
 		t.Fatalf("new otel deep scrub metrics: %v", err)
 	}
@@ -130,16 +130,16 @@ func TestOTelDeepScrubMetrics_AllInstruments(t *testing.T) {
 
 func TestOTelDeepScrubMetrics_ImplementsInterface(t *testing.T) {
 	provider, _ := newTestMeter(t)
-	m, err := scrub.NewOTelDeepScrubMetrics(provider.Meter("test"))
+	m, err := scrub.NewOTelDeepMetrics(provider.Meter("test"))
 	if err != nil {
 		t.Fatalf("new otel deep scrub metrics: %v", err)
 	}
-	var _ scrub.DeepScrubMetrics = m
+	var _ scrub.DeepMetrics = m
 }
 
 func TestOTelDeepScrubMetrics_ProgressRatio(t *testing.T) {
 	provider, reader := newTestMeter(t)
-	m, err := scrub.NewOTelDeepScrubMetrics(provider.Meter("test"))
+	m, err := scrub.NewOTelDeepMetrics(provider.Meter("test"))
 	if err != nil {
 		t.Fatalf("new otel deep scrub metrics: %v", err)
 	}

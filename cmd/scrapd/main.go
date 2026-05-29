@@ -58,7 +58,7 @@ func run() error {
 
 	logger := logbridge.NewLoggerFromEnv(os.Stderr)
 
-	scrubCfg := scrub.ParseScrubConfig()
+	scrubCfg := scrub.ParseConfig()
 	uploadEnabled := envBool("SCRAP_UPLOAD_ENABLED", true)
 
 	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), *dataDir, uploadEnabled)
@@ -123,8 +123,8 @@ func run() error {
 		Transport:          shardTransport,
 		Logger:             logger,
 		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
-		ScrubMetrics:       shardTel.scrubMetrics,
-		DeepScrubMetrics:   shardTel.deepScrubMetrics,
+		Metrics:            shardTel.scrubMetrics,
+		DeepMetrics:        shardTel.deepScrubMetrics,
 		Rebuilder:          peer.NewClientRebuilder(peerClient),
 		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, filepath.Join(*dataDir, "blocks")),
 		Replicator:         peerClient,

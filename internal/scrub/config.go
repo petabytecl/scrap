@@ -17,7 +17,7 @@ const (
 	maxJitter                 = 1.0
 )
 
-type ScrubConfig struct {
+type Config struct {
 	Enabled            bool
 	LightScrubInterval time.Duration
 	DeepScrubInterval  time.Duration
@@ -28,8 +28,8 @@ type ScrubConfig struct {
 	Jitter             float64
 }
 
-func ParseScrubConfig() ScrubConfig {
-	cfg := ScrubConfig{
+func ParseConfig() Config {
+	cfg := Config{
 		Enabled:            envBool("SCRAP_SCRUB_ENABLED", true),
 		LightScrubInterval: envDuration("SCRAP_LIGHT_SCRUB_INTERVAL", DefaultLightScrubInterval),
 		DeepScrubInterval:  envDuration("SCRAP_DEEP_SCRUB_INTERVAL", DefaultDeepScrubInterval),
@@ -43,7 +43,7 @@ func ParseScrubConfig() ScrubConfig {
 	return cfg
 }
 
-func clampScrubConfig(cfg *ScrubConfig) {
+func clampScrubConfig(cfg *Config) {
 	if cfg.LightScrubInterval <= 0 {
 		cfg.LightScrubInterval = DefaultLightScrubInterval
 	}

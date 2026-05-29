@@ -78,7 +78,7 @@ func TestLightScrubber_AllMatch(t *testing.T) {
 	}}
 	metrics := &mockMetrics{}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           proposer,
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},
@@ -109,7 +109,7 @@ func TestLightScrubber_Mismatch(t *testing.T) {
 	}}
 	metrics := &mockMetrics{}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           proposer,
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},
@@ -133,7 +133,7 @@ func TestLightScrubber_Mismatch(t *testing.T) {
 func TestLightScrubber_SkipsWhenNotLeader(t *testing.T) {
 	metrics := &mockMetrics{}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           &mockProposer{},
 		ConsistencyChecker: &mockConsistencyChecker{},
 		LeaderChecker:      &mockLeaderChecker{leader: false},
@@ -162,7 +162,7 @@ func TestLightScrubber_StartStop(t *testing.T) {
 
 	countingProposer := &countingProposer{inner: proposer, count: &runCount}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           countingProposer,
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},
@@ -225,7 +225,7 @@ func TestLightScrubber_MismatchTriggersRebuild(t *testing.T) {
 	metrics := &mockMetrics{}
 	rebuilder := &mockRebuilder{}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           proposer,
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},
@@ -257,7 +257,7 @@ func TestLightScrubber_MultipleMismatchesRebuildAll(t *testing.T) {
 	metrics := &mockMetrics{}
 	rebuilder := &mockRebuilder{}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           proposer,
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},
@@ -284,7 +284,7 @@ func TestLightScrubber_NoRebuildOnMatch(t *testing.T) {
 	}}
 	rebuilder := &mockRebuilder{}
 
-	ls := scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	ls := scrub.NewLight(scrub.LightConfig{
 		Proposer:           proposer,
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},

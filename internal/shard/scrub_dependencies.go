@@ -9,7 +9,7 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
-func (s *Shard) ListSealedBlocks(_ uint64) ([]block.BlockInfo, error) {
+func (s *Shard) ListSealedBlocks(_ uint64) ([]block.Info, error) {
 	s.mu.Lock()
 	openBlockID := uint64(0)
 	if s.blockWriter != nil {

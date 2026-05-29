@@ -17,9 +17,9 @@ func writeSingleDocBlock(t *testing.T, dir string, data []byte) (blkPath, idxPat
 	blkPath = filepath.Join(dir, "test.blk")
 	idxPath = filepath.Join(dir, "test.idx")
 
-	bw, err := block.NewBlockWriter(blkPath, 1, 100)
+	bw, err := block.NewWriter(blkPath, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 	iw, err := block.NewIndexWriter(idxPath)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestTwoPassCorruptPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	raw[block.BlockHeaderSize+block.FrameHeaderSize+10] ^= 0xFF
+	raw[block.HeaderSize+block.FrameHeaderSize+10] ^= 0xFF
 	if err := os.WriteFile(blkPath, raw, 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestTwoPassTruncatedBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if err := os.WriteFile(blkPath, raw[:block.BlockHeaderSize+block.FrameHeaderSize+5], 0o600); err != nil { //nolint:gosec // test file path from temp dir
+	if err := os.WriteFile(blkPath, raw[:block.HeaderSize+block.FrameHeaderSize+5], 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
 

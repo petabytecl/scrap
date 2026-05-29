@@ -54,7 +54,7 @@ func TestShardStartsDeepScrubberForSealedBlocks(t *testing.T) {
 		Peers:         map[uint64]string{1: "localhost:9091"},
 		BlockSealSize: 64,
 		TickInterval:  10 * time.Millisecond,
-		Scrub: scrub.ScrubConfig{
+		Scrub: scrub.Config{
 			Enabled:           true,
 			DeepScrubInterval: 10 * time.Millisecond,
 			DeepScrubIORate:   scrub.DefaultDeepScrubIORate,
@@ -63,7 +63,7 @@ func TestShardStartsDeepScrubberForSealedBlocks(t *testing.T) {
 			CorruptCap:        scrub.DefaultCorruptCap,
 			Jitter:            0,
 		},
-		DeepScrubMetrics: metrics,
+		DeepMetrics: metrics,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

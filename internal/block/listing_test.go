@@ -14,9 +14,9 @@ func createSealedBlock(t *testing.T, dir string, _, blockID uint64) {
 	blkPath := filepath.Join(dir, blockFileName(blockID))
 	idxPath := filepath.Join(dir, idxFileName(blockID))
 
-	bw, err := block.NewBlockWriter(blkPath, 1, blockID)
+	bw, err := block.NewWriter(blkPath, 1, blockID)
 	if err != nil {
-		t.Fatalf("NewBlockWriter(%d): %v", blockID, err)
+		t.Fatalf("NewWriter(%d): %v", blockID, err)
 	}
 	body := bytes.Repeat([]byte("X"), 128)
 	if _, err := bw.AppendDocument("tx-seal", "doc.bin", "application/octet-stream", bytes.NewReader(body)); err != nil {
@@ -36,7 +36,7 @@ func createSealedBlock(t *testing.T, dir string, _, blockID uint64) {
 }
 
 func blockFileName(id uint64) string {
-	return filepath.Base(block.BlockFilePath("", id))
+	return filepath.Base(block.FilePath("", id))
 }
 
 func idxFileName(id uint64) string {

@@ -15,9 +15,9 @@ func TestBlockWriterHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.blk")
 
-	w, err := block.NewBlockWriter(path, 1, 100)
+	w, err := block.NewWriter(path, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -28,11 +28,11 @@ func TestBlockWriterHeader(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	if len(data) < block.BlockHeaderSize {
+	if len(data) < block.HeaderSize {
 		t.Fatalf("block too small: %d bytes", len(data))
 	}
-	if block.BlockHeaderSize != 40 {
-		t.Fatalf("BlockHeaderSize: got %d, want 40", block.BlockHeaderSize)
+	if block.HeaderSize != 40 {
+		t.Fatalf("HeaderSize: got %d, want 40", block.HeaderSize)
 	}
 
 	magic := string(data[0:4])
@@ -62,9 +62,9 @@ func TestBlockWriterAppendDocument(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.blk")
 
-	w, err := block.NewBlockWriter(path, 1, 100)
+	w, err := block.NewWriter(path, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 
 	doc := bytes.Repeat([]byte("A"), 1024)
@@ -92,9 +92,9 @@ func TestBlockWriterMultipleDocuments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.blk")
 
-	w, err := block.NewBlockWriter(path, 1, 100)
+	w, err := block.NewWriter(path, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 
 	for i := range 5 {
@@ -118,9 +118,9 @@ func TestBlockWriterMultiFrameDocument(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.blk")
 
-	w, err := block.NewBlockWriter(path, 1, 100)
+	w, err := block.NewWriter(path, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 
 	doc := bytes.Repeat([]byte("X"), block.MaxFramePayload*3+100)

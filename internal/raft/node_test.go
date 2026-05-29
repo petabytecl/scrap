@@ -17,14 +17,14 @@ import (
 
 type inProcessTransport struct {
 	mu    sync.RWMutex
-	nodes map[uint64]*scrapraft.RaftNode
+	nodes map[uint64]*scrapraft.Node
 }
 
 func newInProcessTransport() *inProcessTransport {
-	return &inProcessTransport{nodes: make(map[uint64]*scrapraft.RaftNode)}
+	return &inProcessTransport{nodes: make(map[uint64]*scrapraft.Node)}
 }
 
-func (t *inProcessTransport) Register(id uint64, n *scrapraft.RaftNode) {
+func (t *inProcessTransport) Register(id uint64, n *scrapraft.Node) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.nodes[id] = n
@@ -41,7 +41,7 @@ func (t *inProcessTransport) Send(msgs []raftpb.Message) {
 }
 
 type testCluster struct {
-	nodes     []*scrapraft.RaftNode
+	nodes     []*scrapraft.Node
 	transport *inProcessTransport
 	applied   [3][]raftpb.Entry
 	mu        [3]sync.Mutex
@@ -114,7 +114,7 @@ func (tc *testCluster) waitForLeader(t *testing.T) uint64 {
 	return 0
 }
 
-func (tc *testCluster) leader() *scrapraft.RaftNode {
+func (tc *testCluster) leader() *scrapraft.Node {
 	for _, n := range tc.nodes {
 		if n.IsLeader() {
 			return n

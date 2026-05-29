@@ -59,7 +59,7 @@ type Config struct {
 	MaxInflightMsgs int
 }
 
-type RaftNode struct {
+type Node struct {
 	cfg       Config
 	logger    *slog.Logger
 	node      raft.Node
@@ -82,7 +82,7 @@ type RaftNode struct {
 }
 
 //nolint:gocognit,cyclop // initialization function validating multiple config fields and bootstrapping WAL/snapshot
-func Open(cfg Config) (*RaftNode, error) {
+func Open(cfg Config) (*Node, error) {
 	if cfg.ID == 0 {
 		return nil, errors.New("raft: node ID must be non-zero")
 	}
@@ -129,7 +129,7 @@ func Open(cfg Config) (*RaftNode, error) {
 
 	walExists := wal.Exist(walDir)
 
-	n := &RaftNode{
+	n := &Node{
 		cfg:       cfg,
 		logger:    logger,
 		snap:      snapshotter,
@@ -153,7 +153,7 @@ func Open(cfg Config) (*RaftNode, error) {
 	return n, nil
 }
 
-func (n *RaftNode) startNode(lg *zap.Logger, walDir string) error {
+func (n *Node) startNode(lg *zap.Logger, walDir string) error {
 	w, err := wal.Create(lg, walDir, nil)
 	if err != nil {
 		return fmt.Errorf("raft: create WAL: %w", err)
@@ -181,7 +181,7 @@ func (n *RaftNode) startNode(lg *zap.Logger, walDir string) error {
 }
 
 //nolint:gocognit,cyclop // restart orchestrates snapshot load, WAL replay, and storage reconstruction
-func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
+func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	snapshot, err := n.snap.Load()
 	if err != nil && !errors.Is(err, snap.ErrNoSnapshot) {
 		return fmt.Errorf("raft: load snapshot: %w", err)
@@ -265,7 +265,7 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 }
 
 //nolint:gocognit,cyclop // main event loop processing ticks, ready states, and shutdown
-func (n *RaftNode) run() {
+func (n *Node) run() {
 	defer close(n.donec)
 	ticker := time.NewTicker(n.cfg.TickInterval)
 	defer ticker.Stop()
@@ -328,7 +328,7 @@ func (n *RaftNode) run() {
 	}
 }
 
-func (n *RaftNode) publishReadStates(states []raft.ReadState) {
+func (n *Node) publishReadStates(states []raft.ReadState) {
 	n.readMu.Lock()
 	defer n.readMu.Unlock()
 
@@ -341,11 +341,11 @@ func (n *RaftNode) publishReadStates(states []raft.ReadState) {
 	}
 }
 
-func (n *RaftNode) Propose(ctx context.Context, data []byte) error {
+func (n *Node) Propose(ctx context.Context, data []byte) error {
 	return n.node.Propose(ctx, data)
 }
 
-func (n *RaftNode) ReadIndex(ctx context.Context) (uint64, error) {
+func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	rctx := fmt.Sprintf("ri-%d-%d", n.cfg.ID, time.Now().UnixNano())
 	ch := make(chan uint64, 1)
 
@@ -371,25 +371,25 @@ func (n *RaftNode) ReadIndex(ctx context.Context) (uint64, error) {
 	}
 }
 
-func (n *RaftNode) Step(ctx context.Context, msg raftpb.Message) error {
+func (n *Node) Step(ctx context.Context, msg raftpb.Message) error {
 	return n.node.Step(ctx, msg)
 }
 
-func (n *RaftNode) IsLeader() bool {
+func (n *Node) IsLeader() bool {
 	return n.leaderID.Load() == n.cfg.ID
 }
 
-func (n *RaftNode) LeaderID() uint64 {
+func (n *Node) LeaderID() uint64 {
 	return n.leaderID.Load()
 }
 
-func (n *RaftNode) AppliedIndex() uint64 {
+func (n *Node) AppliedIndex() uint64 {
 	return atomic.LoadUint64(&n.appliedIndex)
 }
 
 // CommitIndex returns the highest Raft log index known to be committed. Apply lag
 // (commit - applied) is the canonical Raft saturation signal on the USE dashboard.
-func (n *RaftNode) CommitIndex() uint64 {
+func (n *Node) CommitIndex() uint64 {
 	return atomic.LoadUint64(&n.commitIndex)
 }
 
@@ -443,7 +443,7 @@ func removeID(ids []uint64, id uint64) []uint64 {
 	return result
 }
 
-func (n *RaftNode) Stop() {
+func (n *Node) Stop() {
 	select {
 	case n.stopc <- struct{}{}:
 	case <-n.donec:

@@ -22,7 +22,7 @@ type LeaderChecker interface {
 	IsLeader() bool
 }
 
-type ScrubMetrics interface {
+type Metrics interface {
 	RecordRun(result string, durationSec float64)
 }
 
@@ -30,11 +30,11 @@ type Rebuilder interface {
 	RequestRebuild(ctx context.Context, addr, scrubID string) error
 }
 
-type LightScrubberConfig struct {
+type LightConfig struct {
 	Proposer           Proposer
 	ConsistencyChecker ConsistencyChecker
 	LeaderChecker      LeaderChecker
-	Metrics            ScrubMetrics
+	Metrics            Metrics
 	Rebuilder          Rebuilder
 	Logger             *slog.Logger
 	PeerAddrs          []string
@@ -42,36 +42,36 @@ type LightScrubberConfig struct {
 	Jitter             float64
 }
 
-type LightScrubber struct {
-	cfg    LightScrubberConfig
+type Light struct {
+	cfg    LightConfig
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func NewLightScrubber(cfg LightScrubberConfig) *LightScrubber {
+func NewLight(cfg LightConfig) *Light {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultLightScrubInterval
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &LightScrubber{cfg: cfg}
+	return &Light{cfg: cfg}
 }
 
-func (ls *LightScrubber) Start(ctx context.Context) {
+func (ls *Light) Start(ctx context.Context) {
 	ctx, ls.cancel = context.WithCancel(ctx)
 	ls.wg.Add(1)
 	go ls.loop(ctx)
 }
 
-func (ls *LightScrubber) Stop() {
+func (ls *Light) Stop() {
 	if ls.cancel != nil {
 		ls.cancel()
 	}
 	ls.wg.Wait()
 }
 
-func (ls *LightScrubber) loop(ctx context.Context) {
+func (ls *Light) loop(ctx context.Context) {
 	defer ls.wg.Done()
 
 	for {
@@ -85,7 +85,7 @@ func (ls *LightScrubber) loop(ctx context.Context) {
 	}
 }
 
-func (ls *LightScrubber) jitteredInterval() time.Duration {
+func (ls *Light) jitteredInterval() time.Duration {
 	if ls.cfg.Jitter <= 0 {
 		return ls.cfg.Interval
 	}
@@ -94,7 +94,7 @@ func (ls *LightScrubber) jitteredInterval() time.Duration {
 	return ls.cfg.Interval + time.Duration(offset)
 }
 
-func (ls *LightScrubber) RunOnce(ctx context.Context) error { //nolint:gocognit // rebuild error handling adds necessary branches
+func (ls *Light) RunOnce(ctx context.Context) error { //nolint:gocognit // rebuild error handling adds necessary branches
 	if !ls.cfg.LeaderChecker.IsLeader() {
 		return nil
 	}

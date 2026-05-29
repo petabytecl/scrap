@@ -23,7 +23,7 @@ func (r *ClientBlockRepairer) RepairFromPeer(ctx context.Context, blockID uint64
 		return fmt.Errorf("peer: fetch block %d: %w", blockID, err)
 	}
 
-	blkPath := block.BlockFilePath(r.blocksDir, blockID)
+	blkPath := block.FilePath(r.blocksDir, blockID)
 	idxPath := block.IdxFilePath(r.blocksDir, blockID)
 
 	if err := atomicWrite(blkPath, blkData); err != nil {

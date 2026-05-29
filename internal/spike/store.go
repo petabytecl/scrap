@@ -30,7 +30,7 @@ type Store struct {
 	blockSealSize int64
 
 	mu          sync.Mutex
-	blockWriter *block.BlockWriter
+	blockWriter *block.Writer
 	idxWriter   *block.IndexWriter
 	nextBlockID uint64
 	docs        map[string]bool
@@ -92,7 +92,7 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 		return storeapi.WriteResult{}, fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, txID, docName)
 	}
 
-	if s.blockWriter.Offset() > block.BlockHeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
+	if s.blockWriter.Offset() > block.HeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
 		if err := s.sealAndOpenNew(); err != nil {
 			return storeapi.WriteResult{}, fmt.Errorf("spike: seal block: %w", err)
 		}
@@ -292,7 +292,7 @@ func (s *Store) openNewBlock() error {
 	s.nextBlockID++
 
 	blkPath := s.blockPath(id)
-	bw, err := block.NewBlockWriter(blkPath, 0, id)
+	bw, err := block.NewWriter(blkPath, 0, id)
 	if err != nil {
 		return fmt.Errorf("spike: new block: %w", err)
 	}

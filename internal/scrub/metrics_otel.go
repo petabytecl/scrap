@@ -10,12 +10,12 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-type OTelScrubMetrics struct {
+type OTelMetrics struct {
 	runsTotal metric.Int64Counter
 	duration  metric.Float64Histogram
 }
 
-func NewOTelScrubMetrics(meter metric.Meter) (*OTelScrubMetrics, error) {
+func NewOTelMetrics(meter metric.Meter) (*OTelMetrics, error) {
 	if meter == nil {
 		return nil, errors.New("meter is required")
 	}
@@ -35,20 +35,20 @@ func NewOTelScrubMetrics(meter metric.Meter) (*OTelScrubMetrics, error) {
 		return nil, fmt.Errorf("create scrub duration histogram: %w", err)
 	}
 
-	return &OTelScrubMetrics{
+	return &OTelMetrics{
 		runsTotal: runs,
 		duration:  duration,
 	}, nil
 }
 
-func (m *OTelScrubMetrics) RecordRun(result string, durationSec float64) {
+func (m *OTelMetrics) RecordRun(result string, durationSec float64) {
 	ctx := context.Background()
 	attrs := metric.WithAttributes(attribute.String("result", result))
 	m.runsTotal.Add(ctx, 1, attrs)
 	m.duration.Record(ctx, durationSec, attrs)
 }
 
-type OTelDeepScrubMetrics struct {
+type OTelDeepMetrics struct {
 	deepRunsTotal     metric.Int64Counter
 	framesVerified    metric.Int64Counter
 	corruptionsTotal  metric.Int64Counter
@@ -62,7 +62,7 @@ type OTelDeepScrubMetrics struct {
 }
 
 //nolint:cyclop // straight-line constructor registering many independent instruments
-func NewOTelDeepScrubMetrics(meter metric.Meter) (*OTelDeepScrubMetrics, error) {
+func NewOTelDeepMetrics(meter metric.Meter) (*OTelDeepMetrics, error) {
 	if meter == nil {
 		return nil, errors.New("meter is required")
 	}
@@ -138,7 +138,7 @@ func NewOTelDeepScrubMetrics(meter metric.Meter) (*OTelDeepScrubMetrics, error) 
 		return nil, fmt.Errorf("create repairs counter: %w", err)
 	}
 
-	return &OTelDeepScrubMetrics{
+	return &OTelDeepMetrics{
 		deepRunsTotal:     deepRuns,
 		framesVerified:    frames,
 		corruptionsTotal:  corruptions,
@@ -152,14 +152,14 @@ func NewOTelDeepScrubMetrics(meter metric.Meter) (*OTelDeepScrubMetrics, error) 
 	}, nil
 }
 
-func (m *OTelDeepScrubMetrics) RecordDeepRun(result string, durationSec float64) {
+func (m *OTelDeepMetrics) RecordDeepRun(result string, durationSec float64) {
 	ctx := context.Background()
 	attrs := metric.WithAttributes(attribute.String("result", result))
 	m.deepRunsTotal.Add(ctx, 1, attrs)
 	m.deepDuration.Record(ctx, durationSec, attrs)
 }
 
-func (m *OTelDeepScrubMetrics) RecordFramesVerified(n uint64) {
+func (m *OTelDeepMetrics) RecordFramesVerified(n uint64) {
 	m.framesVerified.Add(context.Background(), clampFrames(n))
 }
 
@@ -170,18 +170,18 @@ func clampFrames(n uint64) int64 {
 	return int64(n)
 }
 
-func (m *OTelDeepScrubMetrics) RecordCorruption(corruptionType string) {
+func (m *OTelDeepMetrics) RecordCorruption(corruptionType string) {
 	m.corruptionsTotal.Add(context.Background(), 1,
 		metric.WithAttributes(attribute.String("type", corruptionType)))
 }
 
-func (m *OTelDeepScrubMetrics) RecordQuarantine() {
+func (m *OTelDeepMetrics) RecordQuarantine() {
 	ctx := context.Background()
 	m.quarantinesTotal.Add(ctx, 1)
 	m.blocksQuarantined.Add(ctx, 1)
 }
 
-func (m *OTelDeepScrubMetrics) SetBadDiskSuspected(v bool) {
+func (m *OTelDeepMetrics) SetBadDiskSuspected(v bool) {
 	value := int64(0)
 	if v {
 		value = 1
@@ -189,19 +189,19 @@ func (m *OTelDeepScrubMetrics) SetBadDiskSuspected(v bool) {
 	m.badDiskSuspected.Record(context.Background(), value)
 }
 
-func (m *OTelDeepScrubMetrics) RecordPause() {
+func (m *OTelDeepMetrics) RecordPause() {
 	m.pausedTotal.Add(context.Background(), 1)
 }
 
-func (m *OTelDeepScrubMetrics) SetProgressRatio(v float64) {
+func (m *OTelDeepMetrics) SetProgressRatio(v float64) {
 	m.progressRatio.Record(context.Background(), v)
 }
 
-func (m *OTelDeepScrubMetrics) RecordRepair(result string) {
+func (m *OTelDeepMetrics) RecordRepair(result string) {
 	m.repairsTotal.Add(context.Background(), 1,
 		metric.WithAttributes(attribute.String("result", result)))
 }
 
-func (m *OTelDeepScrubMetrics) DecrementQuarantined() {
+func (m *OTelDeepMetrics) DecrementQuarantined() {
 	m.blocksQuarantined.Add(context.Background(), -1)
 }

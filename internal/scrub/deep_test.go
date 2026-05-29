@@ -14,11 +14,11 @@ import (
 )
 
 type stubBlockLister struct {
-	blocks []block.BlockInfo
+	blocks []block.Info
 }
 
-func (s *stubBlockLister) ListSealedBlocks(openBlockID uint64) ([]block.BlockInfo, error) {
-	var out []block.BlockInfo
+func (s *stubBlockLister) ListSealedBlocks(openBlockID uint64) ([]block.Info, error) {
+	var out []block.Info
 	for _, b := range s.blocks {
 		if b.BlockID != openBlockID {
 			out = append(out, b)
@@ -218,7 +218,7 @@ func (s *stubCheckpointStore) ClearDeepScrubCheckpoint() {
 }
 
 func TestDeepScrubber_CleanBlocks(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 		{BlockID: 2, BlkPath: "/tmp/2.blk", IdxPath: "/tmp/2.idx"},
 	}}
@@ -229,7 +229,7 @@ func TestDeepScrubber_CleanBlocks(t *testing.T) {
 	qm := &stubQuarantineManager{}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: qm,
@@ -254,7 +254,7 @@ func TestDeepScrubber_CleanBlocks(t *testing.T) {
 }
 
 func TestDeepScrubber_CorruptBlockQuarantined(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 	}}
 	verifier := &orderedVerifier{results: []block.VerifyResult{
@@ -268,7 +268,7 @@ func TestDeepScrubber_CorruptBlockQuarantined(t *testing.T) {
 	qm := &stubQuarantineManager{}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: qm,
@@ -293,7 +293,7 @@ func TestDeepScrubber_CorruptBlockQuarantined(t *testing.T) {
 }
 
 func TestDeepScrubber_QuarantineFailureMarksRunError(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 	}}
 	verifier := &orderedVerifier{results: []block.VerifyResult{
@@ -307,7 +307,7 @@ func TestDeepScrubber_QuarantineFailureMarksRunError(t *testing.T) {
 	qm := &stubQuarantineManager{err: errors.New("rename denied")}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: qm,
@@ -343,7 +343,7 @@ func TestDeepScrubber_CorruptCapEscalation_BadDisk(t *testing.T) {
 		}
 	}
 
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 	}}
 	verifier := &orderedVerifier{results: []block.VerifyResult{
@@ -352,7 +352,7 @@ func TestDeepScrubber_CorruptCapEscalation_BadDisk(t *testing.T) {
 	qm := &stubQuarantineManager{}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: qm,
@@ -379,7 +379,7 @@ func TestDeepScrubber_StartStop(t *testing.T) {
 	qm := &stubQuarantineManager{}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: qm,
@@ -404,7 +404,7 @@ func TestDeepScrubber_StartStop(t *testing.T) {
 }
 
 func TestDeepScrubber_CheckpointResumesFromLastBlock(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 		{BlockID: 2, BlkPath: "/tmp/2.blk", IdxPath: "/tmp/2.idx"},
 		{BlockID: 3, BlkPath: "/tmp/3.blk", IdxPath: "/tmp/3.idx"},
@@ -415,7 +415,7 @@ func TestDeepScrubber_CheckpointResumesFromLastBlock(t *testing.T) {
 	checkpoint := &stubCheckpointStore{blockID: 2, set: true}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: &stubQuarantineManager{},
@@ -435,7 +435,7 @@ func TestDeepScrubber_CheckpointResumesFromLastBlock(t *testing.T) {
 }
 
 func TestDeepScrubber_CheckpointClearedOnCompletion(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 	}}
 	verifier := &orderedVerifier{results: []block.VerifyResult{
@@ -444,7 +444,7 @@ func TestDeepScrubber_CheckpointClearedOnCompletion(t *testing.T) {
 	checkpoint := &stubCheckpointStore{}
 	metrics := &deepScrubMetrics{}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: &stubQuarantineManager{},
@@ -464,7 +464,7 @@ func TestDeepScrubber_CheckpointClearedOnCompletion(t *testing.T) {
 }
 
 func TestDeepScrubber_LatencyPauseFires(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 	}}
 	verifier := &orderedVerifier{results: []block.VerifyResult{
@@ -473,7 +473,7 @@ func TestDeepScrubber_LatencyPauseFires(t *testing.T) {
 	metrics := &deepScrubMetrics{}
 	signal := &stubLatencySignal{p99: 50 * time.Millisecond}
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: &stubQuarantineManager{},
@@ -495,7 +495,7 @@ func TestDeepScrubber_LatencyPauseFires(t *testing.T) {
 }
 
 func TestDeepScrubber_PressurePauseWaitsUntilResume(t *testing.T) {
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
 	}}
 	verifier := &orderedVerifier{results: []block.VerifyResult{
@@ -504,7 +504,7 @@ func TestDeepScrubber_PressurePauseWaitsUntilResume(t *testing.T) {
 	metrics := &deepScrubMetrics{}
 	pause := newControlledPause()
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: &stubQuarantineManager{},
@@ -552,7 +552,7 @@ func TestDeepScrubber_IOBudgetThrottles(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	lister := &stubBlockLister{blocks: []block.BlockInfo{
+	lister := &stubBlockLister{blocks: []block.Info{
 		{BlockID: 1, BlkPath: blkPath, IdxPath: "/tmp/1.idx"},
 		{BlockID: 2, BlkPath: blkPath, IdxPath: "/tmp/2.idx"},
 		{BlockID: 3, BlkPath: blkPath, IdxPath: "/tmp/3.idx"},
@@ -565,7 +565,7 @@ func TestDeepScrubber_IOBudgetThrottles(t *testing.T) {
 	metrics := &deepScrubMetrics{}
 	budget := scrub.NewTokenBucket(1500)
 
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       lister,
 		BlockVerifier:     verifier,
 		QuarantineManager: &stubQuarantineManager{},
@@ -597,8 +597,8 @@ func (s *stubLatencySignal) ReadP99() time.Duration {
 
 // --- Repair tests ---
 
-func newRepairScrubber(qm *stubQuarantineManager, repairer *stubBlockRepairer, metrics *deepScrubMetrics, peers []string) *scrub.DeepScrubber {
-	return scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+func newRepairScrubber(qm *stubQuarantineManager, repairer *stubBlockRepairer, metrics *deepScrubMetrics, peers []string) *scrub.Deep {
+	return scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       &stubBlockLister{},
 		BlockVerifier:     &orderedVerifier{},
 		QuarantineManager: qm,
@@ -675,7 +675,7 @@ func TestDeepScrubber_RoundRobinPeerRotation(t *testing.T) {
 func TestDeepScrubber_NilRepairerSkipsGracefully(t *testing.T) {
 	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
 	metrics := &deepScrubMetrics{}
-	ds := scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       &stubBlockLister{},
 		BlockVerifier:     &orderedVerifier{},
 		QuarantineManager: qm,

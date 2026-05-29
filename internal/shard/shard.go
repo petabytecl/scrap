@@ -47,13 +47,13 @@ type Config struct {
 	BlockSealSize  int64
 	TickInterval   time.Duration
 	BootstrapGrace time.Duration
-	Scrub          scrub.ScrubConfig
+	Scrub          scrub.Config
 	Transport      scrapraft.Transport
 	Logger         *slog.Logger
 
 	ConsistencyChecker scrub.ConsistencyChecker
-	ScrubMetrics       scrub.ScrubMetrics
-	DeepScrubMetrics   scrub.DeepScrubMetrics
+	Metrics            scrub.Metrics
+	DeepMetrics        scrub.DeepMetrics
 	Rebuilder          scrub.Rebuilder
 	BlockRepairer      scrub.BlockRepairer
 	LatencySignal      scrub.LatencySignal
@@ -72,7 +72,7 @@ type Shard struct {
 	raftID         uint64
 	peers          map[uint64]string
 	idx            *index.Index
-	raft           *scrapraft.RaftNode
+	raft           *scrapraft.Node
 	replicator     DocumentReplicator
 	upload         UploadConfig
 	writeTelemetry WriteStageRecorder
@@ -84,7 +84,7 @@ type Shard struct {
 	bootstrapGrace time.Duration
 
 	mu          sync.Mutex
-	blockWriter *block.BlockWriter
+	blockWriter *block.Writer
 	idxWriter   *block.IndexWriter
 	nextBlockID uint64
 
@@ -95,8 +95,8 @@ type Shard struct {
 	scrubMu     sync.RWMutex
 	scrubResult *scrub.Result
 
-	scrubber                 *scrub.LightScrubber
-	deepScrubber             *scrub.DeepScrubber
+	scrubber                 *scrub.Light
+	deepScrubber             *scrub.Deep
 	scrubCancel              context.CancelFunc
 	uploadCancel             context.CancelFunc
 	uploadDone               chan struct{}
@@ -246,12 +246,12 @@ func (s *Shard) startScrubber(cfg Config) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.scrubCancel = cancel
-	if cfg.ConsistencyChecker != nil && cfg.ScrubMetrics != nil {
-		s.scrubber = scrub.NewLightScrubber(scrub.LightScrubberConfig{
+	if cfg.ConsistencyChecker != nil && cfg.Metrics != nil {
+		s.scrubber = scrub.NewLight(scrub.LightConfig{
 			Proposer:           s,
 			ConsistencyChecker: cfg.ConsistencyChecker,
 			LeaderChecker:      s,
-			Metrics:            cfg.ScrubMetrics,
+			Metrics:            cfg.Metrics,
 			Rebuilder:          cfg.Rebuilder,
 			Logger:             s.baseLogger.With("component", "scrub"),
 			PeerAddrs:          cfg.PeerAddrs,
@@ -260,12 +260,12 @@ func (s *Shard) startScrubber(cfg Config) {
 		})
 		s.scrubber.Start(ctx)
 	}
-	if cfg.DeepScrubMetrics != nil {
-		s.deepScrubber = scrub.NewDeepScrubber(scrub.DeepScrubberConfig{
+	if cfg.DeepMetrics != nil {
+		s.deepScrubber = scrub.NewDeep(scrub.DeepConfig{
 			BlockLister:       s,
 			BlockVerifier:     s,
 			QuarantineManager: s,
-			Metrics:           cfg.DeepScrubMetrics,
+			Metrics:           cfg.DeepMetrics,
 			LatencySignal:     cfg.LatencySignal,
 			BlockRepairer:     cfg.BlockRepairer,
 			PauseController:   s.uploadPressureScrubGate,
@@ -296,7 +296,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		return storeapi.WriteResult{}, fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, txID, docName)
 	}
 
-	if s.blockWriter.Offset() > block.BlockHeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
+	if s.blockWriter.Offset() > block.HeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
 		if err := s.sealAndOpenNew(ctx); err != nil {
 			s.mu.Unlock()
 			return storeapi.WriteResult{}, fmt.Errorf("shard: seal block: %w", err)
@@ -1348,7 +1348,7 @@ func (s *Shard) openNewBlock() error {
 	id := s.nextBlockID
 	s.nextBlockID++
 
-	bw, err := block.NewBlockWriter(s.blockPath(id), s.shardID, id)
+	bw, err := block.NewWriter(s.blockPath(id), s.shardID, id)
 	if err != nil {
 		return err
 	}
