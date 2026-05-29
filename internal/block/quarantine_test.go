@@ -12,7 +12,7 @@ func TestQuarantine_RenamesBothFiles(t *testing.T) {
 	dir := t.TempDir()
 	createSealedBlock(t, dir, 1, 5)
 
-	blkPath := block.BlockFilePath(dir, 5)
+	blkPath := block.FilePath(dir, 5)
 	if err := block.Quarantine(blkPath); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
@@ -39,10 +39,10 @@ func TestListQuarantined(t *testing.T) {
 	createSealedBlock(t, dir, 1, 2)
 	createSealedBlock(t, dir, 1, 3)
 
-	if err := block.Quarantine(block.BlockFilePath(dir, 2)); err != nil {
+	if err := block.Quarantine(block.FilePath(dir, 2)); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
-	if err := block.Quarantine(block.BlockFilePath(dir, 3)); err != nil {
+	if err := block.Quarantine(block.FilePath(dir, 3)); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestQuarantine_ListSealedExcludes(t *testing.T) {
 	createSealedBlock(t, dir, 1, 1)
 	createSealedBlock(t, dir, 1, 2)
 
-	if err := block.Quarantine(block.BlockFilePath(dir, 2)); err != nil {
+	if err := block.Quarantine(block.FilePath(dir, 2)); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestUnquarantine_RestoresFiles(t *testing.T) {
 	dir := t.TempDir()
 	createSealedBlock(t, dir, 1, 5)
 
-	blkPath := block.BlockFilePath(dir, 5)
+	blkPath := block.FilePath(dir, 5)
 	if err := block.Quarantine(blkPath); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestUnquarantine_RollsBackBlkOnIdxFailure(t *testing.T) {
 	dir := t.TempDir()
 	createSealedBlock(t, dir, 1, 5)
 
-	blkPath := block.BlockFilePath(dir, 5)
+	blkPath := block.FilePath(dir, 5)
 	if err := block.Quarantine(blkPath); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}

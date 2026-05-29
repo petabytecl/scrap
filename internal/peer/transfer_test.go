@@ -50,9 +50,9 @@ func TestTransferBlockStreamsFileContents(t *testing.T) {
 func seedTransferBlock(t *testing.T, dir string) {
 	t.Helper()
 
-	bw, err := block.NewBlockWriter(dir+"/0000000000000001.blk", 0, 1)
+	bw, err := block.NewWriter(dir+"/0000000000000001.blk", 0, 1)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 	content := bytes.Repeat([]byte("transfer test "), 100)
 	result, err := bw.AppendDocument("tx-transfer", "doc.xml", "text/xml", bytes.NewReader(content))

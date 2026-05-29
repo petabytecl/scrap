@@ -69,7 +69,7 @@ func (s *Server) SetRaftRouter(router RaftRouter) {
 }
 
 type blockState struct {
-	writer    *block.BlockWriter
+	writer    *block.Writer
 	idxWriter *block.IndexWriter
 }
 
@@ -103,7 +103,7 @@ func (s *Server) getOrCreateBlock(blockID, shardID uint64) (*blockState, error) 
 		return nil, fmt.Errorf("block %d already exists", blockID)
 	}
 
-	bw, err := block.NewBlockWriter(blkPath, shardID, blockID)
+	bw, err := block.NewWriter(blkPath, shardID, blockID)
 	if err != nil {
 		return nil, err
 	}

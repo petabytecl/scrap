@@ -17,9 +17,9 @@ func writeTestBlock(t *testing.T, dir string) (blkPath, idxPath string) {
 	blkPath = filepath.Join(dir, "test.blk")
 	idxPath = filepath.Join(dir, "test.idx")
 
-	bw, err := block.NewBlockWriter(blkPath, 1, 100)
+	bw, err := block.NewWriter(blkPath, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 
 	iw, err := block.NewIndexWriter(idxPath)
@@ -136,7 +136,7 @@ func TestBlockReaderCorruptPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	data[block.BlockHeaderSize+block.FrameHeaderSize+5] ^= 0xFF
+	data[block.HeaderSize+block.FrameHeaderSize+5] ^= 0xFF
 	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}

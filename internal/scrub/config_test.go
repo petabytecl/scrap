@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseScrubConfig_Defaults(t *testing.T) {
-	cfg := scrub.ParseScrubConfig()
+	cfg := scrub.ParseConfig()
 
 	if !cfg.Enabled {
 		t.Error("expected Enabled=true by default")
@@ -46,7 +46,7 @@ func TestParseScrubConfig_EnvOverrides(t *testing.T) {
 	t.Setenv("SCRAP_SCRUB_CORRUPT_CAP", "3")
 	t.Setenv("SCRAP_SCRUB_JITTER", "0.05")
 
-	cfg := scrub.ParseScrubConfig()
+	cfg := scrub.ParseConfig()
 
 	if cfg.Enabled {
 		t.Error("expected Enabled=false after override")
@@ -83,7 +83,7 @@ func TestParseScrubConfig_ClampsBadValues(t *testing.T) {
 	t.Setenv("SCRAP_SCRUB_CORRUPT_CAP", "0")
 	t.Setenv("SCRAP_SCRUB_JITTER", "5.0")
 
-	cfg := scrub.ParseScrubConfig()
+	cfg := scrub.ParseConfig()
 
 	if cfg.LightScrubInterval != 24*time.Hour {
 		t.Errorf("LightScrubInterval: got %v, want 24h (clamped)", cfg.LightScrubInterval)

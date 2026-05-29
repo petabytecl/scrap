@@ -201,8 +201,8 @@ func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shar
 
 type shardTelemetryBundle struct {
 	uploadMetrics    *shard.UploadOTelMetrics
-	scrubMetrics     *scrub.OTelScrubMetrics
-	deepScrubMetrics *scrub.OTelDeepScrubMetrics
+	scrubMetrics     *scrub.OTelMetrics
+	deepScrubMetrics *scrub.OTelDeepMetrics
 	writeTelemetry   *shard.WriteTelemetry
 }
 
@@ -214,11 +214,11 @@ func (r *scrapdTelemetryRuntime) newShardTelemetry() (*shardTelemetryBundle, err
 	if err != nil {
 		return nil, fmt.Errorf("create upload metrics: %w", err)
 	}
-	sm, err := scrub.NewOTelScrubMetrics(m)
+	sm, err := scrub.NewOTelMetrics(m)
 	if err != nil {
 		return nil, fmt.Errorf("create scrub metrics: %w", err)
 	}
-	dsm, err := scrub.NewOTelDeepScrubMetrics(m)
+	dsm, err := scrub.NewOTelDeepMetrics(m)
 	if err != nil {
 		return nil, fmt.Errorf("create deep scrub metrics: %w", err)
 	}

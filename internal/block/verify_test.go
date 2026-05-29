@@ -18,9 +18,9 @@ func writeVerifyTestBlock(t *testing.T, dir string) (blkPath, idxPath string) {
 	blkPath = filepath.Join(dir, "0000000000000064.blk")
 	idxPath = filepath.Join(dir, "0000000000000064.idx")
 
-	bw, err := block.NewBlockWriter(blkPath, 1, 100)
+	bw, err := block.NewWriter(blkPath, 1, 100)
 	if err != nil {
-		t.Fatalf("NewBlockWriter: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
 
 	iw, err := block.NewIndexWriter(idxPath)
@@ -89,7 +89,7 @@ func TestVerifyBlock_FrameCRCCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	data[block.BlockHeaderSize+block.FrameHeaderSize+5] ^= 0xFF
+	data[block.HeaderSize+block.FrameHeaderSize+5] ^= 0xFF
 	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -115,9 +115,9 @@ func TestVerifyBlock_DocSHA256Mismatch(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	payloadOff := block.BlockHeaderSize + block.FrameHeaderSize + 5
+	payloadOff := block.HeaderSize + block.FrameHeaderSize + 5
 	data[payloadOff] ^= 0xFF
-	block.RecomputeFramePayloadCRC(data, block.BlockHeaderSize)
+	block.RecomputeFramePayloadCRC(data, block.HeaderSize)
 
 	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test file path from temp dir
 		t.Fatalf("WriteFile: %v", err)
@@ -175,7 +175,7 @@ func TestVerifyBlock_OversizedPayloadLen(t *testing.T) {
 	}
 
 	// Set payloadLen to 0xFFFFFFFF in the first frame header, then fix header CRC.
-	frameStart := block.BlockHeaderSize
+	frameStart := block.HeaderSize
 	binary.LittleEndian.PutUint32(data[frameStart+16:frameStart+20], 0xFFFFFFFF)
 	headerCRC := crc32.Checksum(data[frameStart:frameStart+28], crc32.MakeTable(crc32.Castagnoli))
 	binary.LittleEndian.PutUint32(data[frameStart+28:frameStart+32], headerCRC)

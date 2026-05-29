@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-type BlockInfo struct {
+type Info struct {
 	BlockID uint64
 	BlkPath string
 	IdxPath string
 }
 
-func BlockFilePath(dir string, blockID uint64) string {
+func FilePath(dir string, blockID uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%016x.blk", blockID))
 }
 
@@ -23,13 +23,13 @@ func IdxFilePath(dir string, blockID uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%016x.idx", blockID))
 }
 
-func ListSealedBlocks(dir string, openBlockID uint64) ([]BlockInfo, error) {
+func ListSealedBlocks(dir string, openBlockID uint64) ([]Info, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("block: read dir: %w", err)
 	}
 
-	var blocks []BlockInfo
+	var blocks []Info
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasSuffix(name, ".blk") {
@@ -48,7 +48,7 @@ func ListSealedBlocks(dir string, openBlockID uint64) ([]BlockInfo, error) {
 			continue
 		}
 
-		blocks = append(blocks, BlockInfo{
+		blocks = append(blocks, Info{
 			BlockID: id,
 			BlkPath: filepath.Join(dir, name),
 			IdxPath: IdxFilePath(dir, id),

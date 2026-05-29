@@ -13,7 +13,7 @@ import (
 )
 
 type BlockLister interface {
-	ListSealedBlocks(openBlockID uint64) ([]block.BlockInfo, error)
+	ListSealedBlocks(openBlockID uint64) ([]block.Info, error)
 }
 
 type BlockVerifier interface {
@@ -40,7 +40,7 @@ type CheckpointStore interface {
 	ClearDeepScrubCheckpoint()
 }
 
-type DeepScrubMetrics interface {
+type DeepMetrics interface {
 	RecordDeepRun(result string, durationSec float64)
 	RecordFramesVerified(n uint64)
 	RecordCorruption(corruptionType string)
@@ -52,11 +52,11 @@ type DeepScrubMetrics interface {
 	DecrementQuarantined()
 }
 
-type DeepScrubberConfig struct {
+type DeepConfig struct {
 	BlockLister       BlockLister
 	BlockVerifier     BlockVerifier
 	QuarantineManager QuarantineManager
-	Metrics           DeepScrubMetrics
+	Metrics           DeepMetrics
 	Checkpoint        CheckpointStore
 	LatencySignal     LatencySignal
 	BlockRepairer     BlockRepairer
@@ -72,14 +72,14 @@ type DeepScrubberConfig struct {
 	Jitter            float64
 }
 
-type DeepScrubber struct {
-	cfg     DeepScrubberConfig
+type Deep struct {
+	cfg     DeepConfig
 	peerIdx int
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 }
 
-func NewDeepScrubber(cfg DeepScrubberConfig) *DeepScrubber {
+func NewDeep(cfg DeepConfig) *Deep {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultDeepScrubInterval
 	}
@@ -95,23 +95,23 @@ func NewDeepScrubber(cfg DeepScrubberConfig) *DeepScrubber {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &DeepScrubber{cfg: cfg}
+	return &Deep{cfg: cfg}
 }
 
-func (ds *DeepScrubber) Start(ctx context.Context) {
+func (ds *Deep) Start(ctx context.Context) {
 	ctx, ds.cancel = context.WithCancel(ctx)
 	ds.wg.Add(1)
 	go ds.loop(ctx)
 }
 
-func (ds *DeepScrubber) Stop() {
+func (ds *Deep) Stop() {
 	if ds.cancel != nil {
 		ds.cancel()
 	}
 	ds.wg.Wait()
 }
 
-func (ds *DeepScrubber) loop(ctx context.Context) {
+func (ds *Deep) loop(ctx context.Context) {
 	defer ds.wg.Done()
 
 	for {
@@ -125,7 +125,7 @@ func (ds *DeepScrubber) loop(ctx context.Context) {
 	}
 }
 
-func (ds *DeepScrubber) jitteredInterval() time.Duration {
+func (ds *Deep) jitteredInterval() time.Duration {
 	if ds.cfg.Jitter <= 0 {
 		return ds.cfg.Interval
 	}
@@ -134,7 +134,7 @@ func (ds *DeepScrubber) jitteredInterval() time.Duration {
 	return ds.cfg.Interval + time.Duration(offset)
 }
 
-func (ds *DeepScrubber) RunOnce(ctx context.Context) error {
+func (ds *Deep) RunOnce(ctx context.Context) error {
 	ds.repairQuarantined(ctx)
 
 	start := time.Now()
@@ -175,7 +175,7 @@ func (ds *DeepScrubber) RunOnce(ctx context.Context) error {
 	return nil
 }
 
-func (ds *DeepScrubber) filterFromCheckpoint(blocks []block.BlockInfo) []block.BlockInfo {
+func (ds *Deep) filterFromCheckpoint(blocks []block.Info) []block.Info {
 	if ds.cfg.Checkpoint == nil {
 		return blocks
 	}
@@ -191,19 +191,19 @@ func (ds *DeepScrubber) filterFromCheckpoint(blocks []block.BlockInfo) []block.B
 	return nil
 }
 
-func (ds *DeepScrubber) saveCheckpoint(blockID uint64) {
+func (ds *Deep) saveCheckpoint(blockID uint64) {
 	if ds.cfg.Checkpoint != nil {
 		ds.cfg.Checkpoint.SetDeepScrubCheckpoint(blockID)
 	}
 }
 
-func (ds *DeepScrubber) clearCheckpoint() {
+func (ds *Deep) clearCheckpoint() {
 	if ds.cfg.Checkpoint != nil {
 		ds.cfg.Checkpoint.ClearDeepScrubCheckpoint()
 	}
 }
 
-func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
+func (ds *Deep) repairQuarantined(ctx context.Context) {
 	if ds.cfg.BlockRepairer == nil || len(ds.cfg.PeerAddrs) == 0 {
 		return
 	}
@@ -233,7 +233,7 @@ func (ds *DeepScrubber) repairQuarantined(ctx context.Context) {
 	}
 }
 
-func (ds *DeepScrubber) waitPressurePause(ctx context.Context) error {
+func (ds *Deep) waitPressurePause(ctx context.Context) error {
 	if ds.cfg.PauseController == nil || !ds.cfg.PauseController.IsPaused() {
 		return nil
 	}
@@ -241,7 +241,7 @@ func (ds *DeepScrubber) waitPressurePause(ctx context.Context) error {
 	return ds.cfg.PauseController.Wait(ctx)
 }
 
-func (ds *DeepScrubber) pauseIfLatencyExceeded(ctx context.Context) {
+func (ds *Deep) pauseIfLatencyExceeded(ctx context.Context) {
 	if ds.cfg.LatencySignal == nil {
 		return
 	}
@@ -257,7 +257,7 @@ func (ds *DeepScrubber) pauseIfLatencyExceeded(ctx context.Context) {
 	}
 }
 
-func (ds *DeepScrubber) waitIOBudget(ctx context.Context, blkPath string) error {
+func (ds *Deep) waitIOBudget(ctx context.Context, blkPath string) error {
 	if ds.cfg.IOBudget == nil {
 		return nil
 	}
@@ -268,7 +268,7 @@ func (ds *DeepScrubber) waitIOBudget(ctx context.Context, blkPath string) error 
 	return ds.cfg.IOBudget.Wait(ctx, info.Size())
 }
 
-func (ds *DeepScrubber) verifyOneBlock(blk block.BlockInfo) error {
+func (ds *Deep) verifyOneBlock(blk block.Info) error {
 	result, err := ds.cfg.BlockVerifier.VerifyBlock(blk.BlkPath, blk.IdxPath)
 	if err != nil {
 		return err

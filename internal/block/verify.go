@@ -41,7 +41,7 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	if _, err := f.Seek(BlockHeaderSize, io.SeekStart); err != nil {
+	if _, err := f.Seek(HeaderSize, io.SeekStart); err != nil {
 		return VerifyResult{}, fmt.Errorf("block: verify seek past header: %w", err)
 	}
 
@@ -50,7 +50,7 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 
 func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
 	var result VerifyResult
-	offset := int64(BlockHeaderSize)
+	offset := int64(HeaderSize)
 	docBySeq := make(map[uint32]hash.Hash)
 	framesByDocSeq := make(map[uint32]uint32)
 	completedDocSeq := make(map[uint32]bool)
