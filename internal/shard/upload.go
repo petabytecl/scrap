@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
@@ -97,6 +98,12 @@ func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) [
 }
 
 func (s *Shard) proposeUploadCommand(ctx context.Context, op string, cmd *scrapv1.RaftCommand) error {
+	// Stamp the deterministic block.upload trace context so the seal/confirm apply
+	// spans land in the per-block upload trace (trace 2) on every voter (ADR 0013).
+	if blockID, ok := uploadCommandBlockID(cmd); ok {
+		bctx := trace.ContextWithSpanContext(ctx, blockTraceContext(s.uploadCellID(), s.shardID, blockID))
+		injectTraceContext(bctx, cmd)
+	}
 	data, err := proto.Marshal(cmd)
 	if err != nil {
 		return fmt.Errorf("shard: marshal %s: %w", op, err)
@@ -358,12 +365,20 @@ func handleTransientUpload(ctx context.Context, state *uploadRetryState) (bool, 
 
 func (s *Shard) uploadAndConfirm(ctx context.Context, upload PendingUpload) error {
 	prefix := backendKeyPrefix(s.uploadCellID(), upload.ShardID, upload.BlockID)
+	// Root backend I/O in the deterministic per-block trace so the PUT/verify spans
+	// share a trace_id with the seal/confirm apply spans and the documents' links.
+	bctx := trace.ContextWithSpanContext(ctx, blockTraceContext(s.uploadCellID(), s.shardID, upload.BlockID))
+	blockAttr := trace.WithAttributes(blockIDAttribute(upload.BlockID))
 
-	blk, err := s.uploadObject(ctx, upload.BlockID, prefix, "blk")
+	putBlkCtx, putBlk := s.writeTelemetry.StartSpan(bctx, "scrap.upload/put.blk", blockAttr)
+	blk, err := s.uploadObject(putBlkCtx, upload.BlockID, prefix, "blk")
+	putBlk.End(err)
 	if err != nil {
 		return err
 	}
-	idx, err := s.uploadObject(ctx, upload.BlockID, prefix, "idx")
+	putIdxCtx, putIdx := s.writeTelemetry.StartSpan(bctx, "scrap.upload/put.idx", blockAttr)
+	idx, err := s.uploadObject(putIdxCtx, upload.BlockID, prefix, "idx")
+	putIdx.End(err)
 	if err != nil {
 		return err
 	}

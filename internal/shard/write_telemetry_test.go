@@ -10,6 +10,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/petabytecl/scrap/internal/shard"
 )
@@ -114,7 +115,7 @@ func TestWriteTelemetry_StartApplyCreatesSpanOnly(t *testing.T) {
 		t.Fatalf("new write telemetry: %v", err)
 	}
 
-	_, apply := wt.StartApply(context.Background(), "commit_document", attribute.Int64("scrap.block_id", 42))
+	_, apply := wt.StartSpan(context.Background(), "scrap.apply/commit_document", oteltrace.WithAttributes(attribute.Int64("scrap.block_id", 42)))
 	apply.End(errors.New("apply failed"))
 
 	spans := spanRecorder.Ended()

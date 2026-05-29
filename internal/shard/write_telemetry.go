@@ -14,7 +14,7 @@ import (
 
 type WriteStageRecorder interface {
 	StartStage(ctx context.Context, stage string) (context.Context, WriteStageEnd)
-	StartApply(ctx context.Context, operation string, attrs ...attribute.KeyValue) (context.Context, WriteStageEnd)
+	StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, WriteStageEnd)
 }
 
 type WriteStageEnd interface {
@@ -87,31 +87,28 @@ func (ws *writeStage) End(err error) {
 	ws.span.End()
 }
 
-// StartApply starts a span for a Raft command apply. Unlike StartStage it records
-// no stage-duration metric: the span exists so the deterministic state-machine
-// apply is visible on every voter. The leader's client-observed apply latency is
-// already captured by the raft_apply stage. See ADR 0013.
-func (wt *WriteTelemetry) StartApply(ctx context.Context, operation string, attrs ...attribute.KeyValue) (context.Context, WriteStageEnd) {
-	var opts []trace.SpanStartOption
-	if len(attrs) > 0 {
-		opts = append(opts, trace.WithAttributes(attrs...))
-	}
-	ctx, span := wt.tracer.Start(ctx, "scrap.apply/"+operation, opts...)
-	return ctx, &applySpan{span: span}
+// StartSpan starts a span-only telemetry span — no stage-duration metric, unlike
+// StartStage. Used for per-voter apply spans and backend upload spans, which need a
+// span but not the write-path stage histogram. Callers pass the fully-qualified
+// span name (e.g. "scrap.apply/commit_document") and any options such as
+// trace.WithAttributes or trace.WithLinks. See ADR 0013.
+func (wt *WriteTelemetry) StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, WriteStageEnd) {
+	ctx, span := wt.tracer.Start(ctx, name, opts...)
+	return ctx, &spanEnd{span: span}
 }
 
-type applySpan struct {
+type spanEnd struct {
 	span trace.Span
 }
 
-func (a *applySpan) End(err error) {
+func (s *spanEnd) End(err error) {
 	if err != nil {
-		a.span.SetStatus(otelcodes.Error, err.Error())
-		a.span.RecordError(err)
+		s.span.SetStatus(otelcodes.Error, err.Error())
+		s.span.RecordError(err)
 	} else {
-		a.span.SetStatus(otelcodes.Ok, "")
+		s.span.SetStatus(otelcodes.Ok, "")
 	}
-	a.span.End()
+	s.span.End()
 }
 
 type noopWriteTelemetry struct{}
@@ -120,7 +117,7 @@ func (noopWriteTelemetry) StartStage(ctx context.Context, _ string) (context.Con
 	return ctx, noopStageEnd{}
 }
 
-func (noopWriteTelemetry) StartApply(ctx context.Context, _ string, _ ...attribute.KeyValue) (context.Context, WriteStageEnd) {
+func (noopWriteTelemetry) StartSpan(ctx context.Context, _ string, _ ...trace.SpanStartOption) (context.Context, WriteStageEnd) {
 	return ctx, noopStageEnd{}
 }
 

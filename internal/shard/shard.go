@@ -19,6 +19,7 @@ import (
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
@@ -929,8 +930,18 @@ func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, li
 	if !live || operation == "" || s.writeTelemetry == nil {
 		return s.applyEntryCommand(cmd, entryIndex)
 	}
+	opts := []trace.SpanStartOption{trace.WithAttributes(attrs...)}
+	// A committed Document forward-links to its Block's upload trace, so a write can
+	// be navigated to "where did these bytes go" in one click — and the link survives
+	// leader failover because the block trace_id is deterministic (ADR 0013).
+	if c, ok := cmd.Command.(*scrapv1.RaftCommand_CommitDoc); ok {
+		opts = append(opts, trace.WithLinks(trace.Link{
+			SpanContext: blockTraceContext(s.uploadCellID(), s.shardID, c.CommitDoc.GetBlockId()),
+			Attributes:  []attribute.KeyValue{attribute.String("scrap.link", "block.upload")},
+		}))
+	}
 	ctx := extractTraceContext(context.Background(), cmd)
-	_, applyEnd := s.writeTelemetry.StartApply(ctx, operation, attrs...)
+	_, applyEnd := s.writeTelemetry.StartSpan(ctx, "scrap.apply/"+operation, opts...)
 	err := s.applyEntryCommand(cmd, entryIndex)
 	applyEnd.End(err)
 	return err
