@@ -18,6 +18,8 @@ configMapGenerator:
   - name: grafana-evidence-dashboard
     namespace: monitoring
     files:
-      - scrapd-evidence.json
+      - scrap-overview.json
+      - scrap-red.json
+      - scrap-use.json
     options:
       disableNameSuffixHash: true

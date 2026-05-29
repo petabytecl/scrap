@@ -6,6 +6,14 @@ Saved queries for Phase 3 stress evidence review.
 > `PeriodicReader` exports every 60s, so a `[1m]` window would often see a single
 > sample and return empty. This matches the window used in `scripts/evidence-bundle.sh`.
 
+## Dashboards
+
+Three method-based boards are provisioned in the Evidence folder:
+
+- **scrap-overview** — health at a glance (error rate, p99, leader, apply lag, pressure, disk).
+- **scrap-red** — Rate/Errors/Duration per RPC and per write-path stage.
+- **scrap-use** — Utilization/Saturation/Errors per resource (raft apply pipeline, RPC concurrency, upload outbox, local storage, runtime, scrub).
+
 ## Metrics (PromQL via Mimir)
 
 ### Client API
@@ -49,6 +57,28 @@ scrap_raft_is_leader
 
 # Applied index growth (should increase steadily under write load)
 rate(scrap_raft_applied_index[5m])
+
+# Apply lag (saturation): committed entries not yet applied
+max(scrap_raft_commit_index) - max(scrap_raft_applied_index)
+```
+
+### RPC Concurrency (USE)
+```promql
+# Utilization: RPCs currently in flight, by method
+sum(scrap_rpc_server_in_flight) by (rpc_method)
+
+# Saturation: load shed as RESOURCE_EXHAUSTED (gRPC status 8)
+sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code="8"}[5m])) by (rpc_method)
+```
+
+### Local Storage (USE)
+```promql
+# Disk utilization on the data volume
+scrap_disk_used_bytes
+scrap_disk_free_bytes
+
+# Pebble projection on-disk size
+scrap_pebble_disk_bytes
 ```
 
 ### Process Resources
@@ -65,15 +95,29 @@ rate(process_runtime_go_gc_pause_seconds_total[5m])
 
 ## Traces (TraceQL via Tempo)
 
+> Two linked traces per document: `document.write` (states 1-5) and the per-Block
+> `block.upload` (states 6-7). They share a deterministic block trace_id =
+> hash(cell, shard, block); each write's apply span forward-links to the upload
+> trace, and both carry `scrap.block_id` for cross-trace search. See ADR 0013.
+
 ```traceql
+# The state-machine apply, visible on every voter
+{ name =~ "scrap.apply/.*" }
+
+# One document's apply across all replicas
+{ name = "scrap.apply/commit_document" && span.scrap.block_id = 42 }
+
+# The block upload trace (seal -> put -> verify -> confirm)
+{ name =~ "scrap.upload/.*" }
+
+# Everything for one block (writes + upload) via the shared attribute
+{ span.scrap.block_id = 42 }
+
 # Slow write operations (>100ms)
 { span.scrap.write.stage = "raft_propose" } | duration > 100ms
 
 # All errors
 { status = error }
-
-# Specific write stage traces
-{ name =~ "scrap.write/.*" }
 
 # RPC traces by method
 { span.rpc.method = "WriteDocument" }
