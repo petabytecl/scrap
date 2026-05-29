@@ -595,15 +595,16 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 	return nil
 }
 
-func (s *Shard) TriggerRebuild(_ context.Context) (alreadyInProgress bool, err error) {
+func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error) {
 	if !s.rebuilding.CompareAndSwap(false, true) {
 		return true, nil
 	}
 	done := make(chan struct{})
 	s.rebuildDone.Store(&done)
-	// The rebuild is detached: it outlives the triggering RPC, so it runs on a
-	// background context rather than the caller's (which is cancelled on return).
-	go s.doRebuild(context.Background(), done)
+	// The rebuild is detached: it outlives the triggering RPC. WithoutCancel keeps
+	// the caller's trace/values for log correlation while dropping cancellation and
+	// any deadline, so returning from this RPC does not abort the rebuild.
+	go s.doRebuild(context.WithoutCancel(ctx), done)
 	return false, nil
 }
 
