@@ -9,27 +9,20 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
-func (s *Shard) ListSealedBlocks(_ uint64) ([]block.Info, error) {
-	s.mu.Lock()
-	openBlockID := uint64(0)
-	if s.blockWriter != nil {
-		openBlockID = s.blockWriter.BlockID()
-	}
-	s.mu.Unlock()
-
-	return block.ListSealedBlocks(s.blocksDir, openBlockID)
+func (c *scrubCoordinator) ListSealedBlocks(_ uint64) ([]block.Info, error) {
+	return block.ListSealedBlocks(c.blocksDir, c.core.currentOpenBlockID())
 }
 
-func (s *Shard) VerifyBlock(blkPath, idxPath string) (block.VerifyResult, error) {
+func (c *scrubCoordinator) VerifyBlock(blkPath, idxPath string) (block.VerifyResult, error) {
 	return block.VerifyBlock(blkPath, idxPath)
 }
 
-func (s *Shard) Quarantine(blkPath string) error {
+func (c *scrubCoordinator) Quarantine(blkPath string) error {
 	return block.Quarantine(blkPath)
 }
 
-func (s *Shard) ListQuarantined() ([]uint64, error) {
-	return block.ListQuarantined(s.blocksDir)
+func (c *scrubCoordinator) ListQuarantined() ([]uint64, error) {
+	return block.ListQuarantined(c.blocksDir)
 }
 
 func (s *Shard) InjectProjectionKey(_ context.Context, txID string, blockID uint64, docCount uint16, completed bool) error {
@@ -53,7 +46,7 @@ func (s *Shard) InjectProjectionKey(_ context.Context, txID string, blockID uint
 }
 
 var (
-	_ scrub.BlockLister       = (*Shard)(nil)
-	_ scrub.BlockVerifier     = (*Shard)(nil)
-	_ scrub.QuarantineManager = (*Shard)(nil)
+	_ scrub.BlockLister       = (*scrubCoordinator)(nil)
+	_ scrub.BlockVerifier     = (*scrubCoordinator)(nil)
+	_ scrub.QuarantineManager = (*scrubCoordinator)(nil)
 )
