@@ -363,6 +363,14 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" \
 		| sed 's/sampling_percentage: 100/sampling_percentage: $(EVIDENCE_BASELINE_SAMPLING)/' \
 		| $(KUBECTL) apply -f -
+	# A reused cluster keeps the previously-running otel-collector pod, whose
+	# tail_sampling rate is read from config only at process start. kubectl apply
+	# updates the ConfigMap in place but does not roll the Deployment, so without
+	# this the collector would keep its old in-memory sampling (e.g. 100%) while
+	# the rendered config claims the low rate — a misleading low-rate scenario.
+	# Force the collector to reload the freshly-applied config before gating on it
+	# (no-op-cost first rollout on a fresh cluster; the status gate below waits).
+	$(KUBECTL) -n monitoring rollout restart deployment/otel-collector
 	# Gate on the log pipeline first (Loki sink, gateway, per-node agent) so that
 	# when apps deploy in Phase 2 their logs are captured from the first line.
 	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
