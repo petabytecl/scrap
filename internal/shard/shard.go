@@ -156,6 +156,12 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressureScrubGate)
 	s.rebuilder = newProjectionRebuilder(s, cfg.DataDir, blocksDir, cfg.ShardID, cfg.Upload, logger)
+	// Raft Open starts its run loop before returning and can replay committed upload
+	// commands immediately. The apply path refreshes upload pressure, so the
+	// controller must exist before Raft replay begins. Start still waits until after
+	// s.raft is assigned below.
+	s.uploads = newUploadController(s, cfg.Upload, s.shardID, s.logger, s.writeTelemetry, s.uploadPressureScrubGate)
+	s.uploads.resetConcurrency()
 
 	if err := s.recoverOpenlog(); err != nil {
 		_ = idx.Close()
@@ -187,8 +193,6 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
-	s.uploads = newUploadController(s, cfg.Upload, s.shardID, s.logger, s.writeTelemetry, s.uploadPressureScrubGate)
-	s.uploads.resetConcurrency()
 	if err := s.refreshUploadPressureLocked(); err != nil {
 		raftNode.Stop()
 		s.closeBlockAndIdx()
