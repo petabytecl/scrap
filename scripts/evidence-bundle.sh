@@ -153,9 +153,9 @@ query_metric() {
       --data-urlencode "time=$RUN_QUERY_EPOCH" 2>/dev/null) \
       && printf '%s' "$resp" | jq -e 'has("data") and (.data | has("result"))' >/dev/null 2>&1; then
     printf '%s' "$resp" | jq '.data.result' > "$out"
-    if [[ "$required" == "required" && "$(jq 'length' "$out")" == "0" ]]; then
+    if [[ "$required" == "required" ]] && ! jq -e '[.[]? | ((.value[1]? // "0") | tonumber? // 0)] | any(. > 0)' "$out" >/dev/null; then
       METRIC_EMPTY_REQUIRED=$((METRIC_EMPTY_REQUIRED + 1))
-      log "WARNING: required metric returned no series: $name"
+      log "WARNING: required metric returned no positive current-run value: $name"
     fi
   else
     echo '[]' > "$out"

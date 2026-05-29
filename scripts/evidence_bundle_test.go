@@ -43,6 +43,15 @@ func TestEvidenceBundleFailsWhenTraceEvidenceIsMissing(t *testing.T) {
 	assertCheck(t, gate, "traces_captured", false)
 }
 
+func TestEvidenceBundleFailsWhenRequiredMetricHasNoCurrentRunIncrease(t *testing.T) {
+	gate := runEvidenceBundle(t, "metric")
+
+	if gate.Pass {
+		t.Fatalf("expected gate to fail when required RPC metric has no current-run increase")
+	}
+	assertCheck(t, gate, "metrics_captured", false)
+}
+
 func TestEvidenceBundleFailsWhenLogEvidenceIsMissing(t *testing.T) {
 	gate := runEvidenceBundle(t, "log")
 
@@ -195,6 +204,12 @@ if [[ "$args" == *"/api/v1/query"* ]]; then
   if [[ "$args" == *"scrap_rpc_server_requests_total"* && "$args" == *"[60s]"* ]]; then
     echo "rpc metric window was expanded before the run start" >&2
     exit 22
+  fi
+  if [[ "$missing" == "metric" && "$args" == *"scrap_rpc_server_requests_total"* ]]; then
+    cat <<'JSON'
+{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056000,"0"]}]}}
+JSON
+    exit 0
   fi
   cat <<'JSON'
 {"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056000,"20"]}]}}
