@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -20,7 +19,6 @@ import (
 	"github.com/petabytecl/scrap/internal/logbridge"
 	"github.com/petabytecl/scrap/internal/peer"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
-	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
 	"github.com/petabytecl/scrap/internal/telemetry"
@@ -48,44 +46,35 @@ const (
 
 //nolint:cyclop // main startup function wiring all subsystems
 func run() error {
-	dataDir := flag.String("data-dir", "/data", "storage root directory")
-	listenAddr := flag.String("listen-addr", ":9090", "gRPC client listen address")
-	peerAddr := flag.String("peer-addr", ":9091", "gRPC peer listen address")
-	adminAddr := flag.String("admin-addr", ":8080", "HTTP admin listen address (health)")
-	blockSealSize := flag.Int64("block-seal-size", shard.DefaultBlockSealSize, "block seal threshold in bytes")
-	peersFlag := flag.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
-	flag.Parse()
-
-	logger := logbridge.NewLoggerFromEnv(os.Stderr)
-
-	scrubCfg := scrub.ParseConfig()
-	uploadEnabled := envBool("SCRAP_UPLOAD_ENABLED", true)
-
-	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), *dataDir, uploadEnabled)
+	cfg, err := loadConfig(os.Args[1:])
 	if err != nil {
 		return err
 	}
 
-	cellID := os.Getenv("SCRAP_CELL_ID")
+	logger := logbridge.NewLoggerFromEnv(os.Stderr)
+
+	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), cfg.DataDir, cfg.UploadEnabled)
+	if err != nil {
+		return err
+	}
 
 	// Telemetry identifiers are hashed by default; raw Document identifiers are
 	// emitted only in the reserved local non-production Cell, and the request is
 	// refused (fail-closed) anywhere else. See ADR 0013 §4.
-	rawTelemetryIDs := envBool("SCRAP_TELEMETRY_RAW_IDS", false)
-	identifierMode := telemetry.ResolveIdentifierMode(cellID, rawTelemetryIDs)
+	identifierMode := telemetry.ResolveIdentifierMode(cfg.CellID, cfg.RawTelemetryIDs)
 	switch {
 	case identifierMode == telemetry.RawIdentifiersForLocalDebug:
-		logger.Warn("telemetry raw identifiers ENABLED for local debugging (local non-production Cell only)", "cell_id", cellID)
-	case rawTelemetryIDs:
-		logger.Warn("SCRAP_TELEMETRY_RAW_IDS ignored: raw telemetry identifiers are permitted only in the local non-production Cell", "cell_id", cellID)
+		logger.Warn("telemetry raw identifiers ENABLED for local debugging (local non-production Cell only)", "cell_id", cfg.CellID)
+	case cfg.RawTelemetryIDs:
+		logger.Warn("SCRAP_TELEMETRY_RAW_IDS ignored: raw telemetry identifiers are permitted only in the local non-production Cell", "cell_id", cfg.CellID)
 	}
 
-	peers, raftID, err := resolvePeers(*peersFlag)
+	peers, raftID, err := resolvePeers(cfg)
 	if err != nil {
 		return err
 	}
 
-	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), *dataDir, raftID, 0)
+	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), cfg.DataDir, raftID, 0)
 	if err != nil {
 		return err
 	}
@@ -97,11 +86,11 @@ func run() error {
 	}
 
 	uploadCfg := shard.UploadConfig{
-		Enabled:     uploadEnabled,
+		Enabled:     cfg.UploadEnabled,
 		Backend:     uploadBackend,
-		CellID:      cellID,
-		Concurrency: envInt("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency),
-		Pressure:    shard.ParseUploadPressureConfigFromEnv(),
+		CellID:      cfg.CellID,
+		Concurrency: cfg.UploadConcurrency,
+		Pressure:    cfg.UploadPressure,
 		Metrics:     shardTel.uploadMetrics,
 	}
 
@@ -114,19 +103,19 @@ func run() error {
 	peerAddrs := peerAddrsExceptSelf(peers, raftID)
 
 	s, err := shard.Open(shard.Config{
-		DataDir:            *dataDir,
+		DataDir:            cfg.DataDir,
 		ShardID:            0,
 		RaftID:             raftID,
 		Peers:              peers,
-		BlockSealSize:      *blockSealSize,
-		Scrub:              scrubCfg,
+		BlockSealSize:      cfg.BlockSealSize,
+		Scrub:              cfg.Scrub,
 		Transport:          shardTransport,
 		Logger:             logger,
 		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
 		Metrics:            shardTel.scrubMetrics,
 		DeepMetrics:        shardTel.deepScrubMetrics,
 		Rebuilder:          peer.NewClientRebuilder(peerClient),
-		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, filepath.Join(*dataDir, "blocks")),
+		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, filepath.Join(cfg.DataDir, "blocks")),
 		Replicator:         peerClient,
 		PeerAddrs:          peerAddrs,
 		Upload:             uploadCfg,
@@ -151,21 +140,21 @@ func run() error {
 
 	lc := net.ListenConfig{}
 
-	clientLis, err := lc.Listen(ctx, "tcp", *listenAddr)
+	clientLis, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("listen client %s: %w", *listenAddr, err)
+		return fmt.Errorf("listen client %s: %w", cfg.ListenAddr, err)
 	}
 
 	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	server.Register(gs, s, server.WithTelemetry(telemetryRuntime.server), server.WithIdentifierMode(identifierMode))
 	server.RegisterHealth(gs, s)
 
-	peerLis, err := lc.Listen(ctx, "tcp", *peerAddr)
+	peerLis, err := lc.Listen(ctx, "tcp", cfg.PeerAddr)
 	if err != nil {
-		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
+		return fmt.Errorf("listen peer %s: %w", cfg.PeerAddr, err)
 	}
 	peerGS := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
+	peerSrv := peer.NewServer(cfg.DataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)
 	}))
@@ -174,26 +163,26 @@ func run() error {
 	adminOpts := []admin.Option{}
 	adminOpts = append(adminOpts, admin.WithUploadPressureProvider(s))
 	adminOpts = append(adminOpts, admin.WithMetrics(telemetryRuntime.metricsHandler))
-	if envBool("SCRAP_TEST_HOOKS", false) {
+	if cfg.TestHooks {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
 	}
-	if envBool("SCRAP_PPROF_ENABLED", false) {
+	if cfg.PprofEnabled {
 		adminOpts = append(adminOpts, admin.WithPprof())
 	}
 	adminSrv := admin.New(adminOpts...)
-	go func() { _ = adminSrv.ListenAndServe(*adminAddr) }()
+	go func() { _ = adminSrv.ListenAndServe(cfg.AdminAddr) }()
 	go func() { _ = peerGS.Serve(peerLis) }()
 	go func() { _ = gs.Serve(clientLis) }()
 
 	logger.Info("scrapd starting",
-		"client_addr", *listenAddr,
-		"peer_addr", *peerAddr,
-		"admin_addr", *adminAddr,
-		"data_dir", *dataDir,
+		"client_addr", cfg.ListenAddr,
+		"peer_addr", cfg.PeerAddr,
+		"admin_addr", cfg.AdminAddr,
+		"data_dir", cfg.DataDir,
 		"raft_id", raftID,
-		"cell_id", cellID,
+		"cell_id", cfg.CellID,
 		"peers", len(peers),
-		"scrub_enabled", scrubCfg.Enabled,
+		"scrub_enabled", cfg.Scrub.Enabled,
 		"backend_type", backendType,
 		"upload_enabled", uploadCfg.Enabled,
 		"upload_concurrency", uploadCfg.Concurrency,
@@ -251,18 +240,10 @@ func openUploadBackend(ctx context.Context, dataDir string) (backend.Backend, st
 	}
 }
 
-func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
-	replicas := envInt("SCRAP_REPLICAS", 0)
-	headlessSvc := os.Getenv("SCRAP_HEADLESS_SERVICE")
-	peerPort := envInt("SCRAP_PEER_PORT", defaultPeerPort)
-	namespace := os.Getenv("POD_NAMESPACE")
-	if namespace == "" {
-		namespace = "default"
-	}
-
+func resolvePeers(cfg Config) (map[uint64]string, uint64, error) {
 	switch {
-	case peersFlag != "":
-		peers, err := scrapraft.ParsePeersFlag(peersFlag)
+	case cfg.PeersFlag != "":
+		peers, err := scrapraft.ParsePeersFlag(cfg.PeersFlag)
 		if err != nil {
 			return nil, 0, fmt.Errorf("invalid --peers: %w", err)
 		}
@@ -273,7 +254,7 @@ func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
 		}
 		return peers, scrapraft.OrdinalToRaftID(ord), nil
 
-	case replicas > 0 && headlessSvc != "":
+	case cfg.Replicas > 0 && cfg.HeadlessService != "":
 		hostname, err := os.Hostname()
 		if err != nil {
 			return nil, 0, fmt.Errorf("hostname: %w", err)
@@ -283,39 +264,11 @@ func resolvePeers(peersFlag string) (map[uint64]string, uint64, error) {
 			return nil, 0, fmt.Errorf("parse ordinal from %q: %w", hostname, err)
 		}
 		raftID := scrapraft.OrdinalToRaftID(ord)
-		peers := scrapraft.BuildK8sPeers(replicas, headlessSvc, namespace, peerPort)
+		peers := scrapraft.BuildK8sPeers(cfg.Replicas, cfg.HeadlessService, cfg.Namespace, cfg.PeerPort)
 		return peers, raftID, nil
 
 	default:
 		return map[uint64]string{1: "localhost:9091"}, 1, nil
-	}
-}
-
-func envInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	var n int
-	_, err := fmt.Sscanf(v, "%d", &n)
-	if err != nil {
-		return fallback
-	}
-	return n
-}
-
-func envBool(key string, fallback bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	switch v {
-	case "1", "true", "TRUE", "True":
-		return true
-	case "0", "false", "FALSE", "False":
-		return false
-	default:
-		return fallback
 	}
 }
 

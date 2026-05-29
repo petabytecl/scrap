@@ -1,0 +1,158 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/shard"
+)
+
+const (
+	minPort = 1
+	maxPort = 65535
+)
+
+// Config is the fully-assembled scrapd configuration: command-line flags plus
+// environment variables, read and validated in one place by loadConfig.
+//
+// Defaults for subsystem tunables continue to live with their owning packages
+// (e.g. shard.DefaultBlockSealSize, shard.DefaultUploadConcurrency, the scrub
+// defaults). Config centralizes only the reading and validation, not the
+// defaults.
+type Config struct {
+	// Command-line flags.
+	DataDir       string
+	ListenAddr    string
+	PeerAddr      string
+	AdminAddr     string
+	BlockSealSize int64
+	PeersFlag     string
+
+	// Run-level environment.
+	CellID            string
+	UploadEnabled     bool
+	UploadConcurrency int
+	RawTelemetryIDs   bool
+	TestHooks         bool
+	PprofEnabled      bool
+
+	// Peer-resolution environment.
+	Replicas        int
+	HeadlessService string
+	PeerPort        int
+	Namespace       string
+
+	// Subsystem configs assembled from their own env parsers (defaults owned by
+	// their packages).
+	Scrub          scrub.Config
+	UploadPressure shard.UploadPressureConfig
+}
+
+// loadConfig assembles Config from the given command-line arguments and the
+// process environment, validating typed and ranged values. On malformed or
+// out-of-range input it returns an error naming the offending key rather than
+// silently falling back to a default.
+func loadConfig(args []string) (Config, error) {
+	fs := flag.NewFlagSet("scrapd", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", "/data", "storage root directory")
+	listenAddr := fs.String("listen-addr", ":9090", "gRPC client listen address")
+	peerAddr := fs.String("peer-addr", ":9091", "gRPC peer listen address")
+	adminAddr := fs.String("admin-addr", ":8080", "HTTP admin listen address (health)")
+	blockSealSize := fs.Int64("block-seal-size", shard.DefaultBlockSealSize, "block seal threshold in bytes")
+	peersFlag := fs.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, fmt.Errorf("parse flags: %w", err)
+	}
+
+	cfg := Config{
+		DataDir:         *dataDir,
+		ListenAddr:      *listenAddr,
+		PeerAddr:        *peerAddr,
+		AdminAddr:       *adminAddr,
+		BlockSealSize:   *blockSealSize,
+		PeersFlag:       *peersFlag,
+		CellID:          os.Getenv("SCRAP_CELL_ID"),
+		HeadlessService: os.Getenv("SCRAP_HEADLESS_SERVICE"),
+		Namespace:       envString("POD_NAMESPACE", "default"),
+		Scrub:           scrub.ParseConfig(),
+		UploadPressure:  shard.ParseUploadPressureConfigFromEnv(),
+	}
+
+	var err error
+	if cfg.UploadEnabled, err = envBoolChecked("SCRAP_UPLOAD_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.RawTelemetryIDs, err = envBoolChecked("SCRAP_TELEMETRY_RAW_IDS", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.TestHooks, err = envBoolChecked("SCRAP_TEST_HOOKS", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.PprofEnabled, err = envBoolChecked("SCRAP_PPROF_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.UploadConcurrency, err = envIntChecked("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency); err != nil {
+		return Config{}, err
+	}
+	if cfg.Replicas, err = envIntChecked("SCRAP_REPLICAS", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.PeerPort, err = envIntChecked("SCRAP_PEER_PORT", defaultPeerPort); err != nil {
+		return Config{}, err
+	}
+
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// validate enforces ranges on typed values. It only rejects values that are
+// nonsensical regardless of subsystem clamping (e.g. a non-positive seal size or
+// an out-of-range port), so previously-valid configurations keep loading.
+func (c Config) validate() error {
+	if c.BlockSealSize <= 0 {
+		return fmt.Errorf("invalid -block-seal-size: %d (must be > 0)", c.BlockSealSize)
+	}
+	if c.Replicas < 0 {
+		return fmt.Errorf("invalid SCRAP_REPLICAS: %d (must be >= 0)", c.Replicas)
+	}
+	if c.PeerPort < minPort || c.PeerPort > maxPort {
+		return fmt.Errorf("invalid SCRAP_PEER_PORT: %d (must be %d-%d)", c.PeerPort, minPort, maxPort)
+	}
+	return nil
+}
+
+// envIntChecked reads an integer environment variable. An unset/empty value
+// yields the fallback; a present but non-integer value is an error (no silent
+// fallback to the default).
+func envIntChecked(key string, fallback int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %q is not an integer", key, v)
+	}
+	return n, nil
+}
+
+// envBoolChecked reads a boolean environment variable. An unset/empty value
+// yields the fallback; a present but unparseable value is an error (no silent
+// fallback to the default).
+func envBoolChecked(key string, fallback bool) (bool, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s: %q is not a boolean", key, v)
+	}
+	return b, nil
+}
