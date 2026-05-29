@@ -9,6 +9,13 @@ message RaftCommand {
     SealBlock                   seal_block        = 3;
     ConfirmUpload               confirm_upload    = 4;
   }
+
+  // W3C trace context, injected by the proposing leader and extracted by every
+  // voter at apply time so the state-machine apply is traceable on all replicas.
+  // Additive and optional: entries written without these fields apply unchanged
+  // (empty context -> a root apply span). See ADR 0013.
+  string traceparent = 5;
+  string tracestate  = 6;
 }
 
 message RequestConsistencyCheck {

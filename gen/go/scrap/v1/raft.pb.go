@@ -29,7 +29,13 @@ type RaftCommand struct {
 	//	*RaftCommand_ConsistencyCheck
 	//	*RaftCommand_SealBlock
 	//	*RaftCommand_ConfirmUpload
-	Command       isRaftCommand_Command `protobuf_oneof:"command"`
+	Command isRaftCommand_Command `protobuf_oneof:"command"`
+	// W3C trace context, injected by the proposing leader and extracted by every
+	// voter at apply time so the state-machine apply is traceable on all replicas.
+	// Additive and optional: entries written without these fields apply unchanged
+	// (empty context -> a root apply span). See ADR 0013.
+	Traceparent   string `protobuf:"bytes,5,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
+	Tracestate    string `protobuf:"bytes,6,opt,name=tracestate,proto3" json:"tracestate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -105,6 +111,20 @@ func (x *RaftCommand) GetConfirmUpload() *ConfirmUpload {
 		}
 	}
 	return nil
+}
+
+func (x *RaftCommand) GetTraceparent() string {
+	if x != nil {
+		return x.Traceparent
+	}
+	return ""
+}
+
+func (x *RaftCommand) GetTracestate() string {
+	if x != nil {
+		return x.Tracestate
+	}
+	return ""
 }
 
 type isRaftCommand_Command interface {
@@ -535,14 +555,18 @@ var File_scrap_v1_raft_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\n" +
-	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\x9d\x02\n" +
+	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\xdf\x02\n" +
 	"\vRaftCommand\x129\n" +
 	"\n" +
 	"commit_doc\x18\x01 \x01(\v2\x18.scrap.v1.CommitDocumentH\x00R\tcommitDoc\x12P\n" +
 	"\x11consistency_check\x18\x02 \x01(\v2!.scrap.v1.RequestConsistencyCheckH\x00R\x10consistencyCheck\x124\n" +
 	"\n" +
 	"seal_block\x18\x03 \x01(\v2\x13.scrap.v1.SealBlockH\x00R\tsealBlock\x12@\n" +
-	"\x0econfirm_upload\x18\x04 \x01(\v2\x17.scrap.v1.ConfirmUploadH\x00R\rconfirmUploadB\t\n" +
+	"\x0econfirm_upload\x18\x04 \x01(\v2\x17.scrap.v1.ConfirmUploadH\x00R\rconfirmUpload\x12 \n" +
+	"\vtraceparent\x18\x05 \x01(\tR\vtraceparent\x12\x1e\n" +
+	"\n" +
+	"tracestate\x18\x06 \x01(\tR\n" +
+	"tracestateB\t\n" +
 	"\acommand\"\\\n" +
 	"\x17RequestConsistencyCheck\x12\x19\n" +
 	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12&\n" +
