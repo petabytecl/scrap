@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -521,6 +522,30 @@ func (s *Shard) AppliedIndex() uint64 {
 
 func (s *Shard) CommitIndex() uint64 {
 	return s.raft.CommitIndex()
+}
+
+// DiskStats reports local data-volume usage plus the Pebble projection size for the
+// USE dashboard. Best-effort: a Statfs failure yields zeroed disk fields.
+func (s *Shard) DiskStats() telemetry.DiskStats {
+	stats := telemetry.DiskStats{}
+	if s.idx != nil {
+		stats.ProjectionBytes = s.idx.DiskUsageBytes()
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(s.dataDir, &st); err != nil || st.Bsize <= 0 {
+		return stats
+	}
+	bsize := uint64(st.Bsize)
+	stats.FreeBytes = clampUint64ToInt64(st.Bavail * bsize)
+	stats.UsedBytes = clampUint64ToInt64((st.Blocks - st.Bfree) * bsize)
+	return stats
+}
+
+func clampUint64ToInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }
 
 func (s *Shard) CheckReadiness(_ context.Context) error {

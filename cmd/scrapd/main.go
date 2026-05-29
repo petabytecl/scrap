@@ -128,6 +128,9 @@ func run() error {
 	if err := telemetryRuntime.registerRaftMetrics(s); err != nil {
 		return fmt.Errorf("register raft metrics: %w", err)
 	}
+	if err := telemetryRuntime.registerDiskMetrics(s); err != nil {
+		return fmt.Errorf("register disk metrics: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

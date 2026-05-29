@@ -108,6 +108,7 @@ type scrapdTelemetryRuntime struct {
 	server         server.Telemetry
 	runtimeMetrics *scraptelemetry.RuntimeMetrics
 	raftMetrics    *scraptelemetry.RaftMetrics
+	diskMetrics    *scraptelemetry.DiskMetrics
 	metricsHandler http.Handler
 }
 
@@ -243,6 +244,16 @@ func (r *scrapdTelemetryRuntime) registerRaftMetrics(provider scraptelemetry.Raf
 	return nil
 }
 
+func (r *scrapdTelemetryRuntime) registerDiskMetrics(provider scraptelemetry.DiskStatsProvider) error {
+	m := r.meterProvider.Meter(instrumentationScope)
+	dm, err := scraptelemetry.NewDiskMetrics(m, provider)
+	if err != nil {
+		return err
+	}
+	r.diskMetrics = dm
+	return nil
+}
+
 func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -250,6 +261,7 @@ func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	return errors.Join(
 		r.runtimeMetrics.Unregister(),
 		r.raftMetrics.Unregister(),
+		r.diskMetrics.Unregister(),
 		r.meterProvider.Shutdown(ctx),
 		r.tracerProvider.Shutdown(ctx),
 	)
