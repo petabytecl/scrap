@@ -192,6 +192,10 @@ if [[ "$args" == *"/api/v1/query"* ]]; then
     echo "rpc metric did not use increase()" >&2
     exit 22
   fi
+  if [[ "$args" == *"scrap_rpc_server_requests_total"* && "$args" == *"[60s]"* ]]; then
+    echo "rpc metric window was expanded before the run start" >&2
+    exit 22
+  fi
   cat <<'JSON'
 {"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056000,"20"]}]}}
 JSON
