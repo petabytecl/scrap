@@ -85,6 +85,18 @@ restore must **not** produce live apply spans — the historical `traceparent` v
 are stale and would pollute Tempo with ancient trace_ids. Apply-span emission is
 gated to live committed entries only.
 
+The replay cutoff is the **durably-applied index** (the loaded snapshot's index),
+not `hardState.Commit`. The run loop persists the HardState before it calls Apply,
+so a crash in that window leaves entries that are committed but not yet applied;
+those are applied for the *first* time after restart and their trace context is
+genuine, so they must emit live spans. Using the commit index as the cutoff would
+suppress them and leave a gap in crash-recovery apply evidence. Only entries at or
+below the durably-applied index — the ones known to have applied before the
+restart — are suppressed as replay. The watermark is passed into the apply callback
+by the Raft node (it is known before the run loop starts), so the apply path is
+correct from its first invocation rather than depending on a value the state
+machine stores after `Open` returns.
+
 ### 4. Identifier privacy is unchanged
 
 Spans (and correlated logs) carry hashed `scrap.transaction.hash` /

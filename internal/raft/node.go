@@ -29,7 +29,12 @@ const (
 	defaultHeartbeatTick = 1
 )
 
-type ApplyFunc func(entries []raftpb.Entry) error
+// ApplyFunc applies committed entries to the state machine. replayUntil is the
+// startup replay watermark: entries with Index <= replayUntil were already applied
+// before a restart (re-delivered replay) and must not emit live trace spans. It is
+// passed on every call so the apply path is correct from the very first invocation,
+// even though Open starts the run loop before returning the node.
+type ApplyFunc func(entries []raftpb.Entry, replayUntil uint64) error
 
 type SnapshotFunc func() (data []byte, err error)
 
@@ -219,10 +224,13 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 	if err := n.storage.SetHardState(hardState); err != nil {
 		return fmt.Errorf("raft: set hard state: %w", err)
 	}
-	// Commit watermark loaded from the WAL. On restart, raft re-delivers committed
-	// entries up to this index; they were applied before the crash, so the apply
-	// loop treats Index <= this as replay and suppresses live trace spans (ADR 0013).
-	n.replayCommitIndex = hardState.Commit
+	// Replay watermark = the durably-applied index (the loaded snapshot's index, set
+	// above as n.appliedIndex, or 0 with no snapshot) — NOT hardState.Commit. Entries
+	// committed but not yet applied before a crash are re-delivered and applied for the
+	// first time after restart, so they must emit live spans; only entries known to
+	// have applied are suppressed as replay. Basing this on Commit would leave a gap in
+	// crash-recovery apply evidence (ADR 0013 §3).
+	n.replayCommitIndex = n.appliedIndex
 	atomic.StoreUint64(&n.commitIndex, hardState.Commit)
 	if err := n.storage.Append(entries); err != nil {
 		return fmt.Errorf("raft: append entries: %w", err)
@@ -298,7 +306,7 @@ func (n *RaftNode) run() {
 			n.transport.Send(rd.Messages)
 
 			if len(rd.CommittedEntries) > 0 {
-				if err := n.cfg.Apply(rd.CommittedEntries); err != nil {
+				if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
 					panic(fmt.Sprintf("raft: apply: %v", err))
 				}
 				atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
@@ -377,14 +385,6 @@ func (n *RaftNode) LeaderID() uint64 {
 
 func (n *RaftNode) AppliedIndex() uint64 {
 	return atomic.LoadUint64(&n.appliedIndex)
-}
-
-// ReplayCommitIndex returns the commit index loaded from the WAL at startup.
-// Entries with Index <= this value are re-applied replay (already applied before a
-// restart), so the apply loop suppresses live trace spans for them. Zero on a
-// fresh bootstrap. Set once during Open before the run loop starts. See ADR 0013.
-func (n *RaftNode) ReplayCommitIndex() uint64 {
-	return n.replayCommitIndex
 }
 
 // CommitIndex returns the highest Raft log index known to be committed. Apply lag

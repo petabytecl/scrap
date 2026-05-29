@@ -66,7 +66,7 @@ func startGRPCCluster(t *testing.T) *grpcTestCluster {
 			DataDir:      dir,
 			TickInterval: 10 * time.Millisecond,
 			Transport:    shardTransport,
-			Apply: func(entries []raftpb.Entry) error {
+			Apply: func(entries []raftpb.Entry, _ uint64) error {
 				applied[idx].mu.Lock()
 				defer applied[idx].mu.Unlock()
 				for _, e := range entries {

@@ -83,12 +83,6 @@ type Shard struct {
 	raftStartedAt  time.Time
 	bootstrapGrace time.Duration
 
-	// replayCommitIndex is the Raft commit watermark captured at startup. Entries at
-	// or below it are re-applied replay on restart and emit no live trace spans. It is
-	// read from the apply loop (a separate goroutine), so it is atomic rather than read
-	// through s.raft, which is assigned only after the loop has already started.
-	replayCommitIndex atomic.Uint64
-
 	mu          sync.Mutex
 	blockWriter *block.BlockWriter
 	idxWriter   *block.IndexWriter
@@ -221,9 +215,6 @@ func Open(cfg Config) (*Shard, error) {
 		return nil, fmt.Errorf("shard: open raft: %w", err)
 	}
 	s.raft = raftNode
-	// Capture the startup commit watermark for the apply loop. raftNode's run loop
-	// started inside Open, so this is read via the atomic field, not s.raft.
-	s.replayCommitIndex.Store(raftNode.ReplayCommitIndex())
 
 	s.resetUploadConcurrency()
 	if err := s.refreshUploadPressureLocked(); err != nil {
@@ -531,9 +522,13 @@ func (s *Shard) CommitIndex() uint64 {
 // USE dashboard. Best-effort: a Statfs failure yields zeroed disk fields.
 func (s *Shard) DiskStats() telemetry.DiskStats {
 	stats := telemetry.DiskStats{}
+	// A projection rebuild closes, nils, and replaces s.idx under s.mu; hold the lock
+	// so a concurrent /metrics scrape never reads a closed or nil projection.
+	s.mu.Lock()
 	if s.idx != nil {
 		stats.ProjectionBytes = s.idx.DiskUsageBytes()
 	}
+	s.mu.Unlock()
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(s.dataDir, &st); err != nil || st.Bsize <= 0 {
 		return stats
@@ -934,8 +929,7 @@ func captureFirstErr(firstErr *error, err error) {
 	}
 }
 
-func (s *Shard) applyEntries(entries []raftpb.Entry) error {
-	replayUntil := s.replayCommitIndex.Load()
+func (s *Shard) applyEntries(entries []raftpb.Entry, replayUntil uint64) error {
 	for _, e := range entries {
 		if e.Type != raftpb.EntryNormal || len(e.Data) == 0 {
 			continue
@@ -946,8 +940,10 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 			return fmt.Errorf("shard: unmarshal raft command: %w", err)
 		}
 
-		// Entries at or below the startup commit watermark are re-applied replay on
-		// restart; their trace context is stale, so apply spans are suppressed.
+		// Entries at or below the replay watermark (the durably-applied index, passed
+		// in by the Raft node) were applied before a restart; their trace context is
+		// stale, so apply spans are suppressed. Entries above it — including ones
+		// committed but not yet applied before a crash — emit live spans (ADR 0013 §3).
 		live := e.Index > replayUntil
 		if err := s.applyEntryTraced(cmd, e.Index, live); err != nil {
 			return err
