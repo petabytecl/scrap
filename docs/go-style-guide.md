@@ -1172,6 +1172,78 @@ func NewOTelScrubMetrics(meter metric.Meter) (*OTelScrubMetrics, error) {
 
 ---
 
+## Logging
+
+S.C.R.A.P. logs through `log/slog` over the `logbridge` handler, which writes
+stdout-JSON and enriches every record carrying an active span with
+`trace_id`/`span_id` (ADR 0013). Logs are never pushed over OTLP — request
+handling must not block on log-export backpressure (ADR 0012); a per-node
+filelog agent ships stdout to Loki.
+
+### Levels
+
+Choose the level by *who needs to act* and *how often the line fires*, not by how
+much detail it carries.
+
+- **TRACE** (`logbridge.LevelTrace`, `slog.Level(-8)`): very high-volume,
+  per-Frame / per-chunk detail. Off unless `SCRAP_LOG_LEVEL=trace`; `debug` does
+  not enable it. Reserved for deep local debugging — never the default in a
+  deployed Cell.
+- **DEBUG**: one bounded line per operation for diagnosis, e.g. the per-apply
+  `applied raft command` line. Safe to enable in stress/evidence Cells; carries
+  the span's `trace_id` for trace↔log navigation.
+- **INFO**: lifecycle and state transitions an operator expects to see — process
+  start/stop, leadership changes, the startup config summary. The default level.
+- **WARN**: a recoverable or degraded condition that resolved itself or will be
+  retried, e.g. `seal proposal failed, will retry` or `rebuild upload check
+  skipped (transient)`. Worth attention, not paging.
+- **ERROR**: a server-side fault that lost work or left a component degraded and
+  a human may need to act, e.g. `rebuild: swap projection failed`. Treat every
+  ERROR line as something you would page on if it recurred.
+
+### Client Errors Are Not ERROR
+
+A malformed request, a missing Document, a not-leader redirect, or a
+client-cancelled stream is normal control flow, not a server fault. Return it to
+the caller as a gRPC status code; do **not** log it at ERROR. V1 buried its real
+failures under client-driven ERROR noise — the single most expensive logging
+mistake in the project's history. If such a case is worth recording at all, it is
+DEBUG or, at most, WARN.
+
+```go
+// Wrong: a client's bad input pages the on-call.
+if txID == "" {
+  logger.ErrorContext(ctx, "missing transaction_id") // ✗ client error as ERROR
+  return status.Error(codes.InvalidArgument, "transaction_id is required")
+}
+
+// Right: the status code is the signal; no server-side ERROR.
+if txID == "" {
+  return status.Error(codes.InvalidArgument, "transaction_id is required")
+}
+```
+
+### Context-Aware Logging
+
+Prefer the `…Context` methods (`InfoContext`, `DebugContext`, `WarnContext`,
+`ErrorContext`) on every request and background-work path. The `logbridge`
+handler reads the active span from the context and attaches `trace_id`/`span_id`,
+so the line is one click from its trace in Grafana. A bare `logger.Info` is
+acceptable only where there is genuinely no context to thread: process
+startup/shutdown, and library adapters such as the Raft hclog→slog bridge whose
+upstream provides no `context.Context`.
+
+### Identifier Privacy
+
+Logs follow the same identifier rules as metrics and traces: hashed Document
+identifiers by default, raw identifiers only behind the fail-closed
+`SCRAP_TELEMETRY_RAW_IDS` override in the local non-production Cell
+(`cell_id=local`) — see *Attributes And Cardinality* above and ADR 0013 §4. Never
+log raw `transaction_id`, `document_name`, idempotency keys, or Backend object
+keys at any level in a deployed Cell.
+
+---
+
 ## Documentation
 
 ### Godoc on All Exports

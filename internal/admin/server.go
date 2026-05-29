@@ -76,14 +76,34 @@ func New(opts ...Option) *Server {
 		mux.Handle("/metrics", s.metricsHandler)
 	}
 	if s.pprofEnabled {
-		mux.HandleFunc("/debug/pprof/", pprof.Index)
-		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
+		// method, including HEAD — which net/http's ServeMux otherwise routes to a
+		// GET handler, so HEAD /debug/pprof/profile would still start CPU collection.
+		mux.HandleFunc("/debug/pprof/", getOnly(pprof.Index))
+		mux.HandleFunc("/debug/pprof/cmdline", getOnly(pprof.Cmdline))
+		mux.HandleFunc("/debug/pprof/profile", getOnly(pprof.Profile))
+		mux.HandleFunc("/debug/pprof/trace", getOnly(pprof.Trace))
+		// /symbol is exempt from getOnly: unlike the endpoints above it has no side
+		// effects (it's a stateless PC→name lookup), and `go tool pprof` POSTs the
+		// address list in the request body whenever it exceeds URL length limits.
+		// Gating it to GET would return 405 and silently break symbolization.
 		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	}
 	s.handler = mux
 	return s
+}
+
+// getOnly rejects any method other than GET — including HEAD, which net/http's
+// ServeMux routes to a GET handler by default — so a read-only diagnostic
+// endpoint cannot be triggered (e.g. start CPU profiling) by a non-GET request.
+func getOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *Server) Handler() http.Handler {

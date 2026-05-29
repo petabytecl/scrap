@@ -66,6 +66,14 @@ func TestDocumentRPCRecordsOTelMetrics(t *testing.T) {
 	assertMetricAttr(t, duration.Attributes, "rpc.service", "scrap.v1.DocumentService")
 	assertMetricAttr(t, duration.Attributes, "rpc.method", "HeadDocument")
 	assertMetricAttrInt(t, duration.Attributes, "rpc.grpc.status_code", int64(codes.NotFound))
+
+	// The in-flight gauge increments on start and decrements on finish, so a
+	// completed RPC nets to zero — proving both Add(+1) and Add(-1) ran.
+	inFlight := int64DataPoint(t, rm, "scrap.rpc.server.in_flight")
+	if inFlight.Value != 0 {
+		t.Fatalf("in_flight = %d, want 0 after RPC completes", inFlight.Value)
+	}
+	assertMetricAttr(t, inFlight.Attributes, "rpc.method", "HeadDocument")
 }
 
 func TestDocumentRPCRecordsOTelSpansWithHashedDocumentIdentity(t *testing.T) {

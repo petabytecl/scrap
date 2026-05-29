@@ -22,7 +22,7 @@ spec:
               kubernetes.io/metadata.name: monitoring
           podSelector:
             matchLabels:
-              app: pyroscope
+              app: alloy
       ports:
         - port: 9100
           protocol: TCP

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 
 	"github.com/cockroachdb/pebble"
@@ -102,6 +103,19 @@ func (idx *Index) Close() error {
 
 func (idx *Index) SetAppliedIndex(ai uint64) {
 	idx.appliedIndex.Store(ai)
+}
+
+// DiskUsageBytes reports the total on-disk size of the Pebble projection, clamped
+// to int64 for OTel observation. Feeds the USE dashboard's disk panel.
+func (idx *Index) DiskUsageBytes() int64 {
+	if idx.db == nil {
+		return 0
+	}
+	usage := idx.db.Metrics().DiskSpaceUsage()
+	if usage > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(usage)
 }
 
 func (idx *Index) StreamingHash() (appliedIndex uint64, hash [32]byte, err error) {

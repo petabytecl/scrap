@@ -29,7 +29,12 @@ const (
 	defaultHeartbeatTick = 1
 )
 
-type ApplyFunc func(entries []raftpb.Entry) error
+// ApplyFunc applies committed entries to the state machine. replayUntil is the
+// startup replay watermark: entries with Index <= replayUntil were already applied
+// before a restart (re-delivered replay) and must not emit live trace spans. It is
+// passed on every call so the apply path is correct from the very first invocation,
+// even though Open starts the run loop before returning the node.
+type ApplyFunc func(entries []raftpb.Entry, replayUntil uint64) error
 
 type SnapshotFunc func() (data []byte, err error)
 
@@ -63,8 +68,10 @@ type RaftNode struct {
 	snap      *snap.Snapshotter
 	transport Transport
 
-	appliedIndex  uint64
-	snapshotIndex uint64
+	appliedIndex      uint64
+	snapshotIndex     uint64
+	replayCommitIndex uint64
+	commitIndex       uint64
 
 	leaderID atomic.Uint64
 	readMu   sync.Mutex
@@ -217,6 +224,14 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 	if err := n.storage.SetHardState(hardState); err != nil {
 		return fmt.Errorf("raft: set hard state: %w", err)
 	}
+	// Replay watermark = the durably-applied index (the loaded snapshot's index, set
+	// above as n.appliedIndex, or 0 with no snapshot) — NOT hardState.Commit. Entries
+	// committed but not yet applied before a crash are re-delivered and applied for the
+	// first time after restart, so they must emit live spans; only entries known to
+	// have applied are suppressed as replay. Basing this on Commit would leave a gap in
+	// crash-recovery apply evidence (ADR 0013 §3).
+	n.replayCommitIndex = n.appliedIndex
+	atomic.StoreUint64(&n.commitIndex, hardState.Commit)
 	if err := n.storage.Append(entries); err != nil {
 		return fmt.Errorf("raft: append entries: %w", err)
 	}
@@ -265,6 +280,10 @@ func (n *RaftNode) run() {
 				panic(fmt.Sprintf("raft: WAL save: %v", err))
 			}
 
+			if !raft.IsEmptyHardState(rd.HardState) {
+				atomic.StoreUint64(&n.commitIndex, rd.HardState.Commit)
+			}
+
 			if !raft.IsEmptySnap(rd.Snapshot) {
 				if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
 					panic(fmt.Sprintf("raft: save snapshot: %v", err))
@@ -287,7 +306,7 @@ func (n *RaftNode) run() {
 			n.transport.Send(rd.Messages)
 
 			if len(rd.CommittedEntries) > 0 {
-				if err := n.cfg.Apply(rd.CommittedEntries); err != nil {
+				if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
 					panic(fmt.Sprintf("raft: apply: %v", err))
 				}
 				atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
@@ -366,6 +385,12 @@ func (n *RaftNode) LeaderID() uint64 {
 
 func (n *RaftNode) AppliedIndex() uint64 {
 	return atomic.LoadUint64(&n.appliedIndex)
+}
+
+// CommitIndex returns the highest Raft log index known to be committed. Apply lag
+// (commit - applied) is the canonical Raft saturation signal on the USE dashboard.
+func (n *RaftNode) CommitIndex() uint64 {
+	return atomic.LoadUint64(&n.commitIndex)
 }
 
 func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.ConfState {

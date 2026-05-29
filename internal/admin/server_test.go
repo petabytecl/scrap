@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -167,5 +168,102 @@ func TestServer_PprofEnabledWithOption(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pprof should be 200 when enabled, got %d", resp.StatusCode)
+	}
+}
+
+func TestServer_PprofRejectsNonGet(t *testing.T) {
+	srv := admin.New(admin.WithPprof())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Neither POST nor HEAD may invoke a profiling handler. HEAD is the subtle
+	// one: net/http's ServeMux routes it to a GET handler, so without an explicit
+	// guard HEAD /debug/pprof/profile would still start CPU collection.
+	for _, method := range []string{http.MethodPost, http.MethodHead} {
+		req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+"/debug/pprof/profile", nil)
+		if err != nil {
+			t.Fatalf("new %s request: %v", method, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s /debug/pprof/profile: %v", method, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s pprof should be 405, got %d", method, resp.StatusCode)
+		}
+	}
+}
+
+func TestServer_PprofSymbolAcceptsPost(t *testing.T) {
+	srv := admin.New(admin.WithPprof())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// `go tool pprof` POSTs the address list in the request body whenever it
+	// exceeds URL length limits; /symbol must not be gated to GET. An empty body
+	// is a valid request that the stdlib handler answers with 200.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/debug/pprof/symbol", http.NoBody)
+	if err != nil {
+		t.Fatalf("new POST request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /debug/pprof/symbol: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /debug/pprof/symbol should be 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestServer_MetricsEndpoint(t *testing.T) {
+	const want = "scrap_test_metric 1\n"
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(want))
+	})
+	srv := admin.New(admin.WithMetrics(handler))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/metrics: got %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != want {
+		t.Fatalf("/metrics body = %q, want %q", string(body), want)
+	}
+}
+
+func TestServer_MetricsAbsentByDefault(t *testing.T) {
+	srv := admin.New()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("/metrics should be 404 without WithMetrics, got %d", resp.StatusCode)
 	}
 }

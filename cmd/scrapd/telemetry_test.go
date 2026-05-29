@@ -178,6 +178,76 @@ func TestNewScrapdTelemetryForHostInitializesRuntime(t *testing.T) {
 	}
 }
 
+func TestNewScrapdTelemetrySkipsOTLPWhenEndpointUnset(t *testing.T) {
+	// No OTLP endpoint configured: the pipeline factory must not be invoked, and
+	// the runtime must still expose a Prometheus /metrics handler.
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+
+	var factoryCalled bool
+	previous := scrapdTelemetryPipeline
+	scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{
+		newMetricReader: func(context.Context) (sdkmetric.Reader, error) {
+			factoryCalled = true
+			return sdkmetric.NewManualReader(), nil
+		},
+		newSpanProcessor: func(context.Context) (sdktrace.SpanProcessor, error) {
+			factoryCalled = true
+			return tracetest.NewSpanRecorder(), nil
+		},
+	}
+	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
+
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0)
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
+
+	if factoryCalled {
+		t.Fatal("OTLP pipeline factory invoked despite no OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	if rt.metricsHandler == nil {
+		t.Fatal("metricsHandler should be set so /metrics works without an OTLP collector")
+	}
+}
+
+func TestNewScrapdTelemetryGatesSignalsIndependently(t *testing.T) {
+	// Only a metrics endpoint is configured: the metric reader must be built, but
+	// the span processor must not (it would otherwise fall back to localhost:4317).
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "otel-collector:4317")
+
+	var metricBuilt, traceBuilt bool
+	previous := scrapdTelemetryPipeline
+	scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{
+		newMetricReader: func(context.Context) (sdkmetric.Reader, error) {
+			metricBuilt = true
+			return sdkmetric.NewManualReader(), nil
+		},
+		newSpanProcessor: func(context.Context) (sdktrace.SpanProcessor, error) {
+			traceBuilt = true
+			return tracetest.NewSpanRecorder(), nil
+		},
+	}
+	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
+
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0)
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
+
+	if !metricBuilt {
+		t.Fatal("metric reader should be built when the metrics endpoint is set")
+	}
+	if traceBuilt {
+		t.Fatal("span processor must not be built when only the metrics endpoint is set")
+	}
+}
+
 func TestScrapdTelemetryRuntimeShutdownNilReceiver(t *testing.T) {
 	var rt *scrapdTelemetryRuntime
 	if err := rt.Shutdown(context.Background()); err != nil {
@@ -187,6 +257,10 @@ func TestScrapdTelemetryRuntimeShutdownNilReceiver(t *testing.T) {
 
 func stubScrapdTelemetryPipeline(t *testing.T) {
 	t.Helper()
+
+	// Configure an OTLP endpoint so newScrapdTelemetry exercises the OTLP branch
+	// and uses the stubbed reader/processor below.
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
 
 	previous := scrapdTelemetryPipeline
 	scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{

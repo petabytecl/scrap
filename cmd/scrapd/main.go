@@ -12,6 +12,7 @@ import (
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -22,6 +23,7 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
+	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
 func main() {
@@ -65,6 +67,18 @@ func run() error {
 	}
 
 	cellID := os.Getenv("SCRAP_CELL_ID")
+
+	// Telemetry identifiers are hashed by default; raw Document identifiers are
+	// emitted only in the reserved local non-production Cell, and the request is
+	// refused (fail-closed) anywhere else. See ADR 0013 §4.
+	rawTelemetryIDs := envBool("SCRAP_TELEMETRY_RAW_IDS", false)
+	identifierMode := telemetry.ResolveIdentifierMode(cellID, rawTelemetryIDs)
+	switch {
+	case identifierMode == telemetry.RawIdentifiersForLocalDebug:
+		logger.Warn("telemetry raw identifiers ENABLED for local debugging (local non-production Cell only)", "cell_id", cellID)
+	case rawTelemetryIDs:
+		logger.Warn("SCRAP_TELEMETRY_RAW_IDS ignored: raw telemetry identifiers are permitted only in the local non-production Cell", "cell_id", cellID)
+	}
 
 	peers, raftID, err := resolvePeers(*peersFlag)
 	if err != nil {
@@ -117,6 +131,7 @@ func run() error {
 		PeerAddrs:          peerAddrs,
 		Upload:             uploadCfg,
 		WriteTelemetry:     shardTel.writeTelemetry,
+		IdentifierMode:     identifierMode,
 	})
 	if err != nil {
 		return fmt.Errorf("open shard: %w", err)
@@ -126,6 +141,9 @@ func run() error {
 
 	if err := telemetryRuntime.registerRaftMetrics(s); err != nil {
 		return fmt.Errorf("register raft metrics: %w", err)
+	}
+	if err := telemetryRuntime.registerDiskMetrics(s); err != nil {
+		return fmt.Errorf("register disk metrics: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -138,15 +156,15 @@ func run() error {
 		return fmt.Errorf("listen client %s: %w", *listenAddr, err)
 	}
 
-	gs := grpc.NewServer()
-	server.Register(gs, s, server.WithTelemetry(telemetryRuntime.server))
+	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	server.Register(gs, s, server.WithTelemetry(telemetryRuntime.server), server.WithIdentifierMode(identifierMode))
 	server.RegisterHealth(gs, s)
 
 	peerLis, err := lc.Listen(ctx, "tcp", *peerAddr)
 	if err != nil {
 		return fmt.Errorf("listen peer %s: %w", *peerAddr, err)
 	}
-	peerGS := grpc.NewServer()
+	peerGS := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	peerSrv := peer.NewServer(*dataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)

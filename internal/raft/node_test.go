@@ -70,7 +70,7 @@ func startTestCluster(t *testing.T) *testCluster {
 			DataDir:      dir,
 			TickInterval: 10 * time.Millisecond,
 			Transport:    transport,
-			Apply: func(entries []raftpb.Entry) error {
+			Apply: func(entries []raftpb.Entry, _ uint64) error {
 				tc.mu[idx].Lock()
 				defer tc.mu[idx].Unlock()
 				for _, e := range entries {

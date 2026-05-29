@@ -134,24 +134,26 @@ SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 ##? STRESS_KIND_CLUSTER Kind cluster name used by stress targets.
 ##? STRESS_KIND_CONFIG Kind cluster config with Grafana NodePort.
 ##? STRESS_OVERLAY Kustomize overlay used for stress manifests.
-##? MONITORING_OVERLAY Kustomize overlay for Prometheus and Grafana.
 ##? EVIDENCE_OVERLAY Kustomize overlay for OTel evidence stack (stress runs).
 ##? STRESS_ADDR gRPC address for the stress test binary.
 ##? STRESS_SCENARIO Stress scenario to run: throughput, mixed, pressure.
 ##? STRESS_WORKERS Concurrent worker goroutines for the stress test.
 ##? STRESS_DURATION Duration of the stress test run.
 ##? STRESS_DOC_SIZE Document payload size in bytes.
+##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
+##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
 STRESS_KIND_CLUSTER ?= scrap-stress
 STRESS_KIND_CONFIG ?= deploy/kind/cluster-stress.yaml
 STRESS_OVERLAY ?= deploy/kustomize/overlays/local-stress
-MONITORING_OVERLAY ?= deploy/kustomize/overlays/monitoring
 EVIDENCE_OVERLAY ?= deploy/kustomize/overlays/evidence
 STRESS_ADDR ?= 127.0.0.1:18090
 STRESS_SCENARIO ?= throughput
 STRESS_WORKERS ?= 8
 STRESS_DURATION ?= 60s
 STRESS_DOC_SIZE ?= 16384
+EVIDENCE_BASELINE_SAMPLING ?= 100
+EVIDENCE_LOWRATE_SAMPLING ?= 10
 
 ##@ Help
 
@@ -351,23 +353,50 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(KIND) export kubeconfig --name "$(STRESS_KIND_CLUSTER)" >/dev/null
 	$(MAKE) image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(STRESS_KIND_CLUSTER)"
+	@printf '\n== Phase 1: observability stack (log pipeline up before any app starts) ==\n'
+	# Ensure the scrap namespace exists so the evidence overlay's scrap-namespace
+	# NetworkPolicy applies; the app workload (Phase 2) re-applies it idempotently.
+	$(KUBECTL) create namespace scrap --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	# Render the evidence stack, overriding only the baseline trace-sampling rate.
+	# Default 100 keeps the sed a no-op; stress-setup-lowrate lowers it to model a
+	# production capture where errors + slow traces are still kept (ADR 0013).
+	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" \
+		| sed 's/sampling_percentage: 100/sampling_percentage: $(EVIDENCE_BASELINE_SAMPLING)/' \
+		| $(KUBECTL) apply -f -
+	# A reused cluster keeps the previously-running otel-collector pod, whose
+	# tail_sampling rate is read from config only at process start. kubectl apply
+	# updates the ConfigMap in place but does not roll the Deployment, so without
+	# this the collector would keep its old in-memory sampling (e.g. 100%) while
+	# the rendered config claims the low rate — a misleading low-rate scenario.
+	# Force the collector to reload the freshly-applied config before gating on it
+	# (no-op-cost first rollout on a fresh cluster; the status gate below waits).
+	$(KUBECTL) -n monitoring rollout restart deployment/otel-collector
+	# Gate on the log pipeline first (Loki sink, gateway, per-node agent) so that
+	# when apps deploy in Phase 2 their logs are captured from the first line.
+	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
+	$(KUBECTL) -n monitoring rollout status daemonset/otel-agent --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/alloy --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
+	@printf '\n== Phase 2: application workload (logs captured from startup) ==\n'
 	$(KUSTOMIZE) build "$(STRESS_OVERLAY)" | $(KUBECTL) apply -f -
-	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" | $(KUBECTL) apply -f -
 	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
 	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
 	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
-	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
 	@printf '\nStress environment ready.\n'
-	@printf '  gRPC:      127.0.0.1:18090\n'
-	@printf '  Grafana:   http://127.0.0.1:13000\n'
-	@printf '  Collector: 127.0.0.1:14317 (OTLP gRPC)\n\n'
+	@printf '  gRPC:       127.0.0.1:18090\n'
+	@printf '  Grafana:    http://127.0.0.1:13000\n'
+	@printf '  Collector:  127.0.0.1:14317 (OTLP gRPC)\n'
+	@printf '  LocalStack: http://127.0.0.1:18566 (S3, e.g. aws --endpoint-url http://127.0.0.1:18566 s3 ls)\n\n'
+
+.PHONY: stress-setup-lowrate
+stress-setup-lowrate: ## Bring up the stress env with a production-like low baseline trace-sampling rate.
+	$(MAKE) stress-setup EVIDENCE_BASELINE_SAMPLING=$(EVIDENCE_LOWRATE_SAMPLING)
 
 .PHONY: stress
 stress: ## Run the stress test binary against the Kind cluster.
@@ -380,6 +409,10 @@ stress: ## Run the stress test binary against the Kind cluster.
 
 .PHONY: evidence-bundle
 evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
+	STRESS_ADDR="$(STRESS_ADDR)" \
+	STRESS_WORKERS="$(STRESS_WORKERS)" \
+	STRESS_DURATION="$(STRESS_DURATION)" \
+	STRESS_DOC_SIZE="$(STRESS_DOC_SIZE)" \
 	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
 
 .PHONY: stress-teardown

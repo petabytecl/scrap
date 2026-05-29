@@ -15,9 +15,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
@@ -27,6 +30,7 @@ import (
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	"github.com/petabytecl/scrap/internal/scrub"
 	storeapi "github.com/petabytecl/scrap/internal/store"
+	"github.com/petabytecl/scrap/internal/telemetry"
 	"github.com/petabytecl/scrap/internal/ulid"
 )
 
@@ -57,6 +61,7 @@ type Config struct {
 	PeerAddrs          []string
 	Upload             UploadConfig
 	WriteTelemetry     WriteStageRecorder
+	IdentifierMode     telemetry.IdentifierMode
 }
 
 type Shard struct {
@@ -71,6 +76,7 @@ type Shard struct {
 	replicator     DocumentReplicator
 	upload         UploadConfig
 	writeTelemetry WriteStageRecorder
+	identifierMode telemetry.IdentifierMode
 	baseLogger     *slog.Logger
 	logger         *slog.Logger
 	blockSealSize  int64
@@ -165,6 +171,7 @@ func Open(cfg Config) (*Shard, error) {
 		replicator:              cfg.Replicator,
 		upload:                  cfg.Upload,
 		writeTelemetry:          cfg.WriteTelemetry,
+		identifierMode:          cfg.IdentifierMode,
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
@@ -360,17 +367,23 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		},
 	}
 
-	data, err := proto.Marshal(cmd)
-	if err != nil {
-		return storeapi.WriteResult{}, fmt.Errorf("shard: marshal command: %w", err)
-	}
-
 	doneCh := make(chan error, 1)
 	s.proposalMu.Lock()
 	s.proposals[key] = doneCh
 	s.proposalMu.Unlock()
 
 	ctx, proposeStage := s.writeTelemetry.StartStage(ctx, "raft_propose")
+	// Stamp the active propose span into the command so every voter's apply loop
+	// recovers it and emits a child apply span on all replicas. See ADR 0013.
+	injectTraceContext(ctx, cmd)
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		proposeStage.End(err)
+		s.proposalMu.Lock()
+		delete(s.proposals, key)
+		s.proposalMu.Unlock()
+		return storeapi.WriteResult{}, fmt.Errorf("shard: marshal command: %w", err)
+	}
 	proposeErr := s.raft.Propose(ctx, data)
 	proposeStage.End(proposeErr)
 	if proposeErr != nil {
@@ -501,6 +514,38 @@ func (s *Shard) AppliedIndex() uint64 {
 	return s.raft.AppliedIndex()
 }
 
+func (s *Shard) CommitIndex() uint64 {
+	return s.raft.CommitIndex()
+}
+
+// DiskStats reports local data-volume usage plus the Pebble projection size for the
+// USE dashboard. Best-effort: a Statfs failure yields zeroed disk fields.
+func (s *Shard) DiskStats() telemetry.DiskStats {
+	stats := telemetry.DiskStats{}
+	// A projection rebuild closes, nils, and replaces s.idx under s.mu; hold the lock
+	// so a concurrent /metrics scrape never reads a closed or nil projection.
+	s.mu.Lock()
+	if s.idx != nil {
+		stats.ProjectionBytes = s.idx.DiskUsageBytes()
+	}
+	s.mu.Unlock()
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(s.dataDir, &st); err != nil || st.Bsize <= 0 {
+		return stats
+	}
+	bsize := uint64(st.Bsize)
+	stats.FreeBytes = clampUint64ToInt64(st.Bavail * bsize)
+	stats.UsedBytes = clampUint64ToInt64((st.Blocks - st.Bfree) * bsize)
+	return stats
+}
+
+func clampUint64ToInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
+}
+
 func (s *Shard) CheckReadiness(_ context.Context) error {
 	if s.rebuilding.Load() {
 		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)
@@ -545,17 +590,20 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 	return nil
 }
 
-func (s *Shard) TriggerRebuild(_ context.Context) (alreadyInProgress bool, err error) {
+func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error) {
 	if !s.rebuilding.CompareAndSwap(false, true) {
 		return true, nil
 	}
 	done := make(chan struct{})
 	s.rebuildDone.Store(&done)
-	go s.doRebuild(done)
+	// The rebuild is detached: it outlives the triggering RPC. WithoutCancel keeps
+	// the caller's trace/values for log correlation while dropping cancellation and
+	// any deadline, so returning from this RPC does not abort the rebuild.
+	go s.doRebuild(context.WithoutCancel(ctx), done)
 	return false, nil
 }
 
-func (s *Shard) doRebuild(done chan struct{}) {
+func (s *Shard) doRebuild(ctx context.Context, done chan struct{}) {
 	defer close(done)
 
 	pebbleDir := filepath.Join(s.dataDir, "pebble")
@@ -563,7 +611,7 @@ func (s *Shard) doRebuild(done chan struct{}) {
 	oldDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.previous-%d", time.Now().UnixNano()))
 
 	if err := s.prepareRebuildProjection(tempDir); err != nil {
-		s.logger.Error("rebuild: prepare projection failed", "err", err)
+		s.logger.ErrorContext(ctx, "rebuild: prepare projection failed", "err", err)
 		_ = os.RemoveAll(tempDir)
 		s.rebuilding.Store(false)
 		return
@@ -577,9 +625,9 @@ func (s *Shard) doRebuild(done chan struct{}) {
 	_ = os.RemoveAll(tempDir)
 
 	if err != nil {
-		s.logger.Error("rebuild: swap projection failed", "err", err, "shard_id", s.shardID)
+		s.logger.ErrorContext(ctx, "rebuild: swap projection failed", "err", err, "shard_id", s.shardID)
 		if idxNil {
-			s.logger.Error("rebuild: index is nil after failed swap; shard degraded", "err", err, "shard_id", s.shardID)
+			s.logger.ErrorContext(ctx, "rebuild: index is nil after failed swap; shard degraded", "err", err, "shard_id", s.shardID)
 			return
 		}
 	}
@@ -881,7 +929,7 @@ func captureFirstErr(firstErr *error, err error) {
 	}
 }
 
-func (s *Shard) applyEntries(entries []raftpb.Entry) error {
+func (s *Shard) applyEntries(entries []raftpb.Entry, replayUntil uint64) error {
 	for _, e := range entries {
 		if e.Type != raftpb.EntryNormal || len(e.Data) == 0 {
 			continue
@@ -892,11 +940,79 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 			return fmt.Errorf("shard: unmarshal raft command: %w", err)
 		}
 
-		if err := s.applyEntryCommand(cmd, e.Index); err != nil {
+		// Entries at or below the replay watermark (the durably-applied index, passed
+		// in by the Raft node) were applied before a restart; their trace context is
+		// stale, so apply spans are suppressed. Entries above it — including ones
+		// committed but not yet applied before a crash — emit live spans (ADR 0013 §3).
+		live := e.Index > replayUntil
+		if err := s.applyEntryTraced(cmd, e.Index, live); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyEntryTraced wraps applyEntryCommand in a per-voter apply span when the entry
+// is a live commit (not startup replay) and the command is span-worthy. The span's
+// parent is recovered from the command's W3C trace context, so it nests under the
+// originating write trace on every replica. See ADR 0013.
+func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, live bool) error {
+	operation, attrs := applySpanInfo(cmd, s.identifierMode)
+	if !live || operation == "" || s.writeTelemetry == nil {
+		return s.applyEntryCommand(cmd, entryIndex)
+	}
+	opts := []trace.SpanStartOption{trace.WithAttributes(attrs...)}
+	// A committed Document forward-links to its Block's upload trace, so a write can
+	// be navigated to "where did these bytes go" in one click — and the link survives
+	// leader failover because the block trace_id is deterministic (ADR 0013).
+	if c, ok := cmd.Command.(*scrapv1.RaftCommand_CommitDoc); ok {
+		opts = append(opts, trace.WithLinks(trace.Link{
+			SpanContext: blockTraceContext(s.uploadCellID(), s.shardID, c.CommitDoc.GetBlockId()),
+			Attributes:  []attribute.KeyValue{attribute.String("scrap.link", "block.upload")},
+		}))
+	}
+	ctx := extractTraceContext(context.Background(), cmd)
+	ctx, applyEnd := s.writeTelemetry.StartSpan(ctx, "scrap.apply/"+operation, opts...)
+	err := s.applyEntryCommand(cmd, entryIndex)
+	// DEBUG (Tier-1) on the apply span's context: the log line carries the same
+	// trace_id/span_id, so Grafana can jump trace <-> logs for this apply (ADR 0013).
+	s.logger.DebugContext(ctx, "applied raft command", "op", operation, "index", entryIndex)
+	applyEnd.End(err)
+	return err
+}
+
+// applySpanInfo maps a RaftCommand to an apply-span operation name and attributes.
+// Identity follows mode (hashed by default, ADR 0012); scrap.block_id is a
+// low-cardinality attribute used to correlate the write trace with the block.upload
+// trace (ADR 0013).
+func applySpanInfo(cmd *scrapv1.RaftCommand, mode telemetry.IdentifierMode) (string, []attribute.KeyValue) {
+	switch c := cmd.Command.(type) {
+	case *scrapv1.RaftCommand_CommitDoc:
+		attrs := telemetry.DocumentIdentityAttributes(
+			c.CommitDoc.GetTransactionId(),
+			c.CommitDoc.GetDocumentName(),
+			mode,
+		)
+		attrs = append(attrs, blockIDAttribute(c.CommitDoc.GetBlockId()))
+		return "commit_document", attrs
+	case *scrapv1.RaftCommand_SealBlock:
+		return "seal_block", []attribute.KeyValue{blockIDAttribute(c.SealBlock.GetBlockId())}
+	case *scrapv1.RaftCommand_ConfirmUpload:
+		return "confirm_upload", []attribute.KeyValue{blockIDAttribute(c.ConfirmUpload.GetBlockId())}
+	case *scrapv1.RaftCommand_ConsistencyCheck:
+		return "consistency_check", nil
+	}
+	return "", nil
+}
+
+// blockIDAttribute renders a block ID as a clamped int64 span attribute, matching
+// the uint64->int64 guard used for shard_id (avoids overflow on absurd inputs).
+func blockIDAttribute(blockID uint64) attribute.KeyValue {
+	v := int64(math.MaxInt64)
+	if blockID <= math.MaxInt64 {
+		v = int64(blockID)
+	}
+	return attribute.Int64("scrap.block_id", v)
 }
 
 func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) error {

@@ -495,3 +495,36 @@ func TestTriggerRebuild_PreservesPendingUploads(t *testing.T) {
 		t.Fatalf("WriteDocument after rebuild: %v", err)
 	}
 }
+
+// TestDiskStatsRaceWithRebuild guards the F2 fix: DiskStats must read the Pebble
+// projection under s.mu, because a concurrent rebuild closes, nils, and replaces
+// s.idx under the same lock. Run with -race; without the lock this is a data race.
+func TestDiskStatsRaceWithRebuild(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	for i := range 3 {
+		if _, err := s.WriteDocument(ctx, fmt.Sprintf("tx-%03d", i), "doc.xml", "application/xml", "", bytes.NewReader([]byte("data"))); err != nil {
+			t.Fatalf("WriteDocument: %v", err)
+		}
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = s.DiskStats()
+			}
+		}
+	}()
+
+	triggerRebuildAndWait(ctx, t, s)
+
+	close(stop)
+	<-done
+}

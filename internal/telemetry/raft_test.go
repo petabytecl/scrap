@@ -3,8 +3,6 @@ package telemetry_test
 import (
 	"testing"
 
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
@@ -12,11 +10,13 @@ type stubRaftState struct {
 	isLeader     bool
 	leaderID     uint64
 	appliedIndex uint64
+	commitIndex  uint64
 }
 
 func (s *stubRaftState) IsLeader() bool       { return s.isLeader }
 func (s *stubRaftState) LeaderID() uint64     { return s.leaderID }
 func (s *stubRaftState) AppliedIndex() uint64 { return s.appliedIndex }
+func (s *stubRaftState) CommitIndex() uint64  { return s.commitIndex }
 
 func TestRaftMetrics_NilMeter(t *testing.T) {
 	_, err := telemetry.NewRaftMetrics(nil, &stubRaftState{})
@@ -39,6 +39,7 @@ func TestRaftMetrics_ObservesState(t *testing.T) {
 		isLeader:     true,
 		leaderID:     3,
 		appliedIndex: 42,
+		commitIndex:  50,
 	}
 
 	rm, err := telemetry.NewRaftMetrics(provider.Meter("test"), state)
@@ -49,27 +50,10 @@ func TestRaftMetrics_ObservesState(t *testing.T) {
 
 	metrics := collectMetrics(t, reader)
 
-	isLeader := findMetric(metrics, "scrap.raft.is_leader")
-	if isLeader == nil {
-		t.Fatal("scrap.raft.is_leader not found")
-	}
-	gauge, ok := isLeader.Data.(metricdata.Gauge[int64])
-	if !ok {
-		t.Fatalf("expected Gauge[int64], got %T", isLeader.Data)
-	}
-	if len(gauge.DataPoints) == 0 || gauge.DataPoints[0].Value != 1 {
-		t.Fatalf("is_leader: want 1, got %v", gauge.DataPoints)
-	}
-
-	leaderID := findMetric(metrics, "scrap.raft.leader_id")
-	if leaderID == nil {
-		t.Fatal("scrap.raft.leader_id not found")
-	}
-
-	appliedIndex := findMetric(metrics, "scrap.raft.applied_index")
-	if appliedIndex == nil {
-		t.Fatal("scrap.raft.applied_index not found")
-	}
+	assertInt64Gauge(t, metrics, "scrap.raft.is_leader", 1)
+	assertInt64Gauge(t, metrics, "scrap.raft.leader_id", 3)
+	assertInt64Gauge(t, metrics, "scrap.raft.applied_index", 42)
+	assertInt64Gauge(t, metrics, "scrap.raft.commit_index", 50)
 }
 
 func TestRaftMetrics_NilUnregister(t *testing.T) {

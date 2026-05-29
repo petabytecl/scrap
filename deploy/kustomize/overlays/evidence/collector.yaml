@@ -29,6 +29,9 @@ subjects:
     name: otel-collector
     namespace: monitoring
 ---
+# Gateway: single instance so tail_sampling sees whole traces. Receives OTLP
+# metrics/traces from scrapd and forwards to Mimir/Tempo. (Logs are handled by
+# the per-node agent DaemonSet below, since /var/log/pods is node-local.)
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -63,11 +66,15 @@ data:
           - sources:
               - from: connection
 
-      filter/high_cardinality:
+      # Strip per-transaction/per-block ids from metric datapoints so they never
+      # become Mimir series labels (issue #314 high-cardinality guard).
+      transform/strip_high_cardinality:
         error_mode: ignore
-        metrics:
-          metric:
-            - 'HasAttrOnDatapoint("scrap.transaction_id", "")  == false and HasAttrOnDatapoint("scrap.transaction_id", "") == false'
+        metric_statements:
+          - context: datapoint
+            statements:
+              - delete_key(datapoint.attributes, "scrap.transaction_id")
+              - delete_key(datapoint.attributes, "scrap.block_id")
 
       tail_sampling:
         decision_wait: 10s
@@ -83,7 +90,11 @@ data:
           - name: baseline
             type: probabilistic
             probabilistic:
-              sampling_percentage: 10
+              # Evidence env keeps everything (ADR 0013 / showcase): the whole point
+              # is maximum trace resolution. `make stress-setup-lowrate` overrides this
+              # baseline (via EVIDENCE_BASELINE_SAMPLING) to model a production capture
+              # where errors + slow traces are still kept. Production overlays lower this.
+              sampling_percentage: 100
 
     exporters:
       otlphttp/mimir:
@@ -96,26 +107,68 @@ data:
         tls:
           insecure: true
 
-      otlphttp/loki:
-        endpoint: http://loki.monitoring.svc:3100/otlp
-        tls:
-          insecure: true
-
-      otlphttp/pyroscope:
-        endpoint: http://pyroscope.monitoring.svc:4040
-        tls:
-          insecure: true
-
     service:
       pipelines:
         metrics:
           receivers: [otlp]
-          processors: [k8sattributes, batch]
+          processors: [transform/strip_high_cardinality, k8sattributes, batch]
           exporters: [otlphttp/mimir]
         traces:
           receivers: [otlp]
           processors: [k8sattributes, tail_sampling, batch]
           exporters: [otlp/tempo]
+---
+# Agent: per-node DaemonSet. Tails the node-local /var/log/pods so scrapd logs
+# are collected from every node (a single Deployment would only see logs on its
+# own node). Logs-only; no OTLP receiver.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    receivers:
+      filelog:
+        include: [/var/log/pods/scrap_*/*/*.log]
+        include_file_path: true
+        # beginning, not end: the agent is deployed before any scrap-namespace app
+        # (phased rollout), so there are no pre-existing logs to re-ingest, and
+        # reading new files from line 1 captures app startup logs without the
+        # sub-second discovery race that start_at:end would skip.
+        start_at: beginning
+        operators:
+          # The container operator parses the CRI/containerd format and sets
+          # k8s.pod.name / k8s.namespace.name / k8s.container.name from the path.
+          - type: container
+            id: container-parser
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+      # Give filelog-sourced logs a service.name (from the container name set by
+      # the container operator) so Loki indexes them like OTLP-sourced telemetry.
+      transform/log_service_name:
+        error_mode: ignore
+        log_statements:
+          - context: resource
+            statements:
+              - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"]) where resource.attributes["service.name"] == nil
+
+    exporters:
+      otlphttp/loki:
+        endpoint: http://loki.monitoring.svc:3100/otlp
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [transform/log_service_name, batch]
+          exporters: [otlphttp/loki]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -154,6 +207,55 @@ spec:
         - name: config
           configMap:
             name: otel-collector-config
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+    spec:
+      # Read root-owned node pod logs for the filelog receiver.
+      securityContext:
+        runAsUser: 0
+      # Cover every node, including a tainted control-plane, so no scrapd pod's
+      # logs are missed regardless of scheduling.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: agent
+          image: otel/opentelemetry-collector-contrib:0.122.1
+          args: ["--config=/etc/otel/config.yaml"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: otel-agent-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
 ---
 apiVersion: v1
 kind: Service

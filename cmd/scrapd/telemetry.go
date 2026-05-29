@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -61,12 +62,53 @@ var scrapdTelemetryPipeline = scrapdTelemetryPipelineFactory{
 	},
 }
 
+// buildEnabled creates the OTLP metric reader and/or span processor, but only for
+// the signals whose endpoint is configured. Each signal is gated independently:
+// configuring only OTEL_EXPORTER_OTLP_METRICS_ENDPOINT must not also build a trace
+// exporter (which would fall back to localhost:4317). A nil return for a signal
+// means it is disabled. The reader is shut down if the span processor then fails.
+func (f scrapdTelemetryPipelineFactory) buildEnabled(ctx context.Context) (sdkmetric.Reader, sdktrace.SpanProcessor, error) {
+	var (
+		metricReader  sdkmetric.Reader
+		spanProcessor sdktrace.SpanProcessor
+		err           error
+	)
+
+	if otlpSignalEnabled("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") {
+		if metricReader, err = f.newMetricReader(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	if otlpSignalEnabled("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") {
+		if spanProcessor, err = f.newSpanProcessor(ctx); err != nil {
+			if metricReader != nil {
+				_ = metricReader.Shutdown(ctx)
+			}
+			return nil, nil, err
+		}
+	}
+	return metricReader, spanProcessor, nil
+}
+
+// otlpSignalEnabled reports whether the given signal-specific OTLP endpoint, or
+// the common OTEL_EXPORTER_OTLP_ENDPOINT, is configured. When neither is set the
+// signal is not exported, so scrapd never defaults to localhost:4317.
+func otlpSignalEnabled(signalEnv string) bool {
+	for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", signalEnv} {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type scrapdTelemetryRuntime struct {
 	meterProvider  *sdkmetric.MeterProvider
 	tracerProvider *sdktrace.TracerProvider
 	server         server.Telemetry
 	runtimeMetrics *scraptelemetry.RuntimeMetrics
 	raftMetrics    *scraptelemetry.RaftMetrics
+	diskMetrics    *scraptelemetry.DiskMetrics
 	metricsHandler http.Handler
 }
 
@@ -76,43 +118,48 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 		return nil, err
 	}
 
-	metricReader, err := scrapdTelemetryPipeline.newMetricReader(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if metricReader == nil {
-		return nil, errors.New("metric reader is required")
-	}
-
-	spanProcessor, err := scrapdTelemetryPipeline.newSpanProcessor(ctx)
-	if err != nil {
-		_ = metricReader.Shutdown(ctx)
-		return nil, err
-	}
-	if spanProcessor == nil {
-		_ = metricReader.Shutdown(ctx)
-		return nil, errors.New("span processor is required")
-	}
-
+	// The Prometheus reader is always present: it backs the admin /metrics
+	// endpoint regardless of whether an OTLP collector is configured.
 	promRegistry := prometheus.NewRegistry()
 	promExporter, err := otelprom.New(otelprom.WithRegisterer(promRegistry))
 	if err != nil {
-		_ = metricReader.Shutdown(ctx)
-		_ = spanProcessor.Shutdown(ctx)
 		return nil, fmt.Errorf("create prometheus exporter: %w", err)
 	}
 
-	meterProvider := sdkmetric.NewMeterProvider(
+	meterOpts := []sdkmetric.Option{
 		sdkmetric.WithResource(otelResource),
-		sdkmetric.WithReader(metricReader),
 		sdkmetric.WithReader(promExporter),
-	)
-	tracerProvider := sdktrace.NewTracerProvider(
+	}
+	tracerOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(otelResource),
-		sdktrace.WithSpanProcessor(spanProcessor),
-	)
+	}
+
+	// Only export over OTLP for signals whose endpoint is configured. Without this
+	// guard the OTLP exporters default to localhost:4317 and silently ship to a
+	// non-existent collector on every deployment that has not wired one up.
+	metricReader, spanProcessor, err := scrapdTelemetryPipeline.buildEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if metricReader != nil {
+		meterOpts = append(meterOpts, sdkmetric.WithReader(metricReader))
+	}
+	if spanProcessor != nil {
+		tracerOpts = append(tracerOpts, sdktrace.WithSpanProcessor(spanProcessor))
+	}
+
+	meterProvider := sdkmetric.NewMeterProvider(meterOpts...)
+	tracerProvider := sdktrace.NewTracerProvider(tracerOpts...)
 	otel.SetMeterProvider(meterProvider)
 	otel.SetTracerProvider(tracerProvider)
+	// W3C trace context + baggage on every gRPC hop (client<->server and
+	// leader<->peer). The otelgrpc handlers default to the global propagator, so
+	// without this every WriteDocument starts a disconnected root span and the
+	// client's trace_id is dropped at the boundary. See ADR 0013.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	m := meterProvider.Meter(instrumentationScope)
 	t := tracerProvider.Tracer(instrumentationScope)
@@ -197,6 +244,16 @@ func (r *scrapdTelemetryRuntime) registerRaftMetrics(provider scraptelemetry.Raf
 	return nil
 }
 
+func (r *scrapdTelemetryRuntime) registerDiskMetrics(provider scraptelemetry.DiskStatsProvider) error {
+	m := r.meterProvider.Meter(instrumentationScope)
+	dm, err := scraptelemetry.NewDiskMetrics(m, provider)
+	if err != nil {
+		return err
+	}
+	r.diskMetrics = dm
+	return nil
+}
+
 func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -204,6 +261,7 @@ func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	return errors.Join(
 		r.runtimeMetrics.Unregister(),
 		r.raftMetrics.Unregister(),
+		r.diskMetrics.Unregister(),
 		r.meterProvider.Shutdown(ctx),
 		r.tracerProvider.Shutdown(ctx),
 	)

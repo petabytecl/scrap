@@ -14,6 +14,7 @@ import (
 
 type WriteStageRecorder interface {
 	StartStage(ctx context.Context, stage string) (context.Context, WriteStageEnd)
+	StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, WriteStageEnd)
 }
 
 type WriteStageEnd interface {
@@ -86,9 +87,37 @@ func (ws *writeStage) End(err error) {
 	ws.span.End()
 }
 
+// StartSpan starts a span-only telemetry span — no stage-duration metric, unlike
+// StartStage. Used for per-voter apply spans and backend upload spans, which need a
+// span but not the write-path stage histogram. Callers pass the fully-qualified
+// span name (e.g. "scrap.apply/commit_document") and any options such as
+// trace.WithAttributes or trace.WithLinks. See ADR 0013.
+func (wt *WriteTelemetry) StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, WriteStageEnd) {
+	ctx, span := wt.tracer.Start(ctx, name, opts...)
+	return ctx, &spanEnd{span: span}
+}
+
+type spanEnd struct {
+	span trace.Span
+}
+
+func (s *spanEnd) End(err error) {
+	if err != nil {
+		s.span.SetStatus(otelcodes.Error, err.Error())
+		s.span.RecordError(err)
+	} else {
+		s.span.SetStatus(otelcodes.Ok, "")
+	}
+	s.span.End()
+}
+
 type noopWriteTelemetry struct{}
 
 func (noopWriteTelemetry) StartStage(ctx context.Context, _ string) (context.Context, WriteStageEnd) {
+	return ctx, noopStageEnd{}
+}
+
+func (noopWriteTelemetry) StartSpan(ctx context.Context, _ string, _ ...trace.SpanStartOption) (context.Context, WriteStageEnd) {
 	return ctx, noopStageEnd{}
 }
 

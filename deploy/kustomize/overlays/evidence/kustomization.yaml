@@ -8,6 +8,7 @@ resources:
   - loki.yaml
   - tempo.yaml
   - pyroscope.yaml
+  - alloy.yaml
   - grafana.yaml
   - grafana-datasources.yaml
   - grafana-dashboard-provider.yaml
@@ -17,6 +18,8 @@ configMapGenerator:
   - name: grafana-evidence-dashboard
     namespace: monitoring
     files:
-      - scrapd-evidence.json
+      - scrap-overview.json
+      - scrap-red.json
+      - scrap-use.json
     options:
       disableNameSuffixHash: true

@@ -2,15 +2,27 @@
 
 Saved queries for Phase 3 stress evidence review.
 
+> **Rate window:** all `rate()` queries use a `[5m]` window. The OTel SDK
+> `PeriodicReader` exports every 60s, so a `[1m]` window would often see a single
+> sample and return empty. This matches the window used in `scripts/evidence-bundle.sh`.
+
+## Dashboards
+
+Three method-based boards are provisioned in the Evidence folder:
+
+- **scrap-overview** — health at a glance (error rate, p99, leader, apply lag, pressure, disk).
+- **scrap-red** — Rate/Errors/Duration per RPC and per write-path stage.
+- **scrap-use** — Utilization/Saturation/Errors per resource (raft apply pipeline, RPC concurrency, upload outbox, local storage, runtime, scrub).
+
 ## Metrics (PromQL via Mimir)
 
 ### Client API
 ```promql
 # Request rate by method and status
-sum(rate(scrap_rpc_server_requests_total[1m])) by (rpc_method, rpc_grpc_status_code)
+sum(rate(scrap_rpc_server_requests_total[5m])) by (rpc_method, rpc_grpc_status_code)
 
 # p99 latency by method
-histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_bucket[1m])) by (le, rpc_method))
+histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m])) by (le, rpc_method))
 
 # Error rate
 sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code!="0"}[5m])) / sum(rate(scrap_rpc_server_requests_total[5m]))
@@ -19,10 +31,10 @@ sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code!="0"}[5m])) / sum(
 ### Write Path Stages
 ```promql
 # Average stage latency
-sum(rate(scrap_write_stage_duration_sum[1m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_count[1m])) by (scrap_write_stage)
+sum(rate(scrap_write_stage_duration_seconds_sum[5m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_write_stage)
 
 # p99 stage latency
-histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_bucket[1m])) by (le, scrap_write_stage))
+histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_seconds_bucket[5m])) by (le, scrap_write_stage))
 ```
 
 ### Upload Pipeline
@@ -35,7 +47,7 @@ scrap_upload_pending_bytes
 scrap_upload_pending_blocks
 
 # Upload success/failure rate
-sum(rate(scrap_upload_total[1m])) by (status)
+sum(rate(scrap_upload_total[5m])) by (status)
 ```
 
 ### Raft Health
@@ -44,7 +56,29 @@ sum(rate(scrap_upload_total[1m])) by (status)
 scrap_raft_is_leader
 
 # Applied index growth (should increase steadily under write load)
-rate(scrap_raft_applied_index[1m])
+rate(scrap_raft_applied_index[5m])
+
+# Apply lag (saturation): committed entries not yet applied
+max(scrap_raft_commit_index) - max(scrap_raft_applied_index)
+```
+
+### RPC Concurrency (USE)
+```promql
+# Utilization: RPCs currently in flight, by method
+sum(scrap_rpc_server_in_flight) by (rpc_method)
+
+# Saturation: load shed as RESOURCE_EXHAUSTED (gRPC status 8)
+sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code="8"}[5m])) by (rpc_method)
+```
+
+### Local Storage (USE)
+```promql
+# Disk utilization on the data volume
+scrap_disk_used_bytes
+scrap_disk_free_bytes
+
+# Pebble projection on-disk size
+scrap_pebble_disk_bytes
 ```
 
 ### Process Resources
@@ -53,23 +87,37 @@ rate(scrap_raft_applied_index[1m])
 process_runtime_go_goroutines
 
 # Heap memory
-process_runtime_go_mem_heap_alloc
+process_runtime_go_mem_heap_alloc_bytes
 
 # GC pause rate
-rate(process_runtime_go_gc_pause_total[1m])
+rate(process_runtime_go_gc_pause_seconds_total[5m])
 ```
 
 ## Traces (TraceQL via Tempo)
 
+> Two linked traces per document: `document.write` (states 1-5) and the per-Block
+> `block.upload` (states 6-7). They share a deterministic block trace_id =
+> hash(cell, shard, block); each write's apply span forward-links to the upload
+> trace, and both carry `scrap.block_id` for cross-trace search. See ADR 0013.
+
 ```traceql
+# The state-machine apply, visible on every voter
+{ name =~ "scrap.apply/.*" }
+
+# One document's apply across all replicas
+{ name = "scrap.apply/commit_document" && span.scrap.block_id = 42 }
+
+# The block upload trace (seal -> put -> verify -> confirm)
+{ name =~ "scrap.upload/.*" }
+
+# Everything for one block (writes + upload) via the shared attribute
+{ span.scrap.block_id = 42 }
+
 # Slow write operations (>100ms)
 { span.scrap.write.stage = "raft_propose" } | duration > 100ms
 
 # All errors
 { status = error }
-
-# Specific write stage traces
-{ name =~ "scrap.write/.*" }
 
 # RPC traces by method
 { span.rpc.method = "WriteDocument" }
