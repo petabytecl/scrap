@@ -29,7 +29,7 @@ func startPeerServer(t *testing.T, blocksDir string, opts ...peer.ServerOption) 
 	go func() { _ = gs.Serve(lis) }()
 	t.Cleanup(func() {
 		gs.GracefulStop()
-		s.Close()
+		_ = s.Close()
 	})
 
 	return lis.Addr().String()

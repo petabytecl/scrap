@@ -293,11 +293,24 @@ func (s *Server) ConsistencyCheck(_ context.Context, req *scrapv1.ConsistencyChe
 	}, nil
 }
 
-func (s *Server) Close() {
+// Close flushes and closes every block and index writer the server owns. It is
+// safe to call more than once; subsequent calls are no-ops. When closing
+// multiple writers it attempts to close all of them and returns the first error
+// encountered. Callers must ensure the peer gRPC server has stopped accepting
+// RPCs (e.g. after GracefulStop) before calling Close, so no new writer is
+// created concurrently with the close.
+func (s *Server) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, bs := range s.writers {
-		_ = bs.idxWriter.Close()
-		_ = bs.writer.Close()
+	var firstErr error
+	for id, bs := range s.writers {
+		if err := bs.idxWriter.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := bs.writer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		delete(s.writers, id)
 	}
+	return firstErr
 }
