@@ -91,8 +91,9 @@ data:
             type: probabilistic
             probabilistic:
               # Evidence env keeps everything (ADR 0013 / showcase): the whole point
-              # is maximum trace resolution. Pair with a low-rate capture scenario so
-              # 100% never floods the single gateway. Production overlays lower this.
+              # is maximum trace resolution. `make stress-setup-lowrate` overrides this
+              # baseline (via EVIDENCE_BASELINE_SAMPLING) to model a production capture
+              # where errors + slow traces are still kept. Production overlays lower this.
               sampling_percentage: 100
 
     exporters:

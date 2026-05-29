@@ -11,6 +11,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	grpccodes "google.golang.org/grpc/codes"
+
+	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
 const documentServiceName = "scrap.v1.DocumentService"
@@ -35,6 +37,15 @@ func WithTelemetry(tel Telemetry) Option {
 		if tel != nil {
 			s.telemetry = tel
 		}
+	}
+}
+
+// WithIdentifierMode sets how Document identifiers are attached to span
+// attributes. When omitted, the server is fail-closed to hashed identifiers (the
+// zero value of telemetry.IdentifierMode). See ADR 0013 §4.
+func WithIdentifierMode(mode telemetry.IdentifierMode) Option {
+	return func(s *documentServer) {
+		s.identifierMode = mode
 	}
 }
 

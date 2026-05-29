@@ -61,6 +61,7 @@ type Config struct {
 	PeerAddrs          []string
 	Upload             UploadConfig
 	WriteTelemetry     WriteStageRecorder
+	IdentifierMode     telemetry.IdentifierMode
 }
 
 type Shard struct {
@@ -75,6 +76,7 @@ type Shard struct {
 	replicator     DocumentReplicator
 	upload         UploadConfig
 	writeTelemetry WriteStageRecorder
+	identifierMode telemetry.IdentifierMode
 	baseLogger     *slog.Logger
 	logger         *slog.Logger
 	blockSealSize  int64
@@ -175,6 +177,7 @@ func Open(cfg Config) (*Shard, error) {
 		replicator:              cfg.Replicator,
 		upload:                  cfg.Upload,
 		writeTelemetry:          cfg.WriteTelemetry,
+		identifierMode:          cfg.IdentifierMode,
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
@@ -598,11 +601,13 @@ func (s *Shard) TriggerRebuild(_ context.Context) (alreadyInProgress bool, err e
 	}
 	done := make(chan struct{})
 	s.rebuildDone.Store(&done)
-	go s.doRebuild(done)
+	// The rebuild is detached: it outlives the triggering RPC, so it runs on a
+	// background context rather than the caller's (which is cancelled on return).
+	go s.doRebuild(context.Background(), done)
 	return false, nil
 }
 
-func (s *Shard) doRebuild(done chan struct{}) {
+func (s *Shard) doRebuild(ctx context.Context, done chan struct{}) {
 	defer close(done)
 
 	pebbleDir := filepath.Join(s.dataDir, "pebble")
@@ -610,7 +615,7 @@ func (s *Shard) doRebuild(done chan struct{}) {
 	oldDir := filepath.Join(s.dataDir, fmt.Sprintf("pebble.previous-%d", time.Now().UnixNano()))
 
 	if err := s.prepareRebuildProjection(tempDir); err != nil {
-		s.logger.Error("rebuild: prepare projection failed", "err", err)
+		s.logger.ErrorContext(ctx, "rebuild: prepare projection failed", "err", err)
 		_ = os.RemoveAll(tempDir)
 		s.rebuilding.Store(false)
 		return
@@ -624,9 +629,9 @@ func (s *Shard) doRebuild(done chan struct{}) {
 	_ = os.RemoveAll(tempDir)
 
 	if err != nil {
-		s.logger.Error("rebuild: swap projection failed", "err", err, "shard_id", s.shardID)
+		s.logger.ErrorContext(ctx, "rebuild: swap projection failed", "err", err, "shard_id", s.shardID)
 		if idxNil {
-			s.logger.Error("rebuild: index is nil after failed swap; shard degraded", "err", err, "shard_id", s.shardID)
+			s.logger.ErrorContext(ctx, "rebuild: index is nil after failed swap; shard degraded", "err", err, "shard_id", s.shardID)
 			return
 		}
 	}
@@ -955,7 +960,7 @@ func (s *Shard) applyEntries(entries []raftpb.Entry) error {
 // parent is recovered from the command's W3C trace context, so it nests under the
 // originating write trace on every replica. See ADR 0013.
 func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, live bool) error {
-	operation, attrs := applySpanInfo(cmd)
+	operation, attrs := applySpanInfo(cmd, s.identifierMode)
 	if !live || operation == "" || s.writeTelemetry == nil {
 		return s.applyEntryCommand(cmd, entryIndex)
 	}
@@ -980,15 +985,16 @@ func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, li
 }
 
 // applySpanInfo maps a RaftCommand to an apply-span operation name and attributes.
-// Identity is hashed (ADR 0012); scrap.block_id is a low-cardinality attribute used
-// to correlate the write trace with the block.upload trace (ADR 0013).
-func applySpanInfo(cmd *scrapv1.RaftCommand) (string, []attribute.KeyValue) {
+// Identity follows mode (hashed by default, ADR 0012); scrap.block_id is a
+// low-cardinality attribute used to correlate the write trace with the block.upload
+// trace (ADR 0013).
+func applySpanInfo(cmd *scrapv1.RaftCommand, mode telemetry.IdentifierMode) (string, []attribute.KeyValue) {
 	switch c := cmd.Command.(type) {
 	case *scrapv1.RaftCommand_CommitDoc:
 		attrs := telemetry.DocumentIdentityAttributes(
 			c.CommitDoc.GetTransactionId(),
 			c.CommitDoc.GetDocumentName(),
-			telemetry.HashIdentifiers,
+			mode,
 		)
 		attrs = append(attrs, blockIDAttribute(c.CommitDoc.GetBlockId()))
 		return "commit_document", attrs

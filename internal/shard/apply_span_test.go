@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
 func assertApplySpan(t *testing.T, cmd *scrapv1.RaftCommand, wantOp string, wantKeys []string) {
 	t.Helper()
-	op, attrs := applySpanInfo(cmd)
+	op, attrs := applySpanInfo(cmd, telemetry.HashIdentifiers)
 	if op != wantOp {
 		t.Fatalf("op: got %q want %q", op, wantOp)
 	}
@@ -76,6 +77,29 @@ func TestApplySpanInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertApplySpan(t, tt.cmd, tt.wantOp, tt.wantKeys)
 		})
+	}
+}
+
+func TestApplySpanInfoRawModeForLocalDebug(t *testing.T) {
+	cmd := &scrapv1.RaftCommand{Command: &scrapv1.RaftCommand_CommitDoc{
+		CommitDoc: &scrapv1.CommitDocument{TransactionId: "tx", DocumentName: "doc", BlockId: 42},
+	}}
+	op, attrs := applySpanInfo(cmd, telemetry.RawIdentifiersForLocalDebug)
+	if op != "commit_document" {
+		t.Fatalf("op: got %q want commit_document", op)
+	}
+	gotKeys := make(map[string]bool, len(attrs))
+	for _, a := range attrs {
+		gotKeys[string(a.Key)] = true
+	}
+	// In the local-debug mode the apply span carries raw identifiers, not hashes.
+	for _, k := range []string{"scrap.transaction_id", "scrap.document_name", "scrap.block_id"} {
+		if !gotKeys[k] {
+			t.Fatalf("missing attr %q in raw mode: %v", k, gotKeys)
+		}
+	}
+	if gotKeys["scrap.transaction.hash"] || gotKeys["scrap.document.hash"] {
+		t.Fatalf("hashed identifier present in raw mode: %v", gotKeys)
 	}
 }
 

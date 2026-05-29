@@ -22,8 +22,9 @@ const readBufSize = 64 * 1024 // 64 KiB read buffer for streaming document chunk
 
 type documentServer struct {
 	scrapv1.UnimplementedDocumentServiceServer
-	store     storeapi.Store
-	telemetry Telemetry
+	store          storeapi.Store
+	telemetry      Telemetry
+	identifierMode telemetry.IdentifierMode
 }
 
 func Register(gs *grpc.Server, s storeapi.Store, opts ...Option) {
@@ -60,7 +61,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		txID,
 		docName,
-		telemetry.HashIdentifiers,
+		s.identifierMode,
 	)...)
 
 	if txID == "" || docName == "" {
@@ -137,7 +138,7 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		req.GetTransactionId(),
 		req.GetDocumentName(),
-		telemetry.HashIdentifiers,
+		s.identifierMode,
 	)...)
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
@@ -163,7 +164,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		req.GetTransactionId(),
 		req.GetDocumentName(),
-		telemetry.HashIdentifiers,
+		s.identifierMode,
 	)...)
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
@@ -222,7 +223,7 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		req.GetTransactionId(),
 		"",
-		telemetry.HashIdentifiers,
+		s.identifierMode,
 	)...)
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()

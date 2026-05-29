@@ -140,6 +140,8 @@ SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 ##? STRESS_WORKERS Concurrent worker goroutines for the stress test.
 ##? STRESS_DURATION Duration of the stress test run.
 ##? STRESS_DOC_SIZE Document payload size in bytes.
+##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
+##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
 STRESS_KIND_CLUSTER ?= scrap-stress
 STRESS_KIND_CONFIG ?= deploy/kind/cluster-stress.yaml
@@ -150,6 +152,8 @@ STRESS_SCENARIO ?= throughput
 STRESS_WORKERS ?= 8
 STRESS_DURATION ?= 60s
 STRESS_DOC_SIZE ?= 16384
+EVIDENCE_BASELINE_SAMPLING ?= 100
+EVIDENCE_LOWRATE_SAMPLING ?= 10
 
 ##@ Help
 
@@ -353,7 +357,12 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	# Ensure the scrap namespace exists so the evidence overlay's scrap-namespace
 	# NetworkPolicy applies; the app workload (Phase 2) re-applies it idempotently.
 	$(KUBECTL) create namespace scrap --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" | $(KUBECTL) apply -f -
+	# Render the evidence stack, overriding only the baseline trace-sampling rate.
+	# Default 100 keeps the sed a no-op; stress-setup-lowrate lowers it to model a
+	# production capture where errors + slow traces are still kept (ADR 0013).
+	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" \
+		| sed 's/sampling_percentage: 100/sampling_percentage: $(EVIDENCE_BASELINE_SAMPLING)/' \
+		| $(KUBECTL) apply -f -
 	# Gate on the log pipeline first (Loki sink, gateway, per-node agent) so that
 	# when apps deploy in Phase 2 their logs are captured from the first line.
 	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
@@ -375,6 +384,10 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	@printf '  gRPC:      127.0.0.1:18090\n'
 	@printf '  Grafana:   http://127.0.0.1:13000\n'
 	@printf '  Collector: 127.0.0.1:14317 (OTLP gRPC)\n\n'
+
+.PHONY: stress-setup-lowrate
+stress-setup-lowrate: ## Bring up the stress env with a production-like low baseline trace-sampling rate.
+	$(MAKE) stress-setup EVIDENCE_BASELINE_SAMPLING=$(EVIDENCE_LOWRATE_SAMPLING)
 
 .PHONY: stress
 stress: ## Run the stress test binary against the Kind cluster.

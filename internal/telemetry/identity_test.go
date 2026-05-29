@@ -31,6 +31,30 @@ func TestDocumentIdentityAttributesExposeRawIdentifiersOnlyForLocalDebug(t *test
 	assertNotPresent(t, attrs, "scrap.document.hash")
 }
 
+func TestResolveIdentifierModeIsFailClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		cellID string
+		raw    bool
+		want   telemetry.IdentifierMode
+	}{
+		{"local cell with raw requested exposes raw", "local", true, telemetry.RawIdentifiersForLocalDebug},
+		{"local cell without raw request stays hashed", "local", false, telemetry.HashIdentifiers},
+		{"production cell refuses raw request", "kind-dev", true, telemetry.HashIdentifiers},
+		{"stress cell refuses raw request", "kind-stress", true, telemetry.HashIdentifiers},
+		{"empty cell is not local", "", true, telemetry.HashIdentifiers},
+		{"cell id match is case-sensitive", "Local", true, telemetry.HashIdentifiers},
+		{"production cell without raw request stays hashed", "kind-dev", false, telemetry.HashIdentifiers},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := telemetry.ResolveIdentifierMode(tt.cellID, tt.raw); got != tt.want {
+				t.Fatalf("ResolveIdentifierMode(%q, %v) = %v, want %v", tt.cellID, tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func assertNotPresent(t *testing.T, attrs map[attribute.Key]attribute.Value, key string) {
 	t.Helper()
 
