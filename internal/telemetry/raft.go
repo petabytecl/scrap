@@ -13,6 +13,7 @@ type RaftStateProvider interface {
 	IsLeader() bool
 	LeaderID() uint64
 	AppliedIndex() uint64
+	CommitIndex() uint64
 }
 
 type RaftMetrics struct {
@@ -48,6 +49,13 @@ func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider) (*RaftMetric
 		return nil, fmt.Errorf("create raft applied_index gauge: %w", err)
 	}
 
+	commitIndex, err := meter.Int64ObservableGauge("scrap.raft.commit_index",
+		metric.WithDescription("Highest committed Raft log index; apply lag = commit_index - applied_index."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create raft commit_index gauge: %w", err)
+	}
+
 	reg, err := meter.RegisterCallback(
 		func(_ context.Context, o metric.Observer) error {
 			leader := int64(0)
@@ -57,9 +65,10 @@ func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider) (*RaftMetric
 			o.ObserveInt64(isLeader, leader)
 			o.ObserveInt64(leaderID, clampUint64(provider.LeaderID()))
 			o.ObserveInt64(appliedIndex, clampUint64(provider.AppliedIndex()))
+			o.ObserveInt64(commitIndex, clampUint64(provider.CommitIndex()))
 			return nil
 		},
-		isLeader, leaderID, appliedIndex,
+		isLeader, leaderID, appliedIndex, commitIndex,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("register raft callback: %w", err)

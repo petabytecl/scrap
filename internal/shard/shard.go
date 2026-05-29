@@ -519,6 +519,10 @@ func (s *Shard) AppliedIndex() uint64 {
 	return s.raft.AppliedIndex()
 }
 
+func (s *Shard) CommitIndex() uint64 {
+	return s.raft.CommitIndex()
+}
+
 func (s *Shard) CheckReadiness(_ context.Context) error {
 	if s.rebuilding.Load() {
 		return fmt.Errorf("%w: shard unavailable", storeapi.ErrRebuilding)

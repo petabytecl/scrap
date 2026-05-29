@@ -12,11 +12,13 @@ type stubRaftState struct {
 	isLeader     bool
 	leaderID     uint64
 	appliedIndex uint64
+	commitIndex  uint64
 }
 
 func (s *stubRaftState) IsLeader() bool       { return s.isLeader }
 func (s *stubRaftState) LeaderID() uint64     { return s.leaderID }
 func (s *stubRaftState) AppliedIndex() uint64 { return s.appliedIndex }
+func (s *stubRaftState) CommitIndex() uint64  { return s.commitIndex }
 
 func TestRaftMetrics_NilMeter(t *testing.T) {
 	_, err := telemetry.NewRaftMetrics(nil, &stubRaftState{})
@@ -39,6 +41,7 @@ func TestRaftMetrics_ObservesState(t *testing.T) {
 		isLeader:     true,
 		leaderID:     3,
 		appliedIndex: 42,
+		commitIndex:  50,
 	}
 
 	rm, err := telemetry.NewRaftMetrics(provider.Meter("test"), state)
@@ -69,6 +72,18 @@ func TestRaftMetrics_ObservesState(t *testing.T) {
 	appliedIndex := findMetric(metrics, "scrap.raft.applied_index")
 	if appliedIndex == nil {
 		t.Fatal("scrap.raft.applied_index not found")
+	}
+
+	commitIndex := findMetric(metrics, "scrap.raft.commit_index")
+	if commitIndex == nil {
+		t.Fatal("scrap.raft.commit_index not found")
+	}
+	cg, ok := commitIndex.Data.(metricdata.Gauge[int64])
+	if !ok {
+		t.Fatalf("expected Gauge[int64], got %T", commitIndex.Data)
+	}
+	if len(cg.DataPoints) == 0 || cg.DataPoints[0].Value != 50 {
+		t.Fatalf("commit_index: want 50, got %v", cg.DataPoints)
 	}
 }
 

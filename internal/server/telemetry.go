@@ -54,6 +54,7 @@ func (noopRPC) Finish(grpccodes.Code) {}
 type OTelTelemetry struct {
 	requests metric.Int64Counter
 	duration metric.Float64Histogram
+	inFlight metric.Int64UpDownCounter
 	tracer   trace.Tracer
 	now      func() time.Time
 }
@@ -84,9 +85,18 @@ func NewOTelTelemetry(meter metric.Meter, tracer trace.Tracer) (*OTelTelemetry, 
 		return nil, fmt.Errorf("create RPC duration histogram: %w", err)
 	}
 
+	inFlight, err := meter.Int64UpDownCounter(
+		"scrap.rpc.server.in_flight",
+		metric.WithDescription("Document service RPCs currently in flight (concurrency utilization)."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create RPC in-flight counter: %w", err)
+	}
+
 	return &OTelTelemetry{
 		requests: requests,
 		duration: duration,
+		inFlight: inFlight,
 		tracer:   tracer,
 		now:      time.Now,
 	}, nil
@@ -99,6 +109,7 @@ func (t *OTelTelemetry) StartRPC(ctx context.Context, method string) (context.Co
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(rpcSpanAttributes(method)...),
 	)
+	t.inFlight.Add(ctx, 1, metric.WithAttributes(attribute.String("rpc.method", method)))
 
 	return ctx, &otelRPC{
 		telemetry: t,
@@ -122,6 +133,7 @@ func (r *otelRPC) AddSpanAttributes(attrs ...attribute.KeyValue) {
 }
 
 func (r *otelRPC) Finish(code grpccodes.Code) {
+	r.telemetry.inFlight.Add(r.ctx, -1, metric.WithAttributes(attribute.String("rpc.method", r.method)))
 	attrs := rpcAttributes(r.method, code)
 	r.telemetry.requests.Add(r.ctx, 1, metric.WithAttributes(attrs...))
 	r.telemetry.duration.Record(r.ctx, r.telemetry.now().Sub(r.start).Seconds(), metric.WithAttributes(attrs...))

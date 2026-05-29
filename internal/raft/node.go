@@ -66,6 +66,7 @@ type RaftNode struct {
 	appliedIndex      uint64
 	snapshotIndex     uint64
 	replayCommitIndex uint64
+	commitIndex       uint64
 
 	leaderID atomic.Uint64
 	readMu   sync.Mutex
@@ -222,6 +223,7 @@ func (n *RaftNode) restartNode(lg *zap.Logger, walDir string) error {
 	// entries up to this index; they were applied before the crash, so the apply
 	// loop treats Index <= this as replay and suppresses live trace spans (ADR 0013).
 	n.replayCommitIndex = hardState.Commit
+	atomic.StoreUint64(&n.commitIndex, hardState.Commit)
 	if err := n.storage.Append(entries); err != nil {
 		return fmt.Errorf("raft: append entries: %w", err)
 	}
@@ -268,6 +270,10 @@ func (n *RaftNode) run() {
 		case rd := <-n.node.Ready():
 			if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
 				panic(fmt.Sprintf("raft: WAL save: %v", err))
+			}
+
+			if !raft.IsEmptyHardState(rd.HardState) {
+				atomic.StoreUint64(&n.commitIndex, rd.HardState.Commit)
 			}
 
 			if !raft.IsEmptySnap(rd.Snapshot) {
@@ -379,6 +385,12 @@ func (n *RaftNode) AppliedIndex() uint64 {
 // fresh bootstrap. Set once during Open before the run loop starts. See ADR 0013.
 func (n *RaftNode) ReplayCommitIndex() uint64 {
 	return n.replayCommitIndex
+}
+
+// CommitIndex returns the highest Raft log index known to be committed. Apply lag
+// (commit - applied) is the canonical Raft saturation signal on the USE dashboard.
+func (n *RaftNode) CommitIndex() uint64 {
+	return atomic.LoadUint64(&n.commitIndex)
 }
 
 func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.ConfState {
