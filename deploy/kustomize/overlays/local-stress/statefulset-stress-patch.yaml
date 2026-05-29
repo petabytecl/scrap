@@ -37,6 +37,8 @@ spec:
               value: kind-stress
             - name: SCRAP_PPROF_ENABLED
               value: "true"
+            - name: SCRAP_LOG_LEVEL
+              value: debug
           args:
             - "--data-dir=/data"
             - "--listen-addr=:9090"

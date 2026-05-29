@@ -970,8 +970,11 @@ func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, li
 		}))
 	}
 	ctx := extractTraceContext(context.Background(), cmd)
-	_, applyEnd := s.writeTelemetry.StartSpan(ctx, "scrap.apply/"+operation, opts...)
+	ctx, applyEnd := s.writeTelemetry.StartSpan(ctx, "scrap.apply/"+operation, opts...)
 	err := s.applyEntryCommand(cmd, entryIndex)
+	// DEBUG (Tier-1) on the apply span's context: the log line carries the same
+	// trace_id/span_id, so Grafana can jump trace <-> logs for this apply (ADR 0013).
+	s.logger.DebugContext(ctx, "applied raft command", "op", operation, "index", entryIndex)
 	applyEnd.End(err)
 	return err
 }
