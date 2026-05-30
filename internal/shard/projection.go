@@ -36,11 +36,11 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	exists, err := s.documentVisibleInProjectionLenient(doc.TransactionId, doc.DocumentName)
+	state, err := s.inspectCommitProjectionState(doc)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if state.targetExists && state.targetCounted {
 		return fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, doc.TransactionId, doc.DocumentName)
 	}
 
@@ -61,11 +61,75 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 		return err
 	}
 
-	if err := addProjectionDocument(s.idx, doc.TransactionId, doc.BlockId); err != nil {
-		return err
+	if !state.targetCounted {
+		if err := addProjectionDocument(s.idx, doc.TransactionId, doc.BlockId); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+type commitProjectionState struct {
+	targetExists  bool
+	targetCounted bool
+}
+
+func (s *Shard) inspectCommitProjectionState(doc *scrapv1.CommitDocument) (commitProjectionState, error) {
+	entry, exists, err := s.commitProjectionEntry(doc.TransactionId)
+	if err != nil || !exists {
+		return commitProjectionState{}, err
+	}
+	return s.inspectCommitProjectionEntry(doc, entry), nil
+}
+
+func (s *Shard) commitProjectionEntry(txID string) (index.Entry, bool, error) {
+	if s.idx == nil {
+		return index.Entry{}, false, fmt.Errorf("%w: projection is nil", storeapi.ErrDataLoss)
+	}
+	entry, err := s.idx.Get(txID)
+	if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			return index.Entry{}, false, nil
+		}
+		return index.Entry{}, false, fmt.Errorf("%w: projection transaction %s: %w", storeapi.ErrDataLoss, txID, err)
+	}
+	if len(entry.BlockIDs) == 0 {
+		return index.Entry{}, false, fmt.Errorf("%w: projection transaction %s has no block IDs", storeapi.ErrDataLoss, txID)
+	}
+	return entry, true, nil
+}
+
+func (s *Shard) inspectCommitProjectionEntry(doc *scrapv1.CommitDocument, entry index.Entry) commitProjectionState {
+	resolved := 0
+	targetBlockProjected := false
+	for _, blockID := range entry.BlockIDs {
+		if blockID == doc.BlockId {
+			targetBlockProjected = true
+		}
+		for _, blockDoc := range s.blockIndexEntriesLenient(blockID, doc.TransactionId) {
+			resolved++
+			if blockID == doc.BlockId && blockDoc.DocName == doc.DocumentName {
+				return commitProjectionState{
+					targetExists:  true,
+					targetCounted: resolved <= int(entry.DocCount),
+				}
+			}
+		}
+	}
+
+	return commitProjectionState{
+		targetCounted: targetBlockProjected && int(entry.DocCount) > resolved,
+	}
+}
+
+func (s *Shard) blockIndexEntriesLenient(blockID uint64, txID string) []block.IndexEntry {
+	ir, err := block.OpenIndexReader(s.idxPath(blockID))
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = ir.Close() }()
+	return ir.FindByTransaction(txID)
 }
 
 func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry) error {

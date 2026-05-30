@@ -2,6 +2,7 @@ package shard
 
 import (
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -34,19 +35,9 @@ func TestApplyCommitDocumentToleratesProjectionAheadOfBlockIndex(t *testing.T) {
 		idx:       idx,
 	}
 
-	err = s.applyCommitDocument(&scrapv1.CommitDocument{
-		TransactionId: "tx-replay",
-		DocumentName:  "doc.xml",
-		ContentType:   "text/xml",
-		BlockId:       1,
-		FrameCount:    1,
-		TotalBytes:    4,
-		Sha256:        make([]byte, 32),
-		CreatedAtUs:   time.Now().UnixMicro(),
-	})
-	if err != nil {
-		t.Fatalf("applyCommitDocument: %v", err)
-	}
+	applyProjectionCommit(t, s, newProjectionCommit("tx-replay", "doc.xml", 1))
+	requireProjectionDocCount(t, idx, "tx-replay", 1)
+	requireProjectionDocs(t, s, "tx-replay", "doc.xml")
 }
 
 func TestApplyCommitDocumentWritesHistoricalBlockIndex(t *testing.T) {
@@ -135,6 +126,27 @@ func TestApplyCommitDocumentRequeuesHistoricalUploadAfterIndexAppend(t *testing.
 	}
 }
 
+func TestApplyCommitDocumentRepairsProjectionAfterIndexAppendCrash(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeProjectionIndexEntries(t, dir, 1,
+		block.IndexEntry{TransactionID: "tx-crash", DocName: "a.xml"},
+		block.IndexEntry{TransactionID: "tx-crash", DocName: "b.xml"},
+	)
+	if err := idx.Put("tx-crash", 1, 1, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: dir,
+		idx:       idx,
+	}
+
+	applyProjectionCommit(t, s, newProjectionCommit("tx-crash", "b.xml", 1))
+	requireProjectionDocCount(t, idx, "tx-crash", 2)
+	requireProjectionDocs(t, s, "tx-crash", "a.xml", "b.xml")
+}
+
 func openProjectionTestIndex(t *testing.T) *index.Index {
 	t.Helper()
 	idx, err := index.Open(t.TempDir())
@@ -160,6 +172,72 @@ func writeEmptyBlockAndIndex(t *testing.T, dir string, shardID, blockID uint64) 
 	}
 	if err := iw.Close(); err != nil {
 		t.Fatalf("Close empty index: %v", err)
+	}
+}
+
+func writeProjectionIndexEntries(t *testing.T, dir string, blockID uint64, entries ...block.IndexEntry) {
+	t.Helper()
+	iw, err := block.NewIndexWriter(block.IdxFilePath(dir, blockID))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	for _, entry := range entries {
+		if err := iw.Append(entry); err != nil {
+			t.Fatalf("Append index entry: %v", err)
+		}
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index: %v", err)
+	}
+}
+
+func newProjectionCommit(txID, docName string, blockID uint64) *scrapv1.CommitDocument {
+	return &scrapv1.CommitDocument{
+		TransactionId: txID,
+		DocumentName:  docName,
+		ContentType:   "text/xml",
+		BlockId:       blockID,
+		FrameCount:    1,
+		TotalBytes:    4,
+		Sha256:        make([]byte, 32),
+		CreatedAtUs:   time.Now().UnixMicro(),
+	}
+}
+
+func applyProjectionCommit(t *testing.T, s *Shard, doc *scrapv1.CommitDocument) {
+	t.Helper()
+	if err := s.applyCommitDocument(doc); err != nil {
+		t.Fatalf("applyCommitDocument: %v", err)
+	}
+}
+
+func requireProjectionDocCount(t *testing.T, idx *index.Index, txID string, want uint16) {
+	t.Helper()
+	entry, err := idx.Get(txID)
+	if err != nil {
+		t.Fatalf("Get projection entry: %v", err)
+	}
+	if entry.DocCount != want {
+		t.Fatalf("DocCount = %d, want %d", entry.DocCount, want)
+	}
+}
+
+func requireProjectionDocs(t *testing.T, s *Shard, txID string, want ...string) {
+	t.Helper()
+	docs, err := s.projectionResolver().ListDocuments(txID)
+	if err != nil {
+		t.Fatalf("ListDocuments: %v", err)
+	}
+	if len(docs) != len(want) {
+		t.Fatalf("doc count = %d, want %d: %+v", len(docs), len(want), docs)
+		return
+	}
+	got := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		got = append(got, doc.DocName)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("docs = %v, want %v", got, want)
 	}
 }
 
