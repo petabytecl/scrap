@@ -151,6 +151,25 @@ func TestOpenIndexWriterAppendsExistingIndex(t *testing.T) {
 	}
 }
 
+func TestOpenIndexWriterMissingFile(t *testing.T) {
+	_, err := block.OpenIndexWriter(filepath.Join(t.TempDir(), "missing.idx"))
+	if err == nil {
+		t.Fatal("expected error for missing index")
+	}
+}
+
+func TestOpenIndexWriterRejectsBadHeader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.idx")
+	if err := os.WriteFile(path, []byte("not an index"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := block.OpenIndexWriter(path)
+	if err == nil {
+		t.Fatal("expected error for bad index header")
+	}
+}
+
 func TestIndexAllEntries(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.idx")

@@ -146,6 +146,35 @@ func TestApplyCommitDocumentWritesCurrentBlockIndex(t *testing.T) {
 	}
 }
 
+func TestAppendDocumentIndexEntryReportsCurrentWriterError(t *testing.T) {
+	dir := t.TempDir()
+	blockWriter, err := block.NewWriter(block.FilePath(dir, 1), 1, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = blockWriter.Close() })
+	idxWriter, err := block.NewIndexWriter(block.IdxFilePath(dir, 1))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := idxWriter.Close(); err != nil {
+		t.Fatalf("Close idx writer: %v", err)
+	}
+
+	s := &Shard{
+		blockWriter: blockWriter,
+		idxWriter:   idxWriter,
+	}
+
+	err = s.appendDocumentIndexEntry(&scrapv1.CommitDocument{BlockId: 1}, block.IndexEntry{
+		TransactionID: "tx-current-error",
+		DocName:       "doc.xml",
+	})
+	if err == nil {
+		t.Fatal("expected current writer error")
+	}
+}
+
 func TestApplyCommitDocumentSkipsExistingHistoricalIndexEntry(t *testing.T) {
 	dir := t.TempDir()
 	idx, err := index.Open(t.TempDir())
@@ -195,5 +224,68 @@ func TestApplyCommitDocumentSkipsExistingHistoricalIndexEntry(t *testing.T) {
 	}
 	if after.Size() != before.Size() {
 		t.Fatalf("index size changed: got %d, want %d", after.Size(), before.Size())
+	}
+}
+
+func TestApplyCommitDocumentRejectsExistingVisibleDocument(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open index: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	iw, err := block.NewIndexWriter(block.IdxFilePath(dir, 1))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{TransactionID: "tx-visible", DocName: "doc.xml"}); err != nil {
+		t.Fatalf("Append visible entry: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close visible index: %v", err)
+	}
+	if err := idx.Put("tx-visible", 1, 1, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: dir,
+		idx:       idx,
+	}
+
+	err = s.applyCommitDocument(&scrapv1.CommitDocument{
+		TransactionId: "tx-visible",
+		DocumentName:  "doc.xml",
+		BlockId:       1,
+		Sha256:        make([]byte, 32),
+		CreatedAtUs:   time.Now().UnixMicro(),
+	})
+	if err == nil {
+		t.Fatal("expected duplicate visible document error")
+	}
+}
+
+func TestApplyCommitDocumentFailsWhenHistoricalIndexMissing(t *testing.T) {
+	idx, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open index: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	s := &Shard{
+		blocksDir: t.TempDir(),
+		idx:       idx,
+	}
+
+	err = s.applyCommitDocument(&scrapv1.CommitDocument{
+		TransactionId: "tx-missing-index",
+		DocumentName:  "doc.xml",
+		BlockId:       1,
+		Sha256:        make([]byte, 32),
+		CreatedAtUs:   time.Now().UnixMicro(),
+	})
+	if err == nil {
+		t.Fatal("expected missing historical index error")
 	}
 }
