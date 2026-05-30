@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func TestAppRunCleanShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	app, err := newApp(ctx, cfg, logger)
+	app, err := newApp(ctx, cfg, logger, BuildInfo{})
 	if err != nil {
 		t.Fatalf("newApp: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -26,12 +26,6 @@ import (
 	"github.com/petabytecl/scrap/internal/shard"
 	scraptelemetry "github.com/petabytecl/scrap/internal/telemetry"
 	"github.com/petabytecl/scrap/internal/ulid"
-)
-
-var (
-	version   = "dev"
-	buildSHA  = "unknown"
-	buildTime = "unknown"
 )
 
 const (
@@ -116,8 +110,8 @@ type scrapdTelemetryRuntime struct {
 	resourceConfig scraptelemetry.ResourceConfig
 }
 
-func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
-	resourceConfig := scrapdTelemetryResourceConfig(memberSlotID, memberID, raftID, shardID)
+func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo) (*scrapdTelemetryRuntime, error) {
+	resourceConfig := scrapdTelemetryResourceConfig(memberSlotID, memberID, raftID, shardID, build)
 	otelResource, err := scraptelemetry.NewResource(ctx, resourceConfig)
 	if err != nil {
 		return nil, err
@@ -230,7 +224,7 @@ func scrapdRPCServerDurationSecondBuckets() []float64 {
 	return []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 }
 
-func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
+func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shardID uint64, build BuildInfo) (*scrapdTelemetryRuntime, error) {
 	memberSlotID, err := os.Hostname()
 	if err != nil {
 		return nil, fmt.Errorf("hostname: %w", err)
@@ -239,7 +233,7 @@ func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shar
 	if err != nil {
 		return nil, err
 	}
-	return newScrapdTelemetry(ctx, memberSlotID, memberID, raftID, shardID)
+	return newScrapdTelemetry(ctx, memberSlotID, memberID, raftID, shardID, build)
 }
 
 type shardTelemetryBundle struct {
@@ -310,7 +304,8 @@ func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	)
 }
 
-func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardID uint64) scraptelemetry.ResourceConfig {
+func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo) scraptelemetry.ResourceConfig {
+	build = build.withDefaults()
 	instanceID := scrapdTelemetryInstanceID(memberSlotID, memberID)
 	if memberSlotID == "" {
 		memberSlotID = localTelemetryIdentity
@@ -322,9 +317,9 @@ func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardI
 	return scraptelemetry.ResourceConfig{
 		ServiceName:  "scrapd",
 		Environment:  envString("SCRAP_ENVIRONMENT", localTelemetryIdentity),
-		Version:      version,
-		BuildSHA:     buildSHA,
-		BuildTime:    buildTime,
+		Version:      build.Version,
+		BuildSHA:     build.BuildSHA,
+		BuildTime:    build.BuildTime,
 		CellID:       envString("SCRAP_CELL_ID", localTelemetryIdentity),
 		InstanceID:   instanceID,
 		MemberSlotID: memberSlotID,

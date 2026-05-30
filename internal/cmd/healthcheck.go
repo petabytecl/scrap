@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 const defaultHealthAddress = "127.0.0.1:9090"
 
-func runHealthcheck(args []string) error {
+func RunHealthcheck(args []string) error {
 	var address string
 	var service string
 	var timeout time.Duration

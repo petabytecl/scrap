@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -48,7 +48,7 @@ type App struct {
 // construction never leaks a shard, transport, or listener.
 //
 //nolint:cyclop // linear construction of all subsystems; complexity is inherent
-func newApp(ctx context.Context, cfg Config, logger *slog.Logger) (*App, error) {
+func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInfo) (*App, error) {
 	var cleanup []func()
 	fail := func(err error) (*App, error) {
 		for i := len(cleanup) - 1; i >= 0; i-- {
@@ -78,7 +78,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger) (*App, error) 
 		return fail(err)
 	}
 
-	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), cfg.DataDir, raftID, 0)
+	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), cfg.DataDir, raftID, 0, build)
 	if err != nil {
 		return fail(err)
 	}

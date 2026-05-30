@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -21,17 +21,12 @@ func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
 	t.Setenv("SCRAP_MEMBER_ID", "member-123")
 	t.Setenv("SCRAP_ENVIRONMENT", "stress")
 
-	oldVersion, oldBuildSHA, oldBuildTime := version, buildSHA, buildTime
-	version = "v2.3.4"
-	buildSHA = "abc123"
-	buildTime = "2026-05-28T12:00:00Z"
-	t.Cleanup(func() {
-		version = oldVersion
-		buildSHA = oldBuildSHA
-		buildTime = oldBuildTime
-	})
-
-	cfg := scrapdTelemetryResourceConfig("scrapd-0", "member-123", 3, 7)
+	build := BuildInfo{
+		Version:   "v2.3.4",
+		BuildSHA:  "abc123",
+		BuildTime: "2026-05-28T12:00:00Z",
+	}
+	cfg := scrapdTelemetryResourceConfig("scrapd-0", "member-123", 3, 7, build)
 
 	assertString(t, "ServiceName", cfg.ServiceName, "scrapd")
 	assertString(t, "Environment", cfg.Environment, "stress")
@@ -55,7 +50,7 @@ func TestScrapdTelemetryResourceConfigDefaultsLocalIdentity(t *testing.T) {
 	t.Setenv("SCRAP_MEMBER_ID", "")
 	t.Setenv("SCRAP_ENVIRONMENT", "")
 
-	cfg := scrapdTelemetryResourceConfig("", "", 1, 0)
+	cfg := scrapdTelemetryResourceConfig("", "", 1, 0, BuildInfo{})
 
 	assertString(t, "Environment", cfg.Environment, "local")
 	assertString(t, "CellID", cfg.CellID, "local")
@@ -92,7 +87,7 @@ func TestScrapdTelemetryResourceConfigDerivesInstanceID(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			cfg := scrapdTelemetryResourceConfig(tt.memberSlotID, tt.memberID, 1, 0)
+			cfg := scrapdTelemetryResourceConfig(tt.memberSlotID, tt.memberID, 1, 0, BuildInfo{})
 
 			assertString(t, "InstanceID", cfg.InstanceID, tt.want)
 		})
@@ -100,7 +95,7 @@ func TestScrapdTelemetryResourceConfigDerivesInstanceID(t *testing.T) {
 }
 
 func TestTelemetryResourceLogAttrsMatchResourceIdentity(t *testing.T) {
-	cfg := scrapdTelemetryResourceConfig("scrapd-0", "member-123", 3, 7)
+	cfg := scrapdTelemetryResourceConfig("scrapd-0", "member-123", 3, 7, BuildInfo{})
 
 	attrs := logAttrMap(telemetryResourceLogAttrs(cfg))
 
@@ -192,7 +187,7 @@ func TestResolveScrapdTelemetryMemberIDRejectsInvalidDurableRecord(t *testing.T)
 func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0)
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -213,7 +208,7 @@ func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 func TestNewScrapdTelemetryForHostInitializesRuntime(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetryForHost(context.Background(), t.TempDir(), 1, 0)
+	rt, err := newScrapdTelemetryForHost(context.Background(), t.TempDir(), 1, 0, BuildInfo{})
 	if err != nil {
 		t.Fatalf("newScrapdTelemetryForHost: %v", err)
 	}
@@ -246,7 +241,7 @@ func TestNewScrapdTelemetrySkipsOTLPWhenEndpointUnset(t *testing.T) {
 	}
 	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0)
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -281,7 +276,7 @@ func TestNewScrapdTelemetryGatesSignalsIndependently(t *testing.T) {
 	}
 	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0)
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -315,7 +310,7 @@ func TestNewScrapdTelemetryUsesRPCDurationSecondBuckets(t *testing.T) {
 	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 
 	ctx := context.Background()
-	rt, err := newScrapdTelemetry(ctx, "scrapd-0", "member-123", 1, 0)
+	rt, err := newScrapdTelemetry(ctx, "scrapd-0", "member-123", 1, 0, BuildInfo{})
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
