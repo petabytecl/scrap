@@ -1,0 +1,17 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: scrapd-admin-host-allow
+  namespace: scrap
+spec:
+  endpointSelector:
+    matchLabels:
+      app: scrap
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "9100"
+              protocol: TCP

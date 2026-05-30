@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -331,6 +333,30 @@ func TestNewScrapdTelemetryUsesRPCDurationSecondBuckets(t *testing.T) {
 	want := []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 	if !slices.Equal(duration.Bounds, want) {
 		t.Fatalf("duration bounds = %v, want %v", duration.Bounds, want)
+	}
+}
+
+func TestScrapdTelemetryPrometheusScrapeSurvivesInFlightGaugeUnderTrace(t *testing.T) {
+	stubScrapdTelemetryPipeline(t)
+
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
+
+	_, rpc := rt.server.StartRPC(context.Background(), "WriteDocument")
+	rpc.Finish(codes.OK)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	rt.metricsHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/metrics status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "cannot inject exemplar") {
+		t.Fatalf("/metrics exposed exemplar error: %s", rec.Body.String())
 	}
 }
 

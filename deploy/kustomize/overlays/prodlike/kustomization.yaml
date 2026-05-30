@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../local-kind
+  - monitoring-namespace.yaml
+  - networkpolicy-admin.yaml
+  - ciliumnetworkpolicy-admin-host.yaml
+
+patches:
+  - path: statefulset-prodlike-patch.yaml

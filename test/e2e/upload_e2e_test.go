@@ -29,7 +29,6 @@ import (
 
 const (
 	e2eS3Region           = "us-east-1"
-	e2eS3ObjectPrefix     = "kind-dev/shards/0000000000000000/"
 	localStackService     = "localstack"
 	uploadE2ETimeout      = 2 * time.Minute
 	uploadBlockPayloadLen = 70 * 1024
@@ -55,8 +54,8 @@ func TestE2EBackendUploadHappyPath(t *testing.T) {
 
 	leader := findLeaderPod(t, txID, docName)
 	waitUploadPendingBlocks(t, leader, 0, uploadE2ETimeout)
-	waitLeaderMetricAbove(t, leader, "scrap_upload_total", []string{`status="success"`}, 0, uploadE2ETimeout)
-	waitLeaderMetricAbove(t, leader, "scrap_upload_verify_total", []string{`status="pass"`}, 0, uploadE2ETimeout)
+	waitCellMetricAbove(t, "scrap_upload_total", []string{`status="success"`}, 0, uploadE2ETimeout)
+	waitCellMetricAbove(t, "scrap_upload_verify_total", []string{`status="pass"`}, 0, uploadE2ETimeout)
 }
 
 func TestE2EBackendUploadLeaderChange(t *testing.T) {
@@ -283,7 +282,7 @@ func listBackendObjects(t *testing.T, client *awss3.Client) map[string]backendOb
 	defer cancel()
 	paginator := awss3.NewListObjectsV2Paginator(client, &awss3.ListObjectsV2Input{
 		Bucket: aws.String(e2eS3Bucket()),
-		Prefix: aws.String(e2eS3ObjectPrefix),
+		Prefix: aws.String(e2eS3ObjectPrefix()),
 	})
 	objects := make(map[string]backendObject)
 	for paginator.HasMorePages() {
@@ -304,6 +303,11 @@ func listBackendObjects(t *testing.T, client *awss3.Client) map[string]backendOb
 		}
 	}
 	return objects
+}
+
+func e2eS3ObjectPrefix() string {
+	cellID := envOrDefault("SCRAP_E2E_CELL_ID", "kind-dev")
+	return cellID + "/shards/0000000000000000/"
 }
 
 func waitNewBackendPair(t *testing.T, client *awss3.Client, before map[string]backendObject, timeout time.Duration) backendPair {
@@ -445,9 +449,19 @@ func fetchUploadHealth(t *testing.T, pod string) uploadHealth {
 	return health
 }
 
-func waitLeaderMetricAbove(t *testing.T, pod, name string, labels []string, previous float64, timeout time.Duration) {
+func waitCellMetricAbove(t *testing.T, name string, labels []string, previous float64, timeout time.Duration) {
 	t.Helper()
-	addr, stop := startPodPortForward(t, pod, 9100)
-	defer stop()
-	waitMetricAbove(t, "http://"+addr+"/metrics", name, labels, previous, timeout)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, pod := range podNames(t) {
+			addr, stop := startPodPortForward(t, pod, 9100)
+			current := fetchMetricValueWithLabels(t, "http://"+addr+"/metrics", name, labels)
+			stop()
+			if current > previous {
+				return
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("metric %s did not increase above %.0f on any pod", name, previous)
 }
