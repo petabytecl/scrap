@@ -35,7 +35,7 @@ func TestApplyCommitDocumentToleratesProjectionAheadOfBlockIndex(t *testing.T) {
 		idx:       idx,
 	}
 
-	applyProjectionCommit(t, s, newProjectionCommit("tx-replay", "doc.xml", 1))
+	applyProjectionCommit(t, s, newProjectionCommit("tx-replay", "doc.xml"))
 	requireProjectionDocCount(t, idx, "tx-replay", 1)
 	requireProjectionDocs(t, s, "tx-replay", "doc.xml")
 }
@@ -111,19 +111,31 @@ func TestApplyCommitDocumentRequeuesHistoricalUploadAfterIndexAppend(t *testing.
 		t.Fatalf("applyCommitDocument: %v", err)
 	}
 
-	uploads, err := collectPendingUploads(idx)
-	if err != nil {
-		t.Fatalf("collectPendingUploads: %v", err)
+	requirePendingUpload(t, idx, 7, 1)
+}
+
+func TestApplyCommitDocumentRequeuesHistoricalUploadWhenIndexEntryAlreadyPresent(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeEmptyBlockAndIndex(t, dir, 7, 1)
+	writeProjectionIndexEntries(t, dir, 1,
+		block.IndexEntry{TransactionID: "tx-present", DocName: "doc.xml"},
+	)
+	if err := idx.Put("tx-present", 1, 0, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
 	}
-	if len(uploads) != 1 {
-		t.Fatalf("pending uploads = %d, want 1", len(uploads))
+
+	s := &Shard{
+		blocksDir: dir,
+		shardID:   7,
+		idx:       idx,
+		upload:    UploadConfig{Enabled: true},
 	}
-	if uploads[0].BlockID != 1 || uploads[0].ShardID != 7 {
-		t.Fatalf("pending upload = %+v, want block 1 shard 7", uploads[0])
-	}
-	if uploads[0].SealedSizeBytes <= 0 {
-		t.Fatalf("SealedSizeBytes = %d, want > 0", uploads[0].SealedSizeBytes)
-	}
+	s.uploads = newUploadController(s, s.upload, s.shardID, nil, nil, nil)
+
+	applyProjectionCommit(t, s, newProjectionCommit("tx-present", "doc.xml"))
+	requirePendingUpload(t, idx, 7, 1)
+	requireProjectionDocCount(t, idx, "tx-present", 1)
 }
 
 func TestApplyCommitDocumentRepairsProjectionAfterIndexAppendCrash(t *testing.T) {
@@ -142,7 +154,7 @@ func TestApplyCommitDocumentRepairsProjectionAfterIndexAppendCrash(t *testing.T)
 		idx:       idx,
 	}
 
-	applyProjectionCommit(t, s, newProjectionCommit("tx-crash", "b.xml", 1))
+	applyProjectionCommit(t, s, newProjectionCommit("tx-crash", "b.xml"))
 	requireProjectionDocCount(t, idx, "tx-crash", 2)
 	requireProjectionDocs(t, s, "tx-crash", "a.xml", "b.xml")
 }
@@ -163,7 +175,7 @@ func TestApplyCommitDocumentRepairsTornHistoricalIndexTail(t *testing.T) {
 		idx:       idx,
 	}
 
-	applyProjectionCommit(t, s, newProjectionCommit("tx-torn", "b.xml", 1))
+	applyProjectionCommit(t, s, newProjectionCommit("tx-torn", "b.xml"))
 	requireProjectionDocCount(t, idx, "tx-torn", 2)
 	requireProjectionDocs(t, s, "tx-torn", "a.xml", "b.xml")
 }
@@ -176,6 +188,23 @@ func openProjectionTestIndex(t *testing.T) *index.Index {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 	return idx
+}
+
+func requirePendingUpload(t *testing.T, idx *index.Index, shardID, blockID uint64) {
+	t.Helper()
+	uploads, err := collectPendingUploads(idx)
+	if err != nil {
+		t.Fatalf("collectPendingUploads: %v", err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("pending uploads = %d, want 1", len(uploads))
+	}
+	if uploads[0].BlockID != blockID || uploads[0].ShardID != shardID {
+		t.Fatalf("pending upload = %+v, want block %d shard %d", uploads[0], blockID, shardID)
+	}
+	if uploads[0].SealedSizeBytes <= 0 {
+		t.Fatalf("SealedSizeBytes = %d, want > 0", uploads[0].SealedSizeBytes)
+	}
 }
 
 func writeEmptyBlockAndIndex(t *testing.T, dir string, shardID, blockID uint64) {
@@ -227,12 +256,12 @@ func appendRawProjectionIndexTail(t *testing.T, path string, tail []byte) {
 	}
 }
 
-func newProjectionCommit(txID, docName string, blockID uint64) *scrapv1.CommitDocument {
+func newProjectionCommit(txID, docName string) *scrapv1.CommitDocument {
 	return &scrapv1.CommitDocument{
 		TransactionId: txID,
 		DocumentName:  docName,
 		ContentType:   "text/xml",
-		BlockId:       blockID,
+		BlockId:       1,
 		FrameCount:    1,
 		TotalBytes:    4,
 		Sha256:        make([]byte, 32),

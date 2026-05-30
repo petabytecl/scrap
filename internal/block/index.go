@@ -95,6 +95,10 @@ func RepairIndexTail(path string) error {
 	if err := validateIndexHeader(f); err != nil {
 		return err
 	}
+	return repairIndexTail(f, path)
+}
+
+func repairIndexTail(f *os.File, path string) error {
 	for {
 		validEnd, err := f.Seek(0, io.SeekCurrent)
 		if err != nil {
@@ -105,15 +109,22 @@ func RepairIndexTail(path string) error {
 			return nil
 		}
 		if err != nil {
-			if err := f.Truncate(validEnd); err != nil {
-				return fmt.Errorf("block: truncate torn index tail %s: %w", path, err)
-			}
-			if err := f.Sync(); err != nil {
-				return fmt.Errorf("block: fsync repaired index %s: %w", path, err)
-			}
-			return nil
+			return truncateIncompleteIndexTail(f, path, validEnd, err)
 		}
 	}
+}
+
+func truncateIncompleteIndexTail(f *os.File, path string, validEnd int64, readErr error) error {
+	if !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return readErr
+	}
+	if err := f.Truncate(validEnd); err != nil {
+		return fmt.Errorf("block: truncate torn index tail %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("block: fsync repaired index %s: %w", path, err)
+	}
+	return nil
 }
 
 // Append writes a CRC-protected entry: entry_len(4) + payload + entry_crc32c(4)

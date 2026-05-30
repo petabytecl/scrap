@@ -159,7 +159,7 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 		return err
 	}
 	if contains {
-		return nil
+		return s.requeueBlockUploadAfterIndexAppend(doc.BlockId)
 	}
 
 	idxW, err = block.OpenIndexWriter(s.idxPath(doc.BlockId))

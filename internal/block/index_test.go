@@ -345,4 +345,7 @@ func TestIndexCorruptEntryCRC(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected CRC error for corrupt entry")
 	}
+	if err := block.RepairIndexTail(path); err == nil {
+		t.Fatal("expected repair to reject committed entry CRC corruption")
+	}
 }
