@@ -6,6 +6,7 @@ package shard
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
@@ -95,6 +96,32 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 	if err := idxW.Close(); err != nil {
 		return fmt.Errorf("shard: close historical write idx: %w", err)
 	}
+	if err := s.requeueBlockUploadAfterIndexAppend(doc.BlockId); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Shard) requeueBlockUploadAfterIndexAppend(blockID uint64) error {
+	if !s.upload.Enabled {
+		return nil
+	}
+	info, err := os.Stat(s.blockPath(blockID))
+	if err != nil {
+		return fmt.Errorf("shard: stat historical block for upload: %w", err)
+	}
+	if err := s.idx.PutPendingUpload(index.PendingUpload{
+		BlockID:         blockID,
+		ShardID:         s.shardID,
+		SealedSizeBytes: info.Size(),
+		SealedAtUs:      time.Now().UnixMicro(),
+	}); err != nil {
+		return fmt.Errorf("shard: requeue historical block upload: %w", err)
+	}
+	if err := s.refreshUploadPressureLocked(); err != nil {
+		return err
+	}
+	s.uploads.Notify()
 	return nil
 }
 

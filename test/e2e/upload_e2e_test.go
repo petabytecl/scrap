@@ -465,16 +465,26 @@ func waitCellMetricAbove(t *testing.T, name string, labels []string, previous fl
 	t.Fatalf("metric %s did not increase above %.0f on any pod", name, previous)
 }
 
-func cellMetricMax(t *testing.T, name string, labels []string) float64 {
+func waitCellMetricSumAbove(t *testing.T, name string, labels []string, previous float64, timeout time.Duration) {
 	t.Helper()
-	var maxValue float64
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cellMetricSum(t, name, labels) > previous {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("metric %s cell-wide sum did not increase above %.0f", name, previous)
+}
+
+func cellMetricSum(t *testing.T, name string, labels []string) float64 {
+	t.Helper()
+	var total float64
 	for _, pod := range podNames(t) {
 		addr, stop := startPodPortForward(t, pod, 9100)
 		current := fetchMetricValueWithLabels(t, "http://"+addr+"/metrics", name, labels)
 		stop()
-		if current > maxValue {
-			maxValue = current
-		}
+		total += current
 	}
-	return maxValue
+	return total
 }

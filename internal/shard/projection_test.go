@@ -93,6 +93,76 @@ func TestApplyCommitDocumentWritesHistoricalBlockIndex(t *testing.T) {
 	}
 }
 
+func TestApplyCommitDocumentRequeuesHistoricalUploadAfterIndexAppend(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeEmptyBlockAndIndex(t, dir, 7, 1)
+
+	s := &Shard{
+		blocksDir: dir,
+		shardID:   7,
+		idx:       idx,
+		upload:    UploadConfig{Enabled: true},
+	}
+	s.uploads = newUploadController(s, s.upload, s.shardID, nil, nil, nil)
+
+	err := s.applyCommitDocument(&scrapv1.CommitDocument{
+		TransactionId: "tx-requeue",
+		DocumentName:  "doc.xml",
+		ContentType:   "text/xml",
+		BlockId:       1,
+		FrameCount:    1,
+		TotalBytes:    4,
+		Sha256:        make([]byte, 32),
+		CreatedAtUs:   time.Now().UnixMicro(),
+	})
+	if err != nil {
+		t.Fatalf("applyCommitDocument: %v", err)
+	}
+
+	uploads, err := collectPendingUploads(idx)
+	if err != nil {
+		t.Fatalf("collectPendingUploads: %v", err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("pending uploads = %d, want 1", len(uploads))
+	}
+	if uploads[0].BlockID != 1 || uploads[0].ShardID != 7 {
+		t.Fatalf("pending upload = %+v, want block 1 shard 7", uploads[0])
+	}
+	if uploads[0].SealedSizeBytes <= 0 {
+		t.Fatalf("SealedSizeBytes = %d, want > 0", uploads[0].SealedSizeBytes)
+	}
+}
+
+func openProjectionTestIndex(t *testing.T) *index.Index {
+	t.Helper()
+	idx, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open index: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+	return idx
+}
+
+func writeEmptyBlockAndIndex(t *testing.T, dir string, shardID, blockID uint64) {
+	t.Helper()
+	blockWriter, err := block.NewWriter(block.FilePath(dir, blockID), shardID, blockID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := blockWriter.Close(); err != nil {
+		t.Fatalf("Close block writer: %v", err)
+	}
+	iw, err := block.NewIndexWriter(block.IdxFilePath(dir, blockID))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close empty index: %v", err)
+	}
+}
+
 func TestApplyCommitDocumentWritesCurrentBlockIndex(t *testing.T) {
 	dir := t.TempDir()
 	idx, err := index.Open(t.TempDir())

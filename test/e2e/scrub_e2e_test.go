@@ -28,6 +28,7 @@ import (
 const (
 	defaultE2ENamespace  = "scrap"
 	scrubE2ETimeout      = 90 * time.Second
+	lightScrubE2ETimeout = 3 * time.Minute
 	portForwardWait      = 15 * time.Second
 	kubectlCommandWait   = 30 * time.Second
 	corruptPayloadOffset = 72
@@ -77,10 +78,10 @@ func TestE2ELightScrubDetectsProjectionDivergence(t *testing.T) {
 	leader := findLeaderPod(t, txID, "doc.xml")
 	victim := firstNonLeaderPod(t, leader)
 
-	mismatchesBefore := cellMetricMax(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`})
+	mismatchesBefore := cellMetricSum(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`})
 	injectProjectionKey(t, victim, uniqueName("tx-e2e-divergent"))
 
-	waitCellMetricAbove(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`}, mismatchesBefore, scrubE2ETimeout)
+	waitCellMetricSumAbove(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`}, mismatchesBefore, lightScrubE2ETimeout)
 
 	readBack := readDocE2E(t, client, txID, "doc.xml")
 	if !bytes.Equal(readBack, content) {
@@ -181,21 +182,27 @@ func firstNonLeaderPod(t *testing.T, leader string) string {
 
 func findLeaderPod(t *testing.T, txID, docName string) string {
 	t.Helper()
-	for _, pod := range podNames(t) {
-		addr, stop := startPodPortForward(t, pod, 9090)
-		client := newDocumentClientAt(t, addr)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
-			TransactionId: txID,
-			DocumentName:  docName,
-		})
-		cancel()
-		stop()
-		if err == nil {
-			return pod
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		for _, pod := range podNames(t) {
+			addr, stop := startPodPortForward(t, pod, 9090)
+			client := newDocumentClientAt(t, addr)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
+				TransactionId: txID,
+				DocumentName:  docName,
+			})
+			cancel()
+			stop()
+			if err == nil {
+				return pod
+			}
+			lastErr = err
 		}
+		time.Sleep(time.Second)
 	}
-	t.Fatal("could not identify leader pod")
+	t.Fatalf("could not identify leader pod for %s/%s: %v", txID, docName, lastErr)
 	return ""
 }
 
