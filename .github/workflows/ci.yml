@@ -6,6 +6,12 @@ permissions:
 on:
   workflow_dispatch:
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
   push:
     branches:
       - main
@@ -171,14 +177,22 @@ jobs:
 
   e2e-status:
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs:
+      - e2e
+    if: ${{ always() }}
     steps:
-      - name: Tier 2 E2E requested
-        if: contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch'
-        run: echo "Tier 2 E2E requested; the e2e job runs the prod-like Cilium gate."
-
-      - name: Tier 2 E2E skipped
-        if: ${{ !(contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch') }}
-        run: echo "Tier 2 E2E skipped; add the e2e label or run workflow_dispatch to execute it."
+      - name: Verify Tier 2 E2E status
+        env:
+          E2E_RESULT: ${{ needs.e2e.result }}
+          E2E_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ "$E2E_REQUESTED" = "true" ]; then
+            test "$E2E_RESULT" = success
+            echo "Tier 2 E2E requested; the e2e job passed the prod-like Cilium gate."
+          else
+            test "$E2E_RESULT" = skipped
+            echo "Tier 2 E2E skipped; add the e2e label or run workflow_dispatch to execute it."
+          fi
 
   check:
     runs-on: blacksmith-4vcpu-ubuntu-2404
