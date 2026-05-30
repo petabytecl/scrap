@@ -17,6 +17,7 @@ Three method-based boards are provisioned in the Evidence folder:
 ## Metrics (PromQL via Mimir)
 
 ### Client API
+
 ```promql
 # Request rate by method and status
 sum(rate(scrap_rpc_server_requests_total[5m])) by (rpc_method, rpc_grpc_status_code)
@@ -29,6 +30,7 @@ sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code!="0"}[5m])) / sum(
 ```
 
 ### Write Path Stages
+
 ```promql
 # Average stage latency
 sum(rate(scrap_write_stage_duration_seconds_sum[5m])) by (scrap_write_stage) / sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_write_stage)
@@ -38,6 +40,7 @@ histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_seconds_bucket[5m])
 ```
 
 ### Upload Pipeline
+
 ```promql
 # Pressure level (0=ok, 1=warn, 2=pressure, 3=critical)
 scrap_upload_pressure_level
@@ -51,6 +54,7 @@ sum(rate(scrap_upload_total[5m])) by (status)
 ```
 
 ### Raft Health
+
 ```promql
 # Leader state
 scrap_raft_is_leader
@@ -63,6 +67,7 @@ max(scrap_raft_commit_index) - max(scrap_raft_applied_index)
 ```
 
 ### RPC Concurrency (USE)
+
 ```promql
 # Utilization: RPCs currently in flight, by method
 sum(scrap_rpc_server_in_flight) by (rpc_method)
@@ -72,6 +77,7 @@ sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code="8"}[5m])) by (rpc
 ```
 
 ### Local Storage (USE)
+
 ```promql
 # Disk utilization on the data volume
 scrap_disk_used_bytes
@@ -82,6 +88,7 @@ scrap_pebble_disk_bytes
 ```
 
 ### Process Resources
+
 ```promql
 # Goroutine count
 process_runtime_go_goroutines
