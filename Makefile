@@ -291,7 +291,7 @@ manifests-check: ## Validate rendered manifests and deployment hardening invaria
 
 .PHONY: e2e-gates-check
 e2e-gates-check: ## Validate E2E target composition and Tier 2 gate wiring.
-	@sh ./scripts/check-e2e-gates.sh
+	@bash ./scripts/check-e2e-gates.sh
 
 .PHONY: kind-cilium-check
 kind-cilium-check: ## Validate prod-like Kind Cilium bootstrap wiring.
