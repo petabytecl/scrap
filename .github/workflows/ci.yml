@@ -188,6 +188,7 @@ jobs:
       - race
       - build
       - vulnerability
+      - e2e
       - e2e-status
     if: ${{ always() }}
     steps:
@@ -198,7 +199,9 @@ jobs:
           RACE_RESULT: ${{ needs.race.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
           E2E_STATUS_RESULT: ${{ needs.e2e-status.result }}
+          E2E_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch' }}
         run: |
           test "$STATIC_RESULT" = success
           test "$TEST_RESULT" = success
@@ -206,3 +209,8 @@ jobs:
           test "$BUILD_RESULT" = success
           test "$VULNERABILITY_RESULT" = success
           test "$E2E_STATUS_RESULT" = success
+          if [ "$E2E_REQUESTED" = "true" ]; then
+            test "$E2E_RESULT" = success
+          else
+            test "$E2E_RESULT" = skipped
+          fi

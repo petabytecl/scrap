@@ -4,6 +4,7 @@ set -eu
 KIND_CONFIG=${PRODLIKE_KIND_CONFIG:-deploy/kind/cluster-prodlike-cilium.yaml}
 STRESS_KIND_CONFIG=${STRESS_KIND_CONFIG:-deploy/kind/cluster-stress.yaml}
 PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/overlays/prodlike}
+PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/overlays/prodlike-e2e}
 CILIUM_VALUES=${CILIUM_VALUES:-deploy/cilium/prodlike-values.yaml}
 CILIUM_CHART_DIR=${CILIUM_CHART_DIR:-deploy/cilium/charts/cilium}
 CILIUM_SCRIPT=${CILIUM_SCRIPT:-scripts/prodlike-cilium.sh}
@@ -45,6 +46,8 @@ require_file "$KIND_CONFIG" "prod-like Cilium Kind config"
 require_file "$STRESS_KIND_CONFIG" "evidence Cilium Kind config"
 require_file "$PRODLIKE_OVERLAY/kustomization.yaml" "prod-like Kustomize overlay"
 require_file "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like StatefulSet patch"
+require_file "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E Kustomize overlay"
+require_file "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "prod-like E2E StatefulSet patch"
 require_file "$CILIUM_VALUES" "prod-like Cilium Helm values"
 require_file "$CILIUM_CHART_DIR/Chart.yaml" "vendored Cilium chart"
 require_file "$CILIUM_SCRIPT" "prod-like Cilium helper script"
@@ -72,7 +75,9 @@ require 'SCRAP_ENVIRONMENT' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" 
 require 'SCRAP_PPROF_ENABLED' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like pprof gate"
 require 'SCRAP_SCRUB_ENABLED' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like scrub gate"
 require 'SCRAP_LIGHT_SCRUB_INTERVAL' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like fast light scrub"
-require 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like test hooks"
+reject 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like test hooks"
+require '../prodlike' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E overlay reuse"
+require 'SCRAP_TEST_HOOKS' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "prod-like E2E test hooks"
 
 require '^kubeProxyReplacement:[[:space:]]*true' "$CILIUM_VALUES" "Cilium kube-proxy replacement"
 require 'mode:[[:space:]]*kubernetes' "$CILIUM_VALUES" "Kubernetes IPAM mode"
@@ -86,6 +91,8 @@ require 'inspect[[:space:]]+-f' "$CILIUM_SCRIPT" "Kind control-plane IP discover
 require 'upgrade[[:space:]]+--install[[:space:]]+cilium' "$CILIUM_SCRIPT" "vendored Cilium Helm install"
 require 'CILIUM_CHART_DIR' "$CILIUM_SCRIPT" "vendored Cilium chart directory"
 require 'kubeProxyReplacement' "$CILIUM_SCRIPT" "kube-proxy replacement doctor check"
+require 'kindnet' "$CILIUM_SCRIPT" "Kind default CNI baseline check"
+require 'baseline' "$CILIUM_SCRIPT" "stale Kind baseline command"
 require 'NetworkPolicy' "$CILIUM_SCRIPT" "NetworkPolicy doctor check"
 require 'CiliumNetworkPolicy' "$CILIUM_SCRIPT" "Cilium host admin policy doctor check"
 require 'scrap-headless' "$CILIUM_SCRIPT" "headless Service DNS doctor check"
@@ -97,6 +104,9 @@ require '^HELM_VERSION[[:space:]]*\?=' "$MAKEFILE" "Helm version variable"
 require '^CILIUM_VERSION[[:space:]]*\?=' "$MAKEFILE" "Cilium version variable"
 require '^CILIUM_CHART_DIR[[:space:]]*\?=' "$MAKEFILE" "vendored Cilium chart variable"
 require '^PRODLIKE_OVERLAY[[:space:]]*\?=' "$MAKEFILE" "prod-like overlay variable"
+require '^PRODLIKE_E2E_OVERLAY[[:space:]]*\?=' "$MAKEFILE" "prod-like E2E overlay variable"
 require '^prodlike-kind-ensure:' "$MAKEFILE" "prod-like Kind ensure target"
 require '^prodlike-cilium-install:' "$MAKEFILE" "Cilium install target"
+require '^prodlike-kind-deploy-e2e:' "$MAKEFILE" "prod-like E2E deploy target"
 require '^prodlike-cell-doctor:' "$MAKEFILE" "prod-like Cell doctor target"
+require 'baseline' "$MAKEFILE" "stale stress Kind baseline check"
