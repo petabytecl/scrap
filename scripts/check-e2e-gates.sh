@@ -72,6 +72,7 @@ require_target prodlike-up
 require_target prodlike-kind-deploy-e2e
 require_target prodlike-e2e-cell-up
 require_target cell-doctor
+require_target tier2-e2e-hooks-check
 require_target tier2-e2e
 require_target tier2-e2e-up
 
@@ -87,6 +88,7 @@ target_must_depend_on tier2-e2e-up prodlike-e2e-cell-up
 target_must_depend_on tier2-e2e-up tier2-e2e
 target_must_depend_on prodlike-e2e-cell-up prodlike-kind-deploy-e2e
 target_must_depend_on tier2-e2e cell-doctor
+target_must_depend_on tier2-e2e tier2-e2e-hooks-check
 
 reject_pattern 'SCRAP_E2E_CLEANUP' "$MAKEFILE" "cluster cleanup during E2E execution"
 reject_pattern 'SCRAP_E2E_CLEANUP' "$SCRUB_E2E" "cluster cleanup during E2E execution"
@@ -103,6 +105,7 @@ require_pattern 'SCRAP_E2E_CELL_ID="kind-prodlike"' "$MAKEFILE" "prod-like Cell 
 require_pattern 'test ./test/e2e/.*-count=1' "$MAKEFILE" "uncached E2E execution"
 require_pattern 'TIER2_E2E_STATUS=passed' "$MAKEFILE" "explicit Tier 2 pass output"
 require_pattern 'SCRAP_TEST_HOOKS' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "test hooks in prod-like E2E overlay"
+require_pattern 'SCRAP_TEST_HOOKS' "$MAKEFILE" "Tier 2 E2E hook overlay check"
 require_pattern '^[[:space:]]+types:' "$WORKFLOW" "explicit pull_request activity types"
 require_pattern '^[[:space:]]+- labeled[[:space:]]*$' "$WORKFLOW" "E2E label CI trigger"
 require_pattern '^[[:space:]]+- unlabeled[[:space:]]*$' "$WORKFLOW" "E2E label removal CI trigger"

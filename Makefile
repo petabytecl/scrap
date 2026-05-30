@@ -415,8 +415,16 @@ prodlike-up: prodlike-cell-up ## Bring up and verify the prod-like Kind Cell.
 .PHONY: cell-doctor
 cell-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating or deleting infrastructure.
 
+.PHONY: tier2-e2e-hooks-check
+tier2-e2e-hooks-check: ## Verify an existing Tier 2 Cell has the test-only hook overlay.
+	@hooks="$$( $(KUBECTL) -n "$(SCRAP_E2E_NAMESPACE)" get statefulset scrapd -o jsonpath='{.spec.template.spec.containers[?(@.name=="scrapd")].env[?(@.name=="SCRAP_TEST_HOOKS")].value}' )"; \
+	if [ "$$hooks" != "1" ]; then \
+		printf 'Tier 2 E2E requires SCRAP_TEST_HOOKS=1; run make tier2-e2e-up or deploy %s\n' "$(PRODLIKE_E2E_OVERLAY)" >&2; \
+		exit 1; \
+	fi
+
 .PHONY: tier2-e2e
-tier2-e2e: cell-doctor ## Run the Tier 2 prod-like E2E gate against an existing Cell.
+tier2-e2e: cell-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
 	@printf 'TIER2_E2E_STATUS=running\n'
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
