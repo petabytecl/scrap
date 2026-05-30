@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -25,10 +26,15 @@ type documentServer struct {
 	store          storeapi.Store
 	telemetry      Telemetry
 	identifierMode telemetry.IdentifierMode
+	logger         *slog.Logger
 }
 
 func Register(gs *grpc.Server, s storeapi.Store, opts ...Option) {
-	srv := &documentServer{store: s, telemetry: noopTelemetry{}}
+	srv := &documentServer{
+		store:     s,
+		telemetry: noopTelemetry{},
+		logger:    slog.New(slog.DiscardHandler),
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(srv)
@@ -81,7 +87,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 		writeResult, writeErr = s.store.WriteDocument(ctx, txID, docName, contentType, idempotencyKey, pr)
 	}()
 
-	if recvErr := s.recvChunks(stream, pw, done, &writeErr); recvErr != nil {
+	if recvErr := s.recvChunks(ctx, stream, pw, done, &writeErr); recvErr != nil {
 		rpcCode = status.Code(recvErr)
 		return recvErr
 	}
@@ -90,7 +96,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	<-done
 
 	if writeErr != nil {
-		mappedErr := mapStoreError(writeErr)
+		mappedErr := s.mapStoreError(ctx, "WriteDocument", writeErr)
 		rpcCode = status.Code(mappedErr)
 		return mappedErr
 	}
@@ -108,7 +114,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 
 // recvChunks reads chunk messages from the stream and writes them into pw.
 // It closes pw (with error if needed) and waits on done before returning on failure.
-func (s *documentServer) recvChunks(stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], pw *io.PipeWriter, done <-chan struct{}, writeErr *error) error {
+func (s *documentServer) recvChunks(ctx context.Context, stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], pw *io.PipeWriter, done <-chan struct{}, writeErr *error) error {
 	for {
 		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -125,7 +131,7 @@ func (s *documentServer) recvChunks(stream grpc.ClientStreamingServer[scrapv1.Wr
 				_ = pw.Close()
 				<-done
 				if *writeErr != nil {
-					return mapStoreError(*writeErr)
+					return s.mapStoreError(ctx, "WriteDocument", *writeErr)
 				}
 				return status.Errorf(codes.Internal, "write chunk: %v", err)
 			}
@@ -145,7 +151,7 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 
 	meta, err := s.store.HeadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
-		mappedErr := mapStoreError(err)
+		mappedErr := s.mapStoreError(ctx, "HeadDocument", err)
 		rpcCode = status.Code(mappedErr)
 		return nil, mappedErr
 	}
@@ -171,7 +177,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 
 	rc, meta, err := s.store.ReadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
-		mappedErr := mapStoreError(err)
+		mappedErr := s.mapStoreError(ctx, "ReadDocument", err)
 		rpcCode = status.Code(mappedErr)
 		return mappedErr
 	}
@@ -230,7 +236,7 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 
 	docs, err := s.store.FindDocuments(ctx, req.GetTransactionId())
 	if err != nil {
-		mappedErr := mapStoreError(err)
+		mappedErr := s.mapStoreError(ctx, "FindDocuments", err)
 		rpcCode = status.Code(mappedErr)
 		return nil, mappedErr
 	}
@@ -247,6 +253,28 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 	}
 
 	return &scrapv1.FindDocumentsResponse{Documents: pbDocs}, nil
+}
+
+func (s *documentServer) mapStoreError(ctx context.Context, method string, err error) error {
+	var nle *storeapi.NotLeaderError
+	if errors.As(err, &nle) {
+		s.logNotLeaderRedirect(ctx, method, nle.LeaderAddr)
+	}
+	return mapStoreError(err)
+}
+
+func (s *documentServer) logNotLeaderRedirect(ctx context.Context, method, leaderAddr string) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.DebugContext(ctx, "request redirected to shard leader",
+		"rpc.service", documentServiceName,
+		"rpc.method", method,
+		"rpc.grpc.status_code", codes.Unavailable.String(),
+		"reason", "not_leader",
+		"scrap.role", "follower",
+		"leader_addr", leaderAddr,
+	)
 }
 
 func mapStoreError(err error) error {

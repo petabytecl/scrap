@@ -56,6 +56,17 @@ attributes. Logs and traces use stable hashed identifiers by default. Raw
 identifiers are allowed only behind an explicit local debug override and must not
 be enabled in production-like evidence runs.
 
+Each `scrapd` process emits a stable `service.instance.id` resource attribute so
+replica-local metric series do not collapse into one ambiguous target. The
+fallback order is explicit instance ID, Member slot identity, durable Member ID,
+then `local`.
+
+The `scrap.rpc.server.duration` histogram records seconds and uses explicit
+bucket boundaries tuned for the Document service latency target:
+`0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10`.
+The instrument unit remains `s`, so Prometheus-compatible exporters continue to
+emit `scrap_rpc_server_duration_seconds_bucket`.
+
 Before Phase 4 begins, Phase 3 must produce a timestamped evidence bundle for
 throughput, mixed read/write/head, and upload-pressure stress scenarios. The
 bundle includes run configuration, load-generator output, selected metric

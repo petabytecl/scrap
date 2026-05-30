@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,6 +39,8 @@ const (
 	memberIdentityDirMode  = 0o700
 	memberIdentityFileMode = 0o600
 	instrumentationScope   = "github.com/petabytecl/scrap/cmd/scrapd"
+	rpcServerDurationName  = "scrap.rpc.server.duration"
+	secondsUnit            = "s"
 )
 
 type scrapdTelemetryPipelineFactory struct {
@@ -110,10 +113,12 @@ type scrapdTelemetryRuntime struct {
 	raftMetrics    *scraptelemetry.RaftMetrics
 	diskMetrics    *scraptelemetry.DiskMetrics
 	metricsHandler http.Handler
+	resourceConfig scraptelemetry.ResourceConfig
 }
 
 func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
-	otelResource, err := scraptelemetry.NewResource(ctx, scrapdTelemetryResourceConfig(memberSlotID, memberID, raftID, shardID))
+	resourceConfig := scrapdTelemetryResourceConfig(memberSlotID, memberID, raftID, shardID)
+	otelResource, err := scraptelemetry.NewResource(ctx, resourceConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +134,7 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 	meterOpts := []sdkmetric.Option{
 		sdkmetric.WithResource(otelResource),
 		sdkmetric.WithReader(promExporter),
+		sdkmetric.WithView(scrapdRPCServerDurationView()),
 	}
 	tracerOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(otelResource),
@@ -184,7 +190,44 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 		server:         serverTelemetry,
 		runtimeMetrics: runtimeMetrics,
 		metricsHandler: promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}),
+		resourceConfig: resourceConfig,
 	}, nil
+}
+
+func (r *scrapdTelemetryRuntime) logIdentityAttrs() []any {
+	if r == nil {
+		return nil
+	}
+	return telemetryResourceLogAttrs(r.resourceConfig)
+}
+
+func telemetryResourceLogAttrs(cfg scraptelemetry.ResourceConfig) []any {
+	return []any{
+		"service.instance.id", cfg.InstanceID,
+		"scrap.cell_id", cfg.CellID,
+		"scrap.member_slot_id", cfg.MemberSlotID,
+		"scrap.member_id", cfg.MemberID,
+		"scrap.shard_id", strconv.FormatUint(cfg.ShardID, 10),
+		"scrap.raft_id", strconv.FormatUint(cfg.RaftID, 10),
+	}
+}
+
+func scrapdRPCServerDurationView() sdkmetric.View {
+	return sdkmetric.NewView(
+		sdkmetric.Instrument{
+			Name: rpcServerDurationName,
+			Unit: secondsUnit,
+		},
+		sdkmetric.Stream{
+			Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: scrapdRPCServerDurationSecondBuckets(),
+			},
+		},
+	)
+}
+
+func scrapdRPCServerDurationSecondBuckets() []float64 {
+	return []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 }
 
 func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shardID uint64) (*scrapdTelemetryRuntime, error) {
@@ -268,6 +311,7 @@ func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 }
 
 func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardID uint64) scraptelemetry.ResourceConfig {
+	instanceID := scrapdTelemetryInstanceID(memberSlotID, memberID)
 	if memberSlotID == "" {
 		memberSlotID = localTelemetryIdentity
 	}
@@ -282,11 +326,22 @@ func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardI
 		BuildSHA:     buildSHA,
 		BuildTime:    buildTime,
 		CellID:       envString("SCRAP_CELL_ID", localTelemetryIdentity),
+		InstanceID:   instanceID,
 		MemberSlotID: memberSlotID,
 		MemberID:     memberID,
 		ShardID:      shardID,
 		RaftID:       raftID,
 	}
+}
+
+func scrapdTelemetryInstanceID(memberSlotID, memberID string) string {
+	if memberSlotID != "" {
+		return memberSlotID
+	}
+	if memberID != "" {
+		return memberID
+	}
+	return localTelemetryIdentity
 }
 
 type memberIdentityRecord struct {

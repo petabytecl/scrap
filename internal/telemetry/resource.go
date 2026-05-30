@@ -10,7 +10,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
-const defaultServiceName = "scrapd"
+const (
+	defaultServiceName       = "scrapd"
+	defaultServiceInstanceID = "local"
+)
 
 // ResourceConfig holds the bounded identity and build metadata attached to
 // scrapd telemetry.
@@ -19,6 +22,8 @@ type ResourceConfig struct {
 	ServiceName string
 	// Environment identifies the deployment environment for evidence runs.
 	Environment string
+	// InstanceID is the stable OpenTelemetry service.instance.id value.
+	InstanceID string
 	// Version identifies the scrapd release version.
 	Version string
 	// BuildSHA identifies the source revision used to build scrapd.
@@ -62,6 +67,7 @@ func resourceAttributes(cfg ResourceConfig) []attribute.KeyValue {
 
 	attrs := []attribute.KeyValue{
 		attribute.String("service.name", serviceName),
+		attribute.String("service.instance.id", serviceInstanceID(cfg)),
 		attribute.String("deployment.environment", cfg.Environment),
 		attribute.String("service.version", cfg.Version),
 		attribute.String("scrap.cell_id", cfg.CellID),
@@ -78,4 +84,17 @@ func resourceAttributes(cfg ResourceConfig) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String("scrap.build.time", cfg.BuildTime))
 	}
 	return attrs
+}
+
+func serviceInstanceID(cfg ResourceConfig) string {
+	if cfg.InstanceID != "" {
+		return cfg.InstanceID
+	}
+	if cfg.MemberSlotID != "" {
+		return cfg.MemberSlotID
+	}
+	if cfg.MemberID != "" {
+		return cfg.MemberID
+	}
+	return defaultServiceInstanceID
 }

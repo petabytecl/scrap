@@ -13,6 +13,7 @@ func TestNewResourceIncludesScrapIdentityAndBuildAttributes(t *testing.T) {
 	res, err := telemetry.NewResource(context.Background(), telemetry.ResourceConfig{
 		ServiceName:  "scrapd",
 		Environment:  "stress",
+		InstanceID:   "scrapd-explicit",
 		Version:      "v2.3.4",
 		BuildSHA:     "abc123",
 		BuildTime:    "2026-05-28T12:00:00Z",
@@ -28,6 +29,7 @@ func TestNewResourceIncludesScrapIdentityAndBuildAttributes(t *testing.T) {
 
 	attrs := attrMap(res.Attributes())
 	assertAttr(t, attrs, "service.name", "scrapd")
+	assertAttr(t, attrs, "service.instance.id", "scrapd-explicit")
 	assertAttr(t, attrs, "service.version", "v2.3.4")
 	assertAttr(t, attrs, "deployment.environment", "stress")
 	assertAttr(t, attrs, "scrap.build.sha", "abc123")
@@ -42,6 +44,51 @@ func TestNewResourceIncludesScrapIdentityAndBuildAttributes(t *testing.T) {
 		if _, ok := attrs[attribute.Key(forbidden)]; ok {
 			t.Fatalf("resource contains high-cardinality attribute %q", forbidden)
 		}
+	}
+}
+
+func TestNewResourceDerivesServiceInstanceID(t *testing.T) {
+	tests := map[string]struct {
+		cfg  telemetry.ResourceConfig
+		want string
+	}{
+		"explicit instance ID wins": {
+			cfg: telemetry.ResourceConfig{
+				InstanceID:   "scrapd-explicit",
+				MemberSlotID: "scrapd-0",
+				MemberID:     "member-123",
+			},
+			want: "scrapd-explicit",
+		},
+		"member slot identity": {
+			cfg: telemetry.ResourceConfig{
+				MemberSlotID: "scrapd-0",
+				MemberID:     "member-123",
+			},
+			want: "scrapd-0",
+		},
+		"durable member identity": {
+			cfg: telemetry.ResourceConfig{
+				MemberID: "member-123",
+			},
+			want: "member-123",
+		},
+		"local fallback": {
+			cfg:  telemetry.ResourceConfig{},
+			want: "local",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			res, err := telemetry.NewResource(context.Background(), tt.cfg)
+			if err != nil {
+				t.Fatalf("NewResource: %v", err)
+			}
+
+			attrs := attrMap(res.Attributes())
+			assertAttr(t, attrs, "service.instance.id", tt.want)
+		})
 	}
 }
 

@@ -13,8 +13,11 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net"
 	"os"
+	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +36,7 @@ const (
 	maxWriteAttempts = 10
 	progressInterval = 5 * time.Second
 	pollInterval     = 50 * time.Millisecond
+	dialPollInterval = 100 * time.Millisecond
 	writerFraction   = 2
 	readerFraction   = 4
 	p50              = 50
@@ -43,6 +47,8 @@ const (
 	mib              = kib * kib
 	gib              = kib * mib
 	pctDivisor       = 100
+	defaultOpTimeout = 10 * time.Second
+	defaultNamespace = "scrap"
 )
 
 func main() {
@@ -101,11 +107,12 @@ func (p *clientPool) close() {
 }
 
 type config struct {
-	addr     string
-	scenario string
-	workers  int
-	duration time.Duration
-	docSize  int
+	addr      string
+	scenario  string
+	workers   int
+	duration  time.Duration
+	docSize   int
+	opTimeout time.Duration
 }
 
 func parseFlags() config {
@@ -115,6 +122,7 @@ func parseFlags() config {
 	flag.IntVar(&cfg.workers, "workers", 8, "concurrent worker goroutines")
 	flag.DurationVar(&cfg.duration, "duration", 60*time.Second, "test duration")
 	flag.IntVar(&cfg.docSize, "doc-size", 16384, "document payload size in bytes")
+	flag.DurationVar(&cfg.opTimeout, "op-timeout", defaultOpTimeout, "per-operation timeout for write/read/head RPCs")
 	flag.Parse()
 	return cfg
 }
@@ -148,7 +156,7 @@ func runThroughput(pool *clientPool, cfg config) {
 				txID := fmt.Sprintf("stress-tp-%d-%d-%d", i, time.Now().UnixNano(), seq)
 				docName := fmt.Sprintf("doc-%d.bin", seq)
 				start := time.Now()
-				err := writeDoc(ctx, client, cfg.addr, txID, docName, payload)
+				err := writeDoc(ctx, client, cfg.addr, txID, docName, payload, cfg.opTimeout)
 				elapsed := time.Since(start)
 				stats.record(elapsed, err, len(payload))
 			}
@@ -197,7 +205,7 @@ func runMixed(pool *clientPool, cfg config) {
 		client := pool.get(workerIdx)
 		workerIdx++
 		wg.Go(func() {
-			mixedWriter(ctx, client, cfg.addr, cfg.docSize, i, &writeStats, &written)
+			mixedWriter(ctx, client, cfg.addr, cfg.docSize, cfg.opTimeout, i, &writeStats, &written)
 		})
 	}
 
@@ -205,7 +213,7 @@ func runMixed(pool *clientPool, cfg config) {
 		client := pool.get(workerIdx)
 		workerIdx++
 		wg.Go(func() {
-			mixedReader(ctx, client, cfg.addr, &readStats, &written)
+			mixedReader(ctx, client, cfg.addr, cfg.opTimeout, &readStats, &written)
 		})
 	}
 
@@ -213,7 +221,7 @@ func runMixed(pool *clientPool, cfg config) {
 		client := pool.get(workerIdx)
 		workerIdx++
 		wg.Go(func() {
-			mixedHeader(ctx, client, cfg.addr, &headStats, &written)
+			mixedHeader(ctx, client, cfg.addr, cfg.opTimeout, &headStats, &written)
 		})
 	}
 
@@ -228,14 +236,14 @@ func runMixed(pool *clientPool, cfg config) {
 	emitJSON(results)
 }
 
-func mixedWriter(ctx context.Context, client scrapv1.DocumentServiceClient, addr string, docSize, workerID int, stats *runStats, written *writtenDocs) {
+func mixedWriter(ctx context.Context, client scrapv1.DocumentServiceClient, addr string, docSize int, opTimeout time.Duration, workerID int, stats *runStats, written *writtenDocs) {
 	payload := randomPayload(docSize)
 	checksum := sha256Hex(payload)
 	for seq := 0; ctx.Err() == nil; seq++ {
 		txID := fmt.Sprintf("stress-mx-w-%d-%d-%d", workerID, time.Now().UnixNano(), seq)
 		docName := fmt.Sprintf("doc-%d.bin", seq)
 		start := time.Now()
-		err := writeDoc(ctx, client, addr, txID, docName, payload)
+		err := writeDoc(ctx, client, addr, txID, docName, payload, opTimeout)
 		elapsed := time.Since(start)
 		stats.record(elapsed, err, len(payload))
 		if err == nil {
@@ -244,8 +252,13 @@ func mixedWriter(ctx context.Context, client scrapv1.DocumentServiceClient, addr
 	}
 }
 
-func mixedReader(ctx context.Context, client scrapv1.DocumentServiceClient, addr string, stats *runStats, written *writtenDocs) {
+func mixedReader(ctx context.Context, client scrapv1.DocumentServiceClient, addr string, opTimeout time.Duration, stats *runStats, written *writtenDocs) {
 	activeClient := client
+	var transient *documentClientLease
+	defer func() {
+		transient.close()
+	}()
+
 	for ctx.Err() == nil {
 		doc := written.random()
 		if doc == nil {
@@ -253,19 +266,24 @@ func mixedReader(ctx context.Context, client scrapv1.DocumentServiceClient, addr
 			continue
 		}
 		start := time.Now()
-		err := readAndVerify(ctx, activeClient, doc)
+		err := readAndVerify(ctx, activeClient, doc, opTimeout)
 		elapsed := time.Since(start)
 		stats.record(elapsed, err, 0)
 		if status.Code(err) == codes.Unavailable {
-			if fresh := reconnect(addr); fresh != nil {
-				activeClient = fresh
+			if fresh := replaceUnavailableClient(ctx, &transient, addr, err); fresh != nil {
+				activeClient = fresh.client
 			}
 		}
 	}
 }
 
-func mixedHeader(ctx context.Context, client scrapv1.DocumentServiceClient, addr string, stats *runStats, written *writtenDocs) {
+func mixedHeader(ctx context.Context, client scrapv1.DocumentServiceClient, addr string, opTimeout time.Duration, stats *runStats, written *writtenDocs) {
 	activeClient := client
+	var transient *documentClientLease
+	defer func() {
+		transient.close()
+	}()
+
 	for ctx.Err() == nil {
 		doc := written.random()
 		if doc == nil {
@@ -273,12 +291,12 @@ func mixedHeader(ctx context.Context, client scrapv1.DocumentServiceClient, addr
 			continue
 		}
 		start := time.Now()
-		err := headAndVerify(ctx, activeClient, doc)
+		err := headAndVerify(ctx, activeClient, doc, opTimeout)
 		elapsed := time.Since(start)
 		stats.record(elapsed, err, 0)
 		if status.Code(err) == codes.Unavailable {
-			if fresh := reconnect(addr); fresh != nil {
-				activeClient = fresh
+			if fresh := replaceUnavailableClient(ctx, &transient, addr, err); fresh != nil {
+				activeClient = fresh.client
 			}
 		}
 	}
@@ -303,7 +321,7 @@ func runPressure(pool *clientPool, cfg config) {
 			for seq := 0; ctx.Err() == nil; seq++ {
 				txID := fmt.Sprintf("stress-pr-%d-%d-%d", i, time.Now().UnixNano(), seq)
 				start := time.Now()
-				err := writeDoc(ctx, client, cfg.addr, txID, fmt.Sprintf("doc-%d.bin", seq), payload)
+				err := writeDoc(ctx, client, cfg.addr, txID, fmt.Sprintf("doc-%d.bin", seq), payload, cfg.opTimeout)
 				elapsed := time.Since(start)
 				stats.record(elapsed, err, len(payload))
 
@@ -335,19 +353,26 @@ func runPressure(pool *clientPool, cfg config) {
 }
 
 //nolint:gocognit,cyclop // streaming gRPC client with retry and error classification
-func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, txID, docName string, data []byte) error {
+func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, txID, docName string, data []byte, opTimeout time.Duration) error {
+	opCtx, cancel := operationContext(ctx, opTimeout)
+	defer cancel()
+
 	var lastErr error
 	activeClient := client
+	var transient *documentClientLease
+	defer func() {
+		transient.close()
+	}()
 
 	for attempt := range maxWriteAttempts {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if opCtx.Err() != nil {
+			return opCtx.Err()
 		}
 
-		stream, err := activeClient.WriteDocument(ctx)
+		stream, err := activeClient.WriteDocument(opCtx)
 		if err != nil {
 			lastErr = err
-			backoff(ctx, attempt)
+			backoff(opCtx, attempt)
 			continue
 		}
 
@@ -392,11 +417,10 @@ func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, t
 		}
 
 		if status.Code(err) == codes.Unavailable {
-			// Reconnect to get a fresh TCP connection routed to a different pod.
-			if freshClient := reconnect(addr); freshClient != nil {
-				activeClient = freshClient
+			if fresh := replaceUnavailableClient(opCtx, &transient, addr, err); fresh != nil {
+				activeClient = fresh.client
 			}
-			backoff(ctx, attempt)
+			backoff(opCtx, attempt)
 			continue
 		}
 		return err
@@ -404,16 +428,230 @@ func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, t
 	return lastErr
 }
 
-func reconnect(addr string) scrapv1.DocumentServiceClient {
+type documentClientLease struct {
+	client  scrapv1.DocumentServiceClient
+	closeFn func() error
+}
+
+func (l *documentClientLease) close() {
+	if l == nil || l.closeFn == nil {
+		return
+	}
+	_ = l.closeFn()
+}
+
+var dialDocumentClient = func(addr string) (*documentClientLease, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	return &documentClientLease{
+		client:  scrapv1.NewDocumentServiceClient(conn),
+		closeFn: conn.Close,
+	}, nil
+}
+
+type resolvedLeaderTarget struct {
+	addr    string
+	closeFn func() error
+}
+
+var resolveLeaderTarget = defaultResolveLeaderTarget
+
+func reconnect(addr string) *documentClientLease {
+	client, err := dialDocumentClient(addr)
 	if err != nil {
 		return nil
 	}
-	return scrapv1.NewDocumentServiceClient(conn)
+	return client
 }
 
-func readAndVerify(ctx context.Context, client scrapv1.DocumentServiceClient, doc *docRef) error {
-	stream, err := client.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{
+func replaceUnavailableClient(ctx context.Context, current **documentClientLease, fallbackAddr string, err error) *documentClientLease {
+	var fresh *documentClientLease
+	if leaderAddr, ok := leaderAddrFromError(err); ok {
+		fresh = reconnectLeader(ctx, leaderAddr)
+	}
+	if fresh == nil {
+		fresh = reconnect(fallbackAddr)
+	}
+	if fresh == nil {
+		return nil
+	}
+	if *current != nil {
+		(*current).close()
+	}
+	*current = fresh
+	return fresh
+}
+
+func reconnectLeader(ctx context.Context, leaderAddr string) *documentClientLease {
+	target, err := resolveLeaderTarget(ctx, leaderAddr)
+	if err != nil {
+		return nil
+	}
+	client, err := dialDocumentClient(target.addr)
+	if err != nil {
+		_ = target.closeFn()
+		return nil
+	}
+	return &documentClientLease{
+		client: client.client,
+		closeFn: func() error {
+			return errors.Join(closeLease(client), target.closeFn())
+		},
+	}
+}
+
+func leaderAddrFromError(err error) (string, bool) {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.Unavailable {
+		return "", false
+	}
+	for _, detail := range st.Details() {
+		hint, ok := detail.(*scrapv1.LeaderHint)
+		if ok && hint.GetLeaderAddr() != "" {
+			return hint.GetLeaderAddr(), true
+		}
+	}
+	return "", false
+}
+
+func defaultResolveLeaderTarget(ctx context.Context, leaderAddr string) (resolvedLeaderTarget, error) {
+	if leaderAddr == "" {
+		return resolvedLeaderTarget{}, errors.New("empty leader address")
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return resolvedLeaderTarget{addr: leaderAddr, closeFn: noopClose}, nil
+	}
+	podName, remotePort, ok := parsePodLeaderAddr(leaderAddr)
+	if !ok {
+		return resolvedLeaderTarget{addr: leaderAddr, closeFn: noopClose}, nil
+	}
+	return startLeaderPortForward(ctx, podName, remotePort)
+}
+
+func parsePodLeaderAddr(leaderAddr string) (string, string, bool) {
+	host, port, err := net.SplitHostPort(leaderAddr)
+	if err != nil || host == "" || port == "" {
+		return "", "", false
+	}
+	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+		return "", "", false
+	}
+	podName := strings.Split(host, ".")[0]
+	if podName == "" {
+		return "", "", false
+	}
+	return podName, port, true
+}
+
+func startLeaderPortForward(ctx context.Context, podName, remotePort string) (resolvedLeaderTarget, error) {
+	localPort, err := reserveLocalPort()
+	if err != nil {
+		return resolvedLeaderTarget{}, err
+	}
+
+	kubectl := envString("KUBECTL", "kubectl")
+	namespace := envString("SCRAP_NAMESPACE", defaultNamespace)
+	cmd := exec.CommandContext(ctx, kubectl, "-n", namespace, "port-forward", "pod/"+podName, localPort+":"+remotePort) // #nosec G204 -- stress tool allows KUBECTL override; arguments are fixed.
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return resolvedLeaderTarget{}, err
+	}
+
+	done := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(done)
+	}()
+	var closeOnce sync.Once
+	var closeErr error
+	closeFn := func() error {
+		closeOnce.Do(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-done
+			closeErr = waitErr
+		})
+		return closeErr
+	}
+
+	setupCtx, cancel := context.WithTimeout(ctx, defaultOpTimeout)
+	defer cancel()
+	if err := waitForLocalPort(setupCtx, "127.0.0.1:"+localPort, done); err != nil {
+		_ = closeFn()
+		return resolvedLeaderTarget{}, err
+	}
+	return resolvedLeaderTarget{addr: "127.0.0.1:" + localPort, closeFn: closeFn}, nil
+}
+
+func reserveLocalPort() (string, error) {
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("reserve local port: %w", err)
+	}
+	defer func() { _ = ln.Close() }()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return "", fmt.Errorf("parse reserved local port: %w", err)
+	}
+	return port, nil
+}
+
+func waitForLocalPort(ctx context.Context, addr string, done <-chan struct{}) error {
+	for {
+		dialer := net.Dialer{Timeout: dialPollInterval}
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		timer := time.NewTimer(dialPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-done:
+			timer.Stop()
+			return fmt.Errorf("port-forward exited before %s became reachable", addr)
+		case <-timer.C:
+		}
+	}
+}
+
+func noopClose() error {
+	return nil
+}
+
+func envString(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func closeLease(l *documentClientLease) error {
+	if l == nil || l.closeFn == nil {
+		return nil
+	}
+	return l.closeFn()
+}
+
+func operationContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func readAndVerify(ctx context.Context, client scrapv1.DocumentServiceClient, doc *docRef, opTimeout time.Duration) error {
+	opCtx, cancel := operationContext(ctx, opTimeout)
+	defer cancel()
+
+	stream, err := client.ReadDocument(opCtx, &scrapv1.ReadDocumentRequest{
 		TransactionId: doc.txID,
 		DocumentName:  doc.docName,
 	})
@@ -451,8 +689,11 @@ func readAndVerify(ctx context.Context, client scrapv1.DocumentServiceClient, do
 	return nil
 }
 
-func headAndVerify(ctx context.Context, client scrapv1.DocumentServiceClient, doc *docRef) error {
-	resp, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
+func headAndVerify(ctx context.Context, client scrapv1.DocumentServiceClient, doc *docRef, opTimeout time.Duration) error {
+	opCtx, cancel := operationContext(ctx, opTimeout)
+	defer cancel()
+
+	resp, err := client.HeadDocument(opCtx, &scrapv1.HeadDocumentRequest{
 		TransactionId: doc.txID,
 		DocumentName:  doc.docName,
 	})

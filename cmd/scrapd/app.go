@@ -146,7 +146,11 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger) (*App, error) 
 	cleanup = append(cleanup, func() { _ = clientLis.Close() })
 
 	clientGS := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	server.Register(clientGS, s, server.WithTelemetry(telemetryRuntime.server), server.WithIdentifierMode(identifierMode))
+	server.Register(clientGS, s,
+		server.WithTelemetry(telemetryRuntime.server),
+		server.WithIdentifierMode(identifierMode),
+		server.WithLogger(logger.With(telemetryRuntime.logIdentityAttrs()...)),
+	)
 	server.RegisterHealth(clientGS, s)
 
 	peerLis, err := lc.Listen(ctx, "tcp", cfg.PeerAddr)

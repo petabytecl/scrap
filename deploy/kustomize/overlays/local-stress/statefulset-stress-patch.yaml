@@ -39,6 +39,16 @@ spec:
               value: "true"
             - name: SCRAP_LOG_LEVEL
               value: debug
+            - name: SCRAP_SCRUB_ENABLED
+              value: "true"
+            - name: SCRAP_LIGHT_SCRUB_INTERVAL
+              value: "2m"
+            - name: SCRAP_DEEP_SCRUB_INTERVAL
+              value: "2m"
+            - name: SCRAP_DEEP_SCRUB_IO_RATE
+              value: "25000000"
+            - name: SCRAP_SCRUB_JITTER
+              value: "0"
           args:
             - "--data-dir=/data"
             - "--listen-addr=:9090"

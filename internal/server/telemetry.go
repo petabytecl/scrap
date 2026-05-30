@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -46,6 +47,17 @@ func WithTelemetry(tel Telemetry) Option {
 func WithIdentifierMode(mode telemetry.IdentifierMode) Option {
 	return func(s *documentServer) {
 		s.identifierMode = mode
+	}
+}
+
+// WithLogger enables structured operational logs for server-side control-flow
+// events. The caller is expected to attach bounded Cell/Member/Shard identity to
+// the logger before passing it here.
+func WithLogger(logger *slog.Logger) Option {
+	return func(s *documentServer) {
+		if logger != nil {
+			s.logger = logger.With("component", "server")
+		}
 	}
 }
 
