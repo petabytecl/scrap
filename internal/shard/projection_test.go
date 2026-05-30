@@ -147,6 +147,27 @@ func TestApplyCommitDocumentRepairsProjectionAfterIndexAppendCrash(t *testing.T)
 	requireProjectionDocs(t, s, "tx-crash", "a.xml", "b.xml")
 }
 
+func TestApplyCommitDocumentRepairsTornHistoricalIndexTail(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeProjectionIndexEntries(t, dir, 1,
+		block.IndexEntry{TransactionID: "tx-torn", DocName: "a.xml"},
+	)
+	appendRawProjectionIndexTail(t, block.IdxFilePath(dir, 1), []byte{0x03, 0x00})
+	if err := idx.Put("tx-torn", 1, 1, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: dir,
+		idx:       idx,
+	}
+
+	applyProjectionCommit(t, s, newProjectionCommit("tx-torn", "b.xml", 1))
+	requireProjectionDocCount(t, idx, "tx-torn", 2)
+	requireProjectionDocs(t, s, "tx-torn", "a.xml", "b.xml")
+}
+
 func openProjectionTestIndex(t *testing.T) *index.Index {
 	t.Helper()
 	idx, err := index.Open(t.TempDir())
@@ -188,6 +209,21 @@ func writeProjectionIndexEntries(t *testing.T, dir string, blockID uint64, entri
 	}
 	if err := iw.Close(); err != nil {
 		t.Fatalf("Close index: %v", err)
+	}
+}
+
+func appendRawProjectionIndexTail(t *testing.T, path string, tail []byte) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // test file path from temp dir
+	if err != nil {
+		t.Fatalf("OpenFile append: %v", err)
+	}
+	if _, err := f.Write(tail); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write torn tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close torn tail: %v", err)
 	}
 }
 

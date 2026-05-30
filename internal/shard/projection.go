@@ -80,7 +80,7 @@ func (s *Shard) inspectCommitProjectionState(doc *scrapv1.CommitDocument) (commi
 	if err != nil || !exists {
 		return commitProjectionState{}, err
 	}
-	return s.inspectCommitProjectionEntry(doc, entry), nil
+	return s.inspectCommitProjectionEntry(doc, entry)
 }
 
 func (s *Shard) commitProjectionEntry(txID string) (index.Entry, bool, error) {
@@ -100,36 +100,49 @@ func (s *Shard) commitProjectionEntry(txID string) (index.Entry, bool, error) {
 	return entry, true, nil
 }
 
-func (s *Shard) inspectCommitProjectionEntry(doc *scrapv1.CommitDocument, entry index.Entry) commitProjectionState {
+func (s *Shard) inspectCommitProjectionEntry(doc *scrapv1.CommitDocument, entry index.Entry) (commitProjectionState, error) {
 	resolved := 0
 	targetBlockProjected := false
 	for _, blockID := range entry.BlockIDs {
 		if blockID == doc.BlockId {
 			targetBlockProjected = true
 		}
-		for _, blockDoc := range s.blockIndexEntriesLenient(blockID, doc.TransactionId) {
+		entries, err := s.blockIndexEntriesForApply(blockID, doc.TransactionId)
+		if err != nil {
+			return commitProjectionState{}, err
+		}
+		for _, blockDoc := range entries {
 			resolved++
 			if blockID == doc.BlockId && blockDoc.DocName == doc.DocumentName {
 				return commitProjectionState{
 					targetExists:  true,
 					targetCounted: resolved <= int(entry.DocCount),
-				}
+				}, nil
 			}
 		}
 	}
 
 	return commitProjectionState{
 		targetCounted: targetBlockProjected && int(entry.DocCount) > resolved,
-	}
+	}, nil
 }
 
-func (s *Shard) blockIndexEntriesLenient(blockID uint64, txID string) []block.IndexEntry {
+func (s *Shard) blockIndexEntriesForApply(blockID uint64, txID string) ([]block.IndexEntry, error) {
 	ir, err := block.OpenIndexReader(s.idxPath(blockID))
 	if err != nil {
-		return nil
+		if !errors.Is(err, block.ErrIdxCorrupt) {
+			return nil, nil
+		}
+		if err := block.RepairIndexTail(s.idxPath(blockID)); err != nil {
+			return nil, fmt.Errorf("shard: repair historical read idx: %w", err)
+		}
+		ir, err = block.OpenIndexReader(s.idxPath(blockID))
+		if err != nil {
+			return nil, fmt.Errorf("shard: open repaired historical read idx: %w", err)
+		}
 	}
 	defer func() { _ = ir.Close() }()
-	return ir.FindByTransaction(txID)
+	return ir.FindByTransaction(txID), nil
 }
 
 func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry) error {
@@ -141,7 +154,7 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 		return nil
 	}
 
-	contains, err := s.blockIndexContainsDocument(doc.BlockId, doc.TransactionId, doc.DocumentName)
+	contains, err := s.blockIndexContainsDocumentRepairingTail(doc.BlockId, doc.TransactionId, doc.DocumentName)
 	if err != nil {
 		return err
 	}
@@ -164,6 +177,17 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 		return err
 	}
 	return nil
+}
+
+func (s *Shard) blockIndexContainsDocumentRepairingTail(blockID uint64, txID, docName string) (bool, error) {
+	contains, err := s.blockIndexContainsDocument(blockID, txID, docName)
+	if err == nil || !errors.Is(err, block.ErrIdxCorrupt) {
+		return contains, err
+	}
+	if err := block.RepairIndexTail(s.idxPath(blockID)); err != nil {
+		return false, fmt.Errorf("shard: repair historical write idx: %w", err)
+	}
+	return s.blockIndexContainsDocument(blockID, txID, docName)
 }
 
 func (s *Shard) requeueBlockUploadAfterIndexAppend(blockID uint64) error {

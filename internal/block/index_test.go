@@ -151,6 +151,86 @@ func TestOpenIndexWriterAppendsExistingIndex(t *testing.T) {
 	}
 }
 
+func TestRepairIndexTailTruncatesPartialAppend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+
+	writeBlockIndexEntries(t, path, block.IndexEntry{TransactionID: "tx-001", DocName: "a.xml"})
+	appendRawIndexTail(t, path, []byte{0x03, 0x00})
+	requireUnreadableIndex(t, path)
+
+	if err := block.RepairIndexTail(path); err != nil {
+		t.Fatalf("RepairIndexTail: %v", err)
+	}
+	appendBlockIndexEntry(t, path, block.IndexEntry{TransactionID: "tx-001", DocName: "b.xml"})
+	requireBlockIndexDocCount(t, path, "tx-001", 2)
+}
+
+func appendBlockIndexEntry(t *testing.T, path string, entry block.IndexEntry) {
+	t.Helper()
+	iw, err := block.OpenIndexWriter(path)
+	if err != nil {
+		t.Fatalf("OpenIndexWriter: %v", err)
+	}
+	if err := iw.Append(entry); err != nil {
+		t.Fatalf("Append index entry: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index writer: %v", err)
+	}
+}
+
+func writeBlockIndexEntries(t *testing.T, path string, entries ...block.IndexEntry) {
+	t.Helper()
+	iw, err := block.NewIndexWriter(path)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	for _, entry := range entries {
+		if err := iw.Append(entry); err != nil {
+			t.Fatalf("Append index entry: %v", err)
+		}
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index writer: %v", err)
+	}
+}
+
+func requireBlockIndexDocCount(t *testing.T, path, txID string, want int) {
+	t.Helper()
+	ir, err := block.OpenIndexReader(path)
+	if err != nil {
+		t.Fatalf("OpenIndexReader: %v", err)
+	}
+	defer func() { _ = ir.Close() }()
+	all := ir.FindByTransaction(txID)
+	if len(all) != want {
+		t.Fatalf("FindByTransaction: got %d entries, want %d", len(all), want)
+	}
+}
+
+func requireUnreadableIndex(t *testing.T, path string) {
+	t.Helper()
+	if _, err := block.OpenIndexReader(path); err == nil {
+		t.Fatal("expected torn tail to make index unreadable")
+	}
+}
+
+func appendRawIndexTail(t *testing.T, path string, tail []byte) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // test file path from temp dir
+	if err != nil {
+		t.Fatalf("OpenFile append: %v", err)
+	}
+	if _, err := f.Write(tail); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write torn tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close torn tail: %v", err)
+	}
+}
+
 func TestOpenIndexWriterMissingFile(t *testing.T) {
 	_, err := block.OpenIndexWriter(filepath.Join(t.TempDir(), "missing.idx"))
 	if err == nil {
