@@ -35,7 +35,11 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.docExistsInPebble(doc.TransactionId, doc.DocumentName) {
+	exists, err := s.documentVisibleInProjectionLenient(doc.TransactionId, doc.DocumentName)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, doc.TransactionId, doc.DocumentName)
 	}
 
@@ -96,24 +100,20 @@ func (s *Shard) idxWriterForBlock(blockID uint64) *block.IndexWriter {
 	return nil
 }
 
-func (s *Shard) docExistsInPebble(txID, docName string) bool {
-	idxEntry, err := s.idx.Get(txID)
+func (s *Shard) documentVisibleInProjection(txID, docName string) (bool, error) {
+	exists, err := s.projectionResolver().ContainsDocument(txID, docName)
 	if err != nil {
-		return false
+		return false, mapProjectionResolutionError(txID, docName, err)
 	}
-	for _, bid := range idxEntry.BlockIDs {
-		idxPath := s.idxPath(bid)
-		ir, err := block.OpenIndexReader(idxPath)
-		if err != nil {
-			continue
-		}
-		_, err = ir.Find(txID, docName)
-		_ = ir.Close() // best-effort; data already read
-		if err == nil {
-			return true
-		}
+	return exists, nil
+}
+
+func (s *Shard) documentVisibleInProjectionLenient(txID, docName string) (bool, error) {
+	exists, err := s.projectionResolver().ContainsDocumentLenient(txID, docName)
+	if err != nil {
+		return false, mapProjectionResolutionError(txID, docName, err)
 	}
-	return false
+	return exists, nil
 }
 
 type docWithBlock struct {
@@ -122,25 +122,27 @@ type docWithBlock struct {
 }
 
 func (s *Shard) findDocEntry(txID, docName string) (docWithBlock, error) {
-	idxEntry, err := s.idx.Get(txID)
+	doc, err := s.projectionResolver().ResolveDocument(txID, docName)
 	if err != nil {
-		return docWithBlock{}, fmt.Errorf("%w: %s", storeapi.ErrTxNotFound, txID)
+		return docWithBlock{}, mapProjectionResolutionError(txID, docName, err)
 	}
 
-	for _, bid := range idxEntry.BlockIDs {
-		idxPath := s.idxPath(bid)
-		ir, err := block.OpenIndexReader(idxPath)
-		if err != nil {
-			return docWithBlock{}, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
-		}
-		entry, err := ir.Find(txID, docName)
-		_ = ir.Close() // best-effort; data already read
-		if err == nil {
-			return docWithBlock{IndexEntry: entry, blockID: bid}, nil
-		}
-	}
+	return docWithBlock{IndexEntry: doc.IndexEntry, blockID: doc.BlockID}, nil
+}
 
-	return docWithBlock{}, fmt.Errorf("%w: %s/%s", storeapi.ErrNotFound, txID, docName)
+func (s *Shard) projectionResolver() index.Resolver {
+	return index.NewResolver(s.idx, s.idxPath)
+}
+
+func mapProjectionResolutionError(txID, docName string, err error) error {
+	switch {
+	case errors.Is(err, index.ErrNotFound):
+		return fmt.Errorf("%w: %s: %w", storeapi.ErrTxNotFound, txID, err)
+	case errors.Is(err, index.ErrDocumentNotFound):
+		return fmt.Errorf("%w: %s/%s: %w", storeapi.ErrNotFound, txID, docName, err)
+	default:
+		return fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+	}
 }
 
 func (s *Shard) CorruptProjectionForTest(txID string, blockID uint64, docCount uint16, completed bool) {

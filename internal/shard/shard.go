@@ -225,7 +225,12 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	s.mu.Lock()
 
 	key := txID + "\x00" + docName
-	if s.docExistsInPebble(txID, docName) {
+	exists, err := s.documentVisibleInProjection(txID, docName)
+	if err != nil {
+		s.mu.Unlock()
+		return storeapi.WriteResult{}, err
+	}
+	if exists {
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, txID, docName)
 	}
@@ -408,30 +413,20 @@ func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.Docu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idxEntry, err := s.idx.Get(txID)
+	resolved, err := s.projectionResolver().ListDocuments(txID)
 	if err != nil {
-		return nil, nil
+		return nil, mapProjectionResolutionError(txID, "", err)
 	}
 
-	var docs []storeapi.DocumentMeta
-	for _, bid := range idxEntry.BlockIDs {
-		idxPath := s.idxPath(bid)
-		ir, err := block.OpenIndexReader(idxPath)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
-		}
-		entries := ir.FindByTransaction(txID)
-		_ = ir.Close() // best-effort; data already read
-
-		for _, e := range entries {
-			docs = append(docs, storeapi.DocumentMeta{
-				Name:        e.DocName,
-				ContentType: e.ContentType,
-				Size:        e.TotalBytes,
-				SHA256:      e.SHA256,
-				CreatedAt:   e.CreatedAt,
-			})
-		}
+	docs := make([]storeapi.DocumentMeta, 0, len(resolved))
+	for _, doc := range resolved {
+		docs = append(docs, storeapi.DocumentMeta{
+			Name:        doc.DocName,
+			ContentType: doc.ContentType,
+			Size:        doc.TotalBytes,
+			SHA256:      doc.SHA256,
+			CreatedAt:   doc.CreatedAt,
+		})
 	}
 	return docs, nil
 }

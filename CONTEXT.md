@@ -75,6 +75,13 @@ fully rebuildable projection from Raft log replay + **Block** bytes, not the sou
 of truth for visibility or durability.
 _Avoid_: Index, cache, store
 
+**Projection Resolution**:
+The read-side process that turns a visible **Pebble Projection** Transaction entry
+into **Document** metadata by walking its **Block** IDs and reading each Block's
+`.idx` file. In Phase 1, it is the single place that owns fail-closed behavior for
+visible metadata corruption and write-order listing for `FindDocuments`.
+_Avoid_: Index lookup, metadata lookup, document resolver
+
 **Openlog**:
 A per-**Shard** crash-recovery mechanism. Records in-flight write prepare records
 before bytes are committed to Raft. On recovery, entries are compared against committed

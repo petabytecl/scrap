@@ -61,29 +61,40 @@ func (s *Shard) recoverOpenlog() error {
 	sort.Strings(prepFiles)
 
 	for _, name := range prepFiles {
-		path := filepath.Join(s.openlogDir, name)
-		data, err := os.ReadFile(path) //nolint:gosec // path constructed from known openlogDir + directory listing
-		if err != nil {
-			return fmt.Errorf("shard: read prep %s: %w", name, err)
+		if err := s.recoverPrepFile(name); err != nil {
+			return err
 		}
-
-		entry := &scrapv1.OpenlogEntry{}
-		if err := proto.Unmarshal(data, entry); err != nil {
-			return fmt.Errorf("shard: unmarshal prep %s: %w", name, err)
-		}
-
-		if s.docExistsInPebble(entry.TransactionId, entry.DocumentName) {
-			_ = os.Remove(path) // best-effort cleanup of already-committed prep
-			continue
-		}
-
-		blkPath := s.blockPath(entry.BlockId)
-		if err := truncateFile(blkPath, safeUint64ToInt64(entry.StartOffset)); err != nil {
-			return fmt.Errorf("shard: truncate block %d: %w", entry.BlockId, err)
-		}
-		_ = os.Remove(path) // best-effort cleanup after truncation
 	}
 
+	return nil
+}
+
+func (s *Shard) recoverPrepFile(name string) error {
+	path := filepath.Join(s.openlogDir, name)
+	data, err := os.ReadFile(path) //nolint:gosec // path constructed from known openlogDir + directory listing
+	if err != nil {
+		return fmt.Errorf("shard: read prep %s: %w", name, err)
+	}
+
+	entry := &scrapv1.OpenlogEntry{}
+	if err := proto.Unmarshal(data, entry); err != nil {
+		return fmt.Errorf("shard: unmarshal prep %s: %w", name, err)
+	}
+
+	exists, err := s.documentVisibleInProjectionLenient(entry.TransactionId, entry.DocumentName)
+	if err != nil {
+		return fmt.Errorf("shard: resolve prep %s: %w", name, err)
+	}
+	if exists {
+		_ = os.Remove(path) // best-effort cleanup of already-committed prep
+		return nil
+	}
+
+	blkPath := s.blockPath(entry.BlockId)
+	if err := truncateFile(blkPath, safeUint64ToInt64(entry.StartOffset)); err != nil {
+		return fmt.Errorf("shard: truncate block %d: %w", entry.BlockId, err)
+	}
+	_ = os.Remove(path) // best-effort cleanup after truncation
 	return nil
 }
 

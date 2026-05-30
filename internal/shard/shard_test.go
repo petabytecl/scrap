@@ -3,6 +3,7 @@ package shard_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -140,6 +145,31 @@ func TestDuplicateWriteReturnsAlreadyExists(t *testing.T) {
 	}
 }
 
+func TestProjectionResolutionCorruptionFailsClosed(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	_, err := s.WriteDocument(ctx, "tx-corrupt", "doc.xml", "text/xml", "", bytes.NewReader([]byte("first")))
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	idxPath := block.IdxFilePath(filepath.Join(s.DataDirForTest(), "blocks"), 1)
+	if err := os.WriteFile(idxPath, []byte("bad index"), 0o600); err != nil {
+		t.Fatalf("corrupt idx: %v", err)
+	}
+
+	_, err = s.FindDocuments(ctx, "tx-corrupt")
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("FindDocuments error = %v, want ErrDataLoss", err)
+	}
+
+	_, err = s.WriteDocument(ctx, "tx-corrupt", "other.xml", "text/xml", "", bytes.NewReader([]byte("second")))
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("WriteDocument error = %v, want ErrDataLoss", err)
+	}
+}
+
 func TestHeadNotFound(t *testing.T) {
 	s := openTestShard(t)
 	ctx := context.Background()
@@ -206,6 +236,59 @@ func TestOpenlogRecoveryDeletesCompletedPrep(t *testing.T) {
 	if meta.Name != "doc.xml" {
 		t.Fatalf("Name: got %q", meta.Name)
 	}
+}
+
+func TestOpenlogRecoveryToleratesProjectionAheadOfBlockIndex(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := shard.Open(shard.Config{
+		DataDir:      dir,
+		ShardID:      0,
+		RaftID:       1,
+		Peers:        map[uint64]string{1: "localhost:9091"},
+		TickInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	waitForLeader(t, s)
+
+	_, err = s.WriteDocument(context.Background(), "tx-torn", "doc.xml", "text/xml", "", bytes.NewReader([]byte("data")))
+	if err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	blocksDir := filepath.Join(dir, "blocks")
+	iw, err := block.NewIndexWriter(block.IdxFilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close empty index: %v", err)
+	}
+	writeOpenlogPrepForTest(t, dir, "leftover", &scrapv1.OpenlogEntry{
+		TransactionId: "tx-torn",
+		DocumentName:  "doc.xml",
+		BlockId:       1,
+		StartOffset:   block.HeaderSize,
+		ContentType:   "text/xml",
+	})
+
+	reopened, err := shard.Open(shard.Config{
+		DataDir:      dir,
+		ShardID:      0,
+		RaftID:       1,
+		Peers:        map[uint64]string{1: "localhost:9091"},
+		TickInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	waitForLeader(t, reopened)
 }
 
 func TestConsistencyCheckApplyAndCache(t *testing.T) {
@@ -527,4 +610,30 @@ func TestDiskStatsRaceWithRebuild(t *testing.T) {
 
 	close(stop)
 	<-done
+}
+
+func waitForLeader(t *testing.T, s *shard.Shard) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.IsLeader() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("shard did not become leader")
+}
+
+func writeOpenlogPrepForTest(t *testing.T, dataDir, writeID string, entry *scrapv1.OpenlogEntry) {
+	t.Helper()
+
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		t.Fatalf("Marshal prep: %v", err)
+	}
+	path := filepath.Join(dataDir, "openlog", writeID+".prep")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile prep: %v", err)
+	}
 }
