@@ -127,7 +127,7 @@ func waitBeforeRetry(ctx context.Context, attempt int) {
 	}
 }
 
-func TestE2EWriteAndRead(t *testing.T) {
+func TestE2EWriteReadHead(t *testing.T) {
 	if os.Getenv("SCRAP_E2E") == "" {
 		t.Skip("set SCRAP_E2E=1 to run E2E tests")
 	}
@@ -139,6 +139,14 @@ func TestE2EWriteAndRead(t *testing.T) {
 	resp := writeDocE2E(t, client, txID, "invoice.xml", "application/xml", content)
 	if len(resp.GetSha256Checksum()) != 64 {
 		t.Fatalf("checksum should be 64 hex chars, got %d", len(resp.GetSha256Checksum()))
+	}
+
+	headResp := headDocE2E(t, client, txID, "invoice.xml")
+	if headResp.GetSize() != int64(len(content)) {
+		t.Fatalf("HeadDocument size: got %d, want %d", headResp.GetSize(), len(content))
+	}
+	if headResp.GetContentType() != "application/xml" {
+		t.Fatalf("HeadDocument content type: got %q", headResp.GetContentType())
 	}
 
 	readBack := readDocE2E(t, client, txID, "invoice.xml")
@@ -158,11 +166,15 @@ func TestE2ELeaderFailover(t *testing.T) {
 
 	writeDocE2E(t, client, txID, "doc.xml", "text/xml", content)
 
-	t.Log("Document written. To test failover: delete the leader pod, then verify read.")
-	t.Log("kubectl -n scrap delete pod <leader-pod>")
+	leader := findLeaderPod(t, txID, "doc.xml")
+	deletePodAndWaitReady(t, leader)
 
 	headResp := headDocE2E(t, client, txID, "doc.xml")
 	if headResp.GetSize() != int64(len(content)) {
 		t.Fatalf("Size: got %d", headResp.GetSize())
+	}
+	readBack := readDocE2E(t, client, txID, "doc.xml")
+	if !bytes.Equal(readBack, content) {
+		t.Fatalf("read after leader failover: got %d bytes, want %d", len(readBack), len(content))
 	}
 }

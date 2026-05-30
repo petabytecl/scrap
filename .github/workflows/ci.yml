@@ -40,6 +40,9 @@ jobs:
       - name: Check manifests
         run: make manifests-check
 
+      - name: Check E2E gate wiring
+        run: make e2e-gates-check
+
       - name: Check formatting
         run: make GOLANGCI_LINT=golangci-lint fmt-check
 
@@ -164,7 +167,18 @@ jobs:
             tools.go.sum
 
       - name: Run E2E tests
-        run: make e2e
+        run: make tier2-e2e-up
+
+  e2e-status:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Tier 2 E2E requested
+        if: contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch'
+        run: echo "Tier 2 E2E requested; the e2e job runs the prod-like Cilium gate."
+
+      - name: Tier 2 E2E skipped
+        if: ${{ !(contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch') }}
+        run: echo "Tier 2 E2E skipped; add the e2e label or run workflow_dispatch to execute it."
 
   check:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -174,6 +188,7 @@ jobs:
       - race
       - build
       - vulnerability
+      - e2e-status
     if: ${{ always() }}
     steps:
       - name: Verify split CI jobs
@@ -183,9 +198,11 @@ jobs:
           RACE_RESULT: ${{ needs.race.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+          E2E_STATUS_RESULT: ${{ needs.e2e-status.result }}
         run: |
           test "$STATIC_RESULT" = success
           test "$TEST_RESULT" = success
           test "$RACE_RESULT" = success
           test "$BUILD_RESULT" = success
           test "$VULNERABILITY_RESULT" = success
+          test "$E2E_STATUS_RESULT" = success

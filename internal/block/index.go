@@ -69,6 +69,22 @@ func NewIndexWriter(path string) (*IndexWriter, error) {
 	return &IndexWriter{f: f}, nil
 }
 
+func OpenIndexWriter(path string) (*IndexWriter, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	if err != nil {
+		return nil, fmt.Errorf("block: open index writer %s: %w", path, err)
+	}
+	if err := validateIndexHeader(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("block: seek index end %s: %w", path, err)
+	}
+	return &IndexWriter{f: f}, nil
+}
+
 // Append writes a CRC-protected entry: entry_len(4) + payload + entry_crc32c(4)
 func (w *IndexWriter) Append(e IndexEntry) error {
 	payload := encodeIndexEntry(e)
@@ -85,8 +101,13 @@ func (w *IndexWriter) Append(e IndexEntry) error {
 
 	var crcBuf [4]byte
 	binary.LittleEndian.PutUint32(crcBuf[:], crc32.Checksum(payload, crcTable))
-	_, err := w.f.Write(crcBuf[:])
-	return err
+	if _, err := w.f.Write(crcBuf[:]); err != nil {
+		return err
+	}
+	if err := w.f.Sync(); err != nil {
+		return fmt.Errorf("block: fsync index entry: %w", err)
+	}
+	return nil
 }
 
 func (w *IndexWriter) Close() error {

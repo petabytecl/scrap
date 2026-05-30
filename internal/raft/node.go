@@ -213,6 +213,9 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 		}
 		n.snapshotIndex = snapshot.Metadata.Index
 		n.appliedIndex = snapshot.Metadata.Index
+		if hardState.Commit < snapshot.Metadata.Index {
+			hardState.Commit = snapshot.Metadata.Index
+		}
 
 		if n.cfg.Restore != nil {
 			if err := n.cfg.Restore(snapshot.Data); err != nil {
@@ -236,15 +239,8 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 		return fmt.Errorf("raft: append entries: %w", err)
 	}
 
-	cs := deriveConfState(entries, snapshot)
-	if cs != nil {
-		if err := n.storage.ApplySnapshot(raftpb.Snapshot{
-			Metadata: raftpb.SnapshotMetadata{
-				Index:     hardState.Commit,
-				Term:      hardState.Term,
-				ConfState: *cs,
-			},
-		}); err != nil {
+	if snapshot == nil {
+		if err := applyDerivedConfState(n.storage, entries, hardState); err != nil {
 			return fmt.Errorf("raft: apply derived conf state: %w", err)
 		}
 	}
@@ -262,6 +258,23 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 
 	n.node = raft.RestartNode(c)
 	return nil
+}
+
+func applyDerivedConfState(storage *raft.MemoryStorage, entries []raftpb.Entry, hardState raftpb.HardState) error {
+	cs := deriveConfState(entries, nil)
+	if cs == nil {
+		return nil
+	}
+	if hardState.Commit == 0 {
+		return nil
+	}
+	return storage.ApplySnapshot(raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     hardState.Commit,
+			Term:      hardState.Term,
+			ConfState: *cs,
+		},
+	})
 }
 
 //nolint:gocognit,cyclop // main event loop processing ticks, ready states, and shutdown

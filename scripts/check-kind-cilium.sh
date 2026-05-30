@@ -70,6 +70,9 @@ require_file "$PRODLIKE_OVERLAY/ciliumnetworkpolicy-admin-host.yaml" "prod-like 
 require 'SCRAP_CELL_ID' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like Cell ID"
 require 'SCRAP_ENVIRONMENT' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like environment"
 require 'SCRAP_PPROF_ENABLED' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like pprof gate"
+require 'SCRAP_SCRUB_ENABLED' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like scrub gate"
+require 'SCRAP_LIGHT_SCRUB_INTERVAL' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like fast light scrub"
+require 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like test hooks"
 
 require '^kubeProxyReplacement:[[:space:]]*true' "$CILIUM_VALUES" "Cilium kube-proxy replacement"
 require 'mode:[[:space:]]*kubernetes' "$CILIUM_VALUES" "Kubernetes IPAM mode"

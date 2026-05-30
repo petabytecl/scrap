@@ -63,6 +63,7 @@ CHECK_TARGETS := \
 	tests \
 	build
 STATIC_TARGETS := \
+	e2e-gates-check \
 	kind-cilium-check \
 	manifests-check \
 	fmt-check \
@@ -144,14 +145,16 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
 ##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
+##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
 
 SCRAP_E2E_ADDR ?= 127.0.0.1:18090
 SCRAP_E2E_CELL_ID ?= kind-dev
 SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
 SCRAP_E2E_S3_BUCKET ?= scrap-e2e
-E2E_TEST_RUN ?= TestE2E(WriteAndRead|LeaderFailover|BackendUpload)
+E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
+TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub)
 
 ##@ Stress Variables
 
@@ -286,6 +289,10 @@ manifests-check: ## Validate rendered manifests and deployment hardening invaria
 		LOCAL_KIND_OVERLAY='$(LOCAL_KIND_OVERLAY)' \
 		sh ./scripts/check-kustomize-manifests.sh
 
+.PHONY: e2e-gates-check
+e2e-gates-check: ## Validate E2E target composition and Tier 2 gate wiring.
+	@sh ./scripts/check-e2e-gates.sh
+
 .PHONY: kind-cilium-check
 kind-cilium-check: ## Validate prod-like Kind Cilium bootstrap wiring.
 	@PRODLIKE_KIND_CONFIG='$(PRODLIKE_KIND_CONFIG)' \
@@ -386,8 +393,15 @@ prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and Network
 .PHONY: prodlike-cell-up
 prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor ## Bring up and verify the prod-like Kind Cell.
 
-.PHONY: prodlike-e2e-smoke
-prodlike-e2e-smoke: ## Run the current E2E smoke suite against an existing prod-like Cell.
+.PHONY: prodlike-up
+prodlike-up: prodlike-cell-up ## Bring up and verify the prod-like Kind Cell.
+
+.PHONY: cell-doctor
+cell-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating or deleting infrastructure.
+
+.PHONY: tier2-e2e
+tier2-e2e: cell-doctor ## Run the Tier 2 prod-like E2E gate against an existing Cell.
+	@printf 'TIER2_E2E_STATUS=running\n'
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_CELL_ID="kind-prodlike" \
@@ -396,7 +410,14 @@ prodlike-e2e-smoke: ## Run the current E2E smoke suite against an existing prod-
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -run 'TestE2E(WriteAndRead|LeaderFailover|BackendUploadHappyPath)' -v -timeout 300s
+		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -v -timeout 600s
+	@printf 'TIER2_E2E_STATUS=passed\n'
+
+.PHONY: tier2-e2e-up
+tier2-e2e-up: prodlike-up tier2-e2e ## Bring up prod-like Kind, then run the Tier 2 E2E gate.
+
+.PHONY: prodlike-e2e-smoke
+prodlike-e2e-smoke: tier2-e2e ## Compatibility alias for the prod-like Tier 2 E2E gate.
 
 ##@ Local Dev
 
@@ -427,7 +448,7 @@ e2e-setup: local-kind-ensure local-kind-load local-kind-deploy ## Create Kind cl
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
 .PHONY: e2e
-e2e: e2e-setup ## Run E2E tests against a Kind cluster.
+e2e: ## Run E2E tests against an existing Cell.
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
@@ -438,11 +459,12 @@ e2e: e2e-setup ## Run E2E tests against a Kind cluster.
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
 		$(GO) test ./test/e2e/ -run '$(E2E_TEST_RUN)' -v -timeout 300s
 
+.PHONY: e2e-up
+e2e-up: e2e-setup e2e ## Create/update local Kind, then run E2E tests.
+
 .PHONY: e2e-scrub
-e2e-scrub: LOCAL_KIND_OVERLAY=deploy/kustomize/overlays/local-kind-scrub
-e2e-scrub: e2e-setup ## Run scrub E2E tests with the local Kind scrub overlay and cleanup.
+e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 	SCRAP_E2E=1 \
-		SCRAP_E2E_CLEANUP=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
@@ -451,6 +473,10 @@ e2e-scrub: e2e-setup ## Run scrub E2E tests with the local Kind scrub overlay an
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
 		$(GO) test ./test/e2e/ -run '$(SCRUB_E2E_TEST_RUN)' -v -timeout 600s
+
+.PHONY: e2e-scrub-up
+e2e-scrub-up: LOCAL_KIND_OVERLAY=deploy/kustomize/overlays/local-kind-scrub
+e2e-scrub-up: e2e-setup e2e-scrub ## Create/update scrub-enabled local Kind, then run scrub E2E tests.
 
 ##@ Stress
 

@@ -113,6 +113,44 @@ func TestIndexFindNotFound(t *testing.T) {
 	}
 }
 
+func TestOpenIndexWriterAppendsExistingIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+
+	iw, err := block.NewIndexWriter(path)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{TransactionID: "tx-001", DocName: "a.xml"}); err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close first writer: %v", err)
+	}
+
+	iw, err = block.OpenIndexWriter(path)
+	if err != nil {
+		t.Fatalf("OpenIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{TransactionID: "tx-001", DocName: "b.xml"}); err != nil {
+		t.Fatalf("Append second: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close second writer: %v", err)
+	}
+
+	ir, err := block.OpenIndexReader(path)
+	if err != nil {
+		t.Fatalf("OpenIndexReader: %v", err)
+	}
+	defer func() { _ = ir.Close() }()
+	for _, docName := range []string{"a.xml", "b.xml"} {
+		if _, err := ir.Find("tx-001", docName); err != nil {
+			t.Fatalf("Find %s: %v", docName, err)
+		}
+	}
+}
+
 func TestIndexAllEntries(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.idx")

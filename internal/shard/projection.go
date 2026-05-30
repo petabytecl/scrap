@@ -47,20 +47,17 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 	copy(sha[:], doc.Sha256)
 	createdAt := time.UnixMicro(doc.CreatedAtUs)
 
-	idxW := s.idxWriterForBlock(doc.BlockId)
-	if idxW != nil {
-		if err := idxW.Append(block.IndexEntry{
-			TransactionID: doc.TransactionId,
-			DocName:       doc.DocumentName,
-			ContentType:   doc.ContentType,
-			CreatedAt:     createdAt,
-			FirstFrameOff: safeUint64ToInt64(doc.FirstFrameOff),
-			FrameCount:    doc.FrameCount,
-			TotalBytes:    doc.TotalBytes,
-			SHA256:        sha,
-		}); err != nil {
-			return fmt.Errorf("shard: apply write idx: %w", err)
-		}
+	if err := s.appendDocumentIndexEntry(doc, block.IndexEntry{
+		TransactionID: doc.TransactionId,
+		DocName:       doc.DocumentName,
+		ContentType:   doc.ContentType,
+		CreatedAt:     createdAt,
+		FirstFrameOff: safeUint64ToInt64(doc.FirstFrameOff),
+		FrameCount:    doc.FrameCount,
+		TotalBytes:    doc.TotalBytes,
+		SHA256:        sha,
+	}); err != nil {
+		return err
 	}
 
 	if err := addProjectionDocument(s.idx, doc.TransactionId, doc.BlockId); err != nil {
@@ -68,6 +65,54 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 	}
 
 	return nil
+}
+
+func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry) error {
+	idxW := s.idxWriterForBlock(doc.BlockId)
+	if idxW != nil {
+		if err := idxW.Append(entry); err != nil {
+			return fmt.Errorf("shard: apply write idx: %w", err)
+		}
+		return nil
+	}
+
+	contains, err := s.blockIndexContainsDocument(doc.BlockId, doc.TransactionId, doc.DocumentName)
+	if err != nil {
+		return err
+	}
+	if contains {
+		return nil
+	}
+
+	idxW, err = block.OpenIndexWriter(s.idxPath(doc.BlockId))
+	if err != nil {
+		return fmt.Errorf("shard: open historical write idx: %w", err)
+	}
+	if err := idxW.Append(entry); err != nil {
+		_ = idxW.Close()
+		return fmt.Errorf("shard: append historical write idx: %w", err)
+	}
+	if err := idxW.Close(); err != nil {
+		return fmt.Errorf("shard: close historical write idx: %w", err)
+	}
+	return nil
+}
+
+func (s *Shard) blockIndexContainsDocument(blockID uint64, txID, docName string) (bool, error) {
+	ir, err := block.OpenIndexReader(s.idxPath(blockID))
+	if err != nil {
+		return false, fmt.Errorf("shard: open historical read idx: %w", err)
+	}
+	defer func() { _ = ir.Close() }()
+
+	_, err = ir.Find(txID, docName)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, block.ErrDocNotFound) {
+		return false, nil
+	}
+	return false, fmt.Errorf("shard: read historical write idx: %w", err)
 }
 
 func addProjectionDocument(projection *index.Index, txID string, blockID uint64) error {
