@@ -406,7 +406,10 @@ func metricValue(body, name string, labels []string) (float64, bool) {
 }
 
 func metricNameMatches(token, name string) bool {
-	return token == name || strings.HasPrefix(token, name+"{")
+	return token == name ||
+		strings.HasPrefix(token, name+"{") ||
+		token == name+"_total" ||
+		strings.HasPrefix(token, name+"_total{")
 }
 
 func lineContainsLabels(metricToken string, labels []string) bool {

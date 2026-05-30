@@ -19,6 +19,7 @@ import (
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/petabytecl/scrap/internal/scrub"
@@ -128,6 +129,7 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 	meterOpts := []sdkmetric.Option{
 		sdkmetric.WithResource(otelResource),
 		sdkmetric.WithReader(promExporter),
+		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 		sdkmetric.WithView(scrapdRPCServerDurationView()),
 	}
 	tracerOpts := []sdktrace.TracerProviderOption{

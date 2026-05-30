@@ -13,6 +13,7 @@ resources:
   - grafana-datasources.yaml
   - grafana-dashboard-provider.yaml
   - networkpolicy-pprof.yaml
+  - ciliumnetworkpolicy-admin-host.yaml
 
 configMapGenerator:
   - name: grafana-evidence-dashboard

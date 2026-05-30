@@ -21,9 +21,12 @@ KUSTOMIZE ?= $(GO_TOOL) kustomize
 ##? DOCKER Docker CLI used by local image targets.
 ##? KIND kind command used by local cluster targets.
 ##? KIND_VERSION kind version used by the default KIND command.
+##? HELM_VERSION Helm version used by the default HELM command.
 ##? KUBECTL kubectl CLI used by local cluster targets.
 
 DOCKER ?= docker
+HELM_VERSION ?= v3.21.0
+HELM ?= $(GO) run helm.sh/helm/v3/cmd/helm@$(HELM_VERSION)
 KIND_VERSION ?= v0.31.0
 KIND ?= $(GO) run sigs.k8s.io/kind@$(KIND_VERSION)
 KUBECTL ?= kubectl
@@ -60,6 +63,7 @@ CHECK_TARGETS := \
 	tests \
 	build
 STATIC_TARGETS := \
+	kind-cilium-check \
 	manifests-check \
 	fmt-check \
 	package-boundaries \
@@ -107,6 +111,24 @@ CROSS_BUILD_ENV = CGO_ENABLED=0 GOOS=$(IMAGE_GOOS) GOARCH=$(IMAGE_GOARCH)
 KIND_CLUSTER ?= scrap-local
 LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 
+##@ Prod-like Kind Variables
+
+##? PRODLIKE_KIND_CLUSTER Kind cluster name used by prod-like Cell targets.
+##? PRODLIKE_KIND_CONFIG Kind config for the Cilium-backed prod-like Cell.
+##? PRODLIKE_OVERLAY Kustomize overlay used for the prod-like Cell.
+##? CILIUM_VERSION Cilium chart version used by prod-like Kind targets.
+##? CILIUM_CHART_DIR Vendored Cilium chart used by prod-like Kind targets.
+##? CILIUM_VALUES Helm values used for prod-like Cilium.
+##? CILIUM_SCRIPT Helper script used by prod-like Cilium targets.
+
+PRODLIKE_KIND_CLUSTER ?= scrap-prodlike
+PRODLIKE_KIND_CONFIG ?= deploy/kind/cluster-prodlike-cilium.yaml
+PRODLIKE_OVERLAY ?= deploy/kustomize/overlays/prodlike
+CILIUM_VERSION ?= 1.19.4
+CILIUM_CHART_DIR ?= deploy/cilium/charts/cilium
+CILIUM_VALUES ?= deploy/cilium/prodlike-values.yaml
+CILIUM_SCRIPT ?= scripts/prodlike-cilium.sh
+
 ##@ Local Dev Variables
 
 ##? LOCAL_DEV_SCRIPT Script used by local-dev targets.
@@ -116,6 +138,7 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##@ E2E Variables
 
 ##? SCRAP_E2E_ADDR gRPC address used by E2E tests.
+##? SCRAP_E2E_CELL_ID Cell ID prefix used by Backend upload E2E assertions.
 ##? SCRAP_E2E_METRICS_URL HTTP metrics URL used by E2E tests.
 ##? SCRAP_E2E_NAMESPACE Kubernetes namespace used by E2E tests.
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
@@ -123,6 +146,7 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
 
 SCRAP_E2E_ADDR ?= 127.0.0.1:18090
+SCRAP_E2E_CELL_ID ?= kind-dev
 SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
 SCRAP_E2E_S3_BUCKET ?= scrap-e2e
@@ -262,6 +286,16 @@ manifests-check: ## Validate rendered manifests and deployment hardening invaria
 		LOCAL_KIND_OVERLAY='$(LOCAL_KIND_OVERLAY)' \
 		sh ./scripts/check-kustomize-manifests.sh
 
+.PHONY: kind-cilium-check
+kind-cilium-check: ## Validate prod-like Kind Cilium bootstrap wiring.
+	@PRODLIKE_KIND_CONFIG='$(PRODLIKE_KIND_CONFIG)' \
+		STRESS_KIND_CONFIG='$(STRESS_KIND_CONFIG)' \
+		PRODLIKE_OVERLAY='$(PRODLIKE_OVERLAY)' \
+		CILIUM_VALUES='$(CILIUM_VALUES)' \
+		CILIUM_CHART_DIR='$(CILIUM_CHART_DIR)' \
+		CILIUM_SCRIPT='$(CILIUM_SCRIPT)' \
+		sh ./scripts/check-kind-cilium.sh
+
 ##@ Local Kind
 
 .PHONY: local-kind-create
@@ -288,6 +322,81 @@ local-kind-load: image ## Load the scrapd image into the local kind cluster.
 .PHONY: local-kind-deploy
 local-kind-deploy: manifests-check ## Apply the local-kind manifests.
 	$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" | $(KUBECTL) apply -f -
+
+##@ Prod-like Kind
+
+.PHONY: prodlike-kind-create
+prodlike-kind-create: ## Create the Cilium-backed prod-like Kind cluster.
+	$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"
+
+.PHONY: prodlike-kind-ensure
+prodlike-kind-ensure: ## Create prod-like Kind if needed, install Cilium, and wait for readiness.
+	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(PRODLIKE_KIND_CLUSTER)" >/dev/null 2>&1; then \
+		printf 'kind cluster already exists: %s\n' "$(PRODLIKE_KIND_CLUSTER)"; \
+	else \
+		$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"; \
+	fi
+	$(KIND) export kubeconfig --name "$(PRODLIKE_KIND_CLUSTER)" >/dev/null
+	$(MAKE) prodlike-cilium-install
+	$(MAKE) prodlike-cilium-wait
+
+.PHONY: prodlike-kind-delete
+prodlike-kind-delete: ## Delete the prod-like Kind cluster.
+	$(KIND) delete cluster --name "$(PRODLIKE_KIND_CLUSTER)"
+
+.PHONY: prodlike-cilium-install
+prodlike-cilium-install: ## Install Cilium with kube-proxy replacement into prod-like Kind.
+	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		CILIUM_VERSION="$(CILIUM_VERSION)" \
+		CILIUM_VALUES="$(CILIUM_VALUES)" \
+		DOCKER="$(DOCKER)" \
+		HELM="$(HELM)" \
+		KUBECTL="$(KUBECTL)" \
+		CILIUM_CHART_DIR="$(CILIUM_CHART_DIR)" \
+		"$(CILIUM_SCRIPT)" install
+
+.PHONY: prodlike-cilium-wait
+prodlike-cilium-wait: ## Wait until prod-like Cilium and CoreDNS are ready.
+	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		KUBECTL="$(KUBECTL)" \
+		"$(CILIUM_SCRIPT)" wait
+
+.PHONY: prodlike-kind-load
+prodlike-kind-load: image ## Load the scrapd image into the prod-like Kind cluster.
+	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(PRODLIKE_KIND_CLUSTER)"
+
+.PHONY: prodlike-kind-deploy
+prodlike-kind-deploy: LOCAL_KIND_OVERLAY=$(PRODLIKE_OVERLAY)
+prodlike-kind-deploy: manifests-check ## Apply prod-like manifests and wait for S.C.R.A.P. workloads.
+	$(KUSTOMIZE) build "$(PRODLIKE_OVERLAY)" | $(KUBECTL) apply -f -
+	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+
+.PHONY: prodlike-cell-doctor
+prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and NetworkPolicy behavior.
+	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		SCRAP_PRODLIKE_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		DOCKER="$(DOCKER)" \
+		KUBECTL="$(KUBECTL)" \
+		"$(CILIUM_SCRIPT)" doctor
+
+.PHONY: prodlike-cell-up
+prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor ## Bring up and verify the prod-like Kind Cell.
+
+.PHONY: prodlike-e2e-smoke
+prodlike-e2e-smoke: ## Run the current E2E smoke suite against an existing prod-like Cell.
+	SCRAP_E2E=1 \
+		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="kind-prodlike" \
+		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
+		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
+		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		$(GO) test ./test/e2e/ -run 'TestE2E(WriteAndRead|LeaderFailover|BackendUploadHappyPath)' -v -timeout 300s
 
 ##@ Local Dev
 
@@ -321,6 +430,7 @@ e2e-setup: local-kind-ensure local-kind-load local-kind-deploy ## Create Kind cl
 e2e: e2e-setup ## Run E2E tests against a Kind cluster.
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
@@ -334,6 +444,7 @@ e2e-scrub: e2e-setup ## Run scrub E2E tests with the local Kind scrub overlay an
 	SCRAP_E2E=1 \
 		SCRAP_E2E_CLEANUP=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
@@ -351,6 +462,17 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 		$(KIND) create cluster --name "$(STRESS_KIND_CLUSTER)" --config "$(STRESS_KIND_CONFIG)"; \
 	fi
 	$(KIND) export kubeconfig --name "$(STRESS_KIND_CLUSTER)" >/dev/null
+	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
+		CILIUM_VERSION="$(CILIUM_VERSION)" \
+		CILIUM_VALUES="$(CILIUM_VALUES)" \
+		DOCKER="$(DOCKER)" \
+		HELM="$(HELM)" \
+		KUBECTL="$(KUBECTL)" \
+		CILIUM_CHART_DIR="$(CILIUM_CHART_DIR)" \
+		"$(CILIUM_SCRIPT)" install
+	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
+		KUBECTL="$(KUBECTL)" \
+		"$(CILIUM_SCRIPT)" wait
 	$(MAKE) image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(STRESS_KIND_CLUSTER)"
 	@printf '\n== Phase 1: observability stack (log pipeline up before any app starts) ==\n'

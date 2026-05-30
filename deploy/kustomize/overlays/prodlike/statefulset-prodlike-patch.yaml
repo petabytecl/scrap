@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  template:
+    spec:
+      containers:
+        - name: scrapd
+          env:
+            - name: SCRAP_CELL_ID
+              value: kind-prodlike
+            - name: SCRAP_ENVIRONMENT
+              value: prodlike
+            - name: SCRAP_PPROF_ENABLED
+              value: "true"
