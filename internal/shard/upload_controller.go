@@ -22,6 +22,7 @@ import (
 type uploadCore interface {
 	Propose(ctx context.Context, data []byte) error
 	IsLeader() bool
+	retryUploadObligations(ctx context.Context)
 	pendingUploads() ([]PendingUpload, error)
 	blockPath(blockID uint64) string
 	idxPath(blockID uint64) string
@@ -67,9 +68,9 @@ func newUploadController(core uploadCore, cfg UploadConfig, shardID uint64, logg
 }
 
 // Start launches the upload processor goroutine when uploads are enabled. It is
-// a no-op when uploads are disabled or no backend is configured.
+// a no-op when uploads are disabled.
 func (c *uploadController) Start() {
-	if !c.cfg.Enabled || c.cfg.Backend == nil {
+	if !c.cfg.Enabled {
 		return
 	}
 
@@ -112,6 +113,7 @@ func (c *uploadController) runProcessor(ctx context.Context) {
 
 	for {
 		if c.core.IsLeader() {
+			c.core.retryUploadObligations(ctx)
 			c.processPendingOnce(ctx)
 		}
 
@@ -125,7 +127,7 @@ func (c *uploadController) runProcessor(ctx context.Context) {
 }
 
 func (c *uploadController) processPendingOnce(ctx context.Context) {
-	if c.paused() {
+	if c.uploadProcessingPaused() {
 		return
 	}
 
@@ -165,6 +167,10 @@ func (c *uploadController) processPendingOnce(ctx context.Context) {
 	}
 	close(jobs)
 	wg.Wait()
+}
+
+func (c *uploadController) uploadProcessingPaused() bool {
+	return c.cfg.Backend == nil || c.paused()
 }
 
 func (c *uploadController) uploadAndConfirmWithRetry(ctx context.Context, upload PendingUpload) error {

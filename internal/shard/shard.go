@@ -93,7 +93,7 @@ type Shard struct {
 	scrubs                  *scrubCoordinator
 	uploads                 *uploadController
 	uploadPressureScrubGate *pressurePauseGate
-	orphanedSeals           []index.PendingUpload
+	uploadObligations       uploadObligations
 
 	rebuilder *projectionRebuilder
 }
@@ -200,11 +200,14 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
-	if err := s.refreshUploadPressureLocked(); err != nil {
+	s.mu.Lock()
+	refreshErr := s.refreshUploadPressureLocked()
+	s.mu.Unlock()
+	if refreshErr != nil {
 		raftNode.Stop()
 		s.closeBlockAndIdx()
 		_ = idx.Close()
-		return nil, fmt.Errorf("shard: refresh upload pressure: %w", err)
+		return nil, fmt.Errorf("shard: refresh upload pressure: %w", refreshErr)
 	}
 	s.uploads.setAuthPausedMetric(false)
 
@@ -225,7 +228,7 @@ func ensureShardDirs(dirs ...string) error {
 
 //nolint:cyclop,gocognit // orchestration function managing seal check, prep file, block append, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
-	if err := s.requireWritableLeader(); err != nil {
+	if err := s.requireLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
 
@@ -636,7 +639,7 @@ func (s *Shard) CurrentBlockIDForTest() uint64 {
 func (s *Shard) OrphanedSealsForTest() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.orphanedSeals)
+	return s.uploadObligations.len()
 }
 
 func (s *Shard) SetRebuildingForTest(v bool) {

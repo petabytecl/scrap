@@ -2,7 +2,6 @@ package shard
 
 import (
 	"context"
-	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -90,7 +89,7 @@ func (s *Shard) refreshUploadPressureLocked() error {
 	if err != nil {
 		return err
 	}
-	s.uploads.SetPressure(pendingUploadStats(uploads))
+	s.uploads.SetPressure(s.uploadObligations.pressureStats(uploads))
 	return nil
 }
 
@@ -136,26 +135,6 @@ func normalizeUploadPressureConfig(cfg UploadPressureConfig) UploadPressureConfi
 
 func validPct(v float64) bool {
 	return v > 0 && v <= 1
-}
-
-type uploadPressureStats struct {
-	pendingBytes  int64
-	pendingBlocks int
-}
-
-func pendingUploadStats(uploads []PendingUpload) uploadPressureStats {
-	var total int64
-	for _, upload := range uploads {
-		if upload.SealedSizeBytes > math.MaxInt64-total {
-			total = math.MaxInt64
-			break
-		}
-		total += upload.SealedSizeBytes
-	}
-	return uploadPressureStats{
-		pendingBytes:  total,
-		pendingBlocks: len(uploads),
-	}
 }
 
 type pressurePauseGate struct {

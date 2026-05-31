@@ -18,10 +18,6 @@ import (
 )
 
 func (s *Shard) sealAndOpenNew(ctx context.Context) error {
-	// Collect orphans under s.mu, then release to avoid holding s.mu during Raft I/O.
-	orphans := s.orphanedSeals
-	s.orphanedSeals = nil
-
 	blockID := s.blockWriter.BlockID()
 	sealedSize := s.blockWriter.Offset()
 	if err := s.idxWriter.Close(); err != nil {
@@ -40,14 +36,20 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 		SealedSizeBytes: sealedSize,
 		SealedAtUs:      time.Now().UnixMicro(),
 	}
-	orphans = append(orphans, seal)
+	if s.upload.Enabled {
+		s.uploadObligations.recordLocal(seal)
+		if err := s.refreshUploadPressureLocked(); err != nil {
+			return err
+		}
+	}
+	admissionErr := s.uploads.rejectWrite()
+	pendingRetry := s.beginUploadObligationRetryLocked(time.Now())
 
 	s.mu.Unlock()
-	remaining := s.proposeSeals(ctx, orphans)
+	s.proposeSeals(ctx, pendingRetry)
 	s.mu.Lock()
 
-	s.orphanedSeals = remaining
-	return nil
+	return admissionErr
 }
 
 func (s *Shard) openNewBlock() error {

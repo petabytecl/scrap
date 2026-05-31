@@ -18,8 +18,6 @@ import (
 
 const DefaultUploadConcurrency = 2
 
-const maxOrphanedSeals = 64
-
 const (
 	uploadPollInterval        = 50 * time.Millisecond
 	defaultUploadRetryBase    = time.Second
@@ -76,20 +74,24 @@ func (s *Shard) proposeSealBlock(ctx context.Context, upload index.PendingUpload
 	return proposeUploadCommand(ctx, s.raft, cellIDOrLocal(s.upload.CellID), s.shardID, "seal block", cmd)
 }
 
-// proposeSeals proposes seal commands outside s.mu. Returns any that failed.
-func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) []index.PendingUpload {
-	var remaining []index.PendingUpload
+// proposeSeals proposes seal commands outside s.mu. Local upload obligations are
+// removed only by applySealBlock, after Raft has committed the Upload Outbox row.
+func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) {
 	for _, seal := range seals {
 		if err := s.proposeSealBlock(ctx, seal); err != nil {
-			remaining = append(remaining, seal)
+			s.mu.Lock()
+			s.uploadObligations.markRetryFailed(seal.BlockID, time.Now().Add(s.uploadSealRetryDelay()))
+			s.mu.Unlock()
 			s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", seal.BlockID, "err", err)
 		}
 	}
-	if len(remaining) > maxOrphanedSeals {
-		s.logger.WarnContext(ctx, "shard: dropping oldest orphaned seals", "dropped", len(remaining)-maxOrphanedSeals)
-		remaining = remaining[len(remaining)-maxOrphanedSeals:]
+}
+
+func (s *Shard) uploadSealRetryDelay() time.Duration {
+	if s.upload.RetryBaseDelay > 0 {
+		return s.upload.RetryBaseDelay
 	}
-	return remaining
+	return defaultUploadRetryBase
 }
 
 // proposeUploadCommand stamps the deterministic block.upload trace context so the
@@ -122,6 +124,7 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 	}); err != nil {
 		return err
 	}
+	s.uploadObligations.forget(seal.GetBlockId())
 
 	if s.blockWriter != nil && s.idxWriter != nil && s.blockWriter.BlockID() == seal.GetBlockId() {
 		if err := s.idxWriter.Close(); err != nil {
@@ -149,26 +152,33 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	if err := s.idx.DeletePendingUpload(confirm.GetBlockId()); err != nil {
 		return err
 	}
+	s.uploadObligations.forget(confirm.GetBlockId())
 	return s.refreshUploadPressureLocked()
 }
 
 func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.orphanedSeals = append(s.orphanedSeals, seal)
+	s.uploadObligations.recordLocal(seal)
+	if err := s.refreshUploadPressureLocked(); err != nil {
+		panic(err)
+	}
+}
+
+func (s *Shard) retryUploadObligations(ctx context.Context) {
+	s.mu.Lock()
+	pendingRetry := s.beginUploadObligationRetryLocked(time.Now())
+	s.mu.Unlock()
+
+	s.proposeSeals(ctx, pendingRetry)
+}
+
+func (s *Shard) beginUploadObligationRetryLocked(now time.Time) []index.PendingUpload {
+	return s.uploadObligations.beginRetry(now, now.Add(s.uploadSealRetryDelay()))
 }
 
 func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {
-	s.mu.Lock()
-	orphans := s.orphanedSeals
-	s.orphanedSeals = nil
-	s.mu.Unlock()
-
-	remaining := s.proposeSeals(ctx, orphans)
-
-	s.mu.Lock()
-	s.orphanedSeals = remaining
-	s.mu.Unlock()
+	s.retryUploadObligations(ctx)
 }
 
 func (s *Shard) PendingUploadsForTest() ([]PendingUpload, error) {
