@@ -78,7 +78,7 @@ func runCommand(name string, args []string, stdout, stderr io.Writer, deps Deps)
 	case "fault":
 		return runFault(args, stdout, deps)
 	case "evidence":
-		return runEvidence(args, stdout, deps)
+		return runEvidence(args, stdout, stderr, deps)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown command %q\n", name)
 		return fmt.Errorf("unknown command %q", name)
