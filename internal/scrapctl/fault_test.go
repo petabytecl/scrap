@@ -155,7 +155,16 @@ func TestFaultBackendReportsKubectlFailure(t *testing.T) {
 }
 
 func TestFaultLeaderDeleteUsesSafetyGate(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{run: func(_ string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "{.metadata.uid} {.status.phase}") {
+			return "new-uid Running true", nil
+		}
+		if strings.Contains(joined, "jsonpath={.metadata.uid}") {
+			return "old-uid", nil
+		}
+		return "ok", nil
+	}}
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path != "/metrics" {
 			t.Fatalf("path = %s", req.URL.Path)
@@ -186,6 +195,8 @@ scrap_raft_leader_id{service_name="scrapd",instance="scrapd-2"} 3
 		t.Fatalf("leader delete: %v\n%s", err, out.String())
 	}
 	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap delete pod scrapd-2")
+	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap get pod scrapd-2 -o jsonpath={.metadata.uid}")
+	assertCommandContains(t, runner.commands, "jsonpath={.metadata.uid} {.status.phase} {.status.containerStatuses[0].ready}")
 	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap rollout status statefulset/scrapd")
 	if !strings.Contains(out.String(), `"action":"fault.leader.delete"`) {
 		t.Fatalf("unexpected output: %s", out.String())

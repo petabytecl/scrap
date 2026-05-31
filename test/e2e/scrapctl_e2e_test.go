@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const scrapctlFaultTimeout = 8 * time.Minute
+
 func runScrapctlBackendFault(t *testing.T, action string) {
 	t.Helper()
 	cellID := e2eCellID()
@@ -26,7 +28,10 @@ func runScrapctlBackendFault(t *testing.T, action string) {
 	if kubeContext := e2eKubeContext(); kubeContext != "" {
 		args = append(args, "--context", kubeContext)
 	}
-	runScrapctl(t, 3*time.Minute, args...)
+	if kubeconfig := e2eKubeconfig(); kubeconfig != "" {
+		args = append(args, "--kubeconfig", kubeconfig)
+	}
+	runScrapctl(t, scrapctlFaultTimeout, args...)
 }
 
 func runScrapctl(t *testing.T, timeout time.Duration, args ...string) string {
@@ -69,6 +74,10 @@ func e2eKubeContext() string {
 		return "kind-" + cluster
 	}
 	return ""
+}
+
+func e2eKubeconfig() string {
+	return os.Getenv("SCRAP_E2E_KUBECONFIG")
 }
 
 func e2eEnvironment(cellID string) string {

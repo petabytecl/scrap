@@ -25,6 +25,7 @@ const (
 	faultPollInterval        = 100 * time.Millisecond
 	raftIDOrdinalOffset      = 1
 	defaultStatefulSet       = "scrapd"
+	podReplacementTimeout    = 2 * time.Minute
 )
 
 type operationReport struct {
@@ -138,7 +139,14 @@ func runFaultLeaderDelete(args []string, stdout io.Writer, deps Deps) error {
 		}
 	}
 	ctx := context.Background()
+	oldUID, err := podUID(ctx, deps.Runner, opts.common, pod)
+	if err != nil {
+		return err
+	}
 	if err := kubectlRun(ctx, deps.Runner, opts.common, opts.common.timeout, "delete", "pod", pod, "--grace-period=0", "--force", "--wait=false"); err != nil {
+		return err
+	}
+	if err := waitReplacementPodReady(ctx, deps.Runner, opts.common, pod, oldUID, podReplacementTimeout); err != nil {
 		return err
 	}
 	if err := kubectlRun(ctx, deps.Runner, opts.common, defaultRolloutTimeout+commandTimeout(opts.common.timeout), "rollout", "status", "statefulset/"+opts.statefulset, defaultRolloutArg); err != nil {
@@ -157,6 +165,41 @@ func currentLeaderPod(ctx context.Context, deps Deps, opts commonOptions, statef
 	}
 	ordinal := leader.LeaderID - raftIDOrdinalOffset
 	return fmt.Sprintf("%s-%d", statefulset, ordinal), nil
+}
+
+func podUID(ctx context.Context, runner Runner, opts commonOptions, pod string) (string, error) {
+	cctx, cancel := commandContext(ctx, opts.timeout)
+	defer cancel()
+	out, err := runner.Run(cctx, opts.kubectl, kubectlArgs(opts, "-n", opts.namespace, "get", "pod", pod, "-o", "jsonpath={.metadata.uid}")...)
+	if err != nil {
+		return "", fmt.Errorf("get pod uid: %s", strings.TrimSpace(outOrErr(out, err)))
+	}
+	uid := strings.TrimSpace(out)
+	if uid == "" {
+		return "", errors.New("pod uid is empty")
+	}
+	return uid, nil
+}
+
+func waitReplacementPodReady(ctx context.Context, runner Runner, opts commonOptions, pod, oldUID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		cctx, cancel := commandContext(ctx, opts.timeout)
+		out, err := runner.Run(cctx, opts.kubectl, kubectlArgs(opts,
+			"-n", opts.namespace,
+			"get", "pod", pod,
+			"-o", "jsonpath={.metadata.uid} {.status.phase} {.status.containerStatuses[0].ready}",
+		)...)
+		cancel()
+		fields := strings.Fields(out)
+		if err == nil && len(fields) == 3 && fields[0] != oldUID && fields[1] == "Running" && fields[2] == "true" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pod %s replacement did not become ready", pod)
+		}
+		time.Sleep(faultPollInterval)
+	}
 }
 
 func runFaultProjectionInject(args []string, stdout io.Writer, deps Deps) error {
