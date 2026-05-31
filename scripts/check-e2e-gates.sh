@@ -103,7 +103,8 @@ reject_pattern 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.
 
 require_pattern '^PRODLIKE_E2E_OVERLAY[[:space:]]*\?=' "$MAKEFILE" "prod-like E2E overlay variable"
 require_pattern '^PRODLIKE_KUBE_CONTEXT[[:space:]]*\?=' "$MAKEFILE" "prod-like kube context variable"
-require_pattern '^PRODLIKE_E2E_KUBE_CONTEXT[[:space:]]*\?=.*PRODLIKE_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context default"
+require_pattern '^ifndef PRODLIKE_E2E_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context conditional default"
+require_pattern '^PRODLIKE_E2E_KUBE_CONTEXT[[:space:]]*:=.*PRODLIKE_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context default"
 require_pattern '^PRODLIKE_E2E_KUBECTL[[:space:]]*=.*PRODLIKE_E2E_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kubectl context wrapper"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*WriteReadHead' "$MAKEFILE" "Tier 2 write/read/head coverage"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*LeaderFailover' "$MAKEFILE" "Tier 2 leader failover coverage"
