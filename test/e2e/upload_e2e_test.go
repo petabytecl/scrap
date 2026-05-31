@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -194,35 +193,14 @@ func startLocalStackPortForward(t *testing.T) (string, func()) {
 
 func setLocalStackReplicas(t *testing.T, replicas int) {
 	t.Helper()
-	runKubectl(t, kubectlCommandWait, "-n", namespace(), "scale", "deployment/localstack", fmt.Sprintf("--replicas=%d", replicas))
-	if replicas == 0 {
-		waitDeploymentReadyReplicas(t, "localstack", 0, uploadE2ETimeout)
-		return
+	switch replicas {
+	case 0:
+		runScrapctlBackendFault(t, "break")
+	case 1:
+		runScrapctlBackendFault(t, "restore")
+	default:
+		t.Fatalf("unsupported localstack replica count %d", replicas)
 	}
-	runKubectl(t, 3*time.Minute, "-n", namespace(), "rollout", "status", "deployment/localstack", "--timeout=180s")
-	runKubectl(t, 2*time.Minute, "-n", namespace(), "wait", "--for=condition=Ready", "pod", "-l", "app=localstack", "--timeout=120s")
-}
-
-func waitDeploymentReadyReplicas(t *testing.T, deployment string, want int, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		out := runKubectl(t, kubectlCommandWait, "-n", namespace(), "get", "deployment", deployment, "-o", "jsonpath={.status.readyReplicas}")
-		ready := 0
-		trimmed := strings.TrimSpace(out)
-		if trimmed != "" {
-			parsed, err := strconv.Atoi(trimmed)
-			if err != nil {
-				t.Fatalf("parse ready replicas %q: %v", trimmed, err)
-			}
-			ready = parsed
-		}
-		if ready == want {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("deployment %s ready replicas did not become %d", deployment, want)
 }
 
 func newE2ES3Client(t *testing.T, endpoint string) *awss3.Client {
@@ -305,8 +283,7 @@ func listBackendObjects(t *testing.T, client *awss3.Client) map[string]backendOb
 }
 
 func e2eS3ObjectPrefix() string {
-	cellID := envOrDefault("SCRAP_E2E_CELL_ID", "kind-dev")
-	return cellID + "/shards/0000000000000000/"
+	return e2eCellID() + "/shards/0000000000000000/"
 }
 
 func waitNewBackendPair(t *testing.T, client *awss3.Client, before map[string]backendObject, timeout time.Duration) backendPair {

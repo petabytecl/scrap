@@ -128,9 +128,21 @@ func tryKubectl(timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	//nolint:gosec // E2E tests intentionally execute the configured kubectl binary against the test cluster.
-	cmd := exec.CommandContext(ctx, kubectlBin(), args...)
+	cmd := exec.CommandContext(ctx, kubectlBin(), e2eKubectlArgs(args...)...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func e2eKubectlArgs(args ...string) []string {
+	out := make([]string, 0, len(args)+4)
+	if kubeContext := e2eKubeContext(); kubeContext != "" {
+		out = append(out, "--context", kubeContext)
+	}
+	if kubeconfig := e2eKubeconfig(); kubeconfig != "" {
+		out = append(out, "--kubeconfig", kubeconfig)
+	}
+	out = append(out, args...)
+	return out
 }
 
 func deletePodAndWaitReady(t *testing.T, pod string) {
@@ -247,12 +259,12 @@ func startResourcePortForward(t *testing.T, resource string, remotePort int) (st
 	localPort := freeLocalPort(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	//nolint:gosec // E2E tests intentionally execute the configured kubectl binary against the test cluster.
-	cmd := exec.CommandContext(ctx, kubectlBin(),
+	cmd := exec.CommandContext(ctx, kubectlBin(), e2eKubectlArgs(
 		"-n", namespace(),
 		"port-forward",
 		resource,
 		fmt.Sprintf("%d:%d", localPort, remotePort),
-	)
+	)...)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output

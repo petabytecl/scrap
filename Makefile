@@ -118,6 +118,7 @@ LOCAL_KIND_OVERLAY ?= deploy/kustomize/environments/local
 ##? PRODLIKE_KIND_CONFIG Kind config for the Cilium-backed prod-like Cell.
 ##? PRODLIKE_OVERLAY Kustomize environment used for the prod-like Cell.
 ##? PRODLIKE_E2E_OVERLAY Kustomize environment used for prod-like E2E test hooks.
+##? PRODLIKE_KUBE_CONTEXT kubectl context used by prod-like Kind targets.
 ##? CILIUM_VERSION Cilium chart version used by prod-like Kind targets.
 ##? CILIUM_CHART_DIR Vendored Cilium chart used by prod-like Kind targets.
 ##? CILIUM_VALUES Helm values used for prod-like Cilium.
@@ -127,10 +128,12 @@ PRODLIKE_KIND_CLUSTER ?= scrap-prodlike
 PRODLIKE_KIND_CONFIG ?= deploy/kind/cluster-prodlike-cilium.yaml
 PRODLIKE_OVERLAY ?= deploy/kustomize/environments/prodlike
 PRODLIKE_E2E_OVERLAY ?= deploy/kustomize/environments/prodlike-e2e
+PRODLIKE_KUBE_CONTEXT ?= kind-$(PRODLIKE_KIND_CLUSTER)
 CILIUM_VERSION ?= 1.19.4
 CILIUM_CHART_DIR ?= deploy/cilium/charts/cilium
 CILIUM_VALUES ?= deploy/cilium/prodlike-values.yaml
 CILIUM_SCRIPT ?= scripts/prodlike-cilium.sh
+PRODLIKE_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_KUBE_CONTEXT)"
 
 ##@ Local Dev Variables
 
@@ -144,7 +147,9 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_CELL_ID Cell ID prefix used by Backend upload E2E assertions.
 ##? SCRAP_E2E_METRICS_URL HTTP metrics URL used by E2E tests.
 ##? SCRAP_E2E_NAMESPACE Kubernetes namespace used by E2E tests.
+##? SCRAP_E2E_KUBE_CONTEXT kubectl context used by safety-gated E2E fault commands.
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
+##? PRODLIKE_E2E_KUBE_CONTEXT kubectl context used by the prod-like Tier 2 E2E gate.
 ##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
 ##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
@@ -153,7 +158,10 @@ SCRAP_E2E_ADDR ?= 127.0.0.1:18090
 SCRAP_E2E_CELL_ID ?= kind-dev
 SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
+SCRAP_E2E_KUBE_CONTEXT ?= kind-$(KIND_CLUSTER)
 SCRAP_E2E_S3_BUCKET ?= scrap-e2e
+PRODLIKE_E2E_KUBE_CONTEXT ?= $(PRODLIKE_KUBE_CONTEXT)
+PRODLIKE_E2E_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_E2E_KUBE_CONTEXT)"
 E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub)
@@ -363,6 +371,7 @@ prodlike-cilium-install: ## Install Cilium with kube-proxy replacement into prod
 		DOCKER="$(DOCKER)" \
 		HELM="$(HELM)" \
 		KUBECTL="$(KUBECTL)" \
+		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
 		CILIUM_CHART_DIR="$(CILIUM_CHART_DIR)" \
 		"$(CILIUM_SCRIPT)" install
 
@@ -370,6 +379,7 @@ prodlike-cilium-install: ## Install Cilium with kube-proxy replacement into prod
 prodlike-cilium-wait: ## Wait until prod-like Cilium and CoreDNS are ready.
 	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
 		KUBECTL="$(KUBECTL)" \
+		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
 		"$(CILIUM_SCRIPT)" wait
 
 .PHONY: prodlike-kind-load
@@ -379,22 +389,22 @@ prodlike-kind-load: image ## Load the scrapd image into the prod-like Kind clust
 .PHONY: prodlike-kind-deploy
 prodlike-kind-deploy: LOCAL_KIND_OVERLAY=$(PRODLIKE_OVERLAY)
 prodlike-kind-deploy: manifests-check ## Apply prod-like manifests and wait for S.C.R.A.P. workloads.
-	$(KUSTOMIZE) build "$(PRODLIKE_OVERLAY)" | $(KUBECTL) apply -f -
-	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
-	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
-	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
-	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
-	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+	$(KUSTOMIZE) build "$(PRODLIKE_OVERLAY)" | $(PRODLIKE_KUBECTL) apply -f -
+	$(PRODLIKE_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(PRODLIKE_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(PRODLIKE_KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(PRODLIKE_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(PRODLIKE_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
 .PHONY: prodlike-kind-deploy-e2e
 prodlike-kind-deploy-e2e: LOCAL_KIND_OVERLAY=$(PRODLIKE_E2E_OVERLAY)
 prodlike-kind-deploy-e2e: manifests-check ## Apply prod-like E2E manifests with test-only mutation hooks.
-	$(KUSTOMIZE) build "$(PRODLIKE_E2E_OVERLAY)" | $(KUBECTL) apply -f -
-	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
-	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
-	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
-	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
-	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+	$(KUSTOMIZE) build "$(PRODLIKE_E2E_OVERLAY)" | $(PRODLIKE_E2E_KUBECTL) apply -f -
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
 .PHONY: prodlike-cell-doctor
 prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and NetworkPolicy behavior.
@@ -402,12 +412,14 @@ prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and Network
 		SCRAP_PRODLIKE_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
 		DOCKER="$(DOCKER)" \
 		KUBECTL="$(KUBECTL)" \
+		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
 		"$(CILIUM_SCRIPT)" doctor
 
 .PHONY: prodlike-cell-up
 prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor ## Bring up and verify the prod-like Kind Cell.
 
 .PHONY: prodlike-e2e-cell-up
+prodlike-e2e-cell-up: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
 prodlike-e2e-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy-e2e prodlike-cell-doctor ## Bring up prod-like Kind with test-only E2E hooks.
 
 .PHONY: prodlike-up
@@ -418,13 +430,14 @@ cell-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating o
 
 .PHONY: tier2-e2e-hooks-check
 tier2-e2e-hooks-check: ## Verify an existing Tier 2 Cell has the test-only hook overlay.
-	@hooks="$$( $(KUBECTL) -n "$(SCRAP_E2E_NAMESPACE)" get statefulset scrapd -o jsonpath='{.spec.template.spec.containers[?(@.name=="scrapd")].env[?(@.name=="SCRAP_TEST_HOOKS")].value}' )"; \
+	@hooks="$$( $(PRODLIKE_E2E_KUBECTL) -n "$(SCRAP_E2E_NAMESPACE)" get statefulset scrapd -o jsonpath='{.spec.template.spec.containers[?(@.name=="scrapd")].env[?(@.name=="SCRAP_TEST_HOOKS")].value}' )"; \
 	if [ "$$hooks" != "1" ]; then \
 		printf 'Tier 2 E2E requires SCRAP_TEST_HOOKS=1; run make tier2-e2e-up or deploy %s\n' "$(PRODLIKE_E2E_OVERLAY)" >&2; \
 		exit 1; \
 	fi
 
 .PHONY: tier2-e2e
+tier2-e2e: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
 tier2-e2e: cell-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
 	@printf 'TIER2_E2E_STATUS=running\n'
 	SCRAP_E2E=1 \
@@ -432,6 +445,7 @@ tier2-e2e: cell-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gat
 		SCRAP_E2E_CELL_ID="kind-prodlike" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
@@ -479,6 +493,7 @@ e2e: ## Run E2E tests against an existing Cell.
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(SCRAP_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
@@ -494,6 +509,7 @@ e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(SCRAP_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \

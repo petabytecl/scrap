@@ -15,6 +15,7 @@ import (
 
 const (
 	kubectlGlobalFlagCapacity = 4
+	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence>"
 
 	defaultNamespace      = "scrap"
 	defaultCluster        = "scrap-prodlike"
@@ -52,26 +53,35 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) (string,
 
 func Run(args []string, stdout, stderr io.Writer, deps Deps) error {
 	if len(args) == 0 {
-		return errors.New("usage: scrapctl <doctor|status|upload-pressure|peers|leader>")
+		return errors.New("usage: " + scrapctlUsage)
 	}
 	deps = deps.withDefaults()
-	switch args[0] {
-	case "doctor":
-		return runDoctor(args[1:], stdout, deps)
-	case "status":
-		return runStatus(args[1:], stdout, deps)
-	case "upload-pressure":
-		return runUploadPressure(args[1:], stdout, deps)
-	case "peers":
-		return runPeers(args[1:], stdout, deps)
-	case "leader":
-		return runLeader(args[1:], stdout, deps)
-	case "help", "-h", "--help":
-		_, _ = fmt.Fprintln(stdout, "usage: scrapctl <doctor|status|upload-pressure|peers|leader>")
+	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		_, _ = fmt.Fprintln(stdout, "usage: "+scrapctlUsage)
 		return nil
+	}
+	return runCommand(args[0], args[1:], stdout, stderr, deps)
+}
+
+func runCommand(name string, args []string, stdout, stderr io.Writer, deps Deps) error {
+	switch name {
+	case "doctor":
+		return runDoctor(args, stdout, deps)
+	case "status":
+		return runStatus(args, stdout, deps)
+	case "upload-pressure":
+		return runUploadPressure(args, stdout, deps)
+	case "peers":
+		return runPeers(args, stdout, deps)
+	case "leader":
+		return runLeader(args, stdout, deps)
+	case "fault":
+		return runFault(args, stdout, deps)
+	case "evidence":
+		return runEvidence(args, stdout, deps)
 	default:
-		_, _ = fmt.Fprintf(stderr, "unknown command %q\n", args[0])
-		return fmt.Errorf("unknown command %q", args[0])
+		_, _ = fmt.Fprintf(stderr, "unknown command %q\n", name)
+		return fmt.Errorf("unknown command %q", name)
 	}
 }
 
@@ -137,13 +147,20 @@ func parseCommon(name string, args []string, configure ...flagSetOption) (common
 	if err := fs.Parse(args); err != nil {
 		return commonOptions{}, fmt.Errorf("parse flags: %w", err)
 	}
-	if opts.namespace == "" {
-		return commonOptions{}, errors.New("namespace is required")
-	}
-	if opts.output != "text" && opts.output != "json" {
-		return commonOptions{}, fmt.Errorf("unsupported output %q", opts.output)
+	if err := validateCommon(opts); err != nil {
+		return commonOptions{}, err
 	}
 	return opts, nil
+}
+
+func validateCommon(opts commonOptions) error {
+	if opts.namespace == "" {
+		return errors.New("namespace is required")
+	}
+	if opts.output != "text" && opts.output != "json" {
+		return fmt.Errorf("unsupported output %q", opts.output)
+	}
+	return nil
 }
 
 func commandTimeout(timeout time.Duration) time.Duration {

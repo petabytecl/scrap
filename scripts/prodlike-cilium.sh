@@ -11,6 +11,7 @@ CILIUM_VALUES=${CILIUM_VALUES:-deploy/cilium/prodlike-values.yaml}
 DOCKER=${DOCKER:-docker}
 HELM=${HELM:-helm}
 KUBECTL=${KUBECTL:-kubectl}
+KUBE_CONTEXT=${PRODLIKE_KUBE_CONTEXT:-${PRODLIKE_E2E_KUBE_CONTEXT:-}}
 
 log() {
 	printf '[prodlike-cilium] %s\n' "$*"
@@ -31,7 +32,19 @@ require_command() {
 run_helm() {
 	# HELM intentionally supports commands with arguments, matching Makefile tool vars.
 	# shellcheck disable=SC2086
+	if [ -n "$KUBE_CONTEXT" ]; then
+		$HELM --kube-context "$KUBE_CONTEXT" "$@"
+		return
+	fi
 	$HELM "$@"
+}
+
+run_kubectl() {
+	if [ -n "$KUBE_CONTEXT" ]; then
+		"$KUBECTL" --context "$KUBE_CONTEXT" "$@"
+		return
+	fi
+	"$KUBECTL" "$@"
 }
 
 kernel_at_least_5_14() {
@@ -88,10 +101,10 @@ preflight_kind_nodes() {
 
 check_kind_cni_baseline() {
 	require_command "$KUBECTL"
-	if "$KUBECTL" -n kube-system get daemonset kube-proxy >/dev/null 2>&1; then
+	if run_kubectl -n kube-system get daemonset kube-proxy >/dev/null 2>&1; then
 		die "kube-proxy daemonset exists before Cilium install; delete and recreate $CLUSTER with kubeProxyMode=none"
 	fi
-	if "$KUBECTL" -n kube-system get daemonset kindnet >/dev/null 2>&1; then
+	if run_kubectl -n kube-system get daemonset kindnet >/dev/null 2>&1; then
 		die "kindnet daemonset exists before Cilium install; delete and recreate $CLUSTER with disableDefaultCNI=true"
 	fi
 }
@@ -123,13 +136,13 @@ install_cilium() {
 
 wait_cilium() {
 	require_command "$KUBECTL"
-	"$KUBECTL" -n kube-system rollout status daemonset/cilium --timeout=180s
-	"$KUBECTL" -n kube-system rollout status deployment/cilium-operator --timeout=180s
-	"$KUBECTL" -n kube-system rollout status deployment/coredns --timeout=180s
+	run_kubectl -n kube-system rollout status daemonset/cilium --timeout=180s
+	run_kubectl -n kube-system rollout status deployment/cilium-operator --timeout=180s
+	run_kubectl -n kube-system rollout status deployment/coredns --timeout=180s
 }
 
 cilium_status() {
-	"$KUBECTL" -n kube-system exec ds/cilium -- cilium-dbg status --verbose
+	run_kubectl -n kube-system exec ds/cilium -- cilium-dbg status --verbose
 }
 
 check_cilium_status() {
@@ -138,10 +151,10 @@ check_cilium_status() {
 		die "Cilium did not report KubeProxyReplacement: True"
 	printf '%s\n' "$status" | grep -Eq 'NodePort:[[:space:]]+Enabled' ||
 		die "Cilium did not report NodePort: Enabled"
-	if "$KUBECTL" -n kube-system get daemonset kube-proxy >/dev/null 2>&1; then
+	if run_kubectl -n kube-system get daemonset kube-proxy >/dev/null 2>&1; then
 		die "kube-proxy daemonset exists; prod-like Cell must use Cilium replacement only"
 	fi
-	if "$KUBECTL" -n kube-system get daemonset kindnet >/dev/null 2>&1; then
+	if run_kubectl -n kube-system get daemonset kindnet >/dev/null 2>&1; then
 		die "kindnet daemonset exists; recreate the Kind cluster with disableDefaultCNI=true"
 	fi
 }
@@ -181,7 +194,7 @@ run_probe() {
 	labels=$3
 	url=$4
 
-	"$KUBECTL" -n "$namespace" run "$name" \
+	run_kubectl -n "$namespace" run "$name" \
 		--restart=Never \
 		--rm \
 		--attach \
@@ -195,7 +208,7 @@ check_headless_dns() {
 	name="scrap-dns-check-$$"
 	target="scrapd-0.scrap-headless.$NAMESPACE.svc.cluster.local"
 
-	"$KUBECTL" -n "$NAMESPACE" run "$name" \
+	run_kubectl -n "$NAMESPACE" run "$name" \
 		--restart=Never \
 		--rm \
 		--attach \
@@ -207,11 +220,11 @@ check_headless_dns() {
 }
 
 check_network_policy() {
-	"$KUBECTL" -n "$NAMESPACE" get networkpolicy scrapd-admin-restrict >/dev/null 2>&1 ||
+	run_kubectl -n "$NAMESPACE" get networkpolicy scrapd-admin-restrict >/dev/null 2>&1 ||
 		die "NetworkPolicy scrapd-admin-restrict is required before policy checks"
-	"$KUBECTL" -n "$NAMESPACE" get ciliumnetworkpolicy scrapd-admin-host-allow >/dev/null 2>&1 ||
+	run_kubectl -n "$NAMESPACE" get ciliumnetworkpolicy scrapd-admin-host-allow >/dev/null 2>&1 ||
 		die "CiliumNetworkPolicy scrapd-admin-host-allow is required before host admin checks"
-	"$KUBECTL" get namespace monitoring >/dev/null 2>&1 ||
+	run_kubectl get namespace monitoring >/dev/null 2>&1 ||
 		die "monitoring namespace is required before policy checks"
 
 	allowed="scrap-admin-allow-$$"
