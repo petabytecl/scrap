@@ -235,7 +235,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	s.writeOrderMu.Lock()
 	defer s.writeOrderMu.Unlock()
 
-	if err := s.requireWritableLeader(ctx); err != nil {
+	if err := s.requireWritableLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
 
@@ -515,14 +515,10 @@ func (s *Shard) requireLeader() error {
 	return s.notLeaderError()
 }
 
-func (s *Shard) requireWritableLeader(ctx context.Context) error {
+func (s *Shard) requireWritableLeader() error {
 	if err := s.requireLeader(); err != nil {
 		return err
 	}
-	if err := s.uploads.rejectWrite(); err != nil {
-		return err
-	}
-	s.retryUploadObligations(ctx)
 	return s.uploads.rejectWrite()
 }
 

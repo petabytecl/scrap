@@ -37,9 +37,10 @@ func TestUploadPressureRejectsWritesAndResumesAfterDrain(t *testing.T) {
 	writeUploadPressureDoc(t, s, "tx-pressure-3", []byte("accepted"))
 }
 
-func TestOrphanedSealTriggersUploadPressureAdmissionBeforeOutboxCommit(t *testing.T) {
+func TestLocalUploadObligationBackgroundRetryRunsUnderUploadPressure(t *testing.T) {
 	s := openUploadTestShard(t, shard.UploadConfig{
-		Enabled: true,
+		Enabled:        true,
+		RetryBaseDelay: 10 * time.Millisecond,
 		Pressure: shard.UploadPressureConfig{
 			BudgetBytes: 40,
 			WarnPct:     0.80,
@@ -55,13 +56,6 @@ func TestOrphanedSealTriggersUploadPressureAdmissionBeforeOutboxCommit(t *testin
 		SealedSizeBytes: 41,
 		SealedAtUs:      time.Now().UnixMicro(),
 	})
-	uploads, err := s.PendingUploadsForTest()
-	if err != nil {
-		t.Fatalf("PendingUploadsForTest: %v", err)
-	}
-	if len(uploads) != 0 {
-		t.Fatalf("committed pending uploads = %d, want 0", len(uploads))
-	}
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelCritical)
 
 	snapshot := s.UploadPressureForTest()
@@ -72,18 +66,13 @@ func TestOrphanedSealTriggersUploadPressureAdmissionBeforeOutboxCommit(t *testin
 		t.Fatalf("pending bytes = %d, want orphaned sealed Block bytes", snapshot.PendingBytes)
 	}
 
-	_, err = s.WriteDocument(ctx, "tx-orphan-pressure-1", "doc.bin", "application/octet-stream", "", bytes.NewReader([]byte("rejected")))
+	waitPendingUploadBlock(t, s, 99)
+	if got := s.OrphanedSealsForTest(); got != 0 {
+		t.Fatalf("orphaned seals after background retry = %d, want 0", got)
+	}
+
+	_, err := s.WriteDocument(ctx, "tx-orphan-pressure-1", "doc.bin", "application/octet-stream", "", bytes.NewReader([]byte("rejected")))
 	assertUploadPressureError(t, err)
-	uploads, err = s.PendingUploadsForTest()
-	if err != nil {
-		t.Fatalf("PendingUploadsForTest after rejected write: %v", err)
-	}
-	if len(uploads) != 0 {
-		t.Fatalf("committed pending uploads after rejected write = %d, want 0", len(uploads))
-	}
-	if got := s.OrphanedSealsForTest(); got != 1 {
-		t.Fatalf("orphaned seals after rejected write = %d, want 1", got)
-	}
 }
 
 func TestSealTriggeredUploadPressureRejectsCurrentWrite(t *testing.T) {
@@ -247,6 +236,26 @@ func assertUploadPressureError(t *testing.T, err error) {
 	if !ok || reason != storeapi.ResourceExhaustedReasonUploadPressure {
 		t.Fatalf("resource exhausted reason = %q, %v; want upload_pressure", reason, ok)
 	}
+}
+
+func waitPendingUploadBlock(t *testing.T, s *shard.Shard, blockID uint64) shard.PendingUpload {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		uploads, err := s.PendingUploadsForTest()
+		if err != nil {
+			t.Fatalf("PendingUploadsForTest: %v", err)
+		}
+		for _, upload := range uploads {
+			if upload.BlockID == blockID {
+				return upload
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for pending upload block %d", blockID)
+	return shard.PendingUpload{}
 }
 
 func waitUploadPressureLevel(t *testing.T, s *shard.Shard, want shard.UploadPressureLevel) {

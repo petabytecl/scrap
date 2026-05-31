@@ -43,7 +43,7 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 		}
 	}
 	admissionErr := s.uploads.rejectWrite()
-	pendingRetry := s.uploadObligations.beginRetry()
+	pendingRetry := s.uploadObligations.beginRetry(time.Now())
 
 	s.mu.Unlock()
 	s.proposeSeals(ctx, pendingRetry)

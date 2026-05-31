@@ -2,6 +2,7 @@ package shard
 
 import (
 	"math"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/index"
 )
@@ -11,8 +12,9 @@ type uploadObligations struct {
 }
 
 type uploadObligation struct {
-	upload   index.PendingUpload
-	inFlight bool
+	upload     index.PendingUpload
+	inFlight   bool
+	retryAfter time.Time
 }
 
 type uploadPressureStats struct {
@@ -26,8 +28,9 @@ func (o *uploadObligations) recordLocal(upload index.PendingUpload) {
 	for _, existing := range o.local {
 		if existing.upload.BlockID == upload.BlockID {
 			next = append(next, uploadObligation{
-				upload:   upload,
-				inFlight: existing.inFlight,
+				upload:     upload,
+				inFlight:   existing.inFlight,
+				retryAfter: existing.retryAfter,
 			})
 			replaced = true
 			continue
@@ -51,29 +54,33 @@ func (o *uploadObligations) forget(blockID uint64) {
 	o.local = next
 }
 
-func (o *uploadObligations) beginRetry() []index.PendingUpload {
+func (o *uploadObligations) beginRetry(now time.Time) []index.PendingUpload {
 	pending := make([]index.PendingUpload, 0, len(o.local))
 	next := make([]uploadObligation, 0, len(o.local))
 	for _, obligation := range o.local {
-		if obligation.inFlight {
+		if obligation.inFlight || now.Before(obligation.retryAfter) {
 			next = append(next, obligation)
 			continue
 		}
 		pending = append(pending, obligation.upload)
 		next = append(next, uploadObligation{
-			upload:   obligation.upload,
-			inFlight: true,
+			upload:     obligation.upload,
+			inFlight:   true,
+			retryAfter: obligation.retryAfter,
 		})
 	}
 	o.local = next
 	return pending
 }
 
-func (o *uploadObligations) markRetryFailed(blockID uint64) {
+func (o *uploadObligations) markRetryFailed(blockID uint64, retryAfter time.Time) {
 	next := make([]uploadObligation, 0, len(o.local))
 	for _, obligation := range o.local {
 		if obligation.upload.BlockID == blockID && obligation.inFlight {
-			next = append(next, uploadObligation{upload: obligation.upload})
+			next = append(next, uploadObligation{
+				upload:     obligation.upload,
+				retryAfter: retryAfter,
+			})
 			continue
 		}
 		next = append(next, obligation)
