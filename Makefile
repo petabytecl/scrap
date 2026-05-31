@@ -144,7 +144,9 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_CELL_ID Cell ID prefix used by Backend upload E2E assertions.
 ##? SCRAP_E2E_METRICS_URL HTTP metrics URL used by E2E tests.
 ##? SCRAP_E2E_NAMESPACE Kubernetes namespace used by E2E tests.
+##? SCRAP_E2E_KUBE_CONTEXT kubectl context used by safety-gated E2E fault commands.
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
+##? PRODLIKE_E2E_KUBE_CONTEXT kubectl context used by the prod-like Tier 2 E2E gate.
 ##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
 ##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
@@ -153,7 +155,9 @@ SCRAP_E2E_ADDR ?= 127.0.0.1:18090
 SCRAP_E2E_CELL_ID ?= kind-dev
 SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
+SCRAP_E2E_KUBE_CONTEXT ?= kind-$(KIND_CLUSTER)
 SCRAP_E2E_S3_BUCKET ?= scrap-e2e
+PRODLIKE_E2E_KUBE_CONTEXT ?= kind-$(PRODLIKE_KIND_CLUSTER)
 E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub)
@@ -432,6 +436,7 @@ tier2-e2e: cell-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gat
 		SCRAP_E2E_CELL_ID="kind-prodlike" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
@@ -479,6 +484,7 @@ e2e: ## Run E2E tests against an existing Cell.
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(SCRAP_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
@@ -494,6 +500,7 @@ e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
 		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(SCRAP_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \

@@ -93,29 +93,37 @@ func runLeader(args []string, stdout io.Writer, deps Deps) error {
 	if err != nil {
 		return err
 	}
-	cctx, cancel := commandContext(context.Background(), opts.timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, opts.metricsURL, nil)
-	if err != nil {
-		return fmt.Errorf("build metrics request: %w", err)
-	}
-	resp, err := deps.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("GET metrics: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GET metrics status: %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read metrics: %w", err)
-	}
-	leader, err := parseLeaderMetrics(string(body))
+	leader, err := fetchLeaderStatus(context.Background(), opts, deps)
 	if err != nil {
 		return err
 	}
 	return writeByFormat(stdout, opts.output, leader)
+}
+
+func fetchLeaderStatus(ctx context.Context, opts commonOptions, deps Deps) (LeaderStatus, error) {
+	cctx, cancel := commandContext(ctx, opts.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, opts.metricsURL, nil)
+	if err != nil {
+		return LeaderStatus{}, fmt.Errorf("build metrics request: %w", err)
+	}
+	resp, err := deps.HTTPClient.Do(req)
+	if err != nil {
+		return LeaderStatus{}, fmt.Errorf("GET metrics: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return LeaderStatus{}, fmt.Errorf("GET metrics status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return LeaderStatus{}, fmt.Errorf("read metrics: %w", err)
+	}
+	leader, err := parseLeaderMetrics(string(body))
+	if err != nil {
+		return LeaderStatus{}, err
+	}
+	return leader, nil
 }
 
 func fetchHealthCheck(ctx context.Context, opts commonOptions, deps Deps) (*Health, Check) {
