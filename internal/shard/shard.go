@@ -93,7 +93,7 @@ type Shard struct {
 	scrubs                  *scrubCoordinator
 	uploads                 *uploadController
 	uploadPressureScrubGate *pressurePauseGate
-	orphanedSeals           []index.PendingUpload
+	uploadObligations       uploadObligations
 
 	rebuilder *projectionRebuilder
 }
@@ -225,14 +225,14 @@ func ensureShardDirs(dirs ...string) error {
 
 //nolint:cyclop,gocognit // orchestration function managing seal check, prep file, block append, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
-	if err := s.requireWritableLeader(); err != nil {
+	if err := s.requireLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
 
 	s.writeOrderMu.Lock()
 	defer s.writeOrderMu.Unlock()
 
-	if err := s.requireWritableLeader(); err != nil {
+	if err := s.requireWritableLeader(ctx); err != nil {
 		return storeapi.WriteResult{}, err
 	}
 
@@ -512,10 +512,11 @@ func (s *Shard) requireLeader() error {
 	return s.notLeaderError()
 }
 
-func (s *Shard) requireWritableLeader() error {
+func (s *Shard) requireWritableLeader(ctx context.Context) error {
 	if err := s.requireLeader(); err != nil {
 		return err
 	}
+	s.retryUploadObligations(ctx)
 	return s.uploads.rejectWrite()
 }
 
@@ -636,7 +637,7 @@ func (s *Shard) CurrentBlockIDForTest() uint64 {
 func (s *Shard) OrphanedSealsForTest() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.orphanedSeals)
+	return s.uploadObligations.len()
 }
 
 func (s *Shard) SetRebuildingForTest(v bool) {

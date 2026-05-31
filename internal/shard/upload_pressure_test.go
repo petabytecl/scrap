@@ -47,6 +47,51 @@ func TestUploadPressureRejectsWritesAndResumesAfterDrain(t *testing.T) {
 	writeUploadPressureDoc(t, s, "tx-pressure-4", []byte("accepted"))
 }
 
+func TestOrphanedSealTriggersUploadPressureAdmissionBeforeOutboxCommit(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled: true,
+		Pressure: shard.UploadPressureConfig{
+			BudgetBytes: 40,
+			WarnPct:     0.80,
+			PressurePct: 0.90,
+			CriticalPct: 0.95,
+		},
+	})
+	ctx := context.Background()
+
+	s.AddOrphanedSealForTest(shard.PendingUpload{
+		BlockID:         99,
+		ShardID:         testShardID,
+		SealedSizeBytes: 41,
+		SealedAtUs:      time.Now().UnixMicro(),
+	})
+	uploads, err := s.PendingUploadsForTest()
+	if err != nil {
+		t.Fatalf("PendingUploadsForTest: %v", err)
+	}
+	if len(uploads) != 0 {
+		t.Fatalf("committed pending uploads = %d, want 0", len(uploads))
+	}
+	waitUploadPressureLevel(t, s, shard.UploadPressureLevelCritical)
+
+	snapshot := s.UploadPressureForTest()
+	if snapshot.PendingBlocks != 1 {
+		t.Fatalf("pending blocks = %d, want 1 orphaned sealed Block", snapshot.PendingBlocks)
+	}
+	if snapshot.PendingBytes <= 0 {
+		t.Fatalf("pending bytes = %d, want orphaned sealed Block bytes", snapshot.PendingBytes)
+	}
+
+	_, err = s.WriteDocument(ctx, "tx-orphan-pressure-1", "doc.bin", "application/octet-stream", "", bytes.NewReader([]byte("rejected")))
+	if err == nil {
+		t.Fatal("expected write rejection from orphaned upload pressure")
+	}
+	reason, ok := storeapi.ResourceExhaustedReason(err)
+	if !ok || reason != storeapi.ResourceExhaustedReasonUploadPressure {
+		t.Fatalf("resource exhausted reason = %q, %v; want upload_pressure", reason, ok)
+	}
+}
+
 func TestUploadPressureWarnRaisesConcurrencyAndClears(t *testing.T) {
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
