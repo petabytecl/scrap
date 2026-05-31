@@ -1,5 +1,9 @@
 # Mirror block layout across replicas
 
+Status: Accepted
+
+Date: 2026-05-26
+
 Phase 1 has only a single local writer, but it still uses the long-lived Block,
 Frame, and `.idx` format that Phase 2 replicas must mirror.
 

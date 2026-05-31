@@ -1,5 +1,9 @@
 # Bytes separate from Raft
 
+Status: Accepted
+
+Date: 2026-05-26
+
 This ADR governs Phase 2+ replicated storage. Phase 1 is a single-node spike-store:
 it uses the same API and binary storage contracts, but has no Raft, peer fan-out, or
 quorum ACK path.

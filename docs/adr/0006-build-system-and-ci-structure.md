@@ -4,6 +4,8 @@ Status: Accepted
 
 Date: 2026-05-26
 
+Superseded by: ADR-0015 for the prod-like Kind Cell and verification gates.
+
 ## Context
 
 V2 launched with a minimal 6-target Makefile, a multi-stage alpine Dockerfile, a
@@ -64,5 +66,6 @@ the local CI gate.
 
 **Local dev environment.** Orchestration script (`scripts/local-dev-env.sh`) with
 `up`, `down`, `status` commands and profile support. Ships with `dev` profile
-(3-node Kind, 3 scrapd replicas). `prod-like` profile (5+ nodes) deferred until
-needed.
+(3-node Kind, 3 scrapd replicas). The original `prod-like` profile deferral is
+superseded by ADR-0015: prod-like and evidence Kind Cells now use Cilium-backed
+named environments and separate Cell setup from E2E/evidence execution.

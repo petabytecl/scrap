@@ -1,5 +1,9 @@
 # Dual checksum architecture: CRC-32C per frame, SHA-256 per document
 
+Status: Accepted
+
+Date: 2026-05-26
+
 Two checksum algorithms at two granularities:
 
 - **Frame-level: CRC-32C** (embedded in each frame header in the block file).

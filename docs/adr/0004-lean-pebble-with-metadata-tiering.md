@@ -1,5 +1,9 @@
 # Lean Pebble projection with metadata tiering
 
+Status: Accepted
+
+Date: 2026-05-26
+
 Pebble stores one versioned entry per Transaction (not per Document), mapping
 `transaction_id` to `{block_ids, doc_count, completed}`.
 A Transaction may span multiple Blocks when a seal triggers between Documents,
