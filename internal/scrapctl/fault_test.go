@@ -2,6 +2,7 @@ package scrapctl
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -67,6 +68,13 @@ func TestFaultBackendRequiresExplicitKubernetesTarget(t *testing.T) {
 	}
 }
 
+func TestFaultRejectsUnsupportedCommand(t *testing.T) {
+	err := Run([]string{"fault", "backend", "explode"}, io.Discard, io.Discard, Deps{})
+	if err == nil || !strings.Contains(err.Error(), `unsupported fault command "backend" "explode"`) {
+		t.Fatalf("error = %v, want unsupported fault command", err)
+	}
+}
+
 func TestFaultBackendBreakAndRestoreUseSafetyGate(t *testing.T) {
 	runner := &fakeRunner{run: func(name string, args ...string) (string, error) {
 		if name != "kubectl" {
@@ -128,6 +136,24 @@ func TestFaultBackendBreakAndRestoreUseSafetyGate(t *testing.T) {
 	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap rollout status deployment/localstack")
 }
 
+func TestFaultBackendReportsKubectlFailure(t *testing.T) {
+	runner := &fakeRunner{run: func(_ string, _ ...string) (string, error) {
+		return "scale failed", errors.New("failed")
+	}}
+
+	err := Run([]string{
+		"fault", "backend", "break",
+		"--namespace=scrap",
+		"--context=kind-scrap-prodlike",
+		"--cell-id=kind-prodlike",
+		"--environment=prodlike",
+		"--confirm=kind-prodlike",
+	}, io.Discard, io.Discard, Deps{Runner: runner})
+	if err == nil || !strings.Contains(err.Error(), "kubectl scale") {
+		t.Fatalf("error = %v, want kubectl scale failure", err)
+	}
+}
+
 func TestFaultLeaderDeleteUsesSafetyGate(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -163,6 +189,33 @@ scrap_raft_leader_id{service_name="scrapd",instance="scrapd-2"} 3
 	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap rollout status statefulset/scrapd")
 	if !strings.Contains(out.String(), `"action":"fault.leader.delete"`) {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestFaultLeaderDeleteRejectsInvalidLeaderID(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `scrap_raft_is_leader{service_name="scrapd",instance="scrapd-0"} 0
+scrap_raft_leader_id{service_name="scrapd",instance="scrapd-0"} 0
+`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	err := Run([]string{
+		"fault", "leader", "delete",
+		"--namespace=scrap",
+		"--context=kind-scrap-prodlike",
+		"--cell-id=kind-prodlike",
+		"--environment=prodlike",
+		"--confirm=kind-prodlike",
+		"--metrics-url=http://admin.local/metrics",
+	}, io.Discard, io.Discard, Deps{Runner: &fakeRunner{}, HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "cannot map") {
+		t.Fatalf("error = %v, want invalid leader id", err)
 	}
 }
 
@@ -216,6 +269,20 @@ func TestFaultProjectionInjectPostsAdminHook(t *testing.T) {
 	}
 }
 
+func TestFaultProjectionInjectRequiresIdentifiers(t *testing.T) {
+	err := Run([]string{
+		"fault", "projection", "inject",
+		"--namespace=scrap",
+		"--context=kind-scrap-prodlike",
+		"--cell-id=kind-prodlike",
+		"--environment=prodlike",
+		"--confirm=kind-prodlike",
+	}, io.Discard, io.Discard, Deps{})
+	if err == nil || !strings.Contains(err.Error(), "transaction-id") {
+		t.Fatalf("error = %v, want missing identifiers", err)
+	}
+}
+
 func TestFaultBlockCorruptUsesSafetyGate(t *testing.T) {
 	runner := &fakeRunner{}
 
@@ -242,6 +309,34 @@ func TestFaultBlockCorruptUsesSafetyGate(t *testing.T) {
 	}
 }
 
+func TestFaultBlockCorruptRejectsInvalidByte(t *testing.T) {
+	runner := &fakeRunner{}
+
+	err := Run([]string{
+		"fault", "block", "corrupt",
+		"--namespace=scrap",
+		"--context=kind-scrap-prodlike",
+		"--cell-id=kind-prodlike",
+		"--environment=prodlike",
+		"--confirm=kind-prodlike",
+		"--pod=scrapd-1",
+		"--byte=too-long",
+	}, io.Discard, io.Discard, Deps{Runner: runner})
+	if err == nil || !strings.Contains(err.Error(), "single character") {
+		t.Fatalf("error = %v, want invalid byte", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("invalid block corrupt ran commands: %v", runner.commands)
+	}
+}
+
+func TestEvidenceRejectsUnsupportedCommand(t *testing.T) {
+	err := Run([]string{"evidence", "unknown"}, io.Discard, io.Discard, Deps{})
+	if err == nil || !strings.Contains(err.Error(), `unsupported evidence command "unknown"`) {
+		t.Fatalf("error = %v, want unsupported evidence command", err)
+	}
+}
+
 func TestEvidenceLogProbeEmitsMarker(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if got := req.Header.Get("X-Scrap-Evidence-Marker"); got != "evidence-123" {
@@ -262,6 +357,22 @@ func TestEvidenceLogProbeEmitsMarker(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"marker":"evidence-123"`) {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestEvidenceLogProbeRejectsUnhealthyStatus(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Body:       io.NopCloser(strings.NewReader("not ready")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	err := Run([]string{"evidence", "log-probe", "--admin-url=http://admin.local"}, io.Discard, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "status: 503") {
+		t.Fatalf("error = %v, want unhealthy status", err)
 	}
 }
 
@@ -293,6 +404,60 @@ func TestEvidencePprofWritesProfile(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"profile":"heap"`) {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestEvidencePprofValidatesOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing output",
+			args: []string{"evidence", "pprof", "--profile=heap"},
+			want: "out is required",
+		},
+		{
+			name: "unsupported profile",
+			args: []string{"evidence", "pprof", "--profile=unknown", "--out=/tmp/profile.pb.gz"},
+			want: "unsupported profile",
+		},
+		{
+			name: "cpu seconds",
+			args: []string{"evidence", "pprof", "--profile=cpu", "--seconds=0", "--out=/tmp/profile.pb.gz"},
+			want: "seconds must be positive",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Run(tc.args, io.Discard, io.Discard, Deps{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestPprofPath(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile string
+		seconds int
+		want    string
+	}{
+		{name: "heap", profile: "heap", want: "/debug/pprof/heap"},
+		{name: "cpu", profile: "cpu", seconds: 7, want: "/debug/pprof/profile?seconds=7"},
+		{name: "trace", profile: "trace", seconds: 9, want: "/debug/pprof/trace?seconds=9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pprofPath(tc.profile, tc.seconds)
+			if err != nil {
+				t.Fatalf("pprofPath: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("path = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
