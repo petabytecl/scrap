@@ -16,7 +16,7 @@ func TestUploadObligationsRetainsAllLocalSealsForRetryAndPressure(t *testing.T) 
 		})
 	}
 
-	pendingRetry := obligations.pendingRetry()
+	pendingRetry := obligations.beginRetry()
 	if len(pendingRetry) != total {
 		t.Fatalf("pending retry seals = %d, want %d", len(pendingRetry), total)
 	}
@@ -33,6 +33,55 @@ func TestUploadObligationsRetainsAllLocalSealsForRetryAndPressure(t *testing.T) 
 	}
 	if stats.pendingBytes != total {
 		t.Fatalf("pressure pending bytes = %d, want %d", stats.pendingBytes, total)
+	}
+}
+
+func TestUploadObligationsDoesNotRetryInFlightSeal(t *testing.T) {
+	var obligations uploadObligations
+	obligations.recordLocal(PendingUpload{BlockID: 1, ShardID: uploadObligationsTestShardID, SealedSizeBytes: 10})
+
+	first := obligations.beginRetry()
+	if len(first) != 1 {
+		t.Fatalf("first retry batch = %d, want 1", len(first))
+	}
+	second := obligations.beginRetry()
+	if len(second) != 0 {
+		t.Fatalf("second retry batch = %d, want 0 while seal is in flight", len(second))
+	}
+
+	stats := obligations.pressureStats(nil)
+	if stats.pendingBlocks != 1 || stats.pendingBytes != 10 {
+		t.Fatalf("pressure stats while in flight = %+v, want one local obligation", stats)
+	}
+}
+
+func TestUploadObligationsRetriesFailedInFlightSeal(t *testing.T) {
+	var obligations uploadObligations
+	obligations.recordLocal(PendingUpload{BlockID: 1, ShardID: uploadObligationsTestShardID, SealedSizeBytes: 10})
+
+	if got := len(obligations.beginRetry()); got != 1 {
+		t.Fatalf("first retry batch = %d, want 1", got)
+	}
+	obligations.markRetryFailed(1)
+
+	retry := obligations.beginRetry()
+	if len(retry) != 1 {
+		t.Fatalf("retry batch after failed proposal = %d, want 1", len(retry))
+	}
+}
+
+func TestUploadObligationsIgnoresLateFailureAfterForget(t *testing.T) {
+	var obligations uploadObligations
+	obligations.recordLocal(PendingUpload{BlockID: 1, ShardID: uploadObligationsTestShardID, SealedSizeBytes: 10})
+	if got := len(obligations.beginRetry()); got != 1 {
+		t.Fatalf("first retry batch = %d, want 1", got)
+	}
+
+	obligations.forget(1)
+	obligations.markRetryFailed(1)
+
+	if got := len(obligations.beginRetry()); got != 0 {
+		t.Fatalf("retry batch after forgotten obligation failed late = %d, want 0", got)
 	}
 }
 

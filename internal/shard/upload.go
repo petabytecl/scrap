@@ -79,6 +79,9 @@ func (s *Shard) proposeSealBlock(ctx context.Context, upload index.PendingUpload
 func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) {
 	for _, seal := range seals {
 		if err := s.proposeSealBlock(ctx, seal); err != nil {
+			s.mu.Lock()
+			s.uploadObligations.markRetryFailed(seal.BlockID)
+			s.mu.Unlock()
 			s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", seal.BlockID, "err", err)
 		}
 	}
@@ -157,7 +160,7 @@ func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 
 func (s *Shard) retryUploadObligations(ctx context.Context) {
 	s.mu.Lock()
-	pendingRetry := s.uploadObligations.pendingRetry()
+	pendingRetry := s.uploadObligations.beginRetry()
 	s.mu.Unlock()
 
 	s.proposeSeals(ctx, pendingRetry)

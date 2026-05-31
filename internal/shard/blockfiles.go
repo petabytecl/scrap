@@ -42,13 +42,14 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 			return err
 		}
 	}
-	pendingRetry := s.uploadObligations.pendingRetry()
+	admissionErr := s.uploads.rejectWrite()
+	pendingRetry := s.uploadObligations.beginRetry()
 
 	s.mu.Unlock()
 	s.proposeSeals(ctx, pendingRetry)
 	s.mu.Lock()
 
-	return nil
+	return admissionErr
 }
 
 func (s *Shard) openNewBlock() error {

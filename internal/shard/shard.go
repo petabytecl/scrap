@@ -200,11 +200,14 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
-	if err := s.refreshUploadPressureLocked(); err != nil {
+	s.mu.Lock()
+	refreshErr := s.refreshUploadPressureLocked()
+	s.mu.Unlock()
+	if refreshErr != nil {
 		raftNode.Stop()
 		s.closeBlockAndIdx()
 		_ = idx.Close()
-		return nil, fmt.Errorf("shard: refresh upload pressure: %w", err)
+		return nil, fmt.Errorf("shard: refresh upload pressure: %w", refreshErr)
 	}
 	s.uploads.setAuthPausedMetric(false)
 
@@ -514,6 +517,9 @@ func (s *Shard) requireLeader() error {
 
 func (s *Shard) requireWritableLeader(ctx context.Context) error {
 	if err := s.requireLeader(); err != nil {
+		return err
+	}
+	if err := s.uploads.rejectWrite(); err != nil {
 		return err
 	}
 	s.retryUploadObligations(ctx)
