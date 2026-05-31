@@ -21,10 +21,6 @@ func (c *scrubCoordinator) Quarantine(blkPath string) error {
 	return block.Quarantine(blkPath)
 }
 
-func (c *scrubCoordinator) ListQuarantined() ([]uint64, error) {
-	return block.ListQuarantined(c.blocksDir)
-}
-
 func (s *Shard) InjectProjectionKey(_ context.Context, txID string, blockID uint64, docCount uint16, completed bool) error {
 	if txID == "" {
 		return errors.New("shard: transaction_id is required")

@@ -120,7 +120,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		Metrics:            shardTel.scrubMetrics,
 		DeepMetrics:        shardTel.deepScrubMetrics,
 		Rebuilder:          peer.NewClientRebuilder(peerClient),
-		BlockRepairer:      peer.NewClientBlockRepairer(peerClient, cfg.DataDir+"/blocks"),
+		BlockTransferer:    peerClient,
 		Replicator:         peerClient,
 		PeerAddrs:          peerAddrsExceptSelf(peers, raftID),
 		Upload:             uploadCfg,
