@@ -128,7 +128,7 @@ jobs:
         run: make test-race
 
   integration:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -144,7 +144,7 @@ jobs:
         run: make integration
 
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -160,7 +160,7 @@ jobs:
         run: make build
 
   vulnerability:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -175,7 +175,7 @@ jobs:
       - run: make vuln
 
   e2e:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     if: contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v5
@@ -207,7 +207,7 @@ jobs:
           if-no-files-found: warn
 
   e2e-status:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     needs:
       - e2e
     if: ${{ always() }}
@@ -226,7 +226,7 @@ jobs:
           fi
 
   check:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     needs:
       - static
       - test
