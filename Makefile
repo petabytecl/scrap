@@ -63,6 +63,7 @@ CHECK_TARGETS := \
 	tests \
 	build
 STATIC_TARGETS := \
+	e2e-gates-check \
 	kind-cilium-check \
 	manifests-check \
 	fmt-check \
@@ -116,6 +117,7 @@ LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 ##? PRODLIKE_KIND_CLUSTER Kind cluster name used by prod-like Cell targets.
 ##? PRODLIKE_KIND_CONFIG Kind config for the Cilium-backed prod-like Cell.
 ##? PRODLIKE_OVERLAY Kustomize overlay used for the prod-like Cell.
+##? PRODLIKE_E2E_OVERLAY Kustomize overlay used for prod-like E2E test hooks.
 ##? CILIUM_VERSION Cilium chart version used by prod-like Kind targets.
 ##? CILIUM_CHART_DIR Vendored Cilium chart used by prod-like Kind targets.
 ##? CILIUM_VALUES Helm values used for prod-like Cilium.
@@ -124,6 +126,7 @@ LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 PRODLIKE_KIND_CLUSTER ?= scrap-prodlike
 PRODLIKE_KIND_CONFIG ?= deploy/kind/cluster-prodlike-cilium.yaml
 PRODLIKE_OVERLAY ?= deploy/kustomize/overlays/prodlike
+PRODLIKE_E2E_OVERLAY ?= deploy/kustomize/overlays/prodlike-e2e
 CILIUM_VERSION ?= 1.19.4
 CILIUM_CHART_DIR ?= deploy/cilium/charts/cilium
 CILIUM_VALUES ?= deploy/cilium/prodlike-values.yaml
@@ -144,14 +147,16 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
 ##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
+##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
 
 SCRAP_E2E_ADDR ?= 127.0.0.1:18090
 SCRAP_E2E_CELL_ID ?= kind-dev
 SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
 SCRAP_E2E_S3_BUCKET ?= scrap-e2e
-E2E_TEST_RUN ?= TestE2E(WriteAndRead|LeaderFailover|BackendUpload)
+E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
+TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub)
 
 ##@ Stress Variables
 
@@ -286,11 +291,16 @@ manifests-check: ## Validate rendered manifests and deployment hardening invaria
 		LOCAL_KIND_OVERLAY='$(LOCAL_KIND_OVERLAY)' \
 		sh ./scripts/check-kustomize-manifests.sh
 
+.PHONY: e2e-gates-check
+e2e-gates-check: ## Validate E2E target composition and Tier 2 gate wiring.
+	@bash ./scripts/check-e2e-gates.sh
+
 .PHONY: kind-cilium-check
 kind-cilium-check: ## Validate prod-like Kind Cilium bootstrap wiring.
 	@PRODLIKE_KIND_CONFIG='$(PRODLIKE_KIND_CONFIG)' \
 		STRESS_KIND_CONFIG='$(STRESS_KIND_CONFIG)' \
 		PRODLIKE_OVERLAY='$(PRODLIKE_OVERLAY)' \
+		PRODLIKE_E2E_OVERLAY='$(PRODLIKE_E2E_OVERLAY)' \
 		CILIUM_VALUES='$(CILIUM_VALUES)' \
 		CILIUM_CHART_DIR='$(CILIUM_CHART_DIR)' \
 		CILIUM_SCRIPT='$(CILIUM_SCRIPT)' \
@@ -375,6 +385,16 @@ prodlike-kind-deploy: manifests-check ## Apply prod-like manifests and wait for 
 	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
+.PHONY: prodlike-kind-deploy-e2e
+prodlike-kind-deploy-e2e: LOCAL_KIND_OVERLAY=$(PRODLIKE_E2E_OVERLAY)
+prodlike-kind-deploy-e2e: manifests-check ## Apply prod-like E2E manifests with test-only mutation hooks.
+	$(KUSTOMIZE) build "$(PRODLIKE_E2E_OVERLAY)" | $(KUBECTL) apply -f -
+	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+
 .PHONY: prodlike-cell-doctor
 prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and NetworkPolicy behavior.
 	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
@@ -386,8 +406,26 @@ prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and Network
 .PHONY: prodlike-cell-up
 prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor ## Bring up and verify the prod-like Kind Cell.
 
-.PHONY: prodlike-e2e-smoke
-prodlike-e2e-smoke: ## Run the current E2E smoke suite against an existing prod-like Cell.
+.PHONY: prodlike-e2e-cell-up
+prodlike-e2e-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy-e2e prodlike-cell-doctor ## Bring up prod-like Kind with test-only E2E hooks.
+
+.PHONY: prodlike-up
+prodlike-up: prodlike-cell-up ## Bring up and verify the prod-like Kind Cell.
+
+.PHONY: cell-doctor
+cell-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating or deleting infrastructure.
+
+.PHONY: tier2-e2e-hooks-check
+tier2-e2e-hooks-check: ## Verify an existing Tier 2 Cell has the test-only hook overlay.
+	@hooks="$$( $(KUBECTL) -n "$(SCRAP_E2E_NAMESPACE)" get statefulset scrapd -o jsonpath='{.spec.template.spec.containers[?(@.name=="scrapd")].env[?(@.name=="SCRAP_TEST_HOOKS")].value}' )"; \
+	if [ "$$hooks" != "1" ]; then \
+		printf 'Tier 2 E2E requires SCRAP_TEST_HOOKS=1; run make tier2-e2e-up or deploy %s\n' "$(PRODLIKE_E2E_OVERLAY)" >&2; \
+		exit 1; \
+	fi
+
+.PHONY: tier2-e2e
+tier2-e2e: cell-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
+	@printf 'TIER2_E2E_STATUS=running\n'
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_CELL_ID="kind-prodlike" \
@@ -396,7 +434,14 @@ prodlike-e2e-smoke: ## Run the current E2E smoke suite against an existing prod-
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -run 'TestE2E(WriteAndRead|LeaderFailover|BackendUploadHappyPath)' -v -timeout 300s
+		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -count=1 -v -timeout 600s
+	@printf 'TIER2_E2E_STATUS=passed\n'
+
+.PHONY: tier2-e2e-up
+tier2-e2e-up: prodlike-e2e-cell-up tier2-e2e ## Bring up prod-like Kind with E2E hooks, then run the Tier 2 gate.
+
+.PHONY: prodlike-e2e-smoke
+prodlike-e2e-smoke: tier2-e2e ## Compatibility alias for the prod-like Tier 2 E2E gate.
 
 ##@ Local Dev
 
@@ -427,7 +472,7 @@ e2e-setup: local-kind-ensure local-kind-load local-kind-deploy ## Create Kind cl
 	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
 .PHONY: e2e
-e2e: e2e-setup ## Run E2E tests against a Kind cluster.
+e2e: ## Run E2E tests against an existing Cell.
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
@@ -436,13 +481,14 @@ e2e: e2e-setup ## Run E2E tests against a Kind cluster.
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -run '$(E2E_TEST_RUN)' -v -timeout 300s
+		$(GO) test ./test/e2e/ -run '$(E2E_TEST_RUN)' -count=1 -v -timeout 300s
+
+.PHONY: e2e-up
+e2e-up: e2e-setup e2e ## Create/update local Kind, then run E2E tests.
 
 .PHONY: e2e-scrub
-e2e-scrub: LOCAL_KIND_OVERLAY=deploy/kustomize/overlays/local-kind-scrub
-e2e-scrub: e2e-setup ## Run scrub E2E tests with the local Kind scrub overlay and cleanup.
+e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 	SCRAP_E2E=1 \
-		SCRAP_E2E_CLEANUP=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
 		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
 		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
@@ -450,7 +496,11 @@ e2e-scrub: e2e-setup ## Run scrub E2E tests with the local Kind scrub overlay an
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
 		KIND_CLUSTER="$(KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -run '$(SCRUB_E2E_TEST_RUN)' -v -timeout 600s
+		$(GO) test ./test/e2e/ -run '$(SCRUB_E2E_TEST_RUN)' -count=1 -v -timeout 600s
+
+.PHONY: e2e-scrub-up
+e2e-scrub-up: LOCAL_KIND_OVERLAY=deploy/kustomize/overlays/local-kind-scrub
+e2e-scrub-up: e2e-setup e2e-scrub ## Create/update scrub-enabled local Kind, then run scrub E2E tests.
 
 ##@ Stress
 
@@ -462,6 +512,9 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 		$(KIND) create cluster --name "$(STRESS_KIND_CLUSTER)" --config "$(STRESS_KIND_CONFIG)"; \
 	fi
 	$(KIND) export kubeconfig --name "$(STRESS_KIND_CLUSTER)" >/dev/null
+	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
+		KUBECTL="$(KUBECTL)" \
+		"$(CILIUM_SCRIPT)" baseline
 	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
 		CILIUM_VERSION="$(CILIUM_VERSION)" \
 		CILIUM_VALUES="$(CILIUM_VALUES)" \

@@ -86,6 +86,16 @@ preflight_kind_nodes() {
 	done
 }
 
+check_kind_cni_baseline() {
+	require_command "$KUBECTL"
+	if "$KUBECTL" -n kube-system get daemonset kube-proxy >/dev/null 2>&1; then
+		die "kube-proxy daemonset exists before Cilium install; delete and recreate $CLUSTER with kubeProxyMode=none"
+	fi
+	if "$KUBECTL" -n kube-system get daemonset kindnet >/dev/null 2>&1; then
+		die "kindnet daemonset exists before Cilium install; delete and recreate $CLUSTER with disableDefaultCNI=true"
+	fi
+}
+
 control_plane_ip() {
 	"$DOCKER" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CLUSTER-control-plane"
 }
@@ -95,6 +105,7 @@ install_cilium() {
 	require_command "$KUBECTL"
 	preflight_host
 	preflight_kind_nodes
+	check_kind_cni_baseline
 	[ -d "$CILIUM_CHART_DIR" ] || die "vendored Cilium chart not found: $CILIUM_CHART_DIR"
 
 	api_host=$(control_plane_ip)
@@ -130,6 +141,9 @@ check_cilium_status() {
 	if "$KUBECTL" -n kube-system get daemonset kube-proxy >/dev/null 2>&1; then
 		die "kube-proxy daemonset exists; prod-like Cell must use Cilium replacement only"
 	fi
+	if "$KUBECTL" -n kube-system get daemonset kindnet >/dev/null 2>&1; then
+		die "kindnet daemonset exists; recreate the Kind cluster with disableDefaultCNI=true"
+	fi
 }
 
 wait_tcp() {
@@ -137,8 +151,8 @@ wait_tcp() {
 	port=$2
 	label=$3
 
-	deadline=$((SECONDS + 30))
-	while [ "$SECONDS" -lt "$deadline" ]; do
+	deadline=$(($(date +%s) + 30))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if command -v nc >/dev/null 2>&1 && nc -z "$host" "$port" >/dev/null 2>&1; then
 			return
 		fi
@@ -227,6 +241,9 @@ case "$command_name" in
 	preflight)
 		preflight_host
 		;;
+	baseline)
+		check_kind_cni_baseline
+		;;
 	install)
 		install_cilium
 		;;
@@ -240,6 +257,6 @@ case "$command_name" in
 		doctor
 		;;
 	*)
-		die "usage: $0 [preflight|install|wait|status|doctor]"
+		die "usage: $0 [preflight|baseline|install|wait|status|doctor]"
 		;;
 esac

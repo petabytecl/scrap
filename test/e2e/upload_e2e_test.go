@@ -76,8 +76,7 @@ func TestE2EBackendUploadLeaderChange(t *testing.T) {
 	docName := writeUploadBlockE2E(t, client, txID, "failover", 'f')
 	leader := findLeaderPod(t, txID, docName)
 
-	runKubectl(t, kubectlCommandWait, "-n", namespace(), "delete", "pod", leader, "--grace-period=0", "--force", "--wait=false")
-	runKubectl(t, 2*time.Minute, "-n", namespace(), "wait", "--for=condition=Ready", "pod", "-l", "app=scrap", "--timeout=120s")
+	deletePodAndWaitReady(t, leader)
 
 	restoreLocalStack(t)
 	endpoint, stopLocalStack = startLocalStackPortForward(t)
@@ -464,4 +463,28 @@ func waitCellMetricAbove(t *testing.T, name string, labels []string, previous fl
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("metric %s did not increase above %.0f on any pod", name, previous)
+}
+
+func waitCellMetricSumAbove(t *testing.T, name string, labels []string, previous float64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cellMetricSum(t, name, labels) > previous {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("metric %s cell-wide sum did not increase above %.0f", name, previous)
+}
+
+func cellMetricSum(t *testing.T, name string, labels []string) float64 {
+	t.Helper()
+	var total float64
+	for _, pod := range podNames(t) {
+		addr, stop := startPodPortForward(t, pod, 9100)
+		current := fetchMetricValueWithLabels(t, "http://"+addr+"/metrics", name, labels)
+		stop()
+		total += current
+	}
+	return total
 }

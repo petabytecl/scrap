@@ -27,24 +27,12 @@ import (
 
 const (
 	defaultE2ENamespace  = "scrap"
-	defaultKindCluster   = "scrap-local"
 	scrubE2ETimeout      = 90 * time.Second
+	lightScrubE2ETimeout = 3 * time.Minute
 	portForwardWait      = 15 * time.Second
 	kubectlCommandWait   = 30 * time.Second
 	corruptPayloadOffset = 72
 )
-
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if os.Getenv("SCRAP_E2E_CLEANUP") == "1" {
-		cluster := envOrDefault("KIND_CLUSTER", defaultKindCluster)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		//nolint:gosec // E2E cleanup intentionally shells out to the local kind tool with a test-controlled cluster name.
-		_ = exec.CommandContext(ctx, "go", "run", "sigs.k8s.io/kind@v0.31.0", "delete", "cluster", "--name", cluster).Run()
-		cancel()
-	}
-	os.Exit(code)
-}
 
 func TestE2EDeepScrubDetectsAndRepairsBlock(t *testing.T) {
 	requireE2E(t)
@@ -89,14 +77,11 @@ func TestE2ELightScrubDetectsProjectionDivergence(t *testing.T) {
 
 	leader := findLeaderPod(t, txID, "doc.xml")
 	victim := firstNonLeaderPod(t, leader)
-	metricsURL, stopMetrics := startPodPortForward(t, leader, 9100)
-	defer stopMetrics()
-	metricsEndpoint := "http://" + metricsURL + "/metrics"
 
-	mismatchesBefore := fetchMetricValueWithLabels(t, metricsEndpoint, "scrap_scrub_light_runs_total", []string{`result="mismatch"`})
+	mismatchesBefore := cellMetricSum(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`})
 	injectProjectionKey(t, victim, uniqueName("tx-e2e-divergent"))
 
-	waitMetricAbove(t, metricsEndpoint, "scrap_scrub_light_runs_total", []string{`result="mismatch"`}, mismatchesBefore, scrubE2ETimeout)
+	waitCellMetricSumAbove(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`}, mismatchesBefore, lightScrubE2ETimeout)
 
 	readBack := readDocE2E(t, client, txID, "doc.xml")
 	if !bytes.Equal(readBack, content) {
@@ -132,16 +117,46 @@ func kubectlBin() string {
 
 func runKubectl(t *testing.T, timeout time.Duration, args ...string) string {
 	t.Helper()
+	out, err := tryKubectl(timeout, args...)
+	if err != nil {
+		t.Fatalf("kubectl %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return out
+}
+
+func tryKubectl(timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-
 	//nolint:gosec // E2E tests intentionally execute the configured kubectl binary against the test cluster.
 	cmd := exec.CommandContext(ctx, kubectlBin(), args...)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("kubectl %s: %v\n%s", strings.Join(args, " "), err, string(out))
+	return string(out), err
+}
+
+func deletePodAndWaitReady(t *testing.T, pod string) {
+	t.Helper()
+	oldUID := strings.TrimSpace(runKubectl(t, kubectlCommandWait, "-n", namespace(), "get", "pod", pod, "-o", "jsonpath={.metadata.uid}"))
+	runKubectl(t, kubectlCommandWait, "-n", namespace(), "delete", "pod", pod, "--grace-period=0", "--force", "--wait=false")
+	waitForReplacementPodReady(t, pod, oldUID, 2*time.Minute)
+	runKubectl(t, 3*time.Minute, "-n", namespace(), "rollout", "status", "statefulset/scrapd", "--timeout=180s")
+}
+
+func waitForReplacementPodReady(t *testing.T, pod, oldUID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := tryKubectl(kubectlCommandWait,
+			"-n", namespace(),
+			"get", "pod", pod,
+			"-o", "jsonpath={.metadata.uid} {.status.phase} {.status.containerStatuses[0].ready}",
+		)
+		fields := strings.Fields(out)
+		if err == nil && len(fields) == 3 && fields[0] != oldUID && fields[1] == "Running" && fields[2] == "true" {
+			return
+		}
+		time.Sleep(time.Second)
 	}
-	return string(out)
+	t.Fatalf("pod %s was not replaced and ready within %s", pod, timeout)
 }
 
 func podNames(t *testing.T) []string {
@@ -167,21 +182,27 @@ func firstNonLeaderPod(t *testing.T, leader string) string {
 
 func findLeaderPod(t *testing.T, txID, docName string) string {
 	t.Helper()
-	for _, pod := range podNames(t) {
-		addr, stop := startPodPortForward(t, pod, 9090)
-		client := newDocumentClientAt(t, addr)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
-			TransactionId: txID,
-			DocumentName:  docName,
-		})
-		cancel()
-		stop()
-		if err == nil {
-			return pod
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		for _, pod := range podNames(t) {
+			addr, stop := startPodPortForward(t, pod, 9090)
+			client := newDocumentClientAt(t, addr)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
+				TransactionId: txID,
+				DocumentName:  docName,
+			})
+			cancel()
+			stop()
+			if err == nil {
+				return pod
+			}
+			lastErr = err
 		}
+		time.Sleep(time.Second)
 	}
-	t.Fatal("could not identify leader pod")
+	t.Fatalf("could not identify leader pod for %s/%s: %v", txID, docName, lastErr)
 	return ""
 }
 
