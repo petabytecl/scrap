@@ -3,9 +3,12 @@ set -euo pipefail
 
 MAKEFILE=${MAKEFILE:-Makefile}
 WORKFLOW=${WORKFLOW:-.github/workflows/ci.yml}
+PRODLIKE_WORKFLOW=${PRODLIKE_WORKFLOW:-.github/workflows/prodlike-e2e.yml}
+EVIDENCE_WORKFLOW=${EVIDENCE_WORKFLOW:-.github/workflows/evidence-gate.yml}
 SCRUB_E2E=${SCRUB_E2E:-test/e2e/scrub_e2e_test.go}
 PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
 PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodlike-e2e}
+PRD_CLOSURE_POLICY=${PRD_CLOSURE_POLICY:-docs/prd-closure-policy.md}
 
 fail() {
 	echo "e2e gate check failed: $*" >&2
@@ -75,6 +78,8 @@ require_target cell-doctor
 require_target tier2-e2e-hooks-check
 require_target tier2-e2e
 require_target tier2-e2e-up
+require_target tier3-evidence
+require_target tier3-evidence-up
 
 target_must_not_depend_on e2e e2e-setup
 target_must_not_depend_on e2e-scrub e2e-setup
@@ -89,6 +94,8 @@ target_must_depend_on tier2-e2e-up tier2-e2e
 target_must_depend_on prodlike-e2e-cell-up prodlike-kind-deploy-e2e
 target_must_depend_on tier2-e2e cell-doctor
 target_must_depend_on tier2-e2e tier2-e2e-hooks-check
+target_must_depend_on tier3-evidence-up stress-setup
+target_must_depend_on tier3-evidence-up tier3-evidence
 
 reject_pattern 'SCRAP_E2E_CLEANUP' "$MAKEFILE" "cluster cleanup during E2E execution"
 reject_pattern 'SCRAP_E2E_CLEANUP' "$SCRUB_E2E" "cluster cleanup during E2E execution"
@@ -96,7 +103,8 @@ reject_pattern 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.
 
 require_pattern '^PRODLIKE_E2E_OVERLAY[[:space:]]*\?=' "$MAKEFILE" "prod-like E2E overlay variable"
 require_pattern '^PRODLIKE_KUBE_CONTEXT[[:space:]]*\?=' "$MAKEFILE" "prod-like kube context variable"
-require_pattern '^PRODLIKE_E2E_KUBE_CONTEXT[[:space:]]*\?=.*PRODLIKE_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context default"
+require_pattern '^ifndef PRODLIKE_E2E_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context conditional default"
+require_pattern '^PRODLIKE_E2E_KUBE_CONTEXT[[:space:]]*:=.*PRODLIKE_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context default"
 require_pattern '^PRODLIKE_E2E_KUBECTL[[:space:]]*=.*PRODLIKE_E2E_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kubectl context wrapper"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*WriteReadHead' "$MAKEFILE" "Tier 2 write/read/head coverage"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*LeaderFailover' "$MAKEFILE" "Tier 2 leader failover coverage"
@@ -120,3 +128,23 @@ require_pattern '[[:space:]]+- e2e[[:space:]]*$' "$WORKFLOW" "E2E result depende
 require_pattern 'E2E_RESULT:.*needs\.e2e\.result' "$WORKFLOW" "E2E result environment in aggregate check"
 require_pattern 'test "\$E2E_RESULT" = success' "$WORKFLOW" "requested E2E success assertion"
 require_pattern 'test "\$E2E_RESULT" = skipped' "$WORKFLOW" "skipped E2E assertion"
+require_pattern 'ci-tier2-e2e' "$WORKFLOW" "CI Tier 2 artifact upload"
+require_pattern 'collect-kind-artifacts' "$WORKFLOW" "CI Tier 2 failure artifact collection"
+
+require_pattern 'workflow_dispatch:' "$PRODLIKE_WORKFLOW" "manual Tier 2 workflow dispatch"
+require_pattern 'schedule:' "$PRODLIKE_WORKFLOW" "scheduled Tier 2 workflow"
+require_pattern 'make tier2-e2e-up' "$PRODLIKE_WORKFLOW" "Tier 2 prod-like E2E command"
+require_pattern 'upload-artifact' "$PRODLIKE_WORKFLOW" "Tier 2 artifact upload"
+require_pattern 'collect-kind-artifacts' "$PRODLIKE_WORKFLOW" "Tier 2 failure artifact collection"
+require_pattern 'kind-scrap-prodlike' "$PRODLIKE_WORKFLOW" "Tier 2 prod-like Kind context"
+
+require_pattern 'workflow_dispatch:' "$EVIDENCE_WORKFLOW" "manual Tier 3 workflow dispatch"
+require_pattern 'make tier3-evidence-up' "$EVIDENCE_WORKFLOW" "Tier 3 evidence command"
+require_pattern 'upload-artifact' "$EVIDENCE_WORKFLOW" "Tier 3 bundle artifact upload"
+require_pattern 'tier3-bundle-path\.txt' "$EVIDENCE_WORKFLOW" "Tier 3 bundle path artifact"
+require_pattern 'collect-kind-artifacts' "$EVIDENCE_WORKFLOW" "Tier 3 failure artifact collection"
+
+require_pattern '#312' "$PRD_CLOSURE_POLICY" "PRD #312 closure guard"
+require_pattern '#337' "$PRD_CLOSURE_POLICY" "PRD #337 closure guard"
+require_pattern 'green Tier 2' "$PRD_CLOSURE_POLICY" "green Tier 2 closure requirement"
+require_pattern 'GitHub Actions run link' "$PRD_CLOSURE_POLICY" "Tier 2 run link requirement"

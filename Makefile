@@ -160,7 +160,9 @@ SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
 SCRAP_E2E_NAMESPACE ?= scrap
 SCRAP_E2E_KUBE_CONTEXT ?= kind-$(KIND_CLUSTER)
 SCRAP_E2E_S3_BUCKET ?= scrap-e2e
-PRODLIKE_E2E_KUBE_CONTEXT ?= $(PRODLIKE_KUBE_CONTEXT)
+ifndef PRODLIKE_E2E_KUBE_CONTEXT
+PRODLIKE_E2E_KUBE_CONTEXT := $(PRODLIKE_KUBE_CONTEXT)
+endif
 PRODLIKE_E2E_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_E2E_KUBE_CONTEXT)"
 E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
@@ -177,6 +179,7 @@ TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPat
 ##? STRESS_WORKERS Concurrent worker goroutines for the stress test.
 ##? STRESS_DURATION Duration of the stress test run.
 ##? STRESS_DOC_SIZE Document payload size in bytes.
+##? BUNDLE_DIR Directory where evidence bundles are written.
 ##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
 ##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
@@ -189,6 +192,7 @@ STRESS_SCENARIO ?= throughput
 STRESS_WORKERS ?= 8
 STRESS_DURATION ?= 60s
 STRESS_DOC_SIZE ?= 16384
+BUNDLE_DIR ?= evidence
 EVIDENCE_BASELINE_SAMPLING ?= 100
 EVIDENCE_LOWRATE_SAMPLING ?= 10
 
@@ -601,11 +605,18 @@ stress: ## Run the stress test binary against the Kind cluster.
 
 .PHONY: evidence-bundle
 evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
+	BUNDLE_DIR="$(BUNDLE_DIR)" \
 	STRESS_ADDR="$(STRESS_ADDR)" \
 	STRESS_WORKERS="$(STRESS_WORKERS)" \
 	STRESS_DURATION="$(STRESS_DURATION)" \
 	STRESS_DOC_SIZE="$(STRESS_DOC_SIZE)" \
 	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
+
+.PHONY: tier3-evidence
+tier3-evidence: evidence-bundle ## Run the Tier 3 evidence gate against an existing evidence Cell.
+
+.PHONY: tier3-evidence-up
+tier3-evidence-up: stress-setup tier3-evidence ## Bring up the evidence Cell, then run the Tier 3 evidence gate.
 
 .PHONY: stress-teardown
 stress-teardown: ## Delete the stress Kind cluster.
