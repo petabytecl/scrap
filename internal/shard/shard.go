@@ -50,6 +50,7 @@ type Config struct {
 	DeepMetrics        scrub.DeepMetrics
 	Rebuilder          scrub.Rebuilder
 	BlockRepairer      scrub.BlockRepairer
+	BlockTransferer    scrub.BlockTransferer
 	LatencySignal      scrub.LatencySignal
 	Replicator         DocumentReplicator
 	PeerAddrs          []string

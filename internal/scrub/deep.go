@@ -22,11 +22,6 @@ type BlockVerifier interface {
 
 type QuarantineManager interface {
 	Quarantine(blkPath string) error
-	ListQuarantined() ([]uint64, error)
-}
-
-type BlockRepairer interface {
-	RepairFromPeer(ctx context.Context, blockID uint64, peerAddr string) error
 }
 
 type PauseController interface {
@@ -63,7 +58,6 @@ type DeepConfig struct {
 	PauseController   PauseController
 	Logger            *slog.Logger
 	IOBudget          *TokenBucket
-	PeerAddrs         []string
 	OpenBlockID       uint64
 	CorruptCap        int
 	PauseThreshold    time.Duration
@@ -73,10 +67,9 @@ type DeepConfig struct {
 }
 
 type Deep struct {
-	cfg     DeepConfig
-	peerIdx int
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	cfg    DeepConfig
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func NewDeep(cfg DeepConfig) *Deep {
@@ -135,7 +128,9 @@ func (ds *Deep) jitteredInterval() time.Duration {
 }
 
 func (ds *Deep) RunOnce(ctx context.Context) error {
-	ds.repairQuarantined(ctx)
+	if ds.cfg.BlockRepairer != nil {
+		ds.cfg.BlockRepairer.RepairQuarantined(ctx)
+	}
 
 	start := time.Now()
 
@@ -200,36 +195,6 @@ func (ds *Deep) saveCheckpoint(blockID uint64) {
 func (ds *Deep) clearCheckpoint() {
 	if ds.cfg.Checkpoint != nil {
 		ds.cfg.Checkpoint.ClearDeepScrubCheckpoint()
-	}
-}
-
-func (ds *Deep) repairQuarantined(ctx context.Context) {
-	if ds.cfg.BlockRepairer == nil || len(ds.cfg.PeerAddrs) == 0 {
-		return
-	}
-	if err := ds.waitPressurePause(ctx); err != nil {
-		return
-	}
-	quarantined, err := ds.cfg.QuarantineManager.ListQuarantined()
-	if err != nil {
-		ds.cfg.Logger.WarnContext(ctx, "scrub: list quarantined", "err", err)
-		return
-	}
-	if len(quarantined) == 0 {
-		return
-	}
-	for _, blockID := range quarantined {
-		if ctx.Err() != nil {
-			return
-		}
-		peer := ds.cfg.PeerAddrs[ds.peerIdx%len(ds.cfg.PeerAddrs)]
-		ds.peerIdx++
-		if err := ds.cfg.BlockRepairer.RepairFromPeer(ctx, blockID, peer); err != nil {
-			ds.cfg.Metrics.RecordRepair("failed")
-			continue
-		}
-		ds.cfg.Metrics.RecordRepair("ok")
-		ds.cfg.Metrics.DecrementQuarantined()
 	}
 }
 

@@ -73,17 +73,27 @@ func (c *scrubCoordinator) Start(cfg Config) {
 		c.lightScrub.Start(ctx)
 	}
 	if cfg.DeepMetrics != nil {
+		blockRepairer := cfg.BlockRepairer
+		if blockRepairer == nil && cfg.BlockTransferer != nil {
+			blockRepairer = scrub.NewBlockRepair(scrub.BlockRepairConfig{
+				BlocksDir:       c.blocksDir,
+				Transferer:      cfg.BlockTransferer,
+				Metrics:         cfg.DeepMetrics,
+				PauseController: c.pauseController,
+				Logger:          c.baseLogger.With("component", "block_repair"),
+				PeerAddrs:       cfg.PeerAddrs,
+			})
+		}
 		c.deepScrub = scrub.NewDeep(scrub.DeepConfig{
 			BlockLister:       c,
 			BlockVerifier:     c,
 			QuarantineManager: c,
 			Metrics:           cfg.DeepMetrics,
 			LatencySignal:     cfg.LatencySignal,
-			BlockRepairer:     cfg.BlockRepairer,
+			BlockRepairer:     blockRepairer,
 			PauseController:   c.pauseController,
 			Logger:            c.baseLogger.With("component", "deep_scrub"),
 			IOBudget:          scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
-			PeerAddrs:         cfg.PeerAddrs,
 			CorruptCap:        cfg.Scrub.CorruptCap,
 			PauseThreshold:    cfg.Scrub.PauseLatency,
 			PauseCooldown:     cfg.Scrub.PauseCooldown,

@@ -45,10 +45,8 @@ func (v *orderedVerifier) VerifyBlock(_, _ string) (block.VerifyResult, error) {
 }
 
 type stubQuarantineManager struct {
-	quarantined    []string
-	quarantinedIDs []uint64
-	listErr        error
-	err            error
+	quarantined []string
+	err         error
 }
 
 func (s *stubQuarantineManager) Quarantine(blkPath string) error {
@@ -59,26 +57,27 @@ func (s *stubQuarantineManager) Quarantine(blkPath string) error {
 	return nil
 }
 
-func (s *stubQuarantineManager) ListQuarantined() ([]uint64, error) {
-	if s.listErr != nil {
-		return nil, s.listErr
-	}
-	return s.quarantinedIDs, nil
-}
-
-type repairCall struct {
-	blockID  uint64
-	peerAddr string
-}
-
 type stubBlockRepairer struct {
-	calls []repairCall
-	err   error
+	calls  int
+	record func()
 }
 
-func (s *stubBlockRepairer) RepairFromPeer(_ context.Context, blockID uint64, peerAddr string) error {
-	s.calls = append(s.calls, repairCall{blockID: blockID, peerAddr: peerAddr})
-	return s.err
+func (s *stubBlockRepairer) RepairQuarantined(_ context.Context) {
+	s.calls++
+	if s.record != nil {
+		s.record()
+	}
+}
+
+type recordingVerifier struct {
+	record func()
+}
+
+func (v *recordingVerifier) VerifyBlock(_, _ string) (block.VerifyResult, error) {
+	if v.record != nil {
+		v.record()
+	}
+	return block.VerifyResult{}, nil
 }
 
 type controlledPause struct {
@@ -597,88 +596,43 @@ func (s *stubLatencySignal) ReadP99() time.Duration {
 
 // --- Repair tests ---
 
-func newRepairScrubber(qm *stubQuarantineManager, repairer *stubBlockRepairer, metrics *deepScrubMetrics, peers []string) *scrub.Deep {
-	return scrub.NewDeep(scrub.DeepConfig{
-		BlockLister:       &stubBlockLister{},
-		BlockVerifier:     &orderedVerifier{},
-		QuarantineManager: qm,
-		Metrics:           metrics,
+func TestDeepScrubber_RunsRepairBeforeScan(t *testing.T) {
+	order := make([]string, 0, 2)
+	repairer := &stubBlockRepairer{record: func() {
+		order = append(order, "repair")
+	}}
+	verifier := &recordingVerifier{record: func() {
+		order = append(order, "verify")
+	}}
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister: &stubBlockLister{blocks: []block.Info{
+			{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
+		}},
+		BlockVerifier:     verifier,
+		QuarantineManager: &stubQuarantineManager{},
+		Metrics:           &deepScrubMetrics{},
 		BlockRepairer:     repairer,
-		PeerAddrs:         peers,
 		OpenBlockID:       99,
 		CorruptCap:        5,
 	})
-}
-
-func TestDeepScrubber_RepairsQuarantinedBeforeScan(t *testing.T) {
-	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
-	repairer := &stubBlockRepairer{}
-	metrics := &deepScrubMetrics{}
-	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-1:9091", "peer-2:9091"})
 
 	if err := ds.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if len(repairer.calls) != 1 {
-		t.Fatalf("expected 1 repair call, got %d", len(repairer.calls))
+	if repairer.calls != 1 {
+		t.Fatalf("repair calls = %d, want 1", repairer.calls)
 	}
-	if repairer.calls[0].blockID != 5 {
-		t.Fatalf("expected repair for block 5, got %d", repairer.calls[0].blockID)
-	}
-	if metrics.repairsOK != 1 {
-		t.Fatalf("expected 1 repair ok, got %d", metrics.repairsOK)
-	}
-	if metrics.decremented != 1 {
-		t.Fatalf("expected 1 gauge decrement, got %d", metrics.decremented)
-	}
-}
-
-func TestDeepScrubber_FailedRepairEmitsMetric(t *testing.T) {
-	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
-	repairer := &stubBlockRepairer{err: errors.New("peer unreachable")}
-	metrics := &deepScrubMetrics{}
-	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-1:9091"})
-
-	if err := ds.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	if metrics.repairsFailed != 1 {
-		t.Fatalf("expected 1 failed repair, got %d", metrics.repairsFailed)
-	}
-	if metrics.repairsOK != 0 {
-		t.Fatalf("expected 0 ok repairs, got %d", metrics.repairsOK)
-	}
-	if metrics.decremented != 0 {
-		t.Fatalf("expected 0 gauge decrements, got %d", metrics.decremented)
-	}
-}
-
-func TestDeepScrubber_RoundRobinPeerRotation(t *testing.T) {
-	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
-	repairer := &stubBlockRepairer{}
-	metrics := &deepScrubMetrics{}
-	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-A", "peer-B", "peer-C"})
-
-	_ = ds.RunOnce(context.Background())
-	_ = ds.RunOnce(context.Background())
-	_ = ds.RunOnce(context.Background())
-
-	if len(repairer.calls) != 3 {
-		t.Fatalf("expected 3 repair calls, got %d", len(repairer.calls))
-	}
-	peers := []string{repairer.calls[0].peerAddr, repairer.calls[1].peerAddr, repairer.calls[2].peerAddr}
-	if peers[0] == peers[1] || peers[1] == peers[2] {
-		t.Fatalf("expected rotating peers, got %v", peers)
+	if len(order) != 2 || order[0] != "repair" || order[1] != "verify" {
+		t.Fatalf("order = %v, want [repair verify]", order)
 	}
 }
 
 func TestDeepScrubber_NilRepairerSkipsGracefully(t *testing.T) {
-	qm := &stubQuarantineManager{quarantinedIDs: []uint64{5}}
 	metrics := &deepScrubMetrics{}
 	ds := scrub.NewDeep(scrub.DeepConfig{
 		BlockLister:       &stubBlockLister{},
 		BlockVerifier:     &orderedVerifier{},
-		QuarantineManager: qm,
+		QuarantineManager: &stubQuarantineManager{},
 		Metrics:           metrics,
 		OpenBlockID:       99,
 		CorruptCap:        5,
@@ -689,28 +643,5 @@ func TestDeepScrubber_NilRepairerSkipsGracefully(t *testing.T) {
 	}
 	if metrics.repairsOK+metrics.repairsFailed != 0 {
 		t.Fatal("expected no repair attempts without repairer")
-	}
-}
-
-func TestDeepScrubber_ListQuarantinedErrorSkipsRepair(t *testing.T) {
-	qm := &stubQuarantineManager{
-		quarantinedIDs: []uint64{5},
-		listErr:        errors.New("permission denied"),
-	}
-	repairer := &stubBlockRepairer{}
-	metrics := &deepScrubMetrics{}
-	ds := newRepairScrubber(qm, repairer, metrics, []string{"peer-1:9091"})
-
-	if err := ds.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	if len(repairer.calls) != 0 {
-		t.Fatalf("expected 0 repair calls when list fails, got %d", len(repairer.calls))
-	}
-	if metrics.repairsOK+metrics.repairsFailed != 0 {
-		t.Fatal("expected no repair metrics when list fails")
-	}
-	if metrics.runsOK != 1 {
-		t.Fatalf("expected scan to complete ok, got %d ok runs", metrics.runsOK)
 	}
 }
