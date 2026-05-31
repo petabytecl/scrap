@@ -147,6 +147,45 @@ func TestDoctorRejectsUnsupportedOutput(t *testing.T) {
 	}
 }
 
+func TestDoctorTextOutput(t *testing.T) {
+	var out bytes.Buffer
+	err := Run([]string{"doctor"}, &out, io.Discard, Deps{
+		Runner:     successfulDoctorRunner(),
+		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return &fakeConn{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"status: ok", "host.cgroup_v2: ok", "kind.node_cgroup_namespace: ok"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in output:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunHelpAndUnknownCommand(t *testing.T) {
+	var help bytes.Buffer
+	if err := Run([]string{"help"}, &help, io.Discard, Deps{}); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	if !strings.Contains(help.String(), "scrapctl <doctor|status|upload-pressure|peers|leader>") {
+		t.Fatalf("unexpected help output: %s", help.String())
+	}
+
+	var stderr bytes.Buffer
+	err := Run([]string{"unknown"}, io.Discard, &stderr, Deps{})
+	if err == nil {
+		t.Fatal("unknown command should fail")
+	}
+	if !strings.Contains(stderr.String(), `unknown command "unknown"`) {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
 func TestUploadPressurePrintsAdminHealthFields(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"upload-pressure", "--output=json"}, &out, io.Discard, Deps{
@@ -160,6 +199,19 @@ func TestUploadPressurePrintsAdminHealthFields(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s in output:\n%s", want, got)
 		}
+	}
+}
+
+func TestStatusTextOutput(t *testing.T) {
+	var out bytes.Buffer
+	err := Run([]string{"status"}, &out, io.Discard, Deps{
+		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+	})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(out.String(), "UploadPressure:ok") {
+		t.Fatalf("unexpected text output:\n%s", out.String())
 	}
 }
 
@@ -182,6 +234,31 @@ func TestStatusUsesTimeoutForAdminHealth(t *testing.T) {
 	}
 	if !sawDeadline {
 		t.Fatal("status request did not carry a deadline")
+	}
+}
+
+func TestLeaderReportsMetrics(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(`scrap_raft_is_leader{service_name="scrapd",instance="scrapd-0"} 1
+scrap_raft_leader_id{service_name="scrapd",instance="scrapd-0"} 3
+`)),
+			Header:  make(http.Header),
+			Request: req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{"leader", "--output=json"}, &out, io.Discard, Deps{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("leader: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{`"leader_id":3`, `"is_leader":true`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in output:\n%s", want, got)
+		}
 	}
 }
 
