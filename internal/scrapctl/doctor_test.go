@@ -319,12 +319,40 @@ scrap_raft_leader_id{service_name="scrapd",instance="scrapd-0"} 3
 	}
 }
 
+func TestLeaderFailsWhenMetricsMissing(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("scrap_other_metric 1\n")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	err := Run([]string{"leader", "--output=json"}, io.Discard, io.Discard, Deps{HTTPClient: client})
+	if err == nil {
+		t.Fatal("leader should fail when required metrics are missing")
+	}
+	if !strings.Contains(err.Error(), "leader metrics missing") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestPeersReportsReadyPods(t *testing.T) {
-	runner := &fakeRunner{run: func(name string, _ ...string) (string, error) {
+	runner := &fakeRunner{run: func(name string, args ...string) (string, error) {
 		if name != "kubectl" {
 			return "", errors.New("unexpected command")
 		}
-		return "scrapd-0 True\nscrapd-1 True\nscrapd-2 False\n", nil
+		if !strings.Contains(strings.Join(args, " "), "-o json") {
+			return "", errors.New("peers should request pod JSON")
+		}
+		return `{
+			"items": [
+				{"metadata": {"name": "scrapd-0"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+				{"metadata": {"name": "scrapd-1"}, "status": {}},
+				{"metadata": {"name": "scrapd-2"}, "status": {"conditions": [{"type": "Ready", "status": "False"}]}}
+			]
+		}`, nil
 	}}
 
 	var out bytes.Buffer
@@ -341,10 +369,13 @@ func TestPeersReportsReadyPods(t *testing.T) {
 }
 
 func TestParseLeaderMetricsSupportsPrometheusLabels(t *testing.T) {
-	status := parseLeaderMetrics(`# HELP scrap_raft_is_leader Whether this member is the Raft leader.
+	status, err := parseLeaderMetrics(`# HELP scrap_raft_is_leader Whether this member is the Raft leader.
 scrap_raft_is_leader{service_name="scrapd",instance="scrapd-0"} 1
 scrap_raft_leader_id{service_name="scrapd",instance="scrapd-0"} 3
 `)
+	if err != nil {
+		t.Fatalf("parseLeaderMetrics: %v", err)
+	}
 	if !status.IsLeader || status.LeaderID != 3 {
 		t.Fatalf("unexpected leader status: %+v", status)
 	}
