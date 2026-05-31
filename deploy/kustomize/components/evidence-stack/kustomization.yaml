@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - collector.yaml
+  - kube-state-metrics.yaml
   - mimir.yaml
   - loki.yaml
   - tempo.yaml
@@ -22,5 +23,7 @@ configMapGenerator:
       - scrap-overview.json
       - scrap-red.json
       - scrap-use.json
+      - kubernetes-cluster.json
+      - kubernetes-workloads.json
     options:
       disableNameSuffixHash: true

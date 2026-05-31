@@ -7,44 +7,72 @@ the domain vocabulary (Document, Transaction, Block, Frame, Shard) and
 architectural constraints. Use the glossary terms exactly — do not drift to
 synonyms the glossary explicitly avoids.
 
-### Package map
+### General Guidelines
 
-| Package            | Domain concept | Responsibility                                       |
-| ------------------ | -------------- | ---------------------------------------------------- |
-| `internal/shard/`  | Shard          | Shard lifecycle, Raft integration, write path        |
-| `internal/block/`  | Block, Frame   | Block writer, frame encoding/decoding, reader        |
-| `internal/index/`  | Projection     | Pebble projection (document → block lookup)          |
-| `internal/scrub/`  | Scrub          | Light + deep scrub integrity verification            |
-| `internal/raft/`   | Raft           | Raft node, peer resolution, log management           |
-| `internal/peer/`   | Peer           | gRPC peer transport, replication, consistency checks |
-| `internal/store/`  | Store          | Store interface contract and error sentinels         |
-| `internal/server/` | Server         | gRPC client-facing API server                        |
-| `internal/admin/`  | Admin          | HTTP admin server (health, gated diagnostics)         |
-| `internal/ulid/`   | ULID           | Custom ULID generator (ADR-0007)                     |
+Behavioral guidelines to reduce common LLM coding mistakes
 
-## Development
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-### Build and test
+#### 1. Think Before Coding
 
-| Command            | What it does                                         |
-| ------------------ | ---------------------------------------------------- |
-| `make build`       | Compile all command binaries to `bin/`               |
-| `make test`        | Run unit tests                                       |
-| `make test-race`   | Run unit tests with the race detector                |
-| `make test-cover`  | Run tests with coverage profile and JUnit XML        |
-| `make integration` | Run integration tests (`test/integration/`)          |
-| `make lint`        | Run golangci-lint                                    |
-| `make static`      | Run all static analysis and format checks            |
-| `make check`       | Full local verification gate (static + tests + race) |
-| `make proto`       | Regenerate protobuf/gRPC code                        |
-| `make proto-check` | Lint protos and verify generated code is up to date  |
-| `make e2e-setup`   | Build image, load into Kind, deploy manifests        |
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-### Protobuf workflow
+Before implementing:
 
-Proto source lives in `proto/scrap/`. Run `make proto` to regenerate. Generated
-code lands in `gen/go/` — never edit by hand. After changing a `.proto` file,
-always run `make proto` before committing.
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+#### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+#### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+#### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```text
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 ### Code style
 

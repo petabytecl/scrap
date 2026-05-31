@@ -71,13 +71,17 @@ require_target e2e
 require_target e2e-up
 require_target e2e-scrub
 require_target e2e-scrub-up
+require_target gates-check
+require_target tier1-check
 require_target prodlike-up
+require_target prodlike-doctor
 require_target prodlike-kind-deploy-e2e
 require_target prodlike-e2e-cell-up
 require_target cell-doctor
 require_target tier2-e2e-hooks-check
 require_target tier2-e2e
 require_target tier2-e2e-up
+require_target evidence-up
 require_target tier3-evidence
 require_target tier3-evidence-up
 
@@ -89,12 +93,15 @@ target_must_depend_on e2e-up e2e-setup
 target_must_depend_on e2e-up e2e
 target_must_depend_on e2e-scrub-up e2e-setup
 target_must_depend_on e2e-scrub-up e2e-scrub
+target_must_depend_on tier1-check check
+target_must_depend_on tier1-check vuln
 target_must_depend_on tier2-e2e-up prodlike-e2e-cell-up
 target_must_depend_on tier2-e2e-up tier2-e2e
 target_must_depend_on prodlike-e2e-cell-up prodlike-kind-deploy-e2e
-target_must_depend_on tier2-e2e cell-doctor
+target_must_depend_on tier2-e2e prodlike-doctor
 target_must_depend_on tier2-e2e tier2-e2e-hooks-check
-target_must_depend_on tier3-evidence-up stress-setup
+target_must_depend_on evidence-up stress-setup
+target_must_depend_on tier3-evidence-up evidence-up
 target_must_depend_on tier3-evidence-up tier3-evidence
 
 reject_pattern 'SCRAP_E2E_CLEANUP' "$MAKEFILE" "cluster cleanup during E2E execution"
@@ -122,10 +129,17 @@ require_pattern 'SCRAP_TEST_HOOKS' "$MAKEFILE" "Tier 2 E2E hook overlay check"
 require_pattern '^[[:space:]]+types:' "$WORKFLOW" "explicit pull_request activity types"
 require_pattern '^[[:space:]]+- labeled[[:space:]]*$' "$WORKFLOW" "E2E label CI trigger"
 require_pattern '^[[:space:]]+- unlabeled[[:space:]]*$' "$WORKFLOW" "E2E label removal CI trigger"
+require_pattern 'make gates-check' "$WORKFLOW" "CI gate wiring check"
+require_pattern 'make integration' "$WORKFLOW" "CI Tier 1 integration tests"
+require_pattern 'make vuln' "$WORKFLOW" "CI Tier 1 vulnerability scan"
+require_pattern 'Tier 1 commit gate passed' "$WORKFLOW" "explicit Tier 1 aggregate output"
 require_pattern 'Tier 2 E2E skipped' "$WORKFLOW" "explicit skipped E2E CI output"
 require_pattern 'Tier 2 E2E requested' "$WORKFLOW" "explicit requested E2E CI output"
 require_pattern '[[:space:]]+- e2e[[:space:]]*$' "$WORKFLOW" "E2E result dependency in aggregate check"
+require_pattern '[[:space:]]+- integration[[:space:]]*$' "$WORKFLOW" "integration result dependency in aggregate check"
 require_pattern 'E2E_RESULT:.*needs\.e2e\.result' "$WORKFLOW" "E2E result environment in aggregate check"
+require_pattern 'INTEGRATION_RESULT:.*needs\.integration\.result' "$WORKFLOW" "integration result environment in aggregate check"
+require_pattern 'test "\$INTEGRATION_RESULT" = success' "$WORKFLOW" "integration success assertion"
 require_pattern 'test "\$E2E_RESULT" = success' "$WORKFLOW" "requested E2E success assertion"
 require_pattern 'test "\$E2E_RESULT" = skipped' "$WORKFLOW" "skipped E2E assertion"
 require_pattern 'ci-tier2-e2e' "$WORKFLOW" "CI Tier 2 artifact upload"

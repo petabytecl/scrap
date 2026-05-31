@@ -63,7 +63,7 @@ CHECK_TARGETS := \
 	tests \
 	build
 STATIC_TARGETS := \
-	e2e-gates-check \
+	gates-check \
 	kind-cilium-check \
 	manifests-check \
 	fmt-check \
@@ -199,8 +199,16 @@ EVIDENCE_LOWRATE_SAMPLING ?= 10
 ##@ Help
 
 .PHONY: help
-help: ## Show this help.
+help: ## Show public targets.
 	@awk -f scripts/make-help.awk $(MAKEFILE_LIST)
+
+.PHONY: help-vars
+help-vars: ## Show overridable Make variables.
+	@MAKE_HELP_MODE=variables awk -f scripts/make-help.awk $(MAKEFILE_LIST)
+
+.PHONY: help-all
+help-all: ## Show public targets and overridable Make variables.
+	@MAKE_HELP_MODE=all awk -f scripts/make-help.awk $(MAKEFILE_LIST)
 
 ##@ Protobuf
 
@@ -221,7 +229,7 @@ fmt: ## Format Go source using configured golangci formatters.
 	$(GOLANGCI_LINT) fmt
 
 .PHONY: fmt-check
-fmt-check: ## Check formatter drift using configured golangci formatters.
+fmt-check:
 	$(GOLANGCI_LINT) fmt --diff
 
 .PHONY: lint
@@ -229,7 +237,7 @@ lint: ## Run the golangci-lint baseline.
 	$(GOLANGCI_LINT) run --timeout=$(LINT_TIMEOUT)
 
 .PHONY: package-boundaries
-package-boundaries: ## Check package dependency boundaries.
+package-boundaries:
 	GO="$(GO)" scripts/check-package-boundaries.sh
 
 .PHONY: vuln
@@ -304,12 +312,15 @@ manifests-check: ## Validate rendered manifests and deployment hardening invaria
 		LOCAL_KIND_OVERLAY='$(LOCAL_KIND_OVERLAY)' \
 		sh ./scripts/check-kustomize-manifests.sh
 
-.PHONY: e2e-gates-check
-e2e-gates-check: ## Validate E2E target composition and Tier 2 gate wiring.
+.PHONY: gates-check
+gates-check:
 	@bash ./scripts/check-e2e-gates.sh
 
+.PHONY: e2e-gates-check
+e2e-gates-check: gates-check
+
 .PHONY: kind-cilium-check
-kind-cilium-check: ## Validate prod-like Kind Cilium bootstrap wiring.
+kind-cilium-check:
 	@PRODLIKE_KIND_CONFIG='$(PRODLIKE_KIND_CONFIG)' \
 		STRESS_KIND_CONFIG='$(STRESS_KIND_CONFIG)' \
 		PRODLIKE_OVERLAY='$(PRODLIKE_OVERLAY)' \
@@ -319,14 +330,14 @@ kind-cilium-check: ## Validate prod-like Kind Cilium bootstrap wiring.
 		CILIUM_SCRIPT='$(CILIUM_SCRIPT)' \
 		sh ./scripts/check-kind-cilium.sh
 
-##@ Local Kind
+# Internal Local Kind helpers. Public local E2E workflows live under `##@ E2E`.
 
 .PHONY: local-kind-create
-local-kind-create: ## Create the local kind cluster.
+local-kind-create:
 	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml
 
 .PHONY: local-kind-ensure
-local-kind-ensure: ## Create the local kind cluster if it does not exist.
+local-kind-ensure:
 	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(KIND_CLUSTER)" >/dev/null 2>&1; then \
 		printf 'kind cluster already exists: %s\n' "$(KIND_CLUSTER)"; \
 	else \
@@ -335,25 +346,25 @@ local-kind-ensure: ## Create the local kind cluster if it does not exist.
 	$(KIND) export kubeconfig --name "$(KIND_CLUSTER)" >/dev/null
 
 .PHONY: local-kind-delete
-local-kind-delete: ## Delete the local kind cluster.
+local-kind-delete:
 	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
 
 .PHONY: local-kind-load
-local-kind-load: image ## Load the scrapd image into the local kind cluster.
+local-kind-load: image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(KIND_CLUSTER)"
 
 .PHONY: local-kind-deploy
-local-kind-deploy: manifests-check ## Apply the local-kind manifests.
+local-kind-deploy: manifests-check
 	$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" | $(KUBECTL) apply -f -
 
-##@ Prod-like Kind
+##@ Prod-like
 
 .PHONY: prodlike-kind-create
-prodlike-kind-create: ## Create the Cilium-backed prod-like Kind cluster.
+prodlike-kind-create:
 	$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"
 
 .PHONY: prodlike-kind-ensure
-prodlike-kind-ensure: ## Create prod-like Kind if needed, install Cilium, and wait for readiness.
+prodlike-kind-ensure:
 	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(PRODLIKE_KIND_CLUSTER)" >/dev/null 2>&1; then \
 		printf 'kind cluster already exists: %s\n' "$(PRODLIKE_KIND_CLUSTER)"; \
 	else \
@@ -364,11 +375,11 @@ prodlike-kind-ensure: ## Create prod-like Kind if needed, install Cilium, and wa
 	$(MAKE) prodlike-cilium-wait
 
 .PHONY: prodlike-kind-delete
-prodlike-kind-delete: ## Delete the prod-like Kind cluster.
+prodlike-kind-delete:
 	$(KIND) delete cluster --name "$(PRODLIKE_KIND_CLUSTER)"
 
 .PHONY: prodlike-cilium-install
-prodlike-cilium-install: ## Install Cilium with kube-proxy replacement into prod-like Kind.
+prodlike-cilium-install:
 	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
 		CILIUM_VERSION="$(CILIUM_VERSION)" \
 		CILIUM_VALUES="$(CILIUM_VALUES)" \
@@ -380,19 +391,19 @@ prodlike-cilium-install: ## Install Cilium with kube-proxy replacement into prod
 		"$(CILIUM_SCRIPT)" install
 
 .PHONY: prodlike-cilium-wait
-prodlike-cilium-wait: ## Wait until prod-like Cilium and CoreDNS are ready.
+prodlike-cilium-wait:
 	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
 		KUBECTL="$(KUBECTL)" \
 		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
 		"$(CILIUM_SCRIPT)" wait
 
 .PHONY: prodlike-kind-load
-prodlike-kind-load: image ## Load the scrapd image into the prod-like Kind cluster.
+prodlike-kind-load: image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(PRODLIKE_KIND_CLUSTER)"
 
 .PHONY: prodlike-kind-deploy
 prodlike-kind-deploy: LOCAL_KIND_OVERLAY=$(PRODLIKE_OVERLAY)
-prodlike-kind-deploy: manifests-check ## Apply prod-like manifests and wait for S.C.R.A.P. workloads.
+prodlike-kind-deploy: manifests-check
 	$(KUSTOMIZE) build "$(PRODLIKE_OVERLAY)" | $(PRODLIKE_KUBECTL) apply -f -
 	$(PRODLIKE_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
 	$(PRODLIKE_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
@@ -402,7 +413,7 @@ prodlike-kind-deploy: manifests-check ## Apply prod-like manifests and wait for 
 
 .PHONY: prodlike-kind-deploy-e2e
 prodlike-kind-deploy-e2e: LOCAL_KIND_OVERLAY=$(PRODLIKE_E2E_OVERLAY)
-prodlike-kind-deploy-e2e: manifests-check ## Apply prod-like E2E manifests with test-only mutation hooks.
+prodlike-kind-deploy-e2e: manifests-check
 	$(KUSTOMIZE) build "$(PRODLIKE_E2E_OVERLAY)" | $(PRODLIKE_E2E_KUBECTL) apply -f -
 	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
 	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
@@ -411,7 +422,7 @@ prodlike-kind-deploy-e2e: manifests-check ## Apply prod-like E2E manifests with 
 	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
 .PHONY: prodlike-cell-doctor
-prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and NetworkPolicy behavior.
+prodlike-cell-doctor:
 	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
 		SCRAP_PRODLIKE_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
 		DOCKER="$(DOCKER)" \
@@ -420,47 +431,34 @@ prodlike-cell-doctor: ## Check prod-like Cell Cilium, NodePort, DNS, and Network
 		"$(CILIUM_SCRIPT)" doctor
 
 .PHONY: prodlike-cell-up
-prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor ## Bring up and verify the prod-like Kind Cell.
+prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor
 
 .PHONY: prodlike-e2e-cell-up
 prodlike-e2e-cell-up: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
-prodlike-e2e-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy-e2e prodlike-cell-doctor ## Bring up prod-like Kind with test-only E2E hooks.
+prodlike-e2e-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy-e2e prodlike-cell-doctor
 
 .PHONY: prodlike-up
 prodlike-up: prodlike-cell-up ## Bring up and verify the prod-like Kind Cell.
 
+.PHONY: prodlike-down
+prodlike-down: prodlike-kind-delete ## Delete the prod-like Kind Cell.
+
+.PHONY: prodlike-doctor
+prodlike-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating or deleting infrastructure.
+
 .PHONY: cell-doctor
-cell-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating or deleting infrastructure.
+cell-doctor: prodlike-cell-doctor
 
 .PHONY: tier2-e2e-hooks-check
-tier2-e2e-hooks-check: ## Verify an existing Tier 2 Cell has the test-only hook overlay.
+tier2-e2e-hooks-check:
 	@hooks="$$( $(PRODLIKE_E2E_KUBECTL) -n "$(SCRAP_E2E_NAMESPACE)" get statefulset scrapd -o jsonpath='{.spec.template.spec.containers[?(@.name=="scrapd")].env[?(@.name=="SCRAP_TEST_HOOKS")].value}' )"; \
 	if [ "$$hooks" != "1" ]; then \
 		printf 'Tier 2 E2E requires SCRAP_TEST_HOOKS=1; run make tier2-e2e-up or deploy %s\n' "$(PRODLIKE_E2E_OVERLAY)" >&2; \
 		exit 1; \
 	fi
 
-.PHONY: tier2-e2e
-tier2-e2e: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
-tier2-e2e: cell-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
-	@printf 'TIER2_E2E_STATUS=running\n'
-	SCRAP_E2E=1 \
-		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
-		SCRAP_E2E_CELL_ID="kind-prodlike" \
-		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
-		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
-		SCRAP_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
-		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
-		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
-		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
-		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -count=1 -v -timeout 600s
-	@printf 'TIER2_E2E_STATUS=passed\n'
-
-.PHONY: tier2-e2e-up
-tier2-e2e-up: prodlike-e2e-cell-up tier2-e2e ## Bring up prod-like Kind with E2E hooks, then run the Tier 2 gate.
-
 .PHONY: prodlike-e2e-smoke
-prodlike-e2e-smoke: tier2-e2e ## Compatibility alias for the prod-like Tier 2 E2E gate.
+prodlike-e2e-smoke: tier2-e2e
 
 ##@ Local Dev
 
@@ -506,6 +504,9 @@ e2e: ## Run E2E tests against an existing Cell.
 .PHONY: e2e-up
 e2e-up: e2e-setup e2e ## Create/update local Kind, then run E2E tests.
 
+.PHONY: e2e-down
+e2e-down: local-kind-delete ## Delete the local Kind E2E Cell.
+
 .PHONY: e2e-scrub
 e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 	SCRAP_E2E=1 \
@@ -523,10 +524,49 @@ e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 e2e-scrub-up: LOCAL_KIND_OVERLAY=deploy/kustomize/environments/local-scrub
 e2e-scrub-up: e2e-setup e2e-scrub ## Create/update scrub-enabled local Kind, then run scrub E2E tests.
 
-##@ Stress
+##@ Gates
+
+.PHONY: tier1-check
+tier1-check: check vuln ## Run the Tier 1 commit gate.
+
+.PHONY: tier2-e2e
+tier2-e2e: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
+tier2-e2e: prodlike-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
+	@printf 'TIER2_E2E_STATUS=running\n'
+	SCRAP_E2E=1 \
+		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="kind-prodlike" \
+		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
+		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
+		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -count=1 -v -timeout 600s
+	@printf 'TIER2_E2E_STATUS=passed\n'
+
+.PHONY: tier2-e2e-up
+tier2-e2e-up: prodlike-e2e-cell-up tier2-e2e ## Bring up prod-like Kind with E2E hooks, then run the Tier 2 gate.
+
+.PHONY: tier3-evidence
+tier3-evidence: evidence-bundle ## Run the Tier 3 evidence gate against an existing evidence Cell.
+
+.PHONY: tier3-evidence-up
+tier3-evidence-up: evidence-up tier3-evidence ## Bring up the evidence Cell, then run the Tier 3 evidence gate.
+
+##@ Evidence / Stress
+
+.PHONY: evidence-up
+evidence-up: stress-setup ## Bring up the evidence Cell.
+
+.PHONY: evidence-up-lowrate
+evidence-up-lowrate: stress-setup-lowrate ## Bring up the evidence Cell with production-like low trace sampling.
+
+.PHONY: evidence-down
+evidence-down: stress-teardown ## Delete the evidence Kind Cell.
 
 .PHONY: stress-setup
-stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and LocalStack.
+stress-setup:
 	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(STRESS_KIND_CLUSTER)" >/dev/null 2>&1; then \
 		printf 'kind cluster already exists: %s\n' "$(STRESS_KIND_CLUSTER)"; \
 	else \
@@ -572,6 +612,7 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
 	$(KUBECTL) -n monitoring rollout status daemonset/otel-agent --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/kube-state-metrics --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
 	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
@@ -591,7 +632,7 @@ stress-setup: ## Create Kind cluster with stress overlay, monitoring stack, and 
 	@printf '  LocalStack: http://127.0.0.1:18566 (S3, e.g. aws --endpoint-url http://127.0.0.1:18566 s3 ls)\n\n'
 
 .PHONY: stress-setup-lowrate
-stress-setup-lowrate: ## Bring up the stress env with a production-like low baseline trace-sampling rate.
+stress-setup-lowrate:
 	$(MAKE) stress-setup EVIDENCE_BASELINE_SAMPLING=$(EVIDENCE_LOWRATE_SAMPLING)
 
 .PHONY: stress
@@ -612,12 +653,6 @@ evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
 	STRESS_DOC_SIZE="$(STRESS_DOC_SIZE)" \
 	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
 
-.PHONY: tier3-evidence
-tier3-evidence: evidence-bundle ## Run the Tier 3 evidence gate against an existing evidence Cell.
-
-.PHONY: tier3-evidence-up
-tier3-evidence-up: stress-setup tier3-evidence ## Bring up the evidence Cell, then run the Tier 3 evidence gate.
-
 .PHONY: stress-teardown
-stress-teardown: ## Delete the stress Kind cluster.
+stress-teardown:
 	$(KIND) delete cluster --name "$(STRESS_KIND_CLUSTER)"

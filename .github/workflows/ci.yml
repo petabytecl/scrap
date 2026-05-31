@@ -46,8 +46,8 @@ jobs:
       - name: Check manifests
         run: make manifests-check
 
-      - name: Check E2E gate wiring
-        run: make e2e-gates-check
+      - name: Check gate wiring
+        run: make gates-check
 
       - name: Check formatting
         run: make GOLANGCI_LINT=golangci-lint fmt-check
@@ -126,6 +126,22 @@ jobs:
 
       - name: Run race tests
         run: make test-race
+
+  integration:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            tools.go.sum
+
+      - name: Run integration tests
+        run: make integration
 
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -215,17 +231,19 @@ jobs:
       - static
       - test
       - race
+      - integration
       - build
       - vulnerability
       - e2e
       - e2e-status
     if: ${{ always() }}
     steps:
-      - name: Verify split CI jobs
+      - name: Verify Tier 1 split CI jobs and optional Tier 2
         env:
           STATIC_RESULT: ${{ needs.static.result }}
           TEST_RESULT: ${{ needs.test.result }}
           RACE_RESULT: ${{ needs.race.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
@@ -235,8 +253,10 @@ jobs:
           test "$STATIC_RESULT" = success
           test "$TEST_RESULT" = success
           test "$RACE_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
           test "$BUILD_RESULT" = success
           test "$VULNERABILITY_RESULT" = success
+          echo "Tier 1 commit gate passed across split CI jobs."
           test "$E2E_STATUS_RESULT" = success
           if [ "$E2E_REQUESTED" = "true" ]; then
             test "$E2E_RESULT" = success

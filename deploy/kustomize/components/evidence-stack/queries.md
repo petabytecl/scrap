@@ -14,7 +14,40 @@ Three method-based boards are provisioned in the Evidence folder:
 - **scrap-red** — Rate/Errors/Duration per RPC and per write-path stage.
 - **scrap-use** — Utilization/Saturation/Errors per resource (raft apply pipeline, RPC concurrency, upload outbox, local storage, runtime, scrub).
 
+Two Kubernetes boards are also provisioned in the Evidence folder:
+
+- **kubernetes-cluster** — kube-state-metrics health, node readiness, pod phases, allocatable capacity, PVC phases, and cAdvisor namespace resource usage.
+- **kubernetes-workloads** — deployment/statefulset/daemonset readiness, failed jobs, pod readiness, restarts, waiting containers, and terminated containers.
+
 ## Metrics (PromQL via Mimir)
+
+### Kubernetes Scraping
+
+The OTel collector scrapes kube-state-metrics on `kube-state-metrics.monitoring.svc:8080`
+and kubelet node/cAdvisor metrics through the Kubernetes API server. The scrape
+jobs write to the same Mimir datasource (`uid=mimir`) used by the S.C.R.A.P.
+dashboards.
+
+```promql
+# Scrape health
+up{job=~"kube-state-metrics|kubernetes-nodes|kubernetes-cadvisor"}
+
+# Node readiness
+sum(kube_node_status_condition{condition="Ready",status="true"})
+
+# Pod phase distribution
+sum(kube_pod_status_phase) by (phase)
+
+# Workload readiness gaps
+sum(clamp_min(kube_deployment_spec_replicas - kube_deployment_status_replicas_ready, 0)) by (namespace, deployment)
+
+# Recent restarts
+sum(increase(kube_pod_container_status_restarts_total[5m])) by (namespace, pod, container)
+
+# Namespace CPU/memory from cAdvisor
+sum(rate(container_cpu_usage_seconds_total{container!="",pod!=""}[5m])) by (namespace)
+sum(container_memory_working_set_bytes{container!="",pod!=""}) by (namespace)
+```
 
 ### Client API
 
