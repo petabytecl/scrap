@@ -95,6 +95,9 @@ reject_pattern 'SCRAP_E2E_CLEANUP' "$SCRUB_E2E" "cluster cleanup during E2E exec
 reject_pattern 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "test hooks in prod-like overlay"
 
 require_pattern '^PRODLIKE_E2E_OVERLAY[[:space:]]*\?=' "$MAKEFILE" "prod-like E2E overlay variable"
+require_pattern '^PRODLIKE_KUBE_CONTEXT[[:space:]]*\?=' "$MAKEFILE" "prod-like kube context variable"
+require_pattern '^PRODLIKE_E2E_KUBE_CONTEXT[[:space:]]*\?=.*PRODLIKE_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context default"
+require_pattern '^PRODLIKE_E2E_KUBECTL[[:space:]]*=.*PRODLIKE_E2E_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kubectl context wrapper"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*WriteReadHead' "$MAKEFILE" "Tier 2 write/read/head coverage"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*LeaderFailover' "$MAKEFILE" "Tier 2 leader failover coverage"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*BackendUploadHappyPath' "$MAKEFILE" "Tier 2 Backend happy-path coverage"
@@ -102,6 +105,8 @@ require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*BackendUploadLeaderChange' 
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*BackendUploadAdmissionPressure' "$MAKEFILE" "Tier 2 upload pressure coverage"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*LightScrub' "$MAKEFILE" "Tier 2 fast scrub coverage"
 require_pattern 'SCRAP_E2E_CELL_ID="kind-prodlike"' "$MAKEFILE" "prod-like Cell ID in Tier 2"
+require_pattern '^prodlike-e2e-cell-up: PRODLIKE_KUBE_CONTEXT=\$\(PRODLIKE_E2E_KUBE_CONTEXT\)' "$MAKEFILE" "prod-like E2E cell-up kube context"
+require_pattern '^tier2-e2e: PRODLIKE_KUBE_CONTEXT=\$\(PRODLIKE_E2E_KUBE_CONTEXT\)' "$MAKEFILE" "Tier 2 prerequisite kube context"
 require_pattern 'test ./test/e2e/.*-count=1' "$MAKEFILE" "uncached E2E execution"
 require_pattern 'TIER2_E2E_STATUS=passed' "$MAKEFILE" "explicit Tier 2 pass output"
 require_pattern 'SCRAP_TEST_HOOKS' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "test hooks in prod-like E2E overlay"

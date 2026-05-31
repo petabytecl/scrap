@@ -230,27 +230,8 @@ scrap_raft_leader_id{service_name="scrapd",instance="scrapd-0"} 0
 	}
 }
 
-func TestFaultProjectionInjectPostsAdminHook(t *testing.T) {
-	var gotBody string
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", req.Method)
-		}
-		if req.URL.Path != "/test-hooks/projection-key" {
-			t.Fatalf("path = %s", req.URL.Path)
-		}
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		gotBody = string(body)
-		return &http.Response{
-			StatusCode: http.StatusNoContent,
-			Body:       io.NopCloser(strings.NewReader("")),
-			Header:     make(http.Header),
-			Request:    req,
-		}, nil
-	})}
+func TestFaultProjectionInjectPostsThroughSelectedPod(t *testing.T) {
+	runner := &fakeRunner{}
 
 	var out bytes.Buffer
 	err := Run([]string{
@@ -261,36 +242,68 @@ func TestFaultProjectionInjectPostsAdminHook(t *testing.T) {
 		"--environment=prodlike",
 		"--confirm=kind-prodlike",
 		"--run-id=projection-1",
-		"--admin-url=http://admin.local",
+		"--pod=scrapd-1",
 		"--transaction-id=tx-divergent",
 		"--block-id=999",
 		"--doc-count=1",
 		"--output=json",
-	}, &out, io.Discard, Deps{HTTPClient: client})
+	}, &out, io.Discard, Deps{Runner: runner})
 	if err != nil {
 		t.Fatalf("projection inject: %v", err)
 	}
 	for _, want := range []string{`"transaction_id":"tx-divergent"`, `"block_id":999`, `"doc_count":1`} {
-		if !strings.Contains(gotBody, want) {
-			t.Fatalf("request body missing %s: %s", want, gotBody)
-		}
+		assertCommandContains(t, runner.commands, want)
 	}
+	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap debug pod/scrapd-1")
+	assertCommandContains(t, runner.commands, "--attach=true")
+	assertCommandContains(t, runner.commands, "--post-data=")
+	assertCommandContains(t, runner.commands, "http://127.0.0.1:9100/test-hooks/projection-key")
 	if !strings.Contains(out.String(), `"action":"fault.projection.inject"`) {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
 }
 
 func TestFaultProjectionInjectRequiresIdentifiers(t *testing.T) {
-	err := Run([]string{
-		"fault", "projection", "inject",
-		"--namespace=scrap",
-		"--context=kind-scrap-prodlike",
-		"--cell-id=kind-prodlike",
-		"--environment=prodlike",
-		"--confirm=kind-prodlike",
-	}, io.Discard, io.Discard, Deps{})
-	if err == nil || !strings.Contains(err.Error(), "transaction-id") {
-		t.Fatalf("error = %v, want missing identifiers", err)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing pod",
+			args: []string{
+				"fault", "projection", "inject",
+				"--namespace=scrap",
+				"--context=kind-scrap-prodlike",
+				"--cell-id=kind-prodlike",
+				"--environment=prodlike",
+				"--confirm=kind-prodlike",
+				"--transaction-id=tx-divergent",
+				"--block-id=999",
+				"--doc-count=1",
+			},
+			want: "pod",
+		},
+		{
+			name: "missing identifiers",
+			args: []string{
+				"fault", "projection", "inject",
+				"--namespace=scrap",
+				"--context=kind-scrap-prodlike",
+				"--cell-id=kind-prodlike",
+				"--environment=prodlike",
+				"--confirm=kind-prodlike",
+				"--pod=scrapd-1",
+			},
+			want: "transaction-id",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Run(tc.args, io.Discard, io.Discard, Deps{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -314,9 +327,29 @@ func TestFaultBlockCorruptUsesSafetyGate(t *testing.T) {
 		t.Fatalf("block corrupt: %v\n%s", err, out.String())
 	}
 	assertCommandContains(t, runner.commands, "kubectl --context kind-scrap-prodlike -n scrap debug pod/scrapd-1")
+	assertCommandContains(t, runner.commands, "--attach=true")
 	assertCommandContains(t, runner.commands, "seek=13")
 	if !strings.Contains(out.String(), `"action":"fault.block.corrupt"`) {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestFaultBlockCorruptReportsDebugFailure(t *testing.T) {
+	runner := &fakeRunner{run: func(_ string, _ ...string) (string, error) {
+		return "dd failed", errors.New("failed")
+	}}
+
+	err := Run([]string{
+		"fault", "block", "corrupt",
+		"--namespace=scrap",
+		"--context=kind-scrap-prodlike",
+		"--cell-id=kind-prodlike",
+		"--environment=prodlike",
+		"--confirm=kind-prodlike",
+		"--pod=scrapd-1",
+	}, io.Discard, io.Discard, Deps{Runner: runner})
+	if err == nil || !strings.Contains(err.Error(), "kubectl debug") || !strings.Contains(err.Error(), "dd failed") {
+		t.Fatalf("error = %v, want kubectl debug failure", err)
 	}
 }
 

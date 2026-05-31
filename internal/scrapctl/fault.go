@@ -1,14 +1,12 @@
 package scrapctl
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +19,8 @@ const (
 	defaultCorruptOffset     = 72
 	defaultCorruptByte       = "Z"
 	defaultRolloutArg        = "--timeout=180s"
+	defaultPodAdminURL       = "http://127.0.0.1:9100"
+	projectionHookPath       = "/test-hooks/projection-key"
 	faultCommandParts        = 2
 	faultPollInterval        = 100 * time.Millisecond
 	raftIDOrdinalOffset      = 1
@@ -204,16 +204,21 @@ func waitReplacementPodReady(ctx context.Context, runner Runner, opts commonOpti
 
 func runFaultProjectionInject(args []string, stdout io.Writer, deps Deps) error {
 	opts, err := parseFaultOptions("fault projection inject", args, func(fs *flag.FlagSet, opts *faultOptions) {
+		fs.StringVar(&opts.pod, "pod", "", "Pod whose local Pebble Projection receives the injected key")
 		fs.StringVar(&opts.transactionID, "transaction-id", "", "Transaction ID to inject into the Pebble Projection")
 		fs.Uint64Var(&opts.blockID, "block-id", 0, "Block ID to inject")
 		fs.UintVar(&opts.docCount, "doc-count", 0, "Document count to inject")
 		fs.BoolVar(&opts.completed, "completed", false, "Whether the injected projection entry is completed")
+		fs.StringVar(&opts.debugImage, "debug-image", defaultDebugImage, "kubectl debug image")
 	})
 	if err != nil {
 		return err
 	}
 	if err := validateFaultTarget(opts); err != nil {
 		return err
+	}
+	if opts.pod == "" {
+		return errors.New("pod is required")
 	}
 	if opts.transactionID == "" || opts.blockID == 0 || opts.docCount == 0 {
 		return errors.New("transaction-id, block-id, and doc-count are required")
@@ -227,7 +232,19 @@ func runFaultProjectionInject(args []string, stdout io.Writer, deps Deps) error 
 	if err != nil {
 		return fmt.Errorf("marshal projection hook request: %w", err)
 	}
-	if err := postJSON(context.Background(), deps.HTTPClient, opts.common, "/test-hooks/projection-key", body); err != nil {
+	if err := kubectlDebugInPod(
+		context.Background(),
+		deps.Runner,
+		opts.common,
+		opts.common.timeout,
+		opts.pod,
+		opts.debugImage,
+		"wget",
+		"-qO-",
+		"--header=Content-Type: application/json",
+		"--post-data="+string(body),
+		defaultPodAdminURL+projectionHookPath,
+	); err != nil {
 		return err
 	}
 	return writeOperationReport(stdout, opts.common.output, opts.safety, "fault.projection.inject", operationReport{Status: "ok"})
@@ -256,7 +273,7 @@ func runFaultBlockCorrupt(args []string, stdout io.Writer, deps Deps) error {
 blk=$(ls /proc/1/root/data/blocks/*.blk | sort | head -n 1)
 printf %q | dd of="$blk" bs=1 seek=%d conv=notrunc
 `, opts.byteValue, opts.offset)
-	if err := kubectlRun(context.Background(), deps.Runner, opts.common, opts.common.timeout, "debug", "pod/"+opts.pod, "--target=scrapd", "--image="+opts.debugImage, "--share-processes", "--", "sh", "-c", script); err != nil {
+	if err := kubectlDebugInPod(context.Background(), deps.Runner, opts.common, opts.common.timeout, opts.pod, opts.debugImage, "sh", "-c", script); err != nil {
 		return err
 	}
 	return writeOperationReport(stdout, opts.common.output, opts.safety, "fault.block.corrupt", operationReport{Status: "ok"})
@@ -352,6 +369,20 @@ func kubectlRun(ctx context.Context, runner Runner, opts commonOptions, timeout 
 	return nil
 }
 
+func kubectlDebugInPod(ctx context.Context, runner Runner, opts commonOptions, timeout time.Duration, pod, image string, command ...string) error {
+	args := []string{
+		"debug",
+		"pod/" + pod,
+		"--target=scrapd",
+		"--image=" + image,
+		"--attach=true",
+		"--share-processes",
+		"--",
+	}
+	args = append(args, command...)
+	return kubectlRun(ctx, runner, opts, timeout, args...)
+}
+
 func waitDeploymentReadyReplicas(ctx context.Context, runner Runner, opts commonOptions, deployment string, want int) error {
 	deadline := time.Now().Add(commandTimeout(opts.timeout))
 	for {
@@ -377,24 +408,4 @@ func waitDeploymentReadyReplicas(ctx context.Context, runner Runner, opts common
 		}
 		time.Sleep(faultPollInterval)
 	}
-}
-
-func postJSON(ctx context.Context, client *http.Client, opts commonOptions, path string, body []byte) error {
-	cctx, cancel := commandContext(ctx, opts.timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(opts.adminURL, "/")+path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("POST %s: %w", path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("POST %s status: %d: %s", path, resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	return nil
 }
