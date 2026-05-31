@@ -25,6 +25,25 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 	return r.run(name, args...)
 }
 
+type deadlineRunner struct {
+	commands         []string
+	rolloutDeadlines []time.Duration
+}
+
+func (r *deadlineRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	joined := strings.Join(append([]string{name}, args...), " ")
+	r.commands = append(r.commands, joined)
+	if name == "kubectl" && strings.Contains(strings.Join(args, " "), "rollout status") {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			r.rolloutDeadlines = append(r.rolloutDeadlines, 0)
+		} else {
+			r.rolloutDeadlines = append(r.rolloutDeadlines, time.Until(deadline))
+		}
+	}
+	return successfulDoctorCommand(name, args...)
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -136,6 +155,44 @@ func TestDoctorPassesKubeconfigAndContextToKubectl(t *testing.T) {
 	}
 	if !sawKubectl {
 		t.Fatal("doctor did not run kubectl")
+	}
+}
+
+func TestDoctorRolloutChecksUseRolloutTimeout(t *testing.T) {
+	runner := &deadlineRunner{}
+
+	var out bytes.Buffer
+	err := Run([]string{"doctor", "--output=json", "--rollout-timeout=3m", "--timeout=10s"}, &out, io.Discard, Deps{
+		Runner:     runner,
+		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return &fakeConn{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out.String())
+	}
+
+	var rolloutCommands int
+	for _, cmd := range runner.commands {
+		if !strings.Contains(cmd, "rollout status") {
+			continue
+		}
+		rolloutCommands++
+		if !strings.Contains(cmd, "--timeout=3m0s") {
+			t.Fatalf("rollout command did not include rollout timeout: %q", cmd)
+		}
+	}
+	if rolloutCommands != 3 {
+		t.Fatalf("rollout commands = %d, want 3", rolloutCommands)
+	}
+	if len(runner.rolloutDeadlines) != 3 {
+		t.Fatalf("rollout deadlines = %d, want 3", len(runner.rolloutDeadlines))
+	}
+	for _, remaining := range runner.rolloutDeadlines {
+		if remaining <= 3*time.Minute || remaining > 4*time.Minute {
+			t.Fatalf("rollout context deadline = %s, want just above 3m", remaining)
+		}
 	}
 }
 

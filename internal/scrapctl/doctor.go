@@ -16,7 +16,7 @@ const (
 )
 
 func runDoctor(args []string, stdout io.Writer, deps Deps) error {
-	opts, err := parseCommon("doctor", args)
+	opts, err := parseCommon("doctor", args, withRolloutTimeoutFlag)
 	if err != nil {
 		return err
 	}
@@ -63,10 +63,12 @@ func hostChecks(ctx context.Context, opts commonOptions, deps Deps) []Check {
 }
 
 func kubernetesChecks(ctx context.Context, opts commonOptions, deps Deps) []Check {
+	rolloutTimeout := rolloutCommandTimeout(opts)
+	rolloutArg := rolloutTimeoutArg(opts)
 	checks := []Check{
-		commandOK(ctx, deps.Runner, opts.timeout, "cilium.daemonset_ready", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=180s")...),
-		commandOK(ctx, deps.Runner, opts.timeout, "cilium.operator_ready", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "rollout", "status", "deployment/cilium-operator", "--timeout=180s")...),
-		commandOK(ctx, deps.Runner, opts.timeout, "coredns.ready", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=180s")...),
+		commandOK(ctx, deps.Runner, rolloutTimeout, "cilium.daemonset_ready", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "rollout", "status", "daemonset/cilium", rolloutArg)...),
+		commandOK(ctx, deps.Runner, rolloutTimeout, "cilium.operator_ready", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "rollout", "status", "deployment/cilium-operator", rolloutArg)...),
+		commandOK(ctx, deps.Runner, rolloutTimeout, "coredns.ready", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "rollout", "status", "deployment/coredns", rolloutArg)...),
 		ciliumStatusCheck(ctx, opts, deps, "cilium.kube_proxy_replacement", "KubeProxyReplacement:", "True"),
 		ciliumStatusCheck(ctx, opts, deps, "cilium.nodeport", "NodePort:", "Enabled"),
 		commandAbsent(ctx, deps.Runner, opts.timeout, "kubernetes.no_kube_proxy", opts.kubectl, kubectlArgs(opts, "-n", "kube-system", "get", "daemonset", "kube-proxy")...),
@@ -82,6 +84,21 @@ func kubernetesChecks(ctx context.Context, opts commonOptions, deps Deps) []Chec
 		expectOutput(ctx, deps.Runner, opts.timeout, "networkpolicy.host_admin_allow_selector", "scrap", opts.kubectl, kubectlArgs(opts, "-n", opts.namespace, "get", "ciliumnetworkpolicy", "scrapd-admin-host-allow", "-o", "jsonpath={.spec.endpointSelector.matchLabels.app}")...),
 	}
 	return checks
+}
+
+func rolloutCommandTimeout(opts commonOptions) time.Duration {
+	return doctorRolloutTimeout(opts) + commandTimeout(opts.timeout)
+}
+
+func rolloutTimeoutArg(opts commonOptions) string {
+	return "--timeout=" + doctorRolloutTimeout(opts).String()
+}
+
+func doctorRolloutTimeout(opts commonOptions) time.Duration {
+	if opts.rolloutTimeout <= 0 {
+		return defaultRolloutTimeout
+	}
+	return opts.rolloutTimeout
 }
 
 func nodePortChecks(ctx context.Context, opts commonOptions, deps Deps) []Check {

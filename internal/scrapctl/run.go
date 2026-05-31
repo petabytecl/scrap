@@ -16,13 +16,14 @@ import (
 const (
 	kubectlGlobalFlagCapacity = 4
 
-	defaultNamespace  = "scrap"
-	defaultCluster    = "scrap-prodlike"
-	defaultAdminURL   = "http://127.0.0.1:18100"
-	defaultMetricsURL = "http://127.0.0.1:18100/metrics"
-	defaultClientAddr = "127.0.0.1:18090"
-	defaultAdminAddr  = "127.0.0.1:18100"
-	defaultTimeout    = 5 * time.Second
+	defaultNamespace      = "scrap"
+	defaultCluster        = "scrap-prodlike"
+	defaultAdminURL       = "http://127.0.0.1:18100"
+	defaultMetricsURL     = "http://127.0.0.1:18100/metrics"
+	defaultClientAddr     = "127.0.0.1:18090"
+	defaultAdminAddr      = "127.0.0.1:18100"
+	defaultTimeout        = 5 * time.Second
+	defaultRolloutTimeout = 180 * time.Second
 )
 
 var errCommandFailed = errors.New("command failed")
@@ -89,21 +90,24 @@ func (d Deps) withDefaults() Deps {
 }
 
 type commonOptions struct {
-	namespace   string
-	cluster     string
-	kubectl     string
-	kubeContext string
-	kubeconfig  string
-	docker      string
-	adminURL    string
-	metricsURL  string
-	clientAddr  string
-	adminAddr   string
-	timeout     time.Duration
-	output      string
+	namespace      string
+	cluster        string
+	kubectl        string
+	kubeContext    string
+	kubeconfig     string
+	docker         string
+	adminURL       string
+	metricsURL     string
+	clientAddr     string
+	adminAddr      string
+	timeout        time.Duration
+	rolloutTimeout time.Duration
+	output         string
 }
 
-func newFlagSet(name string, opts *commonOptions) *flag.FlagSet {
+type flagSetOption func(*flag.FlagSet, *commonOptions)
+
+func newFlagSet(name string, opts *commonOptions, configure ...flagSetOption) *flag.FlagSet {
 	fs := flag.NewFlagSet("scrapctl "+name, flag.ContinueOnError)
 	fs.StringVar(&opts.namespace, "namespace", defaultNamespace, "Kubernetes namespace containing the Cell")
 	fs.StringVar(&opts.cluster, "cluster", defaultCluster, "Kind cluster name for host runtime checks")
@@ -117,12 +121,19 @@ func newFlagSet(name string, opts *commonOptions) *flag.FlagSet {
 	fs.StringVar(&opts.adminAddr, "admin-addr", defaultAdminAddr, "admin NodePort host:port")
 	fs.DurationVar(&opts.timeout, "timeout", defaultTimeout, "per-check timeout")
 	fs.StringVar(&opts.output, "output", "text", "output format: text or json")
+	for _, apply := range configure {
+		apply(fs, opts)
+	}
 	return fs
 }
 
-func parseCommon(name string, args []string) (commonOptions, error) {
+func withRolloutTimeoutFlag(fs *flag.FlagSet, opts *commonOptions) {
+	fs.DurationVar(&opts.rolloutTimeout, "rollout-timeout", defaultRolloutTimeout, "Kubernetes rollout status timeout")
+}
+
+func parseCommon(name string, args []string, configure ...flagSetOption) (commonOptions, error) {
 	opts := commonOptions{}
-	fs := newFlagSet(name, &opts)
+	fs := newFlagSet(name, &opts, configure...)
 	if err := fs.Parse(args); err != nil {
 		return commonOptions{}, fmt.Errorf("parse flags: %w", err)
 	}
@@ -135,11 +146,15 @@ func parseCommon(name string, args []string) (commonOptions, error) {
 	return opts, nil
 }
 
-func commandContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+func commandTimeout(timeout time.Duration) time.Duration {
 	if timeout <= 0 {
-		timeout = defaultTimeout
+		return defaultTimeout
 	}
-	return context.WithTimeout(parent, timeout)
+	return timeout
+}
+
+func commandContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, commandTimeout(timeout))
 }
 
 func kubectlArgs(opts commonOptions, args ...string) []string {
