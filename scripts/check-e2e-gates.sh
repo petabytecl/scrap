@@ -4,8 +4,8 @@ set -euo pipefail
 MAKEFILE=${MAKEFILE:-Makefile}
 WORKFLOW=${WORKFLOW:-.github/workflows/ci.yml}
 SCRUB_E2E=${SCRUB_E2E:-test/e2e/scrub_e2e_test.go}
-PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/overlays/prodlike}
-PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/overlays/prodlike-e2e}
+PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
+PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodlike-e2e}
 
 fail() {
 	echo "e2e gate check failed: $*" >&2

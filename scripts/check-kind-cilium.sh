@@ -3,8 +3,8 @@ set -eu
 
 KIND_CONFIG=${PRODLIKE_KIND_CONFIG:-deploy/kind/cluster-prodlike-cilium.yaml}
 STRESS_KIND_CONFIG=${STRESS_KIND_CONFIG:-deploy/kind/cluster-stress.yaml}
-PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/overlays/prodlike}
-PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/overlays/prodlike-e2e}
+PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
+PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodlike-e2e}
 CILIUM_VALUES=${CILIUM_VALUES:-deploy/cilium/prodlike-values.yaml}
 CILIUM_CHART_DIR=${CILIUM_CHART_DIR:-deploy/cilium/charts/cilium}
 CILIUM_SCRIPT=${CILIUM_SCRIPT:-scripts/prodlike-cilium.sh}
@@ -64,7 +64,7 @@ require 'kubeProxyMode:[[:space:]]*"?none"?' "$STRESS_KIND_CONFIG" "disabled kub
 require 'hostPort:[[:space:]]*13000' "$STRESS_KIND_CONFIG" "Grafana host port"
 require 'hostPort:[[:space:]]*14317' "$STRESS_KIND_CONFIG" "OTLP host port"
 
-require '../local-kind' "$PRODLIKE_OVERLAY/kustomization.yaml" "prod-like base overlay reuse"
+require '../local' "$PRODLIKE_OVERLAY/kustomization.yaml" "prod-like local environment reuse"
 require 'networkpolicy-admin\.yaml' "$PRODLIKE_OVERLAY/kustomization.yaml" "prod-like admin NetworkPolicy"
 require 'monitoring-namespace\.yaml' "$PRODLIKE_OVERLAY/kustomization.yaml" "prod-like monitoring namespace"
 require_file "$PRODLIKE_OVERLAY/networkpolicy-admin.yaml" "prod-like admin NetworkPolicy"
@@ -76,7 +76,7 @@ require 'SCRAP_PPROF_ENABLED' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml
 require 'SCRAP_SCRUB_ENABLED' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like scrub gate"
 require 'SCRAP_LIGHT_SCRUB_INTERVAL' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like fast light scrub"
 reject 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like test hooks"
-require '../prodlike' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E overlay reuse"
+require '../prodlike' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E environment reuse"
 require 'SCRAP_TEST_HOOKS' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "prod-like E2E test hooks"
 
 require '^kubeProxyReplacement:[[:space:]]*true' "$CILIUM_VALUES" "Cilium kube-proxy replacement"
