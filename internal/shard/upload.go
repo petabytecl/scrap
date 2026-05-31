@@ -167,10 +167,14 @@ func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 
 func (s *Shard) retryUploadObligations(ctx context.Context) {
 	s.mu.Lock()
-	pendingRetry := s.uploadObligations.beginRetry(time.Now())
+	pendingRetry := s.beginUploadObligationRetryLocked(time.Now())
 	s.mu.Unlock()
 
 	s.proposeSeals(ctx, pendingRetry)
+}
+
+func (s *Shard) beginUploadObligationRetryLocked(now time.Time) []index.PendingUpload {
+	return s.uploadObligations.beginRetry(now, now.Add(s.uploadSealRetryDelay()))
 }
 
 func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {

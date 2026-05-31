@@ -54,11 +54,11 @@ func (o *uploadObligations) forget(blockID uint64) {
 	o.local = next
 }
 
-func (o *uploadObligations) beginRetry(now time.Time) []index.PendingUpload {
+func (o *uploadObligations) beginRetry(now, retryAfter time.Time) []index.PendingUpload {
 	pending := make([]index.PendingUpload, 0, len(o.local))
 	next := make([]uploadObligation, 0, len(o.local))
 	for _, obligation := range o.local {
-		if obligation.inFlight || now.Before(obligation.retryAfter) {
+		if now.Before(obligation.retryAfter) {
 			next = append(next, obligation)
 			continue
 		}
@@ -66,7 +66,7 @@ func (o *uploadObligations) beginRetry(now time.Time) []index.PendingUpload {
 		next = append(next, uploadObligation{
 			upload:     obligation.upload,
 			inFlight:   true,
-			retryAfter: obligation.retryAfter,
+			retryAfter: retryAfter,
 		})
 	}
 	o.local = next
