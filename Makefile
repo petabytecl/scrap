@@ -252,6 +252,7 @@ integration: ## Run integration tests.
 .PHONY: build
 build: ## Build all supported command binaries.
 	$(GO) build -ldflags "$(SCRAPD_LDFLAGS)" ./cmd/scrapd
+	$(GO) build ./cmd/scrapctl
 
 .PHONY: static
 static: $(STATIC_TARGETS) ## Run all static analysis and format checks.

@@ -24,6 +24,7 @@ Thumbs.db
 /dist/
 /tmp/
 /scrapd
+/scrapctl
 /stress
 coverage.out
 test-results/
