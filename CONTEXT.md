@@ -463,13 +463,13 @@ Each is the _what_; the _why_ is in the V1 ADR reasoning table.
   Rewrap is a durable, idempotent operation with audit evidence. Encrypted
   envelope reads return a typed `crypto-unavailable` response when key
   material is missing.
-- **Single-voter Raft forensic gap (ADR 0016)**: documented, not closed.
+- **Single-voter Raft forensic gap (V1 ADR 0016)**: documented, not closed.
   Option A (acknowledge + compensating controls: non-root container,
   read-only root FS, K8s RBAC, restricted volume attach, audited admin ops).
   Option B (post-commit HMAC-SHA256 to external append-only log) reserved
   for production. Production forensic integrity blocked until Option B
   evidence exists OR multi-voter Raft (Option C) is shipped.
-- **Group-commit constraints (ADR 0017)**: sync errors fail **all** affected
+- **Group-commit constraints (V1 ADR 0017)**: sync errors fail **all** affected
   waiters and force the component fail-closed. Close/seal/repair must
   flush-or-fail pending batches before continuing. Queue depth, batch size,
   sync latency, retry/drop behavior all observable and bounded.
@@ -693,7 +693,8 @@ Phase 3: Backend upload → leader uploads sealed Blocks (.blk + .idx as separat
 objects) to the Backend, verifies via HEAD + size/ETag, proposes `ConfirmUpload`
 via Raft. Upload Outbox tracks obligations. Three-level admission pressure
 (WARN/PRESSURE/CRITICAL) prevents unbounded upload lag from filling local disk.
-Phase 4 (future): Partial eviction → followers evict uploaded Blocks.
+Phase 4 (future): Partial eviction → followers evict uploaded Blocks (see
+ADR 0016).
 Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
 ### Raft Operations
