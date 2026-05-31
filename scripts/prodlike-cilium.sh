@@ -151,8 +151,8 @@ wait_tcp() {
 	port=$2
 	label=$3
 
-	deadline=$((SECONDS + 30))
-	while [ "$SECONDS" -lt "$deadline" ]; do
+	deadline=$(($(date +%s) + 30))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if command -v nc >/dev/null 2>&1 && nc -z "$host" "$port" >/dev/null 2>&1; then
 			return
 		fi
