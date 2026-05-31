@@ -174,6 +174,9 @@ func promoteRepairStaging(paths blockRepairPaths) error {
 		_ = os.Remove(paths.idxFinal)
 		return fmt.Errorf("scrub: promote replacement block: %w", err)
 	}
+	if err := syncDir(filepath.Dir(paths.blkFinal)); err != nil {
+		return fmt.Errorf("scrub: sync promoted replacement: %w", err)
+	}
 	return nil
 }
 
@@ -183,6 +186,9 @@ func removeQuarantineFiles(paths blockRepairPaths) error {
 	}
 	if err := os.Remove(paths.idxQ); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("scrub: remove quarantined index: %w", err)
+	}
+	if err := syncDir(filepath.Dir(paths.blkQ)); err != nil {
+		return fmt.Errorf("scrub: sync quarantine removal: %w", err)
 	}
 	return nil
 }

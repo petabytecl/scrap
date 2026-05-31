@@ -86,6 +86,26 @@ func TestBlockRepair_CorruptReplacementDeletedAndQuarantineRemains(t *testing.T)
 	}
 }
 
+func TestBlockRepair_InvalidReplacementIndexDeletedAndQuarantineRemains(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(11)
+	quarantineBlock(t, dir, blockID)
+	replacement := replacementPayload(t, blockID, []byte("replacement with invalid index"))
+	replacement.idx = []byte("not an index")
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{payloads: map[uint64]transferPayload{blockID: replacement}}
+	repair := newTestBlockRepair(dir, transferer, metrics, []string{"member-a:9091"})
+
+	repair.RepairQuarantined(context.Background())
+
+	requireQuarantined(t, dir, blockID)
+	requireNoPromotedBlock(t, dir, blockID)
+	requireNoRepairStaging(t, dir)
+	if metrics.repairsFailed != 1 || metrics.repairsOK != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=0 failed=1", metrics.repairsOK, metrics.repairsFailed)
+	}
+}
+
 func TestBlockRepair_VerifiedReplacementRemovesQuarantineFiles(t *testing.T) {
 	dir := t.TempDir()
 	blockID := uint64(9)
@@ -110,6 +130,30 @@ func TestBlockRepair_VerifiedReplacementRemovesQuarantineFiles(t *testing.T) {
 	}
 	if metrics.decremented != 1 {
 		t.Fatalf("quarantine gauge decremented %d times, want 1", metrics.decremented)
+	}
+}
+
+func TestBlockRepair_CleansStaleStagingBeforeSuccessfulRepair(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(12)
+	quarantineBlock(t, dir, blockID)
+	if err := os.WriteFile(block.FilePath(dir, blockID)+".repair", []byte("stale blk"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale blk: %v", err)
+	}
+	if err := os.WriteFile(block.IdxFilePath(dir, blockID)+".repair", []byte("stale idx"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale idx: %v", err)
+	}
+	replacement := replacementPayload(t, blockID, []byte("replacement after stale staging"))
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{payloads: map[uint64]transferPayload{blockID: replacement}}
+	repair := newTestBlockRepair(dir, transferer, metrics, []string{"member-a:9091"})
+
+	repair.RepairQuarantined(context.Background())
+
+	requireNotQuarantined(t, dir, blockID)
+	requireNoRepairStaging(t, dir)
+	if metrics.repairsOK != 1 || metrics.repairsFailed != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=1 failed=0", metrics.repairsOK, metrics.repairsFailed)
 	}
 }
 
@@ -138,6 +182,47 @@ func TestBlockRepair_RotatesPeersAcrossConfiguredMembers(t *testing.T) {
 	}
 	if metrics.repairsOK != 3 || metrics.repairsFailed != 0 {
 		t.Fatalf("repair metrics ok=%d failed=%d, want ok=3 failed=0", metrics.repairsOK, metrics.repairsFailed)
+	}
+}
+
+func TestBlockRepair_ListFailureSkipsTransferAndMetrics(t *testing.T) {
+	missingDir := filepath.Join(t.TempDir(), "missing")
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{}
+	repair := newTestBlockRepair(missingDir, transferer, metrics, []string{"member-a:9091"})
+
+	repair.RepairQuarantined(context.Background())
+
+	if len(transferer.calls) != 0 {
+		t.Fatalf("transfer calls = %d, want 0", len(transferer.calls))
+	}
+	if metrics.repairsOK+metrics.repairsFailed != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want no repair metrics", metrics.repairsOK, metrics.repairsFailed)
+	}
+}
+
+func TestBlockRepair_PromoteFailureLeavesQuarantineIntact(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(13)
+	quarantineBlock(t, dir, blockID)
+	idxDest := block.IdxFilePath(dir, blockID)
+	if err := os.Mkdir(idxDest, 0o700); err != nil {
+		t.Fatalf("Mkdir idx dest blocker: %v", err)
+	}
+	replacement := replacementPayload(t, blockID, []byte("replacement blocked at promote"))
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{payloads: map[uint64]transferPayload{blockID: replacement}}
+	repair := newTestBlockRepair(dir, transferer, metrics, []string{"member-a:9091"})
+
+	repair.RepairQuarantined(context.Background())
+
+	requireQuarantined(t, dir, blockID)
+	if _, err := os.Stat(block.FilePath(dir, blockID)); !os.IsNotExist(err) {
+		t.Fatalf("expected no promoted block, stat err=%v", err)
+	}
+	requireNoRepairStaging(t, dir)
+	if metrics.repairsFailed != 1 || metrics.repairsOK != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=0 failed=1", metrics.repairsOK, metrics.repairsFailed)
 	}
 }
 
@@ -288,5 +373,16 @@ func requireNoPromotedBlock(t *testing.T, dir string, blockID uint64) {
 	}
 	if _, err := os.Stat(block.IdxFilePath(dir, blockID)); !os.IsNotExist(err) {
 		t.Fatalf("expected no promoted index, stat err=%v", err)
+	}
+}
+
+func requireNoRepairStaging(t *testing.T, dir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "*.repair"))
+	if err != nil {
+		t.Fatalf("Glob repair staging: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("repair staging files remain: %v", matches)
 	}
 }
