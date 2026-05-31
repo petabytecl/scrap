@@ -107,17 +107,17 @@ CROSS_BUILD_ENV = CGO_ENABLED=0 GOOS=$(IMAGE_GOOS) GOARCH=$(IMAGE_GOARCH)
 ##@ Local Kind Variables
 
 ##? KIND_CLUSTER Local kind cluster name used by local-kind targets.
-##? LOCAL_KIND_OVERLAY Kustomize overlay used for local kind manifests.
+##? LOCAL_KIND_OVERLAY Kustomize environment used for local kind manifests.
 
 KIND_CLUSTER ?= scrap-local
-LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
+LOCAL_KIND_OVERLAY ?= deploy/kustomize/environments/local
 
 ##@ Prod-like Kind Variables
 
 ##? PRODLIKE_KIND_CLUSTER Kind cluster name used by prod-like Cell targets.
 ##? PRODLIKE_KIND_CONFIG Kind config for the Cilium-backed prod-like Cell.
-##? PRODLIKE_OVERLAY Kustomize overlay used for the prod-like Cell.
-##? PRODLIKE_E2E_OVERLAY Kustomize overlay used for prod-like E2E test hooks.
+##? PRODLIKE_OVERLAY Kustomize environment used for the prod-like Cell.
+##? PRODLIKE_E2E_OVERLAY Kustomize environment used for prod-like E2E test hooks.
 ##? CILIUM_VERSION Cilium chart version used by prod-like Kind targets.
 ##? CILIUM_CHART_DIR Vendored Cilium chart used by prod-like Kind targets.
 ##? CILIUM_VALUES Helm values used for prod-like Cilium.
@@ -125,8 +125,8 @@ LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
 
 PRODLIKE_KIND_CLUSTER ?= scrap-prodlike
 PRODLIKE_KIND_CONFIG ?= deploy/kind/cluster-prodlike-cilium.yaml
-PRODLIKE_OVERLAY ?= deploy/kustomize/overlays/prodlike
-PRODLIKE_E2E_OVERLAY ?= deploy/kustomize/overlays/prodlike-e2e
+PRODLIKE_OVERLAY ?= deploy/kustomize/environments/prodlike
+PRODLIKE_E2E_OVERLAY ?= deploy/kustomize/environments/prodlike-e2e
 CILIUM_VERSION ?= 1.19.4
 CILIUM_CHART_DIR ?= deploy/cilium/charts/cilium
 CILIUM_VALUES ?= deploy/cilium/prodlike-values.yaml
@@ -162,8 +162,8 @@ TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPat
 
 ##? STRESS_KIND_CLUSTER Kind cluster name used by stress targets.
 ##? STRESS_KIND_CONFIG Kind cluster config with Grafana NodePort.
-##? STRESS_OVERLAY Kustomize overlay used for stress manifests.
-##? EVIDENCE_OVERLAY Kustomize overlay for OTel evidence stack (stress runs).
+##? STRESS_OVERLAY Kustomize environment used for stress/evidence workload manifests.
+##? EVIDENCE_OVERLAY Kustomize component for OTel evidence stack manifests.
 ##? STRESS_ADDR gRPC address for the stress test binary.
 ##? STRESS_SCENARIO Stress scenario to run: throughput, mixed, pressure.
 ##? STRESS_WORKERS Concurrent worker goroutines for the stress test.
@@ -174,8 +174,8 @@ TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPat
 
 STRESS_KIND_CLUSTER ?= scrap-stress
 STRESS_KIND_CONFIG ?= deploy/kind/cluster-stress.yaml
-STRESS_OVERLAY ?= deploy/kustomize/overlays/local-stress
-EVIDENCE_OVERLAY ?= deploy/kustomize/overlays/evidence
+STRESS_OVERLAY ?= deploy/kustomize/environments/evidence
+EVIDENCE_OVERLAY ?= deploy/kustomize/components/evidence-stack
 STRESS_ADDR ?= 127.0.0.1:18090
 STRESS_SCENARIO ?= throughput
 STRESS_WORKERS ?= 8
@@ -499,7 +499,7 @@ e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
 		$(GO) test ./test/e2e/ -run '$(SCRUB_E2E_TEST_RUN)' -count=1 -v -timeout 600s
 
 .PHONY: e2e-scrub-up
-e2e-scrub-up: LOCAL_KIND_OVERLAY=deploy/kustomize/overlays/local-kind-scrub
+e2e-scrub-up: LOCAL_KIND_OVERLAY=deploy/kustomize/environments/local-scrub
 e2e-scrub-up: e2e-setup e2e-scrub ## Create/update scrub-enabled local Kind, then run scrub E2E tests.
 
 ##@ Stress

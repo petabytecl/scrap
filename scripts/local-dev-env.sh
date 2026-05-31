@@ -28,12 +28,12 @@ FORWARD_NAMES="client-grpc metrics"
 case "$PROFILE" in
 	dev)
 		DEFAULT_CLUSTER=scrap-dev
-		DEFAULT_OVERLAY=deploy/kustomize/overlays/local-kind
+		DEFAULT_OVERLAY=deploy/kustomize/environments/local
 		DEFAULT_NODE_COUNT=4
 		;;
 	prod-like)
 		DEFAULT_CLUSTER=scrap-prod-dev
-		DEFAULT_OVERLAY=deploy/kustomize/overlays/local-kind
+		DEFAULT_OVERLAY=deploy/kustomize/environments/local
 		DEFAULT_NODE_COUNT=5
 		;;
 	*)
