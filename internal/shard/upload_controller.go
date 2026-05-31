@@ -197,6 +197,8 @@ func (c *uploadController) handleRetry(ctx context.Context, err error, state *up
 		return c.handleThrottled(ctx, state)
 	case backend.ClassTransient:
 		return handleTransientUpload(ctx, state)
+	case backend.ClassNotFound:
+		return handleTransientUpload(ctx, state)
 	case backend.ClassAuth:
 		c.pause(c.authRetryDelay())
 		return false, sleepUploadRetry(ctx, c.authRetryDelay())

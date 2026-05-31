@@ -348,6 +348,7 @@ func runPressure(pool *clientPool, cfg config) {
 		"total_bytes_written": snap.totalBytes,
 		"latency":             snap.latencyStats(),
 		"error_breakdown":     snap.errorBreakdown,
+		"error_samples":       snap.errorSamples,
 	}
 	emitJSON(result)
 }
@@ -386,6 +387,9 @@ func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, t
 			},
 		}); err != nil {
 			lastErr = err
+			if retryWriteError(opCtx, err, &activeClient, &transient, addr, attempt) {
+				continue
+			}
 			continue
 		}
 
@@ -398,6 +402,10 @@ func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, t
 				},
 			}); err != nil {
 				lastErr = err
+				if retryWriteError(opCtx, err, &activeClient, &transient, addr, attempt) {
+					chunkErr = true
+					break
+				}
 				chunkErr = true
 				break
 			}
@@ -426,6 +434,17 @@ func writeDoc(ctx context.Context, client scrapv1.DocumentServiceClient, addr, t
 		return err
 	}
 	return lastErr
+}
+
+func retryWriteError(ctx context.Context, err error, activeClient *scrapv1.DocumentServiceClient, current **documentClientLease, fallbackAddr string, attempt int) bool {
+	if status.Code(err) != codes.Unavailable {
+		return false
+	}
+	if fresh := replaceUnavailableClient(ctx, current, fallbackAddr, err); fresh != nil {
+		*activeClient = fresh.client
+	}
+	backoff(ctx, attempt)
+	return true
 }
 
 type documentClientLease struct {
@@ -715,7 +734,7 @@ func isUploadPressure(err error) bool {
 	}
 	st, ok := status.FromError(err)
 	if !ok {
-		return true
+		return false
 	}
 	for _, detail := range st.Details() {
 		info, ok := detail.(*errdetails.ErrorInfo)
@@ -723,7 +742,7 @@ func isUploadPressure(err error) bool {
 			return true
 		}
 	}
-	return true
+	return false
 }
 
 func backoff(ctx context.Context, attempt int) {
@@ -771,6 +790,7 @@ type statsSnapshot struct {
 	totalBytes     int64
 	latencies      []time.Duration
 	errorBreakdown map[string]int64
+	errorSamples   map[string]string
 }
 
 func (s *statsSnapshot) latencyStats() map[string]string {
@@ -798,6 +818,7 @@ type runStats struct {
 	totalBytes     int64
 	latencies      []time.Duration
 	errorBreakdown map[string]int64
+	errorSamples   map[string]string
 	startOnce      sync.Once
 	start          time.Time
 }
@@ -813,7 +834,14 @@ func (s *runStats) record(elapsed time.Duration, err error, payloadBytes int) {
 		if s.errorBreakdown == nil {
 			s.errorBreakdown = make(map[string]int64)
 		}
-		s.errorBreakdown[classifyError(err)]++
+		class := classifyError(err)
+		s.errorBreakdown[class]++
+		if s.errorSamples == nil {
+			s.errorSamples = make(map[string]string)
+		}
+		if _, ok := s.errorSamples[class]; !ok {
+			s.errorSamples[class] = err.Error()
+		}
 	} else {
 		s.totalBytes += int64(payloadBytes)
 	}
@@ -826,12 +854,15 @@ func (s *runStats) snapshot() statsSnapshot {
 	copy(lat, s.latencies)
 	eb := make(map[string]int64)
 	maps.Copy(eb, s.errorBreakdown)
+	samples := make(map[string]string)
+	maps.Copy(samples, s.errorSamples)
 	return statsSnapshot{
 		total:          s.total,
 		errors:         s.errors,
 		totalBytes:     s.totalBytes,
 		latencies:      lat,
 		errorBreakdown: eb,
+		errorSamples:   samples,
 	}
 }
 
@@ -872,6 +903,7 @@ func (s *runStats) finalize(label string) map[string]any {
 		"throughput_mbps": math.Round(float64(snap.totalBytes)/elapsed.Seconds()/mib*roundFactor) / roundFactor,
 		"latency":         snap.latencyStats(),
 		"error_breakdown": snap.errorBreakdown,
+		"error_samples":   snap.errorSamples,
 	}
 
 	logf("--- %s results ---", label)

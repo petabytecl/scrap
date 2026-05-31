@@ -447,6 +447,7 @@ func TestClassifyS3Error(t *testing.T) {
 		{name: "bad gateway", err: responseErr(http.StatusBadGateway), want: ErrTransient},
 		{name: "gateway timeout", err: responseErr(http.StatusGatewayTimeout), want: ErrTransient},
 		{name: "request timeout", err: responseErr(http.StatusRequestTimeout), want: ErrTransient},
+		{name: "status zero", err: responseErr(0), want: ErrTransient},
 		{name: "timeout", err: timeoutError{}, want: ErrTransient},
 		{name: "cancelled", err: context.Canceled, want: ErrTransient},
 		{name: "expired token", err: apiErr("ExpiredToken"), want: ErrAuth},

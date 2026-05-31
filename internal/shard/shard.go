@@ -37,6 +37,7 @@ type Config struct {
 	ShardID        uint64
 	RaftID         uint64
 	Peers          map[uint64]string
+	ClientAddrs    map[uint64]string
 	BlockSealSize  int64
 	TickInterval   time.Duration
 	BootstrapGrace time.Duration
@@ -64,6 +65,7 @@ type Shard struct {
 	shardID        uint64
 	raftID         uint64
 	peers          map[uint64]string
+	clientAddrs    map[uint64]string
 	idx            *index.Index
 	raft           *scrapraft.Node
 	replicator     DocumentReplicator
@@ -80,6 +82,10 @@ type Shard struct {
 	blockWriter *block.Writer
 	idxWriter   *block.IndexWriter
 	nextBlockID uint64
+
+	// Serializes the leader write pipeline so peer replication and Raft proposals
+	// preserve the same offset order as local block appends.
+	writeOrderMu sync.Mutex
 
 	proposalMu sync.Mutex
 	proposals  map[string]chan error
@@ -140,6 +146,7 @@ func Open(cfg Config) (*Shard, error) {
 		shardID:                 cfg.ShardID,
 		raftID:                  cfg.RaftID,
 		peers:                   cfg.Peers,
+		clientAddrs:             cfg.ClientAddrs,
 		idx:                     idx,
 		baseLogger:              baseLogger,
 		logger:                  logger,
@@ -218,6 +225,13 @@ func ensureShardDirs(dirs ...string) error {
 
 //nolint:cyclop,gocognit // orchestration function managing seal check, prep file, block append, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
+	if err := s.requireWritableLeader(); err != nil {
+		return storeapi.WriteResult{}, err
+	}
+
+	s.writeOrderMu.Lock()
+	defer s.writeOrderMu.Unlock()
+
 	if err := s.requireWritableLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
@@ -631,13 +645,22 @@ func (s *Shard) SetRebuildingForTest(v bool) {
 
 func (s *Shard) notLeaderError() error {
 	leaderID := s.raft.LeaderID()
-	var leaderAddr string
-	if leaderID != 0 {
-		if addr, ok := s.peers[leaderID]; ok {
-			leaderAddr = addr
+	return &storeapi.NotLeaderError{LeaderAddr: s.leaderClientAddr(leaderID)}
+}
+
+func (s *Shard) leaderClientAddr(leaderID uint64) string {
+	if leaderID == 0 {
+		return ""
+	}
+	if s.clientAddrs != nil {
+		if addr, ok := s.clientAddrs[leaderID]; ok {
+			return addr
 		}
 	}
-	return &storeapi.NotLeaderError{LeaderAddr: leaderAddr}
+	if addr, ok := s.peers[leaderID]; ok {
+		return addr
+	}
+	return ""
 }
 
 func (s *Shard) RaftStep(ctx context.Context, msg raftpb.Message) error {

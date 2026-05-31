@@ -360,6 +360,9 @@ func classForS3Code(code string) error {
 }
 
 func classForS3Status(status int) error {
+	if status <= 0 {
+		return ErrTransient
+	}
 	switch status {
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
 		return ErrThrottled

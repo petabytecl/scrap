@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -120,6 +122,36 @@ func resolvePeers(cfg Config) (map[uint64]string, uint64, error) {
 	default:
 		return map[uint64]string{1: "localhost:9091"}, 1, nil
 	}
+}
+
+func resolveClientAddrs(cfg Config, peers map[uint64]string) map[uint64]string {
+	if cfg.Replicas > 0 && cfg.HeadlessService != "" {
+		clientPort, err := portFromListenAddr(cfg.ListenAddr)
+		if err == nil && clientPort > 0 {
+			return scrapraft.BuildK8sPeers(cfg.Replicas, cfg.HeadlessService, cfg.Namespace, clientPort)
+		}
+	}
+	return copyPeerAddrs(peers)
+}
+
+func portFromListenAddr(addr string) (int, error) {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, fmt.Errorf("split listen address %q: %w", addr, err)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return 0, fmt.Errorf("parse listen port %q: %w", port, err)
+	}
+	return n, nil
+}
+
+func copyPeerAddrs(peers map[uint64]string) map[uint64]string {
+	copied := make(map[uint64]string, len(peers))
+	for id, addr := range peers {
+		copied[id] = addr
+	}
+	return copied
 }
 
 func peerAddrsExceptSelf(peers map[uint64]string, selfID uint64) []string {

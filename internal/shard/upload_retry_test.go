@@ -90,6 +90,22 @@ func TestHandleUploadRetryTransient(t *testing.T) {
 	}
 }
 
+func TestHandleUploadRetryNotFound(t *testing.T) {
+	ctx := context.Background()
+	c := newRetryTestController()
+
+	notFound := newUploadRetryState(time.Nanosecond)
+	retry, err := c.handleRetry(ctx, backend.ErrNotFound, &notFound)
+	if err != nil || !retry {
+		t.Fatalf("not-found retry = %v, err = %v; want retry without error", retry, err)
+	}
+	notFound.transientAttempts = maxTransientUploadRetries
+	retry, err = c.handleRetry(ctx, backend.ErrNotFound, &notFound)
+	if err != nil || retry {
+		t.Fatalf("exhausted not-found retry = %v, err = %v; want no retry without error", retry, err)
+	}
+}
+
 func TestHandleUploadRetryCorrupt(t *testing.T) {
 	ctx := context.Background()
 	c := newRetryTestController()

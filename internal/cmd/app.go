@@ -77,6 +77,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return fail(err)
 	}
+	clientAddrs := resolveClientAddrs(cfg, peers)
 
 	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), cfg.DataDir, raftID, 0, build)
 	if err != nil {
@@ -110,6 +111,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		ShardID:            0,
 		RaftID:             raftID,
 		Peers:              peers,
+		ClientAddrs:        clientAddrs,
 		BlockSealSize:      cfg.BlockSealSize,
 		Scrub:              cfg.Scrub,
 		Transport:          shardTransport,
