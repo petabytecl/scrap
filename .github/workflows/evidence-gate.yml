@@ -42,7 +42,7 @@ concurrency:
 
 jobs:
   tier3-evidence:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       GOCACHE: /tmp/scrap-v2-go-build
