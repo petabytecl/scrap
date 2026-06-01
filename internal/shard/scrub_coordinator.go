@@ -74,25 +74,13 @@ func (c *scrubCoordinator) Start(cfg Config) {
 		c.lightScrub.Start(ctx)
 	}
 	if cfg.DeepMetrics != nil {
-		blockRepairer := cfg.BlockRepairer
-		if blockRepairer == nil && cfg.BlockTransferer != nil {
-			blockRepairer = scrub.NewBlockRepair(scrub.BlockRepairConfig{
-				BlocksDir:       c.blocksDir,
-				Transferer:      cfg.BlockTransferer,
-				BackendRestorer: c.core,
-				Metrics:         cfg.DeepMetrics,
-				PauseController: c.pauseController,
-				Logger:          c.baseLogger.With("component", "block_repair"),
-				PeerAddrs:       cfg.PeerAddrs,
-			})
-		}
 		c.deepScrub = scrub.NewDeep(scrub.DeepConfig{
 			BlockLister:          c,
 			BlockVerifier:        c,
 			QuarantineManager:    c,
 			Metrics:              cfg.DeepMetrics,
 			LatencySignal:        cfg.LatencySignal,
-			BlockRepairer:        blockRepairer,
+			BlockRepairer:        c.defaultBlockRepairer(cfg),
 			BlockStateClassifier: c,
 			PauseController:      c.pauseController,
 			Logger:               c.baseLogger.With("component", "deep_scrub"),
@@ -105,6 +93,32 @@ func (c *scrubCoordinator) Start(cfg Config) {
 		})
 		c.deepScrub.Start(ctx)
 	}
+}
+
+func (c *scrubCoordinator) defaultBlockRepairer(cfg Config) scrub.BlockRepairer {
+	if cfg.BlockRepairer != nil {
+		return cfg.BlockRepairer
+	}
+	backendRestorer := c.backendRepairRestorer(cfg)
+	if cfg.BlockTransferer == nil && backendRestorer == nil {
+		return nil
+	}
+	return scrub.NewBlockRepair(scrub.BlockRepairConfig{
+		BlocksDir:       c.blocksDir,
+		Transferer:      cfg.BlockTransferer,
+		BackendRestorer: backendRestorer,
+		Metrics:         cfg.DeepMetrics,
+		PauseController: c.pauseController,
+		Logger:          c.baseLogger.With("component", "block_repair"),
+		PeerAddrs:       cfg.PeerAddrs,
+	})
+}
+
+func (c *scrubCoordinator) backendRepairRestorer(cfg Config) scrub.BackendBlockRestorer {
+	if cfg.Upload.Enabled && cfg.Upload.Backend != nil {
+		return c.core
+	}
+	return nil
 }
 
 // Stop cancels scrub scheduling and waits for owned scrubbers to finish. It

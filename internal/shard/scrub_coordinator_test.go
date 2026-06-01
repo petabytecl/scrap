@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
@@ -159,6 +160,26 @@ func TestScrubCoordinatorApplyAfterStopIsSafe(t *testing.T) {
 	}
 	if cached.AppliedIndex != 7 {
 		t.Fatalf("AppliedIndex = %d, want 7", cached.AppliedIndex)
+	}
+}
+
+func TestScrubCoordinatorDefaultBlockRepairerSupportsBackendOnly(t *testing.T) {
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	repairer := c.defaultBlockRepairer(Config{
+		Upload: UploadConfig{
+			Enabled: true,
+			Backend: backend.NewFS(t.TempDir()),
+		},
+	})
+	if repairer == nil {
+		t.Fatal("expected default Backend-only block repairer")
+	}
+}
+
+func TestScrubCoordinatorDefaultBlockRepairerNilWithoutRepairSource(t *testing.T) {
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	if repairer := c.defaultBlockRepairer(Config{}); repairer != nil {
+		t.Fatalf("defaultBlockRepairer = %T, want nil", repairer)
 	}
 }
 
