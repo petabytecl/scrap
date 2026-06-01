@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -13,6 +14,7 @@ var ErrConfirmedUploadNotFound = errors.New("index: confirmed upload not found")
 
 const (
 	confirmedUploadPrefix       = "\x00confirmed-upload\x00"
+	confirmedUploadUpperBound   = "\x00confirmed-upload\x01"
 	confirmedUploadValueVersion = 0x01
 	confirmedUploadKeyLen       = len(confirmedUploadPrefix) + sizeBlockID
 )
@@ -30,6 +32,10 @@ type ConfirmedUpload struct {
 	SealedSizeBytes int64
 	BlockObject     BackendObjectMetadata
 	IndexObject     BackendObjectMetadata
+}
+
+type ConfirmedUploadIterator interface {
+	Next() (ConfirmedUpload, error)
 }
 
 type confirmedUploadRecord struct {
@@ -69,11 +75,48 @@ func (idx *Index) GetConfirmedUpload(blockID uint64) (ConfirmedUpload, error) {
 	return decodeConfirmedUpload(blockID, val)
 }
 
+func (idx *Index) ConfirmedUploads() (ConfirmedUploadIterator, error) {
+	iter, err := idx.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(confirmedUploadPrefix),
+		UpperBound: []byte(confirmedUploadUpperBound),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("index: confirmed upload iter: %w", err)
+	}
+	defer func() {
+		_ = iter.Close()
+	}()
+
+	uploads := make([]ConfirmedUpload, 0)
+	for iter.First(); iter.Valid(); iter.Next() {
+		blockID, err := confirmedUploadBlockID(iter.Key())
+		if err != nil {
+			return nil, err
+		}
+		upload, err := decodeConfirmedUpload(blockID, iter.Value())
+		if err != nil {
+			return nil, err
+		}
+		uploads = append(uploads, upload)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("index: confirmed upload iter: %w", err)
+	}
+	return &confirmedUploadIterator{uploads: uploads}, nil
+}
+
 func confirmedUploadKey(blockID uint64) []byte {
 	key := make([]byte, confirmedUploadKeyLen)
 	copy(key, confirmedUploadPrefix)
 	binary.BigEndian.PutUint64(key[len(confirmedUploadPrefix):], blockID)
 	return key
+}
+
+func confirmedUploadBlockID(key []byte) (uint64, error) {
+	if len(key) != confirmedUploadKeyLen {
+		return 0, fmt.Errorf("index: confirmed upload key length %d", len(key))
+	}
+	return binary.BigEndian.Uint64(key[len(confirmedUploadPrefix):]), nil
 }
 
 func encodeConfirmedUpload(upload ConfirmedUpload) ([]byte, error) {
@@ -148,4 +191,19 @@ func validateBackendObjectMetadata(kind string, meta BackendObjectMetadata) erro
 		return fmt.Errorf("index: confirmed upload %s object validation token is required", kind)
 	}
 	return nil
+}
+
+type confirmedUploadIterator struct {
+	uploads []ConfirmedUpload
+	next    int
+}
+
+func (i *confirmedUploadIterator) Next() (ConfirmedUpload, error) {
+	if i.next >= len(i.uploads) {
+		return ConfirmedUpload{}, io.EOF
+	}
+
+	upload := i.uploads[i.next]
+	i.next++
+	return upload, nil
 }

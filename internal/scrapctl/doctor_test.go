@@ -229,7 +229,7 @@ func TestRunHelpAndUnknownCommand(t *testing.T) {
 	if err := Run([]string{"help"}, &help, io.Discard, Deps{}); err != nil {
 		t.Fatalf("help: %v", err)
 	}
-	if !strings.Contains(help.String(), "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence>") {
+	if !strings.Contains(help.String(), "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction>") {
 		t.Fatalf("unexpected help output: %s", help.String())
 	}
 
