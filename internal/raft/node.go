@@ -74,6 +74,7 @@ type Node struct {
 	commitIndex       uint64
 
 	leaderID atomic.Uint64
+	stateMu  sync.RWMutex
 	readMu   sync.Mutex
 	readMap  map[string]chan uint64
 
@@ -277,7 +278,6 @@ func applyDerivedConfState(storage *raft.MemoryStorage, entries []raftpb.Entry, 
 	})
 }
 
-//nolint:gocognit,cyclop // main event loop processing ticks, ready states, and shutdown
 func (n *Node) run() {
 	defer close(n.donec)
 	ticker := time.NewTicker(n.cfg.TickInterval)
@@ -286,52 +286,12 @@ func (n *Node) run() {
 	for {
 		select {
 		case <-ticker.C:
+			n.stateMu.Lock()
 			n.node.Tick()
+			n.stateMu.Unlock()
 
 		case rd := <-n.node.Ready():
-			if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
-				panic(fmt.Sprintf("raft: WAL save: %v", err))
-			}
-
-			if !raft.IsEmptyHardState(rd.HardState) {
-				atomic.StoreUint64(&n.commitIndex, rd.HardState.Commit)
-			}
-
-			if !raft.IsEmptySnap(rd.Snapshot) {
-				if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
-					panic(fmt.Sprintf("raft: save snapshot: %v", err))
-				}
-				if err := n.wal.SaveSnapshot(walpb.Snapshot{
-					Index: rd.Snapshot.Metadata.Index,
-					Term:  rd.Snapshot.Metadata.Term,
-				}); err != nil {
-					panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
-				}
-				if err := n.storage.ApplySnapshot(rd.Snapshot); err != nil {
-					panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
-				}
-			}
-
-			if err := n.storage.Append(rd.Entries); err != nil {
-				panic(fmt.Sprintf("raft: storage append: %v", err))
-			}
-
-			n.transport.Send(rd.Messages)
-
-			if len(rd.CommittedEntries) > 0 {
-				if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
-					panic(fmt.Sprintf("raft: apply: %v", err))
-				}
-				atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
-			}
-
-			if rd.SoftState != nil {
-				n.leaderID.Store(rd.SoftState.Lead)
-			}
-
-			n.publishReadStates(rd.ReadStates)
-
-			n.node.Advance()
+			n.processReady(rd)
 
 		case <-n.stopc:
 			n.node.Stop()
@@ -339,6 +299,56 @@ func (n *Node) run() {
 			return
 		}
 	}
+}
+
+//nolint:cyclop // Ready handling must keep the WAL, storage, transport, apply, and publish order explicit.
+func (n *Node) processReady(rd raft.Ready) {
+	n.stateMu.Lock()
+	defer n.stateMu.Unlock()
+
+	if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
+		panic(fmt.Sprintf("raft: WAL save: %v", err))
+	}
+
+	if !raft.IsEmptyHardState(rd.HardState) {
+		atomic.StoreUint64(&n.commitIndex, rd.HardState.Commit)
+	}
+
+	if !raft.IsEmptySnap(rd.Snapshot) {
+		if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
+			panic(fmt.Sprintf("raft: save snapshot: %v", err))
+		}
+		if err := n.wal.SaveSnapshot(walpb.Snapshot{
+			Index: rd.Snapshot.Metadata.Index,
+			Term:  rd.Snapshot.Metadata.Term,
+		}); err != nil {
+			panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
+		}
+		if err := n.storage.ApplySnapshot(rd.Snapshot); err != nil {
+			panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
+		}
+	}
+
+	if err := n.storage.Append(rd.Entries); err != nil {
+		panic(fmt.Sprintf("raft: storage append: %v", err))
+	}
+
+	n.transport.Send(rd.Messages)
+
+	if len(rd.CommittedEntries) > 0 {
+		if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
+			panic(fmt.Sprintf("raft: apply: %v", err))
+		}
+		atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
+	}
+
+	if rd.SoftState != nil {
+		n.leaderID.Store(rd.SoftState.Lead)
+	}
+
+	n.publishReadStates(rd.ReadStates)
+
+	n.node.Advance()
 }
 
 func (n *Node) publishReadStates(states []raft.ReadState) {
@@ -386,6 +396,13 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 
 func (n *Node) Step(ctx context.Context, msg raftpb.Message) error {
 	return n.node.Step(ctx, msg)
+}
+
+func (n *Node) WithStableLeadership(fn func() error) error {
+	n.stateMu.RLock()
+	defer n.stateMu.RUnlock()
+
+	return fn()
 }
 
 func (n *Node) IsLeader() bool {

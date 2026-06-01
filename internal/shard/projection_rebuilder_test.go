@@ -179,6 +179,39 @@ func TestProjectionRebuilderRequeuesSealedBlockForRaftConfirmation(t *testing.T)
 	}
 }
 
+func TestProjectionRebuilderPreservesHotConfirmedBlock(t *testing.T) {
+	dataDir := t.TempDir()
+	blocksDir := filepath.Join(dataDir, "blocks")
+	writeRebuildBlock(t, blocksDir, 1)
+	projection := openProjectionForRebuildTest(t)
+	confirmed := confirmedUploadForEvictionApply(1, 1024)
+	core := &projectionRebuildCoreStub{
+		confirmedUploads: map[uint64]index.ConfirmedUpload{
+			1: confirmed,
+		},
+	}
+	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{
+		Enabled: true,
+		Backend: noopRebuildBackend{},
+		CellID:  "cell-a",
+	}, nil)
+
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+		t.Fatalf("rebuildUploadOutbox: %v", err)
+	}
+
+	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
+		t.Fatalf("GetPendingUpload error = %v, want ErrPendingUploadNotFound", err)
+	}
+	got, err := projection.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if got != confirmed {
+		t.Fatalf("confirmed upload = %+v, want %+v", got, confirmed)
+	}
+}
+
 func TestProjectionRebuilderFailsClosedWhenSealedBlockMetadataMissing(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")

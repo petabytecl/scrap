@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	raftpb "go.etcd.io/raft/v3/raftpb"
+
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
@@ -28,7 +30,7 @@ func TestApplyEvictionPlanWritesMarkerBeforeRemovingBlock(t *testing.T) {
 		t.Fatalf("ApplyEvictionPlan: %v", err)
 	}
 
-	assertEvictionApplyCompleted(t, result, 1024)
+	assertEvictionApplyCompleted(t, result)
 	assertBlockEvictedForApply(t, s, 1)
 
 	second, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
@@ -191,6 +193,41 @@ func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanDoesNotCacheAllSkipResult(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	s.eviction.HotResidencyWindow = time.Hour
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
+		BlockID:      1,
+		RestoredAtUs: time.Now().UTC().UnixMicro(),
+		Source:       RestoreSourceBackend,
+		Reason:       RestoreReasonRead,
+	}); err != nil {
+		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	if result.Status != eviction.ApplyStatusNoEffect || result.SkippedBlocks != 1 {
+		t.Fatalf("result = %+v, want no_effect with one skip", result)
+	}
+	if _, ok := s.evictionApplyResults[plan.PlanID]; ok {
+		t.Fatal("all-skip apply result should not be cached")
+	}
+
+	s.eviction.HotResidencyWindow = 0
+	retry, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan retry: %v", err)
+	}
+	assertEvictionApplyCompleted(t, retry)
+	assertBlockEvictedForApply(t, s, 1)
+}
+
 func TestApplyEvictionPlanUsesCurrentHotResidencyWindow(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -250,7 +287,7 @@ func TestApplyEvictionPlanRetriesHotCleanupNeededBlock(t *testing.T) {
 		t.Fatalf("ApplyEvictionPlan: %v", err)
 	}
 
-	assertEvictionApplyCompleted(t, result, 1024)
+	assertEvictionApplyCompleted(t, result)
 	assertBlockEvictedForApply(t, s, 1)
 }
 
@@ -528,7 +565,7 @@ func TestApplyEvictionPlanDoesNotCacheCanceledResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyEvictionPlan retry: %v", err)
 	}
-	assertEvictionApplyCompleted(t, retry, 1024)
+	assertEvictionApplyCompleted(t, retry)
 }
 
 func TestSkipEvictionAfterPreparedMarkerRemovesMarkerWrittenByApply(t *testing.T) {
@@ -583,6 +620,36 @@ func TestSkipEvictionAfterPreparedMarkerPreservesCrashCleanupMarker(t *testing.T
 	}
 	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); err != nil {
 		t.Fatalf("pre-existing crash cleanup marker should remain: %v", err)
+	}
+}
+
+func TestApplyEvictionPlanFencesFollowerCheckThroughUnlink(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	raft := &evictionApplyRaftStub{becomeLeaderBeforeMutation: true}
+	s.raft = raft
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if raft.stableLeadershipCalls != 1 {
+		t.Fatalf("stable leadership calls = %d, want 1", raft.stableLeadershipCalls)
+	}
+	if result.Status != eviction.ApplyStatusNoEffect || result.SkippedBlocks != 1 {
+		t.Fatalf("result = %+v, want retryable no_effect", result)
+	}
+	if len(result.Blocks) != 1 || result.Blocks[0].Reason != eviction.SkipReasonLeaderHotCopyRequired {
+		t.Fatalf("block result = %+v, want leader hot-copy skip", result.Blocks)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain hot after fenced leadership change: %v", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("eviction marker stat error = %v, want not exist", err)
 	}
 }
 
@@ -801,14 +868,14 @@ func confirmedUploadForEvictionApply(blockID uint64, sizeBytes int64) index.Conf
 	}
 }
 
-func assertEvictionApplyCompleted(t *testing.T, result eviction.ApplyResult, bytesFreed int64) {
+func assertEvictionApplyCompleted(t *testing.T, result eviction.ApplyResult) {
 	t.Helper()
 
 	if result.Status != eviction.ApplyStatusCompleted {
 		t.Fatalf("status = %s, want completed", result.Status)
 	}
-	if result.BytesFreed != bytesFreed || result.EvictedBlocks != 1 {
-		t.Fatalf("result totals = %+v, want bytes_freed=%d evicted_blocks=1", result, bytesFreed)
+	if result.BytesFreed != 1024 || result.EvictedBlocks != 1 {
+		t.Fatalf("result totals = %+v, want bytes_freed=1024 evicted_blocks=1", result)
 	}
 	if len(result.Blocks) != 1 || result.Blocks[0].Status != eviction.ApplyBlockStatusEvicted {
 		t.Fatalf("blocks = %+v, want one evicted Block", result.Blocks)
@@ -851,3 +918,50 @@ func assertBlockEvictedForApply(t *testing.T, s *Shard, blockID uint64) {
 		t.Fatalf("lifecycle state = %s, want evicted", lifecycle.State)
 	}
 }
+
+type evictionApplyRaftStub struct {
+	leader                     bool
+	becomeLeaderBeforeMutation bool
+	stableLeadershipCalls      int
+}
+
+func (r *evictionApplyRaftStub) Propose(context.Context, []byte) error {
+	return nil
+}
+
+func (r *evictionApplyRaftStub) ReadIndex(context.Context) (uint64, error) {
+	return 0, nil
+}
+
+func (r *evictionApplyRaftStub) Step(context.Context, raftpb.Message) error {
+	return nil
+}
+
+func (r *evictionApplyRaftStub) IsLeader() bool {
+	return r.leader
+}
+
+func (r *evictionApplyRaftStub) LeaderID() uint64 {
+	if r.leader {
+		return 1
+	}
+	return 2
+}
+
+func (r *evictionApplyRaftStub) AppliedIndex() uint64 {
+	return 0
+}
+
+func (r *evictionApplyRaftStub) CommitIndex() uint64 {
+	return 0
+}
+
+func (r *evictionApplyRaftStub) WithStableLeadership(fn func() error) error {
+	r.stableLeadershipCalls++
+	if r.becomeLeaderBeforeMutation {
+		r.leader = true
+	}
+	return fn()
+}
+
+func (r *evictionApplyRaftStub) Stop() {}

@@ -201,6 +201,16 @@ func (r *projectionRebuilder) rebuildEvictedUploadAuthorities(projection *index.
 func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projection *index.Index, blockID uint64) error {
 	info, statErr := os.Stat(r.blockPath(blockID))
 	if statErr == nil {
+		confirmed, ok, err := r.committedUploadAuthorityForRebuild(blockID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := projection.PutConfirmedUpload(confirmed); err != nil {
+				return fmt.Errorf("shard: rebuild confirmed upload %d: %w", blockID, err)
+			}
+			return nil
+		}
 		return r.putRebuiltPendingUpload(projection, blockID, info)
 	}
 	if !errors.Is(statErr, os.ErrNotExist) {
@@ -226,9 +236,12 @@ func (r *projectionRebuilder) rebuildEvictedUploadAuthority(projection *index.In
 	if lifecycle.State != LocalBlockStateEvicted {
 		return false, nil
 	}
-	confirmed, err := r.core.confirmedUploadForRebuild(blockID)
+	confirmed, ok, err := r.committedUploadAuthorityForRebuild(blockID)
 	if err != nil {
-		return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, err)
+		return false, err
+	}
+	if !ok {
+		return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, index.ErrConfirmedUploadNotFound)
 	}
 	if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
 		return false, err
@@ -237,6 +250,17 @@ func (r *projectionRebuilder) rebuildEvictedUploadAuthority(projection *index.In
 		return false, fmt.Errorf("shard: rebuild confirmed upload %d: %w", blockID, err)
 	}
 	return true, nil
+}
+
+func (r *projectionRebuilder) committedUploadAuthorityForRebuild(blockID uint64) (index.ConfirmedUpload, bool, error) {
+	confirmed, err := r.core.confirmedUploadForRebuild(blockID)
+	if err != nil {
+		if errors.Is(err, index.ErrConfirmedUploadNotFound) {
+			return index.ConfirmedUpload{}, false, nil
+		}
+		return index.ConfirmedUpload{}, false, fmt.Errorf("shard: rebuild pending upload %d committed ConfirmUpload: %w", blockID, err)
+	}
+	return confirmed, true, nil
 }
 
 func (r *projectionRebuilder) putRebuiltPendingUpload(projection *index.Index, blockID uint64, info os.FileInfo) error {

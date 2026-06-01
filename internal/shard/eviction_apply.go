@@ -41,7 +41,7 @@ func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, 
 }
 
 func shouldCacheEvictionApplyResult(result eviction.ApplyResult) bool {
-	return result.Status != ""
+	return result.Status != "" && result.Status != eviction.ApplyStatusNoEffect
 }
 
 func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction.PlanStatus, error) {
@@ -271,11 +271,23 @@ func removePreparedEvictionMarker(blocksDir string, blockID uint64) error {
 }
 
 func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle) (bool, eviction.ApplyBlock, error) {
-	if s.leaderHotCopyRequired() {
-		return false, s.skipEvictionAfterPreparedMarker(selected, lifecycle), nil
+	if s.raft == nil {
+		removed, err := s.unlinkEvictedBlock(selected.BlockID)
+		return removed, eviction.ApplyBlock{}, err
 	}
-	removed, err := s.unlinkEvictedBlock(selected.BlockID)
-	return removed, eviction.ApplyBlock{}, err
+
+	var removed bool
+	var blockResult eviction.ApplyBlock
+	err := s.raft.WithStableLeadership(func() error {
+		if s.leaderHotCopyRequired() {
+			blockResult = s.skipEvictionAfterPreparedMarker(selected, lifecycle)
+			return nil
+		}
+		var err error
+		removed, err = s.unlinkEvictedBlock(selected.BlockID)
+		return err
+	})
+	return removed, blockResult, err
 }
 
 func (s *Shard) unlinkEvictedBlock(blockID uint64) (bool, error) {

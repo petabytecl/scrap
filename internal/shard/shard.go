@@ -63,6 +63,18 @@ type Config struct {
 	IdentifierMode     telemetry.IdentifierMode
 }
 
+type raftNode interface {
+	Propose(ctx context.Context, data []byte) error
+	ReadIndex(ctx context.Context) (uint64, error)
+	Step(ctx context.Context, msg raftpb.Message) error
+	IsLeader() bool
+	LeaderID() uint64
+	AppliedIndex() uint64
+	CommitIndex() uint64
+	WithStableLeadership(func() error) error
+	Stop()
+}
+
 type Shard struct {
 	dataDir        string
 	blocksDir      string
@@ -72,7 +84,7 @@ type Shard struct {
 	peers          map[uint64]string
 	clientAddrs    map[uint64]string
 	idx            *index.Index
-	raft           *scrapraft.Node
+	raft           raftNode
 	replicator     DocumentReplicator
 	upload         UploadConfig
 	eviction       EvictionConfig
