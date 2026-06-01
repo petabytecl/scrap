@@ -3,12 +3,14 @@ package shard
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
@@ -59,6 +61,10 @@ func (s *scrubCoordinatorCoreStub) scrubProjectionResult(scrubID string, entryIn
 
 func (s *scrubCoordinatorCoreStub) currentOpenBlockID() uint64 {
 	return s.openBlockID
+}
+
+func (s *scrubCoordinatorCoreStub) RestoreBlockForRepair(context.Context, uint64) error {
+	return nil
 }
 
 func TestScrubCoordinatorProposeApplyAndCache(t *testing.T) {
@@ -153,6 +159,43 @@ func TestScrubCoordinatorApplyAfterStopIsSafe(t *testing.T) {
 	}
 	if cached.AppliedIndex != 7 {
 		t.Fatalf("AppliedIndex = %d, want 7", cached.AppliedIndex)
+	}
+}
+
+func TestScrubCoordinatorListsEvictedBlocksForDeepScrubSkip(t *testing.T) {
+	dir := t.TempDir()
+	core := &scrubCoordinatorCoreStub{openBlockID: 99}
+	c := newScrubCoordinator(core, dir, nil, nil)
+
+	if err := os.WriteFile(block.IdxFilePath(dir, 7), []byte("idx retained"), 0o600); err != nil {
+		t.Fatalf("write retained idx: %v", err)
+	}
+	if err := WriteEvictionMarker(dir, EvictionMarker{
+		BlockID:         7,
+		BackendKey:      "cell-a/shards/0/7.blk",
+		SizeBytes:       123,
+		ValidationToken: "etag",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+
+	blocks, err := c.ListSealedBlocks(0)
+	if err != nil {
+		t.Fatalf("ListSealedBlocks: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].BlockID != 7 {
+		t.Fatalf("blocks = %+v, want evicted Block 7 listed for scrub skip", blocks)
+	}
+
+	state, err := c.ClassifyScrubBlock(7)
+	if err != nil {
+		t.Fatalf("ClassifyScrubBlock: %v", err)
+	}
+	if state != scrub.BlockLocalStateEvicted {
+		t.Fatalf("state = %s, want evicted", state)
 	}
 }
 

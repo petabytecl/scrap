@@ -59,6 +59,7 @@ type OTelDeepMetrics struct {
 	pausedTotal       metric.Int64Counter
 	deepDuration      metric.Float64Histogram
 	repairsTotal      metric.Int64Counter
+	skipsTotal        metric.Int64Counter
 }
 
 //nolint:cyclop // straight-line constructor registering many independent instruments
@@ -138,6 +139,13 @@ func NewOTelDeepMetrics(meter metric.Meter) (*OTelDeepMetrics, error) {
 		return nil, fmt.Errorf("create repairs counter: %w", err)
 	}
 
+	skips, err := meter.Int64Counter("scrap.scrub.deep.skips",
+		metric.WithDescription("Total number of Blocks skipped by deep scrub."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create skips counter: %w", err)
+	}
+
 	return &OTelDeepMetrics{
 		deepRunsTotal:     deepRuns,
 		framesVerified:    frames,
@@ -149,6 +157,7 @@ func NewOTelDeepMetrics(meter metric.Meter) (*OTelDeepMetrics, error) {
 		pausedTotal:       paused,
 		deepDuration:      duration,
 		repairsTotal:      repairs,
+		skipsTotal:        skips,
 	}, nil
 }
 
@@ -204,4 +213,9 @@ func (m *OTelDeepMetrics) RecordRepair(result string) {
 
 func (m *OTelDeepMetrics) DecrementQuarantined() {
 	m.blocksQuarantined.Add(context.Background(), -1)
+}
+
+func (m *OTelDeepMetrics) RecordSkip(reason string) {
+	m.skipsTotal.Add(context.Background(), 1,
+		metric.WithAttributes(attribute.String("reason", reason)))
 }

@@ -70,14 +70,27 @@ func (s *stubBlockRepairer) RepairQuarantined(_ context.Context) {
 }
 
 type recordingVerifier struct {
+	calls  int
 	record func()
 }
 
 func (v *recordingVerifier) VerifyBlock(_, _ string) (block.VerifyResult, error) {
+	v.calls++
 	if v.record != nil {
 		v.record()
 	}
 	return block.VerifyResult{}, nil
+}
+
+type stubScrubBlockClassifier struct {
+	states map[uint64]scrub.BlockLocalState
+}
+
+func (s *stubScrubBlockClassifier) ClassifyScrubBlock(blockID uint64) (scrub.BlockLocalState, error) {
+	if state, ok := s.states[blockID]; ok {
+		return state, nil
+	}
+	return scrub.BlockLocalStateHot, nil
 }
 
 type controlledPause struct {
@@ -125,6 +138,7 @@ type deepScrubMetrics struct {
 	repairsOK       int
 	repairsFailed   int
 	decremented     int
+	skips           map[string]int
 }
 
 func (m *deepScrubMetrics) RecordDeepRun(result string, durationSec float64) {
@@ -197,6 +211,15 @@ func (m *deepScrubMetrics) DecrementQuarantined() {
 	m.decremented++
 }
 
+func (m *deepScrubMetrics) RecordSkip(reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.skips == nil {
+		m.skips = make(map[string]int)
+	}
+	m.skips[reason]++
+}
+
 type stubCheckpointStore struct {
 	blockID uint64
 	set     bool
@@ -249,6 +272,37 @@ func TestDeepScrubber_CleanBlocks(t *testing.T) {
 	}
 	if metrics.runsOK != 1 {
 		t.Fatalf("expected 1 ok run, got %d", metrics.runsOK)
+	}
+}
+
+func TestDeepScrubber_SkipsEvictedBlocks(t *testing.T) {
+	lister := &stubBlockLister{blocks: []block.Info{
+		{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
+	}}
+	verifier := &recordingVerifier{}
+	metrics := &deepScrubMetrics{}
+
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:          lister,
+		BlockVerifier:        verifier,
+		QuarantineManager:    &stubQuarantineManager{},
+		Metrics:              metrics,
+		BlockStateClassifier: &stubScrubBlockClassifier{states: map[uint64]scrub.BlockLocalState{1: scrub.BlockLocalStateEvicted}},
+		OpenBlockID:          99,
+		CorruptCap:           5,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if verifier.calls != 0 {
+		t.Fatalf("VerifyBlock calls = %d, want 0", verifier.calls)
+	}
+	if metrics.skips["evicted"] != 1 {
+		t.Fatalf("evicted skips = %d, want 1", metrics.skips["evicted"])
+	}
+	if metrics.runsOK != 1 {
+		t.Fatalf("ok runs = %d, want 1", metrics.runsOK)
 	}
 }
 

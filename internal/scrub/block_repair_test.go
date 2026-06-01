@@ -41,6 +41,23 @@ func (t *recordingBlockTransferer) TransferBlock(_ context.Context, addr string,
 	return bytes.Clone(payload.blk), bytes.Clone(payload.idx), nil
 }
 
+type recordingBackendRestorer struct {
+	calls     []uint64
+	err       error
+	onRestore func(uint64) error
+}
+
+func (r *recordingBackendRestorer) RestoreBlockForRepair(_ context.Context, blockID uint64) error {
+	r.calls = append(r.calls, blockID)
+	if r.err != nil {
+		return r.err
+	}
+	if r.onRestore != nil {
+		return r.onRestore(blockID)
+	}
+	return nil
+}
+
 func TestBlockRepair_FailedPeerTransferLeavesQuarantineIntact(t *testing.T) {
 	dir := t.TempDir()
 	quarantineBlock(t, dir, 7)
@@ -57,6 +74,44 @@ func TestBlockRepair_FailedPeerTransferLeavesQuarantineIntact(t *testing.T) {
 	}
 	if metrics.repairsFailed != 1 || metrics.repairsOK != 0 {
 		t.Fatalf("repair metrics ok=%d failed=%d, want ok=0 failed=1", metrics.repairsOK, metrics.repairsFailed)
+	}
+}
+
+func TestBlockRepair_FallsBackToBackendWhenPeersAreEvicted(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(14)
+	quarantineBlock(t, dir, blockID)
+	replacement := replacementPayload(t, blockID, []byte("backend replacement"))
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{err: scrub.ErrPeerBlockEvicted}
+	restorer := &recordingBackendRestorer{
+		onRestore: func(blockID uint64) error {
+			promoteBackendRepairReplacement(t, dir, blockID, replacement)
+			return nil
+		},
+	}
+	repair := scrub.NewBlockRepair(scrub.BlockRepairConfig{
+		BlocksDir:       dir,
+		Transferer:      transferer,
+		BackendRestorer: restorer,
+		Metrics:         metrics,
+		PeerAddrs:       []string{"member-a:9091", "member-b:9091"},
+	})
+
+	repair.RepairQuarantined(context.Background())
+
+	if len(transferer.calls) != 2 {
+		t.Fatalf("transfer calls = %d, want both peers tried", len(transferer.calls))
+	}
+	if len(restorer.calls) != 1 || restorer.calls[0] != blockID {
+		t.Fatalf("backend restore calls = %v, want [%d]", restorer.calls, blockID)
+	}
+	requireNotQuarantined(t, dir, blockID)
+	if metrics.repairsOK != 1 || metrics.repairsFailed != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=1 failed=0", metrics.repairsOK, metrics.repairsFailed)
+	}
+	if metrics.decremented != 1 {
+		t.Fatalf("quarantine gauge decremented %d times, want 1", metrics.decremented)
 	}
 }
 
@@ -384,5 +439,21 @@ func requireNoRepairStaging(t *testing.T, dir string) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("repair staging files remain: %v", matches)
+	}
+}
+
+func promoteBackendRepairReplacement(t *testing.T, dir string, blockID uint64, replacement transferPayload) {
+	t.Helper()
+	if err := os.WriteFile(block.FilePath(dir, blockID), replacement.blk, 0o600); err != nil {
+		t.Fatalf("WriteFile backend repair blk: %v", err)
+	}
+	if err := os.WriteFile(block.IdxFilePath(dir, blockID), replacement.idx, 0o600); err != nil {
+		t.Fatalf("WriteFile backend repair idx: %v", err)
+	}
+	if err := os.Remove(block.FilePath(dir, blockID) + block.QuarantineSuffix); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove blk quarantine: %v", err)
+	}
+	if err := os.Remove(block.IdxFilePath(dir, blockID) + block.QuarantineSuffix); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove idx quarantine: %v", err)
 	}
 }

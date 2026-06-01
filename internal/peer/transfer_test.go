@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -14,6 +16,9 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/peer"
+	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/shard"
 )
 
 func TestTransferBlockStreamsFileContents(t *testing.T) {
@@ -146,5 +151,32 @@ func TestTransferBlockNotFound(t *testing.T) {
 	st, ok := status.FromError(err)
 	if !ok || st.Code() != codes.NotFound {
 		t.Fatalf("expected NOT_FOUND, got: %v", err)
+	}
+}
+
+func TestTransferBlockEvictedReturnsFailedPrecondition(t *testing.T) {
+	dir := t.TempDir()
+	seedTransferBlock(t, dir)
+	if err := shard.WriteEvictionMarker(dir, shard.EvictionMarker{
+		BlockID:         1,
+		BackendKey:      "cell-a/shards/0/1.blk",
+		SizeBytes:       123,
+		ValidationToken: "etag",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         shard.EvictionTriggerOperatorRequested,
+		Reason:          shard.EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	if err := os.Remove(block.FilePath(dir, 1)); err != nil {
+		t.Fatalf("remove local Block: %v", err)
+	}
+	addr := startPeerServer(t, dir)
+
+	c := peer.NewClient()
+	defer c.Close()
+	_, _, err := c.TransferBlock(context.Background(), addr, 1)
+	if !errors.Is(err, scrub.ErrPeerBlockEvicted) {
+		t.Fatalf("TransferBlock error = %v, want ErrPeerBlockEvicted", err)
 	}
 }

@@ -4,13 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
 func (c *scrubCoordinator) ListSealedBlocks(_ uint64) ([]block.Info, error) {
-	return block.ListSealedBlocks(c.blocksDir, c.core.currentOpenBlockID())
+	openBlockID := c.core.currentOpenBlockID()
+	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID)
+	if err != nil {
+		return nil, err
+	}
+	return c.appendEvictedMarkerBlocks(blocks, openBlockID)
 }
 
 func (c *scrubCoordinator) VerifyBlock(blkPath, idxPath string) (block.VerifyResult, error) {
@@ -19,6 +26,58 @@ func (c *scrubCoordinator) VerifyBlock(blkPath, idxPath string) (block.VerifyRes
 
 func (c *scrubCoordinator) Quarantine(blkPath string) error {
 	return block.Quarantine(blkPath)
+}
+
+func (c *scrubCoordinator) ClassifyScrubBlock(blockID uint64) (scrub.BlockLocalState, error) {
+	lifecycle, err := ClassifyLocalBlock(c.blocksDir, blockID)
+	if err != nil {
+		return "", err
+	}
+	switch lifecycle.State {
+	case LocalBlockStateHot:
+		return scrub.BlockLocalStateHot, nil
+	case LocalBlockStateHotCleanupNeeded:
+		return scrub.BlockLocalStateHotCleanupNeeded, nil
+	case LocalBlockStateEvicted:
+		return scrub.BlockLocalStateEvicted, nil
+	case LocalBlockStateMetadataLoss:
+		return scrub.BlockLocalStateMetadataLoss, nil
+	case LocalBlockStateUnexpectedLoss:
+		return scrub.BlockLocalStateUnexpectedLoss, nil
+	default:
+		return "", fmt.Errorf("unknown local Block state %s", lifecycle.State)
+	}
+}
+
+func (c *scrubCoordinator) appendEvictedMarkerBlocks(blocks []block.Info, openBlockID uint64) ([]block.Info, error) {
+	seen := make(map[uint64]struct{}, len(blocks))
+	for _, blk := range blocks {
+		seen[blk.BlockID] = struct{}{}
+	}
+
+	entries, err := os.ReadDir(c.blocksDir)
+	if err != nil {
+		return nil, fmt.Errorf("shard: read lifecycle markers for scrub: %w", err)
+	}
+	for _, entry := range entries {
+		blockID, ok := parseEvictionMarkerBlockID(entry.Name())
+		if !ok || blockID == openBlockID {
+			continue
+		}
+		if _, ok := seen[blockID]; ok {
+			continue
+		}
+		blocks = append(blocks, block.Info{
+			BlockID: blockID,
+			BlkPath: block.FilePath(c.blocksDir, blockID),
+			IdxPath: block.IdxFilePath(c.blocksDir, blockID),
+		})
+		seen[blockID] = struct{}{}
+	}
+	sort.Slice(blocks, func(i, j int) bool {
+		return blocks[i].BlockID < blocks[j].BlockID
+	})
+	return blocks, nil
 }
 
 func (s *Shard) InjectProjectionKey(_ context.Context, txID string, blockID uint64, docCount uint16, completed bool) error {
@@ -42,7 +101,8 @@ func (s *Shard) InjectProjectionKey(_ context.Context, txID string, blockID uint
 }
 
 var (
-	_ scrub.BlockLister       = (*scrubCoordinator)(nil)
-	_ scrub.BlockVerifier     = (*scrubCoordinator)(nil)
-	_ scrub.QuarantineManager = (*scrubCoordinator)(nil)
+	_ scrub.BlockLister          = (*scrubCoordinator)(nil)
+	_ scrub.BlockVerifier        = (*scrubCoordinator)(nil)
+	_ scrub.QuarantineManager    = (*scrubCoordinator)(nil)
+	_ scrub.BlockStateClassifier = (*scrubCoordinator)(nil)
 )

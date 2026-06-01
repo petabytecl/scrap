@@ -341,6 +341,40 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 	}
 }
 
+func TestRestoreBlockForRepairRestoresQuarantinedBlockFromBackend(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("repair restore "), 8)
+	if _, err := s.WriteDocument(ctx, "tx-repair-restore", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-repair-seal", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "blk"))
+	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "idx"))
+	waitPendingUploads(t, s, 0)
+	_ = waitConfirmedUpload(t, s, 1)
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := block.Quarantine(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	if err := s.RestoreBlockForRepair(ctx, 1); err != nil {
+		t.Fatalf("RestoreBlockForRepair: %v", err)
+	}
+
+	assertRepairRestorePublishedHotBlock(t, blocksDir)
+}
+
 func assertRestoredDocument(t *testing.T, rc io.Reader, meta storeapi.DocumentMeta, want []byte) {
 	t.Helper()
 
@@ -378,6 +412,31 @@ func assertRestorePublishedHotBlock(t *testing.T, blocksDir string) {
 	}
 	if lifecycle.State != shard.LocalBlockStateHot || !lifecycle.ServingAllowed {
 		t.Fatalf("lifecycle = %+v, want hot serving-allowed", lifecycle)
+	}
+}
+
+func assertRepairRestorePublishedHotBlock(t *testing.T, blocksDir string) {
+	t.Helper()
+
+	result, err := block.VerifyBlock(block.FilePath(blocksDir, 1), block.IdxFilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("VerifyBlock: %v", err)
+	}
+	if len(result.CorruptFrames) != 0 {
+		t.Fatalf("restored repair Block has corrupt frames: %+v", result.CorruptFrames)
+	}
+	if _, err := os.Stat(block.FilePath(blocksDir, 1) + block.QuarantineSuffix); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("block quarantine stat = %v, want not exist", err)
+	}
+	if _, err := os.Stat(block.IdxFilePath(blocksDir, 1) + block.QuarantineSuffix); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("index quarantine stat = %v, want not exist", err)
+	}
+	restore, err := shard.ReadRestoreMarker(blocksDir, 1)
+	if err != nil {
+		t.Fatalf("ReadRestoreMarker: %v", err)
+	}
+	if restore.Source != shard.RestoreSourceBackend || restore.Reason != shard.RestoreReasonRepair {
+		t.Fatalf("restore marker = %+v, want backend/repair", restore)
 	}
 }
 

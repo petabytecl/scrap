@@ -111,12 +111,60 @@ func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64, rea
 	return s.downloadVerifyAndPublishRestore(ctx, input, reason)
 }
 
+func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error {
+	input, err := s.repairRestoreInput(ctx, blockID)
+	if err != nil {
+		return err
+	}
+	tmpPath, err := s.downloadRestore(ctx, input)
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := verifyRestoredBlock(input, tmpPath); err != nil {
+		return err
+	}
+	published, err = s.publishVerifiedRepairRestore(input, tmpPath)
+	return err
+}
+
 type restoreInput struct {
 	confirmed index.ConfirmedUpload
 	lifecycle LocalBlockLifecycle
 	backend   backend.Backend
 	blockPath string
 	indexPath string
+}
+
+func (s *Shard) repairRestoreInput(ctx context.Context, blockID uint64) (restoreInput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return restoreInput{}, err
+	}
+	confirmed, err := s.idx.GetConfirmedUpload(blockID)
+	if err != nil {
+		return restoreInput{}, fmt.Errorf("%w: Block %d has no committed ConfirmUpload for repair: %w", storeapi.ErrDataLoss, blockID, err)
+	}
+	if s.upload.Backend == nil {
+		return restoreInput{}, storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "Backend repair restore is not configured")
+	}
+	if err := requireQuarantinedRepairFiles(s.blocksDir, blockID); err != nil {
+		return restoreInput{}, err
+	}
+	return restoreInput{
+		confirmed: confirmed,
+		backend:   s.upload.Backend,
+		blockPath: s.blockPath(blockID),
+		indexPath: s.idxPath(blockID) + block.QuarantineSuffix,
+	}, nil
 }
 
 func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput, error) {
@@ -201,6 +249,19 @@ func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath, reason strin
 	return true, nil
 }
 
+func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpPath string) (bool, error) {
+	s.lifecycleMutationMu.Lock()
+	defer s.lifecycleMutationMu.Unlock()
+
+	if err := publishRepairedBlock(input, tmpPath); err != nil {
+		return false, err
+	}
+	if err := s.recordSuccessfulRestore(input, RestoreReasonRepair); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func verifyRestoredBlock(input restoreInput, tmpPath string) error {
 	if err := block.VerifyHeader(tmpPath, input.confirmed.ShardID, input.confirmed.BlockID); err != nil {
 		return fmt.Errorf("%w: restored Block %d header invalid: %w", storeapi.ErrDataLoss, input.confirmed.BlockID, err)
@@ -220,6 +281,44 @@ func publishRestoredBlock(input restoreInput, tmpPath string) error {
 		return fmt.Errorf("shard: publish restored Block %d: %w", input.confirmed.BlockID, err)
 	}
 	return syncDirectory(filepath.Dir(input.blockPath))
+}
+
+func requireQuarantinedRepairFiles(blocksDir string, blockID uint64) error {
+	blkQ := block.FilePath(blocksDir, blockID) + block.QuarantineSuffix
+	idxQ := block.IdxFilePath(blocksDir, blockID) + block.QuarantineSuffix
+	if _, err := os.Stat(blkQ); err != nil {
+		return fmt.Errorf("%w: Block %d quarantined data missing for repair: %w", storeapi.ErrDataLoss, blockID, err)
+	}
+	if _, err := os.Stat(idxQ); err != nil {
+		return fmt.Errorf("%w: Block %d quarantined index missing for repair: %w", storeapi.ErrDataLoss, blockID, err)
+	}
+	return nil
+}
+
+func publishRepairedBlock(input restoreInput, tmpPath string) error {
+	blkQ := input.blockPath + block.QuarantineSuffix
+	idxFinal := block.IdxFilePath(filepath.Dir(input.blockPath), input.confirmed.BlockID)
+	idxQ := idxFinal + block.QuarantineSuffix
+	if err := os.Rename(idxQ, idxFinal); err != nil {
+		return fmt.Errorf("shard: promote repaired index for Block %d: %w", input.confirmed.BlockID, err)
+	}
+	idxPromoted := true
+	defer func() {
+		if !idxPromoted {
+			_ = os.Rename(idxFinal, idxQ)
+		}
+	}()
+	if err := os.Rename(tmpPath, input.blockPath); err != nil {
+		idxPromoted = false
+		return fmt.Errorf("shard: publish repaired Block %d: %w", input.confirmed.BlockID, err)
+	}
+	if err := os.Remove(blkQ); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("shard: remove quarantined Block %d after repair: %w", input.confirmed.BlockID, err)
+	}
+	if err := syncDirectory(filepath.Dir(input.blockPath)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Shard) recordSuccessfulRestore(input restoreInput, reason string) error {

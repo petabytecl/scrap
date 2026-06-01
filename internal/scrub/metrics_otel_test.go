@@ -105,6 +105,7 @@ func TestOTelDeepScrubMetrics_AllInstruments(t *testing.T) {
 	m.RecordPause()
 	m.SetProgressRatio(0.75)
 	m.RecordRepair("ok")
+	m.RecordSkip("evicted")
 	m.DecrementQuarantined()
 
 	rm := collectOTelMetrics(t, reader)
@@ -119,6 +120,7 @@ func TestOTelDeepScrubMetrics_AllInstruments(t *testing.T) {
 		"scrap.scrub.deep.pauses",
 		"scrap.scrub.deep.duration",
 		"scrap.scrub.deep.repairs",
+		"scrap.scrub.deep.skips",
 	}
 
 	for _, name := range expected {

@@ -22,6 +22,7 @@ type scrubCore interface {
 	requireLeader() error
 	scrubProjectionResult(scrubID string, entryIndex uint64) scrub.Result
 	currentOpenBlockID() uint64
+	RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 }
 
 type scrubCoordinator struct {
@@ -78,6 +79,7 @@ func (c *scrubCoordinator) Start(cfg Config) {
 			blockRepairer = scrub.NewBlockRepair(scrub.BlockRepairConfig{
 				BlocksDir:       c.blocksDir,
 				Transferer:      cfg.BlockTransferer,
+				BackendRestorer: c.core,
 				Metrics:         cfg.DeepMetrics,
 				PauseController: c.pauseController,
 				Logger:          c.baseLogger.With("component", "block_repair"),
@@ -85,20 +87,21 @@ func (c *scrubCoordinator) Start(cfg Config) {
 			})
 		}
 		c.deepScrub = scrub.NewDeep(scrub.DeepConfig{
-			BlockLister:       c,
-			BlockVerifier:     c,
-			QuarantineManager: c,
-			Metrics:           cfg.DeepMetrics,
-			LatencySignal:     cfg.LatencySignal,
-			BlockRepairer:     blockRepairer,
-			PauseController:   c.pauseController,
-			Logger:            c.baseLogger.With("component", "deep_scrub"),
-			IOBudget:          scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
-			CorruptCap:        cfg.Scrub.CorruptCap,
-			PauseThreshold:    cfg.Scrub.PauseLatency,
-			PauseCooldown:     cfg.Scrub.PauseCooldown,
-			Interval:          cfg.Scrub.DeepScrubInterval,
-			Jitter:            cfg.Scrub.Jitter,
+			BlockLister:          c,
+			BlockVerifier:        c,
+			QuarantineManager:    c,
+			Metrics:              cfg.DeepMetrics,
+			LatencySignal:        cfg.LatencySignal,
+			BlockRepairer:        blockRepairer,
+			BlockStateClassifier: c,
+			PauseController:      c.pauseController,
+			Logger:               c.baseLogger.With("component", "deep_scrub"),
+			IOBudget:             scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
+			CorruptCap:           cfg.Scrub.CorruptCap,
+			PauseThreshold:       cfg.Scrub.PauseLatency,
+			PauseCooldown:        cfg.Scrub.PauseCooldown,
+			Interval:             cfg.Scrub.DeepScrubInterval,
+			Jitter:               cfg.Scrub.Jitter,
 		})
 		c.deepScrub.Start(ctx)
 	}
