@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -14,6 +18,9 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/peer"
+	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/shard"
 )
 
 func TestTransferBlockStreamsFileContents(t *testing.T) {
@@ -146,5 +153,135 @@ func TestTransferBlockNotFound(t *testing.T) {
 	st, ok := status.FromError(err)
 	if !ok || st.Code() != codes.NotFound {
 		t.Fatalf("expected NOT_FOUND, got: %v", err)
+	}
+}
+
+func TestTransferBlockDistinguishesLocalLossStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*testing.T, string)
+		wantCode codes.Code
+		wantText string
+	}{
+		{
+			name: "metadata loss",
+			mutate: func(t *testing.T, dir string) {
+				t.Helper()
+				seedTransferBlock(t, dir)
+				if err := os.Remove(block.IdxFilePath(dir, 1)); err != nil {
+					t.Fatalf("remove index: %v", err)
+				}
+			},
+			wantCode: codes.DataLoss,
+			wantText: "block_metadata_loss",
+		},
+		{
+			name: "unexpected data loss",
+			mutate: func(t *testing.T, dir string) {
+				t.Helper()
+				seedTransferBlock(t, dir)
+				if err := os.Remove(block.FilePath(dir, 1)); err != nil {
+					t.Fatalf("remove block: %v", err)
+				}
+			},
+			wantCode: codes.DataLoss,
+			wantText: "block_unexpected_loss",
+		},
+		{
+			name: "quarantined",
+			mutate: func(t *testing.T, dir string) {
+				t.Helper()
+				seedTransferBlock(t, dir)
+				if err := block.Quarantine(block.FilePath(dir, 1)); err != nil {
+					t.Fatalf("Quarantine: %v", err)
+				}
+			},
+			wantCode: codes.DataLoss,
+			wantText: "block_quarantined",
+		},
+		{
+			name: "evicted metadata loss",
+			mutate: func(t *testing.T, dir string) {
+				t.Helper()
+				seedTransferBlock(t, dir)
+				writeTransferEvictionMarker(t, dir, 1)
+				if err := os.Remove(block.FilePath(dir, 1)); err != nil {
+					t.Fatalf("remove block: %v", err)
+				}
+				if err := os.Remove(block.IdxFilePath(dir, 1)); err != nil {
+					t.Fatalf("remove index: %v", err)
+				}
+			},
+			wantCode: codes.DataLoss,
+			wantText: "block_metadata_loss",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.mutate(t, dir)
+			addr := startPeerServer(t, dir)
+			err := transferBlockFirstRecvError(t, addr, 1)
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != tt.wantCode || !strings.Contains(st.Message(), tt.wantText) {
+				t.Fatalf("TransferBlock error = %v, want %s containing %q", err, tt.wantCode, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestTransferBlockEvictedReturnsFailedPrecondition(t *testing.T) {
+	dir := t.TempDir()
+	seedTransferBlock(t, dir)
+	writeTransferEvictionMarker(t, dir, 1)
+	if err := os.Remove(block.FilePath(dir, 1)); err != nil {
+		t.Fatalf("remove local Block: %v", err)
+	}
+	addr := startPeerServer(t, dir)
+
+	c := peer.NewClient()
+	defer c.Close()
+	_, _, err := c.TransferBlock(context.Background(), addr, 1)
+	if !errors.Is(err, scrub.ErrPeerBlockEvicted) {
+		t.Fatalf("TransferBlock error = %v, want ErrPeerBlockEvicted", err)
+	}
+}
+
+func transferBlockFirstRecvError(t *testing.T, addr string, blockID uint64) error {
+	t.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := scrapv1.NewPeerServiceClient(conn)
+	stream, err := client.TransferBlock(context.Background(), &scrapv1.TransferBlockRequest{
+		ShardId: 0,
+		BlockId: blockID,
+	})
+	if err != nil {
+		return fmt.Errorf("TransferBlock: %w", err)
+	}
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected TransferBlock Recv error")
+	}
+	return err
+}
+
+func writeTransferEvictionMarker(t *testing.T, dir string, blockID uint64) {
+	t.Helper()
+	if err := shard.WriteEvictionMarker(dir, shard.EvictionMarker{
+		BlockID:         blockID,
+		BackendKey:      "cell-a/shards/0/1.blk",
+		SizeBytes:       123,
+		ValidationToken: "etag",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         shard.EvictionTriggerOperatorRequested,
+		Reason:          shard.EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
 	}
 }

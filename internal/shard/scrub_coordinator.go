@@ -22,6 +22,7 @@ type scrubCore interface {
 	requireLeader() error
 	scrubProjectionResult(scrubID string, entryIndex uint64) scrub.Result
 	currentOpenBlockID() uint64
+	RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 }
 
 type scrubCoordinator struct {
@@ -73,35 +74,51 @@ func (c *scrubCoordinator) Start(cfg Config) {
 		c.lightScrub.Start(ctx)
 	}
 	if cfg.DeepMetrics != nil {
-		blockRepairer := cfg.BlockRepairer
-		if blockRepairer == nil && cfg.BlockTransferer != nil {
-			blockRepairer = scrub.NewBlockRepair(scrub.BlockRepairConfig{
-				BlocksDir:       c.blocksDir,
-				Transferer:      cfg.BlockTransferer,
-				Metrics:         cfg.DeepMetrics,
-				PauseController: c.pauseController,
-				Logger:          c.baseLogger.With("component", "block_repair"),
-				PeerAddrs:       cfg.PeerAddrs,
-			})
-		}
 		c.deepScrub = scrub.NewDeep(scrub.DeepConfig{
-			BlockLister:       c,
-			BlockVerifier:     c,
-			QuarantineManager: c,
-			Metrics:           cfg.DeepMetrics,
-			LatencySignal:     cfg.LatencySignal,
-			BlockRepairer:     blockRepairer,
-			PauseController:   c.pauseController,
-			Logger:            c.baseLogger.With("component", "deep_scrub"),
-			IOBudget:          scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
-			CorruptCap:        cfg.Scrub.CorruptCap,
-			PauseThreshold:    cfg.Scrub.PauseLatency,
-			PauseCooldown:     cfg.Scrub.PauseCooldown,
-			Interval:          cfg.Scrub.DeepScrubInterval,
-			Jitter:            cfg.Scrub.Jitter,
+			BlockLister:          c,
+			BlockVerifier:        c,
+			QuarantineManager:    c,
+			Metrics:              cfg.DeepMetrics,
+			LatencySignal:        cfg.LatencySignal,
+			BlockRepairer:        c.defaultBlockRepairer(cfg),
+			BlockStateClassifier: c,
+			PauseController:      c.pauseController,
+			Logger:               c.baseLogger.With("component", "deep_scrub"),
+			IOBudget:             scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
+			CorruptCap:           cfg.Scrub.CorruptCap,
+			PauseThreshold:       cfg.Scrub.PauseLatency,
+			PauseCooldown:        cfg.Scrub.PauseCooldown,
+			Interval:             cfg.Scrub.DeepScrubInterval,
+			Jitter:               cfg.Scrub.Jitter,
 		})
 		c.deepScrub.Start(ctx)
 	}
+}
+
+func (c *scrubCoordinator) defaultBlockRepairer(cfg Config) scrub.BlockRepairer {
+	if cfg.BlockRepairer != nil {
+		return cfg.BlockRepairer
+	}
+	backendRestorer := c.backendRepairRestorer(cfg)
+	if cfg.BlockTransferer == nil && backendRestorer == nil {
+		return nil
+	}
+	return scrub.NewBlockRepair(scrub.BlockRepairConfig{
+		BlocksDir:       c.blocksDir,
+		Transferer:      cfg.BlockTransferer,
+		BackendRestorer: backendRestorer,
+		Metrics:         cfg.DeepMetrics,
+		PauseController: c.pauseController,
+		Logger:          c.baseLogger.With("component", "block_repair"),
+		PeerAddrs:       cfg.PeerAddrs,
+	})
+}
+
+func (c *scrubCoordinator) backendRepairRestorer(cfg Config) scrub.BackendBlockRestorer {
+	if cfg.Upload.Backend != nil {
+		return c.core
+	}
+	return nil
 }
 
 // Stop cancels scrub scheduling and waits for owned scrubbers to finish. It

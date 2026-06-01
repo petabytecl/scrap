@@ -9,9 +9,12 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/scrub"
 )
 
 const maxTransferBytes int64 = 4 << 30 // 4 GiB safety limit for block transfers
@@ -118,12 +121,12 @@ func (c *Client) TransferBlock(ctx context.Context, addr string, blockID uint64)
 		BlockId: blockID,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("peer: transfer block %d from %s: %w", blockID, addr, err)
+		return nil, nil, fmt.Errorf("peer: transfer block %d from %s: %w", blockID, addr, mapTransferError(err))
 	}
 
 	msg, err := stream.Recv()
 	if err != nil {
-		return nil, nil, fmt.Errorf("peer: transfer block meta: %w", err)
+		return nil, nil, fmt.Errorf("peer: transfer block meta: %w", mapTransferError(err))
 	}
 	meta := msg.GetMeta()
 	if meta == nil {
@@ -131,6 +134,31 @@ func (c *Client) TransferBlock(ctx context.Context, addr string, blockID uint64)
 	}
 
 	return recvBlockData(stream, meta.BlockSize, meta.IdxSize)
+}
+
+func mapTransferError(err error) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return err
+	}
+	switch st.Code() {
+	case codes.FailedPrecondition:
+		if transferStatusHasReason(err, transferReasonEvicted) {
+			return fmt.Errorf("%w: %w", scrub.ErrPeerBlockEvicted, err)
+		}
+	case codes.DataLoss:
+		switch {
+		case transferStatusHasReason(err, transferReasonMetadataLoss):
+			return fmt.Errorf("%w: %w", scrub.ErrPeerBlockMetadataLoss, err)
+		case transferStatusHasReason(err, transferReasonUnexpectedLoss):
+			return fmt.Errorf("%w: %w", scrub.ErrPeerBlockUnexpectedLoss, err)
+		case transferStatusHasReason(err, transferReasonQuarantined):
+			return fmt.Errorf("%w: %w", scrub.ErrPeerBlockQuarantined, err)
+		}
+	default:
+		return err
+	}
+	return err
 }
 
 func validateTransferSizes(blkSize, idxSize int64) error {

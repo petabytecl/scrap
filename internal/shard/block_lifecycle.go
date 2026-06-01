@@ -22,6 +22,7 @@ const (
 	RestoreSourceBackend    = "backend"
 	RestoreReasonRead       = "read"
 	RestoreReasonValidation = "validation"
+	RestoreReasonRepair     = "repair"
 )
 
 var ErrLifecycleMarkerInvalid = errors.New("shard: lifecycle marker invalid")

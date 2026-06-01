@@ -3,12 +3,15 @@ package shard
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
@@ -59,6 +62,10 @@ func (s *scrubCoordinatorCoreStub) scrubProjectionResult(scrubID string, entryIn
 
 func (s *scrubCoordinatorCoreStub) currentOpenBlockID() uint64 {
 	return s.openBlockID
+}
+
+func (s *scrubCoordinatorCoreStub) RestoreBlockForRepair(context.Context, uint64) error {
+	return nil
 }
 
 func TestScrubCoordinatorProposeApplyAndCache(t *testing.T) {
@@ -153,6 +160,165 @@ func TestScrubCoordinatorApplyAfterStopIsSafe(t *testing.T) {
 	}
 	if cached.AppliedIndex != 7 {
 		t.Fatalf("AppliedIndex = %d, want 7", cached.AppliedIndex)
+	}
+}
+
+func TestScrubCoordinatorDefaultBlockRepairerSupportsBackendOnly(t *testing.T) {
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	repairer := c.defaultBlockRepairer(Config{
+		Upload: UploadConfig{
+			Enabled: true,
+			Backend: backend.NewFS(t.TempDir()),
+		},
+	})
+	if repairer == nil {
+		t.Fatal("expected default Backend-only block repairer")
+	}
+}
+
+func TestScrubCoordinatorDefaultBlockRepairerUsesConfiguredBackendWhenUploadsDisabled(t *testing.T) {
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	repairer := c.defaultBlockRepairer(Config{
+		Upload: UploadConfig{
+			Enabled: false,
+			Backend: backend.NewFS(t.TempDir()),
+		},
+	})
+	if repairer == nil {
+		t.Fatal("expected Backend repairer when Backend is configured")
+	}
+}
+
+func TestScrubCoordinatorDefaultBlockRepairerNilWithoutRepairSource(t *testing.T) {
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	if repairer := c.defaultBlockRepairer(Config{}); repairer != nil {
+		t.Fatalf("defaultBlockRepairer = %T, want nil", repairer)
+	}
+}
+
+func TestScrubCoordinatorListsEvictedBlocksForDeepScrubSkip(t *testing.T) {
+	dir := t.TempDir()
+	core := &scrubCoordinatorCoreStub{openBlockID: 99}
+	c := newScrubCoordinator(core, dir, nil, nil)
+
+	if err := os.WriteFile(block.IdxFilePath(dir, 7), []byte("idx retained"), 0o600); err != nil {
+		t.Fatalf("write retained idx: %v", err)
+	}
+	if err := WriteEvictionMarker(dir, EvictionMarker{
+		BlockID:         7,
+		BackendKey:      "cell-a/shards/0/7.blk",
+		SizeBytes:       123,
+		ValidationToken: "etag",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+
+	blocks, err := c.ListSealedBlocks(0)
+	if err != nil {
+		t.Fatalf("ListSealedBlocks: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].BlockID != 7 {
+		t.Fatalf("blocks = %+v, want evicted Block 7 listed for scrub skip", blocks)
+	}
+
+	state, err := c.ClassifyScrubBlock(7)
+	if err != nil {
+		t.Fatalf("ClassifyScrubBlock: %v", err)
+	}
+	if state != scrub.BlockLocalStateEvicted {
+		t.Fatalf("state = %s, want evicted", state)
+	}
+}
+
+func TestScrubCoordinatorClassifyScrubBlockMapsLifecycleStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		blockID uint64
+		stage   func(*testing.T, string, uint64)
+		want    scrub.BlockLocalState
+	}{
+		{
+			name:    "hot",
+			blockID: 1,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.FilePath(dir, blockID))
+				writeScrubLifecycleFile(t, block.IdxFilePath(dir, blockID))
+			},
+			want: scrub.BlockLocalStateHot,
+		},
+		{
+			name:    "hot cleanup needed",
+			blockID: 2,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.FilePath(dir, blockID))
+				writeScrubLifecycleFile(t, block.IdxFilePath(dir, blockID))
+				writeScrubEvictionMarker(t, dir, blockID)
+			},
+			want: scrub.BlockLocalStateHotCleanupNeeded,
+		},
+		{
+			name:    "metadata loss",
+			blockID: 3,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.FilePath(dir, blockID))
+			},
+			want: scrub.BlockLocalStateMetadataLoss,
+		},
+		{
+			name:    "unexpected loss",
+			blockID: 4,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.IdxFilePath(dir, blockID))
+			},
+			want: scrub.BlockLocalStateUnexpectedLoss,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, dir, nil, nil)
+			tt.stage(t, dir, tt.blockID)
+
+			got, err := c.ClassifyScrubBlock(tt.blockID)
+			if err != nil {
+				t.Fatalf("ClassifyScrubBlock: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("state = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func writeScrubLifecycleFile(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte("scrub lifecycle"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func writeScrubEvictionMarker(t *testing.T, dir string, blockID uint64) {
+	t.Helper()
+
+	if err := WriteEvictionMarker(dir, EvictionMarker{
+		BlockID:         blockID,
+		BackendKey:      "cell-a/shards/0/7.blk",
+		SizeBytes:       123,
+		ValidationToken: "etag",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
 	}
 }
 

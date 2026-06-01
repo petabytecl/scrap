@@ -2,6 +2,7 @@ package scrub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,8 +13,19 @@ import (
 
 const repairStagingSuffix = ".repair"
 
+var (
+	ErrPeerBlockEvicted        = errors.New("scrub: peer Block evicted")
+	ErrPeerBlockMetadataLoss   = errors.New("scrub: peer Block metadata loss")
+	ErrPeerBlockUnexpectedLoss = errors.New("scrub: peer Block unexpected loss")
+	ErrPeerBlockQuarantined    = errors.New("scrub: peer Block quarantined")
+)
+
 type BlockTransferer interface {
 	TransferBlock(ctx context.Context, addr string, blockID uint64) ([]byte, []byte, error)
+}
+
+type BackendBlockRestorer interface {
+	RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 }
 
 type BlockRepairer interface {
@@ -23,6 +35,7 @@ type BlockRepairer interface {
 type BlockRepairConfig struct {
 	BlocksDir       string
 	Transferer      BlockTransferer
+	BackendRestorer BackendBlockRestorer
 	Metrics         DeepMetrics
 	PauseController PauseController
 	Logger          *slog.Logger
@@ -42,7 +55,7 @@ func NewBlockRepair(cfg BlockRepairConfig) *BlockRepair {
 }
 
 func (r *BlockRepair) RepairQuarantined(ctx context.Context) {
-	if r == nil || r.cfg.Transferer == nil || len(r.cfg.PeerAddrs) == 0 || r.cfg.BlocksDir == "" {
+	if r == nil || r.cfg.BlocksDir == "" || (r.cfg.Transferer == nil && r.cfg.BackendRestorer == nil) {
 		return
 	}
 	if err := r.waitPressurePause(ctx); err != nil {
@@ -58,10 +71,9 @@ func (r *BlockRepair) RepairQuarantined(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		peer := r.nextPeer()
-		if err := r.repairFromPeer(ctx, blockID, peer); err != nil {
+		if err := r.repairOneBlock(ctx, blockID); err != nil {
 			r.recordRepair("failed")
-			r.cfg.Logger.WarnContext(ctx, "scrub: repair quarantined block", "block_id", blockID, "peer", peer, "err", err)
+			r.cfg.Logger.WarnContext(ctx, "scrub: repair quarantined block", "block_id", blockID, "err", err)
 			continue
 		}
 		r.recordRepair("ok")
@@ -69,10 +81,45 @@ func (r *BlockRepair) RepairQuarantined(ctx context.Context) {
 	}
 }
 
-func (r *BlockRepair) nextPeer() string {
-	peer := r.cfg.PeerAddrs[r.peerIdx%len(r.cfg.PeerAddrs)]
+func (r *BlockRepair) repairOneBlock(ctx context.Context, blockID uint64) error {
+	if err := r.repairFromPeers(ctx, blockID); err == nil {
+		return nil
+	} else if r.cfg.BackendRestorer == nil {
+		return err
+	}
+	if err := r.cfg.BackendRestorer.RestoreBlockForRepair(ctx, blockID); err != nil {
+		return fmt.Errorf("restore from Backend: %w", err)
+	}
+	return nil
+}
+
+func (r *BlockRepair) repairFromPeers(ctx context.Context, blockID uint64) error {
+	if r.cfg.Transferer == nil || len(r.cfg.PeerAddrs) == 0 {
+		return errors.New("no peer transferer configured")
+	}
+	var lastErr error
+	for _, peer := range r.nextPeerOrder() {
+		if err := r.repairFromPeer(ctx, blockID, peer); err != nil {
+			lastErr = err
+			r.cfg.Logger.WarnContext(ctx, "scrub: repair peer unsuitable", "block_id", blockID, "peer", peer, "err", err)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("all peer repairs failed: %w", lastErr)
+}
+
+func (r *BlockRepair) nextPeerOrder() []string {
+	if len(r.cfg.PeerAddrs) == 0 {
+		return nil
+	}
+	start := r.peerIdx % len(r.cfg.PeerAddrs)
 	r.peerIdx++
-	return peer
+	peers := make([]string, 0, len(r.cfg.PeerAddrs))
+	for i := range r.cfg.PeerAddrs {
+		peers = append(peers, r.cfg.PeerAddrs[(start+i)%len(r.cfg.PeerAddrs)])
+	}
+	return peers
 }
 
 func (r *BlockRepair) waitPressurePause(ctx context.Context) error {

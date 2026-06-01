@@ -45,25 +45,43 @@ type DeepMetrics interface {
 	SetProgressRatio(v float64)
 	RecordRepair(result string)
 	DecrementQuarantined()
+	RecordSkip(reason string)
+}
+
+type BlockLocalState string
+
+const (
+	BlockLocalStateHot              BlockLocalState = "hot"
+	BlockLocalStateEvicted          BlockLocalState = "evicted"
+	BlockLocalStateHotCleanupNeeded BlockLocalState = "hot_cleanup_needed"
+	BlockLocalStateMetadataLoss     BlockLocalState = "metadata_loss"
+	BlockLocalStateUnexpectedLoss   BlockLocalState = "unexpected_loss"
+
+	SkipReasonEvicted = "evicted"
+)
+
+type BlockStateClassifier interface {
+	ClassifyScrubBlock(blockID uint64) (BlockLocalState, error)
 }
 
 type DeepConfig struct {
-	BlockLister       BlockLister
-	BlockVerifier     BlockVerifier
-	QuarantineManager QuarantineManager
-	Metrics           DeepMetrics
-	Checkpoint        CheckpointStore
-	LatencySignal     LatencySignal
-	BlockRepairer     BlockRepairer
-	PauseController   PauseController
-	Logger            *slog.Logger
-	IOBudget          *TokenBucket
-	OpenBlockID       uint64
-	CorruptCap        int
-	PauseThreshold    time.Duration
-	PauseCooldown     time.Duration
-	Interval          time.Duration
-	Jitter            float64
+	BlockLister          BlockLister
+	BlockVerifier        BlockVerifier
+	QuarantineManager    QuarantineManager
+	Metrics              DeepMetrics
+	Checkpoint           CheckpointStore
+	LatencySignal        LatencySignal
+	BlockRepairer        BlockRepairer
+	BlockStateClassifier BlockStateClassifier
+	PauseController      PauseController
+	Logger               *slog.Logger
+	IOBudget             *TokenBucket
+	OpenBlockID          uint64
+	CorruptCap           int
+	PauseThreshold       time.Duration
+	PauseCooldown        time.Duration
+	Interval             time.Duration
+	Jitter               float64
 }
 
 type Deep struct {
@@ -153,6 +171,16 @@ func (ds *Deep) RunOnce(ctx context.Context) error {
 			return err
 		}
 		ds.pauseIfLatencyExceeded(ctx)
+		skipped, err := ds.skipBlockByLifecycle(blk)
+		if err != nil {
+			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
+			return err
+		}
+		if skipped {
+			ds.saveCheckpoint(blk.BlockID)
+			ds.cfg.Metrics.SetProgressRatio(float64(i+1) / float64(total))
+			continue
+		}
 		if err := ds.waitIOBudget(ctx, blk.BlkPath); err != nil {
 			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
 			return err
@@ -168,6 +196,28 @@ func (ds *Deep) RunOnce(ctx context.Context) error {
 	ds.clearCheckpoint()
 	ds.cfg.Metrics.RecordDeepRun("ok", time.Since(start).Seconds())
 	return nil
+}
+
+func (ds *Deep) skipBlockByLifecycle(blk block.Info) (bool, error) {
+	if ds.cfg.BlockStateClassifier == nil {
+		return false, nil
+	}
+	state, err := ds.cfg.BlockStateClassifier.ClassifyScrubBlock(blk.BlockID)
+	if err != nil {
+		return false, fmt.Errorf("scrub: classify Block %d: %w", blk.BlockID, err)
+	}
+	switch state {
+	case BlockLocalStateHot, BlockLocalStateHotCleanupNeeded:
+		return false, nil
+	case BlockLocalStateEvicted:
+		ds.cfg.Metrics.RecordSkip(SkipReasonEvicted)
+		ds.cfg.Logger.Info("scrub: skip Block", "block_id", blk.BlockID, "reason", SkipReasonEvicted)
+		return true, nil
+	case BlockLocalStateMetadataLoss, BlockLocalStateUnexpectedLoss:
+		return false, fmt.Errorf("scrub: Block %d local state %s", blk.BlockID, state)
+	default:
+		return false, fmt.Errorf("scrub: Block %d unknown local state %s", blk.BlockID, state)
+	}
 }
 
 func (ds *Deep) filterFromCheckpoint(blocks []block.Info) []block.Info {

@@ -38,6 +38,7 @@ func (m *deepScrubProbeMetrics) RecordPause()             {}
 func (m *deepScrubProbeMetrics) SetProgressRatio(float64) {}
 func (m *deepScrubProbeMetrics) RecordRepair(string)      {}
 func (m *deepScrubProbeMetrics) DecrementQuarantined()    {}
+func (m *deepScrubProbeMetrics) RecordSkip(string)        {}
 
 func (m *deepScrubProbeMetrics) verifiedFrames() uint64 {
 	m.mu.Lock()
