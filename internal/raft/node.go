@@ -14,7 +14,7 @@ import (
 	"go.etcd.io/etcd/server/v3/storage/wal"
 	"go.etcd.io/etcd/server/v3/storage/wal/walpb"
 	"go.etcd.io/raft/v3"
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
 
 	"github.com/petabytecl/scrap/internal/logbridge"
@@ -32,7 +32,7 @@ const (
 // ApplyFunc applies committed entries to the state machine. replayUntil is the
 // startup replay watermark: entries with Index <= replayUntil were already applied
 // before a restart (re-delivered replay) and must not emit live trace spans. It is
-// passed on every call so the apply path is correct from the very first invocation,
+// passed on every call, so the applied path is correct from the very first invocation,
 // even though Open starts the run loop before returning the node.
 type ApplyFunc func(entries []raftpb.Entry, replayUntil uint64) error
 
@@ -228,7 +228,7 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	if err := n.storage.SetHardState(hardState); err != nil {
 		return fmt.Errorf("raft: set hard state: %w", err)
 	}
-	// Replay watermark = the durably-applied index (the loaded snapshot's index, set
+	// Replay watermark = the durably applied index (the loaded snapshot's index, set
 	// above as n.appliedIndex, or 0 with no snapshot) — NOT hardState.Commit. Entries
 	// committed but not yet applied before a crash are re-delivered and applied for the
 	// first time after restart, so they must emit live spans; only entries known to
@@ -448,8 +448,7 @@ func (n *Node) CommitIndex() uint64 {
 
 func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.ConfState {
 	if snapshot != nil {
-		cs := snapshot.Metadata.ConfState
-		return &cs
+		return new(snapshot.Metadata.ConfState)
 	}
 
 	var voters []uint64

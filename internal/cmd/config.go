@@ -16,10 +16,10 @@ const (
 	maxPort = 65535
 )
 
-// Config is the fully-assembled scrapd configuration: command-line flags plus
+// Config is the fully assembled scrapd configuration: command-line flags plus
 // environment variables, read and validated in one place by loadConfig.
 //
-// Defaults for subsystem tunables continue to live with their owning packages
+// Defaults for subsystem tunable continue to live with their owning packages
 // (e.g. shard.DefaultBlockSealSize, shard.DefaultUploadConcurrency, the scrub
 // defaults). Config centralizes only the reading and validation, not the
 // defaults.
@@ -145,7 +145,7 @@ func loadIntEnv(cfg *Config) error {
 
 // validate enforces ranges on typed values. It only rejects values that are
 // nonsensical regardless of subsystem clamping (e.g. a non-positive seal size or
-// an out-of-range port), so previously-valid configurations keep loading.
+// an out-of-range port), so previously valid configurations keep loading.
 func (c Config) validate() error {
 	if c.BlockSealSize <= 0 {
 		return fmt.Errorf("invalid -block-seal-size: %d (must be > 0)", c.BlockSealSize)
@@ -160,7 +160,7 @@ func (c Config) validate() error {
 }
 
 // envIntChecked reads an integer environment variable. An unset/empty value
-// yields the fallback; a present but non-integer value is an error (no silent
+// yields the fallback; a present but noninteger value is an error (no silent
 // fallback to the default).
 func envIntChecked(key string, fallback int) (int, error) {
 	v := strings.TrimSpace(os.Getenv(key))

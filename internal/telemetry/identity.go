@@ -30,7 +30,7 @@ const (
 
 // ResolveIdentifierMode decides how Document identifiers are attached to
 // telemetry. It is fail-closed (ADR 0013 §4): raw identifiers are emitted only
-// when they are explicitly requested AND the Cell is the reserved local
+// when they are explicitly requested, AND the Cell is the reserved local
 // non-production Cell. Every other combination — most importantly a raw request
 // in a production Cell — resolves to HashIdentifiers.
 func ResolveIdentifierMode(cellID string, rawIDsRequested bool) IdentifierMode {

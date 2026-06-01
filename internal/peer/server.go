@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,7 +22,7 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
-// sha256DigestLen is the byte length of a SHA-256 digest.
+// sha256DigestLen is the byte length of an SHA-256 digest.
 const sha256DigestLen = sha256.Size
 
 type RebuildHandler interface {
@@ -209,7 +209,7 @@ func (s *Server) replicateToSink(stream grpc.ClientStreamingServer[scrapv1.Repli
 }
 
 // recvChunks reads chunk messages from the stream and writes them into pw.
-// It closes pw (with error if needed) and waits on done before returning on failure.
+// It closes pw (with an error if needed) and waits on done before returning on failure.
 func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], pw *io.PipeWriter, done <-chan struct{}) error {
 	for {
 		msg, err := stream.Recv()
@@ -294,8 +294,8 @@ func (s *Server) ConsistencyCheck(_ context.Context, req *scrapv1.ConsistencyChe
 }
 
 // Close flushes and closes every block and index writer the server owns. It is
-// safe to call more than once; subsequent calls are no-ops. When closing
-// multiple writers it attempts to close all of them and returns the first error
+// safe to call more than once; the following calls are no-ops. When closing
+// multiple writers, it attempts to close all of them and returns the first error
 // encountered. Callers must ensure the peer gRPC server has stopped accepting
 // RPCs (e.g. after GracefulStop) before calling Close, so no new writer is
 // created concurrently with the close.

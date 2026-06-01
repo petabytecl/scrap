@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"

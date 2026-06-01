@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"math"
 
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"

@@ -43,7 +43,7 @@ func (c raftCommandCarrier) Keys() []string {
 }
 
 // injectTraceContext writes the active span context from ctx into cmd, so the
-// committed entry carries trace identity to every voter's apply loop.
+// committed entry carries trace identity to every voter's applied loop.
 func injectTraceContext(ctx context.Context, cmd *scrapv1.RaftCommand) {
 	if cmd == nil {
 		return
@@ -53,7 +53,7 @@ func injectTraceContext(ctx context.Context, cmd *scrapv1.RaftCommand) {
 
 // extractTraceContext returns ctx carrying the remote span context recorded in
 // cmd. When cmd has no trace context — an entry written before ADR 0013, or one
-// replayed from an older log — the returned ctx has no remote span and any apply
+// replayed from an older log — the returned ctx has no remote span and any applied
 // span derived from it becomes a root span rather than attaching to a bogus
 // parent.
 func extractTraceContext(ctx context.Context, cmd *scrapv1.RaftCommand) context.Context {

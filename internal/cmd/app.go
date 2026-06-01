@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net"
 
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -264,7 +264,7 @@ func (a *App) servePeerGRPC() error {
 }
 
 // Shutdown tears the App down in the reverse order of startup, documented here
-// in one place rather than emerging from defer ordering:
+// in one place rather than emerging from deferred ordering:
 //
 //	admin -> peer gRPC -> peer writers -> client gRPC -> shard -> peer client ->
 //	transport -> telemetry

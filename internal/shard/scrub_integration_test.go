@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 
 	"github.com/petabytecl/scrap/internal/shard"
 )

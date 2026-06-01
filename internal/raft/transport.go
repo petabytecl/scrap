@@ -1,7 +1,7 @@
 package raft
 
 import (
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 type Transport interface {

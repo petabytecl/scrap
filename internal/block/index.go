@@ -24,7 +24,7 @@ const (
 	uint32Size = 4  // encoded uint32 length in bytes
 	uint16Size = 2  // encoded uint16 length in bytes
 
-	paddingByte = 0x00 // reserved byte in index entry header
+	paddingByte = 0x00 // reserved byte in the index entry header
 )
 
 var (

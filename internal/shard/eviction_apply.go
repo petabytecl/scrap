@@ -109,11 +109,10 @@ func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction
 	}
 	if result, ok := s.evictionApplyResults[planID]; ok {
 		result := result
-		planCopy := plan
 		return eviction.PlanStatus{
 			PlanID:      planID,
 			Status:      result.Status,
-			Plan:        &planCopy,
+			Plan:        new(plan),
 			ApplyResult: &result,
 		}, nil
 	}
@@ -121,11 +120,10 @@ func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction
 	if _, ok := s.evictionApplyRunning[planID]; ok {
 		status = eviction.PlanStatusRunning
 	}
-	planCopy := plan
 	return eviction.PlanStatus{
 		PlanID: planID,
 		Status: status,
-		Plan:   &planCopy,
+		Plan:   new(plan),
 	}, nil
 }
 

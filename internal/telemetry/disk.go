@@ -21,13 +21,13 @@ type DiskStatsProvider interface {
 	DiskStats() DiskStats
 }
 
-// DiskMetrics registers observable gauges for local disk + projection usage.
+// DiskMetrics registers observable gauges for local disk and projection usage.
 type DiskMetrics struct {
 	registration metric.Registration
 }
 
 // NewDiskMetrics registers scrap.disk.used_bytes, scrap.disk.free_bytes, and
-// scrap.pebble.disk_bytes. Names already carry the _bytes suffix and set no unit so
+// scrap.pebble.disk_bytes. Names already carry the _bytes suffix and set no unit, so
 // the OTel->Prometheus exporter does not append a second suffix.
 func NewDiskMetrics(meter metric.Meter, provider DiskStatsProvider) (*DiskMetrics, error) {
 	if meter == nil {

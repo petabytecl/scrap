@@ -19,7 +19,7 @@ const (
 const (
 	FlagFirstFrame  byte = 0x01
 	FlagLastFrame   byte = 0x02
-	FlagSingleFrame byte = FlagFirstFrame | FlagLastFrame
+	FlagSingleFrame      = FlagFirstFrame | FlagLastFrame
 )
 
 var (
@@ -41,7 +41,7 @@ type FrameHeader struct {
 	PayloadCRC uint32
 }
 
-// WriteFrame writes a 32-byte frame header + payload.
+// WriteFrame writes a 32-byte frame header and payload.
 // Layout: magic(2) + version(1) + flags(1) + header_len(2) + reserved(2) +
 //
 //	doc_seq(4) + frame_seq(4) + payload_len(4) + payload_crc32c(4) +

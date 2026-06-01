@@ -113,7 +113,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 }
 
 // recvChunks reads chunk messages from the stream and writes them into pw.
-// It closes pw (with error if needed) and waits on done before returning on failure.
+// It closes pw (with an error if needed) and waits on done before returning on failure.
 func (s *documentServer) recvChunks(ctx context.Context, stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], pw *io.PipeWriter, done <-chan struct{}, writeErr *error) error {
 	for {
 		msg, err := stream.Recv()
@@ -256,8 +256,7 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 }
 
 func (s *documentServer) mapStoreError(ctx context.Context, method string, err error) error {
-	var nle *storeapi.NotLeaderError
-	if errors.As(err, &nle) {
+	if nle, ok := errors.AsType[*storeapi.NotLeaderError](err); ok {
 		s.logNotLeaderRedirect(ctx, method, nle.LeaderAddr)
 	}
 	return mapStoreError(err)
@@ -278,8 +277,7 @@ func (s *documentServer) logNotLeaderRedirect(ctx context.Context, method, leade
 }
 
 func mapStoreError(err error) error {
-	var nle *storeapi.NotLeaderError
-	if errors.As(err, &nle) {
+	if nle, ok := errors.AsType[*storeapi.NotLeaderError](err); ok {
 		st, detailErr := status.New(codes.Unavailable, "not shard leader").
 			WithDetails(&scrapv1.LeaderHint{LeaderAddr: nle.LeaderAddr})
 		if detailErr != nil {

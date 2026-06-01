@@ -111,7 +111,7 @@ func checkDocSHA(h hash.Hash, docSeq uint32, entries []IndexEntry, offset int64,
 	}
 }
 
-// docSeq is 0-indexed and matches entry position in a well-formed block index.
+// docSeq is 0-indexed and matches the entry position in a well-formed block index.
 func recordMissingIndexedFrames(entries []IndexEntry, framesByDocSeq map[uint32]uint32, completedDocSeq map[uint32]bool, offset int64, result *VerifyResult) {
 	for docSeq, entry := range entries {
 		if entry.FrameCount == 0 {

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	raftpb "go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"

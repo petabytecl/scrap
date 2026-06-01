@@ -30,7 +30,7 @@ func parseLevel(s string) slog.Level {
 
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(normalized)); err != nil {
-		fmt.Fprintf(os.Stderr, "scrapd: unknown SCRAP_LOG_LEVEL %q, defaulting to INFO\n", s)
+		_, _ = fmt.Fprintf(os.Stderr, "scrapd: unknown SCRAP_LOG_LEVEL %q, defaulting to INFO\n", s)
 		return slog.LevelInfo
 	}
 	return lvl

@@ -89,7 +89,7 @@ func (f scrapdTelemetryPipelineFactory) buildEnabled(ctx context.Context) (sdkme
 }
 
 // otlpSignalEnabled reports whether the given signal-specific OTLP endpoint, or
-// the common OTEL_EXPORTER_OTLP_ENDPOINT, is configured. When neither is set the
+// the common OTEL_EXPORTER_OTLP_ENDPOINT, is configured. When neither is set, the
 // signal is not exported, so scrapd never defaults to localhost:4317.
 func otlpSignalEnabled(signalEnv string) bool {
 	for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", signalEnv} {
@@ -137,7 +137,7 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 	}
 
 	// Only export over OTLP for signals whose endpoint is configured. Without this
-	// guard the OTLP exporters default to localhost:4317 and silently ship to a
+	//  guard, the OTLP exporters default to localhost:4317 and silently ship to a
 	// non-existent collector on every deployment that has not wired one up.
 	metricReader, spanProcessor, err := scrapdTelemetryPipeline.buildEnabled(ctx)
 	if err != nil {
@@ -156,7 +156,7 @@ func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raft
 	otel.SetTracerProvider(tracerProvider)
 	// W3C trace context + baggage on every gRPC hop (client<->server and
 	// leader<->peer). The otelgrpc handlers default to the global propagator, so
-	// without this every WriteDocument starts a disconnected root span and the
+	// without this every WriteDocument starts a disconnected root span, and the
 	// client's trace_id is dropped at the boundary. See ADR 0013.
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
