@@ -149,11 +149,72 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	pending, err := s.idx.GetPendingUpload(confirm.GetBlockId())
+	if err != nil {
+		if errors.Is(err, index.ErrPendingUploadNotFound) {
+			existing, catalogErr := s.idx.GetConfirmedUpload(confirm.GetBlockId())
+			if catalogErr == nil {
+				if err := s.putConfirmedUploadFromCommand(confirm, existing.SealedSizeBytes); err != nil {
+					return err
+				}
+				return s.refreshUploadPressureLocked()
+			}
+			if !errors.Is(catalogErr, index.ErrConfirmedUploadNotFound) {
+				return fmt.Errorf("shard: get confirmed upload for block %d: %w", confirm.GetBlockId(), catalogErr)
+			}
+		}
+		return fmt.Errorf("shard: confirm upload missing sealed metadata for block %d: %w", confirm.GetBlockId(), err)
+	}
+	if err := s.putConfirmedUploadFromCommand(confirm, pending.SealedSizeBytes); err != nil {
+		return err
+	}
 	if err := s.idx.DeletePendingUpload(confirm.GetBlockId()); err != nil {
 		return err
 	}
 	s.uploadObligations.forget(confirm.GetBlockId())
 	return s.refreshUploadPressureLocked()
+}
+
+func (s *Shard) putConfirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) error {
+	confirmed := confirmedUploadFromCommand(confirm, sealedSize)
+	if err := validateConfirmedUploadMatchesSeal(confirmed); err != nil {
+		return err
+	}
+	return s.idx.PutConfirmedUpload(confirmed)
+}
+
+func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {
+	return index.ConfirmedUpload{
+		BlockID:         confirm.GetBlockId(),
+		ShardID:         confirm.GetShardId(),
+		ConfirmedAtUs:   confirm.GetConfirmedAtUs(),
+		SealedSizeBytes: sealedSize,
+		BlockObject:     indexBackendObject(confirm.GetBlockObject()),
+		IndexObject:     indexBackendObject(confirm.GetIndexObject()),
+	}
+}
+
+func validateConfirmedUploadMatchesSeal(upload index.ConfirmedUpload) error {
+	if upload.BlockObject.SizeBytes != upload.SealedSizeBytes {
+		return fmt.Errorf(
+			"shard: confirmed block object size %d does not match sealed size %d for block %d",
+			upload.BlockObject.SizeBytes,
+			upload.SealedSizeBytes,
+			upload.BlockID,
+		)
+	}
+	return nil
+}
+
+func indexBackendObject(meta *scrapv1.BackendObjectMetadata) index.BackendObjectMetadata {
+	if meta == nil {
+		return index.BackendObjectMetadata{}
+	}
+	return index.BackendObjectMetadata{
+		Key:             meta.GetKey(),
+		SizeBytes:       meta.GetSizeBytes(),
+		ValidationToken: meta.GetValidationToken(),
+	}
 }
 
 func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
@@ -188,8 +249,15 @@ func (s *Shard) PendingUploadsForTest() ([]PendingUpload, error) {
 	return collectPendingUploads(s.idx)
 }
 
-func (s *Shard) ConfirmUploadForTest(ctx context.Context, blockID uint64, backendKeyPrefix, etag string) error {
-	return s.uploads.proposeConfirmUpload(ctx, blockID, backendKeyPrefix, etag)
+func (s *Shard) ConfirmUploadForTest(ctx context.Context, upload index.ConfirmedUpload) error {
+	return s.uploads.proposeConfirmUpload(ctx, upload)
+}
+
+func (s *Shard) ConfirmedUploadForTest(blockID uint64) (index.ConfirmedUpload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.idx.GetConfirmedUpload(blockID)
 }
 
 // pendingUploads is the projection-read seam: it reads the pending-upload outbox

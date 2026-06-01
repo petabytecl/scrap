@@ -796,7 +796,8 @@ Phase 2b configuration (env vars, all with defaults):
 Leader-only upload of sealed Blocks to the Backend. The leader watches the Upload
 Outbox (materialized from `SealBlock` Raft commands without matching `ConfirmUpload`)
 and uploads `.blk` + `.idx` as separate objects. Upload is verified via HEAD +
-size/ETag check before proposing `ConfirmUpload` (see ADR 0010). Retry policy is
+size/ETag check before proposing `ConfirmUpload` with separate `.blk` and `.idx`
+object metadata (key, size, validation token; see ADR 0010). Retry policy is
 error-class-specific: `throttled` reduces upload concurrency, `auth` pauses all
 uploads, `transient` retries with exponential backoff. Admission pressure prevents
 unbounded upload lag from filling local disk.

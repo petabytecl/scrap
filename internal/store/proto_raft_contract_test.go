@@ -132,11 +132,19 @@ func TestRaftCommandConfirmUploadRoundTrip(t *testing.T) {
 	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_ConfirmUpload{
 			ConfirmUpload: &scrapv1.ConfirmUpload{
-				BlockId:          42,
-				ShardId:          7,
-				BackendKeyPrefix: "cell-a/shards/0000000000000007/000000000000002a",
-				ConfirmedAtUs:    1716700001000000,
-				Etag:             "etag-42",
+				BlockId: 42,
+				ShardId: 7,
+				BlockObject: &scrapv1.BackendObjectMetadata{
+					Key:             "cell-a/shards/0000000000000007/000000000000002a.blk",
+					SizeBytes:       67108864,
+					ValidationToken: protoValidationValue("block"),
+				},
+				IndexObject: &scrapv1.BackendObjectMetadata{
+					Key:             "cell-a/shards/0000000000000007/000000000000002a.idx",
+					SizeBytes:       4096,
+					ValidationToken: protoValidationValue("index"),
+				},
+				ConfirmedAtUs: 1716700001000000,
 			},
 		},
 	})
@@ -151,15 +159,29 @@ func TestRaftCommandConfirmUploadRoundTrip(t *testing.T) {
 	if confirm.GetShardId() != 7 {
 		t.Fatalf("ShardId: got %d", confirm.GetShardId())
 	}
-	if confirm.GetBackendKeyPrefix() != "cell-a/shards/0000000000000007/000000000000002a" {
-		t.Fatalf("BackendKeyPrefix: got %q", confirm.GetBackendKeyPrefix())
-	}
+	assertRaftBackendObject(t, "BlockObject", confirm.GetBlockObject(), "cell-a/shards/0000000000000007/000000000000002a.blk", 67108864, protoValidationValue("block"))
+	assertRaftBackendObject(t, "IndexObject", confirm.GetIndexObject(), "cell-a/shards/0000000000000007/000000000000002a.idx", 4096, protoValidationValue("index"))
 	if confirm.GetConfirmedAtUs() != 1716700001000000 {
 		t.Fatalf("ConfirmedAtUs: got %d", confirm.GetConfirmedAtUs())
 	}
-	if confirm.GetEtag() != "etag-42" {
-		t.Fatalf("ETag: got %q", confirm.GetEtag())
+}
+
+func assertRaftBackendObject(t *testing.T, label string, got *scrapv1.BackendObjectMetadata, key string, size int64, validation string) {
+	t.Helper()
+
+	if got.GetKey() != key {
+		t.Fatalf("%s.Key: got %q", label, got.GetKey())
 	}
+	if got.GetSizeBytes() != size {
+		t.Fatalf("%s.SizeBytes: got %d", label, got.GetSizeBytes())
+	}
+	if got.GetValidationToken() != validation {
+		t.Fatalf("%s.ValidationToken: got %q", label, got.GetValidationToken())
+	}
+}
+
+func protoValidationValue(kind string) string {
+	return kind + "-validation"
 }
 
 func roundTripRaftCommand(t *testing.T, original *scrapv1.RaftCommand) *scrapv1.RaftCommand {

@@ -2,7 +2,6 @@ package shard
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 )
@@ -174,51 +172,36 @@ func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, block
 	openBlockID := r.core.currentOpenBlockID()
 
 	ctx := context.Background()
-	cellID := cellIDOrLocal(r.upload.CellID)
 	for _, blockID := range blockIDs {
 		if blockID == openBlockID {
 			continue
 		}
-		prefix := backendKeyPrefix(cellID, r.shardID, blockID)
-		uploaded, err := blockFullyUploaded(ctx, be, prefix)
-		if err != nil {
-			r.logger.WarnContext(ctx, "shard: rebuild upload check skipped (transient)", "block_id", blockID, "err", err)
-			continue
-		}
-		if uploaded {
-			continue
-		}
-		info, statErr := os.Stat(r.blockPath(blockID))
-		if statErr != nil {
-			continue
-		}
-		if err := projection.PutPendingUpload(index.PendingUpload{
-			BlockID:         blockID,
-			ShardID:         r.shardID,
-			SealedSizeBytes: info.Size(),
-			SealedAtUs:      info.ModTime().UnixMicro(),
-		}); err != nil {
-			return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
+		if err := r.rebuildPendingUpload(ctx, projection, blockID); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// blockFullyUploaded returns true when both .blk and .idx exist in the backend,
-// false when either is definitively missing. Returns an error for transient/auth
-// failures so the caller can avoid incorrectly re-queuing already-uploaded blocks.
-func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) (bool, error) {
-	for _, ext := range []string{".blk", ".idx"} {
-		_, err := be.HeadObject(ctx, prefix+ext)
-		if err == nil {
-			continue
-		}
-		if errors.Is(err, backend.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
+func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projection *index.Index, blockID uint64) error {
+	info, statErr := os.Stat(r.blockPath(blockID))
+	if statErr != nil {
+		r.logger.ErrorContext(ctx, "shard: rebuild upload missing sealed Block metadata", "block_id", blockID, "err", statErr)
+		return fmt.Errorf("shard: rebuild pending upload %d missing sealed Block metadata: %w", blockID, statErr)
 	}
-	return true, nil
+	return r.putRebuiltPendingUpload(projection, blockID, info)
+}
+
+func (r *projectionRebuilder) putRebuiltPendingUpload(projection *index.Index, blockID uint64, info os.FileInfo) error {
+	if err := projection.PutPendingUpload(index.PendingUpload{
+		BlockID:         blockID,
+		ShardID:         r.shardID,
+		SealedSizeBytes: info.Size(),
+		SealedAtUs:      info.ModTime().UnixMicro(),
+	}); err != nil {
+		return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
+	}
+	return nil
 }
 
 func (r *projectionRebuilder) listBlockIndexIDs() ([]uint64, error) {

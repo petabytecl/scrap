@@ -30,12 +30,21 @@ message SealBlock {
   int64  sealed_at_us      = 4;
 }
 
+message BackendObjectMetadata {
+  string key              = 1;
+  int64  size_bytes       = 2;
+  string validation_token = 3;
+}
+
 message ConfirmUpload {
-  uint64 block_id            = 1;
-  uint64 shard_id            = 2;
-  string backend_key_prefix  = 3;
-  int64  confirmed_at_us     = 4;
-  string etag                = 5;
+  reserved 3, 5;
+  reserved "backend_key_prefix", "etag";
+
+  uint64                block_id        = 1;
+  uint64                shard_id        = 2;
+  int64                 confirmed_at_us = 4;
+  BackendObjectMetadata block_object    = 6;
+  BackendObjectMetadata index_object    = 7;
 }
 
 message CommitDocument {

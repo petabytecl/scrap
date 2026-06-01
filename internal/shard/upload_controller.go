@@ -12,6 +12,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/index"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -245,10 +246,17 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 		return err
 	}
 
-	return c.proposeConfirmUpload(ctx, upload.BlockID, prefix, blk.ETag+","+idx.ETag)
+	return c.proposeConfirmUpload(ctx, index.ConfirmedUpload{
+		BlockID:         upload.BlockID,
+		ShardID:         upload.ShardID,
+		ConfirmedAtUs:   time.Now().UnixMicro(),
+		SealedSizeBytes: upload.SealedSizeBytes,
+		BlockObject:     blk,
+		IndexObject:     idx,
+	})
 }
 
-func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix, ext string) (backend.PutResult, error) {
+func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix, ext string) (index.BackendObjectMetadata, error) {
 	path := c.core.blockPath(blockID)
 	if ext == "idx" {
 		path = c.core.idxPath(blockID)
@@ -256,7 +264,7 @@ func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, pre
 
 	file, err := os.Open(path) //nolint:gosec // path is derived from controlled shard block IDs
 	if err != nil {
-		return backend.PutResult{}, fmt.Errorf("%w: upload open %s: %w", backend.ErrPermanent, ext, err)
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload open %s: %w", backend.ErrPermanent, ext, err)
 	}
 	defer func() {
 		_ = file.Close()
@@ -264,41 +272,57 @@ func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, pre
 
 	info, err := file.Stat()
 	if err != nil {
-		return backend.PutResult{}, fmt.Errorf("%w: upload stat %s: %w", backend.ErrPermanent, ext, err)
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload stat %s: %w", backend.ErrPermanent, ext, err)
 	}
 
 	key := prefix + "." + ext
 	result, err := c.cfg.Backend.PutObject(ctx, key, file, info.Size(), backend.PutOpts{})
 	if err != nil {
-		return backend.PutResult{}, err
+		return index.BackendObjectMetadata{}, err
 	}
 
 	meta, err := c.cfg.Backend.HeadObject(ctx, key)
 	if err != nil {
 		c.recordVerifyMetric("fail")
-		return backend.PutResult{}, err
+		return index.BackendObjectMetadata{}, err
 	}
 	if meta.Size != result.Size || meta.ETag != result.ETag {
 		c.recordVerifyMetric("fail")
-		return backend.PutResult{}, fmt.Errorf("%w: upload verification mismatch for %s", backend.ErrCorrupt, key)
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification mismatch for %s", backend.ErrCorrupt, key)
+	}
+	if result.ETag == "" {
+		c.recordVerifyMetric("fail")
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification missing validation token for %s", backend.ErrCorrupt, key)
 	}
 	c.recordVerifyMetric("pass")
-	return result, nil
+	return index.BackendObjectMetadata{
+		Key:             key,
+		SizeBytes:       result.Size,
+		ValidationToken: result.ETag,
+	}, nil
 }
 
-func (c *uploadController) proposeConfirmUpload(ctx context.Context, blockID uint64, backendKeyPrefix, etag string) error {
+func (c *uploadController) proposeConfirmUpload(ctx context.Context, upload index.ConfirmedUpload) error {
 	cmd := &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_ConfirmUpload{
 			ConfirmUpload: &scrapv1.ConfirmUpload{
-				BlockId:          blockID,
-				ShardId:          c.shardID,
-				BackendKeyPrefix: backendKeyPrefix,
-				ConfirmedAtUs:    time.Now().UnixMicro(),
-				Etag:             etag,
+				BlockId:       upload.BlockID,
+				ShardId:       upload.ShardID,
+				BlockObject:   protoBackendObject(upload.BlockObject),
+				IndexObject:   protoBackendObject(upload.IndexObject),
+				ConfirmedAtUs: upload.ConfirmedAtUs,
 			},
 		},
 	}
 	return proposeUploadCommand(ctx, c.core, c.cellID(), c.shardID, "confirm upload", cmd)
+}
+
+func protoBackendObject(meta index.BackendObjectMetadata) *scrapv1.BackendObjectMetadata {
+	return &scrapv1.BackendObjectMetadata{
+		Key:             meta.Key,
+		SizeBytes:       meta.SizeBytes,
+		ValidationToken: meta.ValidationToken,
+	}
 }
 
 func (c *uploadController) concurrency() int {

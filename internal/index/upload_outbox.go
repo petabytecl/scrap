@@ -10,6 +10,8 @@ import (
 	"github.com/cockroachdb/pebble"
 )
 
+var ErrPendingUploadNotFound = errors.New("index: pending upload not found")
+
 const (
 	pendingUploadPrefix       = "\x00upload\x00"
 	pendingUploadUpperBound   = "\x00upload\x01"
@@ -47,6 +49,22 @@ func (idx *Index) DeletePendingUpload(blockID uint64) error {
 		return errors.New("index: pending upload block_id is required")
 	}
 	return idx.db.Delete(pendingUploadKey(blockID), pebble.Sync)
+}
+
+func (idx *Index) GetPendingUpload(blockID uint64) (PendingUpload, error) {
+	if blockID == 0 {
+		return PendingUpload{}, errors.New("index: pending upload block_id is required")
+	}
+	val, closer, err := idx.db.Get(pendingUploadKey(blockID))
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return PendingUpload{}, ErrPendingUploadNotFound
+		}
+		return PendingUpload{}, fmt.Errorf("index: get pending upload: %w", err)
+	}
+	defer func() { _ = closer.Close() }()
+
+	return decodePendingUpload(pendingUploadKey(blockID), val)
 }
 
 func (idx *Index) PendingUploads() (PendingUploadIterator, error) {
