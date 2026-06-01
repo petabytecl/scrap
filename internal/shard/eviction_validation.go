@@ -25,16 +25,27 @@ func (s *Shard) validateEvictionApply(ctx context.Context, plan eviction.Plan, r
 		}
 
 		validation := s.validateEvictedBlock(ctx, applied)
-		result.Validations = append(result.Validations, validation)
-		switch validation.Status {
-		case eviction.ValidationStatusPassed:
-			result.ValidatedBlocks++
-		case eviction.ValidationStatusFailed:
-			result.ValidationFailedBlocks++
-		}
+		s.recordEvictionValidationResult(result, applied, validation)
 	}
 	if result.ValidationFailedBlocks > 0 {
 		result.Status = eviction.ApplyStatusEvictedWithValidationFailure
+	}
+}
+
+func (s *Shard) recordEvictionValidationResult(
+	result *eviction.ApplyResult,
+	applied eviction.ApplyBlock,
+	validation eviction.ValidationBlock,
+) {
+	result.Validations = append(result.Validations, validation)
+	if s.validationRestoredBlock(applied.BlockID) {
+		result.BytesFreed = max(0, result.BytesFreed-applied.BytesFreed)
+	}
+	switch validation.Status {
+	case eviction.ValidationStatusPassed:
+		result.ValidatedBlocks++
+	case eviction.ValidationStatusFailed:
+		result.ValidationFailedBlocks++
 	}
 }
 
@@ -42,7 +53,7 @@ func evictionValidationSampleLimit(plan eviction.Plan) int {
 	if evictionReasonForMarker(plan) != eviction.ReasonEvidenceRun || plan.Config.MaxValidateSamples <= 0 {
 		return 0
 	}
-	return plan.Config.MaxValidateSamples
+	return min(1, plan.Config.MaxValidateSamples)
 }
 
 func (s *Shard) validateEvictedBlock(ctx context.Context, applied eviction.ApplyBlock) eviction.ValidationBlock {
@@ -60,17 +71,13 @@ func (s *Shard) validateEvictedBlock(ctx context.Context, applied eviction.Apply
 }
 
 func (s *Shard) restoreAndReadFirstDocument(ctx context.Context, blockID uint64) error {
-	if err := s.restoreEvictedBlockForReason(ctx, blockID, RestoreReasonValidation); err != nil {
-		return err
-	}
-
 	entry, err := firstBlockIndexEntry(s.idxPath(blockID))
 	if err != nil {
 		return err
 	}
-	rc, err := block.ReadDocument(s.blockPath(blockID), entry)
+	rc, _, err := s.readDocumentFromProjection(ctx, entry.TransactionID, entry.DocName, RestoreReasonValidation, blockID)
 	if err != nil {
-		return fmt.Errorf("%w: validation read Block %d: %w", storeapi.ErrDataLoss, blockID, err)
+		return fmt.Errorf("validation read Block %d: %w", blockID, err)
 	}
 	if _, err := io.Copy(io.Discard, rc); err != nil {
 		_ = rc.Close()
@@ -80,6 +87,14 @@ func (s *Shard) restoreAndReadFirstDocument(ctx context.Context, blockID uint64)
 		return fmt.Errorf("%w: validation close Block %d: %w", storeapi.ErrDataLoss, blockID, err)
 	}
 	return nil
+}
+
+func (s *Shard) validationRestoredBlock(blockID uint64) bool {
+	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	if err != nil {
+		return false
+	}
+	return lifecycle.State == LocalBlockStateHot || lifecycle.State == LocalBlockStateHotCleanupNeeded
 }
 
 func firstBlockIndexEntry(path string) (block.IndexEntry, error) {

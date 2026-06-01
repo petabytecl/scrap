@@ -22,7 +22,7 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 	}
 
 	result, cacheable := s.applyEvictionPlanBlocks(ctx, plan)
-	s.validateEvictionApply(ctx, plan, &result)
+	s.validateEvictionApply(context.WithoutCancel(ctx), plan, &result)
 	result.CompletedAtUs = time.Now().UTC().UnixMicro()
 	s.finishEvictionApply(plan.PlanID, result, cacheable)
 

@@ -29,7 +29,7 @@ type blockRestoreCall struct {
 	err  error
 }
 
-func (s *Shard) ensureReadableBlockLocked(ctx context.Context, blockID uint64) error {
+func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID uint64, reason string) error {
 	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
 	if err != nil {
 		s.mu.Unlock()
@@ -41,7 +41,7 @@ func (s *Shard) ensureReadableBlockLocked(ctx context.Context, blockID uint64) e
 		return nil
 	case LocalBlockStateEvicted:
 		s.mu.Unlock()
-		if err := s.restoreEvictedBlock(ctx, blockID); err != nil {
+		if err := s.restoreEvictedBlockForReason(ctx, blockID, reason); err != nil {
 			return err
 		}
 		s.mu.Lock()
@@ -53,10 +53,6 @@ func (s *Shard) ensureReadableBlockLocked(ctx context.Context, blockID uint64) e
 		s.mu.Unlock()
 		return fmt.Errorf("%w: Block %d unknown local state %s", storeapi.ErrDataLoss, blockID, lifecycle.State)
 	}
-}
-
-func (s *Shard) restoreEvictedBlock(ctx context.Context, blockID uint64) error {
-	return s.restoreEvictedBlockForReason(ctx, blockID, RestoreReasonRead)
 }
 
 func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64, reason string) error {
