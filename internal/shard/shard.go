@@ -107,6 +107,8 @@ type Shard struct {
 
 	lifecycleCleanupDone chan struct{}
 	evictionPlans        map[string]eviction.Plan
+	restoreMu            sync.Mutex
+	restores             map[uint64]*blockRestoreCall
 }
 
 func (c *Config) applyDefaults() {
@@ -179,6 +181,7 @@ func Open(cfg Config) (*Shard, error) {
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
 		evictionPlans:           make(map[string]eviction.Plan),
+		restores:                make(map[uint64]*blockRestoreCall),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
 		bootstrapGrace:          cfg.BootstrapGrace,
@@ -429,12 +432,16 @@ func (s *Shard) ReadDocument(ctx context.Context, txID, docName string) (io.Read
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	entry, err := s.findDocEntry(txID, docName)
 	if err != nil {
+		s.mu.Unlock()
 		return nil, storeapi.DocumentMeta{}, err
 	}
+	if err := s.ensureReadableBlockLocked(ctx, entry.blockID); err != nil {
+		return nil, storeapi.DocumentMeta{}, err
+	}
+	defer s.mu.Unlock()
 
 	blkPath := s.blockPath(entry.blockID)
 	rc, err := block.ReadDocument(blkPath, entry.IndexEntry)

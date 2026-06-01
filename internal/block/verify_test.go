@@ -106,6 +106,33 @@ func TestVerifyBlock_FrameCRCCorruption(t *testing.T) {
 	}
 }
 
+func TestVerifyBlock_FrameMagicCorruptionWithValidHeaderCRC(t *testing.T) {
+	dir := t.TempDir()
+	blkPath, idxPath := writeVerifyTestBlock(t, dir)
+
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	frameStart := block.HeaderSize
+	data[frameStart] ^= 0xFF
+	block.RecomputeFramePayloadCRC(data, frameStart)
+	if err := os.WriteFile(blkPath, data, 0o600); err != nil { //nolint:gosec // test file path from temp dir
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := block.VerifyBlock(blkPath, idxPath)
+	if err != nil {
+		t.Fatalf("VerifyBlock: %v", err)
+	}
+	if len(result.CorruptFrames) == 0 {
+		t.Fatal("expected bad frame magic to be reported as corruption")
+	}
+	if result.CorruptFrames[0].Type != block.CorruptionFrameCRC {
+		t.Fatalf("expected frame_crc corruption, got %s", result.CorruptFrames[0].Type)
+	}
+}
+
 func TestVerifyBlock_DocSHA256Mismatch(t *testing.T) {
 	dir := t.TempDir()
 	blkPath, idxPath := writeVerifyTestBlock(t, dir)

@@ -133,9 +133,32 @@ func readFrameRaw(r io.Reader) (FrameHeader, []byte, error) {
 		return FrameHeader{}, nil, fmt.Errorf("block: verify read header: %w", err)
 	}
 
+	hdr, err := parseRawFrameHeader(buf)
+	if err != nil {
+		return FrameHeader{}, nil, err
+	}
+
+	payload, err := readRawFramePayload(r, hdr.PayloadLen)
+	if err != nil {
+		return FrameHeader{}, nil, err
+	}
+	if crc32.Checksum(payload, crcTable) != hdr.PayloadCRC {
+		return FrameHeader{}, nil, ErrCRCMismatch
+	}
+
+	return hdr, payload, nil
+}
+
+func parseRawFrameHeader(buf [FrameHeaderSize]byte) (FrameHeader, error) {
 	headerCRC := binary.LittleEndian.Uint32(buf[28:32])
 	if crc32.Checksum(buf[0:28], crcTable) != headerCRC {
-		return FrameHeader{}, nil, ErrHeaderCRC
+		return FrameHeader{}, ErrHeaderCRC
+	}
+	if magic := binary.LittleEndian.Uint16(buf[0:2]); magic != frameMagic {
+		return FrameHeader{}, ErrBadMagic
+	}
+	if version := buf[2]; version != frameVersion {
+		return FrameHeader{}, ErrBadVersion
 	}
 
 	hdr := FrameHeader{
@@ -145,24 +168,22 @@ func readFrameRaw(r io.Reader) (FrameHeader, []byte, error) {
 	}
 	payloadLen := binary.LittleEndian.Uint32(buf[16:20])
 	if payloadLen > MaxFramePayload {
-		return FrameHeader{}, nil, ErrPayloadLimit
+		return FrameHeader{}, ErrPayloadLimit
 	}
 	payloadCRC := binary.LittleEndian.Uint32(buf[20:24])
 	hdr.PayloadLen = payloadLen
 	hdr.PayloadCRC = payloadCRC
+	return hdr, nil
+}
 
+func readRawFramePayload(r io.Reader, payloadLen uint32) ([]byte, error) {
 	payload := make([]byte, payloadLen)
 	if payloadLen > 0 {
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return FrameHeader{}, nil, ErrCRCMismatch
+			return nil, ErrCRCMismatch
 		}
 	}
-
-	if crc32.Checksum(payload, crcTable) != payloadCRC {
-		return FrameHeader{}, nil, ErrCRCMismatch
-	}
-
-	return hdr, payload, nil
+	return payload, nil
 }
 
 func loadIdxEntries(idxPath string) ([]IndexEntry, error) {

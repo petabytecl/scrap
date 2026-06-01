@@ -297,11 +297,27 @@ func mapStoreError(err error) error {
 		return status.Errorf(codes.InvalidArgument, "%v", err)
 	case errors.Is(err, storeapi.ErrResourceExhausted):
 		return resourceExhaustedStatus(err)
+	case errors.Is(err, storeapi.ErrUnavailable):
+		return unavailableStatus(err)
 	case errors.Is(err, storeapi.ErrDataLoss):
 		return status.Errorf(codes.DataLoss, "%v", err)
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
+}
+
+func unavailableStatus(err error) error {
+	reason, ok := storeapi.UnavailableReason(err)
+	if !ok {
+		return status.Errorf(codes.Unavailable, "%v", err)
+	}
+
+	st, detailErr := status.New(codes.Unavailable, fmt.Sprintf("%v", err)).
+		WithDetails(&errdetails.ErrorInfo{Reason: reason})
+	if detailErr != nil {
+		return status.Errorf(codes.Unavailable, "%v", err)
+	}
+	return st.Err()
 }
 
 func resourceExhaustedStatus(err error) error {
