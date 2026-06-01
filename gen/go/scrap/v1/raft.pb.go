@@ -339,9 +339,9 @@ type ConfirmUpload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BlockId       uint64                 `protobuf:"varint,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
 	ShardId       uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	BlockObject   *BackendObjectMetadata `protobuf:"bytes,3,opt,name=block_object,json=blockObject,proto3" json:"block_object,omitempty"`
-	IndexObject   *BackendObjectMetadata `protobuf:"bytes,4,opt,name=index_object,json=indexObject,proto3" json:"index_object,omitempty"`
-	ConfirmedAtUs int64                  `protobuf:"varint,5,opt,name=confirmed_at_us,json=confirmedAtUs,proto3" json:"confirmed_at_us,omitempty"`
+	ConfirmedAtUs int64                  `protobuf:"varint,4,opt,name=confirmed_at_us,json=confirmedAtUs,proto3" json:"confirmed_at_us,omitempty"`
+	BlockObject   *BackendObjectMetadata `protobuf:"bytes,6,opt,name=block_object,json=blockObject,proto3" json:"block_object,omitempty"`
+	IndexObject   *BackendObjectMetadata `protobuf:"bytes,7,opt,name=index_object,json=indexObject,proto3" json:"index_object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -390,6 +390,13 @@ func (x *ConfirmUpload) GetShardId() uint64 {
 	return 0
 }
 
+func (x *ConfirmUpload) GetConfirmedAtUs() int64 {
+	if x != nil {
+		return x.ConfirmedAtUs
+	}
+	return 0
+}
+
 func (x *ConfirmUpload) GetBlockObject() *BackendObjectMetadata {
 	if x != nil {
 		return x.BlockObject
@@ -402,13 +409,6 @@ func (x *ConfirmUpload) GetIndexObject() *BackendObjectMetadata {
 		return x.IndexObject
 	}
 	return nil
-}
-
-func (x *ConfirmUpload) GetConfirmedAtUs() int64 {
-	if x != nil {
-		return x.ConfirmedAtUs
-	}
-	return 0
 }
 
 type CommitDocument struct {
@@ -641,13 +641,13 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x02 \x01(\x03R\tsizeBytes\x12)\n" +
-	"\x10validation_token\x18\x03 \x01(\tR\x0fvalidationToken\"\xf5\x01\n" +
+	"\x10validation_token\x18\x03 \x01(\tR\x0fvalidationToken\"\x9b\x02\n" +
 	"\rConfirmUpload\x12\x19\n" +
 	"\bblock_id\x18\x01 \x01(\x04R\ablockId\x12\x19\n" +
-	"\bshard_id\x18\x02 \x01(\x04R\ashardId\x12B\n" +
-	"\fblock_object\x18\x03 \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vblockObject\x12B\n" +
-	"\findex_object\x18\x04 \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vindexObject\x12&\n" +
-	"\x0fconfirmed_at_us\x18\x05 \x01(\x03R\rconfirmedAtUs\"\xe9\x02\n" +
+	"\bshard_id\x18\x02 \x01(\x04R\ashardId\x12&\n" +
+	"\x0fconfirmed_at_us\x18\x04 \x01(\x03R\rconfirmedAtUs\x12B\n" +
+	"\fblock_object\x18\x06 \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vblockObject\x12B\n" +
+	"\findex_object\x18\a \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vindexObjectJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06R\x12backend_key_prefixR\x04etag\"\xe9\x02\n" +
 	"\x0eCommitDocument\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +

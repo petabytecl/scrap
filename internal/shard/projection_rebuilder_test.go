@@ -142,31 +142,35 @@ func TestProjectionRebuilderLeavesShardUnavailableWhenSwapLosesIndex(t *testing.
 	r.setInProgressForTest(false)
 }
 
-func TestProjectionRebuilderCatalogsFullyUploadedBlock(t *testing.T) {
+func TestProjectionRebuilderRequeuesSealedBlockForRaftConfirmation(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")
 	blockInfo := writeRebuildBlock(t, blocksDir, 1)
 	projection := openProjectionForRebuildTest(t)
 
-	prefix := backendKeyPrefix("cell-a", 7, 1)
 	r := newProjectionRebuilder(&projectionRebuildCoreStub{}, dataDir, blocksDir, 7, UploadConfig{
 		Enabled: true,
-		Backend: headOnlyBackend{objects: map[string]backend.ObjectMeta{
-			prefix + ".blk": {Size: blockInfo.Size(), ETag: "block-validation"},
-			prefix + ".idx": {Size: 4096, ETag: "index-validation"},
-		}},
-		CellID: "cell-a",
+		Backend: noopRebuildBackend{},
+		CellID:  "cell-a",
 	}, nil)
 
 	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
-	confirmed := requireConfirmedUpload(t, projection, 1)
-	assertRebuiltConfirmedUpload(t, projection, confirmed, prefix, blockInfo.Size())
+	pending, err := projection.GetPendingUpload(1)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if pending.BlockID != 1 || pending.ShardID != 7 || pending.SealedSizeBytes != blockInfo.Size() {
+		t.Fatalf("pending upload = %+v", pending)
+	}
+	if _, err := projection.GetConfirmedUpload(1); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
+	}
 }
 
-func TestProjectionRebuilderFailsClosedWhenUploadedBlockMetadataMissing(t *testing.T) {
+func TestProjectionRebuilderFailsClosedWhenSealedBlockMetadataMissing(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")
 	if err := os.MkdirAll(blocksDir, 0o750); err != nil {
@@ -174,14 +178,10 @@ func TestProjectionRebuilderFailsClosedWhenUploadedBlockMetadataMissing(t *testi
 	}
 
 	projection := openProjectionForRebuildTest(t)
-	prefix := backendKeyPrefix("cell-a", 7, 1)
 	r := newProjectionRebuilder(&projectionRebuildCoreStub{}, dataDir, blocksDir, 7, UploadConfig{
 		Enabled: true,
-		Backend: headOnlyBackend{objects: map[string]backend.ObjectMeta{
-			prefix + ".blk": {Size: 11, ETag: "block-validation"},
-			prefix + ".idx": {Size: 4096, ETag: "index-validation"},
-		}},
-		CellID: "cell-a",
+		Backend: noopRebuildBackend{},
+		CellID:  "cell-a",
 	}, nil)
 
 	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err == nil {
@@ -220,82 +220,24 @@ func openProjectionForRebuildTest(t *testing.T) *index.Index {
 	return projection
 }
 
-func requireConfirmedUpload(t *testing.T, projection *index.Index, blockID uint64) index.ConfirmedUpload {
-	t.Helper()
+type noopRebuildBackend struct{}
 
-	confirmed, err := projection.GetConfirmedUpload(blockID)
-	if err != nil {
-		t.Fatalf("GetConfirmedUpload: %v", err)
-	}
-	return confirmed
-}
-
-func assertRebuiltConfirmedUpload(t *testing.T, projection *index.Index, confirmed index.ConfirmedUpload, prefix string, sealedSize int64) {
-	t.Helper()
-
-	assertRebuiltConfirmedIdentity(t, confirmed, sealedSize)
-	if confirmed.ConfirmedAtUs <= 0 {
-		t.Fatalf("ConfirmedAtUs = %d, want > 0", confirmed.ConfirmedAtUs)
-	}
-	assertRebuiltBackendObject(t, "BlockObject", confirmed.BlockObject, prefix+".blk", sealedSize, "block-validation")
-	assertRebuiltBackendObject(t, "IndexObject", confirmed.IndexObject, prefix+".idx", 4096, "index-validation")
-	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
-		t.Fatalf("GetPendingUpload error = %v, want ErrPendingUploadNotFound", err)
-	}
-}
-
-func assertRebuiltConfirmedIdentity(t *testing.T, confirmed index.ConfirmedUpload, sealedSize int64) {
-	t.Helper()
-
-	if confirmed.BlockID != 1 {
-		t.Fatalf("BlockID = %d, want 1", confirmed.BlockID)
-	}
-	if confirmed.ShardID != 7 {
-		t.Fatalf("ShardID = %d, want 7", confirmed.ShardID)
-	}
-	if confirmed.SealedSizeBytes != sealedSize {
-		t.Fatalf("SealedSizeBytes = %d, want %d", confirmed.SealedSizeBytes, sealedSize)
-	}
-}
-
-func assertRebuiltBackendObject(t *testing.T, label string, got index.BackendObjectMetadata, key string, size int64, validation string) {
-	t.Helper()
-
-	if got.Key != key {
-		t.Fatalf("%s.Key = %q, want %q", label, got.Key, key)
-	}
-	if got.SizeBytes != size {
-		t.Fatalf("%s.SizeBytes = %d, want %d", label, got.SizeBytes, size)
-	}
-	if got.ValidationToken != validation {
-		t.Fatalf("%s.ValidationToken = %q, want %q", label, got.ValidationToken, validation)
-	}
-}
-
-type headOnlyBackend struct {
-	objects map[string]backend.ObjectMeta
-}
-
-func (b headOnlyBackend) PutObject(context.Context, string, io.Reader, int64, backend.PutOpts) (backend.PutResult, error) {
+func (noopRebuildBackend) PutObject(context.Context, string, io.Reader, int64, backend.PutOpts) (backend.PutResult, error) {
 	return backend.PutResult{}, backend.ErrPermanent
 }
 
-func (b headOnlyBackend) HeadObject(_ context.Context, key string) (backend.ObjectMeta, error) {
-	meta, ok := b.objects[key]
-	if !ok {
-		return backend.ObjectMeta{}, backend.ErrNotFound
-	}
-	return meta, nil
+func (noopRebuildBackend) HeadObject(context.Context, string) (backend.ObjectMeta, error) {
+	return backend.ObjectMeta{}, backend.ErrPermanent
 }
 
-func (b headOnlyBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+func (noopRebuildBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
 	return nil, backend.ObjectMeta{}, backend.ErrPermanent
 }
 
-func (b headOnlyBackend) DeleteObject(context.Context, string) error {
+func (noopRebuildBackend) DeleteObject(context.Context, string) error {
 	return backend.ErrPermanent
 }
 
-func (b headOnlyBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+func (noopRebuildBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
 	return nil, backend.ErrPermanent
 }
