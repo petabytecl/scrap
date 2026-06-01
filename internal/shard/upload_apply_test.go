@@ -13,7 +13,7 @@ const uploadApplyTestBlockID = 42
 func TestApplyConfirmUploadFailsClosedWithoutSealedMetadata(t *testing.T) {
 	idx := openApplyTestIndex(t)
 
-	s := shardForApplyTest(idx)
+	s := shardForApplyTest(t, idx)
 	err := s.applyConfirmUpload(confirmUploadCommandForApplyTest())
 	if !errors.Is(err, index.ErrPendingUploadNotFound) {
 		t.Fatalf("applyConfirmUpload error = %v, want ErrPendingUploadNotFound", err)
@@ -36,7 +36,7 @@ func TestApplyConfirmUploadRejectsBlockSizeMismatch(t *testing.T) {
 
 	confirm := confirmUploadCommandForApplyTest()
 	confirm.BlockObject.SizeBytes--
-	err := shardForApplyTest(idx).applyConfirmUpload(confirm)
+	err := shardForApplyTest(t, idx).applyConfirmUpload(confirm)
 	if err == nil {
 		t.Fatal("applyConfirmUpload succeeded with mismatched Block size")
 	}
@@ -60,7 +60,7 @@ func TestApplyConfirmUploadUpdatesDuplicateConfirmationMetadata(t *testing.T) {
 	confirm.BlockObject.ValidationToken = shardApplyValidationValue("new-block")
 	confirm.IndexObject.ValidationToken = shardApplyValidationValue("new-index")
 
-	if err := shardForApplyTest(idx).applyConfirmUpload(confirm); err != nil {
+	if err := shardForApplyTest(t, idx).applyConfirmUpload(confirm); err != nil {
 		t.Fatalf("applyConfirmUpload: %v", err)
 	}
 	got, err := idx.GetConfirmedUpload(uploadApplyTestBlockID)
@@ -84,7 +84,7 @@ func TestApplyConfirmUploadRecordsCommittedAuthorityForRebuild(t *testing.T) {
 		t.Fatalf("PutPendingUpload: %v", err)
 	}
 
-	s := shardForApplyTest(idx)
+	s := shardForApplyTest(t, idx)
 	confirm := confirmUploadCommandForApplyTest()
 	if err := s.applyConfirmUpload(confirm); err != nil {
 		t.Fatalf("applyConfirmUpload: %v", err)
@@ -110,9 +110,37 @@ func TestConfirmedUploadForRebuildRequiresCommittedAuthority(t *testing.T) {
 		t.Fatalf("PutConfirmedUpload: %v", err)
 	}
 
-	_, err := shardForApplyTest(idx).confirmedUploadForRebuild(uploadApplyTestBlockID)
+	_, err := shardForApplyTest(t, idx).confirmedUploadForRebuild(uploadApplyTestBlockID)
 	if !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("confirmedUploadForRebuild error = %v, want ErrConfirmedUploadNotFound", err)
+	}
+}
+
+func TestConfirmedUploadForRebuildSurvivesRestart(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	if err := idx.PutPendingUpload(index.PendingUpload{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700000000000,
+	}); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+
+	s := shardForApplyTest(t, idx)
+	confirm := confirmUploadCommandForApplyTest()
+	if err := s.applyConfirmUpload(confirm); err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
+	}
+
+	restarted := &Shard{blocksDir: s.blocksDir}
+	got, err := restarted.confirmedUploadForRebuild(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("confirmedUploadForRebuild after restart: %v", err)
+	}
+	want := confirmedUploadForApplyTest(confirm.GetConfirmedAtUs(), shardApplyValidationValue("block"), shardApplyValidationValue("index"))
+	if got != want {
+		t.Fatalf("rebuild authority after restart = %+v, want %+v", got, want)
 	}
 }
 
@@ -127,10 +155,13 @@ func openApplyTestIndex(t *testing.T) *index.Index {
 	return idx
 }
 
-func shardForApplyTest(idx *index.Index) *Shard {
+func shardForApplyTest(t *testing.T, idx *index.Index) *Shard {
+	t.Helper()
+
 	return &Shard{
-		idx:     idx,
-		uploads: newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
+		blocksDir: t.TempDir(),
+		idx:       idx,
+		uploads:   newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
 	}
 }
 

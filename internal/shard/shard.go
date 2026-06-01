@@ -671,8 +671,27 @@ func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload
 
 	confirmed, ok := s.committedConfirmUploads[blockID]
 	if !ok {
+		var err error
+		confirmed, err = s.readCommittedConfirmUploadAuthorityLocked(blockID)
+		if err != nil {
+			return index.ConfirmedUpload{}, err
+		}
+	}
+	return confirmed, nil
+}
+
+func (s *Shard) readCommittedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
+	if s.blocksDir == "" {
 		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
 	}
+	confirmed, err := readConfirmedUploadAuthority(s.blocksDir, blockID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
+		}
+		return index.ConfirmedUpload{}, err
+	}
+	s.recordCommittedConfirmUploadLocked(confirmed)
 	return confirmed, nil
 }
 

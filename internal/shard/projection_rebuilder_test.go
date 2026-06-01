@@ -294,6 +294,64 @@ func TestProjectionRebuilderPreservesEvictedConfirmedBlockWhenUploadsDisabled(t 
 	}
 }
 
+func TestProjectionRebuilderPreservesEvictedCommittedBlockAfterRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	blocksDir := filepath.Join(dataDir, "blocks")
+	if err := os.MkdirAll(blocksDir, 0o750); err != nil {
+		t.Fatalf("mkdir blocks dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocksDir, fmt.Sprintf("%016x.idx", uploadApplyTestBlockID)), []byte("index bytes"), 0o600); err != nil {
+		t.Fatalf("write Block index: %v", err)
+	}
+
+	idx := openApplyTestIndex(t)
+	if err := idx.PutPendingUpload(index.PendingUpload{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700000000000,
+	}); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+	s := shardForApplyTest(t, idx)
+	s.blocksDir = blocksDir
+	confirm := confirmUploadCommandForApplyTest()
+	if err := s.applyConfirmUpload(confirm); err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
+	}
+	confirmed := confirmedUploadForApplyTest(confirm.GetConfirmedAtUs(), shardApplyValidationValue("block"), shardApplyValidationValue("index"))
+	if err := WriteEvictionMarker(blocksDir, EvictionMarker{
+		BlockID:         confirmed.BlockID,
+		BackendKey:      confirmed.BlockObject.Key,
+		SizeBytes:       confirmed.BlockObject.SizeBytes,
+		ValidationToken: confirmed.BlockObject.ValidationToken,
+		EvictedAtUs:     time.Now().UTC().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+
+	restarted := &Shard{blocksDir: blocksDir}
+	projection := openProjectionForRebuildTest(t)
+	r := newProjectionRebuilder(restarted, dataDir, blocksDir, 7, UploadConfig{
+		Enabled: true,
+		Backend: noopRebuildBackend{},
+		CellID:  "cell-a",
+	}, nil)
+
+	if err := r.rebuildUploadOutbox(projection, []uint64{uploadApplyTestBlockID}); err != nil {
+		t.Fatalf("rebuildUploadOutbox: %v", err)
+	}
+	got, err := projection.GetConfirmedUpload(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if got != confirmed {
+		t.Fatalf("confirmed upload after restart = %+v, want %+v", got, confirmed)
+	}
+}
+
 func writeRebuildBlock(t *testing.T, blocksDir string, blockID uint64) os.FileInfo {
 	t.Helper()
 

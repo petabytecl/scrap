@@ -184,6 +184,9 @@ func (s *Shard) putConfirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, se
 	if err := validateConfirmedUploadMatchesSeal(confirmed); err != nil {
 		return index.ConfirmedUpload{}, err
 	}
+	if err := writeConfirmedUploadAuthority(s.blocksDir, confirmed); err != nil {
+		return index.ConfirmedUpload{}, err
+	}
 	if err := s.idx.PutConfirmedUpload(confirmed); err != nil {
 		return index.ConfirmedUpload{}, err
 	}
