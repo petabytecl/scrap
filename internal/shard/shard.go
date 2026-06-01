@@ -55,6 +55,7 @@ type Config struct {
 	Replicator         DocumentReplicator
 	PeerAddrs          []string
 	Upload             UploadConfig
+	Eviction           EvictionConfig
 	WriteTelemetry     WriteStageRecorder
 	IdentifierMode     telemetry.IdentifierMode
 }
@@ -71,6 +72,7 @@ type Shard struct {
 	raft           *scrapraft.Node
 	replicator     DocumentReplicator
 	upload         UploadConfig
+	eviction       EvictionConfig
 	writeTelemetry WriteStageRecorder
 	identifierMode telemetry.IdentifierMode
 	baseLogger     *slog.Logger
@@ -97,6 +99,8 @@ type Shard struct {
 	uploadObligations       uploadObligations
 
 	rebuilder *projectionRebuilder
+
+	lifecycleCleanupDone chan struct{}
 }
 
 func (c *Config) applyDefaults() {
@@ -109,15 +113,16 @@ func (c *Config) applyDefaults() {
 	if c.WriteTelemetry == nil {
 		c.WriteTelemetry = noopWriteTelemetry{}
 	}
+	c.Eviction = c.Eviction.withDefaults()
 }
 
 func Open(cfg Config) (*Shard, error) {
 	cfg.applyDefaults()
-
-	baseLogger := cfg.Logger
-	if baseLogger == nil {
-		baseLogger = slog.Default()
+	if err := cfg.Eviction.Validate(); err != nil {
+		return nil, fmt.Errorf("shard: eviction config: %w", err)
 	}
+
+	baseLogger := openLogger(cfg.Logger)
 	logger := baseLogger.With("component", "shard")
 
 	blocksDir := filepath.Join(cfg.DataDir, "blocks")
@@ -153,6 +158,7 @@ func Open(cfg Config) (*Shard, error) {
 		logger:                  logger,
 		replicator:              cfg.Replicator,
 		upload:                  cfg.Upload,
+		eviction:                cfg.Eviction,
 		writeTelemetry:          cfg.WriteTelemetry,
 		identifierMode:          cfg.IdentifierMode,
 		blockSealSize:           cfg.BlockSealSize,
@@ -214,8 +220,16 @@ func Open(cfg Config) (*Shard, error) {
 
 	s.scrubs.Start(cfg)
 	s.uploads.Start()
+	s.startLifecycleCleanup()
 
 	return s, nil
+}
+
+func openLogger(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return slog.Default()
+	}
+	return logger
 }
 
 func ensureShardDirs(dirs ...string) error {
@@ -676,6 +690,7 @@ func (s *Shard) Close() error {
 	s.uploads.Stop()
 	s.raft.Stop()
 	s.WaitRebuild()
+	s.waitLifecycleCleanup()
 
 	return s.closeStorage()
 }

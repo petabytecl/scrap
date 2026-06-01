@@ -20,6 +20,12 @@ var configEnvKeys = []string{
 	"SCRAP_UPLOAD_CONCURRENCY",
 	"SCRAP_REPLICAS",
 	"SCRAP_PEER_PORT",
+	"SCRAP_EVICTION_ENABLED",
+	"SCRAP_EVICTION_HOT_RESIDENCY_WINDOW",
+	"SCRAP_EVICTION_PLAN_TTL",
+	"SCRAP_EVICTION_RECOMMENDED_MAX_BLOCKS",
+	"SCRAP_EVICTION_RECOMMENDED_MAX_BYTES",
+	"SCRAP_EVICTION_MAX_VALIDATE_SAMPLES",
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -65,6 +71,8 @@ func TestLoadConfigValid(t *testing.T) {
 	t.Setenv("SCRAP_TEST_HOOKS", "true")
 	t.Setenv("SCRAP_PPROF_ENABLED", "1")
 	t.Setenv("SCRAP_CELL_ID", "cell-a")
+	t.Setenv("SCRAP_EVICTION_ENABLED", "true")
+	t.Setenv("SCRAP_EVICTION_HOT_RESIDENCY_WINDOW", "30m")
 
 	c, err := loadConfig([]string{"-data-dir=/srv", "-block-seal-size=1024", "-peers=1=h:1"})
 	if err != nil {
@@ -85,6 +93,8 @@ func TestLoadConfigValid(t *testing.T) {
 		{"TestHooks", c.TestHooks, true},
 		{"PprofEnabled", c.PprofEnabled, true},
 		{"CellID", c.CellID, "cell-a"},
+		{"EvictionEnabled", c.Eviction.Enabled, true},
+		{"EvictionHotResidencyWindow", c.Eviction.HotResidencyWindow.String(), "30m0s"},
 	}
 	for _, ck := range checks {
 		if ck.got != ck.want {
@@ -105,6 +115,7 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 		{"out-of-range port", nil, map[string]string{"SCRAP_PEER_PORT": "99999"}, "SCRAP_PEER_PORT"},
 		{"non-positive seal size", []string{"-block-seal-size=0"}, nil, "block-seal-size"},
 		{"negative replicas", nil, map[string]string{"SCRAP_REPLICAS": "-1"}, "SCRAP_REPLICAS"},
+		{"bad eviction config", nil, map[string]string{"SCRAP_EVICTION_PLAN_TTL": "-1s"}, "SCRAP_EVICTION_PLAN_TTL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

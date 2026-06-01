@@ -107,17 +107,30 @@ func scanMaxBlockID(blocksDir string) (uint64, error) {
 	var maxID uint64
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasSuffix(name, ".blk") {
-			continue
-		}
-		hexPart := strings.TrimSuffix(name, ".blk")
-		id, err := strconv.ParseUint(hexPart, 16, 64)
+		id, ok, err := blockIDFromLocalLifecycleName(name)
 		if err != nil {
 			return 0, fmt.Errorf("shard: malformed block filename: %s", name)
+		}
+		if !ok {
+			continue
 		}
 		if id > maxID {
 			maxID = id
 		}
 	}
 	return maxID + 1, nil
+}
+
+func blockIDFromLocalLifecycleName(name string) (uint64, bool, error) {
+	for _, suffix := range []string{".blk", ".idx", ".blk.eviction.json", ".blk.restore.json"} {
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		id, err := strconv.ParseUint(strings.TrimSuffix(name, suffix), 16, 64)
+		if err != nil {
+			return 0, false, err
+		}
+		return id, true, nil
+	}
+	return 0, false, nil
 }
