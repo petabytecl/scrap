@@ -106,6 +106,7 @@ type Shard struct {
 	rebuilder *projectionRebuilder
 
 	lifecycleCleanupDone chan struct{}
+	lifecycleMutationMu  sync.Mutex
 	evictionPlans        map[string]eviction.Plan
 	evictionApplyResults map[string]eviction.ApplyResult
 	evictionApplyRunning map[string]struct{}

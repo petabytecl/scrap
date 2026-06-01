@@ -149,6 +149,8 @@ func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan)
 }
 
 func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
+	s.lifecycleMutationMu.Lock()
+	defer s.lifecycleMutationMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
