@@ -176,29 +176,17 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 	if err := validateEvictionApplyAuthority(selected, confirmed); err != nil {
 		return failedApplyBlock(selected, err)
 	}
-	marker := EvictionMarker{
-		BlockID:         confirmed.BlockID,
-		BackendKey:      confirmed.BlockObject.Key,
-		SizeBytes:       confirmed.BlockObject.SizeBytes,
-		ValidationToken: confirmed.BlockObject.ValidationToken,
-		EvictedAtUs:     time.Now().UTC().UnixMicro(),
-		Trigger:         EvictionTriggerOperatorRequested,
-		Reason:          evictionReasonForMarker(plan),
+	if s.leaderHotCopyRequired() {
+		return skippedApplyBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
 	}
-	if lifecycle.State == LocalBlockStateHotCleanupNeeded {
-		if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
-			return failedApplyBlock(selected, err)
-		}
-	} else {
-		if err := WriteEvictionMarker(s.blocksDir, marker); err != nil {
-			return failedApplyBlock(selected, err)
-		}
+	if err := s.prepareEvictionMarkerForApply(plan, lifecycle, confirmed); err != nil {
+		return failedApplyBlock(selected, err)
 	}
-	if err := os.Remove(block.FilePath(s.blocksDir, selected.BlockID)); err != nil {
-		return failedApplyBlock(selected, fmt.Errorf("remove Block: %w", err))
+	if s.leaderHotCopyRequired() {
+		return skippedApplyBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
 	}
-	if err := syncDirectory(s.blocksDir); err != nil {
-		return failedApplyBlock(selected, fmt.Errorf("sync blocks directory: %w", err))
+	if err := s.unlinkEvictedBlock(selected.BlockID); err != nil {
+		return failedApplyBlock(selected, err)
 	}
 	return eviction.ApplyBlock{
 		BlockID:    selected.BlockID,
@@ -209,6 +197,31 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 	}
 }
 
+func (s *Shard) prepareEvictionMarkerForApply(plan eviction.Plan, lifecycle LocalBlockLifecycle, confirmed index.ConfirmedUpload) error {
+	if lifecycle.State == LocalBlockStateHotCleanupNeeded {
+		return validateRestoreAuthority(confirmed, lifecycle)
+	}
+	return WriteEvictionMarker(s.blocksDir, EvictionMarker{
+		BlockID:         confirmed.BlockID,
+		BackendKey:      confirmed.BlockObject.Key,
+		SizeBytes:       confirmed.BlockObject.SizeBytes,
+		ValidationToken: confirmed.BlockObject.ValidationToken,
+		EvictedAtUs:     time.Now().UTC().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          evictionReasonForMarker(plan),
+	})
+}
+
+func (s *Shard) unlinkEvictedBlock(blockID uint64) error {
+	if err := os.Remove(block.FilePath(s.blocksDir, blockID)); err != nil {
+		return fmt.Errorf("remove Block: %w", err)
+	}
+	if err := syncDirectory(s.blocksDir); err != nil {
+		return fmt.Errorf("sync blocks directory: %w", err)
+	}
+	return nil
+}
+
 func (s *Shard) evictionApplySkipReason(plan eviction.Plan, selected eviction.PlanBlock, lifecycle LocalBlockLifecycle, nowUs int64) string {
 	if selected.ShardID != s.shardID {
 		return eviction.SkipReasonShardFilter
@@ -216,13 +229,17 @@ func (s *Shard) evictionApplySkipReason(plan eviction.Plan, selected eviction.Pl
 	if lifecycle.State != LocalBlockStateHot && lifecycle.State != LocalBlockStateHotCleanupNeeded {
 		return eviction.SkipReasonLocalStateNotHot
 	}
-	if s.raft != nil && s.raft.IsLeader() {
+	if s.leaderHotCopyRequired() {
 		return eviction.SkipReasonLeaderHotCopyRequired
 	}
 	if restoredHotResidencyApplies(plan, lifecycle, nowUs) {
 		return eviction.SkipReasonHotResidencyWindow
 	}
 	return ""
+}
+
+func (s *Shard) leaderHotCopyRequired() bool {
+	return s.raft != nil && s.raft.IsLeader()
 }
 
 func restoredHotResidencyApplies(plan eviction.Plan, lifecycle LocalBlockLifecycle, nowUs int64) bool {
