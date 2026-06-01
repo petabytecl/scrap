@@ -1,4 +1,4 @@
-// Package eviction defines the operator-facing Phase 4 dry-run plan contract.
+// Package eviction defines the operator-facing dry-run plan contract.
 package eviction
 
 import "errors"
@@ -27,6 +27,15 @@ const (
 	SkipReasonLocalStateNotHot      = "local_state_not_hot"
 	SkipReasonPlanBounds            = "plan_bounds"
 	SkipReasonShardFilter           = "shard_filter"
+
+	HealthPressureOK       = "ok"
+	HealthPressureDegraded = "degraded"
+
+	RestoreFailureBackendUnavailable = "backend_restore_unavailable"
+	RestoreFailureNone               = "none"
+	RestoreFailureDataLoss           = "data_loss"
+	RestoreFailureCanceled           = "canceled"
+	RestoreFailureUnknown            = "unknown"
 )
 
 var (
@@ -145,4 +154,16 @@ type ValidationBlock struct {
 	ShardID uint64 `json:"shard_id"`
 	Status  string `json:"status"`
 	Error   string `json:"error,omitempty"`
+}
+
+type HealthSnapshot struct {
+	Pressure                string         `json:"eviction_pressure"`
+	EvictedBlocks           int            `json:"evicted_blocks"`
+	EvictedBytes            int64          `json:"evicted_bytes"`
+	HotCleanupNeededBlocks  int            `json:"hot_cleanup_needed_blocks"`
+	MetadataLossBlocks      int            `json:"metadata_loss_blocks"`
+	UnexpectedLossBlocks    int            `json:"unexpected_loss_blocks"`
+	QuarantinedBlocks       int            `json:"quarantined_blocks"`
+	RestoreFailedBlocks     int            `json:"restore_failed_blocks"`
+	RestoreFailuresByReason map[string]int `json:"restore_failures_by_reason,omitempty"`
 }

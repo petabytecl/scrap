@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/eviction"
 )
 
 type projectionInjectorStub struct {
@@ -33,6 +34,24 @@ func (s *projectionInjectorStub) InjectProjectionKey(_ context.Context, txID str
 
 func (uploadPressureProviderStub) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
 	return 2, "pressure", 1024, 3
+}
+
+type evictionHealthProviderStub struct{}
+
+func (evictionHealthProviderStub) EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error) {
+	return eviction.HealthSnapshot{
+		Pressure:               "degraded",
+		EvictedBlocks:          4,
+		EvictedBytes:           8192,
+		HotCleanupNeededBlocks: 1,
+		MetadataLossBlocks:     2,
+		UnexpectedLossBlocks:   3,
+		QuarantinedBlocks:      5,
+		RestoreFailedBlocks:    6,
+		RestoreFailuresByReason: map[string]int{
+			eviction.RestoreFailureBackendUnavailable: 6,
+		},
+	}, nil
 }
 
 func TestServer_HealthEndpointReportsUploadPressure(t *testing.T) {
@@ -70,6 +89,56 @@ func TestServer_HealthEndpointReportsUploadPressure(t *testing.T) {
 	}
 	if got["upload_pending_blocks"] != float64(3) {
 		t.Fatalf("upload_pending_blocks = %v, want 3", got["upload_pending_blocks"])
+	}
+}
+
+func TestServer_HealthEndpointReportsEvictionLifecycleSeparately(t *testing.T) {
+	srv := admin.New(admin.WithEvictionHealthProvider(evictionHealthProviderStub{}))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+
+	assertHealthNumber(t, got, "evicted_blocks", 4)
+	assertHealthNumber(t, got, "evicted_bytes", 8192)
+	assertHealthNumber(t, got, "hot_cleanup_needed_blocks", 1)
+	assertHealthNumber(t, got, "metadata_loss_blocks", 2)
+	assertHealthNumber(t, got, "unexpected_loss_blocks", 3)
+	assertHealthNumber(t, got, "quarantined_blocks", 5)
+	assertHealthNumber(t, got, "restore_failed_blocks", 6)
+	if got["eviction_pressure"] != "degraded" {
+		t.Fatalf("eviction_pressure = %v, want degraded", got["eviction_pressure"])
+	}
+	reasons, ok := got["restore_failures_by_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("restore_failures_by_reason = %T, want object", got["restore_failures_by_reason"])
+	}
+	if reasons["backend_restore_unavailable"] != float64(6) {
+		t.Fatalf("backend restore failures = %v, want 6", reasons["backend_restore_unavailable"])
+	}
+}
+
+func assertHealthNumber(t *testing.T, got map[string]any, key string, want float64) {
+	t.Helper()
+
+	if got[key] != want {
+		t.Fatalf("%s = %v, want %.0f", key, got[key], want)
 	}
 }
 

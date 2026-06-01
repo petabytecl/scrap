@@ -65,6 +65,7 @@ func (s *Shard) CreateEvictionPlan(ctx context.Context, req eviction.PlanRequest
 
 	s.pruneExpiredEvictionPlansLocked(plan.GeneratedAtUs)
 	s.evictionPlans[plan.PlanID] = plan
+	s.evictionMetricRecorder().RecordPlan(s.shardID, plan)
 	return plan, nil
 }
 

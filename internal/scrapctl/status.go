@@ -18,11 +18,20 @@ const (
 )
 
 type Health struct {
-	Status              string `json:"status"`
-	UploadPressure      string `json:"upload_pressure"`
-	UploadPressureLevel int    `json:"upload_pressure_level"`
-	UploadPendingBytes  int64  `json:"upload_pending_bytes"`
-	UploadPendingBlocks int    `json:"upload_pending_blocks"`
+	Status                  string         `json:"status"`
+	UploadPressure          string         `json:"upload_pressure"`
+	UploadPressureLevel     int            `json:"upload_pressure_level"`
+	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
+	UploadPendingBlocks     int            `json:"upload_pending_blocks"`
+	EvictionPressure        string         `json:"eviction_pressure"`
+	EvictedBlocks           int            `json:"evicted_blocks"`
+	EvictedBytes            int64          `json:"evicted_bytes"`
+	HotCleanupNeededBlocks  int            `json:"hot_cleanup_needed_blocks"`
+	MetadataLossBlocks      int            `json:"metadata_loss_blocks"`
+	UnexpectedLossBlocks    int            `json:"unexpected_loss_blocks"`
+	QuarantinedBlocks       int            `json:"quarantined_blocks"`
+	RestoreFailedBlocks     int            `json:"restore_failed_blocks"`
+	RestoreFailuresByReason map[string]int `json:"restore_failures_by_reason,omitempty"`
 }
 
 type Peer struct {

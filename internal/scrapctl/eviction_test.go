@@ -362,6 +362,106 @@ func TestEvictionApplySupportsJSONOutput(t *testing.T) {
 	assertTextContains(t, out.String(), `"plan_id":"plan-123"`, `"status":"no_effect"`)
 }
 
+func TestEvictionStatusPrintsFinalCampaignEvidence(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", req.Method)
+		}
+		if req.URL.Path != "/admin/eviction/plans/plan-123" {
+			t.Fatalf("path = %s, want /admin/eviction/plans/plan-123", req.URL.Path)
+		}
+
+		status := eviction.PlanStatus{
+			PlanID: "plan-123",
+			Status: eviction.ApplyStatusEvictedWithValidationFailure,
+			Plan: &eviction.Plan{
+				PlanID:          "plan-123",
+				MemberHostname:  "scrapd-1",
+				MemberID:        "member-a",
+				Reason:          eviction.ReasonEvidenceRun,
+				CandidateBlocks: 3,
+				CandidateBytes:  7168,
+				EligibleBlocks:  2,
+				EligibleBytes:   5120,
+				SelectedBytes:   4096,
+				Selected: []eviction.PlanBlock{{
+					BlockID:    3,
+					ShardID:    7,
+					SizeBytes:  4096,
+					BackendKey: "cell/shards/7/3.blk",
+				}},
+				Skipped: []eviction.PlanBlock{{
+					BlockID:   4,
+					ShardID:   7,
+					SizeBytes: 1024,
+					Reason:    eviction.SkipReasonHotResidencyWindow,
+				}},
+				SkipCountsByReason: map[string]int{
+					eviction.SkipReasonHotResidencyWindow: 1,
+				},
+			},
+			ApplyResult: &eviction.ApplyResult{
+				PlanID:                 "plan-123",
+				Status:                 eviction.ApplyStatusEvictedWithValidationFailure,
+				SelectedBlocks:         1,
+				EvictedBlocks:          1,
+				ValidationFailedBlocks: 1,
+				BytesFreed:             4096,
+				Blocks: []eviction.ApplyBlock{{
+					BlockID:    3,
+					ShardID:    7,
+					SizeBytes:  4096,
+					Status:     eviction.ApplyBlockStatusEvicted,
+					BytesFreed: 4096,
+				}},
+				Validations: []eviction.ValidationBlock{{
+					BlockID: 3,
+					ShardID: 7,
+					Status:  eviction.ValidationStatusFailed,
+					Error:   "Backend restore failed",
+				}},
+			},
+		}
+		data, err := json.Marshal(status)
+		if err != nil {
+			t.Fatalf("marshal status: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "status",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("eviction status: %v", err)
+	}
+
+	assertTextContains(t, out.String(),
+		"plan_id: plan-123",
+		"status: evicted_with_validation_failure",
+		"member_hostname: scrapd-1",
+		"reason: evidence_run",
+		"candidate_blocks: 3",
+		"eligible_blocks: 2",
+		"selected_bytes: 4096",
+		"skip_counts_by_reason:",
+		"hot_residency_window=1",
+		"apply_result:",
+		"evicted_blocks: 1",
+		"validation_failed_blocks: 1",
+		"validations:",
+		"block_id=3 shard_id=7 status=failed error=\"Backend restore failed\"",
+	)
+}
+
 func TestEvictionApplyReportsHTTPError(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{

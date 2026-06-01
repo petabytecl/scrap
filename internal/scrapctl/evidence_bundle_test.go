@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/petabytecl/scrap/internal/scrapctl/evidencebundle"
 )
 
 const (
@@ -61,17 +63,25 @@ func TestParseEvidenceBundleOptionsUsesEnvironmentAndFlags(t *testing.T) {
 	t.Setenv("KUBE_CONTEXT", "ctx-env")
 	t.Setenv("STRESS_WORKERS", "3")
 	t.Setenv("STRESS_DOC_SIZE", "1024")
+	t.Setenv("EVICTION_PLAN_ID", "plan-env")
 
 	cfg, err := parseEvidenceBundleOptions([]string{
 		"--bundle-dir=/flag/bundles",
 		"--stress-workers=11",
 		"--stress-doc-size=4096",
 		"--settle-seconds=0",
+		"--eviction-plan-id=plan-flag",
 		"mixed",
 	})
 	if err != nil {
 		t.Fatalf("parseEvidenceBundleOptions: %v", err)
 	}
+	assertParsedEvidenceBundleOptions(t, cfg)
+}
+
+func assertParsedEvidenceBundleOptions(t *testing.T, cfg evidencebundle.Config) {
+	t.Helper()
+
 	if cfg.BundleDir != "/flag/bundles" {
 		t.Fatalf("bundle dir = %q", cfg.BundleDir)
 	}
@@ -86,6 +96,9 @@ func TestParseEvidenceBundleOptionsUsesEnvironmentAndFlags(t *testing.T) {
 	}
 	if cfg.Scenario != "mixed" {
 		t.Fatalf("scenario = %q", cfg.Scenario)
+	}
+	if cfg.EvictionPlanID != "plan-flag" {
+		t.Fatalf("eviction plan ID = %q", cfg.EvictionPlanID)
 	}
 }
 
