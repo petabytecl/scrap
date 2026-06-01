@@ -127,11 +127,9 @@ type Shard struct {
 	evictionApplyRunning   map[string]struct{}
 	restoreFailuresByBlock map[uint64]string
 
-	evictionHealthMu         sync.Mutex
-	evictionHealthCache      eviction.HealthSnapshot
-	evictionHealthCacheAt    time.Time
-	evictionHealthCacheValid bool
-	evictionHealthRefreshing bool
+	evictionHealthMu       sync.Mutex
+	evictionHealthSnapshot eviction.HealthSnapshot
+	evictionHealthBlocks   map[uint64]evictionHealthBlockContribution
 
 	restoreMu sync.Mutex
 	restores  map[uint64]*blockRestoreCall
@@ -213,6 +211,7 @@ func Open(cfg Config) (*Shard, error) {
 		evictionPlans:           make(map[string]eviction.Plan),
 		evictionApplyResults:    make(map[string]eviction.ApplyResult),
 		evictionApplyRunning:    make(map[string]struct{}),
+		evictionHealthBlocks:    make(map[uint64]evictionHealthBlockContribution),
 		committedConfirmUploads: make(map[uint64]index.ConfirmedUpload),
 		restores:                make(map[uint64]*blockRestoreCall),
 		uploadPressureScrubGate: newPressurePauseGate(),
@@ -258,14 +257,11 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
-	s.mu.Lock()
-	refreshErr := s.refreshUploadPressureLocked()
-	s.mu.Unlock()
-	if refreshErr != nil {
+	if err := s.refreshRuntimeStateAfterRaftOpen(); err != nil {
 		raftNode.Stop()
 		s.closeBlockAndIdx()
 		_ = idx.Close()
-		return nil, fmt.Errorf("shard: refresh upload pressure: %w", refreshErr)
+		return nil, err
 	}
 	s.uploads.setAuthPausedMetric(false)
 
@@ -274,6 +270,19 @@ func Open(cfg Config) (*Shard, error) {
 	s.startLifecycleCleanup()
 
 	return s, nil
+}
+
+func (s *Shard) refreshRuntimeStateAfterRaftOpen() error {
+	s.mu.Lock()
+	refreshErr := s.refreshUploadPressureLocked()
+	s.mu.Unlock()
+	if refreshErr != nil {
+		return fmt.Errorf("shard: refresh upload pressure: %w", refreshErr)
+	}
+	if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {
+		return fmt.Errorf("shard: rebuild eviction health: %w", err)
+	}
+	return nil
 }
 
 func openLogger(logger *slog.Logger) *slog.Logger {

@@ -249,7 +249,7 @@ func TestEvictionMetricsPrometheusNamesMatchEvidenceQueries(t *testing.T) {
 			eviction.SkipReasonHotResidencyWindow: 1,
 		},
 	})
-	shardTel.evictionMetrics.RecordApply(7, eviction.ReasonEvidenceRun, eviction.ApplyStatusCompleted, 0)
+	shardTel.evictionMetrics.RecordApply(7, eviction.ReasonEvidenceRun, eviction.ApplyStatusCompleted, 0, nil)
 	shardTel.evictionMetrics.RecordRestore(7, "read", "failed", eviction.RestoreFailureBackendUnavailable, 0)
 	shardTel.evictionMetrics.SetHealth(7, eviction.HealthSnapshot{
 		EvictedBlocks:       2,

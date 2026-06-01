@@ -3,6 +3,7 @@ package shard
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -74,6 +76,37 @@ func TestApplyEvictionPlanReportsCompletedWithSkipsForDrift(t *testing.T) {
 	}
 	if result.Blocks[1].Status != eviction.ApplyBlockStatusSkipped || result.Blocks[1].Reason != eviction.SkipReasonLocalStateNotHot {
 		t.Fatalf("second Block result = %+v, want local_state_not_hot skip", result.Blocks[1])
+	}
+}
+
+func TestApplyEvictionPlanRecordsApplySkipReasons(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	metrics := &recordingEvictionMetrics{}
+	s.evictionMetrics = metrics
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 2)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected = append(plan.Selected, eviction.PlanBlock{
+		BlockID:    2,
+		ShardID:    evictionApplyTestShardID,
+		SizeBytes:  2048,
+		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
+		LocalState: string(LocalBlockStateHot),
+	})
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusCompletedWithSkips {
+		t.Fatalf("status = %s, want completed_with_skips", result.Status)
+	}
+	if metrics.applySkipCounts[eviction.SkipReasonLocalStateNotHot] != 1 {
+		t.Fatalf("apply skip counts = %+v, want local_state_not_hot=1", metrics.applySkipCounts)
 	}
 }
 
@@ -427,6 +460,44 @@ func TestApplyEvictionPlanValidationIgnoresClientCancellationAfterEviction(t *te
 	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
 }
 
+func TestApplyEvictionPlanValidationUsesBoundedContextAfterClientCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("bounded validation"))
+	s.upload.Backend = blockingGetBackend{Backend: backendStore, cancel: cancel}
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
+	plan.ExpiresAtUs = time.Now().Add(75 * time.Millisecond).UnixMicro()
+	s.evictionPlans[plan.PlanID] = plan
+
+	start := time.Now()
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if ctx.Err() == nil {
+		t.Fatal("context was not canceled during validation")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("ApplyEvictionPlan took %s, want bounded validation to finish promptly", elapsed)
+	}
+	if result.Status != eviction.ApplyStatusEvictedWithValidationFailure || result.ValidationFailedBlocks != 1 {
+		t.Fatalf("result = %+v, want bounded validation failure", result)
+	}
+	if len(result.Validations) != 1 || !strings.Contains(result.Validations[0].Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("validations = %+v, want context deadline exceeded", result.Validations)
+	}
+	s.mu.Lock()
+	_, running := s.evictionApplyRunning[plan.PlanID]
+	s.mu.Unlock()
+	if running {
+		t.Fatal("eviction apply remained running after bounded validation timeout")
+	}
+}
+
 func TestApplyEvictionPlanReportsValidationFailure(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -629,6 +700,7 @@ func TestEvictionHealthSnapshotSeparatesLocalLifecycleStates(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageEvictionHealthSnapshotStates(t, s)
+	rebuildEvictionHealthForTest(t, s)
 
 	got, err := s.EvictionHealthSnapshot(ctx)
 	if err != nil {
@@ -721,11 +793,34 @@ func TestEvictionHealthSnapshotClearsRestoreFailureAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestEvictionHealthSnapshotUsesApplyStateWithoutCatalogScan(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	assertEvictionApplyCompleted(t, result)
+	s.idx = nil
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot should not scan closed catalog: %v", err)
+	}
+	if got.EvictedBlocks != 1 || got.EvictedBytes != 1024 {
+		t.Fatalf("evicted health = %d/%d, want 1/1024", got.EvictedBlocks, got.EvictedBytes)
+	}
+}
+
 func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	stageAlreadyEvictedBlockForEvictionApply(t, s, 1)
+	rebuildEvictionHealthForTest(t, s)
 
 	first, err := s.EvictionHealthSnapshot(ctx)
 	if err != nil {
@@ -740,6 +835,139 @@ func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) 
 	}
 	if first.EvictedBlocks != 1 || second.EvictedBlocks != first.EvictedBlocks {
 		t.Fatalf("cached evicted blocks = first:%d second:%d, want stable 1", first.EvictedBlocks, second.EvictedBlocks)
+	}
+}
+
+func TestEvictionHealthRebuildFailsClosedForMalformedMarker(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	if err := os.WriteFile(EvictionMarkerPath(s.blocksDir, 1), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write malformed eviction marker: %v", err)
+	}
+
+	if err := s.rebuildEvictionHealthSnapshot(ctx); err != nil {
+		t.Fatalf("rebuildEvictionHealthSnapshot: %v", err)
+	}
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.UnexpectedLossBlocks != 1 {
+		t.Fatalf("unexpected loss blocks = %d, want 1", got.UnexpectedLossBlocks)
+	}
+}
+
+func TestRefreshRuntimeStateAfterRaftOpenPropagatesHealthRebuildError(t *testing.T) {
+	idxDir := t.TempDir()
+	idx, err := index.Open(idxDir)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	if err := idx.PutConfirmedUpload(confirmedUploadForEvictionApply(1, 1024)); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatalf("close index: %v", err)
+	}
+	writeMalformedConfirmedUploadForEvictionApply(t, idxDir, 1)
+	idx, err = index.Open(idxDir)
+	if err != nil {
+		t.Fatalf("reopen index: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	s := &Shard{
+		blocksDir:               t.TempDir(),
+		shardID:                 evictionApplyTestShardID,
+		idx:                     idx,
+		uploadPressureScrubGate: newPressurePauseGate(),
+	}
+	s.uploads = newUploadController(s, UploadConfig{}, s.shardID, nil, nil, s.uploadPressureScrubGate)
+
+	err = s.refreshRuntimeStateAfterRaftOpen()
+	if err == nil || !strings.Contains(err.Error(), "rebuild eviction health") {
+		t.Fatalf("refreshRuntimeStateAfterRaftOpen error = %v, want rebuild eviction health error", err)
+	}
+}
+
+func TestApplyEvictionPlanDoesNotRecordHealthForUnconfirmedSelectedBlock(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	if result.Status != eviction.ApplyStatusNoEffect || len(result.Blocks) != 1 {
+		t.Fatalf("result = %+v, want one skipped no-effect Block", result)
+	}
+	if result.Blocks[0].Reason != eviction.SkipReasonLocalStateNotHot {
+		t.Fatalf("skip reason = %q, want local_state_not_hot", result.Blocks[0].Reason)
+	}
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.MetadataLossBlocks != 0 || got.UnexpectedLossBlocks != 0 {
+		t.Fatalf("health loss counts = metadata:%d unexpected:%d, want 0/0", got.MetadataLossBlocks, got.UnexpectedLossBlocks)
+	}
+}
+
+func TestApplyEvictionPlanDoesNotRecordHealthForForeignShardSelectedBlock(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected[0].ShardID = evictionApplyTestShardID + 1
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	if result.Status != eviction.ApplyStatusNoEffect || len(result.Blocks) != 1 {
+		t.Fatalf("result = %+v, want one skipped no-effect Block", result)
+	}
+	if result.Blocks[0].Reason != eviction.SkipReasonShardFilter {
+		t.Fatalf("skip reason = %q, want shard_filter", result.Blocks[0].Reason)
+	}
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.MetadataLossBlocks != 0 || got.UnexpectedLossBlocks != 0 {
+		t.Fatalf("health loss counts = metadata:%d unexpected:%d, want 0/0", got.MetadataLossBlocks, got.UnexpectedLossBlocks)
+	}
+}
+
+func writeMalformedConfirmedUploadForEvictionApply(t *testing.T, idxDir string, blockID uint64) {
+	t.Helper()
+
+	db, err := pebble.Open(idxDir, &pebble.Options{})
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.Set(confirmedUploadKeyForEvictionApply(blockID), []byte("{"), pebble.Sync); err != nil {
+		t.Fatalf("write malformed confirmed upload: %v", err)
+	}
+}
+
+func confirmedUploadKeyForEvictionApply(blockID uint64) []byte {
+	const prefix = "\x00confirmed-upload\x00"
+	key := make([]byte, len(prefix)+8)
+	copy(key, prefix)
+	binary.BigEndian.PutUint64(key[len(prefix):], blockID)
+	return key
+}
+
+func rebuildEvictionHealthForTest(t *testing.T, s *Shard) {
+	t.Helper()
+	if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {
+		t.Fatalf("rebuildEvictionHealthSnapshot: %v", err)
 	}
 }
 
@@ -1074,8 +1302,26 @@ func shardForEvictionApplyTest(t *testing.T, enabled bool) *Shard {
 		evictionPlans:        make(map[string]eviction.Plan),
 		evictionApplyResults: make(map[string]eviction.ApplyResult),
 		evictionApplyRunning: make(map[string]struct{}),
+		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
 	}
 }
+
+type recordingEvictionMetrics struct {
+	applySkipCounts map[string]int
+}
+
+func (m *recordingEvictionMetrics) RecordPlan(uint64, eviction.Plan) {}
+
+func (m *recordingEvictionMetrics) RecordApply(_ uint64, _, _ string, _ time.Duration, skipCounts map[string]int) {
+	m.applySkipCounts = make(map[string]int, len(skipCounts))
+	for reason, count := range skipCounts {
+		m.applySkipCounts[reason] = count
+	}
+}
+
+func (m *recordingEvictionMetrics) RecordRestore(uint64, string, string, string, time.Duration) {}
+
+func (m *recordingEvictionMetrics) SetHealth(uint64, eviction.HealthSnapshot) {}
 
 func stageAlreadyEvictedBlockForEvictionApply(t *testing.T, s *Shard, blockID uint64) {
 	t.Helper()
@@ -1466,4 +1712,15 @@ type cancelOnGetBackend struct {
 func (b cancelOnGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
 	b.cancel()
 	return b.Backend.GetObject(ctx, key, opts)
+}
+
+type blockingGetBackend struct {
+	backend.Backend
+	cancel context.CancelFunc
+}
+
+func (b blockingGetBackend) GetObject(ctx context.Context, _ string, _ backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	b.cancel()
+	<-ctx.Done()
+	return nil, backend.ObjectMeta{}, ctx.Err()
 }

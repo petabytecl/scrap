@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
@@ -25,7 +28,25 @@ func (c *scrubCoordinator) VerifyBlock(blkPath, idxPath string) (block.VerifyRes
 }
 
 func (c *scrubCoordinator) Quarantine(blkPath string) error {
-	return block.Quarantine(blkPath)
+	if err := block.Quarantine(blkPath); err != nil {
+		return err
+	}
+	blockID, ok := blockIDFromBlockPath(blkPath)
+	if ok {
+		if recorder, ok := c.core.(interface{ recordEvictionHealthBlockBestEffort(uint64) }); ok {
+			recorder.recordEvictionHealthBlockBestEffort(blockID)
+		}
+	}
+	return nil
+}
+
+func blockIDFromBlockPath(blkPath string) (uint64, bool) {
+	name := filepath.Base(blkPath)
+	if !strings.HasSuffix(name, ".blk") {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(strings.TrimSuffix(name, ".blk"), 16, 64)
+	return id, err == nil
 }
 
 func (c *scrubCoordinator) ClassifyScrubBlock(blockID uint64) (scrub.BlockLocalState, error) {

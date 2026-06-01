@@ -62,7 +62,9 @@ func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64
 		return waitRestore(ctx, call)
 	}
 
-	call.err = s.restoreEvictedBlockOnce(context.WithoutCancel(ctx), blockID, reason)
+	restoreCtx, cancel := detachedRestoreContext(ctx)
+	defer cancel()
+	call.err = s.restoreEvictedBlockOnce(restoreCtx, blockID, reason)
 	close(call.done)
 
 	s.restoreMu.Lock()
@@ -75,6 +77,15 @@ func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64
 		}
 	}
 	return call.err
+}
+
+func detachedRestoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return detached, func() {}
+	}
+	return context.WithDeadline(detached, deadline)
 }
 
 func (s *Shard) beginRestore(blockID uint64) (*blockRestoreCall, bool) {
@@ -180,7 +191,6 @@ func (s *Shard) recordCurrentRestoreFailure(blockID uint64, failureReason string
 		s.restoreFailuresByBlock[blockID] = failureReason
 	}
 	s.mu.Unlock()
-	s.invalidateEvictionHealthCache()
 }
 
 func restoreFailureReason(err error) string {
@@ -309,9 +319,11 @@ func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath, reason strin
 	if err := publishRestoredBlock(input, tmpPath); err != nil {
 		return false, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	if err := s.recordSuccessfulRestore(input, reason); err != nil {
 		return true, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	return true, nil
 }
 
@@ -322,9 +334,11 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, t
 	if err := publishRepairedBlock(input, tmpBlockPath, tmpIndexPath); err != nil {
 		return false, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	if err := s.recordSuccessfulRestore(input, RestoreReasonRepair); err != nil {
 		return true, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	return true, nil
 }
 
