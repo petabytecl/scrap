@@ -88,11 +88,11 @@ func (s *Shard) appendConfirmedUploadHealthContributions(
 			if _, ok := contributions[upload.BlockID]; ok {
 				continue
 			}
-			lifecycle, err := ClassifyLocalBlock(s.blocksDir, upload.BlockID)
-			if err != nil {
-				return fmt.Errorf("shard: classify local Block %d for health: %w", upload.BlockID, err)
+			contribution, err := s.evictionHealthContributionForBlock(upload.BlockID)
+			if err != nil && s.logger != nil {
+				s.logger.WarnContext(ctx, "classify eviction health contribution failed", "block_id", upload.BlockID, "error", err)
 			}
-			contributions[upload.BlockID] = evictionHealthContributionFromLifecycle(lifecycle)
+			contributions[upload.BlockID] = contribution
 			continue
 		}
 		if errors.Is(err, io.EOF) {
@@ -116,9 +116,6 @@ func (s *Shard) replaceEvictionHealthContributions(contributions map[uint64]evic
 
 func (s *Shard) recordEvictionHealthBlock(blockID uint64) error {
 	contribution, err := s.evictionHealthContributionForBlock(blockID)
-	if err != nil {
-		return err
-	}
 
 	s.evictionHealthMu.Lock()
 	defer s.evictionHealthMu.Unlock()
@@ -130,7 +127,7 @@ func (s *Shard) recordEvictionHealthBlock(blockID uint64) error {
 	applyEvictionHealthContribution(&s.evictionHealthSnapshot, old, -1)
 	s.evictionHealthBlocks[blockID] = contribution
 	applyEvictionHealthContribution(&s.evictionHealthSnapshot, contribution, 1)
-	return nil
+	return err
 }
 
 func (s *Shard) recordEvictionHealthBlockBestEffort(blockID uint64) {
@@ -142,14 +139,15 @@ func (s *Shard) recordEvictionHealthBlockBestEffort(blockID uint64) {
 func (s *Shard) evictionHealthContributionForBlock(blockID uint64) (evictionHealthBlockContribution, error) {
 	quarantined, err := fileExists(block.FilePath(s.blocksDir, blockID) + block.QuarantineSuffix)
 	if err != nil {
-		return evictionHealthBlockContribution{}, err
+		return evictionHealthBlockContribution{State: LocalBlockStateUnexpectedLoss}, err
 	}
 	if quarantined {
 		return evictionHealthBlockContribution{Quarantined: true}, nil
 	}
 	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
 	if err != nil {
-		return evictionHealthBlockContribution{}, fmt.Errorf("shard: classify local Block %d for health: %w", blockID, err)
+		contribution := evictionHealthContributionFromClassifiedLifecycle(lifecycle, err)
+		return contribution, fmt.Errorf("shard: classify local Block %d for health: %w", blockID, err)
 	}
 	return evictionHealthContributionFromLifecycle(lifecycle), nil
 }
@@ -180,6 +178,18 @@ func evictionHealthContributionFromLifecycle(lifecycle LocalBlockLifecycle) evic
 		contribution.EvictedSize = lifecycle.EvictionMarker.SizeBytes
 	}
 	return contribution
+}
+
+func evictionHealthContributionFromClassifiedLifecycle(lifecycle LocalBlockLifecycle, err error) evictionHealthBlockContribution {
+	if err == nil {
+		return evictionHealthContributionFromLifecycle(lifecycle)
+	}
+	switch lifecycle.State {
+	case LocalBlockStateMetadataLoss, LocalBlockStateUnexpectedLoss, LocalBlockStateHotCleanupNeeded:
+		return evictionHealthContributionFromLifecycle(lifecycle)
+	default:
+		return evictionHealthBlockContribution{State: LocalBlockStateUnexpectedLoss}
+	}
 }
 
 func applyEvictionHealthContribution(

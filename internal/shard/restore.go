@@ -308,6 +308,7 @@ func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath, reason strin
 	if err := publishRestoredBlock(input, tmpPath); err != nil {
 		return false, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	if err := s.recordSuccessfulRestore(input, reason); err != nil {
 		return true, err
 	}
@@ -322,6 +323,7 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, t
 	if err := publishRepairedBlock(input, tmpBlockPath, tmpIndexPath); err != nil {
 		return false, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	if err := s.recordSuccessfulRestore(input, RestoreReasonRepair); err != nil {
 		return true, err
 	}

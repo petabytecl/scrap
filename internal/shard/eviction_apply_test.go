@@ -798,6 +798,78 @@ func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) 
 	}
 }
 
+func TestEvictionHealthRebuildFailsClosedForMalformedMarker(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	if err := os.WriteFile(EvictionMarkerPath(s.blocksDir, 1), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write malformed eviction marker: %v", err)
+	}
+
+	if err := s.rebuildEvictionHealthSnapshot(ctx); err != nil {
+		t.Fatalf("rebuildEvictionHealthSnapshot: %v", err)
+	}
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.UnexpectedLossBlocks != 1 {
+		t.Fatalf("unexpected loss blocks = %d, want 1", got.UnexpectedLossBlocks)
+	}
+}
+
+func TestApplyEvictionPlanDoesNotRecordHealthForUnconfirmedSelectedBlock(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	if result.Status != eviction.ApplyStatusNoEffect || len(result.Blocks) != 1 {
+		t.Fatalf("result = %+v, want one skipped no-effect Block", result)
+	}
+	if result.Blocks[0].Reason != eviction.SkipReasonLocalStateNotHot {
+		t.Fatalf("skip reason = %q, want local_state_not_hot", result.Blocks[0].Reason)
+	}
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.MetadataLossBlocks != 0 || got.UnexpectedLossBlocks != 0 {
+		t.Fatalf("health loss counts = metadata:%d unexpected:%d, want 0/0", got.MetadataLossBlocks, got.UnexpectedLossBlocks)
+	}
+}
+
+func TestApplyEvictionPlanDoesNotRecordHealthForForeignShardSelectedBlock(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected[0].ShardID = evictionApplyTestShardID + 1
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	if result.Status != eviction.ApplyStatusNoEffect || len(result.Blocks) != 1 {
+		t.Fatalf("result = %+v, want one skipped no-effect Block", result)
+	}
+	if result.Blocks[0].Reason != eviction.SkipReasonShardFilter {
+		t.Fatalf("skip reason = %q, want shard_filter", result.Blocks[0].Reason)
+	}
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.MetadataLossBlocks != 0 || got.UnexpectedLossBlocks != 0 {
+		t.Fatalf("health loss counts = metadata:%d unexpected:%d, want 0/0", got.MetadataLossBlocks, got.UnexpectedLossBlocks)
+	}
+}
+
 func rebuildEvictionHealthForTest(t *testing.T, s *Shard) {
 	t.Helper()
 	if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {

@@ -193,7 +193,7 @@ func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan)
 			break
 		}
 		blockResult := s.applyEvictionBlock(plan, selected)
-		s.recordEvictionHealthBlockBestEffort(selected.BlockID)
+		s.recordEvictionHealthBlockForApplyResult(blockResult)
 		result.Blocks = append(result.Blocks, blockResult)
 		switch blockResult.Status {
 		case eviction.ApplyBlockStatusEvicted:
@@ -238,7 +238,23 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 	return s.applyEvictionBlockLocked(plan, selected)
 }
 
+func (s *Shard) recordEvictionHealthBlockForApplyResult(result eviction.ApplyBlock) {
+	if result.ShardID != s.shardID {
+		return
+	}
+	s.mu.Lock()
+	_, err := s.committedConfirmUploadAuthorityLocked(result.BlockID)
+	s.mu.Unlock()
+	if err != nil {
+		return
+	}
+	s.recordEvictionHealthBlockBestEffort(result.BlockID)
+}
+
 func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
+	if selected.ShardID != s.shardID {
+		return skippedApplyBlock(selected, eviction.SkipReasonShardFilter)
+	}
 	lifecycle, err := ClassifyLocalBlock(s.blocksDir, selected.BlockID)
 	if err != nil {
 		return failedApplyBlock(selected, fmt.Errorf("classify Block: %w", err))
@@ -247,11 +263,8 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 		return skippedApplyBlock(selected, reason)
 	}
 
-	confirmed, err := s.committedConfirmUploadAuthorityLocked(selected.BlockID)
+	confirmed, err := s.confirmedEvictionApplyAuthorityLocked(selected)
 	if err != nil {
-		return failedApplyBlock(selected, fmt.Errorf("get ConfirmUpload: %w", err))
-	}
-	if err := validateEvictionApplyAuthority(selected, confirmed); err != nil {
 		return failedApplyBlock(selected, err)
 	}
 	if s.leaderHotCopyRequired() {
@@ -278,6 +291,17 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 		Status:     eviction.ApplyBlockStatusEvicted,
 		BytesFreed: confirmed.BlockObject.SizeBytes,
 	}
+}
+
+func (s *Shard) confirmedEvictionApplyAuthorityLocked(selected eviction.PlanBlock) (index.ConfirmedUpload, error) {
+	confirmed, err := s.committedConfirmUploadAuthorityLocked(selected.BlockID)
+	if err != nil {
+		return index.ConfirmedUpload{}, fmt.Errorf("get ConfirmUpload: %w", err)
+	}
+	if err := validateEvictionApplyAuthority(selected, confirmed); err != nil {
+		return index.ConfirmedUpload{}, err
+	}
+	return confirmed, nil
 }
 
 func (s *Shard) prepareEvictionMarkerForApply(plan eviction.Plan, lifecycle LocalBlockLifecycle, confirmed index.ConfirmedUpload) error {

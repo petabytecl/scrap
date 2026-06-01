@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -39,6 +40,50 @@ func TestPublishVerifiedRestoreSerializesLifecycleMutation(t *testing.T) {
 	s.lifecycleMutationMu.Unlock()
 	waitRestorePublish(t, done)
 	assertRestorePublishedForMutationTest(t, s, blockID)
+}
+
+func TestPublishVerifiedRestoreRecordsHealthAfterPartialPublish(t *testing.T) {
+	const blockID uint64 = 1
+
+	s := &Shard{
+		blocksDir:            t.TempDir(),
+		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
+	}
+	tmpPath := filepath.Join(s.blocksDir, "restore.tmp")
+	if err := os.WriteFile(tmpPath, []byte("restored"), 0o600); err != nil {
+		t.Fatalf("write restore tmp: %v", err)
+	}
+	if err := os.WriteFile(block.IdxFilePath(s.blocksDir, blockID), []byte("idx"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := WriteEvictionMarker(s.blocksDir, EvictionMarker{
+		BlockID:         blockID,
+		BackendKey:      "cell-a/shards/7/1.blk",
+		SizeBytes:       8,
+		ValidationToken: "validation",
+		EvictedAtUs:     time.Now().UTC().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+
+	published, err := s.publishVerifiedRestore(restoreInput{
+		confirmed: index.ConfirmedUpload{BlockID: blockID},
+		blockPath: block.FilePath(s.blocksDir, blockID),
+		indexPath: block.IdxFilePath(s.blocksDir, blockID),
+	}, tmpPath, "")
+	if !published || err == nil {
+		t.Fatalf("publishVerifiedRestore published=%v err=%v, want published marker error", published, err)
+	}
+
+	got, err := s.EvictionHealthSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.HotCleanupNeededBlocks != 1 {
+		t.Fatalf("hot cleanup needed = %d, want 1", got.HotCleanupNeededBlocks)
+	}
 }
 
 func TestRequireQuarantinedRepairFilesFailsClosed(t *testing.T) {
