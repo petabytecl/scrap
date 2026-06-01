@@ -671,8 +671,9 @@ func stageEvictionHealthSnapshotStates(t *testing.T, s *Shard) {
 	if err := block.Quarantine(block.FilePath(s.blocksDir, 5)); err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
-	s.restoreFailuresByReason = map[string]int{
-		eviction.RestoreFailureBackendUnavailable: 2,
+	s.restoreFailuresByBlock = map[uint64]string{
+		6: eviction.RestoreFailureBackendUnavailable,
+		7: eviction.RestoreFailureBackendUnavailable,
 	}
 }
 
@@ -694,6 +695,51 @@ func assertEvictionHealthSnapshotCounts(t *testing.T, got eviction.HealthSnapsho
 	}
 	if got.RestoreFailedBlocks != 2 || got.RestoreFailuresByReason[eviction.RestoreFailureBackendUnavailable] != 2 {
 		t.Fatalf("restore failures = %+v/%d, want backend_restore_unavailable=2", got.RestoreFailuresByReason, got.RestoreFailedBlocks)
+	}
+}
+
+func TestEvictionHealthSnapshotClearsRestoreFailureAfterSuccess(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+
+	s.recordRestoreOutcome(1, RestoreReasonRead, storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "temporary"), time.Millisecond)
+	failed, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot failed restore: %v", err)
+	}
+	if failed.RestoreFailedBlocks != 1 {
+		t.Fatalf("restore failed blocks = %d, want 1", failed.RestoreFailedBlocks)
+	}
+
+	s.recordRestoreOutcome(1, RestoreReasonRead, nil, time.Millisecond)
+	recovered, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot recovered restore: %v", err)
+	}
+	if recovered.RestoreFailedBlocks != 0 || len(recovered.RestoreFailuresByReason) != 0 {
+		t.Fatalf("restore failures after success = %+v/%d, want cleared", recovered.RestoreFailuresByReason, recovered.RestoreFailedBlocks)
+	}
+}
+
+func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 1)
+
+	first, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot first: %v", err)
+	}
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 2)
+
+	second, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot second: %v", err)
+	}
+	if first.EvictedBlocks != 1 || second.EvictedBlocks != first.EvictedBlocks {
+		t.Fatalf("cached evicted blocks = first:%d second:%d, want stable 1", first.EvictedBlocks, second.EvictedBlocks)
 	}
 }
 

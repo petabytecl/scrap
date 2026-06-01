@@ -104,7 +104,7 @@ func waitRestore(ctx context.Context, call *blockRestoreCall) error {
 func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64, reason string) error {
 	start := time.Now()
 	err := s.restoreEvictedBlockOnceRecorded(ctx, blockID, reason)
-	s.recordRestoreOutcome(reason, err, time.Since(start))
+	s.recordRestoreOutcome(blockID, reason, err, time.Since(start))
 	return err
 }
 
@@ -122,7 +122,7 @@ func (s *Shard) restoreEvictedBlockOnceRecorded(ctx context.Context, blockID uin
 func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error {
 	start := time.Now()
 	err := s.restoreBlockForRepair(ctx, blockID)
-	s.recordRestoreOutcome(RestoreReasonRepair, err, time.Since(start))
+	s.recordRestoreOutcome(blockID, RestoreReasonRepair, err, time.Since(start))
 	return err
 }
 
@@ -158,21 +158,29 @@ func (s *Shard) restoreBlockForRepair(ctx context.Context, blockID uint64) error
 	return err
 }
 
-func (s *Shard) recordRestoreOutcome(reason string, err error, duration time.Duration) {
+func (s *Shard) recordRestoreOutcome(blockID uint64, reason string, err error, duration time.Duration) {
 	result := "success"
 	failureReason := eviction.RestoreFailureNone
 	if err != nil {
 		result = "failed"
 		failureReason = restoreFailureReason(err)
-
-		s.mu.Lock()
-		if s.restoreFailuresByReason == nil {
-			s.restoreFailuresByReason = make(map[string]int)
-		}
-		s.restoreFailuresByReason[failureReason]++
-		s.mu.Unlock()
 	}
+	s.recordCurrentRestoreFailure(blockID, failureReason)
 	s.evictionMetricRecorder().RecordRestore(s.shardID, reason, result, failureReason, duration)
+}
+
+func (s *Shard) recordCurrentRestoreFailure(blockID uint64, failureReason string) {
+	s.mu.Lock()
+	if failureReason == eviction.RestoreFailureNone {
+		delete(s.restoreFailuresByBlock, blockID)
+	} else {
+		if s.restoreFailuresByBlock == nil {
+			s.restoreFailuresByBlock = make(map[uint64]string)
+		}
+		s.restoreFailuresByBlock[blockID] = failureReason
+	}
+	s.mu.Unlock()
+	s.invalidateEvictionHealthCache()
 }
 
 func restoreFailureReason(err error) string {

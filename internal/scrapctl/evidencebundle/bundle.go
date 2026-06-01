@@ -213,6 +213,9 @@ func captureRunWindow(ctx context.Context, cfg Config, opts Options, state *gene
 }
 
 func captureTelemetryEvidence(ctx context.Context, cfg Config, opts Options, state *generationState) error {
+	if err := captureEvictionHealth(ctx, opts.HTTPClient, cfg, state.paths.eviction); err != nil {
+		return err
+	}
 	if err := captureMetricEvidence(ctx, opts.HTTPClient, cfg, state.paths.metrics, state.baseline, state.window.QueryUnixSeconds, &state.signals, opts.Logf); err != nil {
 		return err
 	}
@@ -226,7 +229,7 @@ func captureTelemetryEvidence(ctx context.Context, cfg Config, opts Options, sta
 	if err := captureTraceLogProfileEvidence(ctx, opts.HTTPClient, cfg, state.paths, state.window, state.marker, state.probeFailed, &state.signals); err != nil {
 		return err
 	}
-	if err := captureEvictionEvidence(ctx, opts.HTTPClient, cfg, state.paths.eviction); err != nil {
+	if err := captureEvictionCampaign(ctx, opts.HTTPClient, cfg, state.paths.eviction); err != nil {
 		return err
 	}
 	opts.logf("Wrote trace/log/profile evidence")
@@ -498,17 +501,10 @@ type evictionApplyEvidence struct {
 	Validations            []json.RawMessage `json:"validations"`
 }
 
-func captureEvictionEvidence(ctx context.Context, client *http.Client, cfg Config, dir string) error {
+func captureEvictionHealth(ctx context.Context, client *http.Client, cfg Config, dir string) error {
 	if strings.TrimSpace(cfg.EvictionPlanID) == "" {
 		return nil
 	}
-	if err := captureEvictionHealth(ctx, client, cfg, dir); err != nil {
-		return err
-	}
-	return captureEvictionCampaign(ctx, client, cfg, dir)
-}
-
-func captureEvictionHealth(ctx context.Context, client *http.Client, cfg Config, dir string) error {
 	body, ok := getJSON(ctx, client, strings.TrimRight(cfg.AdminURL, "/")+"/healthz", nil)
 	if !ok {
 		body = []byte(`{"error":"admin health snapshot unavailable"}`)
@@ -517,6 +513,9 @@ func captureEvictionHealth(ctx context.Context, client *http.Client, cfg Config,
 }
 
 func captureEvictionCampaign(ctx context.Context, client *http.Client, cfg Config, dir string) error {
+	if strings.TrimSpace(cfg.EvictionPlanID) == "" {
+		return nil
+	}
 	endpoint := strings.TrimRight(cfg.AdminURL, "/") + "/admin/eviction/plans/" + url.PathEscape(cfg.EvictionPlanID)
 	body, ok := getJSON(ctx, client, endpoint, nil)
 	if !ok {

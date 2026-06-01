@@ -46,6 +46,7 @@ func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, 
 	if cacheable && shouldCacheEvictionApplyResult(result) {
 		s.evictionApplyResults[planID] = result
 	}
+	s.invalidateEvictionHealthCache()
 }
 
 func shouldCacheEvictionApplyResult(result eviction.ApplyResult) bool {

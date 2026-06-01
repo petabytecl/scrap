@@ -120,14 +120,21 @@ type Shard struct {
 
 	rebuilder *projectionRebuilder
 
-	lifecycleCleanupDone    chan struct{}
-	lifecycleMutationMu     sync.Mutex
-	evictionPlans           map[string]eviction.Plan
-	evictionApplyResults    map[string]eviction.ApplyResult
-	evictionApplyRunning    map[string]struct{}
-	restoreFailuresByReason map[string]int
-	restoreMu               sync.Mutex
-	restores                map[uint64]*blockRestoreCall
+	lifecycleCleanupDone   chan struct{}
+	lifecycleMutationMu    sync.Mutex
+	evictionPlans          map[string]eviction.Plan
+	evictionApplyResults   map[string]eviction.ApplyResult
+	evictionApplyRunning   map[string]struct{}
+	restoreFailuresByBlock map[uint64]string
+
+	evictionHealthMu         sync.Mutex
+	evictionHealthCache      eviction.HealthSnapshot
+	evictionHealthCacheAt    time.Time
+	evictionHealthCacheValid bool
+	evictionHealthRefreshing bool
+
+	restoreMu sync.Mutex
+	restores  map[uint64]*blockRestoreCall
 }
 
 func (c *Config) applyDefaults() {
