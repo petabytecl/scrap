@@ -416,6 +416,9 @@ func (s *Shard) HeadDocument(ctx context.Context, txID, docName string) (storeap
 	if err != nil {
 		return storeapi.DocumentMeta{}, err
 	}
+	if err := s.ensureMetadataReadAllowed(entry.blockID); err != nil {
+		return storeapi.DocumentMeta{}, err
+	}
 
 	return storeapi.DocumentMeta{
 		Name:        entry.DocName,
@@ -470,6 +473,9 @@ func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.Docu
 	resolved, err := s.projectionResolver().ListDocuments(txID)
 	if err != nil {
 		return nil, mapProjectionResolutionError(txID, "", err)
+	}
+	if err := s.ensureMetadataReadsAllowed(resolved); err != nil {
+		return nil, err
 	}
 
 	docs := make([]storeapi.DocumentMeta, 0, len(resolved))
