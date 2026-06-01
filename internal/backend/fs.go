@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -232,9 +234,13 @@ func objectMetaFromFile(file *os.File) (ObjectMeta, error) {
 	if !info.Mode().IsRegular() {
 		return ObjectMeta{}, fmt.Errorf("object is not a regular file: %w", ErrPermanent)
 	}
+	etag, err := etagForFile(file)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
 
 	return ObjectMeta{
-		ETag:        etagForFileInfo(info),
+		ETag:        etag,
 		Size:        info.Size(),
 		ContentType: DefaultContentType,
 	}, nil
@@ -387,8 +393,23 @@ func validatePrefix(prefix string) error {
 	return nil
 }
 
-func etagForFileInfo(info os.FileInfo) string {
-	return fmt.Sprintf("%016x-%016x", info.Size(), info.ModTime().UnixNano())
+func etagForFile(file *os.File) (string, error) {
+	offset, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return "", classifyFSError("seek object", err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", classifyFSError("seek object", err)
+	}
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", classifyFSError("hash object", err)
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return "", classifyFSError("seek object", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func classifyFSError(op string, err error) error {

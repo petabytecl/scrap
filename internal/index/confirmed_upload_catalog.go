@@ -93,7 +93,11 @@ func (idx *Index) ConfirmedUploads() (ConfirmedUploadIterator, error) {
 		if err != nil {
 			return nil, err
 		}
-		upload, err := decodeConfirmedUpload(blockID, iter.Value())
+		val, err := iter.ValueAndErr()
+		if err != nil {
+			return nil, fmt.Errorf("index: confirmed upload iter value: %w", err)
+		}
+		upload, err := decodeConfirmedUpload(blockID, val)
 		if err != nil {
 			return nil, err
 		}

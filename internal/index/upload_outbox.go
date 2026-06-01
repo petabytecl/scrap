@@ -81,7 +81,11 @@ func (idx *Index) PendingUploads() (PendingUploadIterator, error) {
 
 	uploads := make([]PendingUpload, 0)
 	for iter.First(); iter.Valid(); iter.Next() {
-		upload, err := decodePendingUpload(iter.Key(), iter.Value())
+		val, err := iter.ValueAndErr()
+		if err != nil {
+			return nil, fmt.Errorf("index: pending upload iter value: %w", err)
+		}
+		upload, err := decodePendingUpload(iter.Key(), val)
 		if err != nil {
 			return nil, err
 		}

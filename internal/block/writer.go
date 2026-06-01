@@ -109,7 +109,7 @@ func (w *Writer) writeDocFrames(body io.Reader) (uint32, int64, hash.Hash, error
 			hasher.Write(payload)
 			totalSize += int64(n)
 
-			isLast := readErr == io.EOF || readErr == io.ErrUnexpectedEOF
+			isLast := errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF)
 			flags := frameFlags(frameSeq, isLast)
 
 			err := WriteFrame(w.f, FrameHeader{
@@ -124,7 +124,7 @@ func (w *Writer) writeDocFrames(body io.Reader) (uint32, int64, hash.Hash, error
 			w.offset += int64(FrameHeaderSize + n)
 			frameSeq++
 		}
-		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
 			break
 		}
 		if readErr != nil {

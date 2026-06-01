@@ -132,8 +132,12 @@ func (idx *Index) StreamingHash() (appliedIndex uint64, hash [32]byte, err error
 
 	h := sha256.New()
 	for iter.First(); iter.Valid(); iter.Next() {
+		val, err := iter.ValueAndErr()
+		if err != nil {
+			return 0, [32]byte{}, fmt.Errorf("index: iter value: %w", err)
+		}
 		h.Write(iter.Key())
-		h.Write(iter.Value())
+		h.Write(val)
 	}
 	if err := iter.Error(); err != nil {
 		return 0, [32]byte{}, fmt.Errorf("index: iter: %w", err)
