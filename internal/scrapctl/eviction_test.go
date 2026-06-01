@@ -243,6 +243,46 @@ func TestEvictionApplyPrintsSkipAndFailureDetails(t *testing.T) {
 	)
 }
 
+func TestEvictionApplyReturnsErrorForFailedResult(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		result := eviction.ApplyResult{
+			PlanID:         "plan-123",
+			Status:         eviction.ApplyStatusFailed,
+			SelectedBlocks: 1,
+			FailedBlocks:   1,
+			Blocks: []eviction.ApplyBlock{{
+				BlockID:   3,
+				ShardID:   7,
+				SizeBytes: 4096,
+				Status:    eviction.ApplyBlockStatusFailed,
+				Error:     "confirmed Block size mismatch",
+			}},
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "eviction apply failed") {
+		t.Fatalf("error = %v, want eviction apply failed", err)
+	}
+	assertTextContains(t, out.String(), "status: failed", "failed_blocks: 1")
+}
+
 func TestEvictionApplySupportsJSONOutput(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		data, err := json.Marshal(eviction.ApplyResult{

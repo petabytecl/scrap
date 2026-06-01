@@ -93,9 +93,15 @@ func runEvictionApply(args []string, stdout io.Writer, deps Deps) error {
 		return err
 	}
 	if opts.common.output == "json" {
-		return writeJSON(stdout, result)
+		if err := writeJSON(stdout, result); err != nil {
+			return err
+		}
+		return failedEvictionApplyResultError(result)
 	}
-	return writeEvictionApplyText(stdout, result)
+	if err := writeEvictionApplyText(stdout, result); err != nil {
+		return err
+	}
+	return failedEvictionApplyResultError(result)
 }
 
 func parseEvictionPlanOptions(args []string) (evictionPlanOptions, error) {
@@ -203,6 +209,13 @@ func postEvictionApply(ctx context.Context, opts commonOptions, deps Deps, planI
 		return eviction.ApplyResult{}, fmt.Errorf("decode eviction apply: %w", err)
 	}
 	return result, nil
+}
+
+func failedEvictionApplyResultError(result eviction.ApplyResult) error {
+	if result.Status != eviction.ApplyStatusFailed {
+		return nil
+	}
+	return fmt.Errorf("eviction apply failed: plan_id=%s failed_blocks=%d", result.PlanID, result.FailedBlocks)
 }
 
 func writeEvictionPlanText(w io.Writer, plan eviction.Plan) error {

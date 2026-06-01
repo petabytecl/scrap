@@ -263,6 +263,7 @@ func TestServer_ApplyEvictionPlanMapsErrors(t *testing.T) {
 	}{
 		{name: "in progress", err: eviction.ErrApplyInProgress, want: http.StatusConflict},
 		{name: "rebuilding", err: storeapi.ErrRebuilding, want: http.StatusServiceUnavailable},
+		{name: "backend unavailable", err: storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "Backend restore is not configured"), want: http.StatusServiceUnavailable},
 		{name: "invalid request", err: eviction.ErrInvalidPlanRequest, want: http.StatusBadRequest},
 		{name: "unexpected", err: errors.New("boom"), want: http.StatusInternalServerError},
 	}

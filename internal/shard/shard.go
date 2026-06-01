@@ -585,6 +585,12 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 }
 
 func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.evictionApplyRunning) > 0 {
+		return true, nil
+	}
 	return s.rebuilder.Trigger(ctx)
 }
 

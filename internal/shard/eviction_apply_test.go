@@ -110,6 +110,28 @@ func TestApplyEvictionPlanStopsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanRejectsMissingRestoreBackend(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	s.upload.Backend = nil
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	_, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("ApplyEvictionPlan error = %v, want ErrUnavailable", err)
+	}
+	if reason, ok := storeapi.UnavailableReason(err); !ok || reason != storeapi.UnavailableReasonBackendRestoreUnavailable {
+		t.Fatalf("unavailable reason = %q, %v; want backend_restore_unavailable", reason, ok)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain hot after backend unavailable: %v", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("eviction marker stat error = %v, want not exist", err)
+	}
+}
+
 func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -244,6 +266,30 @@ func TestApplyEvictionPlanRejectsRebuildInProgress(t *testing.T) {
 	}
 }
 
+func TestTriggerRebuildReportsInProgressDuringEvictionApply(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	core := &projectionRebuildCoreStub{swapStarted: make(chan struct{})}
+	s.rebuilder = newProjectionRebuilder(core, t.TempDir(), s.blocksDir, s.shardID, UploadConfig{}, nil)
+	s.evictionApplyRunning["plan-apply-1"] = struct{}{}
+
+	alreadyInProgress, err := s.TriggerRebuild(ctx)
+	if err != nil {
+		t.Fatalf("TriggerRebuild: %v", err)
+	}
+	if !alreadyInProgress {
+		t.Fatal("TriggerRebuild should report already in progress during eviction apply")
+	}
+	if s.rebuilder.InProgress() {
+		t.Fatal("rebuild should not start while eviction apply is running")
+	}
+	select {
+	case <-core.swapStarted:
+		t.Fatal("rebuild swap should not start while eviction apply is running")
+	default:
+	}
+}
+
 func TestApplyEvictionPlanRejectsExpiredCachedResult(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -336,6 +382,73 @@ func TestApplyEvictionPlanFailsBlockWhenConfirmationDrifts(t *testing.T) {
 	}
 	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
 		t.Fatalf("Block should remain after failed apply: %v", err)
+	}
+}
+
+func TestApplyEvictionPlanStopsAtFirstBlockFailure(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected[0].SizeBytes = 2048
+	plan.Selected = append(plan.Selected, eviction.PlanBlock{
+		BlockID:    2,
+		ShardID:    evictionApplyTestShardID,
+		SizeBytes:  2048,
+		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
+		LocalState: string(LocalBlockStateHot),
+	})
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusFailed || result.FailedBlocks != 1 {
+		t.Fatalf("result = %+v, want failed one Block", result)
+	}
+	if len(result.Blocks) != 1 || result.Blocks[0].BlockID != 1 {
+		t.Fatalf("blocks = %+v, want only first failed Block", result.Blocks)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 2)); err != nil {
+		t.Fatalf("second Block should remain untouched after first failure: %v", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 2)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second eviction marker stat error = %v, want not exist", err)
+	}
+}
+
+func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected = append(plan.Selected, eviction.PlanBlock{
+		BlockID:    2,
+		ShardID:    evictionApplyTestShardID,
+		SizeBytes:  4096,
+		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
+		LocalState: string(LocalBlockStateHot),
+	})
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	if result.Status != eviction.ApplyStatusFailed || result.EvictedBlocks != 1 || result.FailedBlocks != 1 {
+		t.Fatalf("result = %+v, want one eviction then one failure", result)
+	}
+
+	second, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan second call: %v", err)
+	}
+	if second.CompletedAtUs != result.CompletedAtUs || len(second.Blocks) != len(result.Blocks) {
+		t.Fatalf("second result = %+v, want cached failed result %+v", second, result)
 	}
 }
 
@@ -453,6 +566,7 @@ func shardForEvictionApplyTest(t *testing.T, enabled bool) *Shard {
 		blocksDir:            blocksDir,
 		shardID:              evictionApplyTestShardID,
 		idx:                  idx,
+		upload:               UploadConfig{Backend: noopRebuildBackend{}},
 		eviction:             EvictionConfig{Enabled: enabled, PlanTTL: time.Minute},
 		memberHostname:       "scrapd-2",
 		memberID:             "member-b",

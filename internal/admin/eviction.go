@@ -176,6 +176,8 @@ func writeEvictionApplyError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, storeapi.ErrRebuilding):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, storeapi.ErrUnavailable):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, eviction.ErrInvalidPlanRequest):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
