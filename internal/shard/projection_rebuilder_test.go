@@ -251,6 +251,49 @@ func TestProjectionRebuilderSkipsEvictedConfirmedBlock(t *testing.T) {
 	}
 }
 
+func TestProjectionRebuilderPreservesEvictedConfirmedBlockWhenUploadsDisabled(t *testing.T) {
+	dataDir := t.TempDir()
+	blocksDir := filepath.Join(dataDir, "blocks")
+	if err := os.MkdirAll(blocksDir, 0o750); err != nil {
+		t.Fatalf("mkdir blocks dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocksDir, "0000000000000001.idx"), []byte("index bytes"), 0o600); err != nil {
+		t.Fatalf("write Block index: %v", err)
+	}
+
+	projection := openProjectionForRebuildTest(t)
+	confirmed := confirmedUploadForEvictionApply(1, 1024)
+	if err := WriteEvictionMarker(blocksDir, EvictionMarker{
+		BlockID:         confirmed.BlockID,
+		BackendKey:      confirmed.BlockObject.Key,
+		SizeBytes:       confirmed.BlockObject.SizeBytes,
+		ValidationToken: confirmed.BlockObject.ValidationToken,
+		EvictedAtUs:     time.Now().UTC().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+
+	core := &projectionRebuildCoreStub{
+		confirmedUploads: map[uint64]index.ConfirmedUpload{
+			1: confirmed,
+		},
+	}
+	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{}, nil)
+
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+		t.Fatalf("rebuildUploadOutbox: %v", err)
+	}
+	got, err := projection.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if got != confirmed {
+		t.Fatalf("confirmed upload = %+v, want %+v", got, confirmed)
+	}
+}
+
 func writeRebuildBlock(t *testing.T, blocksDir string, blockID uint64) os.FileInfo {
 	t.Helper()
 

@@ -135,6 +135,7 @@ func TestApplyEvictionPlanRejectsMissingRestoreBackend(t *testing.T) {
 func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
+	s.eviction.HotResidencyWindow = time.Hour
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
 		BlockID:      1,
@@ -145,8 +146,6 @@ func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 		t.Fatalf("WriteRestoreMarker: %v", err)
 	}
 	plan := storeEvictionApplyPlan(t, s)
-	plan.Config.HotResidencyWindowSeconds = int64(time.Hour / time.Second)
-	s.evictionPlans[plan.PlanID] = plan
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -161,6 +160,39 @@ func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 	}
 	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
 		t.Fatalf("Block should remain hot after restored residency skip: %v", err)
+	}
+}
+
+func TestApplyEvictionPlanUsesCurrentHotResidencyWindow(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	s.eviction.HotResidencyWindow = time.Hour
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
+		BlockID:      1,
+		RestoredAtUs: time.Now().Add(-30 * time.Second).UTC().UnixMicro(),
+		Source:       RestoreSourceBackend,
+		Reason:       RestoreReasonRead,
+	}); err != nil {
+		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Config.HotResidencyWindowSeconds = 1
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusNoEffect || result.SkippedBlocks != 1 {
+		t.Fatalf("result = %+v, want no_effect with one current-config residency skip", result)
+	}
+	if len(result.Blocks) != 1 || result.Blocks[0].Reason != eviction.SkipReasonHotResidencyWindow {
+		t.Fatalf("block result = %+v, want hot residency skip", result.Blocks)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain hot after current residency skip: %v", err)
 	}
 }
 
@@ -446,6 +478,29 @@ func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T
 	}
 
 	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
+}
+
+func TestApplyEvictionPlanDoesNotCacheCanceledResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, cacheable := s.applyEvictionPlanBlocks(ctx, plan)
+	s.finishEvictionApply(plan.PlanID, result, cacheable)
+
+	if cacheable {
+		t.Fatal("canceled apply result should not be cacheable")
+	}
+	if _, ok := s.evictionApplyResults[plan.PlanID]; ok {
+		t.Fatal("canceled apply result should not be cached")
+	}
+	retry, err := s.ApplyEvictionPlan(context.Background(), eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan retry: %v", err)
+	}
+	assertEvictionApplyCompleted(t, retry, 1024)
 }
 
 func TestSkipEvictionAfterPreparedMarkerRemovesMarkerWrittenByApply(t *testing.T) {

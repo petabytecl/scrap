@@ -21,13 +21,13 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 		return result, nil
 	}
 
-	result = s.applyEvictionPlanBlocks(ctx, plan)
-	s.finishEvictionApply(plan.PlanID, result)
+	result, cacheable := s.applyEvictionPlanBlocks(ctx, plan)
+	s.finishEvictionApply(plan.PlanID, result, cacheable)
 
 	return result, nil
 }
 
-func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult) {
+func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, cacheable bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -35,7 +35,7 @@ func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult) 
 	if s.evictionApplyResults == nil {
 		s.evictionApplyResults = make(map[string]eviction.ApplyResult)
 	}
-	if shouldCacheEvictionApplyResult(result) {
+	if cacheable && shouldCacheEvictionApplyResult(result) {
 		s.evictionApplyResults[planID] = result
 	}
 }
@@ -147,7 +147,7 @@ func (s *Shard) validEvictionPlanForApplyLocked(planID string) (eviction.Plan, e
 	return plan, nil
 }
 
-func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan) eviction.ApplyResult {
+func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan) (eviction.ApplyResult, bool) {
 	startedAtUs := time.Now().UTC().UnixMicro()
 	result := eviction.ApplyResult{
 		PlanID:         plan.PlanID,
@@ -157,10 +157,12 @@ func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan)
 		MemberID:       plan.MemberID,
 		SelectedBlocks: len(plan.Selected),
 	}
+	cacheable := true
 	for _, selected := range plan.Selected {
 		if err := ctx.Err(); err != nil {
 			result.Blocks = append(result.Blocks, failedApplyBlock(selected, err))
 			result.FailedBlocks++
+			cacheable = false
 			break
 		}
 		blockResult := s.applyEvictionBlock(plan, selected)
@@ -181,7 +183,7 @@ func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan)
 	}
 	result.CompletedAtUs = time.Now().UTC().UnixMicro()
 	result.Status = evictionApplyStatus(result)
-	return result
+	return result, cacheable
 }
 
 func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
@@ -194,7 +196,7 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 	if err != nil {
 		return failedApplyBlock(selected, fmt.Errorf("classify Block: %w", err))
 	}
-	if reason := s.evictionApplySkipReason(plan, selected, lifecycle, time.Now().UTC().UnixMicro()); reason != "" {
+	if reason := s.evictionApplySkipReason(selected, lifecycle, time.Now().UTC().UnixMicro()); reason != "" {
 		return skippedApplyBlock(selected, reason)
 	}
 
@@ -211,10 +213,10 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 	if err := s.prepareEvictionMarkerForApply(plan, lifecycle, confirmed); err != nil {
 		return failedApplyBlock(selected, err)
 	}
-	if s.leaderHotCopyRequired() {
-		return s.skipEvictionAfterPreparedMarker(selected, lifecycle)
+	removed, blockResult, err := s.unlinkEvictedBlockIfFollower(selected, lifecycle)
+	if blockResult.Status != "" {
+		return blockResult
 	}
-	removed, err := s.unlinkEvictedBlock(selected.BlockID)
 	if err != nil {
 		failed := failedApplyBlock(selected, err)
 		if removed {
@@ -268,6 +270,14 @@ func removePreparedEvictionMarker(blocksDir string, blockID uint64) error {
 	return nil
 }
 
+func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle) (bool, eviction.ApplyBlock, error) {
+	if s.leaderHotCopyRequired() {
+		return false, s.skipEvictionAfterPreparedMarker(selected, lifecycle), nil
+	}
+	removed, err := s.unlinkEvictedBlock(selected.BlockID)
+	return removed, eviction.ApplyBlock{}, err
+}
+
 func (s *Shard) unlinkEvictedBlock(blockID uint64) (bool, error) {
 	if err := os.Remove(block.FilePath(s.blocksDir, blockID)); err != nil {
 		return false, fmt.Errorf("remove Block: %w", err)
@@ -278,7 +288,7 @@ func (s *Shard) unlinkEvictedBlock(blockID uint64) (bool, error) {
 	return true, nil
 }
 
-func (s *Shard) evictionApplySkipReason(plan eviction.Plan, selected eviction.PlanBlock, lifecycle LocalBlockLifecycle, nowUs int64) string {
+func (s *Shard) evictionApplySkipReason(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle, nowUs int64) string {
 	if selected.ShardID != s.shardID {
 		return eviction.SkipReasonShardFilter
 	}
@@ -288,21 +298,25 @@ func (s *Shard) evictionApplySkipReason(plan eviction.Plan, selected eviction.Pl
 	if s.leaderHotCopyRequired() {
 		return eviction.SkipReasonLeaderHotCopyRequired
 	}
-	if restoredHotResidencyApplies(plan, lifecycle, nowUs) {
+	if restoredHotResidencyApplies(s.currentHotResidencyWindowSeconds(), lifecycle, nowUs) {
 		return eviction.SkipReasonHotResidencyWindow
 	}
 	return ""
+}
+
+func (s *Shard) currentHotResidencyWindowSeconds() int64 {
+	return int64(s.eviction.HotResidencyWindow / time.Second)
 }
 
 func (s *Shard) leaderHotCopyRequired() bool {
 	return s.raft != nil && s.raft.IsLeader()
 }
 
-func restoredHotResidencyApplies(plan eviction.Plan, lifecycle LocalBlockLifecycle, nowUs int64) bool {
-	if lifecycle.RestoreMarker == nil || plan.Config.HotResidencyWindowSeconds <= 0 {
+func restoredHotResidencyApplies(windowSeconds int64, lifecycle LocalBlockLifecycle, nowUs int64) bool {
+	if lifecycle.RestoreMarker == nil || windowSeconds <= 0 {
 		return false
 	}
-	eligibleAtUs := lifecycle.RestoreMarker.RestoredAtUs + plan.Config.HotResidencyWindowSeconds*time.Second.Microseconds()
+	eligibleAtUs := lifecycle.RestoreMarker.RestoredAtUs + windowSeconds*time.Second.Microseconds()
 	return nowUs < eligibleAtUs
 }
 

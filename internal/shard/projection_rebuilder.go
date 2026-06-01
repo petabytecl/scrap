@@ -168,7 +168,7 @@ func (r *projectionRebuilder) rebuildProjectionInto(projection *index.Index) err
 func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) error {
 	be := r.upload.Backend
 	if !r.upload.Enabled || be == nil {
-		return nil
+		return r.rebuildEvictedUploadAuthorities(projection, blockIDs)
 	}
 
 	openBlockID := r.core.currentOpenBlockID()
@@ -179,6 +179,19 @@ func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, block
 			continue
 		}
 		if err := r.rebuildPendingUpload(ctx, projection, blockID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *projectionRebuilder) rebuildEvictedUploadAuthorities(projection *index.Index, blockIDs []uint64) error {
+	openBlockID := r.core.currentOpenBlockID()
+	for _, blockID := range blockIDs {
+		if blockID == openBlockID {
+			continue
+		}
+		if _, err := r.rebuildEvictedUploadAuthority(projection, blockID); err != nil {
 			return err
 		}
 	}
