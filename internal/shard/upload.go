@@ -80,7 +80,7 @@ func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) {
 	for _, seal := range seals {
 		if err := s.proposeSealBlock(ctx, seal); err != nil {
 			s.mu.Lock()
-			s.uploadObligations.markRetryFailed(seal.BlockID, time.Now().Add(s.uploadSealRetryDelay()))
+			s.blockUploadLifecycleLocked().markSealRetryFailed(seal.BlockID, time.Now().Add(s.uploadSealRetryDelay()))
 			s.mu.Unlock()
 			s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", seal.BlockID, "err", err)
 		}
@@ -116,15 +116,9 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.idx.PutPendingUpload(index.PendingUpload{
-		BlockID:         seal.GetBlockId(),
-		ShardID:         seal.GetShardId(),
-		SealedSizeBytes: seal.GetSealedSizeBytes(),
-		SealedAtUs:      seal.GetSealedAtUs(),
-	}); err != nil {
+	if err := s.blockUploadLifecycleLocked().applyCommittedSeal(s.idx, seal); err != nil {
 		return err
 	}
-	s.uploadObligations.forget(seal.GetBlockId())
 
 	if s.blockWriter != nil && s.idxWriter != nil && s.blockWriter.BlockID() == seal.GetBlockId() {
 		if err := s.idxWriter.Close(); err != nil {
@@ -149,56 +143,12 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pending, err := s.idx.GetPendingUpload(confirm.GetBlockId())
-	if err != nil {
-		if errors.Is(err, index.ErrPendingUploadNotFound) {
-			existing, catalogErr := s.idx.GetConfirmedUpload(confirm.GetBlockId())
-			if catalogErr == nil {
-				confirmed, err := s.putConfirmedUploadFromCommand(confirm, existing.SealedSizeBytes)
-				if err != nil {
-					return err
-				}
-				s.recordCommittedConfirmUploadLocked(confirmed)
-				return s.refreshUploadPressureLocked()
-			}
-			if !errors.Is(catalogErr, index.ErrConfirmedUploadNotFound) {
-				return fmt.Errorf("shard: get confirmed upload for block %d: %w", confirm.GetBlockId(), catalogErr)
-			}
-		}
-		return fmt.Errorf("shard: confirm upload missing sealed metadata for block %d: %w", confirm.GetBlockId(), err)
-	}
-	confirmed, err := s.putConfirmedUploadFromCommand(confirm, pending.SealedSizeBytes)
+	confirmed, err := s.blockUploadLifecycleLocked().applyCommittedConfirm(s.blocksDir, s.idx, confirm)
 	if err != nil {
 		return err
 	}
-	if err := s.idx.DeletePendingUpload(confirm.GetBlockId()); err != nil {
-		return err
-	}
-	s.recordCommittedConfirmUploadLocked(confirmed)
-	s.uploadObligations.forget(confirm.GetBlockId())
-	return s.refreshUploadPressureLocked()
-}
-
-func (s *Shard) putConfirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) (index.ConfirmedUpload, error) {
-	confirmed := confirmedUploadFromCommand(confirm, sealedSize)
-	if err := validateConfirmedUploadMatchesSeal(confirmed); err != nil {
-		return index.ConfirmedUpload{}, err
-	}
-	if err := writeConfirmedUploadAuthority(s.blocksDir, confirmed); err != nil {
-		return index.ConfirmedUpload{}, err
-	}
-	if err := s.idx.PutConfirmedUpload(confirmed); err != nil {
-		return index.ConfirmedUpload{}, err
-	}
-	return confirmed, nil
-}
-
-func (s *Shard) recordCommittedConfirmUploadLocked(confirmed index.ConfirmedUpload) {
-	if s.committedConfirmUploads == nil {
-		s.committedConfirmUploads = make(map[uint64]index.ConfirmedUpload)
-	}
-	s.committedConfirmUploads[confirmed.BlockID] = confirmed
 	s.recordEvictionHealthBlockBestEffort(confirmed.BlockID)
+	return s.refreshUploadPressureLocked()
 }
 
 func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {
@@ -238,7 +188,7 @@ func indexBackendObject(meta *scrapv1.BackendObjectMetadata) index.BackendObject
 func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.uploadObligations.recordLocal(seal)
+	s.blockUploadLifecycleLocked().recordLocalSeal(seal)
 	if err := s.refreshUploadPressureLocked(); err != nil {
 		panic(err)
 	}
@@ -253,7 +203,7 @@ func (s *Shard) retryUploadObligations(ctx context.Context) {
 }
 
 func (s *Shard) beginUploadObligationRetryLocked(now time.Time) []index.PendingUpload {
-	return s.uploadObligations.beginRetry(now, now.Add(s.uploadSealRetryDelay()))
+	return s.blockUploadLifecycleLocked().beginSealRetry(now, now.Add(s.uploadSealRetryDelay()))
 }
 
 func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {

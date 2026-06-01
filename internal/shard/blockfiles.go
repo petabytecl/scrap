@@ -37,7 +37,7 @@ func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 		SealedAtUs:      time.Now().UnixMicro(),
 	}
 	if s.upload.Enabled {
-		s.uploadObligations.recordLocal(seal)
+		s.blockUploadLifecycleLocked().recordLocalSeal(seal)
 		if err := s.refreshUploadPressureLocked(); err != nil {
 			return err
 		}
