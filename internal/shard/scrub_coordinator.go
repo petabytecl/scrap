@@ -115,7 +115,7 @@ func (c *scrubCoordinator) defaultBlockRepairer(cfg Config) scrub.BlockRepairer 
 }
 
 func (c *scrubCoordinator) backendRepairRestorer(cfg Config) scrub.BackendBlockRestorer {
-	if cfg.Upload.Enabled && cfg.Upload.Backend != nil {
+	if cfg.Upload.Backend != nil {
 		return c.core
 	}
 	return nil

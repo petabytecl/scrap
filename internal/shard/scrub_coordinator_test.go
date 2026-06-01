@@ -176,6 +176,19 @@ func TestScrubCoordinatorDefaultBlockRepairerSupportsBackendOnly(t *testing.T) {
 	}
 }
 
+func TestScrubCoordinatorDefaultBlockRepairerUsesConfiguredBackendWhenUploadsDisabled(t *testing.T) {
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	repairer := c.defaultBlockRepairer(Config{
+		Upload: UploadConfig{
+			Enabled: false,
+			Backend: backend.NewFS(t.TempDir()),
+		},
+	})
+	if repairer == nil {
+		t.Fatal("expected Backend repairer when Backend is configured")
+	}
+}
+
 func TestScrubCoordinatorDefaultBlockRepairerNilWithoutRepairSource(t *testing.T) {
 	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
 	if repairer := c.defaultBlockRepairer(Config{}); repairer != nil {
