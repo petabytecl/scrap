@@ -1,9 +1,11 @@
 package shard
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	raftpb "go.etcd.io/raft/v3/raftpb"
 
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
@@ -288,6 +291,167 @@ func TestApplyEvictionPlanRetriesHotCleanupNeededBlock(t *testing.T) {
 	}
 
 	assertEvictionApplyCompleted(t, result)
+	assertBlockEvictedForApply(t, s, 1)
+}
+
+func TestApplyEvictionPlanValidatesEvidenceRunSample(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("validated content"))
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if result.EvictedBlocks != 1 || result.ValidatedBlocks != 1 || result.ValidationFailedBlocks != 0 {
+		t.Fatalf("result = %+v, want one evicted and validated Block", result)
+	}
+	if result.BytesFreed != 0 {
+		t.Fatalf("BytesFreed = %d, want 0 after validation restored sampled Block", result.BytesFreed)
+	}
+	if len(result.Validations) != 1 || result.Validations[0].Status != eviction.ValidationStatusPassed {
+		t.Fatalf("validations = %+v, want one passed validation", result.Validations)
+	}
+	assertBlockRestoredByValidationForApply(t, s, 1)
+}
+
+func TestApplyEvictionPlanDefaultsEvidenceValidationToOneSample(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	first := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("first validated content"))
+	second := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 2, []byte("second validated content"))
+	third := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 3, []byte("not sampled content"))
+	plan := storeEvictionApplyPlanForConfirmedUploads(t, s, eviction.ReasonEvidenceRun, 2, first, second, third)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if result.EvictedBlocks != 3 || result.ValidatedBlocks != 1 || result.ValidationFailedBlocks != 0 {
+		t.Fatalf("result = %+v, want three evicted and only default sample validated", result)
+	}
+	if result.BytesFreed != second.BlockObject.SizeBytes+third.BlockObject.SizeBytes {
+		t.Fatalf("BytesFreed = %d, want unsampled Blocks only", result.BytesFreed)
+	}
+	if len(result.Validations) != 1 || result.Validations[0].BlockID != 1 {
+		t.Fatalf("validations = %+v, want Block 1 only", result.Validations)
+	}
+	assertBlockRestoredByValidationForApply(t, s, 1)
+	assertBlockEvictedForApply(t, s, 2)
+	assertBlockEvictedForApply(t, s, 3)
+}
+
+func TestApplyEvictionPlanSkipsValidationForNonEvidenceReason(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("not validated"))
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, "disk_recovery_drill")
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if result.ValidatedBlocks != 0 || len(result.Validations) != 0 {
+		t.Fatalf("validation result = %+v, want no validation for non-evidence reason", result)
+	}
+	assertBlockEvictedForApply(t, s, 1)
+}
+
+func TestApplyEvictionPlanValidationFailsWhenProjectionCannotResolveDocument(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("projection mismatch"))
+	if err := s.idx.Put(evictionApplyTxID(1), 99, 1, true); err != nil {
+		t.Fatalf("corrupt projection: %v", err)
+	}
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusEvictedWithValidationFailure {
+		t.Fatalf("status = %s, want evicted_with_validation_failure", result.Status)
+	}
+	if result.ValidatedBlocks != 0 || result.ValidationFailedBlocks != 1 {
+		t.Fatalf("result = %+v, want one validation failure", result)
+	}
+	if result.BytesFreed != confirmed.BlockObject.SizeBytes {
+		t.Fatalf("BytesFreed = %d, want evicted Block bytes", result.BytesFreed)
+	}
+	assertBlockEvictedForApply(t, s, 1)
+}
+
+func TestApplyEvictionPlanValidationIgnoresClientCancellationAfterEviction(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("cancelled client"))
+	s.upload.Backend = cancelOnGetBackend{Backend: backendStore, cancel: cancel}
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if ctx.Err() == nil {
+		t.Fatal("context was not canceled during validation")
+	}
+	if result.Status != eviction.ApplyStatusCompleted || result.ValidatedBlocks != 1 || result.ValidationFailedBlocks != 0 {
+		t.Fatalf("result = %+v, want completed validation despite client cancellation", result)
+	}
+	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
+}
+
+func TestApplyEvictionPlanReportsValidationFailure(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("missing validation source"))
+	if err := backendStore.DeleteObject(ctx, confirmed.BlockObject.Key); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusEvictedWithValidationFailure {
+		t.Fatalf("status = %s, want evicted_with_validation_failure", result.Status)
+	}
+	if result.EvictedBlocks != 1 || result.ValidatedBlocks != 0 || result.ValidationFailedBlocks != 1 {
+		t.Fatalf("result = %+v, want one evicted Block and one validation failure", result)
+	}
+	if len(result.Validations) != 1 || result.Validations[0].Status != eviction.ValidationStatusFailed || result.Validations[0].Error == "" {
+		t.Fatalf("validations = %+v, want one failed validation with error", result.Validations)
+	}
 	assertBlockEvictedForApply(t, s, 1)
 }
 
@@ -863,6 +1027,169 @@ func storeEvictionApplyPlan(t *testing.T, s *Shard) eviction.Plan {
 	return plan
 }
 
+func storeEvictionApplyPlanForConfirmed(
+	t *testing.T,
+	s *Shard,
+	confirmed index.ConfirmedUpload,
+	reason string,
+) eviction.Plan {
+	t.Helper()
+
+	return storeEvictionApplyPlanForConfirmedUploads(t, s, reason, 1, confirmed)
+}
+
+func storeEvictionApplyPlanForConfirmedUploads(
+	t *testing.T,
+	s *Shard,
+	reason string,
+	maxValidateSamples int,
+	uploads ...index.ConfirmedUpload,
+) eviction.Plan {
+	t.Helper()
+
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Reason = reason
+	plan.Config.MaxValidateSamples = maxValidateSamples
+	plan.Selected = make([]eviction.PlanBlock, 0, len(uploads))
+	for _, upload := range uploads {
+		plan.Selected = append(plan.Selected, evictionApplyPlanBlockForConfirmed(upload))
+	}
+	s.evictionPlans[plan.PlanID] = plan
+	return plan
+}
+
+func evictionApplyPlanBlockForConfirmed(confirmed index.ConfirmedUpload) eviction.PlanBlock {
+	return eviction.PlanBlock{
+		BlockID:    confirmed.BlockID,
+		ShardID:    confirmed.ShardID,
+		SizeBytes:  confirmed.BlockObject.SizeBytes,
+		BackendKey: confirmed.BlockObject.Key,
+		LocalState: string(LocalBlockStateHot),
+	}
+}
+
+func stageReadableHotConfirmedBlockForEvictionApply(
+	ctx context.Context,
+	t *testing.T,
+	s *Shard,
+	backendStore backend.Backend,
+	blockID uint64,
+	content []byte,
+) index.ConfirmedUpload {
+	t.Helper()
+
+	if err := os.MkdirAll(s.blocksDir, 0o750); err != nil {
+		t.Fatalf("mkdir blocks dir: %v", err)
+	}
+	written := writeReadableBlockForEvictionApply(t, s, blockID, content)
+
+	confirmed := confirmedUploadForEvictionApply(blockID, statFileSize(t, written.blockPath))
+	confirmed.BlockObject = putEvictionApplyBackendObject(ctx, t, backendStore, confirmed.BlockObject.Key, written.blockPath)
+	confirmed.IndexObject = putEvictionApplyBackendObject(ctx, t, backendStore, confirmed.IndexObject.Key, written.indexPath)
+	if err := s.idx.PutConfirmedUpload(confirmed); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+	if err := s.idx.Put(written.txID, blockID, 1, true); err != nil {
+		t.Fatalf("put projection entry: %v", err)
+	}
+	if err := writeConfirmedUploadAuthority(s.blocksDir, confirmed); err != nil {
+		t.Fatalf("writeConfirmedUploadAuthority: %v", err)
+	}
+	return confirmed
+}
+
+type readableEvictionApplyBlock struct {
+	blockPath string
+	indexPath string
+	txID      string
+}
+
+func writeReadableBlockForEvictionApply(t *testing.T, s *Shard, blockID uint64, content []byte) readableEvictionApplyBlock {
+	t.Helper()
+
+	blkPath := block.FilePath(s.blocksDir, blockID)
+	idxPath := block.IdxFilePath(s.blocksDir, blockID)
+	bw, err := block.NewWriter(blkPath, s.shardID, blockID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	iw, err := block.NewIndexWriter(idxPath)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+
+	txID := evictionApplyTxID(blockID)
+	docName := fmt.Sprintf("doc-%d.bin", blockID)
+	appendResult, err := bw.AppendDocument(txID, docName, "application/octet-stream", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("AppendDocument: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{
+		TransactionID: txID,
+		DocName:       docName,
+		ContentType:   "application/octet-stream",
+		CreatedAt:     time.Now().UTC(),
+		FirstFrameOff: appendResult.FirstFrameOffset,
+		FrameCount:    appendResult.FrameCount,
+		TotalBytes:    appendResult.Size,
+		SHA256:        appendResult.SHA256,
+	}); err != nil {
+		t.Fatalf("append Block index: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("close Block writer: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("close Block index writer: %v", err)
+	}
+	return readableEvictionApplyBlock{
+		blockPath: blkPath,
+		indexPath: idxPath,
+		txID:      txID,
+	}
+}
+
+func evictionApplyTxID(blockID uint64) string {
+	return fmt.Sprintf("tx-validate-%d", blockID)
+}
+
+func statFileSize(t *testing.T, path string) int64 {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Size()
+}
+
+func putEvictionApplyBackendObject(
+	ctx context.Context,
+	t *testing.T,
+	backendStore backend.Backend,
+	key string,
+	path string,
+) index.BackendObjectMetadata {
+	t.Helper()
+
+	file, err := os.Open(path) //nolint:gosec // test path is generated from temp dir and block ID
+	if err != nil {
+		t.Fatalf("open backend source %s: %v", path, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	size := statFileSize(t, path)
+	result, err := backendStore.PutObject(ctx, key, file, size, backend.PutOpts{})
+	if err != nil {
+		t.Fatalf("PutObject %s: %v", key, err)
+	}
+	return index.BackendObjectMetadata{
+		Key:             key,
+		SizeBytes:       result.Size,
+		ValidationToken: result.ETag,
+	}
+}
+
 func confirmedUploadForEvictionApply(blockID uint64, sizeBytes int64) index.ConfirmedUpload {
 	blockSuffix := fmt.Sprintf("%016x", blockID)
 	return index.ConfirmedUpload{
@@ -934,6 +1261,31 @@ func assertBlockEvictedForApply(t *testing.T, s *Shard, blockID uint64) {
 	}
 }
 
+func assertBlockRestoredByValidationForApply(t *testing.T, s *Shard, blockID uint64) {
+	t.Helper()
+
+	if _, err := os.Stat(block.FilePath(s.blocksDir, blockID)); err != nil {
+		t.Fatalf("Block should be restored by validation: %v", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, blockID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("eviction marker stat error = %v, want not exist", err)
+	}
+	restore, err := ReadRestoreMarker(s.blocksDir, blockID)
+	if err != nil {
+		t.Fatalf("ReadRestoreMarker: %v", err)
+	}
+	if restore.Source != RestoreSourceBackend || restore.Reason != RestoreReasonValidation {
+		t.Fatalf("restore marker = %+v, want backend/validation", restore)
+	}
+	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	if err != nil {
+		t.Fatalf("ClassifyLocalBlock: %v", err)
+	}
+	if lifecycle.State != LocalBlockStateHot || !lifecycle.ServingAllowed {
+		t.Fatalf("lifecycle = %+v, want hot serving-allowed", lifecycle)
+	}
+}
+
 type evictionApplyRaftStub struct {
 	leader                     bool
 	becomeLeaderBeforeMutation bool
@@ -984,3 +1336,13 @@ func (r *evictionApplyRaftStub) WithStableLeadership(fn func() error) error {
 }
 
 func (r *evictionApplyRaftStub) Stop() {}
+
+type cancelOnGetBackend struct {
+	backend.Backend
+	cancel context.CancelFunc
+}
+
+func (b cancelOnGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	b.cancel()
+	return b.Backend.GetObject(ctx, key, opts)
+}

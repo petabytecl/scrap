@@ -453,6 +453,17 @@ func (s *Shard) ReadDocument(ctx context.Context, txID, docName string) (io.Read
 		return nil, storeapi.DocumentMeta{}, err
 	}
 
+	rc, meta, err := s.readDocumentFromProjection(ctx, txID, docName, RestoreReasonRead, 0)
+	return rc, meta, err
+}
+
+func (s *Shard) readDocumentFromProjection(
+	ctx context.Context,
+	txID string,
+	docName string,
+	restoreReason string,
+	expectedBlockID uint64,
+) (io.ReadCloser, storeapi.DocumentMeta, error) {
 	s.mu.Lock()
 
 	entry, err := s.findDocEntry(txID, docName)
@@ -460,7 +471,18 @@ func (s *Shard) ReadDocument(ctx context.Context, txID, docName string) (io.Read
 		s.mu.Unlock()
 		return nil, storeapi.DocumentMeta{}, err
 	}
-	if err := s.ensureReadableBlockLocked(ctx, entry.blockID); err != nil {
+	if expectedBlockID != 0 && entry.blockID != expectedBlockID {
+		s.mu.Unlock()
+		return nil, storeapi.DocumentMeta{}, fmt.Errorf(
+			"%w: projection resolved Block %d for %s/%s, want Block %d",
+			storeapi.ErrDataLoss,
+			entry.blockID,
+			txID,
+			docName,
+			expectedBlockID,
+		)
+	}
+	if err := s.ensureReadableBlockLockedForReason(ctx, entry.blockID, restoreReason); err != nil {
 		return nil, storeapi.DocumentMeta{}, err
 	}
 	defer s.mu.Unlock()

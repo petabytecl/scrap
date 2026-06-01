@@ -19,8 +19,9 @@ const (
 	EvictionTriggerOperatorRequested = "operator_requested"
 	EvictionReasonEvidenceRun        = "evidence_run"
 
-	RestoreSourceBackend = "backend"
-	RestoreReasonRead    = "read"
+	RestoreSourceBackend    = "backend"
+	RestoreReasonRead       = "read"
+	RestoreReasonValidation = "validation"
 )
 
 var ErrLifecycleMarkerInvalid = errors.New("shard: lifecycle marker invalid")

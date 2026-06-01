@@ -212,10 +212,14 @@ func postEvictionApply(ctx context.Context, opts commonOptions, deps Deps, planI
 }
 
 func failedEvictionApplyResultError(result eviction.ApplyResult) error {
-	if result.Status != eviction.ApplyStatusFailed {
+	switch result.Status {
+	case eviction.ApplyStatusFailed:
+		return fmt.Errorf("eviction apply failed: plan_id=%s failed_blocks=%d", result.PlanID, result.FailedBlocks)
+	case eviction.ApplyStatusEvictedWithValidationFailure:
+		return fmt.Errorf("eviction apply validation failed: plan_id=%s validation_failed_blocks=%d", result.PlanID, result.ValidationFailedBlocks)
+	default:
 		return nil
 	}
-	return fmt.Errorf("eviction apply failed: plan_id=%s failed_blocks=%d", result.PlanID, result.FailedBlocks)
 }
 
 func writeEvictionPlanText(w io.Writer, plan eviction.Plan) error {

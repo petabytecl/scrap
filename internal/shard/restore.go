@@ -29,7 +29,7 @@ type blockRestoreCall struct {
 	err  error
 }
 
-func (s *Shard) ensureReadableBlockLocked(ctx context.Context, blockID uint64) error {
+func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID uint64, reason string) error {
 	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
 	if err != nil {
 		s.mu.Unlock()
@@ -41,7 +41,7 @@ func (s *Shard) ensureReadableBlockLocked(ctx context.Context, blockID uint64) e
 		return nil
 	case LocalBlockStateEvicted:
 		s.mu.Unlock()
-		if err := s.restoreEvictedBlock(ctx, blockID); err != nil {
+		if err := s.restoreEvictedBlockForReason(ctx, blockID, reason); err != nil {
 			return err
 		}
 		s.mu.Lock()
@@ -55,13 +55,13 @@ func (s *Shard) ensureReadableBlockLocked(ctx context.Context, blockID uint64) e
 	}
 }
 
-func (s *Shard) restoreEvictedBlock(ctx context.Context, blockID uint64) error {
+func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64, reason string) error {
 	call, leader := s.beginRestore(blockID)
 	if !leader {
 		return waitRestore(ctx, call)
 	}
 
-	call.err = s.restoreEvictedBlockOnce(context.WithoutCancel(ctx), blockID)
+	call.err = s.restoreEvictedBlockOnce(context.WithoutCancel(ctx), blockID, reason)
 	close(call.done)
 
 	s.restoreMu.Lock()
@@ -83,6 +83,9 @@ func (s *Shard) beginRestore(blockID uint64) (*blockRestoreCall, bool) {
 	if call, ok := s.restores[blockID]; ok {
 		return call, false
 	}
+	if s.restores == nil {
+		s.restores = make(map[uint64]*blockRestoreCall)
+	}
 	call := &blockRestoreCall{done: make(chan struct{})}
 	s.restores[blockID] = call
 	return call, true
@@ -97,7 +100,7 @@ func waitRestore(ctx context.Context, call *blockRestoreCall) error {
 	}
 }
 
-func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64) error {
+func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64, reason string) error {
 	input, err := s.restoreInput(ctx, blockID)
 	if err != nil {
 		return err
@@ -105,7 +108,7 @@ func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64) err
 	if input.lifecycle.State != LocalBlockStateEvicted {
 		return nil
 	}
-	return s.downloadVerifyAndPublishRestore(ctx, input)
+	return s.downloadVerifyAndPublishRestore(ctx, input, reason)
 }
 
 type restoreInput struct {
@@ -166,7 +169,7 @@ func validateRestoreAuthority(confirmed index.ConfirmedUpload, lifecycle LocalBl
 	}
 }
 
-func (s *Shard) downloadVerifyAndPublishRestore(ctx context.Context, input restoreInput) error {
+func (s *Shard) downloadVerifyAndPublishRestore(ctx context.Context, input restoreInput, reason string) error {
 	tmpPath, err := s.downloadRestore(ctx, input)
 	if err != nil {
 		return err
@@ -181,18 +184,18 @@ func (s *Shard) downloadVerifyAndPublishRestore(ctx context.Context, input resto
 	if err := verifyRestoredBlock(input, tmpPath); err != nil {
 		return err
 	}
-	published, err = s.publishVerifiedRestore(input, tmpPath)
+	published, err = s.publishVerifiedRestore(input, tmpPath, reason)
 	return err
 }
 
-func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath string) (bool, error) {
+func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath, reason string) (bool, error) {
 	s.lifecycleMutationMu.Lock()
 	defer s.lifecycleMutationMu.Unlock()
 
 	if err := publishRestoredBlock(input, tmpPath); err != nil {
 		return false, err
 	}
-	if err := s.recordSuccessfulRestore(input); err != nil {
+	if err := s.recordSuccessfulRestore(input, reason); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -219,12 +222,12 @@ func publishRestoredBlock(input restoreInput, tmpPath string) error {
 	return syncDirectory(filepath.Dir(input.blockPath))
 }
 
-func (s *Shard) recordSuccessfulRestore(input restoreInput) error {
+func (s *Shard) recordSuccessfulRestore(input restoreInput, reason string) error {
 	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
 		BlockID:      input.confirmed.BlockID,
 		RestoredAtUs: time.Now().UTC().UnixMicro(),
 		Source:       RestoreSourceBackend,
-		Reason:       RestoreReasonRead,
+		Reason:       reason,
 	}); err != nil {
 		return err
 	}

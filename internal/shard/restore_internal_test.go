@@ -48,7 +48,7 @@ func startRestorePublish(t *testing.T, s *Shard, blockID uint64, tmpPath string)
 		_, err := s.publishVerifiedRestore(restoreInput{
 			confirmed: index.ConfirmedUpload{BlockID: blockID},
 			blockPath: block.FilePath(s.blocksDir, blockID),
-		}, tmpPath)
+		}, tmpPath, RestoreReasonRead)
 		done <- err
 	}()
 	return done
