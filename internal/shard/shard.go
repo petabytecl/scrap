@@ -280,9 +280,7 @@ func (s *Shard) refreshRuntimeStateAfterRaftOpen() error {
 		return fmt.Errorf("shard: refresh upload pressure: %w", refreshErr)
 	}
 	if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {
-		if s.logger != nil {
-			s.logger.Warn("rebuild eviction health failed", "error", err)
-		}
+		return fmt.Errorf("shard: rebuild eviction health: %w", err)
 	}
 	return nil
 }

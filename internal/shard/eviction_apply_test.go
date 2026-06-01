@@ -3,6 +3,7 @@ package shard
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 
 	"github.com/petabytecl/scrap/internal/backend"
@@ -818,6 +820,39 @@ func TestEvictionHealthRebuildFailsClosedForMalformedMarker(t *testing.T) {
 	}
 }
 
+func TestRefreshRuntimeStateAfterRaftOpenPropagatesHealthRebuildError(t *testing.T) {
+	idxDir := t.TempDir()
+	idx, err := index.Open(idxDir)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	if err := idx.PutConfirmedUpload(confirmedUploadForEvictionApply(1, 1024)); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatalf("close index: %v", err)
+	}
+	writeMalformedConfirmedUploadForEvictionApply(t, idxDir, 1)
+	idx, err = index.Open(idxDir)
+	if err != nil {
+		t.Fatalf("reopen index: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	s := &Shard{
+		blocksDir:               t.TempDir(),
+		shardID:                 evictionApplyTestShardID,
+		idx:                     idx,
+		uploadPressureScrubGate: newPressurePauseGate(),
+	}
+	s.uploads = newUploadController(s, UploadConfig{}, s.shardID, nil, nil, s.uploadPressureScrubGate)
+
+	err = s.refreshRuntimeStateAfterRaftOpen()
+	if err == nil || !strings.Contains(err.Error(), "rebuild eviction health") {
+		t.Fatalf("refreshRuntimeStateAfterRaftOpen error = %v, want rebuild eviction health error", err)
+	}
+}
+
 func TestApplyEvictionPlanDoesNotRecordHealthForUnconfirmedSelectedBlock(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -868,6 +903,27 @@ func TestApplyEvictionPlanDoesNotRecordHealthForForeignShardSelectedBlock(t *tes
 	if got.MetadataLossBlocks != 0 || got.UnexpectedLossBlocks != 0 {
 		t.Fatalf("health loss counts = metadata:%d unexpected:%d, want 0/0", got.MetadataLossBlocks, got.UnexpectedLossBlocks)
 	}
+}
+
+func writeMalformedConfirmedUploadForEvictionApply(t *testing.T, idxDir string, blockID uint64) {
+	t.Helper()
+
+	db, err := pebble.Open(idxDir, &pebble.Options{})
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.Set(confirmedUploadKeyForEvictionApply(blockID), []byte("{"), pebble.Sync); err != nil {
+		t.Fatalf("write malformed confirmed upload: %v", err)
+	}
+}
+
+func confirmedUploadKeyForEvictionApply(blockID uint64) []byte {
+	const prefix = "\x00confirmed-upload\x00"
+	key := make([]byte, len(prefix)+8)
+	copy(key, prefix)
+	binary.BigEndian.PutUint64(key[len(prefix):], blockID)
+	return key
 }
 
 func rebuildEvictionHealthForTest(t *testing.T, s *Shard) {
