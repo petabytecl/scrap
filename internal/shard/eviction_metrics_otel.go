@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -15,6 +16,7 @@ import (
 const metricUnknown = "unknown"
 
 type EvictionOTelMetrics struct {
+	mu                      sync.Mutex
 	plansTotal              metric.Int64Counter
 	skipsTotal              metric.Int64Counter
 	candidateBlocks         metric.Int64Gauge
@@ -35,6 +37,7 @@ type EvictionOTelMetrics struct {
 	quarantinedBlocks       metric.Int64Gauge
 	restoreFailedBlocks     metric.Int64Gauge
 	restoreFailuresByReason metric.Int64Gauge
+	restoreFailureReasons   map[uint64]map[string]struct{}
 }
 
 //nolint:cyclop // Each instrument maps directly to one eviction evidence field.
@@ -222,7 +225,12 @@ func (m *EvictionOTelMetrics) RecordPlan(shardID uint64, plan eviction.Plan) {
 	}
 }
 
-func (m *EvictionOTelMetrics) RecordApply(shardID uint64, reason, status string, duration time.Duration) {
+func (m *EvictionOTelMetrics) RecordApply(
+	shardID uint64,
+	reason, status string,
+	duration time.Duration,
+	skipCountsByReason map[string]int,
+) {
 	attrs := metric.WithAttributes(
 		shardAttribute(shardID),
 		attribute.String("reason", metricString(reason)),
@@ -230,6 +238,10 @@ func (m *EvictionOTelMetrics) RecordApply(shardID uint64, reason, status string,
 	)
 	m.applyTotal.Add(context.Background(), 1, attrs)
 	m.applyDuration.Record(context.Background(), duration.Seconds(), attrs)
+	for skipReason, count := range skipCountsByReason {
+		m.skipsTotal.Add(context.Background(), int64(count),
+			metric.WithAttributes(shardAttribute(shardID), attribute.String("reason", metricString(skipReason))))
+	}
 }
 
 func (m *EvictionOTelMetrics) RecordRestore(shardID uint64, reason, result, failureReason string, duration time.Duration) {
@@ -253,10 +265,39 @@ func (m *EvictionOTelMetrics) SetHealth(shardID uint64, snapshot eviction.Health
 	m.unexpectedLossBlocks.Record(ctx, int64(snapshot.UnexpectedLossBlocks), attrs)
 	m.quarantinedBlocks.Record(ctx, int64(snapshot.QuarantinedBlocks), attrs)
 	m.restoreFailedBlocks.Record(ctx, int64(snapshot.RestoreFailedBlocks), attrs)
+	staleReasons := m.updateSeenRestoreFailureReasons(shardID, snapshot.RestoreFailuresByReason)
 	for reason, count := range snapshot.RestoreFailuresByReason {
 		m.restoreFailuresByReason.Record(ctx, int64(count),
 			metric.WithAttributes(shardAttribute(shardID), attribute.String("reason", metricString(reason))))
 	}
+	for _, reason := range staleReasons {
+		m.restoreFailuresByReason.Record(ctx, 0,
+			metric.WithAttributes(shardAttribute(shardID), attribute.String("reason", metricString(reason))))
+	}
+}
+
+func (m *EvictionOTelMetrics) updateSeenRestoreFailureReasons(shardID uint64, current map[string]int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.restoreFailureReasons == nil {
+		m.restoreFailureReasons = make(map[uint64]map[string]struct{})
+	}
+	seen := m.restoreFailureReasons[shardID]
+	next := make(map[string]struct{}, len(current))
+	for reason, count := range current {
+		if count > 0 {
+			next[reason] = struct{}{}
+		}
+	}
+	var stale []string
+	for reason := range seen {
+		if _, ok := next[reason]; !ok {
+			stale = append(stale, reason)
+		}
+	}
+	m.restoreFailureReasons[shardID] = next
+	return stale
 }
 
 func metricString(value string) string {

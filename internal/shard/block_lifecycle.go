@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -243,6 +244,10 @@ func (s *Shard) startLifecycleCleanup() {
 		defer s.lifecycleMutationMu.Unlock()
 		if err := CleanupHotLifecycleMarkers(s.blocksDir); err != nil {
 			s.logger.Warn("lifecycle cleanup failed", "error", err)
+			return
+		}
+		if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {
+			s.logger.Warn("rebuild eviction health after lifecycle cleanup failed", "error", err)
 		}
 	}()
 }

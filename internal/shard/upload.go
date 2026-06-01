@@ -198,6 +198,7 @@ func (s *Shard) recordCommittedConfirmUploadLocked(confirmed index.ConfirmedUplo
 		s.committedConfirmUploads = make(map[uint64]index.ConfirmedUpload)
 	}
 	s.committedConfirmUploads[confirmed.BlockID] = confirmed
+	s.recordEvictionHealthBlockBestEffort(confirmed.BlockID)
 }
 
 func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {

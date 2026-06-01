@@ -29,10 +29,27 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 		evictionReasonForMarker(plan),
 		result.Status,
 		time.Duration(result.CompletedAtUs-result.StartedAtUs)*time.Microsecond,
+		applySkipCountsByReason(result),
 	)
 	s.finishEvictionApply(plan.PlanID, result, cacheable)
 
 	return result, nil
+}
+
+func applySkipCountsByReason(result eviction.ApplyResult) map[string]int {
+	if result.SkippedBlocks == 0 {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, block := range result.Blocks {
+		if block.Status == eviction.ApplyBlockStatusSkipped && block.Reason != "" {
+			counts[block.Reason]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, cacheable bool) {
@@ -46,7 +63,6 @@ func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, 
 	if cacheable && shouldCacheEvictionApplyResult(result) {
 		s.evictionApplyResults[planID] = result
 	}
-	s.invalidateEvictionHealthCache()
 }
 
 func shouldCacheEvictionApplyResult(result eviction.ApplyResult) bool {
@@ -177,6 +193,7 @@ func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan)
 			break
 		}
 		blockResult := s.applyEvictionBlock(plan, selected)
+		s.recordEvictionHealthBlockBestEffort(selected.BlockID)
 		result.Blocks = append(result.Blocks, blockResult)
 		switch blockResult.Status {
 		case eviction.ApplyBlockStatusEvicted:

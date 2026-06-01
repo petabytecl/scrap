@@ -77,6 +77,37 @@ func TestApplyEvictionPlanReportsCompletedWithSkipsForDrift(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanRecordsApplySkipReasons(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	metrics := &recordingEvictionMetrics{}
+	s.evictionMetrics = metrics
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 2)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected = append(plan.Selected, eviction.PlanBlock{
+		BlockID:    2,
+		ShardID:    evictionApplyTestShardID,
+		SizeBytes:  2048,
+		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
+		LocalState: string(LocalBlockStateHot),
+	})
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusCompletedWithSkips {
+		t.Fatalf("status = %s, want completed_with_skips", result.Status)
+	}
+	if metrics.applySkipCounts[eviction.SkipReasonLocalStateNotHot] != 1 {
+		t.Fatalf("apply skip counts = %+v, want local_state_not_hot=1", metrics.applySkipCounts)
+	}
+}
+
 func TestApplyEvictionPlanReportsNoEffectWhenAllBlocksDrift(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -629,6 +660,7 @@ func TestEvictionHealthSnapshotSeparatesLocalLifecycleStates(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageEvictionHealthSnapshotStates(t, s)
+	rebuildEvictionHealthForTest(t, s)
 
 	got, err := s.EvictionHealthSnapshot(ctx)
 	if err != nil {
@@ -721,11 +753,34 @@ func TestEvictionHealthSnapshotClearsRestoreFailureAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestEvictionHealthSnapshotUsesApplyStateWithoutCatalogScan(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	assertEvictionApplyCompleted(t, result)
+	s.idx = nil
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot should not scan closed catalog: %v", err)
+	}
+	if got.EvictedBlocks != 1 || got.EvictedBytes != 1024 {
+		t.Fatalf("evicted health = %d/%d, want 1/1024", got.EvictedBlocks, got.EvictedBytes)
+	}
+}
+
 func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	stageAlreadyEvictedBlockForEvictionApply(t, s, 1)
+	rebuildEvictionHealthForTest(t, s)
 
 	first, err := s.EvictionHealthSnapshot(ctx)
 	if err != nil {
@@ -740,6 +795,13 @@ func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) 
 	}
 	if first.EvictedBlocks != 1 || second.EvictedBlocks != first.EvictedBlocks {
 		t.Fatalf("cached evicted blocks = first:%d second:%d, want stable 1", first.EvictedBlocks, second.EvictedBlocks)
+	}
+}
+
+func rebuildEvictionHealthForTest(t *testing.T, s *Shard) {
+	t.Helper()
+	if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {
+		t.Fatalf("rebuildEvictionHealthSnapshot: %v", err)
 	}
 }
 
@@ -1074,8 +1136,26 @@ func shardForEvictionApplyTest(t *testing.T, enabled bool) *Shard {
 		evictionPlans:        make(map[string]eviction.Plan),
 		evictionApplyResults: make(map[string]eviction.ApplyResult),
 		evictionApplyRunning: make(map[string]struct{}),
+		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
 	}
 }
+
+type recordingEvictionMetrics struct {
+	applySkipCounts map[string]int
+}
+
+func (m *recordingEvictionMetrics) RecordPlan(uint64, eviction.Plan) {}
+
+func (m *recordingEvictionMetrics) RecordApply(_ uint64, _, _ string, _ time.Duration, skipCounts map[string]int) {
+	m.applySkipCounts = make(map[string]int, len(skipCounts))
+	for reason, count := range skipCounts {
+		m.applySkipCounts[reason] = count
+	}
+}
+
+func (m *recordingEvictionMetrics) RecordRestore(uint64, string, string, string, time.Duration) {}
+
+func (m *recordingEvictionMetrics) SetHealth(uint64, eviction.HealthSnapshot) {}
 
 func stageAlreadyEvictedBlockForEvictionApply(t *testing.T, s *Shard, blockID uint64) {
 	t.Helper()

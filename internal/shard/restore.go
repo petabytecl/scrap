@@ -180,7 +180,6 @@ func (s *Shard) recordCurrentRestoreFailure(blockID uint64, failureReason string
 		s.restoreFailuresByBlock[blockID] = failureReason
 	}
 	s.mu.Unlock()
-	s.invalidateEvictionHealthCache()
 }
 
 func restoreFailureReason(err error) string {
@@ -312,6 +311,7 @@ func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath, reason strin
 	if err := s.recordSuccessfulRestore(input, reason); err != nil {
 		return true, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	return true, nil
 }
 
@@ -325,6 +325,7 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, t
 	if err := s.recordSuccessfulRestore(input, RestoreReasonRepair); err != nil {
 		return true, err
 	}
+	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	return true, nil
 }
 

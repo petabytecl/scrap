@@ -6,123 +6,93 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
-	"github.com/petabytecl/scrap/internal/index"
 )
 
-const evictionHealthCacheTTL = 5 * time.Second
+type evictionHealthBlockContribution struct {
+	State       LocalBlockState
+	EvictedSize int64
+	Quarantined bool
+}
 
 func (s *Shard) EvictionHealthSnapshot(ctx context.Context) (eviction.HealthSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return eviction.HealthSnapshot{}, err
 	}
-	if snapshot, ok := s.cachedEvictionHealthSnapshot(time.Now()); ok {
-		return snapshot, nil
-	}
-	return s.refreshEvictionHealthSnapshot(ctx)
-}
 
-func (s *Shard) cachedEvictionHealthSnapshot(now time.Time) (eviction.HealthSnapshot, bool) {
-	s.evictionHealthMu.Lock()
-	defer s.evictionHealthMu.Unlock()
-
-	if !s.evictionHealthCacheValid {
-		if !s.evictionHealthRefreshing {
-			s.evictionHealthRefreshing = true
-		}
-		return eviction.HealthSnapshot{}, false
-	}
-	if now.Sub(s.evictionHealthCacheAt) < evictionHealthCacheTTL {
-		return s.evictionHealthCache, true
-	}
-	if !s.evictionHealthRefreshing {
-		s.evictionHealthRefreshing = true
-		go func() {
-			_, _ = s.refreshEvictionHealthSnapshot(context.Background())
-		}()
-	}
-	return s.evictionHealthCache, true
-}
-
-func (s *Shard) refreshEvictionHealthSnapshot(ctx context.Context) (eviction.HealthSnapshot, error) {
-	snapshot, err := s.computeEvictionHealthSnapshot(ctx)
-	if err == nil {
-		s.evictionMetricRecorder().SetHealth(s.shardID, snapshot)
-	}
-
-	s.evictionHealthMu.Lock()
-	defer s.evictionHealthMu.Unlock()
-	s.evictionHealthRefreshing = false
-	if err != nil {
-		return eviction.HealthSnapshot{}, err
-	}
-	s.evictionHealthCache = snapshot
-	s.evictionHealthCacheAt = time.Now()
-	s.evictionHealthCacheValid = true
-	return snapshot, nil
-}
-
-func (s *Shard) invalidateEvictionHealthCache() {
-	s.evictionHealthMu.Lock()
-	s.evictionHealthCacheValid = false
-	s.evictionHealthMu.Unlock()
-}
-
-func (s *Shard) computeEvictionHealthSnapshot(ctx context.Context) (eviction.HealthSnapshot, error) {
-	if err := ctx.Err(); err != nil {
-		return eviction.HealthSnapshot{}, err
-	}
-	quarantined, err := quarantinedBlockIDs(s.blocksDir)
-	if err != nil {
-		return eviction.HealthSnapshot{}, err
-	}
-	iter, err := s.idx.ConfirmedUploads()
-	if err != nil {
-		return eviction.HealthSnapshot{}, err
-	}
-
-	snapshot := eviction.HealthSnapshot{
-		Pressure:                eviction.HealthPressureOK,
-		QuarantinedBlocks:       len(quarantined),
-		RestoreFailuresByReason: s.restoreFailuresByReason(),
-	}
-	if err := s.collectEvictionLifecycleHealth(ctx, &snapshot, quarantined, iter); err != nil {
-		return eviction.HealthSnapshot{}, err
-	}
+	snapshot := s.evictionLifecycleHealthSnapshot()
+	snapshot.RestoreFailuresByReason = s.restoreFailuresByReason()
 	for _, count := range snapshot.RestoreFailuresByReason {
 		snapshot.RestoreFailedBlocks += count
 	}
+	snapshot.Pressure = eviction.HealthPressureOK
 	if evictionHealthDegraded(snapshot) {
 		snapshot.Pressure = eviction.HealthPressureDegraded
 	}
+	s.evictionMetricRecorder().SetHealth(s.shardID, snapshot)
 	return snapshot, nil
 }
 
-func (s *Shard) collectEvictionLifecycleHealth(
+func (s *Shard) rebuildEvictionHealthSnapshot(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	contributions, err := s.evictionHealthContributions(ctx)
+	if err != nil {
+		return err
+	}
+	s.replaceEvictionHealthContributions(contributions)
+	return nil
+}
+
+func (s *Shard) evictionHealthContributions(ctx context.Context) (map[uint64]evictionHealthBlockContribution, error) {
+	contributions, err := quarantinedEvictionHealthContributions(s.blocksDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.appendConfirmedUploadHealthContributions(ctx, contributions); err != nil {
+		return nil, err
+	}
+	return contributions, nil
+}
+
+func quarantinedEvictionHealthContributions(blocksDir string) (map[uint64]evictionHealthBlockContribution, error) {
+	quarantined, err := block.ListQuarantined(blocksDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("shard: list quarantined Blocks: %w", err)
+	}
+
+	contributions := make(map[uint64]evictionHealthBlockContribution, len(quarantined))
+	for _, blockID := range quarantined {
+		contributions[blockID] = evictionHealthBlockContribution{Quarantined: true}
+	}
+	return contributions, nil
+}
+
+func (s *Shard) appendConfirmedUploadHealthContributions(
 	ctx context.Context,
-	snapshot *eviction.HealthSnapshot,
-	quarantined map[uint64]struct{},
-	iter index.ConfirmedUploadIterator,
+	contributions map[uint64]evictionHealthBlockContribution,
 ) error {
+	iter, err := s.idx.ConfirmedUploads()
+	if err != nil {
+		return err
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		upload, err := iter.Next()
 		if err == nil {
-			if _, ok := quarantined[upload.BlockID]; ok {
+			if _, ok := contributions[upload.BlockID]; ok {
 				continue
 			}
 			lifecycle, err := ClassifyLocalBlock(s.blocksDir, upload.BlockID)
 			if err != nil {
 				return fmt.Errorf("shard: classify local Block %d for health: %w", upload.BlockID, err)
 			}
-			applyLifecycleHealth(snapshot, lifecycle)
+			contributions[upload.BlockID] = evictionHealthContributionFromLifecycle(lifecycle)
 			continue
 		}
 		if errors.Is(err, io.EOF) {
@@ -131,6 +101,63 @@ func (s *Shard) collectEvictionLifecycleHealth(
 		return err
 	}
 	return nil
+}
+
+func (s *Shard) replaceEvictionHealthContributions(contributions map[uint64]evictionHealthBlockContribution) {
+	s.evictionHealthMu.Lock()
+	defer s.evictionHealthMu.Unlock()
+
+	s.evictionHealthBlocks = contributions
+	s.evictionHealthSnapshot = eviction.HealthSnapshot{}
+	for _, contribution := range contributions {
+		applyEvictionHealthContribution(&s.evictionHealthSnapshot, contribution, 1)
+	}
+}
+
+func (s *Shard) recordEvictionHealthBlock(blockID uint64) error {
+	contribution, err := s.evictionHealthContributionForBlock(blockID)
+	if err != nil {
+		return err
+	}
+
+	s.evictionHealthMu.Lock()
+	defer s.evictionHealthMu.Unlock()
+
+	if s.evictionHealthBlocks == nil {
+		s.evictionHealthBlocks = make(map[uint64]evictionHealthBlockContribution)
+	}
+	old := s.evictionHealthBlocks[blockID]
+	applyEvictionHealthContribution(&s.evictionHealthSnapshot, old, -1)
+	s.evictionHealthBlocks[blockID] = contribution
+	applyEvictionHealthContribution(&s.evictionHealthSnapshot, contribution, 1)
+	return nil
+}
+
+func (s *Shard) recordEvictionHealthBlockBestEffort(blockID uint64) {
+	if err := s.recordEvictionHealthBlock(blockID); err != nil && s.logger != nil {
+		s.logger.Warn("record eviction health failed", "block_id", blockID, "error", err)
+	}
+}
+
+func (s *Shard) evictionHealthContributionForBlock(blockID uint64) (evictionHealthBlockContribution, error) {
+	quarantined, err := fileExists(block.FilePath(s.blocksDir, blockID) + block.QuarantineSuffix)
+	if err != nil {
+		return evictionHealthBlockContribution{}, err
+	}
+	if quarantined {
+		return evictionHealthBlockContribution{Quarantined: true}, nil
+	}
+	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	if err != nil {
+		return evictionHealthBlockContribution{}, fmt.Errorf("shard: classify local Block %d for health: %w", blockID, err)
+	}
+	return evictionHealthContributionFromLifecycle(lifecycle), nil
+}
+
+func (s *Shard) evictionLifecycleHealthSnapshot() eviction.HealthSnapshot {
+	s.evictionHealthMu.Lock()
+	defer s.evictionHealthMu.Unlock()
+	return s.evictionHealthSnapshot
 }
 
 func (s *Shard) restoreFailuresByReason() map[string]int {
@@ -147,20 +174,34 @@ func (s *Shard) restoreFailuresByReason() map[string]int {
 	return out
 }
 
-func applyLifecycleHealth(snapshot *eviction.HealthSnapshot, lifecycle LocalBlockLifecycle) {
-	switch lifecycle.State {
-	case LocalBlockStateHot:
+func evictionHealthContributionFromLifecycle(lifecycle LocalBlockLifecycle) evictionHealthBlockContribution {
+	contribution := evictionHealthBlockContribution{State: lifecycle.State}
+	if lifecycle.State == LocalBlockStateEvicted && lifecycle.EvictionMarker != nil {
+		contribution.EvictedSize = lifecycle.EvictionMarker.SizeBytes
+	}
+	return contribution
+}
+
+func applyEvictionHealthContribution(
+	snapshot *eviction.HealthSnapshot,
+	contribution evictionHealthBlockContribution,
+	delta int,
+) {
+	if contribution.Quarantined {
+		snapshot.QuarantinedBlocks += delta
+		return
+	}
+	switch contribution.State {
+	case LocalBlockStateHot, "":
 	case LocalBlockStateEvicted:
-		snapshot.EvictedBlocks++
-		if lifecycle.EvictionMarker != nil {
-			snapshot.EvictedBytes += lifecycle.EvictionMarker.SizeBytes
-		}
+		snapshot.EvictedBlocks += delta
+		snapshot.EvictedBytes += int64(delta) * contribution.EvictedSize
 	case LocalBlockStateHotCleanupNeeded:
-		snapshot.HotCleanupNeededBlocks++
+		snapshot.HotCleanupNeededBlocks += delta
 	case LocalBlockStateMetadataLoss:
-		snapshot.MetadataLossBlocks++
+		snapshot.MetadataLossBlocks += delta
 	case LocalBlockStateUnexpectedLoss:
-		snapshot.UnexpectedLossBlocks++
+		snapshot.UnexpectedLossBlocks += delta
 	}
 }
 
@@ -170,33 +211,4 @@ func evictionHealthDegraded(snapshot eviction.HealthSnapshot) bool {
 		snapshot.UnexpectedLossBlocks > 0 ||
 		snapshot.QuarantinedBlocks > 0 ||
 		snapshot.RestoreFailedBlocks > 0
-}
-
-func quarantinedBlockIDs(blocksDir string) (map[uint64]struct{}, error) {
-	entries, err := os.ReadDir(blocksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[uint64]struct{}{}, nil
-		}
-		return nil, fmt.Errorf("shard: read quarantined Blocks: %w", err)
-	}
-	blockIDs := map[uint64]struct{}{}
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".blk"+block.QuarantineSuffix) {
-			blockID, ok := parseBlockQuarantineName(entry.Name())
-			if ok {
-				blockIDs[blockID] = struct{}{}
-			}
-		}
-	}
-	return blockIDs, nil
-}
-
-func parseBlockQuarantineName(name string) (uint64, bool) {
-	trimmed := strings.TrimSuffix(name, ".blk"+block.QuarantineSuffix)
-	id, err := strconv.ParseUint(trimmed, 16, 64)
-	if err != nil {
-		return 0, false
-	}
-	return id, true
 }
