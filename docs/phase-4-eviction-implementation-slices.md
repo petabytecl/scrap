@@ -4,6 +4,8 @@ Status: Published
 
 Source: ADR 0016
 
+ADR tracking issue: #381
+
 ## Purpose
 
 Break Phase 4 partial local eviction into independently reviewable slices. These

@@ -21,6 +21,14 @@ forward fail-closed security boundaries, explicit backend retry policy,
 deployment invariants, and operator visibility before eviction is implemented.
 See `docs/research/2026-05-31-external-storage-systems.md`.
 
+## Tracking
+
+GitHub tracking issue: #381.
+
+Implementation slices are published in
+`docs/phase-4-eviction-implementation-slices.md` and tracked by #372 through
+#380.
+
 ## Decision
 
 Phase 4 is limited to partial local eviction of already-uploaded sealed Block
