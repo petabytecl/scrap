@@ -127,8 +127,93 @@ func TestServer_CreateEvictionPlanRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestServer_ApplyEvictionPlan(t *testing.T) {
+	applier := &evictionApplierStub{}
+	srv := admin.New(admin.WithEvictionApplier(applier))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		ts.URL+"/admin/eviction/plans/plan-123/apply",
+		bytes.NewReader([]byte(`{}`)),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /admin/eviction/plans/plan-123/apply: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+	if applier.req.PlanID != "plan-123" {
+		t.Fatalf("apply request = %+v, want plan-123", applier.req)
+	}
+
+	var got eviction.ApplyResult
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.PlanID != "plan-123" || got.Status != eviction.ApplyStatusCompleted {
+		t.Fatalf("apply response mismatch: %+v", got)
+	}
+}
+
+func TestServer_ApplyEvictionPlanNotFoundReturnsPreconditionFailed(t *testing.T) {
+	applier := evictionApplierFunc(func(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
+		return eviction.ApplyResult{}, eviction.ErrPlanNotFound
+	})
+	srv := admin.New(admin.WithEvictionApplier(applier))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		ts.URL+"/admin/eviction/plans/missing/apply",
+		bytes.NewReader([]byte(`{}`)),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /admin/eviction/plans/missing/apply: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("status: got %d, want 412", resp.StatusCode)
+	}
+}
+
 type evictionPlannerFunc func(context.Context, eviction.PlanRequest) (eviction.Plan, error)
 
 func (f evictionPlannerFunc) CreateEvictionPlan(ctx context.Context, req eviction.PlanRequest) (eviction.Plan, error) {
+	return f(ctx, req)
+}
+
+type evictionApplierStub struct {
+	req eviction.ApplyRequest
+}
+
+func (s *evictionApplierStub) ApplyEvictionPlan(_ context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
+	s.req = req
+	return eviction.ApplyResult{
+		PlanID: req.PlanID,
+		Status: eviction.ApplyStatusCompleted,
+	}, nil
+}
+
+type evictionApplierFunc func(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error)
+
+func (f evictionApplierFunc) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
 	return f(ctx, req)
 }

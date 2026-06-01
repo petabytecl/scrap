@@ -175,6 +175,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithLogger(logger),
 		admin.WithUploadPressureProvider(s),
 		admin.WithEvictionPlanner(s),
+		admin.WithEvictionApplier(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
 	}
 	if cfg.TestHooks {

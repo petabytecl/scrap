@@ -107,6 +107,8 @@ type Shard struct {
 
 	lifecycleCleanupDone chan struct{}
 	evictionPlans        map[string]eviction.Plan
+	evictionApplyResults map[string]eviction.ApplyResult
+	evictionApplyRunning map[string]struct{}
 	restoreMu            sync.Mutex
 	restores             map[uint64]*blockRestoreCall
 }
@@ -181,6 +183,8 @@ func Open(cfg Config) (*Shard, error) {
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
 		evictionPlans:           make(map[string]eviction.Plan),
+		evictionApplyResults:    make(map[string]eviction.ApplyResult),
+		evictionApplyRunning:    make(map[string]struct{}),
 		restores:                make(map[uint64]*blockRestoreCall),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
