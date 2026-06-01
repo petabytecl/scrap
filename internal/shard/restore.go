@@ -116,21 +116,30 @@ func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 	if err != nil {
 		return err
 	}
-	tmpPath, err := s.downloadRestore(ctx, input)
+	tmpBlockPath, err := s.downloadRestore(ctx, input)
 	if err != nil {
 		return err
 	}
 	published := false
+	tmpPaths := []string{tmpBlockPath}
 	defer func() {
 		if !published {
-			_ = os.Remove(tmpPath)
+			for _, tmpPath := range tmpPaths {
+				_ = os.Remove(tmpPath)
+			}
 		}
 	}()
 
-	if err := verifyRestoredBlock(input, tmpPath); err != nil {
+	tmpIndexPath, err := s.downloadRestoreIndex(ctx, input)
+	if err != nil {
 		return err
 	}
-	published, err = s.publishVerifiedRepairRestore(input, tmpPath)
+	tmpPaths = append(tmpPaths, tmpIndexPath)
+
+	if err := verifyRestoredBlock(input, tmpBlockPath, tmpIndexPath); err != nil {
+		return err
+	}
+	published, err = s.publishVerifiedRepairRestore(input, tmpBlockPath, tmpIndexPath)
 	return err
 }
 
@@ -229,7 +238,7 @@ func (s *Shard) downloadVerifyAndPublishRestore(ctx context.Context, input resto
 		}
 	}()
 
-	if err := verifyRestoredBlock(input, tmpPath); err != nil {
+	if err := verifyRestoredBlock(input, tmpPath, input.indexPath); err != nil {
 		return err
 	}
 	published, err = s.publishVerifiedRestore(input, tmpPath, reason)
@@ -249,11 +258,11 @@ func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath, reason strin
 	return true, nil
 }
 
-func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpPath string) (bool, error) {
+func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, tmpIndexPath string) (bool, error) {
 	s.lifecycleMutationMu.Lock()
 	defer s.lifecycleMutationMu.Unlock()
 
-	if err := publishRepairedBlock(input, tmpPath); err != nil {
+	if err := publishRepairedBlock(input, tmpBlockPath, tmpIndexPath); err != nil {
 		return false, err
 	}
 	if err := s.recordSuccessfulRestore(input, RestoreReasonRepair); err != nil {
@@ -262,11 +271,11 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpPath string)
 	return true, nil
 }
 
-func verifyRestoredBlock(input restoreInput, tmpPath string) error {
-	if err := block.VerifyHeader(tmpPath, input.confirmed.ShardID, input.confirmed.BlockID); err != nil {
+func verifyRestoredBlock(input restoreInput, blkPath, idxPath string) error {
+	if err := block.VerifyHeader(blkPath, input.confirmed.ShardID, input.confirmed.BlockID); err != nil {
 		return fmt.Errorf("%w: restored Block %d header invalid: %w", storeapi.ErrDataLoss, input.confirmed.BlockID, err)
 	}
-	result, err := block.VerifyBlock(tmpPath, input.indexPath)
+	result, err := block.VerifyBlock(blkPath, idxPath)
 	if err != nil {
 		return fmt.Errorf("%w: restored Block %d verification failed: %w", storeapi.ErrDataLoss, input.confirmed.BlockID, err)
 	}
@@ -295,28 +304,64 @@ func requireQuarantinedRepairFiles(blocksDir string, blockID uint64) error {
 	return nil
 }
 
-func publishRepairedBlock(input restoreInput, tmpPath string) error {
+func publishRepairedBlock(input restoreInput, tmpBlockPath, tmpIndexPath string) error {
 	blkQ := input.blockPath + block.QuarantineSuffix
 	idxFinal := block.IdxFilePath(filepath.Dir(input.blockPath), input.confirmed.BlockID)
 	idxQ := idxFinal + block.QuarantineSuffix
-	if err := os.Rename(idxQ, idxFinal); err != nil {
-		return fmt.Errorf("shard: promote repaired index for Block %d: %w", input.confirmed.BlockID, err)
+	rollback := repairPublishRollback{
+		blockPath: input.blockPath,
+		idxFinal:  idxFinal,
 	}
-	idxPromoted := true
-	defer func() {
-		if !idxPromoted {
-			_ = os.Rename(idxFinal, idxQ)
-		}
-	}()
-	if err := os.Rename(tmpPath, input.blockPath); err != nil {
-		idxPromoted = false
+	defer rollback.run()
+
+	if err := os.Rename(tmpBlockPath, input.blockPath); err != nil {
 		return fmt.Errorf("shard: publish repaired Block %d: %w", input.confirmed.BlockID, err)
 	}
-	if err := os.Remove(blkQ); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("shard: remove quarantined Block %d after repair: %w", input.confirmed.BlockID, err)
+	rollback.blockPublished = true
+	if err := os.Rename(tmpIndexPath, idxFinal); err != nil {
+		return fmt.Errorf("shard: publish repaired index for Block %d: %w", input.confirmed.BlockID, err)
 	}
+	rollback.indexPublished = true
 	if err := syncDirectory(filepath.Dir(input.blockPath)); err != nil {
 		return err
+	}
+	rollback.committed = true
+	return removeRepairQuarantineFiles(input.confirmed.BlockID, filepath.Dir(input.blockPath), blkQ, idxQ)
+}
+
+type repairPublishRollback struct {
+	committed      bool
+	blockPublished bool
+	indexPublished bool
+	blockPath      string
+	idxFinal       string
+}
+
+func (r *repairPublishRollback) run() {
+	if r.committed {
+		return
+	}
+	if r.indexPublished {
+		_ = os.Remove(r.idxFinal)
+	}
+	if r.blockPublished {
+		_ = os.Remove(r.blockPath)
+	}
+}
+
+func removeRepairQuarantineFiles(blockID uint64, dir, blkQ, idxQ string) error {
+	if err := removeRepairQuarantineFile(blockID, "Block", blkQ); err != nil {
+		return err
+	}
+	if err := removeRepairQuarantineFile(blockID, "index", idxQ); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
+}
+
+func removeRepairQuarantineFile(blockID uint64, kind, path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("shard: remove quarantined %s %d after repair: %w", kind, blockID, err)
 	}
 	return nil
 }
@@ -337,17 +382,25 @@ func (s *Shard) recordSuccessfulRestore(input restoreInput, reason string) error
 }
 
 func (s *Shard) downloadRestore(ctx context.Context, input restoreInput) (string, error) {
-	rc, meta, err := input.backend.GetObject(ctx, input.confirmed.BlockObject.Key, backend.GetOpts{})
+	return s.downloadRestoreObject(ctx, input, input.confirmed.BlockObject, "blk")
+}
+
+func (s *Shard) downloadRestoreIndex(ctx context.Context, input restoreInput) (string, error) {
+	return s.downloadRestoreObject(ctx, input, input.confirmed.IndexObject, "idx")
+}
+
+func (s *Shard) downloadRestoreObject(ctx context.Context, input restoreInput, object index.BackendObjectMetadata, ext string) (string, error) {
+	rc, meta, err := input.backend.GetObject(ctx, object.Key, backend.GetOpts{})
 	if err != nil {
 		return "", mapRestoreBackendError(err, input.confirmed.BlockID)
 	}
 	defer func() { _ = rc.Close() }()
 
-	if err := validateRestoreObjectMeta(input.confirmed, meta); err != nil {
+	if err := validateRestoreObjectMeta(input.confirmed.BlockID, ext, object, meta); err != nil {
 		return "", err
 	}
 
-	tmp, err := os.CreateTemp(s.blocksDir, fmt.Sprintf(".%016x.blk.restore-*", input.confirmed.BlockID))
+	tmp, err := os.CreateTemp(s.blocksDir, fmt.Sprintf(".%016x.%s.restore-*", input.confirmed.BlockID, ext))
 	if err != nil {
 		return "", fmt.Errorf("shard: create restore staging file: %w", err)
 	}
@@ -359,7 +412,7 @@ func (s *Shard) downloadRestore(ctx context.Context, input restoreInput) (string
 		}
 	}()
 
-	if err := copyRestoreObject(tmp, rc, input.confirmed); err != nil {
+	if err := copyRestoreObject(tmp, rc, input.confirmed.BlockID, ext, object); err != nil {
 		return "", err
 	}
 
@@ -367,29 +420,29 @@ func (s *Shard) downloadRestore(ctx context.Context, input restoreInput) (string
 	return tmpPath, nil
 }
 
-func validateRestoreObjectMeta(confirmed index.ConfirmedUpload, meta backend.ObjectMeta) error {
-	if meta.Size != confirmed.BlockObject.SizeBytes {
-		return fmt.Errorf("%w: restored Block %d size %d does not match confirmed size %d", storeapi.ErrDataLoss, confirmed.BlockID, meta.Size, confirmed.BlockObject.SizeBytes)
+func validateRestoreObjectMeta(blockID uint64, ext string, object index.BackendObjectMetadata, meta backend.ObjectMeta) error {
+	if meta.Size != object.SizeBytes {
+		return fmt.Errorf("%w: restored %s for Block %d size %d does not match confirmed size %d", storeapi.ErrDataLoss, ext, blockID, meta.Size, object.SizeBytes)
 	}
-	if meta.ETag != "" && meta.ETag != confirmed.BlockObject.ValidationToken {
-		return fmt.Errorf("%w: restored Block %d validation token mismatch", storeapi.ErrDataLoss, confirmed.BlockID)
+	if meta.ETag != "" && meta.ETag != object.ValidationToken {
+		return fmt.Errorf("%w: restored %s for Block %d validation token mismatch", storeapi.ErrDataLoss, ext, blockID)
 	}
 	return nil
 }
 
-func copyRestoreObject(tmp restoreStagingFile, rc io.Reader, confirmed index.ConfirmedUpload) error {
-	limit := confirmed.BlockObject.SizeBytes
+func copyRestoreObject(tmp restoreStagingFile, rc io.Reader, blockID uint64, ext string, object index.BackendObjectMetadata) error {
+	limit := object.SizeBytes
 	if limit < math.MaxInt64 {
 		limit++
 	}
-	written, err := copyRestoreReader(tmp, io.LimitReader(rc, limit), confirmed.BlockID)
+	written, err := copyRestoreReader(tmp, io.LimitReader(rc, limit), blockID)
 	if err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if written != confirmed.BlockObject.SizeBytes {
+	if written != object.SizeBytes {
 		_ = tmp.Close()
-		return fmt.Errorf("%w: restored Block %d copied %d bytes, expected %d", storeapi.ErrDataLoss, confirmed.BlockID, written, confirmed.BlockObject.SizeBytes)
+		return fmt.Errorf("%w: restored %s for Block %d copied %d bytes, expected %d", storeapi.ErrDataLoss, ext, blockID, written, object.SizeBytes)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()

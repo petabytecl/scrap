@@ -361,11 +361,48 @@ func TestRestoreBlockForRepairRestoresQuarantinedBlockFromBackend(t *testing.T) 
 	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "blk"))
 	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "idx"))
 	waitPendingUploads(t, s, 0)
-	_ = waitConfirmedUpload(t, s, 1)
+	_ = waitConfirmedUpload(t, s)
 
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	if err := block.Quarantine(block.FilePath(blocksDir, 1)); err != nil {
 		t.Fatalf("Quarantine: %v", err)
+	}
+
+	if err := s.RestoreBlockForRepair(ctx, 1); err != nil {
+		t.Fatalf("RestoreBlockForRepair: %v", err)
+	}
+
+	assertRepairRestorePublishedHotBlock(t, blocksDir)
+}
+
+func TestRestoreBlockForRepairRestoresCorruptQuarantinedIndexFromBackend(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("repair corrupt index "), 8)
+	if _, err := s.WriteDocument(ctx, "tx-repair-index", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-repair-index-seal", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "blk"))
+	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "idx"))
+	waitPendingUploads(t, s, 0)
+	_ = waitConfirmedUpload(t, s)
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := block.Quarantine(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	if err := os.WriteFile(block.IdxFilePath(blocksDir, 1)+block.QuarantineSuffix, []byte("corrupt local index"), 0o600); err != nil {
+		t.Fatalf("corrupt quarantined index: %v", err)
 	}
 
 	if err := s.RestoreBlockForRepair(ctx, 1); err != nil {
@@ -400,7 +437,7 @@ func TestRestoreBlockForRepairCorruptBackendLeavesQuarantine(t *testing.T) {
 	waitBackendObject(ctx, t, backendStore.Backend, backendObjectKey(1, "blk"))
 	waitBackendObject(ctx, t, backendStore.Backend, backendObjectKey(1, "idx"))
 	waitPendingUploads(t, s, 0)
-	_ = waitConfirmedUpload(t, s, 1)
+	_ = waitConfirmedUpload(t, s)
 
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	if err := block.Quarantine(block.FilePath(blocksDir, 1)); err != nil {
@@ -502,6 +539,13 @@ func assertRepairRestoreFailureLeftQuarantined(t *testing.T, blocksDir string) {
 	if len(matches) != 0 {
 		t.Fatalf("repair restore staging files remain: %v", matches)
 	}
+	matches, err = filepath.Glob(filepath.Join(blocksDir, ".0000000000000001.idx.restore-*"))
+	if err != nil {
+		t.Fatalf("glob repair index restore staging: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("repair index restore staging files remain: %v", matches)
+	}
 }
 
 func stageEvictedConfirmedBlock(ctx context.Context, t *testing.T, s *shard.Shard, backendStore backend.Backend, content []byte) index.ConfirmedUpload {
@@ -517,7 +561,7 @@ func stageEvictedConfirmedBlock(ctx context.Context, t *testing.T, s *shard.Shar
 	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "blk"))
 	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "idx"))
 	waitPendingUploads(t, s, 0)
-	confirmed := waitConfirmedUpload(t, s, 1)
+	confirmed := waitConfirmedUpload(t, s)
 
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	if err := shard.WriteEvictionMarker(blocksDir, evictionMarkerFromConfirmed(confirmed)); err != nil {
@@ -529,9 +573,10 @@ func stageEvictedConfirmedBlock(ctx context.Context, t *testing.T, s *shard.Shar
 	return confirmed
 }
 
-func waitConfirmedUpload(t *testing.T, s *shard.Shard, blockID uint64) index.ConfirmedUpload {
+func waitConfirmedUpload(t *testing.T, s *shard.Shard) index.ConfirmedUpload {
 	t.Helper()
 
+	const blockID uint64 = 1
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		confirmed, err := s.ConfirmedUploadForTest(blockID)

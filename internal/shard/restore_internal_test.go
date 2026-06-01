@@ -66,17 +66,21 @@ func TestRequireQuarantinedRepairFilesFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPublishRepairedBlockRollsBackIndexOnBlockPublishFailure(t *testing.T) {
+func TestPublishRepairedBlockDoesNotConsumeIndexWhenBlockPublishFails(t *testing.T) {
 	const blockID uint64 = 1
 
 	blocksDir := t.TempDir()
 	blockPath := block.FilePath(blocksDir, blockID)
-	tmpPath := filepath.Join(blocksDir, "repair.tmp")
+	tmpBlockPath := filepath.Join(blocksDir, "repair.blk.tmp")
+	tmpIndexPath := filepath.Join(blocksDir, "repair.idx.tmp")
 	idxFinal := block.IdxFilePath(blocksDir, blockID)
 	idxQuarantine := idxFinal + block.QuarantineSuffix
 
-	if err := os.WriteFile(tmpPath, []byte("restored"), 0o600); err != nil {
+	if err := os.WriteFile(tmpBlockPath, []byte("restored"), 0o600); err != nil {
 		t.Fatalf("write repair tmp: %v", err)
+	}
+	if err := os.WriteFile(tmpIndexPath, []byte("restored idx"), 0o600); err != nil {
+		t.Fatalf("write repair index tmp: %v", err)
 	}
 	if err := os.WriteFile(idxQuarantine, []byte("idx"), 0o600); err != nil {
 		t.Fatalf("write quarantined index: %v", err)
@@ -88,7 +92,7 @@ func TestPublishRepairedBlockRollsBackIndexOnBlockPublishFailure(t *testing.T) {
 	err := publishRepairedBlock(restoreInput{
 		confirmed: index.ConfirmedUpload{BlockID: blockID},
 		blockPath: blockPath,
-	}, tmpPath)
+	}, tmpBlockPath, tmpIndexPath)
 	if err == nil {
 		t.Fatal("expected publish failure")
 	}
@@ -97,6 +101,53 @@ func TestPublishRepairedBlockRollsBackIndexOnBlockPublishFailure(t *testing.T) {
 	}
 	if _, statErr := os.Stat(idxFinal); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("final index stat after rollback = %v, want not exist", statErr)
+	}
+	if _, statErr := os.Stat(tmpIndexPath); statErr != nil {
+		t.Fatalf("repair index tmp stat after block publish failure: %v", statErr)
+	}
+}
+
+func TestPublishRepairedBlockRollsBackBlockOnIndexPublishFailure(t *testing.T) {
+	const blockID uint64 = 1
+
+	blocksDir := t.TempDir()
+	blockPath := block.FilePath(blocksDir, blockID)
+	tmpBlockPath := filepath.Join(blocksDir, "repair.blk.tmp")
+	tmpIndexPath := filepath.Join(blocksDir, "repair.idx.tmp")
+	idxFinal := block.IdxFilePath(blocksDir, blockID)
+	idxQuarantine := idxFinal + block.QuarantineSuffix
+
+	if err := os.WriteFile(tmpBlockPath, []byte("restored"), 0o600); err != nil {
+		t.Fatalf("write repair block tmp: %v", err)
+	}
+	if err := os.WriteFile(tmpIndexPath, []byte("restored idx"), 0o600); err != nil {
+		t.Fatalf("write repair index tmp: %v", err)
+	}
+	if err := os.WriteFile(blockPath+block.QuarantineSuffix, []byte("quarantined"), 0o600); err != nil {
+		t.Fatalf("write quarantined Block: %v", err)
+	}
+	if err := os.WriteFile(idxQuarantine, []byte("idx"), 0o600); err != nil {
+		t.Fatalf("write quarantined index: %v", err)
+	}
+	if err := os.Mkdir(idxFinal, 0o750); err != nil {
+		t.Fatalf("mkdir index publish collision: %v", err)
+	}
+
+	err := publishRepairedBlock(restoreInput{
+		confirmed: index.ConfirmedUpload{BlockID: blockID},
+		blockPath: blockPath,
+	}, tmpBlockPath, tmpIndexPath)
+	if err == nil {
+		t.Fatal("expected publish failure")
+	}
+	if _, statErr := os.Stat(blockPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("final Block stat after rollback = %v, want not exist", statErr)
+	}
+	if _, statErr := os.Stat(blockPath + block.QuarantineSuffix); statErr != nil {
+		t.Fatalf("quarantined Block stat after rollback: %v", statErr)
+	}
+	if _, statErr := os.Stat(idxQuarantine); statErr != nil {
+		t.Fatalf("quarantined index stat after rollback: %v", statErr)
 	}
 }
 
