@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
@@ -94,6 +95,42 @@ func TestMetadataReadsStayLocalForEvictedBlock(t *testing.T) {
 	}
 	if _, err := os.Stat(shard.EvictionMarkerPath(blocksDir, 1)); err != nil {
 		t.Fatalf("eviction marker should remain: %v", err)
+	}
+}
+
+func TestMetadataReadsRequireConfirmedUploadForEvictedBlock(t *testing.T) {
+	ctx := context.Background()
+	s := openUploadTestShard(t, shard.UploadConfig{})
+
+	content := bytes.Repeat([]byte("marker without catalog "), 4)
+	if _, err := s.WriteDocument(ctx, "tx-unconfirmed", "doc.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument unconfirmed: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-next", "doc.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument next: %v", err)
+	}
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := shard.WriteEvictionMarker(blocksDir, shard.EvictionMarker{
+		BlockID:         1,
+		BackendKey:      "local/shards/0000000000000007/0000000000000001.blk",
+		SizeBytes:       123,
+		ValidationToken: "validation",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         shard.EvictionTriggerOperatorRequested,
+		Reason:          shard.EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	if err := os.Remove(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("remove unconfirmed Block: %v", err)
+	}
+
+	if _, err := s.HeadDocument(ctx, "tx-unconfirmed", "doc.bin"); !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("HeadDocument error = %v, want ErrDataLoss", err)
+	}
+	if _, err := s.FindDocuments(ctx, "tx-unconfirmed"); !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("FindDocuments error = %v, want ErrDataLoss", err)
 	}
 }
 

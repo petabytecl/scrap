@@ -28,11 +28,21 @@ func (s *Shard) ensureMetadataReadAllowed(blockID uint64) error {
 	}
 
 	switch lifecycle.State {
-	case LocalBlockStateHot, LocalBlockStateHotCleanupNeeded, LocalBlockStateEvicted:
+	case LocalBlockStateHot, LocalBlockStateHotCleanupNeeded:
 		return nil
+	case LocalBlockStateEvicted:
+		return s.ensureEvictedMetadataAuthority(blockID, lifecycle)
 	case LocalBlockStateMetadataLoss, LocalBlockStateUnexpectedLoss:
 		return fmt.Errorf("%w: Block %d local state %s", storeapi.ErrDataLoss, blockID, lifecycle.State)
 	default:
 		return fmt.Errorf("%w: Block %d unknown local state %s", storeapi.ErrDataLoss, blockID, lifecycle.State)
 	}
+}
+
+func (s *Shard) ensureEvictedMetadataAuthority(blockID uint64, lifecycle LocalBlockLifecycle) error {
+	confirmed, err := s.idx.GetConfirmedUpload(blockID)
+	if err != nil {
+		return fmt.Errorf("%w: Block %d has no committed ConfirmUpload: %w", storeapi.ErrDataLoss, blockID, err)
+	}
+	return validateRestoreAuthority(confirmed, lifecycle)
 }
