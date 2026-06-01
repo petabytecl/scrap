@@ -50,6 +50,7 @@ type Config struct {
 	// their packages).
 	Scrub          scrub.Config
 	UploadPressure shard.UploadPressureConfig
+	Eviction       shard.EvictionConfig
 }
 
 // loadConfig assembles Config from the given command-line arguments and the
@@ -82,26 +83,7 @@ func loadConfig(args []string) (Config, error) {
 		UploadPressure:  shard.ParseUploadPressureConfigFromEnv(),
 	}
 
-	var err error
-	if cfg.UploadEnabled, err = envBoolChecked("SCRAP_UPLOAD_ENABLED", true); err != nil {
-		return Config{}, err
-	}
-	if cfg.RawTelemetryIDs, err = envBoolChecked("SCRAP_TELEMETRY_RAW_IDS", false); err != nil {
-		return Config{}, err
-	}
-	if cfg.TestHooks, err = envBoolChecked("SCRAP_TEST_HOOKS", false); err != nil {
-		return Config{}, err
-	}
-	if cfg.PprofEnabled, err = envBoolChecked("SCRAP_PPROF_ENABLED", false); err != nil {
-		return Config{}, err
-	}
-	if cfg.UploadConcurrency, err = envIntChecked("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency); err != nil {
-		return Config{}, err
-	}
-	if cfg.Replicas, err = envIntChecked("SCRAP_REPLICAS", 0); err != nil {
-		return Config{}, err
-	}
-	if cfg.PeerPort, err = envIntChecked("SCRAP_PEER_PORT", defaultPeerPort); err != nil {
+	if err := loadCheckedEnv(&cfg); err != nil {
 		return Config{}, err
 	}
 
@@ -109,6 +91,56 @@ func loadConfig(args []string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func loadCheckedEnv(cfg *Config) error {
+	if err := loadSubsystemEnv(cfg); err != nil {
+		return err
+	}
+	if err := loadBoolEnv(cfg); err != nil {
+		return err
+	}
+	return loadIntEnv(cfg)
+}
+
+func loadSubsystemEnv(cfg *Config) error {
+	eviction, err := shard.ParseEvictionConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	cfg.Eviction = eviction
+	return nil
+}
+
+func loadBoolEnv(cfg *Config) error {
+	var err error
+	if cfg.UploadEnabled, err = envBoolChecked("SCRAP_UPLOAD_ENABLED", true); err != nil {
+		return err
+	}
+	if cfg.RawTelemetryIDs, err = envBoolChecked("SCRAP_TELEMETRY_RAW_IDS", false); err != nil {
+		return err
+	}
+	if cfg.TestHooks, err = envBoolChecked("SCRAP_TEST_HOOKS", false); err != nil {
+		return err
+	}
+	if cfg.PprofEnabled, err = envBoolChecked("SCRAP_PPROF_ENABLED", false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadIntEnv(cfg *Config) error {
+	var err error
+	if cfg.UploadConcurrency, err = envIntChecked("SCRAP_UPLOAD_CONCURRENCY", shard.DefaultUploadConcurrency); err != nil {
+		return err
+	}
+	if cfg.Replicas, err = envIntChecked("SCRAP_REPLICAS", 0); err != nil {
+		return err
+	}
+	if cfg.PeerPort, err = envIntChecked("SCRAP_PEER_PORT", defaultPeerPort); err != nil {
+		return err
+	}
+	return nil
 }
 
 // validate enforces ranges on typed values. It only rejects values that are

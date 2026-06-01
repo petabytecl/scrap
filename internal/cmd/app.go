@@ -124,6 +124,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		Replicator:         peerClient,
 		PeerAddrs:          peerAddrsExceptSelf(peers, raftID),
 		Upload:             uploadCfg,
+		Eviction:           cfg.Eviction,
 		WriteTelemetry:     shardTel.writeTelemetry,
 		IdentifierMode:     identifierMode,
 	})
