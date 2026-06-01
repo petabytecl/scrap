@@ -114,8 +114,7 @@ type Shard struct {
 	scrubs                  *scrubCoordinator
 	uploads                 *uploadController
 	uploadPressureScrubGate *pressurePauseGate
-	uploadObligations       uploadObligations
-	committedConfirmUploads map[uint64]index.ConfirmedUpload
+	blockUploads            *blockUploadLifecycle
 
 	rebuilder *projectionRebuilder
 
@@ -211,7 +210,7 @@ func Open(cfg Config) (*Shard, error) {
 		evictionApplyResults:    make(map[string]eviction.ApplyResult),
 		evictionApplyRunning:    make(map[string]struct{}),
 		evictionHealthBlocks:    make(map[uint64]evictionHealthBlockContribution),
-		committedConfirmUploads: make(map[uint64]index.ConfirmedUpload),
+		blockUploads:            newBlockUploadLifecycle(),
 		restores:                make(map[uint64]*blockRestoreCall),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
@@ -702,29 +701,13 @@ func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload
 }
 
 func (s *Shard) committedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
-	confirmed, ok := s.committedConfirmUploads[blockID]
-	if !ok {
-		var err error
-		confirmed, err = s.readCommittedConfirmUploadAuthorityLocked(blockID)
-		if err != nil {
-			return index.ConfirmedUpload{}, err
-		}
-	}
-	return confirmed, nil
-}
-
-func (s *Shard) readCommittedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
-	if s.blocksDir == "" {
-		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
-	}
-	confirmed, err := readConfirmedUploadAuthority(s.blocksDir, blockID)
+	confirmed, loadedFromDisk, err := s.blockUploadLifecycleLocked().confirmedUploadAuthority(s.blocksDir, blockID)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
-		}
 		return index.ConfirmedUpload{}, err
 	}
-	s.recordCommittedConfirmUploadLocked(confirmed)
+	if loadedFromDisk {
+		s.recordEvictionHealthBlockBestEffort(confirmed.BlockID)
+	}
 	return confirmed, nil
 }
 
@@ -758,7 +741,7 @@ func (s *Shard) CurrentBlockIDForTest() uint64 {
 func (s *Shard) OrphanedSealsForTest() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.uploadObligations.len()
+	return s.blockUploadLifecycleLocked().obligationCount()
 }
 
 func (s *Shard) SetRebuildingForTest(v bool) {
