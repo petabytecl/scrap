@@ -18,6 +18,9 @@ GOTESTSUM ?= $(GO_TOOL) gotestsum
 GOVULNCHECK ?= $(GO_TOOL) govulncheck
 KUSTOMIZE ?= $(GO_TOOL) kustomize
 
+##? ACT act CLI used by local GitHub Actions validation targets.
+ACT ?= act
+
 ##? DOCKER Docker CLI used by local image targets.
 ##? KIND kind command used by local cluster targets.
 ##? KIND_VERSION kind version used by the default KIND command.
@@ -74,6 +77,30 @@ TEST_TARGETS := \
 	test \
 	test-race \
 	integration
+
+##@ GitHub Actions Variables
+
+##? ACT_ARGS Extra arguments appended to act commands.
+##? ACT_CI_WORKFLOW GitHub Actions workflow file used by act CI targets.
+##? ACT_EVENT GitHub event used by act CI targets.
+##? ACT_JOB Single job run by act-ci-job.
+##? ACT_CONCURRENT_JOBS Maximum concurrent act jobs for local CI runs.
+##? ACT_CLEANUP Whether act-ci-run removes local act CI resources on exit.
+##? ACT_PULL Whether act pulls mapped runner images before execution.
+##? ACT_RUNNER_BASE_IMAGE Base image used for the local act runner image.
+##? ACT_RUNNER_DOCKERFILE Dockerfile used for the local act runner image.
+##? ACT_RUNNER_IMAGE Local act runner image tag used by .actrc mappings.
+
+ACT_ARGS ?= --pull=$(ACT_PULL) --rm --concurrent-jobs=$(ACT_CONCURRENT_JOBS) --env=ACT=true
+ACT_CI_WORKFLOW ?= .github/workflows/ci.yml
+ACT_CLEANUP ?= false
+ACT_CONCURRENT_JOBS ?= 1
+ACT_EVENT ?= workflow_dispatch
+ACT_JOB ?= build
+ACT_PULL ?= false
+ACT_RUNNER_BASE_IMAGE ?= catthehacker/ubuntu:act-24.04
+ACT_RUNNER_DOCKERFILE ?= tools/act-runner/Dockerfile
+ACT_RUNNER_IMAGE ?= scrap-v2/act-ubuntu:24.04-varrun
 
 ##@ Release Metadata Variables
 
@@ -282,6 +309,66 @@ tests: $(TEST_TARGETS) ## Run all test suites including race detector.
 
 .PHONY: check
 check: $(CHECK_TARGETS) ## Run the full local verification gate.
+
+##@ GitHub Actions
+
+.PHONY: act-runner-image
+act-runner-image: ## Build the local act runner image used by .actrc.
+	$(DOCKER) build \
+		--build-arg ACT_RUNNER_BASE_IMAGE="$(ACT_RUNNER_BASE_IMAGE)" \
+		-f "$(ACT_RUNNER_DOCKERFILE)" \
+		-t "$(ACT_RUNNER_IMAGE)" \
+		.
+
+.PHONY: act-ci-list
+act-ci-list: ## List jobs in the CI workflow through act.
+	$(ACT) --list -W "$(ACT_CI_WORKFLOW)"
+
+.PHONY: act-ci-validate
+act-ci-validate: ## Validate the CI workflow through act.
+	$(ACT) --validate -W "$(ACT_CI_WORKFLOW)"
+
+.PHONY: act-ci-dry-run
+act-ci-dry-run: act-runner-image ## Dry-run the CI workflow_dispatch path through act.
+	@$(MAKE) --no-print-directory act-ci-run ACT_RUN_ARGS="-n"
+
+.PHONY: act-ci
+act-ci: ACT_CLEANUP=true
+act-ci: act-runner-image ## Run the CI workflow_dispatch path through act, including Tier 2 E2E.
+	@$(MAKE) --no-print-directory act-ci-run
+
+.PHONY: act-ci-job
+act-ci-job: act-runner-image ## Run one CI job through act, e.g. make act-ci-job ACT_JOB=build.
+	@test -n "$(ACT_JOB)" || { printf 'ACT_JOB is required\n' >&2; exit 1; }
+	@$(MAKE) --no-print-directory act-ci-run ACT_RUN_ARGS="-j $(ACT_JOB)"
+
+.PHONY: act-ci-e2e
+act-ci-e2e: ACT_JOB=e2e
+act-ci-e2e: ACT_CLEANUP=true
+act-ci-e2e: act-ci-job ## Run only the Tier 2 E2E CI job through act.
+
+.PHONY: act-ci-clean
+act-ci-clean: ## Remove local act CI containers and the prod-like Kind Cell.
+	@containers="$$( $(DOCKER) ps -aq --filter 'name=act-ci-' )"; \
+	if [ -n "$$containers" ]; then \
+		$(DOCKER) rm -f $$containers; \
+	else \
+		printf 'no act CI containers found\n'; \
+	fi
+	@$(MAKE) --no-print-directory prodlike-kind-delete || true
+
+.PHONY: act-ci-run
+act-ci-run:
+	@tmp="$$(mktemp)"; \
+	trap 'status="$$?"; rm -f "$$tmp"; if [ "$(ACT_CLEANUP)" = "true" ]; then $(MAKE) --no-print-directory act-ci-clean || true; fi; exit "$$status"' EXIT; \
+	if command -v gh >/dev/null 2>&1 && token="$$(gh auth token 2>/dev/null)" && [ -n "$$token" ]; then \
+		printf 'GITHUB_TOKEN=%s\nGH_TOKEN=%s\n' "$$token" "$$token" > "$$tmp"; \
+		secret_args="--secret-file $$tmp"; \
+	else \
+		printf 'warning: gh auth token unavailable; running act without GITHUB_TOKEN/GH_TOKEN\n' >&2; \
+		secret_args=""; \
+	fi; \
+	$(ACT) "$(ACT_EVENT)" -W "$(ACT_CI_WORKFLOW)" $(ACT_ARGS) $(ACT_RUN_ARGS) $$secret_args
 
 ##@ Release Artifacts
 

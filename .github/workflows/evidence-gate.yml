@@ -53,7 +53,7 @@ jobs:
       STRESS_DOC_SIZE: ${{ inputs.doc_size }}
       BUNDLE_DIR: evidence
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
@@ -87,8 +87,8 @@ jobs:
           scripts/collect-kind-artifacts.sh
 
       - name: Upload Tier 3 artifacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        if: ${{ always() && env.ACT != 'true' }}
+        uses: actions/upload-artifact@v7
         with:
           name: tier3-evidence-${{ inputs.scenario }}-${{ github.run_id }}
           path: |
