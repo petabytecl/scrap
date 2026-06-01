@@ -290,6 +290,10 @@ func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, pre
 		c.recordVerifyMetric("fail")
 		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification mismatch for %s", backend.ErrCorrupt, key)
 	}
+	if result.ETag == "" {
+		c.recordVerifyMetric("fail")
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification missing validation token for %s", backend.ErrCorrupt, key)
+	}
 	c.recordVerifyMetric("pass")
 	return index.BackendObjectMetadata{
 		Key:             key,

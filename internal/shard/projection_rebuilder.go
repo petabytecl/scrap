@@ -179,46 +179,110 @@ func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, block
 		if blockID == openBlockID {
 			continue
 		}
-		prefix := backendKeyPrefix(cellID, r.shardID, blockID)
-		uploaded, err := blockFullyUploaded(ctx, be, prefix)
-		if err != nil {
-			r.logger.WarnContext(ctx, "shard: rebuild upload check skipped (transient)", "block_id", blockID, "err", err)
-			continue
-		}
-		if uploaded {
-			continue
-		}
-		info, statErr := os.Stat(r.blockPath(blockID))
-		if statErr != nil {
-			continue
-		}
-		if err := projection.PutPendingUpload(index.PendingUpload{
-			BlockID:         blockID,
-			ShardID:         r.shardID,
-			SealedSizeBytes: info.Size(),
-			SealedAtUs:      info.ModTime().UnixMicro(),
-		}); err != nil {
-			return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
+		if err := r.rebuildBlockUploadState(ctx, projection, be, cellID, blockID); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// blockFullyUploaded returns true when both .blk and .idx exist in the backend,
-// false when either is definitively missing. Returns an error for transient/auth
-// failures so the caller can avoid incorrectly re-queuing already-uploaded blocks.
-func blockFullyUploaded(ctx context.Context, be backend.Backend, prefix string) (bool, error) {
-	for _, ext := range []string{".blk", ".idx"} {
-		_, err := be.HeadObject(ctx, prefix+ext)
-		if err == nil {
-			continue
-		}
-		if errors.Is(err, backend.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
+func (r *projectionRebuilder) rebuildBlockUploadState(ctx context.Context, projection *index.Index, be backend.Backend, cellID string, blockID uint64) error {
+	prefix := backendKeyPrefix(cellID, r.shardID, blockID)
+	blkObject, idxObject, uploaded, err := uploadedBlockObjects(ctx, be, prefix)
+	if err != nil {
+		return r.handleRebuildUploadCheckError(ctx, blockID, err)
 	}
-	return true, nil
+
+	info, statErr := os.Stat(r.blockPath(blockID))
+	if statErr != nil {
+		if uploaded {
+			return fmt.Errorf("shard: rebuild confirmed upload %d missing sealed Block metadata: %w", blockID, statErr)
+		}
+		return nil
+	}
+
+	if uploaded {
+		return r.putRebuiltConfirmedUpload(projection, blockID, info.Size(), blkObject, idxObject)
+	}
+	return r.putRebuiltPendingUpload(projection, blockID, info)
+}
+
+func (r *projectionRebuilder) handleRebuildUploadCheckError(ctx context.Context, blockID uint64, err error) error {
+	class := backend.ErrorClass(err)
+	if class != backend.ClassTransient && class != backend.ClassAuth && class != backend.ClassThrottled {
+		return fmt.Errorf("shard: rebuild upload metadata %d: %w", blockID, err)
+	}
+	r.logger.WarnContext(ctx, "shard: rebuild upload check skipped (transient)", "block_id", blockID, "err", err)
+	return nil
+}
+
+func (r *projectionRebuilder) putRebuiltConfirmedUpload(
+	projection *index.Index,
+	blockID uint64,
+	sealedSize int64,
+	blkObject index.BackendObjectMetadata,
+	idxObject index.BackendObjectMetadata,
+) error {
+	if err := projection.PutConfirmedUpload(index.ConfirmedUpload{
+		BlockID:         blockID,
+		ShardID:         r.shardID,
+		ConfirmedAtUs:   time.Now().UnixMicro(),
+		SealedSizeBytes: sealedSize,
+		BlockObject:     blkObject,
+		IndexObject:     idxObject,
+	}); err != nil {
+		return fmt.Errorf("shard: rebuild confirmed upload %d: %w", blockID, err)
+	}
+	return nil
+}
+
+func (r *projectionRebuilder) putRebuiltPendingUpload(projection *index.Index, blockID uint64, info os.FileInfo) error {
+	if err := projection.PutPendingUpload(index.PendingUpload{
+		BlockID:         blockID,
+		ShardID:         r.shardID,
+		SealedSizeBytes: info.Size(),
+		SealedAtUs:      info.ModTime().UnixMicro(),
+	}); err != nil {
+		return fmt.Errorf("shard: rebuild pending upload %d: %w", blockID, err)
+	}
+	return nil
+}
+
+// uploadedBlockObjects returns both object metadata records when .blk and .idx
+// exist in the Backend. A missing object means the Block still needs upload.
+// Other Backend errors are returned so rebuild does not incorrectly requeue a
+// Block when the dependency is unavailable.
+func uploadedBlockObjects(ctx context.Context, be backend.Backend, prefix string) (index.BackendObjectMetadata, index.BackendObjectMetadata, bool, error) {
+	blk, err := backendObjectMetadata(ctx, be, prefix+".blk")
+	if err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			return index.BackendObjectMetadata{}, index.BackendObjectMetadata{}, false, nil
+		}
+		return index.BackendObjectMetadata{}, index.BackendObjectMetadata{}, false, err
+	}
+	idx, err := backendObjectMetadata(ctx, be, prefix+".idx")
+	if err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			return index.BackendObjectMetadata{}, index.BackendObjectMetadata{}, false, nil
+		}
+		return index.BackendObjectMetadata{}, index.BackendObjectMetadata{}, false, err
+	}
+	return blk, idx, true, nil
+}
+
+func backendObjectMetadata(ctx context.Context, be backend.Backend, key string) (index.BackendObjectMetadata, error) {
+	meta, err := be.HeadObject(ctx, key)
+	if err != nil {
+		return index.BackendObjectMetadata{}, err
+	}
+	if meta.ETag == "" {
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: backend object %s missing validation token", backend.ErrCorrupt, key)
+	}
+	return index.BackendObjectMetadata{
+		Key:             key,
+		SizeBytes:       meta.Size,
+		ValidationToken: meta.ETag,
+	}, nil
 }
 
 func (r *projectionRebuilder) listBlockIndexIDs() ([]uint64, error) {

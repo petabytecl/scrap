@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -111,6 +113,30 @@ func TestShardUploadProcessorUploadsSealedBlocks(t *testing.T) {
 		waitBackendObject(ctx, t, backendStore, backendObjectKey(blockID, "idx"))
 	}
 	waitPendingUploads(t, s, 0)
+}
+
+func TestShardUploadProcessorRejectsEmptyValidationToken(t *testing.T) {
+	ctx := context.Background()
+	backendStore := newEmptyValidationBackend()
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	if _, err := s.WriteDocument(ctx, "tx-upload-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-upload-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+
+	backendStore.waitHeadCalls(t, 1)
+	waitPendingUploads(t, s, 1)
+	if _, err := s.ConfirmedUploadForTest(1); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("ConfirmedUploadForTest error = %v, want ErrConfirmedUploadNotFound", err)
+	}
 }
 
 func TestShardUploadProcessorResumesPendingUploadAfterReopen(t *testing.T) {
@@ -244,6 +270,65 @@ func confirmedUploadForTest(blockSize int64) index.ConfirmedUpload {
 
 func shardValidationValue(kind string) string {
 	return kind + "-validation"
+}
+
+type emptyValidationBackend struct {
+	mu        sync.Mutex
+	sizes     map[string]int64
+	headCalls atomic.Int32
+}
+
+func newEmptyValidationBackend() *emptyValidationBackend {
+	return &emptyValidationBackend{sizes: make(map[string]int64)}
+}
+
+func (b *emptyValidationBackend) PutObject(_ context.Context, key string, body io.Reader, size int64, _ backend.PutOpts) (backend.PutResult, error) {
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		return backend.PutResult{}, fmt.Errorf("%w: read object: %w", backend.ErrPermanent, err)
+	}
+
+	b.mu.Lock()
+	b.sizes[key] = size
+	b.mu.Unlock()
+
+	return backend.PutResult{Size: size}, nil
+}
+
+func (b *emptyValidationBackend) HeadObject(_ context.Context, key string) (backend.ObjectMeta, error) {
+	b.mu.Lock()
+	size, ok := b.sizes[key]
+	b.mu.Unlock()
+
+	if !ok {
+		return backend.ObjectMeta{}, backend.ErrNotFound
+	}
+	b.headCalls.Add(1)
+	return backend.ObjectMeta{Size: size}, nil
+}
+
+func (b *emptyValidationBackend) waitHeadCalls(t *testing.T, want int32) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.headCalls.Load() >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d backend HEAD calls", want)
+}
+
+func (b *emptyValidationBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	return nil, backend.ObjectMeta{}, backend.ErrPermanent
+}
+
+func (b *emptyValidationBackend) DeleteObject(context.Context, string) error {
+	return backend.ErrPermanent
+}
+
+func (b *emptyValidationBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+	return nil, backend.ErrPermanent
 }
 
 type transientBackend struct{}
