@@ -6,6 +6,18 @@ import "errors"
 const (
 	ReasonEvidenceRun = "evidence_run"
 
+	ApplyStatusCompleted          = "completed"
+	ApplyStatusCompletedWithSkips = "completed_with_skips"
+	ApplyStatusNoEffect           = "no_effect"
+	ApplyStatusFailed             = "failed"
+
+	PlanStatusPending = "pending"
+	PlanStatusRunning = "running"
+
+	ApplyBlockStatusEvicted = "evicted"
+	ApplyBlockStatusSkipped = "skipped"
+	ApplyBlockStatusFailed  = "failed"
+
 	SkipReasonHotResidencyWindow    = "hot_residency_window"
 	SkipReasonLeaderHotCopyRequired = "leader_hot_copy_required"
 	SkipReasonLocalStateNotHot      = "local_state_not_hot"
@@ -17,6 +29,11 @@ var (
 	ErrInvalidPlanRequest    = errors.New("eviction: invalid plan request")
 	ErrTargetMemberMismatch  = errors.New("eviction: target member_hostname does not match local member")
 	ErrPlanCapExceedsCeiling = errors.New("eviction: requested cap exceeds configured ceiling")
+	ErrPlanNotFound          = errors.New("eviction: plan not found")
+	ErrPlanExpired           = errors.New("eviction: plan expired")
+	ErrApplyInProgress       = errors.New("eviction: apply already in progress")
+	ErrApplyDisabled         = errors.New("eviction: apply disabled")
+	ErrPlanStale             = errors.New("eviction: plan member identity is stale")
 )
 
 type Bounds struct {
@@ -78,4 +95,40 @@ type PlanBlock struct {
 	OpenReaders               int    `json:"open_readers"`
 	RepairState               string `json:"repair_state,omitempty"`
 	Reason                    string `json:"reason,omitempty"`
+}
+
+type ApplyRequest struct {
+	PlanID string `json:"plan_id"`
+}
+
+type ApplyResult struct {
+	PlanID         string       `json:"plan_id"`
+	Status         string       `json:"status"`
+	StartedAtUs    int64        `json:"started_at_us"`
+	CompletedAtUs  int64        `json:"completed_at_us"`
+	MemberHostname string       `json:"member_hostname"`
+	MemberID       string       `json:"member_id"`
+	SelectedBlocks int          `json:"selected_blocks"`
+	EvictedBlocks  int          `json:"evicted_blocks"`
+	SkippedBlocks  int          `json:"skipped_blocks"`
+	FailedBlocks   int          `json:"failed_blocks"`
+	BytesFreed     int64        `json:"bytes_freed"`
+	Blocks         []ApplyBlock `json:"blocks"`
+}
+
+type PlanStatus struct {
+	PlanID      string       `json:"plan_id"`
+	Status      string       `json:"status"`
+	Plan        *Plan        `json:"plan,omitempty"`
+	ApplyResult *ApplyResult `json:"apply_result,omitempty"`
+}
+
+type ApplyBlock struct {
+	BlockID    uint64 `json:"block_id"`
+	ShardID    uint64 `json:"shard_id"`
+	SizeBytes  int64  `json:"size_bytes"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason,omitempty"`
+	Error      string `json:"error,omitempty"`
+	BytesFreed int64  `json:"bytes_freed,omitempty"`
 }

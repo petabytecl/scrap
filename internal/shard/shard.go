@@ -63,6 +63,18 @@ type Config struct {
 	IdentifierMode     telemetry.IdentifierMode
 }
 
+type raftNode interface {
+	Propose(ctx context.Context, data []byte) error
+	ReadIndex(ctx context.Context) (uint64, error)
+	Step(ctx context.Context, msg raftpb.Message) error
+	IsLeader() bool
+	LeaderID() uint64
+	AppliedIndex() uint64
+	CommitIndex() uint64
+	WithStableLeadership(func() error) error
+	Stop()
+}
+
 type Shard struct {
 	dataDir        string
 	blocksDir      string
@@ -72,7 +84,7 @@ type Shard struct {
 	peers          map[uint64]string
 	clientAddrs    map[uint64]string
 	idx            *index.Index
-	raft           *scrapraft.Node
+	raft           raftNode
 	replicator     DocumentReplicator
 	upload         UploadConfig
 	eviction       EvictionConfig
@@ -102,11 +114,15 @@ type Shard struct {
 	uploads                 *uploadController
 	uploadPressureScrubGate *pressurePauseGate
 	uploadObligations       uploadObligations
+	committedConfirmUploads map[uint64]index.ConfirmedUpload
 
 	rebuilder *projectionRebuilder
 
 	lifecycleCleanupDone chan struct{}
+	lifecycleMutationMu  sync.Mutex
 	evictionPlans        map[string]eviction.Plan
+	evictionApplyResults map[string]eviction.ApplyResult
+	evictionApplyRunning map[string]struct{}
 	restoreMu            sync.Mutex
 	restores             map[uint64]*blockRestoreCall
 }
@@ -181,6 +197,9 @@ func Open(cfg Config) (*Shard, error) {
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
 		evictionPlans:           make(map[string]eviction.Plan),
+		evictionApplyResults:    make(map[string]eviction.ApplyResult),
+		evictionApplyRunning:    make(map[string]struct{}),
+		committedConfirmUploads: make(map[uint64]index.ConfirmedUpload),
 		restores:                make(map[uint64]*blockRestoreCall),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
@@ -580,6 +599,12 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 }
 
 func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.evictionApplyRunning) > 0 {
+		return true, nil
+	}
 	return s.rebuilder.Trigger(ctx)
 }
 
@@ -650,6 +675,40 @@ func (s *Shard) swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (bool, 
 
 	err := s.swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir)
 	return s.idx == nil, err
+}
+
+func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.committedConfirmUploadAuthorityLocked(blockID)
+}
+
+func (s *Shard) committedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
+	confirmed, ok := s.committedConfirmUploads[blockID]
+	if !ok {
+		var err error
+		confirmed, err = s.readCommittedConfirmUploadAuthorityLocked(blockID)
+		if err != nil {
+			return index.ConfirmedUpload{}, err
+		}
+	}
+	return confirmed, nil
+}
+
+func (s *Shard) readCommittedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
+	if s.blocksDir == "" {
+		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
+	}
+	confirmed, err := readConfirmedUploadAuthority(s.blocksDir, blockID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
+		}
+		return index.ConfirmedUpload{}, err
+	}
+	s.recordCommittedConfirmUploadLocked(confirmed)
+	return confirmed, nil
 }
 
 func (s *Shard) currentOpenBlockID() uint64 {

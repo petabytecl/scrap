@@ -237,6 +237,8 @@ func (s *Shard) startLifecycleCleanup() {
 	s.lifecycleCleanupDone = done
 	go func() {
 		defer close(done)
+		s.lifecycleMutationMu.Lock()
+		defer s.lifecycleMutationMu.Unlock()
 		if err := CleanupHotLifecycleMarkers(s.blocksDir); err != nil {
 			s.logger.Warn("lifecycle cleanup failed", "error", err)
 		}
@@ -358,7 +360,8 @@ func readMarkerJSON(path string, out any) error {
 }
 
 func writeMarkerJSON(path string, marker any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("mkdir marker dir: %w", err)
 	}
 	data, err := json.MarshalIndent(marker, "", "  ")
@@ -366,8 +369,36 @@ func writeMarkerJSON(path string, marker any) error {
 		return fmt.Errorf("encode marker: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write marker file: %w", err)
+
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create marker temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	published := false
+	defer func() {
+		if !published {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write marker temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync marker temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close marker temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("publish marker file: %w", err)
+	}
+	published = true
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("sync marker directory: %w", err)
 	}
 	return nil
 }

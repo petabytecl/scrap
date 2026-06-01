@@ -128,3 +128,224 @@ func TestEvictionPlanRequiresMemberHostname(t *testing.T) {
 		t.Fatalf("error = %v, want member-hostname is required", err)
 	}
 }
+
+func TestEvictionApplyPostsStoredPlanWithConfirm(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", req.Method)
+		}
+		if req.URL.Path != "/admin/eviction/plans/plan-123/apply" {
+			t.Fatalf("path = %s, want /admin/eviction/plans/plan-123/apply", req.URL.Path)
+		}
+
+		result := eviction.ApplyResult{
+			PlanID:         "plan-123",
+			Status:         eviction.ApplyStatusCompleted,
+			EvictedBlocks:  1,
+			SelectedBlocks: 1,
+			BytesFreed:     1024,
+			Blocks: []eviction.ApplyBlock{{
+				BlockID:    1,
+				ShardID:    7,
+				SizeBytes:  1024,
+				Status:     eviction.ApplyBlockStatusEvicted,
+				BytesFreed: 1024,
+			}},
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("eviction apply: %v", err)
+	}
+
+	assertTextContains(t, out.String(),
+		"plan_id: plan-123",
+		"status: completed",
+		"selected_blocks: 1",
+		"evicted_blocks: 1",
+		"bytes_freed: 1024",
+		"block_id=1",
+		"status=evicted",
+	)
+}
+
+func TestEvictionApplyPrintsSkipAndFailureDetails(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		result := eviction.ApplyResult{
+			PlanID:         "plan-123",
+			Status:         eviction.ApplyStatusCompletedWithSkips,
+			SelectedBlocks: 2,
+			SkippedBlocks:  1,
+			FailedBlocks:   1,
+			Blocks: []eviction.ApplyBlock{
+				{
+					BlockID:   2,
+					ShardID:   7,
+					SizeBytes: 2048,
+					Status:    eviction.ApplyBlockStatusSkipped,
+					Reason:    eviction.SkipReasonLocalStateNotHot,
+				},
+				{
+					BlockID:   3,
+					ShardID:   7,
+					SizeBytes: 4096,
+					Status:    eviction.ApplyBlockStatusFailed,
+					Error:     "remove Block: permission denied",
+				},
+			},
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("eviction apply: %v", err)
+	}
+
+	assertTextContains(t, out.String(),
+		"status: completed_with_skips",
+		"skipped_blocks: 1",
+		"failed_blocks: 1",
+		"reason=local_state_not_hot",
+		"error=\"remove Block: permission denied\"",
+	)
+}
+
+func TestEvictionApplyReturnsErrorForFailedResult(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		result := eviction.ApplyResult{
+			PlanID:         "plan-123",
+			Status:         eviction.ApplyStatusFailed,
+			SelectedBlocks: 1,
+			FailedBlocks:   1,
+			Blocks: []eviction.ApplyBlock{{
+				BlockID:   3,
+				ShardID:   7,
+				SizeBytes: 4096,
+				Status:    eviction.ApplyBlockStatusFailed,
+				Error:     "confirmed Block size mismatch",
+			}},
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "eviction apply failed") {
+		t.Fatalf("error = %v, want eviction apply failed", err)
+	}
+	assertTextContains(t, out.String(), "status: failed", "failed_blocks: 1")
+}
+
+func TestEvictionApplySupportsJSONOutput(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		data, err := json.Marshal(eviction.ApplyResult{
+			PlanID: "plan-123",
+			Status: eviction.ApplyStatusNoEffect,
+		})
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+		"--output=json",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("eviction apply json: %v", err)
+	}
+
+	assertTextContains(t, out.String(), `"plan_id":"plan-123"`, `"status":"no_effect"`)
+}
+
+func TestEvictionApplyReportsHTTPError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusPreconditionFailed,
+			Body:       io.NopCloser(strings.NewReader("eviction: plan not found\n")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, io.Discard, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "POST eviction apply status: 412") {
+		t.Fatalf("error = %v, want HTTP status error", err)
+	}
+}
+
+func TestEvictionApplyRequiresConfirm(t *testing.T) {
+	err := Run([]string{"eviction", "apply", "--plan-id=plan-123"}, io.Discard, io.Discard, Deps{})
+	if err == nil || !strings.Contains(err.Error(), "confirm is required") {
+		t.Fatalf("error = %v, want confirm is required", err)
+	}
+}
+
+func TestEvictionApplyRequiresPlanID(t *testing.T) {
+	err := Run([]string{"eviction", "apply", "--confirm"}, io.Discard, io.Discard, Deps{})
+	if err == nil || !strings.Contains(err.Error(), "plan-id is required") {
+		t.Fatalf("error = %v, want plan-id is required", err)
+	}
+}

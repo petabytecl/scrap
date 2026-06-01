@@ -44,6 +44,8 @@ type Server struct {
 	pprofEnabled       bool
 	metricsHandler     http.Handler
 	evictionPlanner    EvictionPlanner
+	evictionApplier    EvictionApplier
+	evictionPlanStatus EvictionPlanStatusProvider
 	logger             *slog.Logger
 }
 
@@ -93,6 +95,9 @@ func New(opts ...Option) *Server {
 	}
 	if s.evictionPlanner != nil {
 		mux.HandleFunc("/admin/eviction/plans", s.handleEvictionPlans)
+	}
+	if s.evictionApplier != nil || s.evictionPlanStatus != nil {
+		mux.HandleFunc("/admin/eviction/plans/", s.handleEvictionPlanByID)
 	}
 	if s.pprofEnabled {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
