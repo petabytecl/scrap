@@ -17,7 +17,6 @@ import (
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
 
-	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
@@ -26,7 +25,6 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 	"github.com/petabytecl/scrap/internal/telemetry"
-	"github.com/petabytecl/scrap/internal/ulid"
 )
 
 const (
@@ -302,7 +300,7 @@ func ensureShardDirs(dirs ...string) error {
 	return nil
 }
 
-//nolint:cyclop,gocognit // orchestration function managing seal check, prep file, block append, raft propose, and apply
+//nolint:cyclop,gocognit // orchestration function managing seal check, block append, peer replication, raft propose, and apply
 func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
 	if err := s.requireLeader(); err != nil {
 		return storeapi.WriteResult{}, err
@@ -335,32 +333,22 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		}
 	}
 
-	writeID := ulid.New().String()
 	blockID := s.blockWriter.BlockID()
 	startOffset := s.blockWriter.Offset()
 
-	if startOffset < 0 {
+	attempt, err := s.beginOpenlogWriteAttempt(openlogWriteAttemptConfig{
+		txID:           txID,
+		docName:        docName,
+		contentType:    contentType,
+		idempotencyKey: idempotencyKey,
+		blockID:        blockID,
+		startOffset:    startOffset,
+	})
+	if err != nil {
 		s.mu.Unlock()
-		return storeapi.WriteResult{}, fmt.Errorf("shard: negative start offset %d", startOffset)
+		return storeapi.WriteResult{}, err
 	}
-	prepEntry := &scrapv1.OpenlogEntry{
-		TransactionId:  txID,
-		DocumentName:   docName,
-		BlockId:        blockID,
-		StartOffset:    uint64(startOffset),
-		ContentType:    contentType,
-		IdempotencyKey: idempotencyKey,
-	}
-	if err := s.writePrepFile(writeID, prepEntry); err != nil {
-		s.mu.Unlock()
-		return storeapi.WriteResult{}, fmt.Errorf("shard: write prep: %w", err)
-	}
-	prepCleaned := false
-	defer func() {
-		if !prepCleaned {
-			_ = os.Remove(s.prepPath(writeID))
-		}
-	}()
+	defer attempt.cleanupOnAbort()
 
 	now := time.Now()
 
@@ -376,27 +364,10 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	s.mu.Unlock()
 
 	ctx, replicateStage := s.writeTelemetry.StartStage(ctx, "peer_replicate")
-	err = s.replicateDocument(ctx, prepEntry, contentType, result, bodyCopy.Bytes())
+	err = s.replicateDocument(ctx, attempt.prepEntry(), contentType, result, bodyCopy.Bytes())
 	replicateStage.End(err)
 	if err != nil {
 		return storeapi.WriteResult{}, err
-	}
-
-	cmd := &scrapv1.RaftCommand{
-		Command: &scrapv1.RaftCommand_CommitDoc{
-			CommitDoc: &scrapv1.CommitDocument{
-				TransactionId:  txID,
-				DocumentName:   docName,
-				ContentType:    contentType,
-				IdempotencyKey: idempotencyKey,
-				BlockId:        blockID,
-				FirstFrameOff:  uint64(max(0, result.FirstFrameOffset)),
-				FrameCount:     result.FrameCount,
-				TotalBytes:     result.Size,
-				Sha256:         result.SHA256[:],
-				CreatedAtUs:    now.UnixMicro(),
-			},
-		},
 	}
 
 	doneCh := make(chan error, 1)
@@ -407,6 +378,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	ctx, proposeStage := s.writeTelemetry.StartStage(ctx, "raft_propose")
 	// Stamp the active propose span into the command so every voter's apply loop
 	// recovers it and emits a child apply span on all replicas. See ADR 0013.
+	cmd := attempt.commitCommand(result, now)
 	injectTraceContext(ctx, cmd)
 	data, err := proto.Marshal(cmd)
 	if err != nil {
@@ -437,8 +409,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		return storeapi.WriteResult{}, ctx.Err()
 	}
 
-	prepCleaned = true
-	_ = os.Remove(s.prepPath(writeID))
+	attempt.complete()
 
 	return storeapi.WriteResult{
 		SHA256:    result.SHA256,
