@@ -181,11 +181,21 @@ func (s *Shard) downloadVerifyAndPublishRestore(ctx context.Context, input resto
 	if err := verifyRestoredBlock(input, tmpPath); err != nil {
 		return err
 	}
+	published, err = s.publishVerifiedRestore(input, tmpPath)
+	return err
+}
+
+func (s *Shard) publishVerifiedRestore(input restoreInput, tmpPath string) (bool, error) {
+	s.lifecycleMutationMu.Lock()
+	defer s.lifecycleMutationMu.Unlock()
+
 	if err := publishRestoredBlock(input, tmpPath); err != nil {
-		return err
+		return false, err
 	}
-	published = true
-	return s.recordSuccessfulRestore(input)
+	if err := s.recordSuccessfulRestore(input); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func verifyRestoredBlock(input restoreInput, tmpPath string) error {

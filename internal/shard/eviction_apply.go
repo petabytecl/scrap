@@ -41,10 +41,7 @@ func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult) 
 }
 
 func shouldCacheEvictionApplyResult(result eviction.ApplyResult) bool {
-	if result.Status != eviction.ApplyStatusFailed {
-		return true
-	}
-	return result.EvictedBlocks > 0 || result.BytesFreed > 0
+	return result.Status != ""
 }
 
 func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction.PlanStatus, error) {

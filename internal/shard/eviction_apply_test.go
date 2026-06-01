@@ -418,6 +418,8 @@ func TestApplyEvictionPlanStopsAtFirstBlockFailure(t *testing.T) {
 	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 2)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("second eviction marker stat error = %v, want not exist", err)
 	}
+
+	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
 }
 
 func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T) {
@@ -443,13 +445,7 @@ func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T
 		t.Fatalf("result = %+v, want one eviction then one failure", result)
 	}
 
-	second, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
-	if err != nil {
-		t.Fatalf("ApplyEvictionPlan second call: %v", err)
-	}
-	if second.CompletedAtUs != result.CompletedAtUs || len(second.Blocks) != len(result.Blocks) {
-		t.Fatalf("second result = %+v, want cached failed result %+v", second, result)
-	}
+	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
 }
 
 func TestApplyEvictionPlanUsesDefaultMarkerReason(t *testing.T) {
@@ -667,6 +663,18 @@ func assertEvictionApplyCompleted(t *testing.T, result eviction.ApplyResult, byt
 	}
 	if len(result.Blocks) != 1 || result.Blocks[0].Status != eviction.ApplyBlockStatusEvicted {
 		t.Fatalf("blocks = %+v, want one evicted Block", result.Blocks)
+	}
+}
+
+func assertCachedEvictionApplyResult(t *testing.T, s *Shard, planID string, want eviction.ApplyResult) {
+	t.Helper()
+
+	got, err := s.ApplyEvictionPlan(context.Background(), eviction.ApplyRequest{PlanID: planID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan cached call: %v", err)
+	}
+	if got.CompletedAtUs != want.CompletedAtUs || len(got.Blocks) != len(want.Blocks) {
+		t.Fatalf("cached result = %+v, want %+v", got, want)
 	}
 }
 
