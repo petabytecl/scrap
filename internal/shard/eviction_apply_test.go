@@ -448,6 +448,61 @@ func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T
 	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
 }
 
+func TestSkipEvictionAfterPreparedMarkerRemovesMarkerWrittenByApply(t *testing.T) {
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	confirmed, err := s.idx.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+	if err := s.prepareEvictionMarkerForApply(plan, LocalBlockLifecycle{State: LocalBlockStateHot}, confirmed); err != nil {
+		t.Fatalf("prepareEvictionMarkerForApply: %v", err)
+	}
+
+	result := s.skipEvictionAfterPreparedMarker(plan.Selected[0], LocalBlockLifecycle{State: LocalBlockStateHot})
+
+	if result.Status != eviction.ApplyBlockStatusSkipped || result.Reason != eviction.SkipReasonLeaderHotCopyRequired {
+		t.Fatalf("skip result = %+v, want leader hot-copy skip", result)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain hot after leadership skip: %v", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("eviction marker stat error = %v, want not exist", err)
+	}
+}
+
+func TestSkipEvictionAfterPreparedMarkerPreservesCrashCleanupMarker(t *testing.T) {
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	confirmed, err := s.idx.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if err := WriteEvictionMarker(s.blocksDir, EvictionMarker{
+		BlockID:         confirmed.BlockID,
+		BackendKey:      confirmed.BlockObject.Key,
+		SizeBytes:       confirmed.BlockObject.SizeBytes,
+		ValidationToken: confirmed.BlockObject.ValidationToken,
+		EvictedAtUs:     time.Now().UTC().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+
+	result := s.skipEvictionAfterPreparedMarker(plan.Selected[0], LocalBlockLifecycle{State: LocalBlockStateHotCleanupNeeded})
+
+	if result.Status != eviction.ApplyBlockStatusSkipped || result.Reason != eviction.SkipReasonLeaderHotCopyRequired {
+		t.Fatalf("skip result = %+v, want leader hot-copy skip", result)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("pre-existing crash cleanup marker should remain: %v", err)
+	}
+}
+
 func TestApplyEvictionPlanUsesDefaultMarkerReason(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)

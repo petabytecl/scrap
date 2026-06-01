@@ -8,15 +8,17 @@ import (
 	"github.com/petabytecl/scrap/internal/index"
 )
 
+const uploadApplyTestBlockID = 42
+
 func TestApplyConfirmUploadFailsClosedWithoutSealedMetadata(t *testing.T) {
 	idx := openApplyTestIndex(t)
 
 	s := shardForApplyTest(idx)
-	err := s.applyConfirmUpload(confirmUploadCommandForApplyTest(42))
+	err := s.applyConfirmUpload(confirmUploadCommandForApplyTest())
 	if !errors.Is(err, index.ErrPendingUploadNotFound) {
 		t.Fatalf("applyConfirmUpload error = %v, want ErrPendingUploadNotFound", err)
 	}
-	if _, err := idx.GetConfirmedUpload(42); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+	if _, err := idx.GetConfirmedUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
 	}
 }
@@ -24,7 +26,7 @@ func TestApplyConfirmUploadFailsClosedWithoutSealedMetadata(t *testing.T) {
 func TestApplyConfirmUploadRejectsBlockSizeMismatch(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	if err := idx.PutPendingUpload(index.PendingUpload{
-		BlockID:         42,
+		BlockID:         uploadApplyTestBlockID,
 		ShardID:         7,
 		SealedSizeBytes: 67108864,
 		SealedAtUs:      1716700000000000,
@@ -32,28 +34,28 @@ func TestApplyConfirmUploadRejectsBlockSizeMismatch(t *testing.T) {
 		t.Fatalf("PutPendingUpload: %v", err)
 	}
 
-	confirm := confirmUploadCommandForApplyTest(42)
+	confirm := confirmUploadCommandForApplyTest()
 	confirm.BlockObject.SizeBytes--
 	err := shardForApplyTest(idx).applyConfirmUpload(confirm)
 	if err == nil {
 		t.Fatal("applyConfirmUpload succeeded with mismatched Block size")
 	}
-	if _, err := idx.GetConfirmedUpload(42); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+	if _, err := idx.GetConfirmedUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
 	}
-	if _, err := idx.GetPendingUpload(42); err != nil {
+	if _, err := idx.GetPendingUpload(uploadApplyTestBlockID); err != nil {
 		t.Fatalf("GetPendingUpload after rejected confirm: %v", err)
 	}
 }
 
 func TestApplyConfirmUploadUpdatesDuplicateConfirmationMetadata(t *testing.T) {
 	idx := openApplyTestIndex(t)
-	existing := confirmedUploadForApplyTest(42, 1716700001000000, shardApplyValidationValue("old-block"), shardApplyValidationValue("old-index"))
+	existing := confirmedUploadForApplyTest(1716700001000000, shardApplyValidationValue("old-block"), shardApplyValidationValue("old-index"))
 	if err := idx.PutConfirmedUpload(existing); err != nil {
 		t.Fatalf("PutConfirmedUpload: %v", err)
 	}
 
-	confirm := confirmUploadCommandForApplyTest(42)
+	confirm := confirmUploadCommandForApplyTest()
 	confirm.ConfirmedAtUs = 1716700002000000
 	confirm.BlockObject.ValidationToken = shardApplyValidationValue("new-block")
 	confirm.IndexObject.ValidationToken = shardApplyValidationValue("new-index")
@@ -61,13 +63,56 @@ func TestApplyConfirmUploadUpdatesDuplicateConfirmationMetadata(t *testing.T) {
 	if err := shardForApplyTest(idx).applyConfirmUpload(confirm); err != nil {
 		t.Fatalf("applyConfirmUpload: %v", err)
 	}
-	got, err := idx.GetConfirmedUpload(42)
+	got, err := idx.GetConfirmedUpload(uploadApplyTestBlockID)
 	if err != nil {
 		t.Fatalf("GetConfirmedUpload: %v", err)
 	}
-	want := confirmedUploadForApplyTest(42, confirm.GetConfirmedAtUs(), shardApplyValidationValue("new-block"), shardApplyValidationValue("new-index"))
+	want := confirmedUploadForApplyTest(confirm.GetConfirmedAtUs(), shardApplyValidationValue("new-block"), shardApplyValidationValue("new-index"))
 	if got != want {
 		t.Fatalf("confirmed upload = %+v, want %+v", got, want)
+	}
+}
+
+func TestApplyConfirmUploadRecordsCommittedAuthorityForRebuild(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	if err := idx.PutPendingUpload(index.PendingUpload{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700000000000,
+	}); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+
+	s := shardForApplyTest(idx)
+	confirm := confirmUploadCommandForApplyTest()
+	if err := s.applyConfirmUpload(confirm); err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
+	}
+	poisoned := confirmedUploadForApplyTest(1716700003000000, shardApplyValidationValue("poisoned-block"), shardApplyValidationValue("poisoned-index"))
+	if err := idx.PutConfirmedUpload(poisoned); err != nil {
+		t.Fatalf("poison confirmed upload: %v", err)
+	}
+
+	got, err := s.confirmedUploadForRebuild(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("confirmedUploadForRebuild: %v", err)
+	}
+	want := confirmedUploadForApplyTest(confirm.GetConfirmedAtUs(), shardApplyValidationValue("block"), shardApplyValidationValue("index"))
+	if got != want {
+		t.Fatalf("rebuild authority = %+v, want committed authority %+v", got, want)
+	}
+}
+
+func TestConfirmedUploadForRebuildRequiresCommittedAuthority(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	if err := idx.PutConfirmedUpload(confirmedUploadForApplyTest(1716700001000000, shardApplyValidationValue("block"), shardApplyValidationValue("index"))); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+
+	_, err := shardForApplyTest(idx).confirmedUploadForRebuild(uploadApplyTestBlockID)
+	if !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("confirmedUploadForRebuild error = %v, want ErrConfirmedUploadNotFound", err)
 	}
 }
 
@@ -89,10 +134,10 @@ func shardForApplyTest(idx *index.Index) *Shard {
 	}
 }
 
-func confirmedUploadForApplyTest(blockID uint64, confirmedAtUs int64, blockValidation, indexValidation string) index.ConfirmedUpload {
-	confirm := confirmUploadCommandForApplyTest(blockID)
+func confirmedUploadForApplyTest(confirmedAtUs int64, blockValidation, indexValidation string) index.ConfirmedUpload {
+	confirm := confirmUploadCommandForApplyTest()
 	return index.ConfirmedUpload{
-		BlockID:         blockID,
+		BlockID:         uploadApplyTestBlockID,
 		ShardID:         confirm.GetShardId(),
 		ConfirmedAtUs:   confirmedAtUs,
 		SealedSizeBytes: confirm.GetBlockObject().GetSizeBytes(),
@@ -109,10 +154,10 @@ func confirmedUploadForApplyTest(blockID uint64, confirmedAtUs int64, blockValid
 	}
 }
 
-func confirmUploadCommandForApplyTest(blockID uint64) *scrapv1.ConfirmUpload {
+func confirmUploadCommandForApplyTest() *scrapv1.ConfirmUpload {
 	prefix := "cell-a/shards/0000000000000007/000000000000002a"
 	return &scrapv1.ConfirmUpload{
-		BlockId: blockID,
+		BlockId: uploadApplyTestBlockID,
 		ShardId: 7,
 		BlockObject: &scrapv1.BackendObjectMetadata{
 			Key:             prefix + ".blk",

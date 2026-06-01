@@ -154,9 +154,11 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 		if errors.Is(err, index.ErrPendingUploadNotFound) {
 			existing, catalogErr := s.idx.GetConfirmedUpload(confirm.GetBlockId())
 			if catalogErr == nil {
-				if err := s.putConfirmedUploadFromCommand(confirm, existing.SealedSizeBytes); err != nil {
+				confirmed, err := s.putConfirmedUploadFromCommand(confirm, existing.SealedSizeBytes)
+				if err != nil {
 					return err
 				}
+				s.recordCommittedConfirmUploadLocked(confirmed)
 				return s.refreshUploadPressureLocked()
 			}
 			if !errors.Is(catalogErr, index.ErrConfirmedUploadNotFound) {
@@ -165,22 +167,34 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 		}
 		return fmt.Errorf("shard: confirm upload missing sealed metadata for block %d: %w", confirm.GetBlockId(), err)
 	}
-	if err := s.putConfirmedUploadFromCommand(confirm, pending.SealedSizeBytes); err != nil {
+	confirmed, err := s.putConfirmedUploadFromCommand(confirm, pending.SealedSizeBytes)
+	if err != nil {
 		return err
 	}
 	if err := s.idx.DeletePendingUpload(confirm.GetBlockId()); err != nil {
 		return err
 	}
+	s.recordCommittedConfirmUploadLocked(confirmed)
 	s.uploadObligations.forget(confirm.GetBlockId())
 	return s.refreshUploadPressureLocked()
 }
 
-func (s *Shard) putConfirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) error {
+func (s *Shard) putConfirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) (index.ConfirmedUpload, error) {
 	confirmed := confirmedUploadFromCommand(confirm, sealedSize)
 	if err := validateConfirmedUploadMatchesSeal(confirmed); err != nil {
-		return err
+		return index.ConfirmedUpload{}, err
 	}
-	return s.idx.PutConfirmedUpload(confirmed)
+	if err := s.idx.PutConfirmedUpload(confirmed); err != nil {
+		return index.ConfirmedUpload{}, err
+	}
+	return confirmed, nil
+}
+
+func (s *Shard) recordCommittedConfirmUploadLocked(confirmed index.ConfirmedUpload) {
+	if s.committedConfirmUploads == nil {
+		s.committedConfirmUploads = make(map[uint64]index.ConfirmedUpload)
+	}
+	s.committedConfirmUploads[confirmed.BlockID] = confirmed
 }
 
 func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {

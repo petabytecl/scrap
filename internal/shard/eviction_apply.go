@@ -212,7 +212,7 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 		return failedApplyBlock(selected, err)
 	}
 	if s.leaderHotCopyRequired() {
-		return skippedApplyBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+		return s.skipEvictionAfterPreparedMarker(selected, lifecycle)
 	}
 	removed, err := s.unlinkEvictedBlock(selected.BlockID)
 	if err != nil {
@@ -244,6 +244,28 @@ func (s *Shard) prepareEvictionMarkerForApply(plan eviction.Plan, lifecycle Loca
 		Trigger:         EvictionTriggerOperatorRequested,
 		Reason:          evictionReasonForMarker(plan),
 	})
+}
+
+func (s *Shard) skipEvictionAfterPreparedMarker(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle) eviction.ApplyBlock {
+	if lifecycle.State == LocalBlockStateHot {
+		if err := removePreparedEvictionMarker(s.blocksDir, selected.BlockID); err != nil {
+			return failedApplyBlock(selected, err)
+		}
+	}
+	return skippedApplyBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+}
+
+func removePreparedEvictionMarker(blocksDir string, blockID uint64) error {
+	if err := os.Remove(EvictionMarkerPath(blocksDir, blockID)); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("remove prepared eviction marker: %w", err)
+	}
+	if err := syncDirectory(blocksDir); err != nil {
+		return fmt.Errorf("sync blocks directory after marker cleanup: %w", err)
+	}
+	return nil
 }
 
 func (s *Shard) unlinkEvictedBlock(blockID uint64) (bool, error) {

@@ -102,6 +102,7 @@ type Shard struct {
 	uploads                 *uploadController
 	uploadPressureScrubGate *pressurePauseGate
 	uploadObligations       uploadObligations
+	committedConfirmUploads map[uint64]index.ConfirmedUpload
 
 	rebuilder *projectionRebuilder
 
@@ -186,6 +187,7 @@ func Open(cfg Config) (*Shard, error) {
 		evictionPlans:           make(map[string]eviction.Plan),
 		evictionApplyResults:    make(map[string]eviction.ApplyResult),
 		evictionApplyRunning:    make(map[string]struct{}),
+		committedConfirmUploads: make(map[uint64]index.ConfirmedUpload),
 		restores:                make(map[uint64]*blockRestoreCall),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
@@ -667,10 +669,11 @@ func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.idx == nil {
-		return index.ConfirmedUpload{}, fmt.Errorf("%w: shard projection unavailable", storeapi.ErrRebuilding)
+	confirmed, ok := s.committedConfirmUploads[blockID]
+	if !ok {
+		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
 	}
-	return s.idx.GetConfirmedUpload(blockID)
+	return confirmed, nil
 }
 
 func (s *Shard) currentOpenBlockID() uint64 {
