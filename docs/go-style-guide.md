@@ -1103,9 +1103,11 @@ scrap.scrub.deep.frames_verified
 
 Telemetry attributes must be bounded and useful for aggregation.
 
-- Good attributes: `scrap.cell_id`, `scrap.member_slot_id`, `scrap.member_id`,
+- Good attributes: `scrap.cell_id`, `scrap.member_hostname`, `scrap.member_id`,
   `scrap.shard_id`, `scrap.role`, `rpc.service`, `rpc.method`, `rpc.grpc.status_code`,
   `scrap.write_stage`, `scrap.upload.status`, `scrap.scrub.result`.
+  Existing code may still emit `scrap.member_slot_id` until the member-hostname
+  compatibility pass is implemented.
 - Never use raw `transaction_id`, `document_name`, idempotency keys, Backend
   object keys, file paths, trace IDs, or request IDs as metric attributes.
 - Logs and traces may carry stable hashed Document identifiers by default. Raw

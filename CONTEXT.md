@@ -57,7 +57,7 @@ _Avoid_: Cluster (ambiguous with K8s cluster), deployment, instance
 
 **Member**:
 A storage node within a **Cell**. Identified by three levels: `cell_id` (permanent),
-`member_slot_id` (K8s pod hostname), `member_id` (durable identity on the PVC).
+`member_hostname` (K8s pod hostname), `member_id` (durable identity on the PVC).
 A Member hosts replicas of multiple **Shards**.
 _Avoid_: Node (ambiguous with K8s node), replica, pod
 
@@ -95,6 +95,13 @@ verified upload). A new leader scans the outbox and resumes uploads. The outbox
 drives admission pressure: when pending upload bytes exceed the configured budget,
 the **Shard** rejects new writes to prevent local disk exhaustion.
 _Avoid_: Upload queue (implies in-memory), upload log (ambiguous with Raft log)
+
+**Confirmed Upload Catalog**:
+A derived per-**Shard** record of sealed **Blocks** whose upload to the
+**Backend** was confirmed by committed Raft state. Used by Phase 4 to decide
+whether a local `.blk` copy can be considered for eviction and to find Backend
+metadata for restore. It is not eviction state and not Backend inventory.
+_Avoid_: Upload Outbox (pending uploads), Eviction Marker, Backend listing
 
 **Block Quarantine**:
 A filesystem-level isolation of a corrupt **Block**. The `.blk` and `.idx` files are
@@ -197,16 +204,16 @@ These anchor every design decision:
 V1 landed on a 3-level identity model because conflating any two of these created
 silent-divergence bugs. V2 should accept this as the starting point.
 
-| Level            | Source                                      | Lifetime                         | Purpose                                                                      |
-| ---------------- | ------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- |
-| `cell_id`        | Operator-assigned config                    | Permanent for one deployment     | Stable identity of one authoritative SCRAP cell; safe in keys, logs, metrics |
-| `member_slot_id` | K8s pod hostname (`scrapd-0`)               | Lifetime of the StatefulSet slot | Stable peer DNS + operator messages ("pod scrapd-0 is missing")              |
-| `member_id`      | Durable identity record on the member's PVC | Lifetime of the data volume      | The actual storage member identity in cluster metadata                       |
+| Level             | Source                                      | Lifetime                         | Purpose                                                                      |
+| ----------------- | ------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- |
+| `cell_id`         | Operator-assigned config                    | Permanent for one deployment     | Stable identity of one authoritative SCRAP cell; safe in keys, logs, metrics |
+| `member_hostname` | K8s pod hostname (`scrapd-0`)               | Lifetime of the StatefulSet slot | Stable peer DNS + operator messages ("pod scrapd-0 is missing")              |
+| `member_id`       | Durable identity record on the member's PVC | Lifetime of the data volume      | The actual storage member identity in cluster metadata                       |
 
 Rules that came out of V1:
 
 - A normal pod restart presents the **same `member_id` from the same PVC**.
-- If a PVC is lost, the replacement pod may reuse the `member_slot_id`, but it
+- If a PVC is lost, the replacement pod may reuse the `member_hostname`, but it
   must **not silently reuse the old `member_id`**. Operator must run the
   lost-member workflow: SCRAP catches up metadata, verifies bytes, performs
   membership change under placement rules.
@@ -220,7 +227,10 @@ Rules that came out of V1:
 Peer discovery in K8s: one StatefulSet, one PVC per member, one headless Service,
 separate public/admin/peer listener ports, NetworkPolicies restricting peer +
 admin traffic. DNS form:
-`<member_slot_id>.<headless_service>.<namespace>.svc.<cluster_domain>:<peer_port>`.
+`<member_hostname>.<headless_service>.<namespace>.svc.<cluster_domain>:<peer_port>`.
+
+Implementation note: older V2 code and telemetry may still use
+`member_slot_id` until a compatibility pass renames those identifiers.
 
 ## V1 Spike Evidence (Empirically Validated)
 
@@ -693,8 +703,8 @@ Phase 3: Backend upload → leader uploads sealed Blocks (.blk + .idx as separat
 objects) to the Backend, verifies via HEAD + size/ETag, proposes `ConfirmUpload`
 via Raft. Upload Outbox tracks obligations. Three-level admission pressure
 (WARN/PRESSURE/CRITICAL) prevents unbounded upload lag from filling local disk.
-Phase 4 (future): Partial eviction → followers evict uploaded Blocks (see
-ADR 0016).
+Phase 4 (future): Partial eviction → followers evict uploaded `.blk` data files
+while retaining local `.idx` files for metadata reads (see ADR 0016).
 Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
 ### Raft Operations
@@ -812,6 +822,17 @@ Phase 3 configuration (env vars, all with defaults):
 | `SCRAP_UPLOAD_WARN_PCT`       | `80`         | percent   |
 | `SCRAP_UPLOAD_PRESSURE_PCT`   | `90`         | percent   |
 | `SCRAP_UPLOAD_CRITICAL_PCT`   | `95`         | percent   |
+
+Phase 4 configuration (env vars, all with defaults):
+
+| Env var                                 | Default     | Unit     |
+| --------------------------------------- | ----------- | -------- |
+| `SCRAP_EVICTION_ENABLED`                | `false`     | bool     |
+| `SCRAP_EVICTION_HOT_RESIDENCY_WINDOW`   | `24h`       | duration |
+| `SCRAP_EVICTION_PLAN_TTL`               | `10m`       | duration |
+| `SCRAP_EVICTION_RECOMMENDED_MAX_BLOCKS` | `10`        | count    |
+| `SCRAP_EVICTION_RECOMMENDED_MAX_BYTES`  | `671088640` | bytes    |
+| `SCRAP_EVICTION_MAX_VALIDATE_SAMPLES`   | `1`         | count    |
 
 ### Phase 3.6 Telemetry Evidence Plane
 
