@@ -103,6 +103,15 @@ whether a local `.blk` copy can be considered for eviction and to find Backend
 metadata for restore. It is not eviction state and not Backend inventory.
 _Avoid_: Upload Outbox (pending uploads), Eviction Marker, Backend listing
 
+**Local Block Lifecycle**:
+A per-**Member** filesystem classification for one local **Block** copy. Derived
+from `.blk`, `.idx`, eviction marker, restore marker, and quarantine files.
+States include `hot`, `evicted`, `hot_cleanup_needed`, `metadata_loss`, and
+`unexpected_loss`. It is not Raft authority and does not change **Document**
+visibility; it guides Phase 4 reads, eviction, restore, Deep Scrub skip/repair,
+peer `TransferBlock`, and local health.
+_Avoid_: Raft state, Document lifecycle, Backend inventory
+
 **Block Quarantine**:
 A filesystem-level isolation of a corrupt **Block**. The `.blk` and `.idx` files are
 renamed to `.blk.quarantine` / `.idx.quarantine`. Triggered by **Deep Scrub** when

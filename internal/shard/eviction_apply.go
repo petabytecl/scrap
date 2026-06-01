@@ -9,6 +9,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -277,7 +278,7 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 	if selected.ShardID != s.shardID {
 		return skippedApplyBlock(selected, eviction.SkipReasonShardFilter)
 	}
-	lifecycle, err := ClassifyLocalBlock(s.blocksDir, selected.BlockID)
+	lifecycle, err := localblock.Classify(s.blocksDir, selected.BlockID)
 	if err != nil {
 		return failedApplyBlock(selected, fmt.Errorf("classify Block: %w", err))
 	}
@@ -326,23 +327,23 @@ func (s *Shard) confirmedEvictionApplyAuthorityLocked(selected eviction.PlanBloc
 	return confirmed, nil
 }
 
-func (s *Shard) prepareEvictionMarkerForApply(plan eviction.Plan, lifecycle LocalBlockLifecycle, confirmed index.ConfirmedUpload) error {
-	if lifecycle.State == LocalBlockStateHotCleanupNeeded {
+func (s *Shard) prepareEvictionMarkerForApply(plan eviction.Plan, lifecycle localblock.Lifecycle, confirmed index.ConfirmedUpload) error {
+	if lifecycle.State == localblock.StateHotCleanupNeeded {
 		return validateRestoreAuthority(confirmed, lifecycle)
 	}
-	return WriteEvictionMarker(s.blocksDir, EvictionMarker{
+	return localblock.WriteEvictionMarker(s.blocksDir, localblock.EvictionMarker{
 		BlockID:         confirmed.BlockID,
 		BackendKey:      confirmed.BlockObject.Key,
 		SizeBytes:       confirmed.BlockObject.SizeBytes,
 		ValidationToken: confirmed.BlockObject.ValidationToken,
 		EvictedAtUs:     time.Now().UTC().UnixMicro(),
-		Trigger:         EvictionTriggerOperatorRequested,
+		Trigger:         localblock.EvictionTriggerOperatorRequested,
 		Reason:          evictionReasonForMarker(plan),
 	})
 }
 
-func (s *Shard) skipEvictionAfterPreparedMarker(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle) eviction.ApplyBlock {
-	if lifecycle.State == LocalBlockStateHot {
+func (s *Shard) skipEvictionAfterPreparedMarker(selected eviction.PlanBlock, lifecycle localblock.Lifecycle) eviction.ApplyBlock {
+	if lifecycle.State == localblock.StateHot {
 		if err := removePreparedEvictionMarker(s.blocksDir, selected.BlockID); err != nil {
 			return failedApplyBlock(selected, err)
 		}
@@ -351,19 +352,19 @@ func (s *Shard) skipEvictionAfterPreparedMarker(selected eviction.PlanBlock, lif
 }
 
 func removePreparedEvictionMarker(blocksDir string, blockID uint64) error {
-	if err := os.Remove(EvictionMarkerPath(blocksDir, blockID)); err != nil {
+	if err := os.Remove(localblock.EvictionMarkerPath(blocksDir, blockID)); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("remove prepared eviction marker: %w", err)
 	}
-	if err := syncDirectory(blocksDir); err != nil {
+	if err := localblock.SyncDirectory(blocksDir); err != nil {
 		return fmt.Errorf("sync blocks directory after marker cleanup: %w", err)
 	}
 	return nil
 }
 
-func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle) (bool, eviction.ApplyBlock, error) {
+func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecycle localblock.Lifecycle) (bool, eviction.ApplyBlock, error) {
 	if s.leaderHotCopyRequired() {
 		return false, s.skipEvictionAfterPreparedMarker(selected, lifecycle), nil
 	}
@@ -375,17 +376,17 @@ func (s *Shard) unlinkEvictedBlock(blockID uint64) (bool, error) {
 	if err := os.Remove(block.FilePath(s.blocksDir, blockID)); err != nil {
 		return false, fmt.Errorf("remove Block: %w", err)
 	}
-	if err := syncDirectory(s.blocksDir); err != nil {
+	if err := localblock.SyncDirectory(s.blocksDir); err != nil {
 		return true, fmt.Errorf("sync blocks directory: %w", err)
 	}
 	return true, nil
 }
 
-func (s *Shard) evictionApplySkipReason(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle, nowUs int64) string {
+func (s *Shard) evictionApplySkipReason(selected eviction.PlanBlock, lifecycle localblock.Lifecycle, nowUs int64) string {
 	if selected.ShardID != s.shardID {
 		return eviction.SkipReasonShardFilter
 	}
-	if lifecycle.State != LocalBlockStateHot && lifecycle.State != LocalBlockStateHotCleanupNeeded {
+	if lifecycle.State != localblock.StateHot && lifecycle.State != localblock.StateHotCleanupNeeded {
 		return eviction.SkipReasonLocalStateNotHot
 	}
 	if s.leaderHotCopyRequired() {
@@ -405,7 +406,7 @@ func (s *Shard) leaderHotCopyRequired() bool {
 	return s.raft != nil && s.raft.IsLeader()
 }
 
-func restoredHotResidencyApplies(windowSeconds int64, lifecycle LocalBlockLifecycle, nowUs int64) bool {
+func restoredHotResidencyApplies(windowSeconds int64, lifecycle localblock.Lifecycle, nowUs int64) bool {
 	if lifecycle.RestoreMarker == nil || windowSeconds <= 0 {
 		return false
 	}
@@ -430,7 +431,7 @@ func evictionReasonForMarker(plan eviction.Plan) string {
 	if plan.Reason != "" {
 		return plan.Reason
 	}
-	return EvictionReasonEvidenceRun
+	return localblock.EvictionReasonEvidenceRun
 }
 
 func evictionApplyStatus(result eviction.ApplyResult) string {

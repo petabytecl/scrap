@@ -14,7 +14,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
-	"github.com/petabytecl/scrap/internal/shard"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 const transferChunkSize = 64 * 1024
@@ -105,15 +105,15 @@ func (s *Server) transferIndexStatError(blockID uint64, blkPath, idxPath string,
 	return status.Errorf(codes.DataLoss, "%s: index for block %d missing", transferReasonMetadataLoss, blockID)
 }
 
-func readTransferEvictionMarker(blocksDir string, blockID uint64) (shard.EvictionMarker, bool, error) {
-	marker, err := shard.ReadEvictionMarker(blocksDir, blockID)
+func readTransferEvictionMarker(blocksDir string, blockID uint64) (localblock.EvictionMarker, bool, error) {
+	marker, err := localblock.ReadEvictionMarker(blocksDir, blockID)
 	if err == nil {
 		return marker, true, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return shard.EvictionMarker{}, false, nil
+		return localblock.EvictionMarker{}, false, nil
 	}
-	return shard.EvictionMarker{}, false, err
+	return localblock.EvictionMarker{}, false, err
 }
 
 func pathExists(path string) (bool, error) {

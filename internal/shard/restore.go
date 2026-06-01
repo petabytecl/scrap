@@ -14,6 +14,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -31,23 +32,23 @@ type blockRestoreCall struct {
 }
 
 func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID uint64, reason string) error {
-	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: classify Block %d for read: %w", storeapi.ErrDataLoss, blockID, err)
 	}
 
 	switch lifecycle.State {
-	case LocalBlockStateHot, LocalBlockStateHotCleanupNeeded:
+	case localblock.StateHot, localblock.StateHotCleanupNeeded:
 		return nil
-	case LocalBlockStateEvicted:
+	case localblock.StateEvicted:
 		s.mu.Unlock()
 		if err := s.restoreEvictedBlockForReason(ctx, blockID, reason); err != nil {
 			return err
 		}
 		s.mu.Lock()
 		return nil
-	case LocalBlockStateMetadataLoss, LocalBlockStateUnexpectedLoss:
+	case localblock.StateMetadataLoss, localblock.StateUnexpectedLoss:
 		s.mu.Unlock()
 		return fmt.Errorf("%w: Block %d local state %s", storeapi.ErrDataLoss, blockID, lifecycle.State)
 	default:
@@ -124,7 +125,7 @@ func (s *Shard) restoreEvictedBlockOnceRecorded(ctx context.Context, blockID uin
 	if err != nil {
 		return err
 	}
-	if input.lifecycle.State != LocalBlockStateEvicted {
+	if input.lifecycle.State != localblock.StateEvicted {
 		return nil
 	}
 	return s.downloadVerifyAndPublishRestore(ctx, input, reason)
@@ -133,7 +134,7 @@ func (s *Shard) restoreEvictedBlockOnceRecorded(ctx context.Context, blockID uin
 func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error {
 	start := time.Now()
 	err := s.restoreBlockForRepair(ctx, blockID)
-	s.recordRestoreOutcome(blockID, RestoreReasonRepair, err, time.Since(start))
+	s.recordRestoreOutcome(blockID, localblock.RestoreReasonRepair, err, time.Since(start))
 	return err
 }
 
@@ -212,7 +213,7 @@ func restoreFailureReason(err error) string {
 
 type restoreInput struct {
 	confirmed index.ConfirmedUpload
-	lifecycle LocalBlockLifecycle
+	lifecycle localblock.Lifecycle
 	backend   backend.Backend
 	blockPath string
 	indexPath string
@@ -250,11 +251,11 @@ func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput,
 	if err := ctx.Err(); err != nil {
 		return restoreInput{}, err
 	}
-	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
 		return restoreInput{}, fmt.Errorf("%w: classify Block %d for restore: %w", storeapi.ErrDataLoss, blockID, err)
 	}
-	if lifecycle.State != LocalBlockStateEvicted {
+	if lifecycle.State != localblock.StateEvicted {
 		return restoreInput{lifecycle: lifecycle}, nil
 	}
 	confirmed, err := s.idx.GetConfirmedUpload(blockID)
@@ -276,7 +277,7 @@ func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput,
 	}, nil
 }
 
-func validateRestoreAuthority(confirmed index.ConfirmedUpload, lifecycle LocalBlockLifecycle) error {
+func validateRestoreAuthority(confirmed index.ConfirmedUpload, lifecycle localblock.Lifecycle) error {
 	marker := lifecycle.EvictionMarker
 	if marker == nil {
 		return fmt.Errorf("%w: evicted Block %d missing eviction marker", storeapi.ErrDataLoss, confirmed.BlockID)
@@ -335,7 +336,7 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, t
 		return false, err
 	}
 	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
-	if err := s.recordSuccessfulRestore(input, RestoreReasonRepair); err != nil {
+	if err := s.recordSuccessfulRestore(input, localblock.RestoreReasonRepair); err != nil {
 		return true, err
 	}
 	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
@@ -438,15 +439,15 @@ func removeRepairQuarantineFile(blockID uint64, kind, path string) error {
 }
 
 func (s *Shard) recordSuccessfulRestore(input restoreInput, reason string) error {
-	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
+	if err := localblock.WriteRestoreMarker(s.blocksDir, localblock.RestoreMarker{
 		BlockID:      input.confirmed.BlockID,
 		RestoredAtUs: time.Now().UTC().UnixMicro(),
-		Source:       RestoreSourceBackend,
+		Source:       localblock.RestoreSourceBackend,
 		Reason:       reason,
 	}); err != nil {
 		return err
 	}
-	if err := os.Remove(EvictionMarkerPath(s.blocksDir, input.confirmed.BlockID)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(localblock.EvictionMarkerPath(s.blocksDir, input.confirmed.BlockID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("shard: remove eviction marker after restore: %w", err)
 	}
 	return nil

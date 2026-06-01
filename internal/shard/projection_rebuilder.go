@@ -15,6 +15,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 type projectionRebuildCore interface {
@@ -229,7 +230,7 @@ func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projecti
 }
 
 func (r *projectionRebuilder) rebuildLocalConfirmedUploadAuthority(projection *index.Index, blockID uint64) (bool, error) {
-	lifecycle, err := ClassifyLocalBlock(r.blocksDir, blockID)
+	lifecycle, err := localblock.Classify(r.blocksDir, blockID)
 	if err != nil {
 		return false, fmt.Errorf("shard: rebuild pending upload %d classify local lifecycle: %w", blockID, err)
 	}
@@ -253,24 +254,24 @@ func (r *projectionRebuilder) rebuildLocalConfirmedUploadAuthority(projection *i
 
 func shouldRebuildConfirmedUploadAuthority(
 	blockID uint64,
-	lifecycle LocalBlockLifecycle,
+	lifecycle localblock.Lifecycle,
 	confirmed index.ConfirmedUpload,
 	hasAuthority bool,
 ) (bool, error) {
 	if !hasAuthority {
-		if lifecycle.State == LocalBlockStateEvicted {
+		if lifecycle.State == localblock.StateEvicted {
 			return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, index.ErrConfirmedUploadNotFound)
 		}
 		return false, nil
 	}
 
 	switch lifecycle.State {
-	case LocalBlockStateEvicted:
+	case localblock.StateEvicted:
 		if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
 			return false, err
 		}
 		return true, nil
-	case LocalBlockStateHot, LocalBlockStateHotCleanupNeeded:
+	case localblock.StateHot, localblock.StateHotCleanupNeeded:
 		return true, nil
 	default:
 		return false, nil
