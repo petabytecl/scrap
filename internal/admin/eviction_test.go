@@ -130,7 +130,10 @@ func TestServer_CreateEvictionPlanRejectsInvalidJSON(t *testing.T) {
 
 func TestServer_ApplyEvictionPlan(t *testing.T) {
 	applier := &evictionApplierStub{}
-	srv := admin.New(admin.WithEvictionApplier(applier))
+	statusProvider := evictionPlanStatusFunc(func(context.Context, string) (eviction.PlanStatus, error) {
+		return eviction.PlanStatus{}, errors.New("should not be called")
+	})
+	srv := admin.New(admin.WithEvictionApplier(applier), admin.WithEvictionPlanStatusProvider(statusProvider))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -164,6 +167,62 @@ func TestServer_ApplyEvictionPlan(t *testing.T) {
 	}
 	if got.PlanID != "plan-123" || got.Status != eviction.ApplyStatusCompleted {
 		t.Fatalf("apply response mismatch: %+v", got)
+	}
+}
+
+func TestServer_GetEvictionPlanStatus(t *testing.T) {
+	statusProvider := evictionPlanStatusFunc(func(_ context.Context, planID string) (eviction.PlanStatus, error) {
+		return eviction.PlanStatus{
+			PlanID: planID,
+			Status: eviction.PlanStatusRunning,
+		}, nil
+	})
+	srv := admin.New(admin.WithEvictionPlanStatusProvider(statusProvider))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/admin/eviction/plans/plan-123", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/eviction/plans/plan-123: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+	var got eviction.PlanStatus
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.PlanID != "plan-123" || got.Status != eviction.PlanStatusRunning {
+		t.Fatalf("status response = %+v, want running plan-123", got)
+	}
+}
+
+func TestServer_GetEvictionPlanStatusNotFoundReturnsPreconditionFailed(t *testing.T) {
+	statusProvider := evictionPlanStatusFunc(func(context.Context, string) (eviction.PlanStatus, error) {
+		return eviction.PlanStatus{}, eviction.ErrPlanNotFound
+	})
+	srv := admin.New(admin.WithEvictionPlanStatusProvider(statusProvider))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/admin/eviction/plans/missing", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/eviction/plans/missing: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("status: got %d, want 412", resp.StatusCode)
 	}
 }
 
@@ -279,6 +338,12 @@ type evictionApplierFunc func(context.Context, eviction.ApplyRequest) (eviction.
 
 func (f evictionApplierFunc) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
 	return f(ctx, req)
+}
+
+type evictionPlanStatusFunc func(context.Context, string) (eviction.PlanStatus, error)
+
+func (f evictionPlanStatusFunc) EvictionPlanStatus(ctx context.Context, planID string) (eviction.PlanStatus, error) {
+	return f(ctx, planID)
 }
 
 func postEvictionApplyForAdminTest(baseURL, planID string, body []byte) (*http.Response, error) {

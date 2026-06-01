@@ -109,6 +109,38 @@ func TestApplyEvictionPlanStopsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
+		BlockID:      1,
+		RestoredAtUs: time.Now().UTC().UnixMicro(),
+		Source:       RestoreSourceBackend,
+		Reason:       RestoreReasonRead,
+	}); err != nil {
+		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Config.HotResidencyWindowSeconds = int64(time.Hour / time.Second)
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusNoEffect || result.SkippedBlocks != 1 {
+		t.Fatalf("result = %+v, want no_effect with one skip", result)
+	}
+	if len(result.Blocks) != 1 || result.Blocks[0].Reason != eviction.SkipReasonHotResidencyWindow {
+		t.Fatalf("block result = %+v, want hot residency skip", result.Blocks)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain hot after restored residency skip: %v", err)
+	}
+}
+
 func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 	ctx := context.Background()
 
@@ -164,6 +196,56 @@ func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 				t.Fatalf("ApplyEvictionPlan error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestEvictionPlanStatusReportsPendingPlan(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	status, err := s.EvictionPlanStatus(ctx, plan.PlanID)
+	if err != nil {
+		t.Fatalf("EvictionPlanStatus pending: %v", err)
+	}
+	if status.Status != eviction.PlanStatusPending || status.Plan == nil || status.Plan.PlanID != plan.PlanID {
+		t.Fatalf("pending status = %+v, want pending with plan", status)
+	}
+}
+
+func TestEvictionPlanStatusReportsRunningPlan(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	s.evictionApplyRunning[plan.PlanID] = struct{}{}
+	status, err := s.EvictionPlanStatus(ctx, plan.PlanID)
+	if err != nil {
+		t.Fatalf("EvictionPlanStatus running: %v", err)
+	}
+	if status.Status != eviction.PlanStatusRunning {
+		t.Fatalf("running status = %+v, want running", status)
+	}
+}
+
+func TestEvictionPlanStatusReportsCompletedResult(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	s.evictionApplyResults[plan.PlanID] = eviction.ApplyResult{
+		PlanID: plan.PlanID,
+		Status: eviction.ApplyStatusCompleted,
+	}
+	status, err := s.EvictionPlanStatus(ctx, plan.PlanID)
+	if err != nil {
+		t.Fatalf("EvictionPlanStatus completed: %v", err)
+	}
+	if status.Status != eviction.ApplyStatusCompleted || status.ApplyResult == nil || status.ApplyResult.PlanID != plan.PlanID {
+		t.Fatalf("completed status = %+v, want completed apply result", status)
 	}
 }
 

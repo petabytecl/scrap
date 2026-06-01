@@ -2,6 +2,7 @@ package shard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -185,11 +186,40 @@ func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, block
 
 func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projection *index.Index, blockID uint64) error {
 	info, statErr := os.Stat(r.blockPath(blockID))
-	if statErr != nil {
-		r.logger.ErrorContext(ctx, "shard: rebuild upload missing sealed Block metadata", "block_id", blockID, "err", statErr)
-		return fmt.Errorf("shard: rebuild pending upload %d missing sealed Block metadata: %w", blockID, statErr)
+	if statErr == nil {
+		return r.putRebuiltPendingUpload(projection, blockID, info)
 	}
-	return r.putRebuiltPendingUpload(projection, blockID, info)
+	if !errors.Is(statErr, os.ErrNotExist) {
+		r.logger.ErrorContext(ctx, "shard: rebuild upload cannot stat sealed Block metadata", "block_id", blockID, "err", statErr)
+		return fmt.Errorf("shard: rebuild pending upload %d stat sealed Block metadata: %w", blockID, statErr)
+	}
+	evicted, err := r.rebuildEvictedUploadAuthority(projection, blockID)
+	if err != nil {
+		return err
+	}
+	if evicted {
+		return nil
+	}
+	r.logger.ErrorContext(ctx, "shard: rebuild upload missing sealed Block metadata", "block_id", blockID, "err", statErr)
+	return fmt.Errorf("shard: rebuild pending upload %d missing sealed Block metadata: %w", blockID, statErr)
+}
+
+func (r *projectionRebuilder) rebuildEvictedUploadAuthority(projection *index.Index, blockID uint64) (bool, error) {
+	lifecycle, err := ClassifyLocalBlock(r.blocksDir, blockID)
+	if err != nil {
+		return false, fmt.Errorf("shard: rebuild pending upload %d classify local lifecycle: %w", blockID, err)
+	}
+	if lifecycle.State != LocalBlockStateEvicted {
+		return false, nil
+	}
+	confirmed, err := projection.GetConfirmedUpload(blockID)
+	if err != nil {
+		return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, err)
+	}
+	if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *projectionRebuilder) putRebuiltPendingUpload(projection *index.Index, blockID uint64, info os.FileInfo) error {

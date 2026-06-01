@@ -21,6 +21,10 @@ type EvictionApplier interface {
 	ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error)
 }
 
+type EvictionPlanStatusProvider interface {
+	EvictionPlanStatus(ctx context.Context, planID string) (eviction.PlanStatus, error)
+}
+
 func WithEvictionPlanner(planner EvictionPlanner) Option {
 	return func(s *Server) {
 		s.evictionPlanner = planner
@@ -30,6 +34,12 @@ func WithEvictionPlanner(planner EvictionPlanner) Option {
 func WithEvictionApplier(applier EvictionApplier) Option {
 	return func(s *Server) {
 		s.evictionApplier = applier
+	}
+}
+
+func WithEvictionPlanStatusProvider(provider EvictionPlanStatusProvider) Option {
+	return func(s *Server) {
+		s.evictionPlanStatus = provider
 	}
 }
 
@@ -62,13 +72,26 @@ func (s *Server) handleEvictionPlans(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvictionPlanByID(w http.ResponseWriter, r *http.Request) {
-	planID, ok := evictionApplyPlanID(r.URL.Path)
+	planID, action, ok := evictionPlanPath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method != http.MethodPost {
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		s.handleEvictionPlanStatus(w, r, planID)
+	case action == "apply" && r.Method == http.MethodPost:
+		s.handleEvictionPlanApply(w, r, planID)
+	case action == "", action == "apply":
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request, planID string) {
+	if s.evictionApplier == nil {
+		http.NotFound(w, r)
 		return
 	}
 	if err := decodeEvictionApplyBody(w, r); err != nil {
@@ -89,10 +112,37 @@ func (s *Server) handleEvictionPlanByID(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func evictionApplyPlanID(path string) (string, bool) {
+func (s *Server) handleEvictionPlanStatus(w http.ResponseWriter, r *http.Request, planID string) {
+	if s.evictionPlanStatus == nil {
+		http.NotFound(w, r)
+		return
+	}
+	status, err := s.evictionPlanStatus.EvictionPlanStatus(r.Context(), planID)
+	if err != nil {
+		writeEvictionApplyError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, "encode eviction plan status response failed", http.StatusInternalServerError)
+		return
+	}
+}
+
+func evictionPlanPath(path string) (string, string, bool) {
 	rest := strings.TrimPrefix(path, "/admin/eviction/plans/")
-	planID, suffix, ok := strings.Cut(rest, "/")
-	return planID, ok && planID != "" && suffix == "apply"
+	if rest == path || rest == "" {
+		return "", "", false
+	}
+	planID, suffix, hasSuffix := strings.Cut(rest, "/")
+	if planID == "" {
+		return "", "", false
+	}
+	if !hasSuffix {
+		return planID, "", true
+	}
+	return planID, suffix, suffix == "apply"
 }
 
 func decodeEvictionApplyBody(w http.ResponseWriter, r *http.Request) error {

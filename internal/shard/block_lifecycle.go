@@ -237,6 +237,8 @@ func (s *Shard) startLifecycleCleanup() {
 	s.lifecycleCleanupDone = done
 	go func() {
 		defer close(done)
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		if err := CleanupHotLifecycleMarkers(s.blocksDir); err != nil {
 			s.logger.Warn("lifecycle cleanup failed", "error", err)
 		}

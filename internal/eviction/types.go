@@ -11,6 +11,9 @@ const (
 	ApplyStatusNoEffect           = "no_effect"
 	ApplyStatusFailed             = "failed"
 
+	PlanStatusPending = "pending"
+	PlanStatusRunning = "running"
+
 	ApplyBlockStatusEvicted = "evicted"
 	ApplyBlockStatusSkipped = "skipped"
 	ApplyBlockStatusFailed  = "failed"
@@ -111,6 +114,13 @@ type ApplyResult struct {
 	FailedBlocks   int          `json:"failed_blocks"`
 	BytesFreed     int64        `json:"bytes_freed"`
 	Blocks         []ApplyBlock `json:"blocks"`
+}
+
+type PlanStatus struct {
+	PlanID      string       `json:"plan_id"`
+	Status      string       `json:"status"`
+	Plan        *Plan        `json:"plan,omitempty"`
+	ApplyResult *ApplyResult `json:"apply_result,omitempty"`
 }
 
 type ApplyBlock struct {
