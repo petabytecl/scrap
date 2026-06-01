@@ -132,6 +132,34 @@ func TestApplyEvictionPlanRejectsMissingRestoreBackend(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanRequiresCommittedAuthorityBeforeUnlink(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockCatalogOnlyForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusFailed {
+		t.Fatalf("status = %s, want failed", result.Status)
+	}
+	if result.FailedBlocks != 1 || len(result.Blocks) != 1 {
+		t.Fatalf("result = %+v, want one failed Block", result)
+	}
+	if !strings.Contains(result.Blocks[0].Error, index.ErrConfirmedUploadNotFound.Error()) {
+		t.Fatalf("block error = %q, want ErrConfirmedUploadNotFound", result.Blocks[0].Error)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain hot without committed authority: %v", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("eviction marker stat error = %v, want not exist", err)
+	}
+}
+
 func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -708,15 +736,26 @@ func stageAlreadyEvictedBlockForEvictionApply(t *testing.T, s *Shard, blockID ui
 func stageHotConfirmedBlockForEvictionApply(t *testing.T, s *Shard, blockID uint64, sizeBytes int64) {
 	t.Helper()
 
+	confirmed := stageHotConfirmedBlockCatalogOnlyForEvictionApply(t, s, blockID, sizeBytes)
+	if err := writeConfirmedUploadAuthority(s.blocksDir, confirmed); err != nil {
+		t.Fatalf("writeConfirmedUploadAuthority: %v", err)
+	}
+}
+
+func stageHotConfirmedBlockCatalogOnlyForEvictionApply(t *testing.T, s *Shard, blockID uint64, sizeBytes int64) index.ConfirmedUpload {
+	t.Helper()
+
 	if err := os.WriteFile(block.FilePath(s.blocksDir, blockID), []byte("block bytes"), 0o600); err != nil {
 		t.Fatalf("write Block: %v", err)
 	}
 	if err := os.WriteFile(block.IdxFilePath(s.blocksDir, blockID), []byte("index bytes"), 0o600); err != nil {
 		t.Fatalf("write Block index: %v", err)
 	}
-	if err := s.idx.PutConfirmedUpload(confirmedUploadForEvictionApply(blockID, sizeBytes)); err != nil {
+	confirmed := confirmedUploadForEvictionApply(blockID, sizeBytes)
+	if err := s.idx.PutConfirmedUpload(confirmed); err != nil {
 		t.Fatalf("PutConfirmedUpload: %v", err)
 	}
+	return confirmed
 }
 
 func storeEvictionApplyPlan(t *testing.T, s *Shard) eviction.Plan {

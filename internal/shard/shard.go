@@ -669,6 +669,10 @@ func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.committedConfirmUploadAuthorityLocked(blockID)
+}
+
+func (s *Shard) committedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
 	confirmed, ok := s.committedConfirmUploads[blockID]
 	if !ok {
 		var err error

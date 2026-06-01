@@ -200,7 +200,7 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 		return skippedApplyBlock(selected, reason)
 	}
 
-	confirmed, err := s.idx.GetConfirmedUpload(selected.BlockID)
+	confirmed, err := s.committedConfirmUploadAuthorityLocked(selected.BlockID)
 	if err != nil {
 		return failedApplyBlock(selected, fmt.Errorf("get ConfirmUpload: %w", err))
 	}
