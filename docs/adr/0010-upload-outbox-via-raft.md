@@ -23,7 +23,12 @@ Two new `RaftCommand` variants track the upload lifecycle:
   sealed size, and seal timestamp. This is the upload obligation.
 - **`ConfirmUpload`**: proposed by the leader after uploading both `.blk` and `.idx`
   to the Backend and verifying via HEAD (size + ETag match). Records the block ID,
-  backend key prefix, and confirmation timestamp.
+  confirmation timestamp, and separate `.blk` and `.idx` Backend object metadata
+  (key, size, and provider validation token).
+
+Phase 4 hard-cut the original combined key-prefix/ETag `ConfirmUpload` shape
+because restore and eviction need per-object metadata. V2 is pre-production, so
+no compatibility migration is required for older local Raft logs.
 
 The upload outbox is derived state: any committed `SealBlock` without a matching
 `ConfirmUpload` is a pending upload. The projection materializes this as a

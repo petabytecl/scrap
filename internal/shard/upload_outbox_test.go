@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/shard"
 )
 
@@ -53,10 +54,38 @@ func TestShardConfirmUploadClearsPendingUpload(t *testing.T) {
 	}
 	waitPendingUploads(t, s, 1)
 
-	if err := s.ConfirmUploadForTest(ctx, 1, "cell-a/shards/0000000000000007/0000000000000001", "etag-1"); err != nil {
+	pending := waitPendingUploads(t, s, 1)[0]
+	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(pending.SealedSizeBytes)); err != nil {
 		t.Fatalf("ConfirmUploadForTest: %v", err)
 	}
 	waitPendingUploads(t, s, 0)
+}
+
+func TestShardConfirmUploadCatalogsConfirmedUploadAndClearsPendingUpload(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	if _, err := s.WriteDocument(ctx, "tx-upload-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-upload-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	pending := waitPendingUploads(t, s, 1)[0]
+
+	confirmed := confirmedUploadForTest(pending.SealedSizeBytes)
+	if err := s.ConfirmUploadForTest(ctx, confirmed); err != nil {
+		t.Fatalf("ConfirmUploadForTest: %v", err)
+	}
+
+	waitPendingUploads(t, s, 0)
+	got, err := s.ConfirmedUploadForTest(1)
+	if err != nil {
+		t.Fatalf("ConfirmedUploadForTest: %v", err)
+	}
+	if got != confirmed {
+		t.Fatalf("confirmed upload = %+v, want %+v", got, confirmed)
+	}
 }
 
 func TestShardUploadProcessorUploadsSealedBlocks(t *testing.T) {
@@ -190,6 +219,31 @@ func waitBackendObject(ctx context.Context, t *testing.T, store backend.Backend,
 
 func backendObjectKey(blockID uint64, ext string) string {
 	return fmt.Sprintf("%s/shards/%016x/%016x.%s", testCellID, testShardID, blockID, ext)
+}
+
+func confirmedUploadForTest(blockSize int64) index.ConfirmedUpload {
+	const blockID = 1
+	prefix := fmt.Sprintf("%s/shards/%016x/%016x", testCellID, testShardID, blockID)
+	return index.ConfirmedUpload{
+		BlockID:         blockID,
+		ShardID:         testShardID,
+		ConfirmedAtUs:   1716700001000000,
+		SealedSizeBytes: blockSize,
+		BlockObject: index.BackendObjectMetadata{
+			Key:             prefix + ".blk",
+			SizeBytes:       blockSize,
+			ValidationToken: shardValidationValue("block"),
+		},
+		IndexObject: index.BackendObjectMetadata{
+			Key:             prefix + ".idx",
+			SizeBytes:       4096,
+			ValidationToken: shardValidationValue("index"),
+		},
+	}
+}
+
+func shardValidationValue(kind string) string {
+	return kind + "-validation"
 }
 
 type transientBackend struct{}

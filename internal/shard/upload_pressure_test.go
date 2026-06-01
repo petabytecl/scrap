@@ -28,8 +28,8 @@ func TestUploadPressureRejectsWritesAndResumesAfterDrain(t *testing.T) {
 	assertUploadPressureError(t, err)
 
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelCritical)
-	waitPendingUploads(t, s, 1)
-	if err := s.ConfirmUploadForTest(ctx, 1, "cell-a/shards/0000000000000007/0000000000000001", "etag-1"); err != nil {
+	pending := waitPendingUploads(t, s, 1)[0]
+	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(pending.SealedSizeBytes)); err != nil {
 		t.Fatalf("ConfirmUploadForTest: %v", err)
 	}
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelOK)
@@ -116,7 +116,8 @@ func TestUploadPressureWarnRaisesConcurrencyAndClears(t *testing.T) {
 		t.Fatalf("warn concurrency = %d, want 4", got)
 	}
 
-	if err := s.ConfirmUploadForTest(ctx, 1, "cell-a/shards/0000000000000007/0000000000000001", "etag-1"); err != nil {
+	pending := waitPendingUploads(t, s, 1)[0]
+	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(pending.SealedSizeBytes)); err != nil {
 		t.Fatalf("ConfirmUploadForTest: %v", err)
 	}
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelOK)
@@ -146,7 +147,8 @@ func TestUploadPressureCriticalPausesDeepScrubAndResumes(t *testing.T) {
 		t.Fatal("expected deep scrub pause gate to be paused at critical upload pressure")
 	}
 
-	if err := s.ConfirmUploadForTest(ctx, 1, "cell-a/shards/0000000000000007/0000000000000001", "etag-1"); err != nil {
+	pending := waitPendingUploads(t, s, 1)[0]
+	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(pending.SealedSizeBytes)); err != nil {
 		t.Fatalf("ConfirmUploadForTest: %v", err)
 	}
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelOK)
