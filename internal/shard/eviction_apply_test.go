@@ -460,6 +460,44 @@ func TestApplyEvictionPlanValidationIgnoresClientCancellationAfterEviction(t *te
 	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
 }
 
+func TestApplyEvictionPlanValidationUsesBoundedContextAfterClientCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := shardForEvictionApplyTest(t, true)
+	backendStore := backend.NewFS(t.TempDir())
+	s.upload.Backend = backendStore
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, []byte("bounded validation"))
+	s.upload.Backend = blockingGetBackend{Backend: backendStore, cancel: cancel}
+	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
+	plan.ExpiresAtUs = time.Now().Add(75 * time.Millisecond).UnixMicro()
+	s.evictionPlans[plan.PlanID] = plan
+
+	start := time.Now()
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if ctx.Err() == nil {
+		t.Fatal("context was not canceled during validation")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("ApplyEvictionPlan took %s, want bounded validation to finish promptly", elapsed)
+	}
+	if result.Status != eviction.ApplyStatusEvictedWithValidationFailure || result.ValidationFailedBlocks != 1 {
+		t.Fatalf("result = %+v, want bounded validation failure", result)
+	}
+	if len(result.Validations) != 1 || !strings.Contains(result.Validations[0].Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("validations = %+v, want context deadline exceeded", result.Validations)
+	}
+	s.mu.Lock()
+	_, running := s.evictionApplyRunning[plan.PlanID]
+	s.mu.Unlock()
+	if running {
+		t.Fatal("eviction apply remained running after bounded validation timeout")
+	}
+}
+
 func TestApplyEvictionPlanReportsValidationFailure(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -1674,4 +1712,15 @@ type cancelOnGetBackend struct {
 func (b cancelOnGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
 	b.cancel()
 	return b.Backend.GetObject(ctx, key, opts)
+}
+
+type blockingGetBackend struct {
+	backend.Backend
+	cancel context.CancelFunc
+}
+
+func (b blockingGetBackend) GetObject(ctx context.Context, _ string, _ backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	b.cancel()
+	<-ctx.Done()
+	return nil, backend.ObjectMeta{}, ctx.Err()
 }

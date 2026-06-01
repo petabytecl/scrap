@@ -12,6 +12,8 @@ import (
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
+const evictionApplyValidationTimeout = 30 * time.Second
+
 func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
 	plan, result, ok, err := s.beginEvictionApply(ctx, req.PlanID)
 	if err != nil {
@@ -22,7 +24,9 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 	}
 
 	result, cacheable := s.applyEvictionPlanBlocks(ctx, plan)
-	s.validateEvictionApply(context.WithoutCancel(ctx), plan, &result)
+	validationCtx, cancelValidation := evictionApplyValidationContext(ctx, plan, time.Now().UTC())
+	defer cancelValidation()
+	s.validateEvictionApply(validationCtx, plan, &result)
 	result.CompletedAtUs = time.Now().UTC().UnixMicro()
 	s.evictionMetricRecorder().RecordApply(
 		s.shardID,
@@ -34,6 +38,24 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 	s.finishEvictionApply(plan.PlanID, result, cacheable)
 
 	return result, nil
+}
+
+func evictionApplyValidationContext(ctx context.Context, plan eviction.Plan, now time.Time) (context.Context, context.CancelFunc) {
+	timeout := evictionApplyValidationTimeout
+	if plan.ExpiresAtUs > 0 {
+		remaining := time.UnixMicro(plan.ExpiresAtUs).Sub(now)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+
+	base := context.WithoutCancel(ctx)
+	if timeout <= 0 {
+		canceled, cancel := context.WithCancel(base)
+		cancel()
+		return canceled, func() {}
+	}
+	return context.WithTimeout(base, timeout)
 }
 
 func applySkipCountsByReason(result eviction.ApplyResult) map[string]int {

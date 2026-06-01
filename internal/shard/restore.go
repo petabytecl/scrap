@@ -62,7 +62,9 @@ func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64
 		return waitRestore(ctx, call)
 	}
 
-	call.err = s.restoreEvictedBlockOnce(context.WithoutCancel(ctx), blockID, reason)
+	restoreCtx, cancel := detachedRestoreContext(ctx)
+	defer cancel()
+	call.err = s.restoreEvictedBlockOnce(restoreCtx, blockID, reason)
 	close(call.done)
 
 	s.restoreMu.Lock()
@@ -75,6 +77,15 @@ func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64
 		}
 	}
 	return call.err
+}
+
+func detachedRestoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return detached, func() {}
+	}
+	return context.WithDeadline(detached, deadline)
 }
 
 func (s *Shard) beginRestore(blockID uint64) (*blockRestoreCall, bool) {
