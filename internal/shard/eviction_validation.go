@@ -7,6 +7,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/localblock"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -75,7 +76,7 @@ func (s *Shard) restoreAndReadFirstDocument(ctx context.Context, blockID uint64)
 	if err != nil {
 		return err
 	}
-	rc, _, err := s.readDocumentFromProjection(ctx, entry.TransactionID, entry.DocName, RestoreReasonValidation, blockID)
+	rc, _, err := s.readDocumentFromProjection(ctx, entry.TransactionID, entry.DocName, localblock.RestoreReasonValidation, blockID)
 	if err != nil {
 		return fmt.Errorf("validation read Block %d: %w", blockID, err)
 	}
@@ -90,11 +91,11 @@ func (s *Shard) restoreAndReadFirstDocument(ctx context.Context, blockID uint64)
 }
 
 func (s *Shard) validationRestoredBlock(blockID uint64) bool {
-	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
 		return false
 	}
-	return lifecycle.State == LocalBlockStateHot || lifecycle.State == LocalBlockStateHotCleanupNeeded
+	return lifecycle.State == localblock.StateHot || lifecycle.State == localblock.StateHotCleanupNeeded
 }
 
 func firstBlockIndexEntry(path string) (block.IndexEntry, error) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/localblock"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
@@ -50,20 +51,20 @@ func blockIDFromBlockPath(blkPath string) (uint64, bool) {
 }
 
 func (c *scrubCoordinator) ClassifyScrubBlock(blockID uint64) (scrub.BlockLocalState, error) {
-	lifecycle, err := ClassifyLocalBlock(c.blocksDir, blockID)
+	lifecycle, err := localblock.Classify(c.blocksDir, blockID)
 	if err != nil {
 		return "", err
 	}
 	switch lifecycle.State {
-	case LocalBlockStateHot:
+	case localblock.StateHot:
 		return scrub.BlockLocalStateHot, nil
-	case LocalBlockStateHotCleanupNeeded:
+	case localblock.StateHotCleanupNeeded:
 		return scrub.BlockLocalStateHotCleanupNeeded, nil
-	case LocalBlockStateEvicted:
+	case localblock.StateEvicted:
 		return scrub.BlockLocalStateEvicted, nil
-	case LocalBlockStateMetadataLoss:
+	case localblock.StateMetadataLoss:
 		return scrub.BlockLocalStateMetadataLoss, nil
-	case LocalBlockStateUnexpectedLoss:
+	case localblock.StateUnexpectedLoss:
 		return scrub.BlockLocalStateUnexpectedLoss, nil
 	default:
 		return "", fmt.Errorf("unknown local Block state %s", lifecycle.State)
@@ -81,7 +82,7 @@ func (c *scrubCoordinator) appendEvictedMarkerBlocks(blocks []block.Info, openBl
 		return nil, fmt.Errorf("shard: read lifecycle markers for scrub: %w", err)
 	}
 	for _, entry := range entries {
-		blockID, ok := parseEvictionMarkerBlockID(entry.Name())
+		blockID, ok := localblock.ParseEvictionMarkerBlockID(entry.Name())
 		if !ok || blockID == openBlockID {
 			continue
 		}

@@ -18,9 +18,9 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/localblock"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/scrub"
-	"github.com/petabytecl/scrap/internal/shard"
 )
 
 func TestTransferBlockStreamsFileContents(t *testing.T) {
@@ -273,14 +273,14 @@ func transferBlockFirstRecvError(t *testing.T, addr string, blockID uint64) erro
 
 func writeTransferEvictionMarker(t *testing.T, dir string, blockID uint64) {
 	t.Helper()
-	if err := shard.WriteEvictionMarker(dir, shard.EvictionMarker{
+	if err := localblock.WriteEvictionMarker(dir, localblock.EvictionMarker{
 		BlockID:         blockID,
 		BackendKey:      "cell-a/shards/0/1.blk",
 		SizeBytes:       123,
 		ValidationToken: "etag",
 		EvictedAtUs:     time.Now().UnixMicro(),
-		Trigger:         shard.EvictionTriggerOperatorRequested,
-		Reason:          shard.EvictionReasonEvidenceRun,
+		Trigger:         localblock.EvictionTriggerOperatorRequested,
+		Reason:          localblock.EvictionReasonEvidenceRun,
 	}); err != nil {
 		t.Fatalf("WriteEvictionMarker: %v", err)
 	}

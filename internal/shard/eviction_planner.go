@@ -10,6 +10,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 	"github.com/petabytecl/scrap/internal/ulid"
 )
 
@@ -32,7 +33,7 @@ type evictionPlanInput struct {
 
 type evictionCandidate struct {
 	Upload    index.ConfirmedUpload
-	Lifecycle LocalBlockLifecycle
+	Lifecycle localblock.Lifecycle
 }
 
 func (s *Shard) CreateEvictionPlan(ctx context.Context, req eviction.PlanRequest) (eviction.Plan, error) {
@@ -87,7 +88,7 @@ func (s *Shard) evictionCandidatesLocked() ([]evictionCandidate, error) {
 	for {
 		upload, err := iter.Next()
 		if err == nil {
-			lifecycle, err := ClassifyLocalBlock(s.blocksDir, upload.BlockID)
+			lifecycle, err := localblock.Classify(s.blocksDir, upload.BlockID)
 			if err != nil {
 				return nil, fmt.Errorf("shard: classify local Block %d: %w", upload.BlockID, err)
 			}
@@ -263,7 +264,7 @@ func evictionSkipReason(candidate evictionCandidate, req eviction.PlanRequest, i
 	if req.ShardID != nil && candidate.Upload.ShardID != *req.ShardID {
 		return eviction.SkipReasonShardFilter
 	}
-	if candidate.Lifecycle.State != LocalBlockStateHot {
+	if candidate.Lifecycle.State != localblock.StateHot {
 		return eviction.SkipReasonLocalStateNotHot
 	}
 	if isLeader {

@@ -21,6 +21,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	"github.com/petabytecl/scrap/internal/scrub"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -476,7 +477,7 @@ func (s *Shard) ReadDocument(ctx context.Context, txID, docName string) (io.Read
 		return nil, storeapi.DocumentMeta{}, err
 	}
 
-	rc, meta, err := s.readDocumentFromProjection(ctx, txID, docName, RestoreReasonRead, 0)
+	rc, meta, err := s.readDocumentFromProjection(ctx, txID, docName, localblock.RestoreReasonRead, 0)
 	return rc, meta, err
 }
 

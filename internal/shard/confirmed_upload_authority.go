@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 type confirmedUploadAuthorityRecord struct {
@@ -23,7 +24,7 @@ func confirmedUploadAuthorityPath(blocksDir string, blockID uint64) string {
 
 func writeConfirmedUploadAuthority(blocksDir string, upload index.ConfirmedUpload) error {
 	record := confirmedUploadAuthorityRecord{
-		Version:         LifecycleMarkerVersion,
+		Version:         localblock.MarkerVersion,
 		BlockID:         upload.BlockID,
 		ShardID:         upload.ShardID,
 		ConfirmedAtUs:   upload.ConfirmedAtUs,
@@ -34,7 +35,7 @@ func writeConfirmedUploadAuthority(blocksDir string, upload index.ConfirmedUploa
 	if err := validateConfirmedUploadAuthorityRecord(record, upload.BlockID); err != nil {
 		return err
 	}
-	if err := writeMarkerJSON(confirmedUploadAuthorityPath(blocksDir, upload.BlockID), record); err != nil {
+	if err := localblock.WriteJSONMarker(confirmedUploadAuthorityPath(blocksDir, upload.BlockID), record); err != nil {
 		return fmt.Errorf("shard: write committed ConfirmUpload authority: %w", err)
 	}
 	return nil
@@ -42,7 +43,7 @@ func writeConfirmedUploadAuthority(blocksDir string, upload index.ConfirmedUploa
 
 func readConfirmedUploadAuthority(blocksDir string, blockID uint64) (index.ConfirmedUpload, error) {
 	var record confirmedUploadAuthorityRecord
-	if err := readMarkerJSON(confirmedUploadAuthorityPath(blocksDir, blockID), &record); err != nil {
+	if err := localblock.ReadJSONMarker(confirmedUploadAuthorityPath(blocksDir, blockID), &record); err != nil {
 		return index.ConfirmedUpload{}, err
 	}
 	if err := validateConfirmedUploadAuthorityRecord(record, blockID); err != nil {
@@ -59,14 +60,14 @@ func readConfirmedUploadAuthority(blocksDir string, blockID uint64) (index.Confi
 }
 
 func validateConfirmedUploadAuthorityRecord(record confirmedUploadAuthorityRecord, blockID uint64) error {
-	if err := validateMarkerHeader("committed ConfirmUpload authority", record.Version, record.BlockID, blockID); err != nil {
+	if err := localblock.ValidateMarkerHeader("committed ConfirmUpload authority", record.Version, record.BlockID, blockID); err != nil {
 		return err
 	}
 	switch {
 	case record.ConfirmedAtUs < 0:
-		return fmt.Errorf("%w: committed ConfirmUpload confirmed_at_us is negative: %d", ErrLifecycleMarkerInvalid, record.ConfirmedAtUs)
+		return fmt.Errorf("%w: committed ConfirmUpload confirmed_at_us is negative: %d", localblock.ErrMarkerInvalid, record.ConfirmedAtUs)
 	case record.SealedSizeBytes < 0:
-		return fmt.Errorf("%w: committed ConfirmUpload sealed_size_bytes is negative: %d", ErrLifecycleMarkerInvalid, record.SealedSizeBytes)
+		return fmt.Errorf("%w: committed ConfirmUpload sealed_size_bytes is negative: %d", localblock.ErrMarkerInvalid, record.SealedSizeBytes)
 	}
 	if err := validateConfirmedUploadAuthorityObject("block", record.BlockObject); err != nil {
 		return err
@@ -77,11 +78,11 @@ func validateConfirmedUploadAuthorityRecord(record confirmedUploadAuthorityRecor
 func validateConfirmedUploadAuthorityObject(kind string, object index.BackendObjectMetadata) error {
 	switch {
 	case object.Key == "":
-		return fmt.Errorf("%w: committed ConfirmUpload %s object key is required", ErrLifecycleMarkerInvalid, kind)
+		return fmt.Errorf("%w: committed ConfirmUpload %s object key is required", localblock.ErrMarkerInvalid, kind)
 	case object.SizeBytes < 0:
-		return fmt.Errorf("%w: committed ConfirmUpload %s object size_bytes is negative: %d", ErrLifecycleMarkerInvalid, kind, object.SizeBytes)
+		return fmt.Errorf("%w: committed ConfirmUpload %s object size_bytes is negative: %d", localblock.ErrMarkerInvalid, kind, object.SizeBytes)
 	case object.ValidationToken == "":
-		return fmt.Errorf("%w: committed ConfirmUpload %s object validation_token is required", ErrLifecycleMarkerInvalid, kind)
+		return fmt.Errorf("%w: committed ConfirmUpload %s object validation_token is required", localblock.ErrMarkerInvalid, kind)
 	default:
 		return nil
 	}

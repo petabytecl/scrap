@@ -9,10 +9,11 @@ import (
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 type evictionHealthBlockContribution struct {
-	State       LocalBlockState
+	State       localblock.State
 	EvictedSize int64
 	Quarantined bool
 }
@@ -137,19 +138,31 @@ func (s *Shard) recordEvictionHealthBlockBestEffort(blockID uint64) {
 }
 
 func (s *Shard) evictionHealthContributionForBlock(blockID uint64) (evictionHealthBlockContribution, error) {
-	quarantined, err := fileExists(block.FilePath(s.blocksDir, blockID) + block.QuarantineSuffix)
+	quarantined, err := quarantinedBlockExists(s.blocksDir, blockID)
 	if err != nil {
-		return evictionHealthBlockContribution{State: LocalBlockStateUnexpectedLoss}, err
+		return evictionHealthBlockContribution{State: localblock.StateUnexpectedLoss}, err
 	}
 	if quarantined {
 		return evictionHealthBlockContribution{Quarantined: true}, nil
 	}
-	lifecycle, err := ClassifyLocalBlock(s.blocksDir, blockID)
+	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
 		contribution := evictionHealthContributionFromClassifiedLifecycle(lifecycle, err)
 		return contribution, fmt.Errorf("shard: classify local Block %d for health: %w", blockID, err)
 	}
 	return evictionHealthContributionFromLifecycle(lifecycle), nil
+}
+
+func quarantinedBlockExists(blocksDir string, blockID uint64) (bool, error) {
+	path := block.FilePath(blocksDir, blockID) + block.QuarantineSuffix
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("shard: stat quarantined Block %d: %w", blockID, err)
 }
 
 func (s *Shard) evictionLifecycleHealthSnapshot() eviction.HealthSnapshot {
@@ -172,23 +185,23 @@ func (s *Shard) restoreFailuresByReason() map[string]int {
 	return out
 }
 
-func evictionHealthContributionFromLifecycle(lifecycle LocalBlockLifecycle) evictionHealthBlockContribution {
+func evictionHealthContributionFromLifecycle(lifecycle localblock.Lifecycle) evictionHealthBlockContribution {
 	contribution := evictionHealthBlockContribution{State: lifecycle.State}
-	if lifecycle.State == LocalBlockStateEvicted && lifecycle.EvictionMarker != nil {
+	if lifecycle.State == localblock.StateEvicted && lifecycle.EvictionMarker != nil {
 		contribution.EvictedSize = lifecycle.EvictionMarker.SizeBytes
 	}
 	return contribution
 }
 
-func evictionHealthContributionFromClassifiedLifecycle(lifecycle LocalBlockLifecycle, err error) evictionHealthBlockContribution {
+func evictionHealthContributionFromClassifiedLifecycle(lifecycle localblock.Lifecycle, err error) evictionHealthBlockContribution {
 	if err == nil {
 		return evictionHealthContributionFromLifecycle(lifecycle)
 	}
 	switch lifecycle.State {
-	case LocalBlockStateMetadataLoss, LocalBlockStateUnexpectedLoss, LocalBlockStateHotCleanupNeeded:
+	case localblock.StateMetadataLoss, localblock.StateUnexpectedLoss, localblock.StateHotCleanupNeeded:
 		return evictionHealthContributionFromLifecycle(lifecycle)
 	default:
-		return evictionHealthBlockContribution{State: LocalBlockStateUnexpectedLoss}
+		return evictionHealthBlockContribution{State: localblock.StateUnexpectedLoss}
 	}
 }
 
@@ -202,15 +215,15 @@ func applyEvictionHealthContribution(
 		return
 	}
 	switch contribution.State {
-	case LocalBlockStateHot, "":
-	case LocalBlockStateEvicted:
+	case localblock.StateHot, "":
+	case localblock.StateEvicted:
 		snapshot.EvictedBlocks += delta
 		snapshot.EvictedBytes += int64(delta) * contribution.EvictedSize
-	case LocalBlockStateHotCleanupNeeded:
+	case localblock.StateHotCleanupNeeded:
 		snapshot.HotCleanupNeededBlocks += delta
-	case LocalBlockStateMetadataLoss:
+	case localblock.StateMetadataLoss:
 		snapshot.MetadataLossBlocks += delta
-	case LocalBlockStateUnexpectedLoss:
+	case localblock.StateUnexpectedLoss:
 		snapshot.UnexpectedLossBlocks += delta
 	}
 }
