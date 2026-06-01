@@ -115,6 +115,61 @@ func TestBlockRepair_FallsBackToBackendWhenPeersAreEvicted(t *testing.T) {
 	}
 }
 
+func TestBlockRepair_FallsBackToBackendWithoutPeers(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(15)
+	quarantineBlock(t, dir, blockID)
+	replacement := replacementPayload(t, blockID, []byte("backend only replacement"))
+	metrics := &deepScrubMetrics{}
+	restorer := &recordingBackendRestorer{
+		onRestore: func(blockID uint64) error {
+			promoteBackendRepairReplacement(t, dir, blockID, replacement)
+			return nil
+		},
+	}
+	repair := scrub.NewBlockRepair(scrub.BlockRepairConfig{
+		BlocksDir:       dir,
+		BackendRestorer: restorer,
+		Metrics:         metrics,
+	})
+
+	repair.RepairQuarantined(context.Background())
+
+	if len(restorer.calls) != 1 || restorer.calls[0] != blockID {
+		t.Fatalf("backend restore calls = %v, want [%d]", restorer.calls, blockID)
+	}
+	requireNotQuarantined(t, dir, blockID)
+	if metrics.repairsOK != 1 || metrics.repairsFailed != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=1 failed=0", metrics.repairsOK, metrics.repairsFailed)
+	}
+}
+
+func TestBlockRepair_BackendFallbackFailureLeavesQuarantineIntact(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(16)
+	quarantineBlock(t, dir, blockID)
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{err: scrub.ErrPeerBlockEvicted}
+	restorer := &recordingBackendRestorer{err: errors.New("backend unavailable")}
+	repair := scrub.NewBlockRepair(scrub.BlockRepairConfig{
+		BlocksDir:       dir,
+		Transferer:      transferer,
+		BackendRestorer: restorer,
+		Metrics:         metrics,
+		PeerAddrs:       []string{"member-a:9091"},
+	})
+
+	repair.RepairQuarantined(context.Background())
+
+	requireQuarantined(t, dir, blockID)
+	if metrics.repairsOK != 0 || metrics.repairsFailed != 1 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=0 failed=1", metrics.repairsOK, metrics.repairsFailed)
+	}
+	if metrics.decremented != 0 {
+		t.Fatalf("quarantine gauge decremented %d times, want 0", metrics.decremented)
+	}
+}
+
 func TestBlockRepair_CorruptReplacementDeletedAndQuarantineRemains(t *testing.T) {
 	dir := t.TempDir()
 	blockID := uint64(8)

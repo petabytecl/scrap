@@ -9,6 +9,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func TestPublishVerifiedRestoreSerializesLifecycleMutation(t *testing.T) {
@@ -38,6 +39,65 @@ func TestPublishVerifiedRestoreSerializesLifecycleMutation(t *testing.T) {
 	s.lifecycleMutationMu.Unlock()
 	waitRestorePublish(t, done)
 	assertRestorePublishedForMutationTest(t, s, blockID)
+}
+
+func TestRequireQuarantinedRepairFilesFailsClosed(t *testing.T) {
+	const blockID uint64 = 1
+
+	blocksDir := t.TempDir()
+	err := requireQuarantinedRepairFiles(blocksDir, blockID)
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("missing quarantine error = %v, want ErrDataLoss", err)
+	}
+
+	if err := os.WriteFile(block.FilePath(blocksDir, blockID)+block.QuarantineSuffix, []byte("blk"), 0o600); err != nil {
+		t.Fatalf("write quarantined Block: %v", err)
+	}
+	err = requireQuarantinedRepairFiles(blocksDir, blockID)
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("missing quarantine index error = %v, want ErrDataLoss", err)
+	}
+
+	if err := os.WriteFile(block.IdxFilePath(blocksDir, blockID)+block.QuarantineSuffix, []byte("idx"), 0o600); err != nil {
+		t.Fatalf("write quarantined index: %v", err)
+	}
+	if err := requireQuarantinedRepairFiles(blocksDir, blockID); err != nil {
+		t.Fatalf("requireQuarantinedRepairFiles: %v", err)
+	}
+}
+
+func TestPublishRepairedBlockRollsBackIndexOnBlockPublishFailure(t *testing.T) {
+	const blockID uint64 = 1
+
+	blocksDir := t.TempDir()
+	blockPath := block.FilePath(blocksDir, blockID)
+	tmpPath := filepath.Join(blocksDir, "repair.tmp")
+	idxFinal := block.IdxFilePath(blocksDir, blockID)
+	idxQuarantine := idxFinal + block.QuarantineSuffix
+
+	if err := os.WriteFile(tmpPath, []byte("restored"), 0o600); err != nil {
+		t.Fatalf("write repair tmp: %v", err)
+	}
+	if err := os.WriteFile(idxQuarantine, []byte("idx"), 0o600); err != nil {
+		t.Fatalf("write quarantined index: %v", err)
+	}
+	if err := os.Mkdir(blockPath, 0o750); err != nil {
+		t.Fatalf("mkdir block publish collision: %v", err)
+	}
+
+	err := publishRepairedBlock(restoreInput{
+		confirmed: index.ConfirmedUpload{BlockID: blockID},
+		blockPath: blockPath,
+	}, tmpPath)
+	if err == nil {
+		t.Fatal("expected publish failure")
+	}
+	if _, statErr := os.Stat(idxQuarantine); statErr != nil {
+		t.Fatalf("quarantined index stat after rollback: %v", statErr)
+	}
+	if _, statErr := os.Stat(idxFinal); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("final index stat after rollback = %v, want not exist", statErr)
+	}
 }
 
 func startRestorePublish(t *testing.T, s *Shard, blockID uint64, tmpPath string) <-chan error {

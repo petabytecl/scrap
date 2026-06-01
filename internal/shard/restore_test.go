@@ -375,6 +375,46 @@ func TestRestoreBlockForRepairRestoresQuarantinedBlockFromBackend(t *testing.T) 
 	assertRepairRestorePublishedHotBlock(t, blocksDir)
 }
 
+func TestRestoreBlockForRepairCorruptBackendLeavesQuarantine(t *testing.T) {
+	ctx := context.Background()
+	backendStore := &mutatingGetBackend{
+		Backend: backend.NewFS(t.TempDir()),
+		mutate: func(data []byte) {
+			data[block.HeaderSize+block.FrameHeaderSize] ^= 0xff
+		},
+	}
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("corrupt repair restore "), 8)
+	if _, err := s.WriteDocument(ctx, "tx-repair-corrupt", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-repair-corrupt-seal", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	waitBackendObject(ctx, t, backendStore.Backend, backendObjectKey(1, "blk"))
+	waitBackendObject(ctx, t, backendStore.Backend, backendObjectKey(1, "idx"))
+	waitPendingUploads(t, s, 0)
+	_ = waitConfirmedUpload(t, s, 1)
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := block.Quarantine(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	err := s.RestoreBlockForRepair(ctx, 1)
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("RestoreBlockForRepair error = %v, want ErrDataLoss", err)
+	}
+
+	assertRepairRestoreFailureLeftQuarantined(t, blocksDir)
+}
+
 func assertRestoredDocument(t *testing.T, rc io.Reader, meta storeapi.DocumentMeta, want []byte) {
 	t.Helper()
 
@@ -437,6 +477,30 @@ func assertRepairRestorePublishedHotBlock(t *testing.T, blocksDir string) {
 	}
 	if restore.Source != shard.RestoreSourceBackend || restore.Reason != shard.RestoreReasonRepair {
 		t.Fatalf("restore marker = %+v, want backend/repair", restore)
+	}
+}
+
+func assertRepairRestoreFailureLeftQuarantined(t *testing.T, blocksDir string) {
+	t.Helper()
+
+	if _, err := os.Stat(block.FilePath(blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Block stat after repair failure = %v, want not exist", err)
+	}
+	if _, err := os.Stat(block.IdxFilePath(blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("index stat after repair failure = %v, want not exist", err)
+	}
+	if _, err := os.Stat(block.FilePath(blocksDir, 1) + block.QuarantineSuffix); err != nil {
+		t.Fatalf("quarantined Block should remain: %v", err)
+	}
+	if _, err := os.Stat(block.IdxFilePath(blocksDir, 1) + block.QuarantineSuffix); err != nil {
+		t.Fatalf("quarantined index should remain: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(blocksDir, ".0000000000000001.blk.restore-*"))
+	if err != nil {
+		t.Fatalf("glob repair restore staging: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("repair restore staging files remain: %v", matches)
 	}
 }
 

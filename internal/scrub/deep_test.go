@@ -84,9 +84,13 @@ func (v *recordingVerifier) VerifyBlock(_, _ string) (block.VerifyResult, error)
 
 type stubScrubBlockClassifier struct {
 	states map[uint64]scrub.BlockLocalState
+	err    error
 }
 
 func (s *stubScrubBlockClassifier) ClassifyScrubBlock(blockID uint64) (scrub.BlockLocalState, error) {
+	if s.err != nil {
+		return "", s.err
+	}
 	if state, ok := s.states[blockID]; ok {
 		return state, nil
 	}
@@ -303,6 +307,79 @@ func TestDeepScrubber_SkipsEvictedBlocks(t *testing.T) {
 	}
 	if metrics.runsOK != 1 {
 		t.Fatalf("ok runs = %d, want 1", metrics.runsOK)
+	}
+}
+
+func TestDeepScrubber_LifecycleFailuresMarkRunError(t *testing.T) {
+	tests := []struct {
+		name       string
+		classifier scrub.BlockStateClassifier
+	}{
+		{
+			name:       "classifier error",
+			classifier: &stubScrubBlockClassifier{err: errors.New("marker invalid")},
+		},
+		{
+			name: "metadata loss",
+			classifier: &stubScrubBlockClassifier{
+				states: map[uint64]scrub.BlockLocalState{1: scrub.BlockLocalStateMetadataLoss},
+			},
+		},
+		{
+			name: "unknown state",
+			classifier: &stubScrubBlockClassifier{
+				states: map[uint64]scrub.BlockLocalState{1: scrub.BlockLocalState("mystery")},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verifier := &recordingVerifier{}
+			metrics := &deepScrubMetrics{}
+			ds := scrub.NewDeep(scrub.DeepConfig{
+				BlockLister:          &stubBlockLister{blocks: []block.Info{{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"}}},
+				BlockVerifier:        verifier,
+				QuarantineManager:    &stubQuarantineManager{},
+				Metrics:              metrics,
+				BlockStateClassifier: tt.classifier,
+				OpenBlockID:          99,
+				CorruptCap:           5,
+			})
+
+			if err := ds.RunOnce(context.Background()); err == nil {
+				t.Fatal("expected lifecycle failure")
+			}
+			if verifier.calls != 0 {
+				t.Fatalf("VerifyBlock calls = %d, want 0", verifier.calls)
+			}
+			if metrics.runsError != 1 {
+				t.Fatalf("error runs = %d, want 1", metrics.runsError)
+			}
+		})
+	}
+}
+
+func TestDeepScrubber_HotCleanupBlocksStillVerify(t *testing.T) {
+	verifier := &recordingVerifier{}
+	metrics := &deepScrubMetrics{}
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister: &stubBlockLister{blocks: []block.Info{
+			{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
+		}},
+		BlockVerifier:        verifier,
+		QuarantineManager:    &stubQuarantineManager{},
+		Metrics:              metrics,
+		BlockStateClassifier: &stubScrubBlockClassifier{states: map[uint64]scrub.BlockLocalState{1: scrub.BlockLocalStateHotCleanupNeeded}},
+		OpenBlockID:          99,
+		CorruptCap:           5,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("VerifyBlock calls = %d, want 1", verifier.calls)
 	}
 }
 

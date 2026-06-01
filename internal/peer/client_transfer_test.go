@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/scrub"
 )
 
 type mockTransferStream struct {
@@ -124,5 +126,35 @@ func TestRecvBlockData_SplitChunk(t *testing.T) {
 	}
 	if string(gotIdx) != "iii" {
 		t.Fatalf("idx: got %q, want %q", gotIdx, "iii")
+	}
+}
+
+func TestMapTransferError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "evicted", err: status.Error(codes.FailedPrecondition, transferReasonEvicted+": local"), want: scrub.ErrPeerBlockEvicted},
+		{name: "metadata loss", err: status.Error(codes.DataLoss, transferReasonMetadataLoss+": missing idx"), want: scrub.ErrPeerBlockMetadataLoss},
+		{name: "unexpected loss", err: status.Error(codes.DataLoss, transferReasonUnexpectedLoss+": missing blk"), want: scrub.ErrPeerBlockUnexpectedLoss},
+		{name: "quarantined", err: status.Error(codes.DataLoss, transferReasonQuarantined+": corrupt"), want: scrub.ErrPeerBlockQuarantined},
+		{name: "unmatched status", err: status.Error(codes.NotFound, "missing"), want: nil},
+		{name: "non status", err: io.ErrUnexpectedEOF, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mapTransferError(tt.err)
+			if tt.want == nil {
+				if !errors.Is(got, tt.err) {
+					t.Fatalf("mapTransferError = %v, want original %v", got, tt.err)
+				}
+				return
+			}
+			if !errors.Is(got, tt.want) {
+				t.Fatalf("mapTransferError = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -199,6 +199,95 @@ func TestScrubCoordinatorListsEvictedBlocksForDeepScrubSkip(t *testing.T) {
 	}
 }
 
+func TestScrubCoordinatorClassifyScrubBlockMapsLifecycleStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		blockID uint64
+		stage   func(*testing.T, string, uint64)
+		want    scrub.BlockLocalState
+	}{
+		{
+			name:    "hot",
+			blockID: 1,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.FilePath(dir, blockID))
+				writeScrubLifecycleFile(t, block.IdxFilePath(dir, blockID))
+			},
+			want: scrub.BlockLocalStateHot,
+		},
+		{
+			name:    "hot cleanup needed",
+			blockID: 2,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.FilePath(dir, blockID))
+				writeScrubLifecycleFile(t, block.IdxFilePath(dir, blockID))
+				writeScrubEvictionMarker(t, dir, blockID)
+			},
+			want: scrub.BlockLocalStateHotCleanupNeeded,
+		},
+		{
+			name:    "metadata loss",
+			blockID: 3,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.FilePath(dir, blockID))
+			},
+			want: scrub.BlockLocalStateMetadataLoss,
+		},
+		{
+			name:    "unexpected loss",
+			blockID: 4,
+			stage: func(t *testing.T, dir string, blockID uint64) {
+				t.Helper()
+				writeScrubLifecycleFile(t, block.IdxFilePath(dir, blockID))
+			},
+			want: scrub.BlockLocalStateUnexpectedLoss,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, dir, nil, nil)
+			tt.stage(t, dir, tt.blockID)
+
+			got, err := c.ClassifyScrubBlock(tt.blockID)
+			if err != nil {
+				t.Fatalf("ClassifyScrubBlock: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("state = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func writeScrubLifecycleFile(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte("scrub lifecycle"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func writeScrubEvictionMarker(t *testing.T, dir string, blockID uint64) {
+	t.Helper()
+
+	if err := WriteEvictionMarker(dir, EvictionMarker{
+		BlockID:         blockID,
+		BackendKey:      "cell-a/shards/0/7.blk",
+		SizeBytes:       123,
+		ValidationToken: "etag",
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+}
+
 type scrubCoordinatorResult struct {
 	result scrub.Result
 	err    error
