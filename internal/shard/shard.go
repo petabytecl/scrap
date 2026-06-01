@@ -19,6 +19,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
 	"github.com/petabytecl/scrap/internal/scrub"
@@ -56,6 +57,8 @@ type Config struct {
 	PeerAddrs          []string
 	Upload             UploadConfig
 	Eviction           EvictionConfig
+	MemberHostname     string
+	MemberID           string
 	WriteTelemetry     WriteStageRecorder
 	IdentifierMode     telemetry.IdentifierMode
 }
@@ -73,6 +76,8 @@ type Shard struct {
 	replicator     DocumentReplicator
 	upload         UploadConfig
 	eviction       EvictionConfig
+	memberHostname string
+	memberID       string
 	writeTelemetry WriteStageRecorder
 	identifierMode telemetry.IdentifierMode
 	baseLogger     *slog.Logger
@@ -101,6 +106,7 @@ type Shard struct {
 	rebuilder *projectionRebuilder
 
 	lifecycleCleanupDone chan struct{}
+	evictionPlans        map[string]eviction.Plan
 }
 
 func (c *Config) applyDefaults() {
@@ -112,6 +118,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.WriteTelemetry == nil {
 		c.WriteTelemetry = noopWriteTelemetry{}
+	}
+	if c.MemberHostname == "" {
+		c.MemberHostname = "local"
+	}
+	if c.MemberID == "" {
+		c.MemberID = "local"
 	}
 	c.Eviction = c.Eviction.withDefaults()
 }
@@ -159,11 +171,14 @@ func Open(cfg Config) (*Shard, error) {
 		replicator:              cfg.Replicator,
 		upload:                  cfg.Upload,
 		eviction:                cfg.Eviction,
+		memberHostname:          cfg.MemberHostname,
+		memberID:                cfg.MemberID,
 		writeTelemetry:          cfg.WriteTelemetry,
 		identifierMode:          cfg.IdentifierMode,
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
+		evictionPlans:           make(map[string]eviction.Plan),
 		uploadPressureScrubGate: newPressurePauseGate(),
 		raftStartedAt:           time.Now(),
 		bootstrapGrace:          cfg.BootstrapGrace,

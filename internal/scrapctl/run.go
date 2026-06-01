@@ -15,7 +15,7 @@ import (
 
 const (
 	kubectlGlobalFlagCapacity = 4
-	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence>"
+	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction>"
 
 	defaultNamespace      = "scrap"
 	defaultCluster        = "scrap-prodlike"
@@ -79,6 +79,8 @@ func runCommand(name string, args []string, stdout, stderr io.Writer, deps Deps)
 		return runFault(args, stdout, deps)
 	case "evidence":
 		return runEvidence(args, stdout, stderr, deps)
+	case "eviction":
+		return runEviction(args, stdout, deps)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown command %q\n", name)
 		return fmt.Errorf("unknown command %q", name)

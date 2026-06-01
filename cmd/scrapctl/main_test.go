@@ -11,7 +11,7 @@ func TestRunMainHelp(t *testing.T) {
 	if code := run([]string{"help"}, &stdout, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout.String(), "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence>") {
+	if !strings.Contains(stdout.String(), "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction>") {
 		t.Fatalf("unexpected help output: %s", stdout.String())
 	}
 }

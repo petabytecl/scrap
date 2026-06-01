@@ -125,6 +125,8 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		PeerAddrs:          peerAddrsExceptSelf(peers, raftID),
 		Upload:             uploadCfg,
 		Eviction:           cfg.Eviction,
+		MemberHostname:     telemetryRuntime.resourceConfig.MemberSlotID,
+		MemberID:           telemetryRuntime.resourceConfig.MemberID,
 		WriteTelemetry:     shardTel.writeTelemetry,
 		IdentifierMode:     identifierMode,
 	})
@@ -172,6 +174,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	adminOpts := []admin.Option{
 		admin.WithLogger(logger),
 		admin.WithUploadPressureProvider(s),
+		admin.WithEvictionPlanner(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
 	}
 	if cfg.TestHooks {

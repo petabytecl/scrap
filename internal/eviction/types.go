@@ -1,0 +1,81 @@
+// Package eviction defines the operator-facing Phase 4 dry-run plan contract.
+package eviction
+
+import "errors"
+
+const (
+	ReasonEvidenceRun = "evidence_run"
+
+	SkipReasonHotResidencyWindow    = "hot_residency_window"
+	SkipReasonLeaderHotCopyRequired = "leader_hot_copy_required"
+	SkipReasonLocalStateNotHot      = "local_state_not_hot"
+	SkipReasonPlanBounds            = "plan_bounds"
+	SkipReasonShardFilter           = "shard_filter"
+)
+
+var (
+	ErrInvalidPlanRequest    = errors.New("eviction: invalid plan request")
+	ErrTargetMemberMismatch  = errors.New("eviction: target member_hostname does not match local member")
+	ErrPlanCapExceedsCeiling = errors.New("eviction: requested cap exceeds configured ceiling")
+)
+
+type Bounds struct {
+	MaxBlocks int   `json:"max_blocks"`
+	MaxBytes  int64 `json:"max_bytes"`
+}
+
+type ConfigSnapshot struct {
+	Enabled                   bool  `json:"enabled"`
+	HotResidencyWindowSeconds int64 `json:"hot_residency_window_seconds"`
+	PlanTTLSeconds            int64 `json:"plan_ttl_seconds"`
+	RecommendedMaxBlocks      int   `json:"recommended_max_blocks"`
+	RecommendedMaxBytes       int64 `json:"recommended_max_bytes"`
+	MaxValidateSamples        int   `json:"max_validate_samples"`
+}
+
+type PlanRequest struct {
+	MemberHostname string  `json:"member_hostname"`
+	ShardID        *uint64 `json:"shard_id,omitempty"`
+	MaxBlocks      *int    `json:"max_blocks,omitempty"`
+	MaxBytes       *int64  `json:"max_bytes,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	Note           string  `json:"note,omitempty"`
+}
+
+type Plan struct {
+	PlanID             string         `json:"plan_id"`
+	GeneratedAtUs      int64          `json:"generated_at_us"`
+	ExpiresAtUs        int64          `json:"expires_at_us"`
+	MemberHostname     string         `json:"member_hostname"`
+	MemberID           string         `json:"member_id"`
+	ShardID            *uint64        `json:"shard_id,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	Note               string         `json:"note,omitempty"`
+	Config             ConfigSnapshot `json:"config"`
+	RecommendedBounds  Bounds         `json:"recommended_bounds"`
+	RequestedBounds    Bounds         `json:"requested_bounds,omitempty"`
+	EffectiveBounds    Bounds         `json:"effective_bounds"`
+	Selected           []PlanBlock    `json:"selected_blocks"`
+	Skipped            []PlanBlock    `json:"skipped_candidates"`
+	SkipCountsByReason map[string]int `json:"skip_counts_by_reason,omitempty"`
+	CandidateBlocks    int            `json:"candidate_blocks"`
+	CandidateBytes     int64          `json:"candidate_bytes"`
+	EligibleBlocks     int            `json:"eligible_blocks"`
+	EligibleBytes      int64          `json:"eligible_bytes"`
+	SelectedBytes      int64          `json:"selected_bytes"`
+}
+
+type PlanBlock struct {
+	BlockID                   uint64 `json:"block_id"`
+	ShardID                   uint64 `json:"shard_id"`
+	SizeBytes                 int64  `json:"size_bytes"`
+	BackendKey                string `json:"backend_key,omitempty"`
+	ConfirmedAtUs             int64  `json:"confirmed_at_us,omitempty"`
+	RestoredAtUs              int64  `json:"restored_at_us,omitempty"`
+	EligibleAtUs              int64  `json:"eligible_at_us,omitempty"`
+	HotResidencyWindowSeconds int64  `json:"hot_residency_window_seconds,omitempty"`
+	LocalState                string `json:"local_state,omitempty"`
+	OpenReaders               int    `json:"open_readers"`
+	RepairState               string `json:"repair_state,omitempty"`
+	Reason                    string `json:"reason,omitempty"`
+}

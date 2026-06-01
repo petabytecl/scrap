@@ -43,6 +43,7 @@ type Server struct {
 	uploadPressure     UploadPressureProvider
 	pprofEnabled       bool
 	metricsHandler     http.Handler
+	evictionPlanner    EvictionPlanner
 	logger             *slog.Logger
 }
 
@@ -89,6 +90,9 @@ func New(opts ...Option) *Server {
 	}
 	if s.metricsHandler != nil {
 		mux.Handle("/metrics", s.metricsHandler)
+	}
+	if s.evictionPlanner != nil {
+		mux.HandleFunc("/admin/eviction/plans", s.handleEvictionPlans)
 	}
 	if s.pprofEnabled {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
