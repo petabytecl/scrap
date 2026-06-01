@@ -152,21 +152,20 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	pending, err := s.idx.GetPendingUpload(confirm.GetBlockId())
 	if err != nil {
 		if errors.Is(err, index.ErrPendingUploadNotFound) {
-			if _, catalogErr := s.idx.GetConfirmedUpload(confirm.GetBlockId()); catalogErr == nil {
+			existing, catalogErr := s.idx.GetConfirmedUpload(confirm.GetBlockId())
+			if catalogErr == nil {
+				if err := s.putConfirmedUploadFromCommand(confirm, existing.SealedSizeBytes); err != nil {
+					return err
+				}
 				return s.refreshUploadPressureLocked()
+			}
+			if !errors.Is(catalogErr, index.ErrConfirmedUploadNotFound) {
+				return fmt.Errorf("shard: get confirmed upload for block %d: %w", confirm.GetBlockId(), catalogErr)
 			}
 		}
 		return fmt.Errorf("shard: confirm upload missing sealed metadata for block %d: %w", confirm.GetBlockId(), err)
 	}
-	confirmed := index.ConfirmedUpload{
-		BlockID:         confirm.GetBlockId(),
-		ShardID:         confirm.GetShardId(),
-		ConfirmedAtUs:   confirm.GetConfirmedAtUs(),
-		SealedSizeBytes: pending.SealedSizeBytes,
-		BlockObject:     indexBackendObject(confirm.GetBlockObject()),
-		IndexObject:     indexBackendObject(confirm.GetIndexObject()),
-	}
-	if err := s.idx.PutConfirmedUpload(confirmed); err != nil {
+	if err := s.putConfirmedUploadFromCommand(confirm, pending.SealedSizeBytes); err != nil {
 		return err
 	}
 	if err := s.idx.DeletePendingUpload(confirm.GetBlockId()); err != nil {
@@ -174,6 +173,37 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	}
 	s.uploadObligations.forget(confirm.GetBlockId())
 	return s.refreshUploadPressureLocked()
+}
+
+func (s *Shard) putConfirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) error {
+	confirmed := confirmedUploadFromCommand(confirm, sealedSize)
+	if err := validateConfirmedUploadMatchesSeal(confirmed); err != nil {
+		return err
+	}
+	return s.idx.PutConfirmedUpload(confirmed)
+}
+
+func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {
+	return index.ConfirmedUpload{
+		BlockID:         confirm.GetBlockId(),
+		ShardID:         confirm.GetShardId(),
+		ConfirmedAtUs:   confirm.GetConfirmedAtUs(),
+		SealedSizeBytes: sealedSize,
+		BlockObject:     indexBackendObject(confirm.GetBlockObject()),
+		IndexObject:     indexBackendObject(confirm.GetIndexObject()),
+	}
+}
+
+func validateConfirmedUploadMatchesSeal(upload index.ConfirmedUpload) error {
+	if upload.BlockObject.SizeBytes != upload.SealedSizeBytes {
+		return fmt.Errorf(
+			"shard: confirmed block object size %d does not match sealed size %d for block %d",
+			upload.BlockObject.SizeBytes,
+			upload.SealedSizeBytes,
+			upload.BlockID,
+		)
+	}
+	return nil
 }
 
 func indexBackendObject(meta *scrapv1.BackendObjectMetadata) index.BackendObjectMetadata {
