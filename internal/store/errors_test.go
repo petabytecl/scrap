@@ -44,3 +44,32 @@ func TestNotLeaderErrorIsNotSentinel(t *testing.T) {
 		t.Fatal("NotLeaderError should not match ErrNotFound")
 	}
 }
+
+func TestUnavailableErrorReason(t *testing.T) {
+	err := store.NewUnavailable(store.UnavailableReasonBackendRestoreUnavailable, "restore paused")
+
+	if !errors.Is(err, store.ErrUnavailable) {
+		t.Fatal("UnavailableError should match ErrUnavailable")
+	}
+	reason, ok := store.UnavailableReason(err)
+	if !ok || reason != store.UnavailableReasonBackendRestoreUnavailable {
+		t.Fatalf("UnavailableReason = %q/%v, want backend_restore_unavailable", reason, ok)
+	}
+	if got, want := err.Error(), "temporarily unavailable: restore paused"; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestUnavailableErrorWithoutMessage(t *testing.T) {
+	err := store.NewUnavailable(store.UnavailableReasonBackendRestoreUnavailable, "")
+
+	if got, want := err.Error(), store.ErrUnavailable.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestUnavailableReasonMissing(t *testing.T) {
+	if reason, ok := store.UnavailableReason(store.ErrUnavailable); ok || reason != "" {
+		t.Fatalf("UnavailableReason = %q/%v, want empty/false", reason, ok)
+	}
+}

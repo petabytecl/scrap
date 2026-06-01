@@ -2,7 +2,11 @@ package store
 
 import "errors"
 
-const ResourceExhaustedReasonUploadPressure = "upload_pressure"
+const (
+	ResourceExhaustedReasonUploadPressure = "upload_pressure"
+
+	UnavailableReasonBackendRestoreUnavailable = "backend_restore_unavailable"
+)
 
 var (
 	ErrAlreadyExists     = errors.New("document already exists")
@@ -10,6 +14,7 @@ var (
 	ErrTxNotFound        = errors.New("transaction not found")
 	ErrInvalidArgument   = errors.New("invalid argument")
 	ErrResourceExhausted = errors.New("resource exhausted")
+	ErrUnavailable       = errors.New("temporarily unavailable")
 	ErrDataLoss          = errors.New("data corruption detected")
 	ErrRebuilding        = errors.New("projection rebuild in progress")
 )
@@ -43,6 +48,37 @@ func ResourceExhaustedReason(err error) (string, bool) {
 		return "", false
 	}
 	return resourceErr.Reason, true
+}
+
+type UnavailableError struct {
+	Reason  string
+	Message string
+}
+
+func NewUnavailable(reason, message string) *UnavailableError {
+	return &UnavailableError{
+		Reason:  reason,
+		Message: message,
+	}
+}
+
+func (e *UnavailableError) Error() string {
+	if e.Message == "" {
+		return ErrUnavailable.Error()
+	}
+	return ErrUnavailable.Error() + ": " + e.Message
+}
+
+func (e *UnavailableError) Unwrap() error {
+	return ErrUnavailable
+}
+
+func UnavailableReason(err error) (string, bool) {
+	var unavailableErr *UnavailableError
+	if !errors.As(err, &unavailableErr) || unavailableErr.Reason == "" {
+		return "", false
+	}
+	return unavailableErr.Reason, true
 }
 
 func IsAlreadyExists(err error) bool {
