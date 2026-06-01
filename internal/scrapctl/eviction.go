@@ -34,15 +34,22 @@ type evictionApplyOptions struct {
 	confirm bool
 }
 
+type evictionStatusOptions struct {
+	common commonOptions
+	planID string
+}
+
 func runEviction(args []string, stdout io.Writer, deps Deps) error {
 	if len(args) == 0 {
-		return errors.New("usage: scrapctl eviction <plan|apply>")
+		return errors.New("usage: scrapctl eviction <plan|apply|status>")
 	}
 	switch args[0] {
 	case "plan":
 		return runEvictionPlan(args[1:], stdout, deps)
 	case "apply":
 		return runEvictionApply(args[1:], stdout, deps)
+	case "status":
+		return runEvictionStatus(args[1:], stdout, deps)
 	default:
 		return fmt.Errorf("unsupported eviction command %q", args[0])
 	}
@@ -104,6 +111,24 @@ func runEvictionApply(args []string, stdout io.Writer, deps Deps) error {
 	return failedEvictionApplyResultError(result)
 }
 
+func runEvictionStatus(args []string, stdout io.Writer, deps Deps) error {
+	opts, err := parseEvictionStatusOptions(args)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := commandContext(context.Background(), opts.common.timeout)
+	defer cancel()
+	status, err := getEvictionStatus(ctx, opts.common, deps, opts.planID)
+	if err != nil {
+		return err
+	}
+	if opts.common.output == "json" {
+		return writeJSON(stdout, status)
+	}
+	return writeEvictionStatusText(stdout, status)
+}
+
 func parseEvictionPlanOptions(args []string) (evictionPlanOptions, error) {
 	opts := evictionPlanOptions{}
 	fs := newFlagSet("eviction plan", &opts.common, func(fs *flag.FlagSet, _ *commonOptions) {
@@ -153,6 +178,23 @@ func parseEvictionApplyOptions(args []string) (evictionApplyOptions, error) {
 	}
 	if !opts.confirm {
 		return evictionApplyOptions{}, errors.New("confirm is required")
+	}
+	return opts, nil
+}
+
+func parseEvictionStatusOptions(args []string) (evictionStatusOptions, error) {
+	opts := evictionStatusOptions{}
+	fs := newFlagSet("eviction status", &opts.common, func(fs *flag.FlagSet, _ *commonOptions) {
+		fs.StringVar(&opts.planID, "plan-id", "", "Stored eviction plan ID")
+	})
+	if err := fs.Parse(args); err != nil {
+		return evictionStatusOptions{}, fmt.Errorf("parse flags: %w", err)
+	}
+	if err := validateCommon(opts.common); err != nil {
+		return evictionStatusOptions{}, err
+	}
+	if strings.TrimSpace(opts.planID) == "" {
+		return evictionStatusOptions{}, errors.New("plan-id is required")
 	}
 	return opts, nil
 }
@@ -211,6 +253,30 @@ func postEvictionApply(ctx context.Context, opts commonOptions, deps Deps, planI
 	return result, nil
 }
 
+func getEvictionStatus(ctx context.Context, opts commonOptions, deps Deps, planID string) (eviction.PlanStatus, error) {
+	endpoint := strings.TrimRight(opts.adminURL, "/") + "/admin/eviction/plans/" + url.PathEscape(planID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return eviction.PlanStatus{}, fmt.Errorf("build eviction status request: %w", err)
+	}
+
+	resp, err := deps.HTTPClient.Do(req)
+	if err != nil {
+		return eviction.PlanStatus{}, fmt.Errorf("GET eviction status: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return eviction.PlanStatus{}, fmt.Errorf("GET eviction status: %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	var status eviction.PlanStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return eviction.PlanStatus{}, fmt.Errorf("decode eviction status: %w", err)
+	}
+	return status, nil
+}
+
 func failedEvictionApplyResultError(result eviction.ApplyResult) error {
 	switch result.Status {
 	case eviction.ApplyStatusFailed:
@@ -220,6 +286,65 @@ func failedEvictionApplyResultError(result eviction.ApplyResult) error {
 	default:
 		return nil
 	}
+}
+
+func writeEvictionStatusText(w io.Writer, status eviction.PlanStatus) error {
+	if _, err := fmt.Fprintf(w, "plan_id: %s\nstatus: %s\n", status.PlanID, status.Status); err != nil {
+		return fmt.Errorf("write status summary: %w", err)
+	}
+	if status.Plan != nil {
+		if err := writeEvictionPlanEvidenceText(w, *status.Plan); err != nil {
+			return err
+		}
+	}
+	if status.ApplyResult != nil {
+		if _, err := fmt.Fprintln(w, "apply_result:"); err != nil {
+			return fmt.Errorf("write apply result label: %w", err)
+		}
+		if err := writeEvictionApplyText(w, *status.ApplyResult); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeEvictionPlanEvidenceText(w io.Writer, plan eviction.Plan) error {
+	if _, err := fmt.Fprintf(w, "member_hostname: %s\nmember_id: %s\n", plan.MemberHostname, plan.MemberID); err != nil {
+		return fmt.Errorf("write status member identity: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "reason: %s\n", plan.Reason); err != nil {
+		return fmt.Errorf("write status reason: %w", err)
+	}
+	if _, err := fmt.Fprintf(
+		w,
+		"candidate_blocks: %d\ncandidate_bytes: %d\neligible_blocks: %d\neligible_bytes: %d\nselected_bytes: %d\n",
+		plan.CandidateBlocks,
+		plan.CandidateBytes,
+		plan.EligibleBlocks,
+		plan.EligibleBytes,
+		plan.SelectedBytes,
+	); err != nil {
+		return fmt.Errorf("write candidate evidence: %w", err)
+	}
+	if err := writeEvictionSkipCounts(w, plan.SkipCountsByReason); err != nil {
+		return err
+	}
+	if err := writeEvictionBlocks(w, "selected_blocks", plan.Selected); err != nil {
+		return err
+	}
+	return writeEvictionBlocks(w, "skipped_candidates", plan.Skipped)
+}
+
+func writeEvictionSkipCounts(w io.Writer, counts map[string]int) error {
+	if _, err := fmt.Fprintln(w, "skip_counts_by_reason:"); err != nil {
+		return fmt.Errorf("write skip count label: %w", err)
+	}
+	for reason, count := range counts {
+		if _, err := fmt.Fprintf(w, "  %s=%d\n", reason, count); err != nil {
+			return fmt.Errorf("write skip count: %w", err)
+		}
+	}
+	return nil
 }
 
 func writeEvictionPlanText(w io.Writer, plan eviction.Plan) error {
@@ -262,11 +387,13 @@ func writeEvictionApplyText(w io.Writer, result eviction.ApplyResult) error {
 	}
 	if _, err := fmt.Fprintf(
 		w,
-		"selected_blocks: %d\nevicted_blocks: %d\nskipped_blocks: %d\nfailed_blocks: %d\nbytes_freed: %d\n",
+		"selected_blocks: %d\nevicted_blocks: %d\nskipped_blocks: %d\nfailed_blocks: %d\nvalidated_blocks: %d\nvalidation_failed_blocks: %d\nbytes_freed: %d\n",
 		result.SelectedBlocks,
 		result.EvictedBlocks,
 		result.SkippedBlocks,
 		result.FailedBlocks,
+		result.ValidatedBlocks,
+		result.ValidationFailedBlocks,
 		result.BytesFreed,
 	); err != nil {
 		return fmt.Errorf("write apply totals: %w", err)
@@ -276,6 +403,17 @@ func writeEvictionApplyText(w io.Writer, result eviction.ApplyResult) error {
 	}
 	for _, block := range result.Blocks {
 		if err := writeEvictionApplyBlock(w, block); err != nil {
+			return err
+		}
+	}
+	if len(result.Validations) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "validations:"); err != nil {
+		return fmt.Errorf("write validations label: %w", err)
+	}
+	for _, validation := range result.Validations {
+		if err := writeEvictionValidationBlock(w, validation); err != nil {
 			return err
 		}
 	}
@@ -306,6 +444,27 @@ func writeEvictionApplyBlock(w io.Writer, block eviction.ApplyBlock) error {
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return fmt.Errorf("write apply newline: %w", err)
+	}
+	return nil
+}
+
+func writeEvictionValidationBlock(w io.Writer, validation eviction.ValidationBlock) error {
+	if _, err := fmt.Fprintf(
+		w,
+		"  block_id=%d shard_id=%d status=%s",
+		validation.BlockID,
+		validation.ShardID,
+		validation.Status,
+	); err != nil {
+		return fmt.Errorf("write validation block: %w", err)
+	}
+	if validation.Error != "" {
+		if _, err := fmt.Fprintf(w, " error=%q", validation.Error); err != nil {
+			return fmt.Errorf("write validation error: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return fmt.Errorf("write validation newline: %w", err)
 	}
 	return nil
 }

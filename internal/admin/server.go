@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/eviction"
 )
 
 const (
@@ -33,6 +35,10 @@ type UploadPressureProvider interface {
 	UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int)
 }
 
+type EvictionHealthProvider interface {
+	EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error)
+}
+
 type Option func(*Server)
 
 type Server struct {
@@ -46,6 +52,7 @@ type Server struct {
 	evictionPlanner    EvictionPlanner
 	evictionApplier    EvictionApplier
 	evictionPlanStatus EvictionPlanStatusProvider
+	evictionHealth     EvictionHealthProvider
 	logger             *slog.Logger
 }
 
@@ -58,6 +65,12 @@ func WithProjectionInjector(injector ProjectionInjector) Option {
 func WithUploadPressureProvider(provider UploadPressureProvider) Option {
 	return func(s *Server) {
 		s.uploadPressure = provider
+	}
+}
+
+func WithEvictionHealthProvider(provider EvictionHealthProvider) Option {
+	return func(s *Server) {
+		s.evictionHealth = provider
 	}
 }
 
@@ -204,11 +217,20 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 }
 
 type healthResponse struct {
-	Status              string `json:"status"`
-	UploadPressure      string `json:"upload_pressure"`
-	UploadPressureLevel int    `json:"upload_pressure_level"`
-	UploadPendingBytes  int64  `json:"upload_pending_bytes"`
-	UploadPendingBlocks int    `json:"upload_pending_blocks"`
+	Status                  string         `json:"status"`
+	UploadPressure          string         `json:"upload_pressure"`
+	UploadPressureLevel     int            `json:"upload_pressure_level"`
+	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
+	UploadPendingBlocks     int            `json:"upload_pending_blocks"`
+	EvictionPressure        string         `json:"eviction_pressure"`
+	EvictedBlocks           int            `json:"evicted_blocks"`
+	EvictedBytes            int64          `json:"evicted_bytes"`
+	HotCleanupNeededBlocks  int            `json:"hot_cleanup_needed_blocks"`
+	MetadataLossBlocks      int            `json:"metadata_loss_blocks"`
+	UnexpectedLossBlocks    int            `json:"unexpected_loss_blocks"`
+	QuarantinedBlocks       int            `json:"quarantined_blocks"`
+	RestoreFailedBlocks     int            `json:"restore_failed_blocks"`
+	RestoreFailuresByReason map[string]int `json:"restore_failures_by_reason,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +248,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Status:              "ok",
 		UploadPressure:      "ok",
 		UploadPressureLevel: 0,
+		EvictionPressure:    eviction.HealthPressureOK,
 	}
 	if s.uploadPressure != nil {
 		level, levelName, pendingBytes, pendingBlocks := s.uploadPressure.UploadPressureSnapshot()
@@ -234,11 +257,39 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.UploadPendingBytes = pendingBytes
 		resp.UploadPendingBlocks = pendingBlocks
 	}
+	if s.evictionHealth != nil {
+		snapshot, err := s.evictionHealth.EvictionHealthSnapshot(r.Context())
+		if err != nil {
+			resp.Status = "degraded"
+			resp.EvictionPressure = eviction.HealthPressureDegraded
+			resp.RestoreFailuresByReason = map[string]int{eviction.RestoreFailureUnknown: 1}
+		} else {
+			applyEvictionHealthSnapshot(&resp, snapshot)
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(w, "encode health response failed", http.StatusInternalServerError)
 		return
+	}
+}
+
+func applyEvictionHealthSnapshot(resp *healthResponse, snapshot eviction.HealthSnapshot) {
+	resp.EvictionPressure = snapshot.Pressure
+	if resp.EvictionPressure == "" {
+		resp.EvictionPressure = eviction.HealthPressureOK
+	}
+	resp.EvictedBlocks = snapshot.EvictedBlocks
+	resp.EvictedBytes = snapshot.EvictedBytes
+	resp.HotCleanupNeededBlocks = snapshot.HotCleanupNeededBlocks
+	resp.MetadataLossBlocks = snapshot.MetadataLossBlocks
+	resp.UnexpectedLossBlocks = snapshot.UnexpectedLossBlocks
+	resp.QuarantinedBlocks = snapshot.QuarantinedBlocks
+	resp.RestoreFailedBlocks = snapshot.RestoreFailedBlocks
+	resp.RestoreFailuresByReason = snapshot.RestoreFailuresByReason
+	if resp.EvictionPressure != eviction.HealthPressureOK {
+		resp.Status = "degraded"
 	}
 }
 

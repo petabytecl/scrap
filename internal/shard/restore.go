@@ -12,6 +12,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -101,6 +102,13 @@ func waitRestore(ctx context.Context, call *blockRestoreCall) error {
 }
 
 func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64, reason string) error {
+	start := time.Now()
+	err := s.restoreEvictedBlockOnceRecorded(ctx, blockID, reason)
+	s.recordRestoreOutcome(blockID, reason, err, time.Since(start))
+	return err
+}
+
+func (s *Shard) restoreEvictedBlockOnceRecorded(ctx context.Context, blockID uint64, reason string) error {
 	input, err := s.restoreInput(ctx, blockID)
 	if err != nil {
 		return err
@@ -112,6 +120,13 @@ func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64, rea
 }
 
 func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error {
+	start := time.Now()
+	err := s.restoreBlockForRepair(ctx, blockID)
+	s.recordRestoreOutcome(blockID, RestoreReasonRepair, err, time.Since(start))
+	return err
+}
+
+func (s *Shard) restoreBlockForRepair(ctx context.Context, blockID uint64) error {
 	input, err := s.repairRestoreInput(ctx, blockID)
 	if err != nil {
 		return err
@@ -141,6 +156,48 @@ func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 	}
 	published, err = s.publishVerifiedRepairRestore(input, tmpBlockPath, tmpIndexPath)
 	return err
+}
+
+func (s *Shard) recordRestoreOutcome(blockID uint64, reason string, err error, duration time.Duration) {
+	result := "success"
+	failureReason := eviction.RestoreFailureNone
+	if err != nil {
+		result = "failed"
+		failureReason = restoreFailureReason(err)
+	}
+	s.recordCurrentRestoreFailure(blockID, failureReason)
+	s.evictionMetricRecorder().RecordRestore(s.shardID, reason, result, failureReason, duration)
+}
+
+func (s *Shard) recordCurrentRestoreFailure(blockID uint64, failureReason string) {
+	s.mu.Lock()
+	if failureReason == eviction.RestoreFailureNone {
+		delete(s.restoreFailuresByBlock, blockID)
+	} else {
+		if s.restoreFailuresByBlock == nil {
+			s.restoreFailuresByBlock = make(map[uint64]string)
+		}
+		s.restoreFailuresByBlock[blockID] = failureReason
+	}
+	s.mu.Unlock()
+	s.invalidateEvictionHealthCache()
+}
+
+func restoreFailureReason(err error) string {
+	if err == nil {
+		return eviction.RestoreFailureNone
+	}
+	if reason, ok := storeapi.UnavailableReason(err); ok {
+		return reason
+	}
+	switch {
+	case errors.Is(err, storeapi.ErrDataLoss):
+		return eviction.RestoreFailureDataLoss
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return eviction.RestoreFailureCanceled
+	default:
+		return eviction.RestoreFailureUnknown
+	}
 }
 
 type restoreInput struct {

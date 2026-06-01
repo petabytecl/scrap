@@ -16,6 +16,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc/codes"
+
+	"github.com/petabytecl/scrap/internal/eviction"
 )
 
 func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
@@ -205,6 +207,80 @@ func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 	if err := rt.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
+}
+
+func TestNewShardTelemetryIncludesEvictionMetrics(t *testing.T) {
+	stubScrapdTelemetryPipeline(t)
+
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
+
+	got, err := rt.newShardTelemetry()
+	if err != nil {
+		t.Fatalf("newShardTelemetry: %v", err)
+	}
+	if got.evictionMetrics == nil {
+		t.Fatal("eviction metrics is nil")
+	}
+}
+
+func TestEvictionMetricsPrometheusNamesMatchEvidenceQueries(t *testing.T) {
+	stubScrapdTelemetryPipeline(t)
+
+	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
+
+	shardTel, err := rt.newShardTelemetry()
+	if err != nil {
+		t.Fatalf("newShardTelemetry: %v", err)
+	}
+	shardTel.evictionMetrics.RecordPlan(7, eviction.Plan{
+		Reason:          eviction.ReasonEvidenceRun,
+		CandidateBlocks: 3,
+		CandidateBytes:  4096,
+		SelectedBytes:   2048,
+		SkipCountsByReason: map[string]int{
+			eviction.SkipReasonHotResidencyWindow: 1,
+		},
+	})
+	shardTel.evictionMetrics.RecordApply(7, eviction.ReasonEvidenceRun, eviction.ApplyStatusCompleted, 0)
+	shardTel.evictionMetrics.RecordRestore(7, "read", "failed", eviction.RestoreFailureBackendUnavailable, 0)
+	shardTel.evictionMetrics.SetHealth(7, eviction.HealthSnapshot{
+		EvictedBlocks:       2,
+		RestoreFailedBlocks: 1,
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	rt.metricsHandler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, name := range []string{
+		"scrap_eviction_plans_total",
+		"scrap_eviction_apply_total_total",
+		"scrap_eviction_restore_total_total",
+		"scrap_eviction_evicted_blocks",
+		"scrap_eviction_restore_failed_blocks",
+	} {
+		if !prometheusMetricNameFound(body, name) {
+			t.Fatalf("/metrics missing %s:\n%s", name, body)
+		}
+	}
+}
+
+func prometheusMetricNameFound(body, name string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, name+"{") || strings.HasPrefix(line, name+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNewScrapdTelemetryForHostInitializesRuntime(t *testing.T) {

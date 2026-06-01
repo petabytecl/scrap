@@ -24,6 +24,12 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 	result, cacheable := s.applyEvictionPlanBlocks(ctx, plan)
 	s.validateEvictionApply(context.WithoutCancel(ctx), plan, &result)
 	result.CompletedAtUs = time.Now().UTC().UnixMicro()
+	s.evictionMetricRecorder().RecordApply(
+		s.shardID,
+		evictionReasonForMarker(plan),
+		result.Status,
+		time.Duration(result.CompletedAtUs-result.StartedAtUs)*time.Microsecond,
+	)
 	s.finishEvictionApply(plan.PlanID, result, cacheable)
 
 	return result, nil
@@ -40,6 +46,7 @@ func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, 
 	if cacheable && shouldCacheEvictionApplyResult(result) {
 		s.evictionApplyResults[planID] = result
 	}
+	s.invalidateEvictionHealthCache()
 }
 
 func shouldCacheEvictionApplyResult(result eviction.ApplyResult) bool {
@@ -63,9 +70,11 @@ func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction
 	}
 	if result, ok := s.evictionApplyResults[planID]; ok {
 		result := result
+		planCopy := plan
 		return eviction.PlanStatus{
 			PlanID:      planID,
 			Status:      result.Status,
+			Plan:        &planCopy,
 			ApplyResult: &result,
 		}, nil
 	}

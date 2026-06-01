@@ -57,6 +57,7 @@ type Config struct {
 	PeerAddrs          []string
 	Upload             UploadConfig
 	Eviction           EvictionConfig
+	EvictionMetrics    EvictionMetrics
 	MemberHostname     string
 	MemberID           string
 	WriteTelemetry     WriteStageRecorder
@@ -76,27 +77,28 @@ type raftNode interface {
 }
 
 type Shard struct {
-	dataDir        string
-	blocksDir      string
-	openlogDir     string
-	shardID        uint64
-	raftID         uint64
-	peers          map[uint64]string
-	clientAddrs    map[uint64]string
-	idx            *index.Index
-	raft           raftNode
-	replicator     DocumentReplicator
-	upload         UploadConfig
-	eviction       EvictionConfig
-	memberHostname string
-	memberID       string
-	writeTelemetry WriteStageRecorder
-	identifierMode telemetry.IdentifierMode
-	baseLogger     *slog.Logger
-	logger         *slog.Logger
-	blockSealSize  int64
-	raftStartedAt  time.Time
-	bootstrapGrace time.Duration
+	dataDir         string
+	blocksDir       string
+	openlogDir      string
+	shardID         uint64
+	raftID          uint64
+	peers           map[uint64]string
+	clientAddrs     map[uint64]string
+	idx             *index.Index
+	raft            raftNode
+	replicator      DocumentReplicator
+	upload          UploadConfig
+	eviction        EvictionConfig
+	evictionMetrics EvictionMetrics
+	memberHostname  string
+	memberID        string
+	writeTelemetry  WriteStageRecorder
+	identifierMode  telemetry.IdentifierMode
+	baseLogger      *slog.Logger
+	logger          *slog.Logger
+	blockSealSize   int64
+	raftStartedAt   time.Time
+	bootstrapGrace  time.Duration
 
 	mu          sync.Mutex
 	blockWriter *block.Writer
@@ -118,13 +120,21 @@ type Shard struct {
 
 	rebuilder *projectionRebuilder
 
-	lifecycleCleanupDone chan struct{}
-	lifecycleMutationMu  sync.Mutex
-	evictionPlans        map[string]eviction.Plan
-	evictionApplyResults map[string]eviction.ApplyResult
-	evictionApplyRunning map[string]struct{}
-	restoreMu            sync.Mutex
-	restores             map[uint64]*blockRestoreCall
+	lifecycleCleanupDone   chan struct{}
+	lifecycleMutationMu    sync.Mutex
+	evictionPlans          map[string]eviction.Plan
+	evictionApplyResults   map[string]eviction.ApplyResult
+	evictionApplyRunning   map[string]struct{}
+	restoreFailuresByBlock map[uint64]string
+
+	evictionHealthMu         sync.Mutex
+	evictionHealthCache      eviction.HealthSnapshot
+	evictionHealthCacheAt    time.Time
+	evictionHealthCacheValid bool
+	evictionHealthRefreshing bool
+
+	restoreMu sync.Mutex
+	restores  map[uint64]*blockRestoreCall
 }
 
 func (c *Config) applyDefaults() {
@@ -136,6 +146,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.WriteTelemetry == nil {
 		c.WriteTelemetry = noopWriteTelemetry{}
+	}
+	if c.EvictionMetrics == nil {
+		c.EvictionMetrics = noopEvictionMetrics{}
 	}
 	if c.MemberHostname == "" {
 		c.MemberHostname = "local"
@@ -189,6 +202,7 @@ func Open(cfg Config) (*Shard, error) {
 		replicator:              cfg.Replicator,
 		upload:                  cfg.Upload,
 		eviction:                cfg.Eviction,
+		evictionMetrics:         cfg.EvictionMetrics,
 		memberHostname:          cfg.MemberHostname,
 		memberID:                cfg.MemberID,
 		writeTelemetry:          cfg.WriteTelemetry,

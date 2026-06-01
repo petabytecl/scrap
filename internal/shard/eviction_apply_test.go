@@ -620,6 +620,127 @@ func TestEvictionPlanStatusReportsCompletedResult(t *testing.T) {
 	if status.Status != eviction.ApplyStatusCompleted || status.ApplyResult == nil || status.ApplyResult.PlanID != plan.PlanID {
 		t.Fatalf("completed status = %+v, want completed apply result", status)
 	}
+	if status.Plan == nil || status.Plan.PlanID != plan.PlanID || status.Plan.CandidateBlocks != plan.CandidateBlocks {
+		t.Fatalf("completed plan evidence = %+v, want original plan", status.Plan)
+	}
+}
+
+func TestEvictionHealthSnapshotSeparatesLocalLifecycleStates(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageEvictionHealthSnapshotStates(t, s)
+
+	got, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+
+	assertEvictionHealthSnapshotCounts(t, got)
+}
+
+func stageEvictionHealthSnapshotStates(t *testing.T, s *Shard) {
+	t.Helper()
+
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 1)
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	confirmed, err := s.idx.GetConfirmedUpload(2)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if err := WriteEvictionMarker(s.blocksDir, EvictionMarker{
+		BlockID:         2,
+		BackendKey:      confirmed.BlockObject.Key,
+		SizeBytes:       confirmed.BlockObject.SizeBytes,
+		ValidationToken: confirmed.BlockObject.ValidationToken,
+		EvictedAtUs:     time.Now().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	stageHotConfirmedBlockForEvictionApply(t, s, 3, 4096)
+	if err := os.Remove(block.IdxFilePath(s.blocksDir, 3)); err != nil {
+		t.Fatalf("remove metadata-loss index: %v", err)
+	}
+	stageHotConfirmedBlockForEvictionApply(t, s, 4, 8192)
+	if err := os.Remove(block.FilePath(s.blocksDir, 4)); err != nil {
+		t.Fatalf("remove unexpected-loss Block: %v", err)
+	}
+	stageHotConfirmedBlockForEvictionApply(t, s, 5, 16384)
+	if err := block.Quarantine(block.FilePath(s.blocksDir, 5)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	s.restoreFailuresByBlock = map[uint64]string{
+		6: eviction.RestoreFailureBackendUnavailable,
+		7: eviction.RestoreFailureBackendUnavailable,
+	}
+}
+
+func assertEvictionHealthSnapshotCounts(t *testing.T, got eviction.HealthSnapshot) {
+	t.Helper()
+
+	if got.Pressure != eviction.HealthPressureDegraded {
+		t.Fatalf("pressure = %s, want degraded", got.Pressure)
+	}
+	if got.EvictedBlocks != 1 || got.EvictedBytes != 1024 {
+		t.Fatalf("evicted = %d/%d, want 1/1024", got.EvictedBlocks, got.EvictedBytes)
+	}
+	if got.HotCleanupNeededBlocks != 1 || got.MetadataLossBlocks != 1 || got.UnexpectedLossBlocks != 1 {
+		t.Fatalf("lifecycle counts = cleanup:%d metadata:%d unexpected:%d, want 1/1/1",
+			got.HotCleanupNeededBlocks, got.MetadataLossBlocks, got.UnexpectedLossBlocks)
+	}
+	if got.QuarantinedBlocks != 1 {
+		t.Fatalf("quarantined = %d, want 1", got.QuarantinedBlocks)
+	}
+	if got.RestoreFailedBlocks != 2 || got.RestoreFailuresByReason[eviction.RestoreFailureBackendUnavailable] != 2 {
+		t.Fatalf("restore failures = %+v/%d, want backend_restore_unavailable=2", got.RestoreFailuresByReason, got.RestoreFailedBlocks)
+	}
+}
+
+func TestEvictionHealthSnapshotClearsRestoreFailureAfterSuccess(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+
+	s.recordRestoreOutcome(1, RestoreReasonRead, storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "temporary"), time.Millisecond)
+	failed, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot failed restore: %v", err)
+	}
+	if failed.RestoreFailedBlocks != 1 {
+		t.Fatalf("restore failed blocks = %d, want 1", failed.RestoreFailedBlocks)
+	}
+
+	s.recordRestoreOutcome(1, RestoreReasonRead, nil, time.Millisecond)
+	recovered, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot recovered restore: %v", err)
+	}
+	if recovered.RestoreFailedBlocks != 0 || len(recovered.RestoreFailuresByReason) != 0 {
+		t.Fatalf("restore failures after success = %+v/%d, want cleared", recovered.RestoreFailuresByReason, recovered.RestoreFailedBlocks)
+	}
+}
+
+func TestEvictionHealthSnapshotUsesCachedSnapshotForRepeatedProbe(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 1)
+
+	first, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot first: %v", err)
+	}
+	stageHotConfirmedBlockForEvictionApply(t, s, 2, 2048)
+	stageAlreadyEvictedBlockForEvictionApply(t, s, 2)
+
+	second, err := s.EvictionHealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot second: %v", err)
+	}
+	if first.EvictedBlocks != 1 || second.EvictedBlocks != first.EvictedBlocks {
+		t.Fatalf("cached evicted blocks = first:%d second:%d, want stable 1", first.EvictedBlocks, second.EvictedBlocks)
+	}
 }
 
 func TestApplyEvictionPlanFailsBlockWhenConfirmationDrifts(t *testing.T) {

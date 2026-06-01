@@ -23,26 +23,27 @@ const (
 
 // Config describes one Tier 3 evidence bundle run.
 type Config struct {
-	RepoRoot     string
-	BundleDir    string
-	GrafanaURL   string
-	AdminURL     string
-	Kubectl      string
-	Namespace    string
-	KubeContext  string
-	Kubeconfig   string
-	MimirProxy   string
-	TempoProxy   string
-	LokiProxy    string
-	PyroscopeURL string
-	Scenario     string
-	StressAddr   string
-	Workers      int
-	Duration     string
-	DocSizeBytes int
-	Settle       time.Duration
-	ProbeTimeout time.Duration
-	GoCommand    string
+	RepoRoot       string
+	BundleDir      string
+	GrafanaURL     string
+	AdminURL       string
+	Kubectl        string
+	Namespace      string
+	KubeContext    string
+	Kubeconfig     string
+	MimirProxy     string
+	TempoProxy     string
+	LokiProxy      string
+	PyroscopeURL   string
+	EvictionPlanID string
+	Scenario       string
+	StressAddr     string
+	Workers        int
+	Duration       string
+	DocSizeBytes   int
+	Settle         time.Duration
+	ProbeTimeout   time.Duration
+	GoCommand      string
 }
 
 // Options wires Config to replaceable adapters.

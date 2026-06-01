@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,6 +25,7 @@ type bundlePaths struct {
 	traces   string
 	logs     string
 	profiles string
+	eviction string
 }
 
 type metricQuery struct {
@@ -40,17 +42,18 @@ type runWindow struct {
 }
 
 type runConfig struct {
-	Scenario     string `json:"scenario"`
-	Timestamp    string `json:"timestamp"`
-	GitSHA       string `json:"git_sha"`
-	GitSHAShort  string `json:"git_sha_short"`
-	GitDirty     bool   `json:"git_dirty"`
-	Image        string `json:"image"`
-	Replicas     int    `json:"replicas"`
-	Workers      int    `json:"workers"`
-	Duration     string `json:"duration"`
-	DocSizeBytes int    `json:"doc_size_bytes"`
-	Cluster      string `json:"cluster"`
+	Scenario       string `json:"scenario"`
+	Timestamp      string `json:"timestamp"`
+	GitSHA         string `json:"git_sha"`
+	GitSHAShort    string `json:"git_sha_short"`
+	GitDirty       bool   `json:"git_dirty"`
+	Image          string `json:"image"`
+	Replicas       int    `json:"replicas"`
+	Workers        int    `json:"workers"`
+	Duration       string `json:"duration"`
+	DocSizeBytes   int    `json:"doc_size_bytes"`
+	EvictionPlanID string `json:"eviction_plan_id,omitempty"`
+	Cluster        string `json:"cluster"`
 }
 
 type signalResults struct {
@@ -114,6 +117,7 @@ func initializeBundle(ctx context.Context, cfg Config, opts Options) (generation
 		traces:   filepath.Join(cfg.BundleDir, bundleName, "traces"),
 		logs:     filepath.Join(cfg.BundleDir, bundleName, "logs"),
 		profiles: filepath.Join(cfg.BundleDir, bundleName, "profiles"),
+		eviction: filepath.Join(cfg.BundleDir, bundleName, "eviction"),
 	}
 	if err := createBundleDirs(paths); err != nil {
 		return generationState{}, err
@@ -209,6 +213,9 @@ func captureRunWindow(ctx context.Context, cfg Config, opts Options, state *gene
 }
 
 func captureTelemetryEvidence(ctx context.Context, cfg Config, opts Options, state *generationState) error {
+	if err := captureEvictionHealth(ctx, opts.HTTPClient, cfg, state.paths.eviction); err != nil {
+		return err
+	}
 	if err := captureMetricEvidence(ctx, opts.HTTPClient, cfg, state.paths.metrics, state.baseline, state.window.QueryUnixSeconds, &state.signals, opts.Logf); err != nil {
 		return err
 	}
@@ -220,6 +227,9 @@ func captureTelemetryEvidence(ctx context.Context, cfg Config, opts Options, sta
 	opts.logf("Wrote queries.json")
 
 	if err := captureTraceLogProfileEvidence(ctx, opts.HTTPClient, cfg, state.paths, state.window, state.marker, state.probeFailed, &state.signals); err != nil {
+		return err
+	}
+	if err := captureEvictionCampaign(ctx, opts.HTTPClient, cfg, state.paths.eviction); err != nil {
 		return err
 	}
 	opts.logf("Wrote trace/log/profile evidence")
@@ -287,7 +297,7 @@ func (opts Options) logf(format string, args ...any) {
 }
 
 func createBundleDirs(paths bundlePaths) error {
-	for _, dir := range []string{paths.root, paths.metrics, paths.traces, paths.logs, paths.profiles} {
+	for _, dir := range []string{paths.root, paths.metrics, paths.traces, paths.logs, paths.profiles, paths.eviction} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("create bundle dir %s: %w", dir, err)
 		}
@@ -305,17 +315,18 @@ func writeRunConfig(ctx context.Context, cfg Config, runner CommandRunner, times
 		replicas = 0
 	}
 	report := runConfig{
-		Scenario:     cfg.Scenario,
-		Timestamp:    timestamp.Format(timestampFormat),
-		GitSHA:       fullSHA,
-		GitSHAShort:  shortSHA,
-		GitDirty:     gitDirty(ctx, runner, cfg.RepoRoot),
-		Image:        image,
-		Replicas:     replicas,
-		Workers:      cfg.Workers,
-		Duration:     cfg.Duration,
-		DocSizeBytes: cfg.DocSizeBytes,
-		Cluster:      cluster,
+		Scenario:       cfg.Scenario,
+		Timestamp:      timestamp.Format(timestampFormat),
+		GitSHA:         fullSHA,
+		GitSHAShort:    shortSHA,
+		GitDirty:       gitDirty(ctx, runner, cfg.RepoRoot),
+		Image:          image,
+		Replicas:       replicas,
+		Workers:        cfg.Workers,
+		Duration:       cfg.Duration,
+		DocSizeBytes:   cfg.DocSizeBytes,
+		EvictionPlanID: cfg.EvictionPlanID,
+		Cluster:        cluster,
 	}
 	return writeJSONFile(filepath.Join(root, "config.json"), report)
 }
@@ -411,6 +422,14 @@ func metricQueries() []metricQuery {
 		{name: "raft_is_leader", query: "scrap_raft_is_leader"},
 		{name: "goroutines", query: "process_runtime_go_goroutines"},
 		{name: "heap_alloc", query: "process_runtime_go_mem_heap_alloc_bytes"},
+		{name: "eviction_plans", query: "sum(scrap_eviction_plans_total) by (reason)"},
+		{name: "eviction_skips", query: "sum(scrap_eviction_skips_total) by (reason)"},
+		{name: "eviction_candidate_blocks", query: "scrap_eviction_candidate_blocks"},
+		{name: "eviction_selected_bytes", query: "scrap_eviction_selected_bytes"},
+		{name: "eviction_apply_total", query: "sum(scrap_eviction_apply_total_total) by (reason, status)"},
+		{name: "eviction_restore_total", query: "sum(scrap_eviction_restore_total_total) by (reason, result, failure_reason)"},
+		{name: "eviction_evicted_blocks", query: "scrap_eviction_evicted_blocks"},
+		{name: "eviction_restore_failed_blocks", query: "scrap_eviction_restore_failed_blocks"},
 	}
 }
 
@@ -469,6 +488,76 @@ func captureTraceLogProfileEvidence(ctx context.Context, client *http.Client, cf
 	signals.heapProfileOK = heapOK
 	signals.heapReason = heapReason
 	return nil
+}
+
+type evictionStatusEvidence struct {
+	Plan        json.RawMessage `json:"plan"`
+	ApplyResult json.RawMessage `json:"apply_result"`
+}
+
+type evictionApplyEvidence struct {
+	ValidatedBlocks        int               `json:"validated_blocks"`
+	ValidationFailedBlocks int               `json:"validation_failed_blocks"`
+	Validations            []json.RawMessage `json:"validations"`
+}
+
+func captureEvictionHealth(ctx context.Context, client *http.Client, cfg Config, dir string) error {
+	if strings.TrimSpace(cfg.EvictionPlanID) == "" {
+		return nil
+	}
+	body, ok := getJSON(ctx, client, strings.TrimRight(cfg.AdminURL, "/")+"/healthz", nil)
+	if !ok {
+		body = []byte(`{"error":"admin health snapshot unavailable"}`)
+	}
+	return writeRawJSONFile(filepath.Join(dir, "health.json"), body)
+}
+
+func captureEvictionCampaign(ctx context.Context, client *http.Client, cfg Config, dir string) error {
+	if strings.TrimSpace(cfg.EvictionPlanID) == "" {
+		return nil
+	}
+	endpoint := strings.TrimRight(cfg.AdminURL, "/") + "/admin/eviction/plans/" + url.PathEscape(cfg.EvictionPlanID)
+	body, ok := getJSON(ctx, client, endpoint, nil)
+	if !ok {
+		return fmt.Errorf("capture eviction status for plan %s", cfg.EvictionPlanID)
+	}
+	if err := writeRawJSONFile(filepath.Join(dir, "status.json"), body); err != nil {
+		return err
+	}
+	return writeEvictionCampaignArtifacts(dir, body)
+}
+
+func writeEvictionCampaignArtifacts(dir string, statusBody []byte) error {
+	var status evictionStatusEvidence
+	if err := json.Unmarshal(statusBody, &status); err != nil {
+		return fmt.Errorf("parse eviction status evidence: %w", err)
+	}
+	if len(status.Plan) == 0 {
+		status.Plan = []byte(`null`)
+	}
+	if len(status.ApplyResult) == 0 {
+		status.ApplyResult = []byte(`null`)
+	}
+	if err := writeRawJSONFile(filepath.Join(dir, "candidate-plan.json"), status.Plan); err != nil {
+		return err
+	}
+	if err := writeRawJSONFile(filepath.Join(dir, "apply-result.json"), status.ApplyResult); err != nil {
+		return err
+	}
+	return writeEvictionValidationResult(dir, status.ApplyResult)
+}
+
+func writeEvictionValidationResult(dir string, applyBody []byte) error {
+	var apply evictionApplyEvidence
+	if string(applyBody) != "null" {
+		if err := json.Unmarshal(applyBody, &apply); err != nil {
+			return fmt.Errorf("parse eviction apply evidence: %w", err)
+		}
+	}
+	if apply.Validations == nil {
+		apply.Validations = []json.RawMessage{}
+	}
+	return writeJSONFile(filepath.Join(dir, "validation-result.json"), apply)
 }
 
 func writeJSONFile(path string, value any) error {
