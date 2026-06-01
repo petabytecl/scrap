@@ -53,11 +53,29 @@ post-merge verification, and selection of the next issue.
    - Codex must review the current PR head, not an older commit.
    - After every consecutive push, request or wait for a fresh Codex review of the new head.
    - Do not treat an older clean Codex review as valid after new commits land.
+   - Record the exact head SHA when the review request is made; merge readiness
+     must be judged against that same SHA.
 
 7. Wait for and inspect review feedback.
    - Poll PR reviews, top-level comments, and thread-aware review data.
    - Use GraphQL review threads for `isResolved`, `isOutdated`, path, and line state.
    - Do not treat flat comments or a PR summary as complete thread state.
+   - Codex Web may report through several GitHub surfaces:
+     - a formal PR review (`APPROVED`, `COMMENTED`, or `CHANGES_REQUESTED`);
+     - inline review threads with actionable code comments;
+     - a top-level PR comment summarizing findings or saying no issues were found;
+     - reactions on the `@codex review` trigger comment; and
+     - reactions on the PR description/body itself.
+   - Treat an `eyes` reaction as "queued/running/acknowledged", not as a final
+     clean review.
+   - Treat a positive reaction such as `THUMBS_UP` on the trigger comment or PR
+     description/body as a clean Codex result only when the PR head SHA still
+     matches the requested SHA and there are no Codex review comments, no
+     unresolved review threads, and no failing or pending required checks.
+   - Treat `CHANGES_REQUESTED`, a negative reaction, a failure comment, or
+     unresolved non-outdated threads as actionable or blocked until resolved.
+   - If no final Codex signal appears and only `eyes` remains, keep polling or
+     retry the request; do not merge based on CI alone.
    - Use `../scrap-gh-address-comments/SKILL.md` when feedback must be implemented.
    - Continue the Codex review loop until Codex finds no new issues on the latest head.
 
@@ -70,7 +88,9 @@ post-merge verification, and selection of the next issue.
    - Keep iterating until every review item is implemented, justified, obsolete, or resolved.
 
 9. Merge only when ready.
-   - Confirm PR merge state is clean, required checks are green, Codex has reviewed the latest head without new issues, and conversations are resolved.
+   - Confirm PR merge state is clean, required checks are green, Codex has
+     returned a final clean signal for the latest head, and conversations are
+     resolved.
    - Match the repo's existing merge style unless the user specifies otherwise.
    - Use a head-SHA guard when merging to avoid merging stale commits.
    - Delete the feature branch when the repo workflow allows it.
