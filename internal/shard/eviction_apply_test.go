@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +106,153 @@ func TestApplyEvictionPlanStopsWhenDisabled(t *testing.T) {
 	}
 	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("eviction marker stat error = %v, want not exist", err)
+	}
+}
+
+func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		mutate func(*Shard, eviction.Plan) string
+		want   error
+	}{
+		{
+			name: "missing",
+			mutate: func(_ *Shard, _ eviction.Plan) string {
+				return "missing"
+			},
+			want: eviction.ErrPlanNotFound,
+		},
+		{
+			name: "expired",
+			mutate: func(s *Shard, plan eviction.Plan) string {
+				plan.ExpiresAtUs = time.Now().Add(-time.Second).UnixMicro()
+				s.evictionPlans[plan.PlanID] = plan
+				return plan.PlanID
+			},
+			want: eviction.ErrPlanExpired,
+		},
+		{
+			name: "stale member identity",
+			mutate: func(s *Shard, plan eviction.Plan) string {
+				plan.MemberID = "old-member"
+				s.evictionPlans[plan.PlanID] = plan
+				return plan.PlanID
+			},
+			want: eviction.ErrPlanStale,
+		},
+		{
+			name: "already in progress",
+			mutate: func(s *Shard, plan eviction.Plan) string {
+				s.evictionApplyRunning[plan.PlanID] = struct{}{}
+				return plan.PlanID
+			},
+			want: eviction.ErrApplyInProgress,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := shardForEvictionApplyTest(t, true)
+			stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+			plan := storeEvictionApplyPlan(t, s)
+			planID := tt.mutate(s, plan)
+
+			_, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: planID})
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("ApplyEvictionPlan error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyEvictionPlanFailsBlockWhenConfirmationDrifts(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Selected[0].SizeBytes = 2048
+	s.evictionPlans[plan.PlanID] = plan
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	if result.Status != eviction.ApplyStatusFailed || result.FailedBlocks != 1 {
+		t.Fatalf("result = %+v, want failed one Block", result)
+	}
+	if len(result.Blocks) != 1 || !strings.Contains(result.Blocks[0].Error, "size mismatch") {
+		t.Fatalf("block result = %+v, want size mismatch failure", result.Blocks)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, 1)); err != nil {
+		t.Fatalf("Block should remain after failed apply: %v", err)
+	}
+}
+
+func TestApplyEvictionPlanUsesDefaultMarkerReason(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.Reason = ""
+	s.evictionPlans[plan.PlanID] = plan
+
+	if _, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID}); err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+	marker, err := ReadEvictionMarker(s.blocksDir, 1)
+	if err != nil {
+		t.Fatalf("ReadEvictionMarker: %v", err)
+	}
+	if marker.Reason != EvictionReasonEvidenceRun {
+		t.Fatalf("marker reason = %s, want evidence_run", marker.Reason)
+	}
+}
+
+func TestValidateEvictionApplyAuthorityRejectsMismatches(t *testing.T) {
+	confirmed := confirmedUploadForEvictionApply(1, 1024)
+	selected := eviction.PlanBlock{
+		BlockID:    1,
+		ShardID:    confirmed.ShardID,
+		SizeBytes:  confirmed.BlockObject.SizeBytes,
+		BackendKey: confirmed.BlockObject.Key,
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(eviction.PlanBlock) eviction.PlanBlock
+	}{
+		{
+			name: "shard",
+			mutate: func(block eviction.PlanBlock) eviction.PlanBlock {
+				block.ShardID++
+				return block
+			},
+		},
+		{
+			name: "size",
+			mutate: func(block eviction.PlanBlock) eviction.PlanBlock {
+				block.SizeBytes++
+				return block
+			},
+		},
+		{
+			name: "backend key",
+			mutate: func(block eviction.PlanBlock) eviction.PlanBlock {
+				block.BackendKey = "other.blk"
+				return block
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateEvictionApplyAuthority(tt.mutate(selected), confirmed); err == nil {
+				t.Fatal("validateEvictionApplyAuthority succeeded, want error")
+			}
+		})
 	}
 }
 

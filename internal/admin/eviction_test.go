@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -194,6 +195,68 @@ func TestServer_ApplyEvictionPlanNotFoundReturnsPreconditionFailed(t *testing.T)
 	}
 }
 
+func TestServer_ApplyEvictionPlanMapsErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "in progress", err: eviction.ErrApplyInProgress, want: http.StatusConflict},
+		{name: "invalid request", err: eviction.ErrInvalidPlanRequest, want: http.StatusBadRequest},
+		{name: "unexpected", err: errors.New("boom"), want: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			applier := evictionApplierFunc(func(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
+				return eviction.ApplyResult{}, tt.err
+			})
+			srv := admin.New(admin.WithEvictionApplier(applier))
+			ts := httptest.NewServer(srv.Handler())
+			defer ts.Close()
+
+			resp, err := postEvictionApplyForAdminTest(ts.URL, "plan-123", []byte(`{}`))
+			if err != nil {
+				t.Fatalf("POST apply: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != tt.want {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.want)
+			}
+		})
+	}
+}
+
+func TestServer_ApplyEvictionPlanRejectsInvalidRequest(t *testing.T) {
+	applier := &evictionApplierStub{}
+	srv := admin.New(admin.WithEvictionApplier(applier))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/admin/eviction/plans/plan-123/apply", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET apply: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET status = %d, want 405", resp.StatusCode)
+	}
+
+	resp, err = postEvictionApplyForAdminTest(ts.URL, "plan-123", []byte(`{"plan_id":"x"}`))
+	if err != nil {
+		t.Fatalf("POST invalid apply: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid JSON status = %d, want 400", resp.StatusCode)
+	}
+}
+
 type evictionPlannerFunc func(context.Context, eviction.PlanRequest) (eviction.Plan, error)
 
 func (f evictionPlannerFunc) CreateEvictionPlan(ctx context.Context, req eviction.PlanRequest) (eviction.Plan, error) {
@@ -216,4 +279,22 @@ type evictionApplierFunc func(context.Context, eviction.ApplyRequest) (eviction.
 
 func (f evictionApplierFunc) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
 	return f(ctx, req)
+}
+
+func postEvictionApplyForAdminTest(baseURL, planID string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		baseURL+"/admin/eviction/plans/"+planID+"/apply",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("new apply request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do apply request: %w", err)
+	}
+	return resp, nil
 }
