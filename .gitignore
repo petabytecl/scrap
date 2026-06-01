@@ -12,6 +12,7 @@ Thumbs.db
 # LLM
 /.claude/
 /.codex/
+/.worktrees/
 
 # Local environment files
 .env
