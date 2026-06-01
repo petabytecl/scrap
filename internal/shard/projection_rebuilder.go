@@ -19,6 +19,7 @@ import (
 
 type projectionRebuildCore interface {
 	currentOpenBlockID() uint64
+	confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error)
 	swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (idxNil bool, err error)
 }
 
@@ -212,12 +213,15 @@ func (r *projectionRebuilder) rebuildEvictedUploadAuthority(projection *index.In
 	if lifecycle.State != LocalBlockStateEvicted {
 		return false, nil
 	}
-	confirmed, err := projection.GetConfirmedUpload(blockID)
+	confirmed, err := r.core.confirmedUploadForRebuild(blockID)
 	if err != nil {
 		return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, err)
 	}
 	if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
 		return false, err
+	}
+	if err := projection.PutConfirmedUpload(confirmed); err != nil {
+		return false, fmt.Errorf("shard: rebuild confirmed upload %d: %w", blockID, err)
 	}
 	return true, nil
 }

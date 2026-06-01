@@ -657,6 +657,16 @@ func (s *Shard) swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (bool, 
 	return s.idx == nil, err
 }
 
+func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.idx == nil {
+		return index.ConfirmedUpload{}, fmt.Errorf("%w: shard projection unavailable", storeapi.ErrRebuilding)
+	}
+	return s.idx.GetConfirmedUpload(blockID)
+}
+
 func (s *Shard) currentOpenBlockID() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()

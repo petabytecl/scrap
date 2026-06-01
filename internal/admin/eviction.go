@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/petabytecl/scrap/internal/eviction"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 const maxEvictionPlanBodyBytes = 8 * 1024
@@ -173,6 +174,8 @@ func writeEvictionApplyError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
 	case errors.Is(err, eviction.ErrApplyInProgress):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, storeapi.ErrRebuilding):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, eviction.ErrInvalidPlanRequest):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:

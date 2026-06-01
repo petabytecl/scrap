@@ -12,6 +12,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/eviction"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 type evictionPlannerStub struct {
@@ -261,6 +262,7 @@ func TestServer_ApplyEvictionPlanMapsErrors(t *testing.T) {
 		want int
 	}{
 		{name: "in progress", err: eviction.ErrApplyInProgress, want: http.StatusConflict},
+		{name: "rebuilding", err: storeapi.ErrRebuilding, want: http.StatusServiceUnavailable},
 		{name: "invalid request", err: eviction.ErrInvalidPlanRequest, want: http.StatusBadRequest},
 		{name: "unexpected", err: errors.New("boom"), want: http.StatusInternalServerError},
 	}

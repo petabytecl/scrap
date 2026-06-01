@@ -16,16 +16,25 @@ import (
 )
 
 type projectionRebuildCoreStub struct {
-	openBlockID uint64
-	swapStarted chan struct{}
-	releaseSwap chan struct{}
-	swapOnce    sync.Once
-	idxNil      bool
-	swapErr     error
+	openBlockID      uint64
+	confirmedUploads map[uint64]index.ConfirmedUpload
+	swapStarted      chan struct{}
+	releaseSwap      chan struct{}
+	swapOnce         sync.Once
+	idxNil           bool
+	swapErr          error
 }
 
 func (s *projectionRebuildCoreStub) currentOpenBlockID() uint64 {
 	return s.openBlockID
+}
+
+func (s *projectionRebuildCoreStub) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {
+	confirmed, ok := s.confirmedUploads[blockID]
+	if !ok {
+		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
+	}
+	return confirmed, nil
 }
 
 func (s *projectionRebuildCoreStub) swapRebuiltProjection(_, _, _ string) (bool, error) {
@@ -204,9 +213,6 @@ func TestProjectionRebuilderSkipsEvictedConfirmedBlock(t *testing.T) {
 
 	projection := openProjectionForRebuildTest(t)
 	confirmed := confirmedUploadForEvictionApply(1, 1024)
-	if err := projection.PutConfirmedUpload(confirmed); err != nil {
-		t.Fatalf("PutConfirmedUpload: %v", err)
-	}
 	if err := WriteEvictionMarker(blocksDir, EvictionMarker{
 		BlockID:         confirmed.BlockID,
 		BackendKey:      confirmed.BlockObject.Key,
@@ -219,7 +225,12 @@ func TestProjectionRebuilderSkipsEvictedConfirmedBlock(t *testing.T) {
 		t.Fatalf("WriteEvictionMarker: %v", err)
 	}
 
-	r := newProjectionRebuilder(&projectionRebuildCoreStub{}, dataDir, blocksDir, 7, UploadConfig{
+	core := &projectionRebuildCoreStub{
+		confirmedUploads: map[uint64]index.ConfirmedUpload{
+			1: confirmed,
+		},
+	}
+	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{
 		Enabled: true,
 		Backend: noopRebuildBackend{},
 		CellID:  "cell-a",
@@ -230,6 +241,13 @@ func TestProjectionRebuilderSkipsEvictedConfirmedBlock(t *testing.T) {
 	}
 	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
 		t.Fatalf("GetPendingUpload error = %v, want ErrPendingUploadNotFound", err)
+	}
+	got, err := projection.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if got.BlockObject.Key != confirmed.BlockObject.Key || got.BlockObject.ValidationToken == "" {
+		t.Fatalf("confirmed upload = %+v, want copied Backend authority", got)
 	}
 }
 

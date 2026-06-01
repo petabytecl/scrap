@@ -9,6 +9,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
@@ -27,7 +28,9 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 	if s.evictionApplyResults == nil {
 		s.evictionApplyResults = make(map[string]eviction.ApplyResult)
 	}
-	s.evictionApplyResults[plan.PlanID] = result
+	if result.Status != eviction.ApplyStatusFailed {
+		s.evictionApplyResults[plan.PlanID] = result
+	}
 	s.mu.Unlock()
 
 	return result, nil
@@ -44,6 +47,10 @@ func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	plan, err := s.validEvictionPlanForApplyLocked(planID)
+	if err != nil {
+		return eviction.PlanStatus{}, err
+	}
 	if result, ok := s.evictionApplyResults[planID]; ok {
 		result := result
 		return eviction.PlanStatus{
@@ -51,10 +58,6 @@ func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction
 			Status:      result.Status,
 			ApplyResult: &result,
 		}, nil
-	}
-	plan, err := s.validEvictionPlanForApplyLocked(planID)
-	if err != nil {
-		return eviction.PlanStatus{}, err
 	}
 	status := eviction.PlanStatusPending
 	if _, ok := s.evictionApplyRunning[planID]; ok {
@@ -79,18 +82,21 @@ func (s *Shard) beginEvictionApply(ctx context.Context, planID string) (eviction
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !s.eviction.Enabled {
+		return eviction.Plan{}, eviction.ApplyResult{}, false, eviction.ErrApplyDisabled
+	}
+	if s.rebuilder != nil && s.rebuilder.InProgress() {
+		return eviction.Plan{}, eviction.ApplyResult{}, false, fmt.Errorf("%w: eviction apply unavailable", storeapi.ErrRebuilding)
+	}
+	plan, err := s.validEvictionPlanForApplyLocked(planID)
+	if err != nil {
+		return eviction.Plan{}, eviction.ApplyResult{}, false, err
+	}
 	if result, ok := s.evictionApplyResults[planID]; ok {
 		return eviction.Plan{}, result, true, nil
 	}
 	if _, ok := s.evictionApplyRunning[planID]; ok {
 		return eviction.Plan{}, eviction.ApplyResult{}, false, eviction.ErrApplyInProgress
-	}
-	if !s.eviction.Enabled {
-		return eviction.Plan{}, eviction.ApplyResult{}, false, eviction.ErrApplyDisabled
-	}
-	plan, err := s.validEvictionPlanForApplyLocked(planID)
-	if err != nil {
-		return eviction.Plan{}, eviction.ApplyResult{}, false, err
 	}
 	if s.evictionApplyRunning == nil {
 		s.evictionApplyRunning = make(map[string]struct{})
@@ -107,6 +113,7 @@ func (s *Shard) validEvictionPlanForApplyLocked(planID string) (eviction.Plan, e
 	nowUs := time.Now().UTC().UnixMicro()
 	if plan.ExpiresAtUs <= nowUs {
 		delete(s.evictionPlans, planID)
+		delete(s.evictionApplyResults, planID)
 		return eviction.Plan{}, eviction.ErrPlanExpired
 	}
 	if plan.MemberHostname != s.memberHostname || plan.MemberID != s.memberID {
@@ -178,8 +185,14 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 		Trigger:         EvictionTriggerOperatorRequested,
 		Reason:          evictionReasonForMarker(plan),
 	}
-	if err := WriteEvictionMarker(s.blocksDir, marker); err != nil {
-		return failedApplyBlock(selected, err)
+	if lifecycle.State == LocalBlockStateHotCleanupNeeded {
+		if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
+			return failedApplyBlock(selected, err)
+		}
+	} else {
+		if err := WriteEvictionMarker(s.blocksDir, marker); err != nil {
+			return failedApplyBlock(selected, err)
+		}
 	}
 	if err := os.Remove(block.FilePath(s.blocksDir, selected.BlockID)); err != nil {
 		return failedApplyBlock(selected, fmt.Errorf("remove Block: %w", err))
@@ -200,7 +213,7 @@ func (s *Shard) evictionApplySkipReason(plan eviction.Plan, selected eviction.Pl
 	if selected.ShardID != s.shardID {
 		return eviction.SkipReasonShardFilter
 	}
-	if lifecycle.State != LocalBlockStateHot {
+	if lifecycle.State != LocalBlockStateHot && lifecycle.State != LocalBlockStateHotCleanupNeeded {
 		return eviction.SkipReasonLocalStateNotHot
 	}
 	if s.raft != nil && s.raft.IsLeader() {

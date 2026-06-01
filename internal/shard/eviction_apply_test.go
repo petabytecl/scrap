@@ -12,6 +12,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 const evictionApplyTestShardID = 7
@@ -141,6 +142,36 @@ func TestApplyEvictionPlanSkipsFreshlyRestoredBlock(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanRetriesHotCleanupNeededBlock(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	confirmed, err := s.idx.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if err := WriteEvictionMarker(s.blocksDir, EvictionMarker{
+		BlockID:         confirmed.BlockID,
+		BackendKey:      confirmed.BlockObject.Key,
+		SizeBytes:       confirmed.BlockObject.SizeBytes,
+		ValidationToken: confirmed.BlockObject.ValidationToken,
+		EvictedAtUs:     time.Now().UTC().UnixMicro(),
+		Trigger:         EvictionTriggerOperatorRequested,
+		Reason:          EvictionReasonEvidenceRun,
+	}); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	assertEvictionApplyCompleted(t, result, 1024)
+	assertBlockEvictedForApply(t, s, 1)
+}
+
 func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 	ctx := context.Background()
 
@@ -196,6 +227,41 @@ func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 				t.Fatalf("ApplyEvictionPlan error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestApplyEvictionPlanRejectsRebuildInProgress(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+	s.rebuilder = newProjectionRebuilder(&projectionRebuildCoreStub{}, t.TempDir(), s.blocksDir, s.shardID, UploadConfig{}, nil)
+	s.rebuilder.setInProgressForTest(true)
+
+	_, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if !errors.Is(err, storeapi.ErrRebuilding) {
+		t.Fatalf("ApplyEvictionPlan error = %v, want ErrRebuilding", err)
+	}
+}
+
+func TestApplyEvictionPlanRejectsExpiredCachedResult(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+	plan.ExpiresAtUs = time.Now().Add(-time.Second).UnixMicro()
+	s.evictionPlans[plan.PlanID] = plan
+	s.evictionApplyResults[plan.PlanID] = eviction.ApplyResult{
+		PlanID: plan.PlanID,
+		Status: eviction.ApplyStatusCompleted,
+	}
+
+	_, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if !errors.Is(err, eviction.ErrPlanExpired) {
+		t.Fatalf("ApplyEvictionPlan error = %v, want ErrPlanExpired", err)
+	}
+	if _, ok := s.evictionApplyResults[plan.PlanID]; ok {
+		t.Fatal("expired cached result should be pruned")
 	}
 }
 
