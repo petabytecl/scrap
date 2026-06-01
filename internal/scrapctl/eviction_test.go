@@ -283,6 +283,53 @@ func TestEvictionApplyReturnsErrorForFailedResult(t *testing.T) {
 	assertTextContains(t, out.String(), "status: failed", "failed_blocks: 1")
 }
 
+func TestEvictionApplyReturnsErrorForValidationFailureResult(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		result := eviction.ApplyResult{
+			PlanID:                 "plan-123",
+			Status:                 eviction.ApplyStatusEvictedWithValidationFailure,
+			SelectedBlocks:         1,
+			EvictedBlocks:          1,
+			ValidationFailedBlocks: 1,
+			Blocks: []eviction.ApplyBlock{{
+				BlockID:    3,
+				ShardID:    7,
+				SizeBytes:  4096,
+				Status:     eviction.ApplyBlockStatusEvicted,
+				BytesFreed: 4096,
+			}},
+			Validations: []eviction.ValidationBlock{{
+				BlockID: 3,
+				ShardID: 7,
+				Status:  eviction.ValidationStatusFailed,
+				Error:   "Backend restore failed",
+			}},
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "eviction apply validation failed") {
+		t.Fatalf("error = %v, want eviction apply validation failed", err)
+	}
+	assertTextContains(t, out.String(), "status: evicted_with_validation_failure")
+}
+
 func TestEvictionApplySupportsJSONOutput(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		data, err := json.Marshal(eviction.ApplyResult{
