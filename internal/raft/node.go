@@ -288,6 +288,7 @@ func (n *Node) run() {
 		case <-ticker.C:
 			n.stateMu.Lock()
 			n.node.Tick()
+			n.drainReadyLocked()
 			n.stateMu.Unlock()
 
 		case rd := <-n.node.Ready():
@@ -301,11 +302,26 @@ func (n *Node) run() {
 	}
 }
 
-//nolint:cyclop // Ready handling must keep the WAL, storage, transport, apply, and publish order explicit.
 func (n *Node) processReady(rd raft.Ready) {
 	n.stateMu.Lock()
 	defer n.stateMu.Unlock()
 
+	n.processReadyLocked(rd)
+}
+
+func (n *Node) drainReadyLocked() {
+	for {
+		select {
+		case rd := <-n.node.Ready():
+			n.processReadyLocked(rd)
+		default:
+			return
+		}
+	}
+}
+
+//nolint:cyclop // Ready handling must keep the WAL, storage, transport, apply, and publish order explicit.
+func (n *Node) processReadyLocked(rd raft.Ready) {
 	if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
 		panic(fmt.Sprintf("raft: WAL save: %v", err))
 	}
@@ -335,15 +351,15 @@ func (n *Node) processReady(rd raft.Ready) {
 
 	n.transport.Send(rd.Messages)
 
+	if rd.SoftState != nil {
+		n.leaderID.Store(rd.SoftState.Lead)
+	}
+
 	if len(rd.CommittedEntries) > 0 {
 		if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
 			panic(fmt.Sprintf("raft: apply: %v", err))
 		}
 		atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
-	}
-
-	if rd.SoftState != nil {
-		n.leaderID.Store(rd.SoftState.Lead)
 	}
 
 	n.publishReadStates(rd.ReadStates)
@@ -399,10 +415,17 @@ func (n *Node) Step(ctx context.Context, msg raftpb.Message) error {
 }
 
 func (n *Node) WithStableLeadership(fn func() error) error {
-	n.stateMu.RLock()
-	defer n.stateMu.RUnlock()
+	n.stateMu.Lock()
+	defer n.stateMu.Unlock()
 
+	n.drainReadyLocked()
+	n.publishCurrentLeaderLocked()
 	return fn()
+}
+
+func (n *Node) publishCurrentLeaderLocked() {
+	status := n.node.Status()
+	n.leaderID.Store(status.SoftState.Lead)
 }
 
 func (n *Node) IsLeader() bool {

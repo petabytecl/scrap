@@ -627,7 +627,10 @@ func TestApplyEvictionPlanFencesFollowerCheckThroughUnlink(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
-	raft := &evictionApplyRaftStub{becomeLeaderBeforeMutation: true}
+	raft := &evictionApplyRaftStub{
+		becomeLeaderBeforeMutation: true,
+		beforeStableLeadership:     requireShardMutexUnlockedForRaftFence(t, s),
+	}
 	s.raft = raft
 	plan := storeEvictionApplyPlan(t, s)
 
@@ -650,6 +653,18 @@ func TestApplyEvictionPlanFencesFollowerCheckThroughUnlink(t *testing.T) {
 	}
 	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("eviction marker stat error = %v, want not exist", err)
+	}
+}
+
+func requireShardMutexUnlockedForRaftFence(t *testing.T, s *Shard) func() {
+	t.Helper()
+
+	return func() {
+		t.Helper()
+		if !s.mu.TryLock() {
+			t.Fatal("Shard mutex was held before the Raft leadership fence")
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -922,6 +937,7 @@ func assertBlockEvictedForApply(t *testing.T, s *Shard, blockID uint64) {
 type evictionApplyRaftStub struct {
 	leader                     bool
 	becomeLeaderBeforeMutation bool
+	beforeStableLeadership     func()
 	stableLeadershipCalls      int
 }
 
@@ -958,6 +974,9 @@ func (r *evictionApplyRaftStub) CommitIndex() uint64 {
 
 func (r *evictionApplyRaftStub) WithStableLeadership(fn func() error) error {
 	r.stableLeadershipCalls++
+	if r.beforeStableLeadership != nil {
+		r.beforeStableLeadership()
+	}
 	if r.becomeLeaderBeforeMutation {
 		r.leader = true
 	}

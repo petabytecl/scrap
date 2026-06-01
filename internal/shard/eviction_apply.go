@@ -189,9 +189,29 @@ func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan)
 func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
 	s.lifecycleMutationMu.Lock()
 	defer s.lifecycleMutationMu.Unlock()
+
+	if s.raft != nil {
+		var result eviction.ApplyBlock
+		err := s.raft.WithStableLeadership(func() error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			result = s.applyEvictionBlockLocked(plan, selected)
+			return nil
+		})
+		if err != nil {
+			return failedApplyBlock(selected, err)
+		}
+		return result
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.applyEvictionBlockLocked(plan, selected)
+}
+
+func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
 	lifecycle, err := ClassifyLocalBlock(s.blocksDir, selected.BlockID)
 	if err != nil {
 		return failedApplyBlock(selected, fmt.Errorf("classify Block: %w", err))
@@ -271,23 +291,11 @@ func removePreparedEvictionMarker(blocksDir string, blockID uint64) error {
 }
 
 func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecycle LocalBlockLifecycle) (bool, eviction.ApplyBlock, error) {
-	if s.raft == nil {
-		removed, err := s.unlinkEvictedBlock(selected.BlockID)
-		return removed, eviction.ApplyBlock{}, err
+	if s.leaderHotCopyRequired() {
+		return false, s.skipEvictionAfterPreparedMarker(selected, lifecycle), nil
 	}
-
-	var removed bool
-	var blockResult eviction.ApplyBlock
-	err := s.raft.WithStableLeadership(func() error {
-		if s.leaderHotCopyRequired() {
-			blockResult = s.skipEvictionAfterPreparedMarker(selected, lifecycle)
-			return nil
-		}
-		var err error
-		removed, err = s.unlinkEvictedBlock(selected.BlockID)
-		return err
-	})
-	return removed, blockResult, err
+	removed, err := s.unlinkEvictedBlock(selected.BlockID)
+	return removed, eviction.ApplyBlock{}, err
 }
 
 func (s *Shard) unlinkEvictedBlock(blockID uint64) (bool, error) {

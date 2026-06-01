@@ -168,7 +168,7 @@ func (r *projectionRebuilder) rebuildProjectionInto(projection *index.Index) err
 func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) error {
 	be := r.upload.Backend
 	if !r.upload.Enabled || be == nil {
-		return r.rebuildEvictedUploadAuthorities(projection, blockIDs)
+		return r.rebuildCommittedUploadAuthorities(projection, blockIDs)
 	}
 
 	openBlockID := r.core.currentOpenBlockID()
@@ -185,13 +185,13 @@ func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, block
 	return nil
 }
 
-func (r *projectionRebuilder) rebuildEvictedUploadAuthorities(projection *index.Index, blockIDs []uint64) error {
+func (r *projectionRebuilder) rebuildCommittedUploadAuthorities(projection *index.Index, blockIDs []uint64) error {
 	openBlockID := r.core.currentOpenBlockID()
 	for _, blockID := range blockIDs {
 		if blockID == openBlockID {
 			continue
 		}
-		if _, err := r.rebuildEvictedUploadAuthority(projection, blockID); err != nil {
+		if _, err := r.rebuildLocalConfirmedUploadAuthority(projection, blockID); err != nil {
 			return err
 		}
 	}
@@ -217,7 +217,7 @@ func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projecti
 		r.logger.ErrorContext(ctx, "shard: rebuild upload cannot stat sealed Block metadata", "block_id", blockID, "err", statErr)
 		return fmt.Errorf("shard: rebuild pending upload %d stat sealed Block metadata: %w", blockID, statErr)
 	}
-	evicted, err := r.rebuildEvictedUploadAuthority(projection, blockID)
+	evicted, err := r.rebuildLocalConfirmedUploadAuthority(projection, blockID)
 	if err != nil {
 		return err
 	}
@@ -228,28 +228,53 @@ func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projecti
 	return fmt.Errorf("shard: rebuild pending upload %d missing sealed Block metadata: %w", blockID, statErr)
 }
 
-func (r *projectionRebuilder) rebuildEvictedUploadAuthority(projection *index.Index, blockID uint64) (bool, error) {
+func (r *projectionRebuilder) rebuildLocalConfirmedUploadAuthority(projection *index.Index, blockID uint64) (bool, error) {
 	lifecycle, err := ClassifyLocalBlock(r.blocksDir, blockID)
 	if err != nil {
 		return false, fmt.Errorf("shard: rebuild pending upload %d classify local lifecycle: %w", blockID, err)
-	}
-	if lifecycle.State != LocalBlockStateEvicted {
-		return false, nil
 	}
 	confirmed, ok, err := r.committedUploadAuthorityForRebuild(blockID)
 	if err != nil {
 		return false, err
 	}
-	if !ok {
-		return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, index.ErrConfirmedUploadNotFound)
-	}
-	if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
+
+	shouldCopy, err := shouldRebuildConfirmedUploadAuthority(blockID, lifecycle, confirmed, ok)
+	if err != nil {
 		return false, err
+	}
+	if !shouldCopy {
+		return false, nil
 	}
 	if err := projection.PutConfirmedUpload(confirmed); err != nil {
 		return false, fmt.Errorf("shard: rebuild confirmed upload %d: %w", blockID, err)
 	}
 	return true, nil
+}
+
+func shouldRebuildConfirmedUploadAuthority(
+	blockID uint64,
+	lifecycle LocalBlockLifecycle,
+	confirmed index.ConfirmedUpload,
+	hasAuthority bool,
+) (bool, error) {
+	if !hasAuthority {
+		if lifecycle.State == LocalBlockStateEvicted {
+			return false, fmt.Errorf("shard: rebuild pending upload %d evicted Block missing committed ConfirmUpload: %w", blockID, index.ErrConfirmedUploadNotFound)
+		}
+		return false, nil
+	}
+
+	switch lifecycle.State {
+	case LocalBlockStateEvicted:
+		if err := validateRestoreAuthority(confirmed, lifecycle); err != nil {
+			return false, err
+		}
+		return true, nil
+	case LocalBlockStateHot, LocalBlockStateHotCleanupNeeded:
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func (r *projectionRebuilder) committedUploadAuthorityForRebuild(blockID uint64) (index.ConfirmedUpload, bool, error) {
