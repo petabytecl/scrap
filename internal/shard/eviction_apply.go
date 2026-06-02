@@ -32,7 +32,7 @@ func (s *Shard) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest
 		evictionReasonForMarker(plan),
 		result.Status,
 		time.Duration(result.CompletedAtUs-result.StartedAtUs)*time.Microsecond,
-		applySkipCountsByReason(result),
+		eviction.ApplySkipCountsByReason(result),
 	)
 	s.finishEvictionApply(plan.PlanID, result, cacheable)
 
@@ -57,37 +57,11 @@ func evictionApplyValidationContext(ctx context.Context, plan eviction.Plan, now
 	return context.WithTimeout(base, timeout)
 }
 
-func applySkipCountsByReason(result eviction.ApplyResult) map[string]int {
-	if result.SkippedBlocks == 0 {
-		return nil
-	}
-	counts := make(map[string]int)
-	for _, block := range result.Blocks {
-		if block.Status == eviction.ApplyBlockStatusSkipped && block.Reason != "" {
-			counts[block.Reason]++
-		}
-	}
-	if len(counts) == 0 {
-		return nil
-	}
-	return counts
-}
-
 func (s *Shard) finishEvictionApply(planID string, result eviction.ApplyResult, cacheable bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.evictionApplyRunning, planID)
-	if s.evictionApplyResults == nil {
-		s.evictionApplyResults = make(map[string]eviction.ApplyResult)
-	}
-	if cacheable && shouldCacheEvictionApplyResult(result) {
-		s.evictionApplyResults[planID] = result
-	}
-}
-
-func shouldCacheEvictionApplyResult(result eviction.ApplyResult) bool {
-	return result.Status != "" && result.Status != eviction.ApplyStatusNoEffect
+	s.evictionCampaigns.FinishApply(planID, result, cacheable)
 }
 
 func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction.PlanStatus, error) {
@@ -101,28 +75,7 @@ func (s *Shard) EvictionPlanStatus(ctx context.Context, planID string) (eviction
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	plan, err := s.validEvictionPlanForApplyLocked(planID)
-	if err != nil {
-		return eviction.PlanStatus{}, err
-	}
-	if result, ok := s.evictionApplyResults[planID]; ok {
-		result := result
-		return eviction.PlanStatus{
-			PlanID:      planID,
-			Status:      result.Status,
-			Plan:        new(plan),
-			ApplyResult: &result,
-		}, nil
-	}
-	status := eviction.PlanStatusPending
-	if _, ok := s.evictionApplyRunning[planID]; ok {
-		status = eviction.PlanStatusRunning
-	}
-	return eviction.PlanStatus{
-		PlanID: planID,
-		Status: status,
-		Plan:   new(plan),
-	}, nil
+	return s.evictionCampaigns.Status(planID, s.evictionMember(), time.Now().UTC())
 }
 
 func (s *Shard) beginEvictionApply(ctx context.Context, planID string) (eviction.Plan, eviction.ApplyResult, bool, error) {
@@ -139,17 +92,21 @@ func (s *Shard) beginEvictionApply(ctx context.Context, planID string) (eviction
 	if err := s.ensureEvictionApplyReadyLocked(); err != nil {
 		return eviction.Plan{}, eviction.ApplyResult{}, false, err
 	}
-	plan, err := s.validEvictionPlanForApplyLocked(planID)
+	start, err := s.evictionCampaigns.BeginApply(planID, s.evictionMember(), time.Now().UTC())
 	if err != nil {
 		return eviction.Plan{}, eviction.ApplyResult{}, false, err
 	}
-	if result, ok := s.evictionApplyResults[planID]; ok {
-		return eviction.Plan{}, result, true, nil
+	if start.Cached {
+		return eviction.Plan{}, start.Result, true, nil
 	}
-	if err := s.markEvictionApplyRunningLocked(planID); err != nil {
-		return eviction.Plan{}, eviction.ApplyResult{}, false, err
+	if s.upload.Backend == nil {
+		s.evictionCampaigns.FinishApply(planID, eviction.ApplyResult{}, false)
+		return eviction.Plan{}, eviction.ApplyResult{}, false, storeapi.NewUnavailable(
+			storeapi.UnavailableReasonBackendRestoreUnavailable,
+			"Backend restore is not configured",
+		)
 	}
-	return plan, eviction.ApplyResult{}, false, nil
+	return start.Plan, eviction.ApplyResult{}, false, nil
 }
 
 func (s *Shard) ensureEvictionApplyReadyLocked() error {
@@ -162,74 +119,16 @@ func (s *Shard) ensureEvictionApplyReadyLocked() error {
 	return nil
 }
 
-func (s *Shard) markEvictionApplyRunningLocked(planID string) error {
-	if _, ok := s.evictionApplyRunning[planID]; ok {
-		return eviction.ErrApplyInProgress
-	}
-	if s.upload.Backend == nil {
-		return storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "Backend restore is not configured")
-	}
-	if s.evictionApplyRunning == nil {
-		s.evictionApplyRunning = make(map[string]struct{})
-	}
-	s.evictionApplyRunning[planID] = struct{}{}
-	return nil
-}
-
-func (s *Shard) validEvictionPlanForApplyLocked(planID string) (eviction.Plan, error) {
-	plan, ok := s.evictionPlans[planID]
-	if !ok {
-		return eviction.Plan{}, eviction.ErrPlanNotFound
-	}
-	nowUs := time.Now().UTC().UnixMicro()
-	if plan.ExpiresAtUs <= nowUs {
-		delete(s.evictionPlans, planID)
-		delete(s.evictionApplyResults, planID)
-		return eviction.Plan{}, eviction.ErrPlanExpired
-	}
-	if plan.MemberHostname != s.memberHostname || plan.MemberID != s.memberID {
-		return eviction.Plan{}, eviction.ErrPlanStale
-	}
-	return plan, nil
-}
-
 func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan) (eviction.ApplyResult, bool) {
-	startedAtUs := time.Now().UTC().UnixMicro()
-	result := eviction.ApplyResult{
-		PlanID:         plan.PlanID,
-		Status:         eviction.ApplyStatusNoEffect,
-		StartedAtUs:    startedAtUs,
-		MemberHostname: plan.MemberHostname,
-		MemberID:       plan.MemberID,
-		SelectedBlocks: len(plan.Selected),
-	}
-	cacheable := true
-	for _, selected := range plan.Selected {
-		if err := ctx.Err(); err != nil {
-			result.Blocks = append(result.Blocks, failedApplyBlock(selected, err))
-			result.FailedBlocks++
-			cacheable = false
-			break
-		}
-		blockResult := s.applyEvictionBlock(plan, selected)
-		s.recordEvictionHealthBlockForApplyResult(blockResult)
-		result.Blocks = append(result.Blocks, blockResult)
-		switch blockResult.Status {
-		case eviction.ApplyBlockStatusEvicted:
-			result.EvictedBlocks++
-			result.BytesFreed += blockResult.BytesFreed
-		case eviction.ApplyBlockStatusSkipped:
-			result.SkippedBlocks++
-		case eviction.ApplyBlockStatusFailed:
-			result.FailedBlocks++
-			result.BytesFreed += blockResult.BytesFreed
-		}
-		if blockResult.Status == eviction.ApplyBlockStatusFailed {
-			break
-		}
-	}
-	result.Status = evictionApplyStatus(result)
-	return result, cacheable
+	return eviction.ApplyBlocks(
+		ctx,
+		plan,
+		time.Now().UTC(),
+		func(selected eviction.PlanBlock) eviction.ApplyBlock {
+			return s.applyEvictionBlock(plan, selected)
+		},
+		s.recordEvictionHealthBlockForApplyResult,
+	)
 }
 
 func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
@@ -246,7 +145,7 @@ func (s *Shard) applyEvictionBlock(plan eviction.Plan, selected eviction.PlanBlo
 			return nil
 		})
 		if err != nil {
-			return failedApplyBlock(selected, err)
+			return eviction.FailedBlock(selected, err)
 		}
 		return result
 	}
@@ -272,32 +171,32 @@ func (s *Shard) recordEvictionHealthBlockForApplyResult(result eviction.ApplyBlo
 
 func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.PlanBlock) eviction.ApplyBlock {
 	if selected.ShardID != s.shardID {
-		return skippedApplyBlock(selected, eviction.SkipReasonShardFilter)
+		return eviction.SkippedBlock(selected, eviction.SkipReasonShardFilter)
 	}
 	lifecycle, err := localblock.Classify(s.blocksDir, selected.BlockID)
 	if err != nil {
-		return failedApplyBlock(selected, fmt.Errorf("classify Block: %w", err))
+		return eviction.FailedBlock(selected, fmt.Errorf("classify Block: %w", err))
 	}
 	if reason := s.evictionApplySkipReason(selected, lifecycle, time.Now().UTC().UnixMicro()); reason != "" {
-		return skippedApplyBlock(selected, reason)
+		return eviction.SkippedBlock(selected, reason)
 	}
 
 	confirmed, err := s.confirmedEvictionApplyAuthorityLocked(selected)
 	if err != nil {
-		return failedApplyBlock(selected, err)
+		return eviction.FailedBlock(selected, err)
 	}
 	if s.leaderHotCopyRequired() {
-		return skippedApplyBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+		return eviction.SkippedBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
 	}
 	if err := s.prepareEvictionMarkerForApply(plan, lifecycle, confirmed); err != nil {
-		return failedApplyBlock(selected, err)
+		return eviction.FailedBlock(selected, err)
 	}
 	removed, blockResult, err := s.unlinkEvictedBlockIfFollower(selected, lifecycle)
 	if blockResult.Status != "" {
 		return blockResult
 	}
 	if err != nil {
-		failed := failedApplyBlock(selected, err)
+		failed := eviction.FailedBlock(selected, err)
 		if removed {
 			failed.BytesFreed = confirmed.BlockObject.SizeBytes
 		}
@@ -339,10 +238,10 @@ func (s *Shard) prepareEvictionMarkerForApply(plan eviction.Plan, lifecycle loca
 func (s *Shard) skipEvictionAfterPreparedMarker(selected eviction.PlanBlock, lifecycle localblock.Lifecycle) eviction.ApplyBlock {
 	if lifecycle.State == localblock.StateHot {
 		if err := localblock.RemoveEvictionMarker(s.blocksDir, selected.BlockID); err != nil {
-			return failedApplyBlock(selected, err)
+			return eviction.FailedBlock(selected, err)
 		}
 	}
-	return skippedApplyBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+	return eviction.SkippedBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
 }
 
 func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecycle localblock.Lifecycle) (bool, eviction.ApplyBlock, error) {
@@ -403,37 +302,4 @@ func evictionReasonForMarker(plan eviction.Plan) string {
 		return plan.Reason
 	}
 	return localblock.EvictionReasonEvidenceRun
-}
-
-func evictionApplyStatus(result eviction.ApplyResult) string {
-	switch {
-	case result.FailedBlocks > 0:
-		return eviction.ApplyStatusFailed
-	case result.EvictedBlocks == 0:
-		return eviction.ApplyStatusNoEffect
-	case result.SkippedBlocks > 0:
-		return eviction.ApplyStatusCompletedWithSkips
-	default:
-		return eviction.ApplyStatusCompleted
-	}
-}
-
-func skippedApplyBlock(selected eviction.PlanBlock, reason string) eviction.ApplyBlock {
-	return eviction.ApplyBlock{
-		BlockID:   selected.BlockID,
-		ShardID:   selected.ShardID,
-		SizeBytes: selected.SizeBytes,
-		Status:    eviction.ApplyBlockStatusSkipped,
-		Reason:    reason,
-	}
-}
-
-func failedApplyBlock(selected eviction.PlanBlock, err error) eviction.ApplyBlock {
-	return eviction.ApplyBlock{
-		BlockID:   selected.BlockID,
-		ShardID:   selected.ShardID,
-		SizeBytes: selected.SizeBytes,
-		Status:    eviction.ApplyBlockStatusFailed,
-		Error:     err.Error(),
-	}
 }

@@ -61,7 +61,7 @@ func TestApplyEvictionPlanReportsCompletedWithSkipsForDrift(t *testing.T) {
 		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
 		LocalState: string(LocalBlockStateHot),
 	})
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestApplyEvictionPlanRecordsApplySkipReasons(t *testing.T) {
 		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
 		LocalState: string(LocalBlockStateHot),
 	})
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestApplyEvictionPlanDoesNotCacheAllSkipResult(t *testing.T) {
 	if result.Status != eviction.ApplyStatusNoEffect || result.SkippedBlocks != 1 {
 		t.Fatalf("result = %+v, want no_effect with one skip", result)
 	}
-	if _, ok := s.evictionApplyResults[plan.PlanID]; ok {
+	if hasEvictionApplyResultForTest(s, plan.PlanID) {
 		t.Fatal("all-skip apply result should not be cached")
 	}
 
@@ -279,7 +279,7 @@ func TestApplyEvictionPlanUsesCurrentHotResidencyWindow(t *testing.T) {
 	}
 	plan := storeEvictionApplyPlan(t, s)
 	plan.Config.HotResidencyWindowSeconds = 1
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -469,7 +469,7 @@ func TestApplyEvictionPlanValidationUsesBoundedContextAfterClientCancellation(t 
 	s.upload.Backend = blockingGetBackend{Backend: backendStore, cancel: cancel}
 	plan := storeEvictionApplyPlanForConfirmed(t, s, confirmed, eviction.ReasonEvidenceRun)
 	plan.ExpiresAtUs = time.Now().Add(75 * time.Millisecond).UnixMicro()
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	start := time.Now()
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
@@ -490,10 +490,7 @@ func TestApplyEvictionPlanValidationUsesBoundedContextAfterClientCancellation(t 
 	if len(result.Validations) != 1 || !strings.Contains(result.Validations[0].Error, context.DeadlineExceeded.Error()) {
 		t.Fatalf("validations = %+v, want context deadline exceeded", result.Validations)
 	}
-	s.mu.Lock()
-	_, running := s.evictionApplyRunning[plan.PlanID]
-	s.mu.Unlock()
-	if running {
+	if s.evictionCampaigns.HasRunningApply() {
 		t.Fatal("eviction apply remained running after bounded validation timeout")
 	}
 }
@@ -545,7 +542,7 @@ func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 			name: "expired",
 			mutate: func(s *Shard, plan eviction.Plan) string {
 				plan.ExpiresAtUs = time.Now().Add(-time.Second).UnixMicro()
-				s.evictionPlans[plan.PlanID] = plan
+				storeEvictionPlanForTest(s, plan)
 				return plan.PlanID
 			},
 			want: eviction.ErrPlanExpired,
@@ -554,7 +551,7 @@ func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 			name: "stale member identity",
 			mutate: func(s *Shard, plan eviction.Plan) string {
 				plan.MemberID = "old-member"
-				s.evictionPlans[plan.PlanID] = plan
+				storeEvictionPlanForTest(s, plan)
 				return plan.PlanID
 			},
 			want: eviction.ErrPlanStale,
@@ -562,7 +559,7 @@ func TestApplyEvictionPlanRejectsInvalidPlanState(t *testing.T) {
 		{
 			name: "already in progress",
 			mutate: func(s *Shard, plan eviction.Plan) string {
-				s.evictionApplyRunning[plan.PlanID] = struct{}{}
+				beginEvictionApplyForTest(t, s, plan.PlanID)
 				return plan.PlanID
 			},
 			want: eviction.ErrApplyInProgress,
@@ -603,7 +600,8 @@ func TestTriggerRebuildReportsInProgressDuringEvictionApply(t *testing.T) {
 	s := shardForEvictionApplyTest(t, true)
 	core := &projectionRebuildCoreStub{swapStarted: make(chan struct{})}
 	s.rebuilder = newProjectionRebuilder(core, t.TempDir(), s.blocksDir, s.shardID, UploadConfig{}, nil)
-	s.evictionApplyRunning["plan-apply-1"] = struct{}{}
+	plan := storeEvictionApplyPlan(t, s)
+	beginEvictionApplyForTest(t, s, plan.PlanID)
 
 	alreadyInProgress, err := s.TriggerRebuild(ctx)
 	if err != nil {
@@ -628,17 +626,17 @@ func TestApplyEvictionPlanRejectsExpiredCachedResult(t *testing.T) {
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	plan := storeEvictionApplyPlan(t, s)
 	plan.ExpiresAtUs = time.Now().Add(-time.Second).UnixMicro()
-	s.evictionPlans[plan.PlanID] = plan
-	s.evictionApplyResults[plan.PlanID] = eviction.ApplyResult{
+	storeEvictionPlanForTest(s, plan)
+	finishEvictionApplyForTest(s, plan.PlanID, eviction.ApplyResult{
 		PlanID: plan.PlanID,
 		Status: eviction.ApplyStatusCompleted,
-	}
+	})
 
 	_, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if !errors.Is(err, eviction.ErrPlanExpired) {
 		t.Fatalf("ApplyEvictionPlan error = %v, want ErrPlanExpired", err)
 	}
-	if _, ok := s.evictionApplyResults[plan.PlanID]; ok {
+	if hasEvictionApplyResultForTest(s, plan.PlanID) {
 		t.Fatal("expired cached result should be pruned")
 	}
 }
@@ -664,7 +662,7 @@ func TestEvictionPlanStatusReportsRunningPlan(t *testing.T) {
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	plan := storeEvictionApplyPlan(t, s)
 
-	s.evictionApplyRunning[plan.PlanID] = struct{}{}
+	beginEvictionApplyForTest(t, s, plan.PlanID)
 	status, err := s.EvictionPlanStatus(ctx, plan.PlanID)
 	if err != nil {
 		t.Fatalf("EvictionPlanStatus running: %v", err)
@@ -680,10 +678,10 @@ func TestEvictionPlanStatusReportsCompletedResult(t *testing.T) {
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	plan := storeEvictionApplyPlan(t, s)
 
-	s.evictionApplyResults[plan.PlanID] = eviction.ApplyResult{
+	finishEvictionApplyForTest(s, plan.PlanID, eviction.ApplyResult{
 		PlanID: plan.PlanID,
 		Status: eviction.ApplyStatusCompleted,
-	}
+	})
 	status, err := s.EvictionPlanStatus(ctx, plan.PlanID)
 	if err != nil {
 		t.Fatalf("EvictionPlanStatus completed: %v", err)
@@ -921,7 +919,7 @@ func TestApplyEvictionPlanDoesNotRecordHealthForForeignShardSelectedBlock(t *tes
 	s := shardForEvictionApplyTest(t, true)
 	plan := storeEvictionApplyPlan(t, s)
 	plan.Selected[0].ShardID = evictionApplyTestShardID + 1
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -977,7 +975,7 @@ func TestApplyEvictionPlanFailsBlockWhenConfirmationDrifts(t *testing.T) {
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	plan := storeEvictionApplyPlan(t, s)
 	plan.Selected[0].SizeBytes = 2048
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -1009,7 +1007,7 @@ func TestApplyEvictionPlanStopsAtFirstBlockFailure(t *testing.T) {
 		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
 		LocalState: string(LocalBlockStateHot),
 	})
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -1045,7 +1043,7 @@ func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T
 		BackendKey: "cell-a/shards/0000000000000007/0000000000000002.blk",
 		LocalState: string(LocalBlockStateHot),
 	})
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
 	if err != nil {
@@ -1071,7 +1069,7 @@ func TestApplyEvictionPlanDoesNotCacheCanceledResult(t *testing.T) {
 	if cacheable {
 		t.Fatal("canceled apply result should not be cacheable")
 	}
-	if _, ok := s.evictionApplyResults[plan.PlanID]; ok {
+	if hasEvictionApplyResultForTest(s, plan.PlanID) {
 		t.Fatal("canceled apply result should not be cached")
 	}
 	retry, err := s.ApplyEvictionPlan(context.Background(), eviction.ApplyRequest{PlanID: plan.PlanID})
@@ -1187,7 +1185,7 @@ func TestApplyEvictionPlanUsesDefaultMarkerReason(t *testing.T) {
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
 	plan := storeEvictionApplyPlan(t, s)
 	plan.Reason = ""
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 
 	if _, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID}); err != nil {
 		t.Fatalf("ApplyEvictionPlan: %v", err)
@@ -1299,9 +1297,7 @@ func shardForEvictionApplyTest(t *testing.T, enabled bool) *Shard {
 		eviction:             EvictionConfig{Enabled: enabled, PlanTTL: time.Minute},
 		memberHostname:       "scrapd-2",
 		memberID:             "member-b",
-		evictionPlans:        make(map[string]eviction.Plan),
-		evictionApplyResults: make(map[string]eviction.ApplyResult),
-		evictionApplyRunning: make(map[string]struct{}),
+		evictionCampaigns:    eviction.NewCampaigns(),
 		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
 	}
 }
@@ -1390,8 +1386,29 @@ func storeEvictionApplyPlan(t *testing.T, s *Shard) eviction.Plan {
 			LocalState: string(LocalBlockStateHot),
 		}},
 	}
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 	return plan
+}
+
+func storeEvictionPlanForTest(s *Shard, plan eviction.Plan) {
+	s.evictionCampaigns.StorePlan(plan)
+}
+
+func finishEvictionApplyForTest(s *Shard, planID string, result eviction.ApplyResult) {
+	s.evictionCampaigns.FinishApply(planID, result, true)
+}
+
+func beginEvictionApplyForTest(t *testing.T, s *Shard, planID string) {
+	t.Helper()
+
+	if _, err := s.evictionCampaigns.BeginApply(planID, s.evictionMember(), time.Now().UTC()); err != nil {
+		t.Fatalf("BeginApply test setup: %v", err)
+	}
+}
+
+func hasEvictionApplyResultForTest(s *Shard, planID string) bool {
+	_, ok := s.evictionCampaigns.ApplyResult(planID)
+	return ok
 }
 
 func storeEvictionApplyPlanForConfirmed(
@@ -1421,7 +1438,7 @@ func storeEvictionApplyPlanForConfirmedUploads(
 	for _, upload := range uploads {
 		plan.Selected = append(plan.Selected, evictionApplyPlanBlockForConfirmed(upload))
 	}
-	s.evictionPlans[plan.PlanID] = plan
+	storeEvictionPlanForTest(s, plan)
 	return plan
 }
 
