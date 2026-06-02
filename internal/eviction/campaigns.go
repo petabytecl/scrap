@@ -117,7 +117,6 @@ func (c *Campaigns) validPlan(planID string, member Member, nowUs int64) (Plan, 
 	if plan.ExpiresAtUs <= nowUs {
 		delete(c.plans, planID)
 		delete(c.applyResults, planID)
-		delete(c.applyRunning, planID)
 		return Plan{}, ErrPlanExpired
 	}
 	if plan.MemberHostname != member.Hostname || plan.MemberID != member.ID {
@@ -131,7 +130,6 @@ func (c *Campaigns) pruneExpired(nowUs int64) {
 		if plan.ExpiresAtUs <= nowUs {
 			delete(c.plans, planID)
 			delete(c.applyResults, planID)
-			delete(c.applyRunning, planID)
 		}
 	}
 }

@@ -148,6 +148,29 @@ func TestCampaignsRejectInvalidPlanState(t *testing.T) {
 	}
 }
 
+func TestCampaignsKeepExpiredRunningApplyUntilFinish(t *testing.T) {
+	now := time.Unix(1700, 0)
+	campaigns := NewCampaigns()
+	plan := campaignPlanForTest("plan-running-expired")
+	campaigns.StorePlan(plan)
+	if _, err := campaigns.BeginApply(plan.PlanID, campaignMemberForTest(), now); err != nil {
+		t.Fatalf("BeginApply: %v", err)
+	}
+
+	_, err := campaigns.Status(plan.PlanID, campaignMemberForTest(), time.UnixMicro(plan.ExpiresAtUs+1))
+	if !errors.Is(err, ErrPlanExpired) {
+		t.Fatalf("Status error = %v, want ErrPlanExpired", err)
+	}
+	if !campaigns.HasRunningApply() {
+		t.Fatal("expired status lookup cleared running apply before FinishApply")
+	}
+
+	campaigns.FinishApply(plan.PlanID, ApplyResult{PlanID: plan.PlanID, Status: ApplyStatusFailed}, false)
+	if campaigns.HasRunningApply() {
+		t.Fatal("FinishApply did not clear expired running apply")
+	}
+}
+
 func TestApplyBlocksCountsResultsAndStopsAtFailure(t *testing.T) {
 	plan := campaignPlanForTest("plan-1")
 	plan.Selected = append(plan.Selected, PlanBlock{BlockID: 2, ShardID: 7, SizeBytes: 2048})
