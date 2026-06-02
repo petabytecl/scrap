@@ -1,4 +1,4 @@
-// Package eviction defines the operator-facing dry-run plan contract.
+// Package eviction defines the operator-facing eviction campaign contract.
 package eviction
 
 import "errors"
@@ -36,7 +36,14 @@ const (
 	RestoreFailureDataLoss           = "data_loss"
 	RestoreFailureCanceled           = "canceled"
 	RestoreFailureUnknown            = "unknown"
+
+	RepairStateIdle = "idle"
 )
+
+type Member struct {
+	Hostname string
+	ID       string
+}
 
 var (
 	ErrInvalidPlanRequest    = errors.New("eviction: invalid plan request")

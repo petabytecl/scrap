@@ -120,9 +120,7 @@ type Shard struct {
 
 	lifecycleCleanupDone   chan struct{}
 	lifecycleMutationMu    sync.Mutex
-	evictionPlans          map[string]eviction.Plan
-	evictionApplyResults   map[string]eviction.ApplyResult
-	evictionApplyRunning   map[string]struct{}
+	evictionCampaigns      *eviction.Campaigns
 	restoreFailuresByBlock map[uint64]string
 
 	evictionHealthMu       sync.Mutex
@@ -206,9 +204,7 @@ func Open(cfg Config) (*Shard, error) {
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
-		evictionPlans:           make(map[string]eviction.Plan),
-		evictionApplyResults:    make(map[string]eviction.ApplyResult),
-		evictionApplyRunning:    make(map[string]struct{}),
+		evictionCampaigns:       eviction.NewCampaigns(),
 		evictionHealthBlocks:    make(map[uint64]evictionHealthBlockContribution),
 		blockUploads:            newBlockUploadLifecycle(),
 		restores:                make(map[uint64]*blockRestoreCall),
@@ -618,7 +614,7 @@ func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.evictionApplyRunning) > 0 {
+	if s.evictionCampaigns.HasRunningApply() {
 		return true, nil
 	}
 	return s.rebuilder.Trigger(ctx)
