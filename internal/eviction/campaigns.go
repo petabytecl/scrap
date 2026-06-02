@@ -70,7 +70,7 @@ func (c *Campaigns) BeginApply(planID string, member Member, now time.Time) (App
 func (c *Campaigns) FinishApply(planID string, result ApplyResult, cacheable bool) {
 	c.ensureMaps()
 	delete(c.applyRunning, planID)
-	if cacheable && shouldCacheApplyResult(result) {
+	if _, ok := c.plans[planID]; ok && cacheable && shouldCacheApplyResult(result) {
 		c.applyResults[planID] = cloneApplyResult(result)
 	}
 }

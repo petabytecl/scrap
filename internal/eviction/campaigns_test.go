@@ -165,9 +165,12 @@ func TestCampaignsKeepExpiredRunningApplyUntilFinish(t *testing.T) {
 		t.Fatal("expired status lookup cleared running apply before FinishApply")
 	}
 
-	campaigns.FinishApply(plan.PlanID, ApplyResult{PlanID: plan.PlanID, Status: ApplyStatusFailed}, false)
+	campaigns.FinishApply(plan.PlanID, ApplyResult{PlanID: plan.PlanID, Status: ApplyStatusCompleted}, true)
 	if campaigns.HasRunningApply() {
 		t.Fatal("FinishApply did not clear expired running apply")
+	}
+	if result, ok := campaigns.ApplyResult(plan.PlanID); ok {
+		t.Fatalf("FinishApply cached orphaned result after plan expiry: %+v", result)
 	}
 }
 
