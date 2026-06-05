@@ -169,7 +169,7 @@ func waitForPortForwardPort(ctx context.Context, logPath string) (string, error)
 }
 
 func kubectlArgs(req AdminProbeRequest, args ...string) []string {
-	out := make([]string, 0, len(args)+kubectlArgCapacity)
+	out := make([]string, 0, safeStringSliceCapacity(len(args), kubectlArgCapacity))
 	if req.KubeContext != "" {
 		out = append(out, "--context", req.KubeContext)
 	}

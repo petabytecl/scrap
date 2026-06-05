@@ -598,7 +598,7 @@ func gitDirty(ctx context.Context, runner CommandRunner, repoRoot string) bool {
 }
 
 func kubectlGlobalArgs(cfg Config, args ...string) []string {
-	out := make([]string, 0, len(args)+kubectlGlobalArgCapacity)
+	out := make([]string, 0, safeStringSliceCapacity(len(args), kubectlGlobalArgCapacity))
 	if cfg.KubeContext != "" {
 		out = append(out, "--context", cfg.KubeContext)
 	}

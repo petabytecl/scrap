@@ -177,7 +177,7 @@ func commandContext(parent context.Context, timeout time.Duration) (context.Cont
 }
 
 func kubectlArgs(opts commonOptions, args ...string) []string {
-	out := make([]string, 0, len(args)+kubectlGlobalFlagCapacity)
+	out := make([]string, 0, safeStringSliceCapacity(len(args), kubectlGlobalFlagCapacity))
 	if opts.kubeContext != "" {
 		out = append(out, "--context", opts.kubeContext)
 	}
