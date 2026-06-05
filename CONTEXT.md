@@ -712,8 +712,11 @@ Phase 3: Backend upload → leader uploads sealed Blocks (.blk + .idx as separat
 objects) to the Backend, verifies via HEAD + size/ETag, proposes `ConfirmUpload`
 via Raft. Upload Outbox tracks obligations. Three-level admission pressure
 (WARN/PRESSURE/CRITICAL) prevents unbounded upload lag from filling local disk.
-Phase 4 (future): Partial eviction → followers evict uploaded `.blk` data files
-while retaining local `.idx` files for metadata reads (see ADR 0016).
+Phase 4: Partial eviction → followers evict uploaded `.blk` data files while
+retaining local `.idx` files for metadata reads (see ADR 0016).
+Phase 4.5: Production security bridge → mTLS/authz/audit/rate-limit boundaries
+and OpenBao Transit envelope encryption before cold-only reads (see ADR 0019
+and ADR 0020).
 Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
 ### Raft Operations
@@ -906,6 +909,6 @@ Fallback for local dev: `--peers` flag overrides K8s DNS discovery.
 
 - Cell federation model
 - Multi-tier write ACK (priority classes)
-- Encryption (OpenBao Transit integration)
+- Metadata encryption and tenant-specific key policy
 - Group commit optimization
 - Shard rebalancing and slot transfer protocol
