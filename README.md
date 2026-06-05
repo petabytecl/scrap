@@ -36,7 +36,7 @@ contract for this repository.
 
 ## Requirements
 
-- Go 1.26.3.
+- Go 1.26.4.
 - Docker for container and local `act` workflows.
 - `kubectl` for Kubernetes-oriented targets.
 - GitHub CLI (`gh`) for local `act` targets that need GitHub tokens.
