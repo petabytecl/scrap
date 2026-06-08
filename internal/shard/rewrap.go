@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -141,6 +142,15 @@ func (s *Shard) proposeRewrapDocument(
 	result rewrap.Result,
 	envelope []byte,
 ) error {
+	oldKeyVersion, err := rewrapKeyVersion32(result.OldKeyVersion)
+	if err != nil {
+		return err
+	}
+	newKeyVersion, err := rewrapKeyVersion32(result.NewKeyVersion)
+	if err != nil {
+		return err
+	}
+
 	doneCh := make(chan error, 1)
 	key := rewrapProposalKey(req.TransactionID, req.DocumentName)
 	s.proposalMu.Lock()
@@ -154,8 +164,8 @@ func (s *Shard) proposeRewrapDocument(
 				DocumentName:       req.DocumentName,
 				BlockId:            blockID,
 				EncryptionEnvelope: envelope,
-				OldKeyVersion:      int32(result.OldKeyVersion), //nolint:gosec // Transit key versions are positive small ints.
-				NewKeyVersion:      int32(result.NewKeyVersion), //nolint:gosec // Transit key versions are positive small ints.
+				OldKeyVersion:      oldKeyVersion,
+				NewKeyVersion:      newKeyVersion,
 				RewrappedAtUs:      result.RewrappedAt.UnixMicro(),
 			},
 		},
@@ -178,6 +188,13 @@ func (s *Shard) proposeRewrapDocument(
 		s.forgetProposal(key)
 		return ctx.Err()
 	}
+}
+
+func rewrapKeyVersion32(version int) (int32, error) {
+	if version < 0 || version > math.MaxInt32 {
+		return 0, fmt.Errorf("%w: rewrap key version out of range", storeapi.ErrDataLoss)
+	}
+	return int32(version), nil
 }
 
 func (s *Shard) forgetProposal(key string) {
