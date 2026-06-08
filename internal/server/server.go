@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
@@ -27,6 +28,7 @@ type documentServer struct {
 	telemetry      Telemetry
 	identifierMode telemetry.IdentifierMode
 	logger         *slog.Logger
+	authorizer     *security.Authorizer
 }
 
 func Register(gs *grpc.Server, s storeapi.Store, opts ...Option) {
@@ -47,6 +49,11 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	ctx, rpc := s.telemetry.StartRPC(stream.Context(), "WriteDocument")
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
+
+	if err := s.requireRole(ctx, security.RoleDocumentWriter); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
 
 	first, err := stream.Recv()
 	if err != nil {
@@ -149,6 +156,11 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
 
+	if err := s.requireRole(ctx, security.RoleDocumentReader); err != nil {
+		rpcCode = status.Code(err)
+		return nil, err
+	}
+
 	meta, err := s.store.HeadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
 		mappedErr := s.mapStoreError(ctx, "HeadDocument", err)
@@ -174,6 +186,11 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 	)...)
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
+
+	if err := s.requireRole(ctx, security.RoleDocumentReader); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
 
 	rc, meta, err := s.store.ReadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
@@ -234,6 +251,11 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
 
+	if err := s.requireRole(ctx, security.RoleDocumentReader); err != nil {
+		rpcCode = status.Code(err)
+		return nil, err
+	}
+
 	docs, err := s.store.FindDocuments(ctx, req.GetTransactionId())
 	if err != nil {
 		mappedErr := s.mapStoreError(ctx, "FindDocuments", err)
@@ -253,6 +275,13 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 	}
 
 	return &scrapv1.FindDocumentsResponse{Documents: pbDocs}, nil
+}
+
+func (s *documentServer) requireRole(ctx context.Context, role security.Role) error {
+	if s.authorizer == nil {
+		return nil
+	}
+	return s.authorizer.Authorize(ctx, role)
 }
 
 func (s *documentServer) mapStoreError(ctx context.Context, method string, err error) error {

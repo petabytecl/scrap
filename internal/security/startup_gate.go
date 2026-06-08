@@ -11,15 +11,6 @@ import (
 	"time"
 )
 
-var allowedRoles = map[string]struct{}{
-	"document_writer":   {},
-	"document_reader":   {},
-	"peer_member":       {},
-	"admin_reader":      {},
-	"admin_operator":    {},
-	"admin_break_glass": {},
-}
-
 // StartupGateConfig is the production startup security gate input.
 type StartupGateConfig struct {
 	Mode                   Mode
@@ -259,21 +250,8 @@ func validateCertificateIdentity(key string, cert *x509.Certificate, serverName 
 }
 
 func validateRolePolicy(path string) error {
-	var policy struct {
-		Roles []string `json:"roles"`
-	}
-	if err := readJSONPolicy(ClassRolePolicy, "SCRAP_ROLE_POLICY_FILE", path, &policy); err != nil {
-		return err
-	}
-	if len(policy.Roles) == 0 {
-		return newGateError(ClassRolePolicy, "SCRAP_ROLE_POLICY_FILE", "role policy must contain at least one role")
-	}
-	for _, role := range policy.Roles {
-		if _, ok := allowedRoles[role]; !ok {
-			return newGateError(ClassRolePolicy, "SCRAP_ROLE_POLICY_FILE", "role policy contains an unknown role")
-		}
-	}
-	return nil
+	_, err := LoadRolePolicy(path)
+	return err
 }
 
 func validatePeerIdentityPolicy(path string, expected PeerIdentityConfig) error {

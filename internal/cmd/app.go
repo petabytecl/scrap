@@ -161,6 +161,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		server.WithTelemetry(telemetryRuntime.server),
 		server.WithIdentifierMode(identifierMode),
 		server.WithLogger(logger.With(telemetryRuntime.logIdentityAttrs()...)),
+		server.WithAuthorizer(securityRuntime.authorizer),
 	)
 	server.RegisterHealth(clientGS, s)
 
@@ -171,7 +172,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	cleanup = append(cleanup, func() { _ = peerLis.Close() })
 
 	peerGS := grpc.NewServer(securityRuntime.peerGRPCOptions...)
-	peerSrv := peer.NewServer(cfg.DataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
+	peerSrv := newPeerServer(cfg, s, securityRuntime, memberIdentity)
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)
 	}))
@@ -186,6 +187,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithEvictionPlanStatusProvider(s),
 		admin.WithEvictionHealthProvider(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
+		admin.WithAuthorizer(securityRuntime.authorizer),
 	}
 	if cfg.TestHooks {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
@@ -213,6 +215,22 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		raftID:      raftID,
 		uploadCfg:   uploadCfg,
 	}, nil
+}
+
+func newPeerServer(cfg Config, shard *shard.Shard, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
+	peerOpts := []peer.ServerOption{
+		peer.WithScrubCache(shard),
+		peer.WithRebuildHandler(shard),
+		peer.WithReplicationSink(shard),
+	}
+	if securityRuntime.authorizer != nil {
+		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{
+			CellID:         cfg.CellID,
+			MemberHostname: memberIdentity.MemberHostname,
+			MemberID:       memberIdentity.MemberID,
+		}))
+	}
+	return peer.NewServer(cfg.DataDir+"/blocks", peerOpts...)
 }
 
 func logIdentifierMode(ctx context.Context, logger *slog.Logger, cfg Config, identifierMode telemetry.IdentifierMode) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -45,6 +46,9 @@ func WithEvictionPlanStatusProvider(provider EvictionPlanStatusProvider) Option 
 }
 
 func (s *Server) handleEvictionPlans(w http.ResponseWriter, r *http.Request) {
+	if !s.authorize(w, r, security.RoleAdminOperator) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -91,6 +95,9 @@ func (s *Server) handleEvictionPlanByID(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request, planID string) {
+	if !s.authorize(w, r, security.RoleAdminOperator) {
+		return
+	}
 	if s.evictionApplier == nil {
 		http.NotFound(w, r)
 		return
@@ -114,6 +121,9 @@ func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleEvictionPlanStatus(w http.ResponseWriter, r *http.Request, planID string) {
+	if !s.authorize(w, r, security.RoleAdminReader) {
+		return
+	}
 	if s.evictionPlanStatus == nil {
 		http.NotFound(w, r)
 		return

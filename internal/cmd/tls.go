@@ -18,11 +18,16 @@ type appSecurityRuntime struct {
 	publicGRPCOptions []grpc.ServerOption
 	peerGRPCOptions   []grpc.ServerOption
 	adminTLS          adminTLSConfig
+	authorizer        *security.Authorizer
 }
 
 type adminTLSConfig struct {
 	config  *tls.Config
 	enabled bool
+}
+
+type appAuthorizerConfig struct {
+	authorizer *security.Authorizer
 }
 
 func newAppSecurityRuntime(cfg Config, peers map[uint64]string) (appSecurityRuntime, error) {
@@ -49,11 +54,16 @@ func newAppSecurityRuntime(cfg Config, peers map[uint64]string) (appSecurityRunt
 }
 
 func newAppSecurityRuntimeOptions(cfg Config) (appSecurityRuntime, error) {
-	publicGRPCOptions, err := newPublicGRPCServerOptions(cfg)
+	authorizerCfg, err := newAppAuthorizer(cfg)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
-	peerGRPCOptions, err := newPeerGRPCServerOptions(cfg)
+	authorizer := authorizerCfg.authorizer
+	publicGRPCOptions, err := newPublicGRPCServerOptions(cfg, authorizer)
+	if err != nil {
+		return appSecurityRuntime{}, err
+	}
+	peerGRPCOptions, err := newPeerGRPCServerOptions(cfg, authorizer)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
@@ -65,7 +75,19 @@ func newAppSecurityRuntimeOptions(cfg Config) (appSecurityRuntime, error) {
 		publicGRPCOptions: publicGRPCOptions,
 		peerGRPCOptions:   peerGRPCOptions,
 		adminTLS:          adminTLS,
+		authorizer:        authorizer,
 	}, nil
+}
+
+func newAppAuthorizer(cfg Config) (appAuthorizerConfig, error) {
+	if !cfg.SecurityMode.IsProduction() {
+		return appAuthorizerConfig{}, nil
+	}
+	policy, err := security.LoadRolePolicy(cfg.ProductionGates.RolePolicyPath)
+	if err != nil {
+		return appAuthorizerConfig{}, fmt.Errorf("role policy: %w", err)
+	}
+	return appAuthorizerConfig{authorizer: security.NewAuthorizer(policy)}, nil
 }
 
 func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransport, error) {
@@ -90,7 +112,7 @@ func newPeerClient(cfg Config) (*peer.Client, error) {
 	return peer.NewClient(peer.WithClientTransportCredentials(credentials.NewTLS(clientTLS))), nil
 }
 
-func newPublicGRPCServerOptions(cfg Config) ([]grpc.ServerOption, error) {
+func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer) ([]grpc.ServerOption, error) {
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
 	if !cfg.SecurityMode.IsProduction() {
 		return opts, nil
@@ -99,10 +121,14 @@ func newPublicGRPCServerOptions(cfg Config) ([]grpc.ServerOption, error) {
 	if err != nil {
 		return nil, fmt.Errorf("public gRPC TLS: %w", err)
 	}
-	return append(opts, grpc.Creds(credentials.NewTLS(serverTLS))), nil
+	return append(opts,
+		grpc.Creds(credentials.NewTLS(serverTLS)),
+		grpc.ChainUnaryInterceptor(security.PrincipalUnaryServerInterceptor(authorizer)),
+		grpc.ChainStreamInterceptor(security.PrincipalStreamServerInterceptor(authorizer)),
+	), nil
 }
 
-func newPeerGRPCServerOptions(cfg Config) ([]grpc.ServerOption, error) {
+func newPeerGRPCServerOptions(cfg Config, authorizer *security.Authorizer) ([]grpc.ServerOption, error) {
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
 	if !cfg.SecurityMode.IsProduction() {
 		return opts, nil
@@ -113,8 +139,14 @@ func newPeerGRPCServerOptions(cfg Config) ([]grpc.ServerOption, error) {
 	}
 	return append(opts,
 		grpc.Creds(credentials.NewTLS(serverTLS)),
-		grpc.ChainUnaryInterceptor(security.PeerIdentityUnaryServerInterceptor()),
-		grpc.ChainStreamInterceptor(security.PeerIdentityStreamServerInterceptor()),
+		grpc.ChainUnaryInterceptor(
+			security.PrincipalUnaryServerInterceptor(authorizer),
+			security.PeerIdentityUnaryServerInterceptor(),
+		),
+		grpc.ChainStreamInterceptor(
+			security.PrincipalStreamServerInterceptor(authorizer),
+			security.PeerIdentityStreamServerInterceptor(),
+		),
 	), nil
 }
 
