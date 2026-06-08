@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/security"
 )
@@ -58,6 +60,8 @@ type Server struct {
 	securityMode       security.Mode
 	readiness          security.Readiness
 	authorizer         *security.Authorizer
+	auditSink          audit.Sink
+	rateLimiter        *security.RateLimiter
 	logger             *slog.Logger
 }
 
@@ -107,6 +111,18 @@ func WithSecurityStatus(mode security.Mode, readiness security.Readiness) Option
 func WithAuthorizer(authorizer *security.Authorizer) Option {
 	return func(s *Server) {
 		s.authorizer = authorizer
+	}
+}
+
+func WithAuditSink(sink audit.Sink) Option {
+	return func(s *Server) {
+		s.auditSink = sink
+	}
+}
+
+func WithRateLimiter(limiter *security.RateLimiter) Option {
+	return func(s *Server) {
+		s.rateLimiter = limiter
 	}
 }
 
@@ -182,14 +198,149 @@ func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security.Role) bool {
+	operation, target := auditRequest(r, role)
+	resolvedRequest, principalErr := s.requestWithResolvedPrincipal(r)
+	if decision := s.checkRateLimit(resolvedRequest.Context(), operation); decision.Limited {
+		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
+		http.Error(w, security.ErrRateLimited.Error(), http.StatusTooManyRequests)
+		return false
+	}
+	if principalErr != nil {
+		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(principalErr)); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
+		http.Error(w, principalErr.Error(), security.HTTPStatusForAuthorization(principalErr))
+		return false
+	}
 	if s.authorizer == nil {
+		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
 		return true
 	}
-	if err := s.authorizer.AuthorizeHTTPRequest(r, role); err != nil {
+	if err := s.authorizer.Authorize(resolvedRequest.Context(), role); err != nil {
+		if auditErr := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
 		http.Error(w, err.Error(), security.HTTPStatusForAuthorization(err))
 		return false
 	}
+	if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+		http.Error(w, "audit event failed", http.StatusInternalServerError)
+		return false
+	}
 	return true
+}
+
+func (s *Server) requestWithResolvedPrincipal(r *http.Request) (*http.Request, error) {
+	if s.authorizer == nil {
+		return r, nil
+	}
+	if _, ok := security.PrincipalFromContext(r.Context()); ok {
+		return r, nil
+	}
+	if r.TLS == nil {
+		return r, nil
+	}
+	ctx, err := s.authorizer.ContextWithTLSPrincipal(r.Context(), *r.TLS)
+	if err != nil {
+		return r, err
+	}
+	return r.WithContext(ctx), nil
+}
+
+func (s *Server) checkRateLimit(ctx context.Context, operation string) security.RateLimitDecision {
+	if s.rateLimiter == nil {
+		return security.RateLimitDecision{}
+	}
+	return s.rateLimiter.Allow(ctx, security.RateLimitSurfaceAdmin, adminPrincipalID(ctx), operation)
+}
+
+func (s *Server) recordAudit(ctx context.Context, role security.Role, operation, target, result, reason string) error {
+	if s.auditSink == nil {
+		return nil
+	}
+	event, err := audit.NewEvent(audit.EventInput{
+		PrincipalID: adminPrincipalID(ctx),
+		Role:        string(role),
+		Surface:     audit.SurfaceAdmin,
+		Operation:   operation,
+		Target:      target,
+		Result:      result,
+		Reason:      reason,
+	})
+	if err != nil {
+		return err
+	}
+	return s.auditSink.Record(ctx, event)
+}
+
+func (s *Server) auditReasonForError(err error) string {
+	switch {
+	case errors.Is(err, security.ErrUnauthenticated):
+		return audit.ReasonUnauthenticated
+	case errors.Is(err, security.ErrPermissionDenied):
+		if s.authorizer != nil && s.authorizer.AuthorizationStatus() == security.AuthorizationStatusMissingRole {
+			return audit.ReasonMissingRole
+		}
+		return audit.ReasonPermissionDenied
+	default:
+		return audit.ReasonInternalError
+	}
+}
+
+func auditRequest(r *http.Request, role security.Role) (operation, target string) {
+	path := r.URL.Path
+	if route, ok := adminAuditRoutes[path]; ok {
+		return route.operation, route.target
+	}
+	if strings.HasPrefix(path, "/admin/eviction/plans") {
+		return auditEvictionRequest(r)
+	}
+	if role == security.RoleAdminBreakGlass {
+		return audit.OperationProjectionKeyHook, audit.TargetAdmin
+	}
+	return audit.OperationHealth, audit.TargetAdmin
+}
+
+type auditRoute struct {
+	operation string
+	target    string
+}
+
+var adminAuditRoutes = map[string]auditRoute{
+	"/healthz":                   {operation: audit.OperationHealth, target: audit.TargetAdmin},
+	"/metrics":                   {operation: audit.OperationMetrics, target: audit.TargetMetrics},
+	"/test-hooks/projection-key": {operation: audit.OperationProjectionKeyHook, target: audit.TargetEvidence},
+	"/debug/pprof/":              {operation: audit.OperationPprofIndex, target: audit.TargetProfile},
+	"/debug/pprof/cmdline":       {operation: audit.OperationPprofCmdline, target: audit.TargetProfile},
+	"/debug/pprof/profile":       {operation: audit.OperationPprofProfile, target: audit.TargetProfile},
+	"/debug/pprof/trace":         {operation: audit.OperationPprofTrace, target: audit.TargetProfile},
+	"/debug/pprof/symbol":        {operation: audit.OperationPprofSymbol, target: audit.TargetProfile},
+}
+
+func auditEvictionRequest(r *http.Request) (string, string) {
+	if r.URL.Path == "/admin/eviction/plans" && r.Method == http.MethodPost {
+		return audit.OperationEvictionPlanCreate, audit.TargetBlock
+	}
+	if strings.HasSuffix(r.URL.Path, "/apply") {
+		return audit.OperationEvictionApply, audit.TargetBlock
+	}
+	return audit.OperationEvictionPlanStatus, audit.TargetBlock
+}
+
+func adminPrincipalID(ctx context.Context) string {
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return principal.ID
 }
 
 // getOnly rejects any method other than GET — including HEAD, which net/http's

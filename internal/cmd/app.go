@@ -100,7 +100,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		Metrics:     shardTel.uploadMetrics,
 	}
 
-	securityRuntime, err := newAppSecurityRuntime(cfg, peers)
+	securityRuntime, err := newAppSecurityRuntimeForTelemetry(cfg, peers, logger, telemetryRuntime)
 	if err != nil {
 		return fail(err)
 	}
@@ -162,6 +162,8 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		server.WithIdentifierMode(identifierMode),
 		server.WithLogger(logger.With(telemetryRuntime.logIdentityAttrs()...)),
 		server.WithAuthorizer(securityRuntime.authorizer),
+		server.WithAuditSink(securityRuntime.auditSink),
+		server.WithRateLimiter(securityRuntime.rateLimiter),
 	)
 	server.RegisterHealth(clientGS, s)
 
@@ -188,6 +190,8 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithEvictionHealthProvider(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
 		admin.WithAuthorizer(securityRuntime.authorizer),
+		admin.WithAuditSink(securityRuntime.auditSink),
+		admin.WithRateLimiter(securityRuntime.rateLimiter),
 	}
 	if cfg.TestHooks {
 		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
@@ -217,6 +221,14 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}, nil
 }
 
+func newAppSecurityRuntimeForTelemetry(cfg Config, peers map[uint64]string, logger *slog.Logger, telemetryRuntime *scrapdTelemetryRuntime) (appSecurityRuntime, error) {
+	rateLimitMetrics, err := telemetryRuntime.newRateLimitMetrics()
+	if err != nil {
+		return appSecurityRuntime{}, fmt.Errorf("create rate-limit metrics: %w", err)
+	}
+	return newAppSecurityRuntime(cfg, peers, logger.With(telemetryRuntime.logIdentityAttrs()...), rateLimitMetrics)
+}
+
 func newPeerServer(cfg Config, shard *shard.Shard, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
 	peerOpts := []peer.ServerOption{
 		peer.WithScrubCache(shard),
@@ -229,6 +241,12 @@ func newPeerServer(cfg Config, shard *shard.Shard, securityRuntime appSecurityRu
 			MemberHostname: memberIdentity.MemberHostname,
 			MemberID:       memberIdentity.MemberID,
 		}))
+	}
+	if securityRuntime.auditSink != nil {
+		peerOpts = append(peerOpts, peer.WithAuditSink(securityRuntime.auditSink))
+	}
+	if securityRuntime.rateLimiter != nil {
+		peerOpts = append(peerOpts, peer.WithRateLimiter(securityRuntime.rateLimiter))
 	}
 	return peer.NewServer(cfg.DataDir+"/blocks", peerOpts...)
 }

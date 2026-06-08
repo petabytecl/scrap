@@ -3,11 +3,13 @@ package cmd
 import (
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/security"
 )
@@ -19,6 +21,8 @@ type appSecurityRuntime struct {
 	peerGRPCOptions   []grpc.ServerOption
 	adminTLS          adminTLSConfig
 	authorizer        *security.Authorizer
+	auditSink         audit.Sink
+	rateLimiter       *security.RateLimiter
 }
 
 type adminTLSConfig struct {
@@ -30,7 +34,7 @@ type appAuthorizerConfig struct {
 	authorizer *security.Authorizer
 }
 
-func newAppSecurityRuntime(cfg Config, peers map[uint64]string) (appSecurityRuntime, error) {
+func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Logger, rateObserver security.RateLimitObserver) (appSecurityRuntime, error) {
 	transport, err := newSharedTransport(cfg, peers)
 	if err != nil {
 		return appSecurityRuntime{}, err
@@ -42,7 +46,7 @@ func newAppSecurityRuntime(cfg Config, peers map[uint64]string) (appSecurityRunt
 		return appSecurityRuntime{}, err
 	}
 
-	runtime, err := newAppSecurityRuntimeOptions(cfg)
+	runtime, err := newAppSecurityRuntimeOptions(cfg, logger, rateObserver)
 	if err != nil {
 		peerClient.Close()
 		transport.Close()
@@ -53,12 +57,20 @@ func newAppSecurityRuntime(cfg Config, peers map[uint64]string) (appSecurityRunt
 	return runtime, nil
 }
 
-func newAppSecurityRuntimeOptions(cfg Config) (appSecurityRuntime, error) {
+func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver security.RateLimitObserver) (appSecurityRuntime, error) {
 	authorizerCfg, err := newAppAuthorizer(cfg)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
 	authorizer := authorizerCfg.authorizer
+	auditSink, err := newAppAuditSink(cfg, logger)
+	if err != nil {
+		return appSecurityRuntime{}, err
+	}
+	rateLimiter, err := newAppRateLimiter(cfg, rateObserver)
+	if err != nil {
+		return appSecurityRuntime{}, err
+	}
 	publicGRPCOptions, err := newPublicGRPCServerOptions(cfg, authorizer)
 	if err != nil {
 		return appSecurityRuntime{}, err
@@ -76,6 +88,8 @@ func newAppSecurityRuntimeOptions(cfg Config) (appSecurityRuntime, error) {
 		peerGRPCOptions:   peerGRPCOptions,
 		adminTLS:          adminTLS,
 		authorizer:        authorizer,
+		auditSink:         auditSink,
+		rateLimiter:       rateLimiter,
 	}, nil
 }
 
@@ -88,6 +102,27 @@ func newAppAuthorizer(cfg Config) (appAuthorizerConfig, error) {
 		return appAuthorizerConfig{}, fmt.Errorf("role policy: %w", err)
 	}
 	return appAuthorizerConfig{authorizer: security.NewAuthorizer(policy)}, nil
+}
+
+func newAppAuditSink(cfg Config, logger *slog.Logger) (audit.Sink, error) {
+	if !cfg.SecurityMode.IsProduction() {
+		return audit.NewNopSink(), nil
+	}
+	if _, err := audit.LoadPolicy(cfg.ProductionGates.AuditSink.PolicyPath); err != nil {
+		return nil, fmt.Errorf("audit policy: %w", err)
+	}
+	return audit.NewLoggerSink(logger), nil
+}
+
+func newAppRateLimiter(cfg Config, observer security.RateLimitObserver) (*security.RateLimiter, error) {
+	if !cfg.SecurityMode.IsProduction() {
+		return security.NewRateLimiter(security.RateLimitPolicy{}), nil
+	}
+	policy, err := security.LoadRateLimitPolicy(cfg.ProductionGates.RateLimits.PolicyPath)
+	if err != nil {
+		return nil, fmt.Errorf("rate-limit policy: %w", err)
+	}
+	return security.NewRateLimiter(policy, security.WithRateLimitObserver(observer)), nil
 }
 
 func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransport, error) {

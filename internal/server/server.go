@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 	"github.com/petabytecl/scrap/internal/telemetry"
@@ -29,6 +30,8 @@ type documentServer struct {
 	identifierMode telemetry.IdentifierMode
 	logger         *slog.Logger
 	authorizer     *security.Authorizer
+	auditSink      audit.Sink
+	rateLimiter    *security.RateLimiter
 }
 
 func Register(gs *grpc.Server, s storeapi.Store, opts ...Option) {
@@ -50,7 +53,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
 
-	if err := s.requireRole(ctx, security.RoleDocumentWriter); err != nil {
+	if err := s.requireSecurity(ctx, security.RoleDocumentWriter, audit.OperationWriteDocument); err != nil {
 		rpcCode = status.Code(err)
 		return err
 	}
@@ -156,7 +159,7 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
 
-	if err := s.requireRole(ctx, security.RoleDocumentReader); err != nil {
+	if err := s.requireSecurity(ctx, security.RoleDocumentReader, audit.OperationHeadDocument); err != nil {
 		rpcCode = status.Code(err)
 		return nil, err
 	}
@@ -187,7 +190,7 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
 
-	if err := s.requireRole(ctx, security.RoleDocumentReader); err != nil {
+	if err := s.requireSecurity(ctx, security.RoleDocumentReader, audit.OperationReadDocument); err != nil {
 		rpcCode = status.Code(err)
 		return err
 	}
@@ -251,7 +254,7 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 	rpcCode := codes.OK
 	defer func() { rpc.Finish(rpcCode) }()
 
-	if err := s.requireRole(ctx, security.RoleDocumentReader); err != nil {
+	if err := s.requireSecurity(ctx, security.RoleDocumentReader, audit.OperationFindDocuments); err != nil {
 		rpcCode = status.Code(err)
 		return nil, err
 	}
@@ -282,6 +285,73 @@ func (s *documentServer) requireRole(ctx context.Context, role security.Role) er
 		return nil
 	}
 	return s.authorizer.Authorize(ctx, role)
+}
+
+func (s *documentServer) requireSecurity(ctx context.Context, role security.Role, operation string) error {
+	if decision := s.checkRateLimit(ctx, operation); decision.Limited {
+		if err := s.recordAudit(ctx, role, operation, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
+			return status.Error(codes.Internal, "audit event failed")
+		}
+		return security.RateLimitedError()
+	}
+	if err := s.requireRole(ctx, role); err != nil {
+		if auditErr := s.recordAudit(ctx, role, operation, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+			return status.Error(codes.Internal, "audit event failed")
+		}
+		return err
+	}
+	if err := s.recordAudit(ctx, role, operation, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+		return status.Error(codes.Internal, "audit event failed")
+	}
+	return nil
+}
+
+func (s *documentServer) checkRateLimit(ctx context.Context, operation string) security.RateLimitDecision {
+	if s.rateLimiter == nil {
+		return security.RateLimitDecision{}
+	}
+	return s.rateLimiter.Allow(ctx, security.RateLimitSurfacePublic, principalIDFromContext(ctx), operation)
+}
+
+func (s *documentServer) recordAudit(ctx context.Context, role security.Role, operation, result, reason string) error {
+	if s.auditSink == nil {
+		return nil
+	}
+	event, err := audit.NewEvent(audit.EventInput{
+		PrincipalID: principalIDFromContext(ctx),
+		Role:        string(role),
+		Surface:     audit.SurfacePublic,
+		Operation:   operation,
+		Target:      audit.TargetDocument,
+		Result:      result,
+		Reason:      reason,
+	})
+	if err != nil {
+		return err
+	}
+	return s.auditSink.Record(ctx, event)
+}
+
+func (s *documentServer) auditReasonForError(err error) string {
+	switch {
+	case errors.Is(err, security.ErrUnauthenticated):
+		return audit.ReasonUnauthenticated
+	case errors.Is(err, security.ErrPermissionDenied):
+		if s.authorizer != nil && s.authorizer.AuthorizationStatus() == security.AuthorizationStatusMissingRole {
+			return audit.ReasonMissingRole
+		}
+		return audit.ReasonPermissionDenied
+	default:
+		return audit.ReasonInternalError
+	}
+}
+
+func principalIDFromContext(ctx context.Context) string {
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return principal.ID
 }
 
 func (s *documentServer) mapStoreError(ctx context.Context, method string, err error) error {

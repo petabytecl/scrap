@@ -255,6 +255,8 @@ func (e *AuthorizationError) GRPCStatus() *status.Status {
 		return status.New(codes.Unauthenticated, e.message)
 	case errors.Is(e.cause, ErrPermissionDenied):
 		return status.New(codes.PermissionDenied, e.message)
+	case errors.Is(e.cause, ErrRateLimited):
+		return status.New(codes.ResourceExhausted, e.message)
 	default:
 		return status.New(codes.Internal, "authorization failed")
 	}
@@ -267,6 +269,8 @@ func HTTPStatusForAuthorization(err error) int {
 		return http.StatusUnauthorized
 	case errors.Is(err, ErrPermissionDenied):
 		return http.StatusForbidden
+	case errors.Is(err, ErrRateLimited):
+		return http.StatusTooManyRequests
 	default:
 		return http.StatusInternalServerError
 	}
