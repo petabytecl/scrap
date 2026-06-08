@@ -57,6 +57,7 @@ type Server struct {
 	evictionHealth     EvictionHealthProvider
 	securityMode       security.Mode
 	readiness          security.Readiness
+	authorizer         *security.Authorizer
 	logger             *slog.Logger
 }
 
@@ -103,6 +104,12 @@ func WithSecurityStatus(mode security.Mode, readiness security.Readiness) Option
 	}
 }
 
+func WithAuthorizer(authorizer *security.Authorizer) Option {
+	return func(s *Server) {
+		s.authorizer = authorizer
+	}
+}
+
 func New(opts ...Option) *Server {
 	s := &Server{}
 	for _, opt := range opts {
@@ -115,7 +122,7 @@ func New(opts ...Option) *Server {
 		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
 	}
 	if s.metricsHandler != nil {
-		mux.Handle("/metrics", s.metricsHandler)
+		mux.Handle("/metrics", s.authorizedHandler(security.RoleAdminReader, s.metricsHandler))
 	}
 	if s.evictionPlanner != nil {
 		mux.HandleFunc("/admin/eviction/plans", s.handleEvictionPlans)
@@ -127,18 +134,62 @@ func New(opts ...Option) *Server {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
 		// method, including HEAD — which net/http's ServeMux otherwise routes to a
 		// GET handler, so HEAD /debug/pprof/profile would still start CPU collection.
-		mux.HandleFunc("/debug/pprof/", getOnly(pprof.Index))
-		mux.HandleFunc("/debug/pprof/cmdline", getOnly(pprof.Cmdline))
-		mux.HandleFunc("/debug/pprof/profile", getOnly(pprof.Profile))
-		mux.HandleFunc("/debug/pprof/trace", getOnly(pprof.Trace))
+		mux.HandleFunc("/debug/pprof/", s.authorizedPprof(getOnly(pprof.Index)))
+		mux.HandleFunc("/debug/pprof/cmdline", s.authorizedFunc(security.RoleAdminReader, getOnly(pprof.Cmdline)))
+		mux.HandleFunc("/debug/pprof/profile", s.authorizedFunc(security.RoleAdminBreakGlass, getOnly(pprof.Profile)))
+		mux.HandleFunc("/debug/pprof/trace", s.authorizedFunc(security.RoleAdminBreakGlass, getOnly(pprof.Trace)))
 		// /symbol is exempt from getOnly: unlike the endpoints above it has no side
 		// effects (it's a stateless PC→name lookup), and `go tool pprof` POSTs the
 		// address list in the request body whenever it exceeds URL length limits.
 		// Gating it to GET would return 405 and silently break symbolization.
-		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/symbol", s.authorizedFunc(security.RoleAdminReader, pprof.Symbol))
 	}
 	s.handler = mux
 	return s
+}
+
+func (s *Server) authorizedHandler(role security.Role, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorize(w, r, role) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) authorizedFunc(role security.Role, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorize(w, r, role) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role := security.RoleAdminReader
+		switch r.URL.Path {
+		case "/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/symbol":
+		default:
+			role = security.RoleAdminBreakGlass
+		}
+		if !s.authorize(w, r, role) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security.Role) bool {
+	if s.authorizer == nil {
+		return true
+	}
+	if err := s.authorizer.AuthorizeHTTPRequest(r, role); err != nil {
+		http.Error(w, err.Error(), security.HTTPStatusForAuthorization(err))
+		return false
+	}
+	return true
 }
 
 // getOnly rejects any method other than GET — including HEAD, which net/http's
@@ -226,6 +277,9 @@ type projectionKeyRequest struct {
 }
 
 func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request) {
+	if !s.authorize(w, r, security.RoleAdminBreakGlass) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -255,6 +309,7 @@ type healthResponse struct {
 	SecurityMode            string         `json:"security_mode,omitempty"`
 	ProductionReadyStatus   string         `json:"production_readiness_status,omitempty"`
 	ProductionReadyReason   string         `json:"production_readiness_reason,omitempty"`
+	AuthorizationStatus     string         `json:"authorization_status,omitempty"`
 	UploadPressure          string         `json:"upload_pressure"`
 	UploadPressureLevel     int            `json:"upload_pressure_level"`
 	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
@@ -271,14 +326,12 @@ type healthResponse struct {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if marker := r.Header.Get(evidenceMarkerHeader); marker != "" {
-		if !validEvidenceMarker(marker) {
-			http.Error(w, "invalid evidence marker", http.StatusBadRequest)
-			return
-		}
-		if s.logger != nil {
-			s.logger.InfoContext(r.Context(), evidenceLogProbeMessage, evidenceLogProbeAttribute, marker)
-		}
+	if !s.authorize(w, r, security.RoleAdminReader) {
+		return
+	}
+
+	if !s.handleEvidenceMarker(w, r) {
+		return
 	}
 
 	resp := healthResponse{
@@ -287,6 +340,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		UploadPressureLevel: 0,
 		EvictionPressure:    eviction.HealthPressureOK,
 	}
+	s.applySecurityHealth(&resp)
+	s.applyUploadPressure(&resp)
+	s.applyEvictionHealth(r.Context(), &resp)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "encode health response failed", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (s *Server) handleEvidenceMarker(w http.ResponseWriter, r *http.Request) bool {
+	marker := r.Header.Get(evidenceMarkerHeader)
+	if marker == "" {
+		return true
+	}
+	if !validEvidenceMarker(marker) {
+		http.Error(w, "invalid evidence marker", http.StatusBadRequest)
+		return false
+	}
+	if s.logger != nil {
+		s.logger.InfoContext(r.Context(), evidenceLogProbeMessage, evidenceLogProbeAttribute, marker)
+	}
+	return true
+}
+
+func (s *Server) applySecurityHealth(resp *healthResponse) {
 	if s.securityMode != "" {
 		readiness := s.readiness
 		if readiness.Status == "" {
@@ -296,6 +376,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.ProductionReadyStatus = string(readiness.Status)
 		resp.ProductionReadyReason = readiness.Reason
 	}
+	resp.AuthorizationStatus = s.authorizationStatus()
+}
+
+func (s *Server) applyUploadPressure(resp *healthResponse) {
 	if s.uploadPressure != nil {
 		level, levelName, pendingBytes, pendingBlocks := s.uploadPressure.UploadPressureSnapshot()
 		resp.UploadPressureLevel = level
@@ -303,22 +387,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.UploadPendingBytes = pendingBytes
 		resp.UploadPendingBlocks = pendingBlocks
 	}
+}
+
+func (s *Server) applyEvictionHealth(ctx context.Context, resp *healthResponse) {
 	if s.evictionHealth != nil {
-		snapshot, err := s.evictionHealth.EvictionHealthSnapshot(r.Context())
+		snapshot, err := s.evictionHealth.EvictionHealthSnapshot(ctx)
 		if err != nil {
 			resp.Status = "degraded"
 			resp.EvictionPressure = eviction.HealthPressureDegraded
 			resp.RestoreFailuresByReason = map[string]int{eviction.RestoreFailureUnknown: 1}
 		} else {
-			applyEvictionHealthSnapshot(&resp, snapshot)
+			applyEvictionHealthSnapshot(resp, snapshot)
 		}
 	}
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		http.Error(w, "encode health response failed", http.StatusInternalServerError)
-		return
+func (s *Server) authorizationStatus() string {
+	if s.authorizer == nil {
+		return ""
 	}
+	return s.authorizer.AuthorizationStatus()
 }
 
 func applyEvictionHealthSnapshot(resp *healthResponse, snapshot eviction.HealthSnapshot) {

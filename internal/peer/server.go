@@ -20,6 +20,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 // sha256DigestLen is the byte length of an SHA-256 digest.
@@ -53,15 +54,24 @@ func WithReplicationSink(sink ReplicationSink) ServerOption {
 	}
 }
 
+func WithAuthorizer(authorizer *security.Authorizer, expected security.PeerIdentityConfig) ServerOption {
+	return func(s *Server) {
+		s.authorizer = authorizer
+		s.expectedPeerIdentity = expected
+	}
+}
+
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
-	blocksDir       string
-	scrubCache      scrub.ResultCache
-	rebuildHandler  RebuildHandler
-	replicationSink ReplicationSink
-	raftRouter      atomic.Pointer[RaftRouter]
-	mu              sync.Mutex
-	writers         map[uint64]*blockState
+	blocksDir            string
+	scrubCache           scrub.ResultCache
+	rebuildHandler       RebuildHandler
+	replicationSink      ReplicationSink
+	authorizer           *security.Authorizer
+	expectedPeerIdentity security.PeerIdentityConfig
+	raftRouter           atomic.Pointer[RaftRouter]
+	mu                   sync.Mutex
+	writers              map[uint64]*blockState
 }
 
 func (s *Server) SetRaftRouter(router RaftRouter) {
@@ -120,6 +130,10 @@ func (s *Server) getOrCreateBlock(blockID, shardID uint64) (*blockState, error) 
 }
 
 func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse]) error {
+	if err := s.authorizePeer(stream.Context()); err != nil {
+		return err
+	}
+
 	first, err := stream.Recv()
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "receive init: %v", err)
@@ -233,6 +247,9 @@ func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateD
 }
 
 func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftRequest) (*scrapv1.ForwardRaftResponse, error) {
+	if err := s.authorizePeer(ctx); err != nil {
+		return nil, err
+	}
 	router := s.raftRouter.Load()
 	if router == nil {
 		return nil, status.Error(codes.FailedPrecondition, "raft router not configured")
@@ -248,6 +265,9 @@ func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftReques
 }
 
 func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse]) error {
+	if err := s.authorizePeer(stream.Context()); err != nil {
+		return err
+	}
 	router := s.raftRouter.Load()
 	if router == nil {
 		return status.Error(codes.FailedPrecondition, "raft router not configured")
@@ -266,6 +286,9 @@ func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.Forwa
 }
 
 func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestIndexRebuildRequest) (*scrapv1.RequestIndexRebuildResponse, error) {
+	if err := s.authorizePeer(ctx); err != nil {
+		return nil, err
+	}
 	if s.rebuildHandler == nil {
 		return nil, status.Error(codes.FailedPrecondition, "rebuild handler not configured")
 	}
@@ -278,7 +301,10 @@ func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestInde
 	}, nil
 }
 
-func (s *Server) ConsistencyCheck(_ context.Context, req *scrapv1.ConsistencyCheckRequest) (*scrapv1.ConsistencyCheckResponse, error) {
+func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyCheckRequest) (*scrapv1.ConsistencyCheckResponse, error) {
+	if err := s.authorizePeer(ctx); err != nil {
+		return nil, err
+	}
 	if s.scrubCache == nil {
 		return nil, status.Error(codes.NotFound, "scrub cache not configured")
 	}
@@ -291,6 +317,34 @@ func (s *Server) ConsistencyCheck(_ context.Context, req *scrapv1.ConsistencyChe
 		AppliedIndex: result.AppliedIndex,
 		Sha256:       result.SHA256[:],
 	}, nil
+}
+
+func (s *Server) authorizePeer(ctx context.Context) error {
+	if s.authorizer == nil {
+		return nil
+	}
+	if err := s.authorizer.Authorize(ctx, security.RolePeerMember); err != nil {
+		return err
+	}
+	identity, ok := security.PeerIdentityFromContext(ctx)
+	if !ok {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
+		return security.UnauthenticatedError("verified peer identity is required")
+	}
+	if identity.CellID != s.expectedPeerIdentity.CellID {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+		return security.PermissionDeniedError("peer identity mismatch")
+	}
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
+		return security.UnauthenticatedError("verified peer identity is required")
+	}
+	if principal.ID != security.PeerIdentityPrincipalID(identity) {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+		return security.PermissionDeniedError("peer identity mismatch")
+	}
+	return nil
 }
 
 // Close flushes and closes every block and index writer the server owns. It is

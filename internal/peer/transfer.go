@@ -27,6 +27,10 @@ const (
 )
 
 func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.ServerStreamingServer[scrapv1.TransferBlockResponse]) error {
+	if err := s.authorizePeer(stream.Context()); err != nil {
+		return err
+	}
+
 	blockID := req.GetBlockId()
 	blkPath := filepath.Join(s.blocksDir, fmt.Sprintf("%016x.blk", blockID))
 	idxPath := filepath.Join(s.blocksDir, fmt.Sprintf("%016x.idx", blockID))

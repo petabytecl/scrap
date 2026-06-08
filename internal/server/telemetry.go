@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	grpccodes "google.golang.org/grpc/codes"
 
+	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
@@ -58,6 +59,13 @@ func WithLogger(logger *slog.Logger) Option {
 		if logger != nil {
 			s.logger = logger.With("component", "server")
 		}
+	}
+}
+
+// WithAuthorizer enables role authorization for Document RPC handlers.
+func WithAuthorizer(authorizer *security.Authorizer) Option {
+	return func(s *documentServer) {
+		s.authorizer = authorizer
 	}
 }
 

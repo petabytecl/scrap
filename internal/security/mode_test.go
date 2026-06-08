@@ -148,6 +148,19 @@ func validProductionGateConfig(t *testing.T) StartupGateConfig {
 			"admin_operator",
 			"admin_break_glass",
 		},
+		"principals": []map[string]any{
+			{
+				"id": "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+				"roles": []string{
+					"document_writer",
+					"document_reader",
+					"peer_member",
+					"admin_reader",
+					"admin_operator",
+					"admin_break_glass",
+				},
+			},
+		},
 	})
 	peerIdentityPolicyPath := writeJSONFixture(t, dir, "peer-identity.json", map[string]any{
 		"cell_id":         "cell-a",

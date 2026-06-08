@@ -1,0 +1,182 @@
+package admin_test
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/security"
+)
+
+func TestAdminAuthorizationDeniesOperatorEndpointBeforeSideEffect(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	applier := &recordingEvictionApplier{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithEvictionApplier(applier))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodPost, "/admin/eviction/plans/plan-1/apply", bytes.NewReader([]byte(`{}`)))
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.Code)
+	}
+	if applier.calls != 0 {
+		t.Fatalf("applier calls = %d, want 0", applier.calls)
+	}
+}
+
+func TestAdminAuthorizationDeniesPlannerBeforeSideEffect(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	planner := &recordingEvictionPlanner{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithEvictionPlanner(planner))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodPost, "/admin/eviction/plans", bytes.NewReader([]byte(`{}`)))
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.Code)
+	}
+	if planner.calls != 0 {
+		t.Fatalf("planner calls = %d, want 0", planner.calls)
+	}
+}
+
+func TestAdminAuthorizationAllowsReaderStatusEndpoint(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	status := &recordingEvictionStatusProvider{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithEvictionPlanStatusProvider(status))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodGet, "/admin/eviction/plans/plan-1", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+	if status.calls != 1 {
+		t.Fatalf("status provider calls = %d, want 1", status.calls)
+	}
+}
+
+func TestAdminAuthorizationDeniesMetricsBeforeHandler(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	calls := 0
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithMetrics(metrics))
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+	if calls != 0 {
+		t.Fatalf("metrics calls = %d, want 0", calls)
+	}
+}
+
+func TestAdminAuthorizationDeniesBreakGlassEndpointsBeforeSideEffect(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	injector := &projectionInjectorStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithProjectionInjector(injector), admin.WithPprof())
+
+	hookReq := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodPost, "/test-hooks/projection-key", bytes.NewReader([]byte(`{}`)))
+	hookResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(hookResp, hookReq)
+
+	if hookResp.Code != http.StatusForbidden {
+		t.Fatalf("hook status = %d, want 403", hookResp.Code)
+	}
+	if injector.txID != "" || injector.blockID != 0 || injector.docCount != 0 || injector.completed {
+		t.Fatalf("projection injector was called: %+v", injector)
+	}
+
+	profileReq := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodGet, "/debug/pprof/profile", nil)
+	profileResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(profileResp, profileReq)
+
+	if profileResp.Code != http.StatusForbidden {
+		t.Fatalf("profile status = %d, want 403", profileResp.Code)
+	}
+}
+
+func TestAdminAuthorizationAllowsReaderEndpoint(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	srv := admin.New(admin.WithAuthorizer(authz))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+}
+
+func TestAdminHealthReportsBoundedAuthorizationStatus(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	authz.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+	srv := admin.New(admin.WithAuthorizer(authz))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"authorization_status":"mismatch"`) {
+		t.Fatalf("health body missing bounded authorization status: %s", resp.Body.String())
+	}
+}
+
+func adminAuthContext(roles ...security.Role) context.Context {
+	return security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "admin",
+		Roles: security.NewRoleSet(roles...),
+	})
+}
+
+type recordingEvictionPlanner struct {
+	calls int
+}
+
+func (p *recordingEvictionPlanner) CreateEvictionPlan(context.Context, eviction.PlanRequest) (eviction.Plan, error) {
+	p.calls++
+	return eviction.Plan{PlanID: "plan-1"}, nil
+}
+
+type recordingEvictionApplier struct {
+	calls int
+}
+
+func (a *recordingEvictionApplier) ApplyEvictionPlan(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
+	a.calls++
+	return eviction.ApplyResult{}, errors.New("should not be called")
+}
+
+type recordingEvictionStatusProvider struct {
+	calls int
+}
+
+func (p *recordingEvictionStatusProvider) EvictionPlanStatus(context.Context, string) (eviction.PlanStatus, error) {
+	p.calls++
+	return eviction.PlanStatus{PlanID: "plan-1", Status: eviction.PlanStatusPending}, nil
+}
