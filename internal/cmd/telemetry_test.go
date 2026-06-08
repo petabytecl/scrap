@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
@@ -47,6 +48,14 @@ func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
 	if cfg.ShardID != 7 {
 		t.Fatalf("ShardID = %d, want 7", cfg.ShardID)
 	}
+}
+
+func TestScrapdTelemetryResourceConfigIncludesSecurityStatus(t *testing.T) {
+	cfg := scrapdTelemetryResourceConfigWithSecurity("scrapd-0", "member-123", 3, 7, BuildInfo{}, security.ModeDevelopment)
+
+	assertString(t, "SecurityMode", cfg.SecurityMode, "development")
+	assertString(t, "ProductionReadinessStatus", cfg.ProductionReadinessStatus, "not_ready")
+	assertString(t, "ProductionReadinessReason", cfg.ProductionReadinessReason, "non_production_security_mode")
 }
 
 func TestScrapdTelemetryResourceConfigDefaultsLocalIdentity(t *testing.T) {
@@ -191,7 +200,7 @@ func TestResolveScrapdTelemetryMemberIDRejectsInvalidDurableRecord(t *testing.T)
 func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -212,7 +221,7 @@ func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 func TestNewShardTelemetryIncludesEvictionMetrics(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -230,7 +239,7 @@ func TestNewShardTelemetryIncludesEvictionMetrics(t *testing.T) {
 func TestEvictionMetricsPrometheusNamesMatchEvidenceQueries(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -286,7 +295,7 @@ func prometheusMetricNameFound(body, name string) bool {
 func TestNewScrapdTelemetryForHostInitializesRuntime(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetryForHost(context.Background(), t.TempDir(), 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryForHost(context.Background(), t.TempDir(), 1, 0, BuildInfo{}, security.ModeDevelopment)
 	if err != nil {
 		t.Fatalf("newScrapdTelemetryForHost: %v", err)
 	}
@@ -319,7 +328,7 @@ func TestNewScrapdTelemetrySkipsOTLPWhenEndpointUnset(t *testing.T) {
 	}
 	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -354,7 +363,7 @@ func TestNewScrapdTelemetryGatesSignalsIndependently(t *testing.T) {
 	}
 	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -388,7 +397,7 @@ func TestNewScrapdTelemetryUsesRPCDurationSecondBuckets(t *testing.T) {
 	t.Cleanup(func() { scrapdTelemetryPipeline = previous })
 
 	ctx := context.Background()
-	rt, err := newScrapdTelemetry(ctx, "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(ctx, "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}
@@ -415,7 +424,7 @@ func TestNewScrapdTelemetryUsesRPCDurationSecondBuckets(t *testing.T) {
 func TestScrapdTelemetryPrometheusScrapeSurvivesInFlightGaugeUnderTrace(t *testing.T) {
 	stubScrapdTelemetryPipeline(t)
 
-	rt, err := newScrapdTelemetry(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{})
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
 	if err != nil {
 		t.Fatalf("newScrapdTelemetry: %v", err)
 	}

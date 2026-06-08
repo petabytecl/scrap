@@ -35,6 +35,8 @@ spec:
               value: stress
             - name: SCRAP_CELL_ID
               value: kind-stress
+            - name: SCRAP_SECURITY_MODE
+              value: development
             - name: SCRAP_PPROF_ENABLED
               value: "true"
             - name: SCRAP_LOG_LEVEL

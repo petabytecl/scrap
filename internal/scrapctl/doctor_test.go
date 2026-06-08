@@ -50,6 +50,8 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+const productionReadyHealthBody = `{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0,"security_mode":"production","production_readiness_status":"ready"}`
+
 func TestDoctorReportsCiliumKubeProxyReplacementFailure(t *testing.T) {
 	runner := successfulDoctorRunner()
 	runner.run = func(name string, args ...string) (string, error) {
@@ -62,7 +64,7 @@ func TestDoctorReportsCiliumKubeProxyReplacementFailure(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"doctor", "--output=json"}, &out, io.Discard, Deps{
 		Runner:     runner,
-		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		HTTPClient: healthClient(productionReadyHealthBody),
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return &fakeConn{}, nil
 		},
@@ -83,7 +85,7 @@ func TestDoctorUsesReadOnlyKubectlOperations(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"doctor", "--output=json"}, &out, io.Discard, Deps{
 		Runner:     runner,
-		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		HTTPClient: healthClient(productionReadyHealthBody),
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return &fakeConn{}, nil
 		},
@@ -113,7 +115,7 @@ func TestDoctorFailsWhenAbsenceCheckCannotReachAPIServer(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"doctor", "--output=json"}, &out, io.Discard, Deps{
 		Runner:     runner,
-		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		HTTPClient: healthClient(productionReadyHealthBody),
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return &fakeConn{}, nil
 		},
@@ -133,7 +135,7 @@ func TestDoctorPassesKubeconfigAndContextToKubectl(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"doctor", "--output=json", "--context=kind-scrap-prodlike", "--kubeconfig=/tmp/kubeconfig"}, &out, io.Discard, Deps{
 		Runner:     runner,
-		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		HTTPClient: healthClient(productionReadyHealthBody),
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return &fakeConn{}, nil
 		},
@@ -164,7 +166,7 @@ func TestDoctorRolloutChecksUseRolloutTimeout(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"doctor", "--output=json", "--rollout-timeout=3m", "--timeout=10s"}, &out, io.Discard, Deps{
 		Runner:     runner,
-		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		HTTPClient: healthClient(productionReadyHealthBody),
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return &fakeConn{}, nil
 		},
@@ -204,11 +206,31 @@ func TestDoctorRejectsUnsupportedOutput(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsNonProductionReadinessFailure(t *testing.T) {
+	var out bytes.Buffer
+	err := Run([]string{"doctor", "--output=json"}, &out, io.Discard, Deps{
+		Runner:     successfulDoctorRunner(),
+		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0,"security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode"}`),
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return &fakeConn{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("doctor should fail production readiness for development security mode")
+	}
+	got := out.String()
+	for _, want := range []string{`"name":"admin.health"`, `"name":"production.readiness"`, `"reason":"non_production_security_mode"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in output:\n%s", want, got)
+		}
+	}
+}
+
 func TestDoctorTextOutput(t *testing.T) {
 	var out bytes.Buffer
 	err := Run([]string{"doctor"}, &out, io.Discard, Deps{
 		Runner:     successfulDoctorRunner(),
-		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0}`),
+		HTTPClient: healthClient(productionReadyHealthBody),
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return &fakeConn{}, nil
 		},
@@ -269,6 +291,22 @@ func TestStatusTextOutput(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "UploadPressure:ok") {
 		t.Fatalf("unexpected text output:\n%s", out.String())
+	}
+}
+
+func TestStatusReportsSecurityModeFields(t *testing.T) {
+	var out bytes.Buffer
+	err := Run([]string{"status", "--output=json"}, &out, io.Discard, Deps{
+		HTTPClient: healthClient(`{"status":"ok","upload_pressure":"ok","upload_pressure_level":0,"upload_pending_bytes":0,"upload_pending_blocks":0,"security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode"}`),
+	})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{`"security_mode":"test"`, `"production_readiness_status":"not_ready"`, `"production_readiness_reason":"non_production_security_mode"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in output:\n%s", want, got)
+		}
 	}
 }
 

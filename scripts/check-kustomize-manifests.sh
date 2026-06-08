@@ -92,6 +92,7 @@ require '../../components/stress-tuning' deploy/kustomize/environments/evidence/
 
 reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "NodePort service in base render"
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
+reject 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$base_render" "security mode in base render"
 
 require 'healthcheck' "$base_render" "in-container healthcheck probe"
 require 'scrap\.v1-readiness' "$base_render" "readiness healthcheck service"
@@ -107,10 +108,16 @@ require 'memory:[[:space:]]*"?512Mi"?' "$statefulset_render" "scrapd memory limi
 
 require '^[[:space:]]*nodePort:[[:space:]]*30090[[:space:]]*$' "$local_kind_render" "local-kind client NodePort"
 require '^[[:space:]]*nodePort:[[:space:]]*30100[[:space:]]*$' "$local_kind_render" "local-kind metrics NodePort"
+require 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$local_kind_render" "explicit local security mode"
+require 'value:[[:space:]]*development' "$local_kind_render" "local development security mode"
 require 'kind:[[:space:]]*Service' "$evidence_render" "evidence S.C.R.A.P. workload"
 require 'localstack' "$evidence_render" "evidence LocalStack workload"
 require 'SCRAP_ENVIRONMENT' "$evidence_render" "evidence environment marker"
+require 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$evidence_render" "explicit evidence security mode"
+require 'value:[[:space:]]*development' "$evidence_render" "evidence development security mode"
 require 'SCRAP_CELL_ID' "$prodlike_render" "prod-like Cell ID marker"
+require 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$prodlike_render" "explicit prod-like security mode"
+require 'value:[[:space:]]*development' "$prodlike_render" "prod-like development security mode"
 require 'NetworkPolicy' "$prodlike_render" "prod-like NetworkPolicy"
 reject 'name:[[:space:]]*otel-collector' "$evidence_render" "evidence stack in S.C.R.A.P. workload render"
 require 'name:[[:space:]]*otel-collector' "$evidence_stack_render" "evidence stack collector"

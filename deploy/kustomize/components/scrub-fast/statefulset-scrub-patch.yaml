@@ -23,6 +23,8 @@ spec:
               value: "1s"
             - name: SCRAP_SCRUB_JITTER
               value: "0"
+            - name: SCRAP_SECURITY_MODE
+              value: test
             - name: SCRAP_TEST_HOOKS
               value: "1"
           args:

@@ -44,6 +44,27 @@ func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) 
 	assertBundleCheck(t, result.Gate, "logs_captured", true)
 	assertBundleCheck(t, result.Gate, "cpu_profile_captured", true)
 	assertBundleCheck(t, result.Gate, "heap_profile_captured", true)
+	assertEvidenceProbeHealthIncludesSecurityMode(t, result.BundlePath)
+}
+
+func assertEvidenceProbeHealthIncludesSecurityMode(t *testing.T, root string) {
+	t.Helper()
+
+	var health struct {
+		SecurityMode              string `json:"security_mode"`
+		ProductionReadinessStatus string `json:"production_readiness_status"`
+		ProductionReadinessReason string `json:"production_readiness_reason"`
+	}
+	readBundleJSON(t, root, "logs/evidence-probe-health.json", &health)
+	if health.SecurityMode != "development" {
+		t.Fatalf("security_mode = %q, want development", health.SecurityMode)
+	}
+	if health.ProductionReadinessStatus != "not_ready" {
+		t.Fatalf("production_readiness_status = %q, want not_ready", health.ProductionReadinessStatus)
+	}
+	if health.ProductionReadinessReason != "non_production_security_mode" {
+		t.Fatalf("production_readiness_reason = %q, want non_production_security_mode", health.ProductionReadinessReason)
+	}
 }
 
 func TestGenerateWritesEvictionCampaignEvidence(t *testing.T) {
@@ -316,7 +337,7 @@ func (p fakeAdminProbe) Emit(context.Context, AdminProbeRequest) (AdminProbeResu
 	if p.failed {
 		return AdminProbeResult{Body: []byte(`{"error":"admin evidence log probe failed"}`)}, errors.New("probe failed")
 	}
-	return AdminProbeResult{Body: []byte(`{"status":"ok"}`)}, nil
+	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode"}`)}, nil
 }
 
 type fakeEvidenceTransport struct {

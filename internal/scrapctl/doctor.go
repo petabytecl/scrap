@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 const (
@@ -27,6 +29,9 @@ func runDoctor(args []string, stdout io.Writer, deps Deps) error {
 
 	health, healthCheck := fetchHealthCheck(context.Background(), opts, deps)
 	checks = append(checks, healthCheck)
+	if health != nil {
+		checks = append(checks, productionReadinessCheck(health))
+	}
 
 	status := "ok"
 	if reportFailed(checks) {
@@ -49,6 +54,21 @@ func runDoctor(args []string, stdout io.Writer, deps Deps) error {
 		return errors.New("doctor checks failed")
 	}
 	return nil
+}
+
+func productionReadinessCheck(health *Health) Check {
+	switch health.ProductionReadyStatus {
+	case string(security.ReadinessStatusReady):
+		return Check{Name: "production.readiness", Status: "ok"}
+	case "":
+		return Check{Name: "production.readiness", Status: "fail", Reason: "missing_production_readiness_status"}
+	default:
+		reason := health.ProductionReadyReason
+		if reason == "" {
+			reason = "status=" + health.ProductionReadyStatus
+		}
+		return Check{Name: "production.readiness", Status: "fail", Reason: reason}
+	}
 }
 
 func hostChecks(ctx context.Context, opts commonOptions, deps Deps) []Check {
