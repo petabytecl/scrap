@@ -15,6 +15,7 @@ const (
 	idxVersion        = 1
 	idxHeaderLen      = 12
 	idxEntryVersion   = 0x01
+	idxEntryVersionV2 = 0x02
 	idxMinEntryLen    = 2  // version + reserved
 	idxLenPrefixSize  = 2  // uint16 length prefix for strings
 	idxFixedFieldSize = 60 // created_at(8) + first_frame_off(8) + frame_count(4) + total_bytes(8) + sha256(32)
@@ -33,14 +34,15 @@ var (
 )
 
 type IndexEntry struct {
-	TransactionID string
-	DocName       string
-	ContentType   string
-	CreatedAt     time.Time
-	FirstFrameOff int64
-	FrameCount    uint32
-	TotalBytes    int64
-	SHA256        [32]byte
+	TransactionID      string
+	DocName            string
+	ContentType        string
+	CreatedAt          time.Time
+	FirstFrameOff      int64
+	FrameCount         uint32
+	TotalBytes         int64
+	SHA256             [32]byte
+	EncryptionEnvelope []byte
 }
 
 type IndexWriter struct {
@@ -281,10 +283,17 @@ func encodeIndexEntry(e IndexEntry) []byte {
 	ctBytes := []byte(e.ContentType)
 
 	size := idxMinEntryLen + (uint16Size + len(txIDBytes)) + (uint16Size + len(docNameBytes)) + (uint16Size + len(ctBytes)) + uint64Size + uint64Size + uint32Size + uint64Size + sha256Size
+	if len(e.EncryptionEnvelope) > 0 {
+		size += uint16Size + len(e.EncryptionEnvelope)
+	}
 	buf := make([]byte, 0, size)
 
-	buf = append(buf, idxEntryVersion) // version
-	buf = append(buf, paddingByte)     // reserved
+	version := byte(idxEntryVersion)
+	if len(e.EncryptionEnvelope) > 0 {
+		version = idxEntryVersionV2
+	}
+	buf = append(buf, version)     // version
+	buf = append(buf, paddingByte) // reserved
 
 	buf = appendLenPrefixed(buf, txIDBytes)
 	buf = appendLenPrefixed(buf, docNameBytes)
@@ -298,38 +307,83 @@ func encodeIndexEntry(e IndexEntry) []byte {
 	copy(fixed[28:idxFixedFieldSize], e.SHA256[:])
 
 	buf = append(buf, fixed[:idxFixedFieldSize]...)
+	if version == idxEntryVersionV2 {
+		buf = appendLenPrefixed(buf, e.EncryptionEnvelope)
+	}
 	return buf
 }
 
 func decodeIndexEntry(data []byte) (IndexEntry, error) {
-	if len(data) < idxMinEntryLen {
-		return IndexEntry{}, errors.New("entry too short")
-	}
-	if data[0] != idxEntryVersion {
-		return IndexEntry{}, fmt.Errorf("unknown entry version: %d", data[0])
+	version, err := decodeIndexEntryVersion(data)
+	if err != nil {
+		return IndexEntry{}, err
 	}
 
 	off := idxMinEntryLen
-	txID, n, err := readLenPrefixed(data[off:])
+	txID, docName, contentType, off, err := decodeIndexEntryStrings(data, off)
 	if err != nil {
 		return IndexEntry{}, err
+	}
+	createdAt, firstFrameOff, frameCount, totalBytes, sha, off, err := decodeIndexEntryFixed(data, off)
+	if err != nil {
+		return IndexEntry{}, err
+	}
+	envelope, off, err := decodeIndexEntryEnvelope(data, version, off)
+	if err != nil {
+		return IndexEntry{}, err
+	}
+	if off != len(data) {
+		return IndexEntry{}, fmt.Errorf("entry has %d trailing bytes", len(data)-off)
+	}
+
+	return IndexEntry{
+		TransactionID:      txID,
+		DocName:            docName,
+		ContentType:        contentType,
+		CreatedAt:          createdAt,
+		FirstFrameOff:      firstFrameOff,
+		FrameCount:         frameCount,
+		TotalBytes:         totalBytes,
+		SHA256:             sha,
+		EncryptionEnvelope: envelope,
+	}, nil
+}
+
+func decodeIndexEntryVersion(data []byte) (byte, error) {
+	if len(data) < idxMinEntryLen {
+		return 0, errors.New("entry too short")
+	}
+	version := data[0]
+	if version != idxEntryVersion && version != idxEntryVersionV2 {
+		return 0, fmt.Errorf("unknown entry version: %d", data[0])
+	}
+	return version, nil
+}
+
+func decodeIndexEntryStrings(data []byte, off int) (string, string, string, int, error) {
+	txID, n, err := readLenPrefixed(data[off:])
+	if err != nil {
+		return "", "", "", 0, err
 	}
 	off += n
 
 	docName, n, err := readLenPrefixed(data[off:])
 	if err != nil {
-		return IndexEntry{}, err
+		return "", "", "", 0, err
 	}
 	off += n
 
 	contentType, n, err := readLenPrefixed(data[off:])
 	if err != nil {
-		return IndexEntry{}, err
+		return "", "", "", 0, err
 	}
 	off += n
+	return txID, docName, contentType, off, nil
+}
 
+func decodeIndexEntryFixed(data []byte, off int) (time.Time, int64, uint32, int64, [32]byte, int, error) {
 	if len(data[off:]) < idxFixedFieldSize {
-		return IndexEntry{}, errors.New("entry fixed fields truncated")
+		return time.Time{}, 0, 0, 0, [32]byte{}, 0, errors.New("entry fixed fields truncated")
 	}
 
 	createdAt := time.UnixMicro(int64(binary.LittleEndian.Uint64(data[off : off+8]))) //nolint:gosec // stored as uint64, safe round-trip for valid timestamps
@@ -338,17 +392,18 @@ func decodeIndexEntry(data []byte) (IndexEntry, error) {
 	totalBytes := int64(binary.LittleEndian.Uint64(data[off+20 : off+28])) //nolint:gosec // stored as uint64, safe round-trip for valid byte counts
 	var sha [32]byte
 	copy(sha[:], data[off+28:off+idxFixedFieldSize])
+	return createdAt, firstFrameOff, frameCount, totalBytes, sha, off + idxFixedFieldSize, nil
+}
 
-	return IndexEntry{
-		TransactionID: txID,
-		DocName:       docName,
-		ContentType:   contentType,
-		CreatedAt:     createdAt,
-		FirstFrameOff: firstFrameOff,
-		FrameCount:    frameCount,
-		TotalBytes:    totalBytes,
-		SHA256:        sha,
-	}, nil
+func decodeIndexEntryEnvelope(data []byte, version byte, off int) ([]byte, int, error) {
+	if version != idxEntryVersionV2 {
+		return nil, off, nil
+	}
+	envelopeString, n, err := readLenPrefixed(data[off:])
+	if err != nil {
+		return nil, 0, err
+	}
+	return []byte(envelopeString), off + n, nil
 }
 
 func appendLenPrefixed(buf, data []byte) []byte {

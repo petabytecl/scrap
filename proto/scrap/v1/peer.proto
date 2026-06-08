@@ -27,6 +27,7 @@ message ReplicateDocumentInit {
   uint32 frame_count     = 6;
   int64  total_bytes     = 7;
   bytes  sha256          = 8;
+  bytes  encryption_envelope = 9;
 }
 
 message ReplicateDocumentResponse {

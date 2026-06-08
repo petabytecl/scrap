@@ -6,6 +6,7 @@ const (
 	ResourceExhaustedReasonUploadPressure = "upload_pressure"
 
 	UnavailableReasonBackendRestoreUnavailable = "backend_restore_unavailable"
+	UnavailableReasonCryptoUnavailable         = "crypto_unavailable"
 )
 
 var (

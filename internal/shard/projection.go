@@ -49,14 +49,15 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 	createdAt := time.UnixMicro(doc.CreatedAtUs)
 
 	if err := s.appendDocumentIndexEntry(doc, block.IndexEntry{
-		TransactionID: doc.TransactionId,
-		DocName:       doc.DocumentName,
-		ContentType:   doc.ContentType,
-		CreatedAt:     createdAt,
-		FirstFrameOff: safeUint64ToInt64(doc.FirstFrameOff),
-		FrameCount:    doc.FrameCount,
-		TotalBytes:    doc.TotalBytes,
-		SHA256:        sha,
+		TransactionID:      doc.TransactionId,
+		DocName:            doc.DocumentName,
+		ContentType:        doc.ContentType,
+		CreatedAt:          createdAt,
+		FirstFrameOff:      safeUint64ToInt64(doc.FirstFrameOff),
+		FrameCount:         doc.FrameCount,
+		TotalBytes:         doc.TotalBytes,
+		SHA256:             sha,
+		EncryptionEnvelope: append([]byte(nil), doc.EncryptionEnvelope...),
 	}); err != nil {
 		return err
 	}

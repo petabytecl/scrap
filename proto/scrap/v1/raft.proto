@@ -58,6 +58,7 @@ message CommitDocument {
   int64  total_bytes     = 8;
   bytes  sha256          = 9;
   int64  created_at_us   = 10;
+  bytes  encryption_envelope = 11;
 }
 
 message OpenlogEntry {

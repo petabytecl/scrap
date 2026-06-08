@@ -21,6 +21,12 @@ type AppendResult struct {
 	FirstFrameOffset int64
 }
 
+type DocumentFrames struct {
+	Payloads [][]byte
+	SHA256   [32]byte
+	Size     int64
+}
+
 type Writer struct {
 	f        *os.File
 	path     string
@@ -92,6 +98,44 @@ func (w *Writer) AppendDocument(txID, docName, contentType string, body io.Reade
 		SHA256:           digest,
 		Size:             totalSize,
 		FrameCount:       frameSeq,
+		FirstFrameOffset: firstOffset,
+	}, nil
+}
+
+//nolint:revive // txID, docName, contentType are part of the public API contract; callers pass document metadata
+func (w *Writer) AppendDocumentFrames(txID, docName, contentType string, frames DocumentFrames) (AppendResult, error) {
+	if w.closed {
+		return AppendResult{}, errors.New("block: writer is closed")
+	}
+	if frames.Size < 0 {
+		return AppendResult{}, errors.New("block: document size is negative")
+	}
+
+	firstOffset := w.offset
+	for frameSeq, payload := range frames.Payloads {
+		isLast := frameSeq == len(frames.Payloads)-1
+		flags := frameFlags(uint32(frameSeq), isLast)
+		if err := WriteFrame(w.f, FrameHeader{
+			DocSeq:   w.docSeq,
+			FrameSeq: uint32(frameSeq),
+			Flags:    flags,
+		}, payload); err != nil {
+			return AppendResult{}, fmt.Errorf("block: write prepared frame %d: %w", frameSeq, err)
+		}
+		w.offset += int64(FrameHeaderSize + len(payload))
+	}
+
+	if err := w.f.Sync(); err != nil {
+		return AppendResult{}, fmt.Errorf("block: fsync after document: %w", err)
+	}
+
+	w.docSeq++
+	w.docCount++
+
+	return AppendResult{
+		SHA256:           frames.SHA256,
+		Size:             frames.Size,
+		FrameCount:       uint32(len(frames.Payloads)), //nolint:gosec // frame count is bounded by memory and uint32 protocol fields.
 		FirstFrameOffset: firstOffset,
 	}, nil
 }

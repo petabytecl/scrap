@@ -135,6 +135,11 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		MemberID:           telemetryRuntime.resourceConfig.MemberID,
 		WriteTelemetry:     shardTel.writeTelemetry,
 		IdentifierMode:     identifierMode,
+		Encryption: shard.EncryptionConfig{
+			Transit:      securityRuntime.transit,
+			TransitMount: cfg.ProductionGates.Transit.MountPath,
+			TransitKey:   cfg.ProductionGates.Transit.KeyName,
+		},
 	})
 	if err != nil {
 		return fail(fmt.Errorf("open shard: %w", err))

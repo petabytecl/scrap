@@ -412,19 +412,20 @@ func (x *ConfirmUpload) GetIndexObject() *BackendObjectMetadata {
 }
 
 type CommitDocument struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	TransactionId  string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
-	DocumentName   string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
-	ContentType    string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	IdempotencyKey string                 `protobuf:"bytes,4,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	BlockId        uint64                 `protobuf:"varint,5,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
-	FirstFrameOff  uint64                 `protobuf:"varint,6,opt,name=first_frame_off,json=firstFrameOff,proto3" json:"first_frame_off,omitempty"`
-	FrameCount     uint32                 `protobuf:"varint,7,opt,name=frame_count,json=frameCount,proto3" json:"frame_count,omitempty"`
-	TotalBytes     int64                  `protobuf:"varint,8,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
-	Sha256         []byte                 `protobuf:"bytes,9,opt,name=sha256,proto3" json:"sha256,omitempty"`
-	CreatedAtUs    int64                  `protobuf:"varint,10,opt,name=created_at_us,json=createdAtUs,proto3" json:"created_at_us,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TransactionId      string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	DocumentName       string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
+	ContentType        string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	IdempotencyKey     string                 `protobuf:"bytes,4,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	BlockId            uint64                 `protobuf:"varint,5,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	FirstFrameOff      uint64                 `protobuf:"varint,6,opt,name=first_frame_off,json=firstFrameOff,proto3" json:"first_frame_off,omitempty"`
+	FrameCount         uint32                 `protobuf:"varint,7,opt,name=frame_count,json=frameCount,proto3" json:"frame_count,omitempty"`
+	TotalBytes         int64                  `protobuf:"varint,8,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	Sha256             []byte                 `protobuf:"bytes,9,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	CreatedAtUs        int64                  `protobuf:"varint,10,opt,name=created_at_us,json=createdAtUs,proto3" json:"created_at_us,omitempty"`
+	EncryptionEnvelope []byte                 `protobuf:"bytes,11,opt,name=encryption_envelope,json=encryptionEnvelope,proto3" json:"encryption_envelope,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *CommitDocument) Reset() {
@@ -525,6 +526,13 @@ func (x *CommitDocument) GetCreatedAtUs() int64 {
 		return x.CreatedAtUs
 	}
 	return 0
+}
+
+func (x *CommitDocument) GetEncryptionEnvelope() []byte {
+	if x != nil {
+		return x.EncryptionEnvelope
+	}
+	return nil
 }
 
 type OpenlogEntry struct {
@@ -647,7 +655,7 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\bshard_id\x18\x02 \x01(\x04R\ashardId\x12&\n" +
 	"\x0fconfirmed_at_us\x18\x04 \x01(\x03R\rconfirmedAtUs\x12B\n" +
 	"\fblock_object\x18\x06 \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vblockObject\x12B\n" +
-	"\findex_object\x18\a \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vindexObjectJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06R\x12backend_key_prefixR\x04etag\"\xe9\x02\n" +
+	"\findex_object\x18\a \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vindexObjectJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06R\x12backend_key_prefixR\x04etag\"\x9a\x03\n" +
 	"\x0eCommitDocument\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
@@ -661,7 +669,8 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"totalBytes\x12\x16\n" +
 	"\x06sha256\x18\t \x01(\fR\x06sha256\x12\"\n" +
 	"\rcreated_at_us\x18\n" +
-	" \x01(\x03R\vcreatedAtUs\"\xe4\x01\n" +
+	" \x01(\x03R\vcreatedAtUs\x12/\n" +
+	"\x13encryption_envelope\x18\v \x01(\fR\x12encryptionEnvelope\"\xe4\x01\n" +
 	"\fOpenlogEntry\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x19\n" +
