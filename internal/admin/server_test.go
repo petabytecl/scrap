@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 type projectionInjectorStub struct {
@@ -285,6 +287,79 @@ func TestServer_RewrapDocumentEndpointCallsServiceWithSafeResponse(t *testing.T)
 	body := resp.Body.String()
 	assertNoSensitiveRewrapFields(t, body)
 	assertRewrapResponse(t, body, rewrap.StatusOK, 1, 2, true)
+}
+
+func TestServer_RewrapDocumentEndpointRejectsInvalidRequest(t *testing.T) {
+	service := &rewrapServiceStub{}
+	srv := admin.New(admin.WithRewrapService(service))
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/rewrap/document", strings.NewReader(`{"transaction_id":`))
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+	if service.calls != 0 {
+		t.Fatalf("rewrap calls = %d, want 0", service.calls)
+	}
+}
+
+func TestServer_RewrapDocumentEndpointRejectsNonPost(t *testing.T) {
+	service := &rewrapServiceStub{}
+	srv := admin.New(admin.WithRewrapService(service))
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/admin/rewrap/document", nil)
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405: %s", resp.Code, resp.Body.String())
+	}
+	if service.calls != 0 {
+		t.Fatalf("rewrap calls = %d, want 0", service.calls)
+	}
+}
+
+func TestServer_RewrapDocumentEndpointMapsServiceErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		reason string
+	}{
+		{name: "invalid request", err: rewrap.ErrInvalidRequest, status: http.StatusBadRequest, reason: rewrap.ReasonInvalidRequest},
+		{name: "not encrypted", err: rewrap.ErrNotEncrypted, status: http.StatusPreconditionFailed, reason: rewrap.ReasonNotEncrypted},
+		{name: "data loss", err: storeapi.ErrDataLoss, status: http.StatusPreconditionFailed, reason: rewrap.ReasonDataLoss},
+		{name: "not found", err: storeapi.ErrNotFound, status: http.StatusNotFound, reason: rewrap.ReasonNotFound},
+		{
+			name:   "unavailable",
+			err:    storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "crypto unavailable"),
+			status: http.StatusServiceUnavailable,
+			reason: rewrap.ReasonCryptoUnavailable,
+		},
+		{name: "internal", err: errors.New("boom"), status: http.StatusInternalServerError, reason: rewrap.ReasonInternalError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &rewrapServiceStub{
+				result: rewrap.Result{Status: rewrap.StatusFailed, Reason: tt.reason},
+				err:    tt.err,
+			}
+			srv := admin.New(admin.WithRewrapService(service))
+			resp := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/rewrap/document", strings.NewReader(`{"transaction_id":"tx","document_name":"doc.xml"}`))
+
+			srv.Handler().ServeHTTP(resp, req)
+
+			if resp.Code != tt.status {
+				t.Fatalf("status = %d, want %d: %s", resp.Code, tt.status, resp.Body.String())
+			}
+			assertNoSensitiveRewrapFields(t, resp.Body.String())
+			assertRewrapResponse(t, resp.Body.String(), rewrap.StatusFailed, 0, 0, false)
+		})
+	}
 }
 
 func assertNoSensitiveRewrapFields(t *testing.T, body string, extraForbidden ...string) {

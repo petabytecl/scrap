@@ -1,6 +1,7 @@
 package block_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -137,6 +138,54 @@ func TestReplaceDocumentEnvelopeRewritesOnlyTargetEntry(t *testing.T) {
 	}
 	if string(kept.EncryptionEnvelope) != `{"version":1,"wrapped_data_key":"vault:v1:keep"}` {
 		t.Fatalf("non-target envelope = %q", kept.EncryptionEnvelope)
+	}
+}
+
+func TestReplaceDocumentEnvelopeNoopsWhenEnvelopeMatches(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+	envelope := []byte(`{"version":1,"wrapped_data_key":"vault:v1:same"}`)
+	writeBlockIndexEntries(t, path, block.IndexEntry{
+		TransactionID:      "tx-001",
+		DocName:            "invoice.xml",
+		ContentType:        "application/xml",
+		CreatedAt:          time.Now().Truncate(time.Microsecond),
+		FirstFrameOff:      40,
+		FrameCount:         1,
+		TotalBytes:         1024,
+		SHA256:             [32]byte{0xAA},
+		EncryptionEnvelope: envelope,
+	})
+
+	updated, changed, err := block.ReplaceDocumentEnvelope(path, "tx-001", "invoice.xml", envelope)
+	if err != nil {
+		t.Fatalf("ReplaceDocumentEnvelope: %v", err)
+	}
+	if changed {
+		t.Fatal("ReplaceDocumentEnvelope changed = true, want false")
+	}
+	if string(updated.EncryptionEnvelope) != string(envelope) {
+		t.Fatalf("updated envelope = %q, want %q", updated.EncryptionEnvelope, envelope)
+	}
+}
+
+func TestReplaceDocumentEnvelopeMissingDocument(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+	writeBlockIndexEntries(t, path, block.IndexEntry{
+		TransactionID: "tx-001",
+		DocName:       "invoice.xml",
+		ContentType:   "application/xml",
+		CreatedAt:     time.Now().Truncate(time.Microsecond),
+		FirstFrameOff: 40,
+		FrameCount:    1,
+		TotalBytes:    1024,
+		SHA256:        [32]byte{0xAA},
+	})
+
+	_, _, err := block.ReplaceDocumentEnvelope(path, "tx-001", "missing.xml", []byte(`{"version":1}`))
+	if !errors.Is(err, block.ErrDocNotFound) {
+		t.Fatalf("ReplaceDocumentEnvelope error = %v, want ErrDocNotFound", err)
 	}
 }
 
