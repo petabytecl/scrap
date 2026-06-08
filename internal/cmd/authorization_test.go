@@ -97,6 +97,22 @@ func TestAppSecurityRuntimeRejectsProductionFakeTransit(t *testing.T) {
 	}
 }
 
+func TestAppShardEncryptionConfigSkipsDevelopmentFakeTransit(t *testing.T) {
+	cfg := Config{
+		SecurityMode: security.ModeDevelopment,
+		ProductionGates: security.StartupGateConfig{
+			Transit: security.TransitConfig{
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+			},
+		},
+	}
+	got := appShardEncryptionConfig(cfg, encryption.NewFakeTransit(encryption.FakeConfig{KeyName: "scrap-documents"}))
+	if got.Transit != nil || got.TransitMount != "" || got.TransitKey != "" {
+		t.Fatalf("development fake Transit enabled shard encryption: %+v", got)
+	}
+}
+
 func writeAuditPolicy(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "audit.json")

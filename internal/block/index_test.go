@@ -24,14 +24,15 @@ func TestIndexRoundTrip(t *testing.T) { //nolint:cyclop // test function with ex
 	sha := [32]byte{0xAA, 0xBB, 0xCC}
 	entries := []block.IndexEntry{
 		{
-			TransactionID: "tx-001",
-			DocName:       "invoice.xml",
-			ContentType:   "application/xml",
-			CreatedAt:     now,
-			FirstFrameOff: 40,
-			FrameCount:    1,
-			TotalBytes:    1024,
-			SHA256:        sha,
+			TransactionID:      "tx-001",
+			DocName:            "invoice.xml",
+			ContentType:        "application/xml",
+			CreatedAt:          now,
+			FirstFrameOff:      40,
+			FrameCount:         1,
+			TotalBytes:         1024,
+			SHA256:             sha,
+			EncryptionEnvelope: []byte(`{"version":1,"wrapped_data_key":"vault:v1:test"}`),
 		},
 		{
 			TransactionID: "tx-001",
@@ -72,6 +73,9 @@ func TestIndexRoundTrip(t *testing.T) { //nolint:cyclop // test function with ex
 	}
 	if got.SHA256 != sha {
 		t.Fatalf("SHA256 mismatch")
+	}
+	if string(got.EncryptionEnvelope) != `{"version":1,"wrapped_data_key":"vault:v1:test"}` {
+		t.Fatalf("EncryptionEnvelope: got %q", got.EncryptionEnvelope)
 	}
 	if !got.CreatedAt.Equal(now) {
 		t.Fatalf("CreatedAt: got %v, want %v", got.CreatedAt, now)

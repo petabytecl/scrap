@@ -22,6 +22,28 @@ func ReadDocumentTwoPass(blkPath string, entry IndexEntry) (io.ReadCloser, error
 	return streamPass(blkPath, entry)
 }
 
+func ReadDocumentFrames(blkPath string, entry IndexEntry) ([][]byte, error) {
+	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	if err != nil {
+		return nil, fmt.Errorf("block: open %s for frame read: %w", blkPath, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("block: seek for frame read: %w", err)
+	}
+
+	frames := make([][]byte, 0, entry.FrameCount)
+	for i := range int(entry.FrameCount) {
+		_, payload, err := ReadFrame(f)
+		if err != nil {
+			return nil, fmt.Errorf("block: read stored frame %d: %w", i, err)
+		}
+		frames = append(frames, payload)
+	}
+	return frames, nil
+}
+
 func verifyPass(blkPath string, entry IndexEntry) error {
 	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
@@ -55,28 +77,13 @@ func verifyPass(blkPath string, entry IndexEntry) error {
 }
 
 func streamPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
-	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	frames, err := ReadDocumentFrames(blkPath, entry)
 	if err != nil {
-		return nil, fmt.Errorf("block: open %s for stream: %w", blkPath, err)
+		return nil, err
 	}
-
-	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("block: seek for stream: %w", err)
-	}
-
 	var combined []byte
-	for i := range int(entry.FrameCount) {
-		_, payload, err := ReadFrame(f)
-		if err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("block: stream frame %d: %w", i, err)
-		}
+	for _, payload := range frames {
 		combined = append(combined, payload...)
-	}
-
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("block: close after stream: %w", err)
 	}
 	return io.NopCloser(bytes.NewReader(combined)), nil
 }

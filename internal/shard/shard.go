@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/localblock"
@@ -61,6 +62,13 @@ type Config struct {
 	MemberID           string
 	WriteTelemetry     WriteStageRecorder
 	IdentifierMode     telemetry.IdentifierMode
+	Encryption         EncryptionConfig
+}
+
+type EncryptionConfig struct {
+	Transit      encryption.Transit
+	TransitMount string
+	TransitKey   string
 }
 
 type raftNode interface {
@@ -93,6 +101,7 @@ type Shard struct {
 	memberID        string
 	writeTelemetry  WriteStageRecorder
 	identifierMode  telemetry.IdentifierMode
+	encryption      EncryptionConfig
 	baseLogger      *slog.Logger
 	logger          *slog.Logger
 	blockSealSize   int64
@@ -151,6 +160,32 @@ func (c *Config) applyDefaults() {
 		c.MemberID = "local"
 	}
 	c.Eviction = c.Eviction.withDefaults()
+	c.Encryption = c.Encryption.withDefaults()
+}
+
+func (c EncryptionConfig) withDefaults() EncryptionConfig {
+	if c.Transit == nil {
+		return c
+	}
+	if c.TransitMount == "" {
+		c.TransitMount = encryption.DefaultTransitMountPath
+	}
+	if c.TransitKey == "" {
+		c.TransitKey = encryption.DefaultTransitKeyName
+	}
+	return c
+}
+
+func (c EncryptionConfig) enabled() bool {
+	return c.Transit != nil
+}
+
+func (c EncryptionConfig) documentConfig() encryption.DocumentConfig {
+	return encryption.DocumentConfig{
+		Transit:      c.Transit,
+		TransitMount: c.TransitMount,
+		TransitKey:   c.TransitKey,
+	}
 }
 
 func Open(cfg Config) (*Shard, error) {
@@ -201,6 +236,7 @@ func Open(cfg Config) (*Shard, error) {
 		memberID:                cfg.MemberID,
 		writeTelemetry:          cfg.WriteTelemetry,
 		identifierMode:          cfg.IdentifierMode,
+		encryption:              cfg.Encryption,
 		blockSealSize:           cfg.BlockSealSize,
 		nextBlockID:             nextID,
 		proposals:               make(map[string]chan error),
@@ -348,18 +384,17 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	now := time.Now()
 
 	ctx, appendStage := s.writeTelemetry.StartStage(ctx, "block_append")
-	var bodyCopy bytes.Buffer
-	result, err := s.blockWriter.AppendDocument(txID, docName, contentType, io.TeeReader(body, &bodyCopy))
+	result, replicationData, envelope, err := s.appendDocumentPayload(ctx, txID, docName, contentType, body)
 	appendStage.End(err)
 	if err != nil {
 		s.mu.Unlock()
-		return storeapi.WriteResult{}, fmt.Errorf("shard: append document: %w", err)
+		return storeapi.WriteResult{}, mapEncryptionError(fmt.Errorf("shard: append document: %w", err))
 	}
 
 	s.mu.Unlock()
 
 	ctx, replicateStage := s.writeTelemetry.StartStage(ctx, "peer_replicate")
-	err = s.replicateDocument(ctx, attempt.prepEntry(), contentType, result, bodyCopy.Bytes())
+	err = s.replicateDocument(ctx, attempt.prepEntry(), contentType, result, replicationData, envelope)
 	replicateStage.End(err)
 	if err != nil {
 		return storeapi.WriteResult{}, err
@@ -373,7 +408,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	ctx, proposeStage := s.writeTelemetry.StartStage(ctx, "raft_propose")
 	// Stamp the active propose span into the command so every voter's apply loop
 	// recovers it and emits a child apply span on all replicas. See ADR 0013.
-	cmd := attempt.commitCommand(result, now)
+	cmd := attempt.commitCommand(result, now, envelope)
 	injectTraceContext(ctx, cmd)
 	data, err := proto.Marshal(cmd)
 	if err != nil {
@@ -475,14 +510,10 @@ func (s *Shard) readDocumentFromProjection(
 	if err := s.ensureReadableBlockLockedForReason(ctx, entry.blockID, restoreReason); err != nil {
 		return nil, storeapi.DocumentMeta{}, err
 	}
-	defer s.mu.Unlock()
 
 	blkPath := s.blockPath(entry.blockID)
-	rc, err := block.ReadDocument(blkPath, entry.IndexEntry)
-	if err != nil {
-		return nil, storeapi.DocumentMeta{}, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
-	}
-
+	indexEntry := entry.IndexEntry
+	indexEntry.EncryptionEnvelope = append([]byte(nil), entry.EncryptionEnvelope...)
 	meta := storeapi.DocumentMeta{
 		Name:        entry.DocName,
 		ContentType: entry.ContentType,
@@ -490,7 +521,41 @@ func (s *Shard) readDocumentFromProjection(
 		SHA256:      entry.SHA256,
 		CreatedAt:   entry.CreatedAt,
 	}
+	s.mu.Unlock()
+
+	rc, err := s.readDocumentBytes(ctx, blkPath, indexEntry)
+	if err != nil {
+		return nil, storeapi.DocumentMeta{}, mapReadDocumentError(err)
+	}
 	return rc, meta, nil
+}
+
+func (s *Shard) readDocumentBytes(ctx context.Context, blkPath string, entry block.IndexEntry) (io.ReadCloser, error) {
+	if len(entry.EncryptionEnvelope) == 0 {
+		return block.ReadDocument(blkPath, entry)
+	}
+	if !s.encryption.enabled() {
+		return nil, storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
+	}
+	frames, err := block.ReadDocumentFrames(blkPath, entry)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+	}
+	plaintext, err := encryption.DecryptDocument(ctx, s.encryption.Transit, encryption.DocumentIdentity{
+		TransactionID: entry.TransactionID,
+		DocumentName:  entry.DocName,
+	}, entry.EncryptionEnvelope, frames, entry.SHA256, entry.TotalBytes)
+	if err != nil {
+		return nil, mapEncryptionError(err)
+	}
+	return io.NopCloser(bytes.NewReader(plaintext)), nil
+}
+
+func mapReadDocumentError(err error) error {
+	if errors.Is(err, storeapi.ErrUnavailable) || errors.Is(err, storeapi.ErrDataLoss) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 }
 
 func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.DocumentMeta, error) {

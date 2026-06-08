@@ -117,20 +117,21 @@ func TestOpenlogWriteAttemptCommitCommand(t *testing.T) {
 		Size:             99,
 		FrameCount:       3,
 		FirstFrameOffset: 88,
-	}, createdAt)
+	}, createdAt, []byte(`{"version":1}`))
 
 	got := cmd.GetCommitDoc()
 	want := &scrapv1.CommitDocument{
-		TransactionId:  "tx-1",
-		DocumentName:   "doc.xml",
-		ContentType:    "text/xml",
-		IdempotencyKey: "idem-1",
-		BlockId:        7,
-		FirstFrameOff:  88,
-		FrameCount:     3,
-		TotalBytes:     99,
-		Sha256:         sum[:],
-		CreatedAtUs:    123456,
+		TransactionId:      "tx-1",
+		DocumentName:       "doc.xml",
+		ContentType:        "text/xml",
+		IdempotencyKey:     "idem-1",
+		BlockId:            7,
+		FirstFrameOff:      88,
+		FrameCount:         3,
+		TotalBytes:         99,
+		Sha256:             sum[:],
+		CreatedAtUs:        123456,
+		EncryptionEnvelope: []byte(`{"version":1}`),
 	}
 	if !proto.Equal(got, want) {
 		t.Fatalf("commit document mismatch\ngot:  %v\nwant: %v", got, want)

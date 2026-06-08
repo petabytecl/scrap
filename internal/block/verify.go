@@ -3,6 +3,7 @@ package block
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -14,9 +15,10 @@ import (
 type CorruptionType string
 
 const (
-	CorruptionFrameCRC  CorruptionType = "frame_crc"
-	CorruptionDocSHA256 CorruptionType = "doc_sha256"
-	CorruptionMissing   CorruptionType = "missing_frame"
+	CorruptionFrameCRC            CorruptionType = "frame_crc"
+	CorruptionDocSHA256           CorruptionType = "doc_sha256"
+	CorruptionDocCiphertextLength CorruptionType = "doc_ciphertext_length"
+	CorruptionMissing             CorruptionType = "missing_frame"
 )
 
 type CorruptFrame struct {
@@ -27,6 +29,11 @@ type CorruptFrame struct {
 type VerifyResult struct {
 	CorruptFrames  []CorruptFrame
 	FramesVerified uint64
+}
+
+type docAccumulator struct {
+	hash         hash.Hash
+	payloadBytes int64
 }
 
 func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
@@ -51,7 +58,7 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
 	var result VerifyResult
 	offset := int64(HeaderSize)
-	docBySeq := make(map[uint32]hash.Hash)
+	docBySeq := make(map[uint32]*docAccumulator)
 	framesByDocSeq := make(map[uint32]uint32)
 	completedDocSeq := make(map[uint32]bool)
 	reachedEOF := false
@@ -69,11 +76,11 @@ func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
 
 		result.FramesVerified++
 		framesByDocSeq[hdr.DocSeq]++
-		h := accumulateDoc(docBySeq, hdr.DocSeq, payload)
+		acc := accumulateDoc(docBySeq, hdr.DocSeq, payload)
 
 		if isLastFrame(hdr.Flags) {
 			completedDocSeq[hdr.DocSeq] = true
-			checkDocSHA(h, hdr.DocSeq, idxEntries, offset, &result)
+			checkDocIntegrity(acc, hdr.DocSeq, idxEntries, offset, &result)
 			delete(docBySeq, hdr.DocSeq)
 		}
 		offset += int64(FrameHeaderSize) + int64(hdr.PayloadLen)
@@ -84,31 +91,60 @@ func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
 	return result
 }
 
-func accumulateDoc(accum map[uint32]hash.Hash, docSeq uint32, payload []byte) hash.Hash {
-	h, ok := accum[docSeq]
+func accumulateDoc(accum map[uint32]*docAccumulator, docSeq uint32, payload []byte) *docAccumulator {
+	acc, ok := accum[docSeq]
 	if !ok {
-		h = sha256.New()
-		accum[docSeq] = h
+		acc = &docAccumulator{hash: sha256.New()}
+		accum[docSeq] = acc
 	}
-	h.Write(payload)
-	return h
+	acc.hash.Write(payload)
+	acc.payloadBytes += int64(len(payload))
+	return acc
 }
 
 func isLastFrame(flags byte) bool {
 	return flags == FlagLastFrame || flags == FlagSingleFrame
 }
 
-func checkDocSHA(h hash.Hash, docSeq uint32, entries []IndexEntry, offset int64, result *VerifyResult) {
-	var computed [32]byte
-	copy(computed[:], h.Sum(nil))
+func checkDocIntegrity(acc *docAccumulator, docSeq uint32, entries []IndexEntry, offset int64, result *VerifyResult) {
 	idx, found := findIdxEntryByDocSeq(entries, docSeq)
 	if !found {
 		return
 	}
+	if len(idx.EncryptionEnvelope) > 0 {
+		checkEncryptedDocPayloadLength(acc.payloadBytes, idx.EncryptionEnvelope, offset, result)
+		return
+	}
+	checkDocSHA(acc.hash, idx.SHA256, offset, result)
+}
+
+func checkDocSHA(h hash.Hash, expected [32]byte, offset int64, result *VerifyResult) {
+	var computed [32]byte
+	copy(computed[:], h.Sum(nil))
 	var empty [32]byte
-	if idx.SHA256 != empty && computed != idx.SHA256 {
+	if expected != empty && computed != expected {
 		result.CorruptFrames = append(result.CorruptFrames, CorruptFrame{Offset: offset, Type: CorruptionDocSHA256})
 	}
+}
+
+func checkEncryptedDocPayloadLength(payloadBytes int64, envelope []byte, offset int64, result *VerifyResult) {
+	ciphertextLength, err := encryptedEnvelopeCiphertextLength(envelope)
+	if err != nil || payloadBytes != ciphertextLength {
+		result.CorruptFrames = append(result.CorruptFrames, CorruptFrame{Offset: offset, Type: CorruptionDocCiphertextLength})
+	}
+}
+
+func encryptedEnvelopeCiphertextLength(envelope []byte) (int64, error) {
+	var meta struct {
+		CiphertextLength *int64 `json:"ciphertext_length"`
+	}
+	if err := json.Unmarshal(envelope, &meta); err != nil {
+		return 0, err
+	}
+	if meta.CiphertextLength == nil || *meta.CiphertextLength < 0 {
+		return 0, ErrIdxCorrupt
+	}
+	return *meta.CiphertextLength, nil
 }
 
 // docSeq is 0-indexed and matches the entry position in a well-formed block index.

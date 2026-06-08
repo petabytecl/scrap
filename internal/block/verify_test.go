@@ -2,6 +2,7 @@ package block_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"hash/crc32"
 	"os"
@@ -78,6 +79,59 @@ func TestVerifyBlock_Clean(t *testing.T) {
 	}
 	if result.FramesVerified == 0 {
 		t.Fatal("expected frames to be verified")
+	}
+}
+
+func TestVerifyBlock_EncryptedEntryVerifiesStoredCiphertext(t *testing.T) {
+	dir := t.TempDir()
+	blkPath := filepath.Join(dir, "0000000000000064.blk")
+	idxPath := filepath.Join(dir, "0000000000000064.idx")
+
+	bw, err := block.NewWriter(blkPath, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	iw, err := block.NewIndexWriter(idxPath)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+
+	storedCiphertext := []byte("ciphertext-frame")
+	plaintextSHA := sha256.Sum256([]byte("plaintext-frame"))
+	result, err := bw.AppendDocumentFrames("tx-encrypted", "doc.xml", "text/xml", block.DocumentFrames{
+		Payloads: [][]byte{storedCiphertext},
+		SHA256:   plaintextSHA,
+		Size:     int64(len("plaintext-frame")),
+	})
+	if err != nil {
+		t.Fatalf("AppendDocumentFrames: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{
+		TransactionID:      "tx-encrypted",
+		DocName:            "doc.xml",
+		ContentType:        "text/xml",
+		CreatedAt:          time.Now(),
+		FirstFrameOff:      result.FirstFrameOffset,
+		FrameCount:         result.FrameCount,
+		TotalBytes:         result.Size,
+		SHA256:             result.SHA256,
+		EncryptionEnvelope: []byte(`{"ciphertext_length":16}`),
+	}); err != nil {
+		t.Fatalf("Append index: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close block: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index: %v", err)
+	}
+
+	resultVerify, err := block.VerifyBlock(blkPath, idxPath)
+	if err != nil {
+		t.Fatalf("VerifyBlock: %v", err)
+	}
+	if len(resultVerify.CorruptFrames) != 0 {
+		t.Fatalf("expected encrypted block to verify cleanly, got %v", resultVerify.CorruptFrames)
 	}
 }
 

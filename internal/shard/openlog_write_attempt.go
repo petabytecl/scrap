@@ -67,20 +67,21 @@ func (a *openlogWriteAttempt) prepEntry() *scrapv1.OpenlogEntry {
 	return a.entry
 }
 
-func (a *openlogWriteAttempt) commitCommand(result block.AppendResult, createdAt time.Time) *scrapv1.RaftCommand {
+func (a *openlogWriteAttempt) commitCommand(result block.AppendResult, createdAt time.Time, envelope []byte) *scrapv1.RaftCommand {
 	return &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_CommitDoc{
 			CommitDoc: &scrapv1.CommitDocument{
-				TransactionId:  a.entry.TransactionId,
-				DocumentName:   a.entry.DocumentName,
-				ContentType:    a.entry.ContentType,
-				IdempotencyKey: a.entry.IdempotencyKey,
-				BlockId:        a.entry.BlockId,
-				FirstFrameOff:  uint64(max(0, result.FirstFrameOffset)),
-				FrameCount:     result.FrameCount,
-				TotalBytes:     result.Size,
-				Sha256:         result.SHA256[:],
-				CreatedAtUs:    createdAt.UnixMicro(),
+				TransactionId:      a.entry.TransactionId,
+				DocumentName:       a.entry.DocumentName,
+				ContentType:        a.entry.ContentType,
+				IdempotencyKey:     a.entry.IdempotencyKey,
+				BlockId:            a.entry.BlockId,
+				FirstFrameOff:      uint64(max(0, result.FirstFrameOffset)),
+				FrameCount:         result.FrameCount,
+				TotalBytes:         result.Size,
+				Sha256:             result.SHA256[:],
+				CreatedAtUs:        createdAt.UnixMicro(),
+				EncryptionEnvelope: envelope,
 			},
 		},
 	}

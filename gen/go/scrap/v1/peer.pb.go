@@ -104,17 +104,18 @@ func (*ReplicateDocumentRequest_Init) isReplicateDocumentRequest_Part() {}
 func (*ReplicateDocumentRequest_ChunkData) isReplicateDocumentRequest_Part() {}
 
 type ReplicateDocumentInit struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TransactionId string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
-	DocumentName  string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
-	ContentType   string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	BlockId       uint64                 `protobuf:"varint,4,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
-	StartOffset   uint64                 `protobuf:"varint,5,opt,name=start_offset,json=startOffset,proto3" json:"start_offset,omitempty"`
-	FrameCount    uint32                 `protobuf:"varint,6,opt,name=frame_count,json=frameCount,proto3" json:"frame_count,omitempty"`
-	TotalBytes    int64                  `protobuf:"varint,7,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
-	Sha256        []byte                 `protobuf:"bytes,8,opt,name=sha256,proto3" json:"sha256,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TransactionId      string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	DocumentName       string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
+	ContentType        string                 `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	BlockId            uint64                 `protobuf:"varint,4,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	StartOffset        uint64                 `protobuf:"varint,5,opt,name=start_offset,json=startOffset,proto3" json:"start_offset,omitempty"`
+	FrameCount         uint32                 `protobuf:"varint,6,opt,name=frame_count,json=frameCount,proto3" json:"frame_count,omitempty"`
+	TotalBytes         int64                  `protobuf:"varint,7,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	Sha256             []byte                 `protobuf:"bytes,8,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	EncryptionEnvelope []byte                 `protobuf:"bytes,9,opt,name=encryption_envelope,json=encryptionEnvelope,proto3" json:"encryption_envelope,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ReplicateDocumentInit) Reset() {
@@ -199,6 +200,13 @@ func (x *ReplicateDocumentInit) GetTotalBytes() int64 {
 func (x *ReplicateDocumentInit) GetSha256() []byte {
 	if x != nil {
 		return x.Sha256
+	}
+	return nil
+}
+
+func (x *ReplicateDocumentInit) GetEncryptionEnvelope() []byte {
+	if x != nil {
+		return x.EncryptionEnvelope
 	}
 	return nil
 }
@@ -818,7 +826,7 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"\x04init\x18\x01 \x01(\v2\x1f.scrap.v1.ReplicateDocumentInitH\x00R\x04init\x12\x1f\n" +
 	"\n" +
 	"chunk_data\x18\x02 \x01(\fH\x00R\tchunkDataB\x06\n" +
-	"\x04part\"\x9e\x02\n" +
+	"\x04part\"\xcf\x02\n" +
 	"\x15ReplicateDocumentInit\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
@@ -829,7 +837,8 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"frameCount\x12\x1f\n" +
 	"\vtotal_bytes\x18\a \x01(\x03R\n" +
 	"totalBytes\x12\x16\n" +
-	"\x06sha256\x18\b \x01(\fR\x06sha256\"3\n" +
+	"\x06sha256\x18\b \x01(\fR\x06sha256\x12/\n" +
+	"\x13encryption_envelope\x18\t \x01(\fR\x12encryptionEnvelope\"3\n" +
 	"\x19ReplicateDocumentResponse\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\fR\x06sha256\"L\n" +
 	"\x14TransferBlockRequest\x12\x19\n" +
