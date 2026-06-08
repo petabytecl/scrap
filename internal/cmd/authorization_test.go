@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/security"
 	securityfixture "github.com/petabytecl/scrap/test/fixtures/security"
 )
@@ -26,10 +28,18 @@ func TestAppSecurityRuntimeLoadsProductionAuthorizer(t *testing.T) {
 				Scrapctl: productionTLSFiles(bundle),
 			},
 			RolePolicyPath: writeRolePolicy(t, t.TempDir()),
-			AuditSink:      security.AuditSinkConfig{PolicyPath: writeAuditPolicy(t, t.TempDir())},
-			RateLimits:     security.RateLimitConfig{PolicyPath: writeRateLimitPolicy(t, t.TempDir())},
+			Transit: security.TransitConfig{
+				Address:      "https://openbao.example.invalid",
+				MountPath:    "transit",
+				KeyName:      "scrap-documents",
+				TokenEnv:     "OPENBAO_TOKEN",
+				TokenPresent: true,
+			},
+			AuditSink:  security.AuditSinkConfig{PolicyPath: writeAuditPolicy(t, t.TempDir())},
+			RateLimits: security.RateLimitConfig{PolicyPath: writeRateLimitPolicy(t, t.TempDir())},
 		},
 	}
+	t.Setenv("OPENBAO_TOKEN", "test-token")
 
 	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil)
 	if err != nil {
@@ -44,6 +54,9 @@ func TestAppSecurityRuntimeLoadsProductionAuthorizer(t *testing.T) {
 	if runtime.auditSink == nil || runtime.rateLimiter == nil {
 		t.Fatalf("runtime audit/rate controls not configured: %+v", runtime)
 	}
+	if runtime.transit == nil || !encryption.ProductionCapable(runtime.transit) {
+		t.Fatalf("runtime transit not configured as production capable: %+v", runtime.transit)
+	}
 }
 
 func TestAppSecurityRuntimeLeavesDevelopmentAuthorizerUnset(t *testing.T) {
@@ -53,6 +66,34 @@ func TestAppSecurityRuntimeLeavesDevelopmentAuthorizerUnset(t *testing.T) {
 	}
 	if runtime.authorizer != nil {
 		t.Fatal("development runtime authorizer should be nil")
+	}
+	if runtime.transit == nil || encryption.ProductionCapable(runtime.transit) {
+		t.Fatalf("development runtime transit = %+v, want test-only fake", runtime.transit)
+	}
+}
+
+func TestAppSecurityRuntimeRejectsProductionFakeTransit(t *testing.T) {
+	cfg := Config{
+		SecurityMode: security.ModeProduction,
+		ProductionGates: security.StartupGateConfig{
+			Transit: security.TransitConfig{
+				Address:      "https://openbao.example.invalid",
+				MountPath:    "transit",
+				KeyName:      "scrap-documents",
+				TokenEnv:     "OPENBAO_TOKEN",
+				TokenPresent: true,
+				Fake:         true,
+			},
+		},
+	}
+	t.Setenv("OPENBAO_TOKEN", "test-token")
+
+	_, err := newAppTransit(cfg)
+	if err == nil {
+		t.Fatal("newAppTransit succeeded, want fake Transit rejection")
+	}
+	if !errors.Is(err, encryption.ErrInvalidConfig) {
+		t.Fatalf("newAppTransit error = %v, want invalid config", err)
 	}
 }
 

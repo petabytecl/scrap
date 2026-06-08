@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -11,6 +13,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/audit"
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/security"
 )
@@ -24,6 +27,7 @@ type appSecurityRuntime struct {
 	authorizer        *security.Authorizer
 	auditSink         audit.Sink
 	rateLimiter       *security.RateLimiter
+	transit           encryption.Transit
 }
 
 type adminTLSConfig struct {
@@ -72,6 +76,10 @@ func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver 
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
+	transit, err := newAppTransit(cfg)
+	if err != nil {
+		return appSecurityRuntime{}, err
+	}
 	publicGRPCOptions, err := newPublicGRPCServerOptions(cfg, authorizer, auditSink, rateLimiter)
 	if err != nil {
 		return appSecurityRuntime{}, err
@@ -91,6 +99,7 @@ func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver 
 		authorizer:        authorizer,
 		auditSink:         auditSink,
 		rateLimiter:       rateLimiter,
+		transit:           transit,
 	}, nil
 }
 
@@ -124,6 +133,34 @@ func newAppRateLimiter(cfg Config, observer security.RateLimitObserver) (*securi
 		return nil, fmt.Errorf("rate-limit policy: %w", err)
 	}
 	return security.NewRateLimiter(policy, security.WithRateLimitObserver(observer)), nil
+}
+
+func newAppTransit(cfg Config) (encryption.Transit, error) {
+	transitCfg := cfg.ProductionGates.Transit
+	if !cfg.SecurityMode.IsProduction() {
+		return encryption.NewFakeTransit(encryption.FakeConfig{KeyName: transitCfg.KeyName}), nil
+	}
+	if transitCfg.Fake {
+		return nil, fmt.Errorf("transit config: fake Transit cannot satisfy production: %w", encryption.ErrInvalidConfig)
+	}
+	tokenEnv := strings.TrimSpace(transitCfg.TokenEnv)
+	if tokenEnv == "" {
+		return nil, fmt.Errorf("transit config: token env is required: %w", encryption.ErrInvalidConfig)
+	}
+	token := strings.TrimSpace(os.Getenv(tokenEnv))
+	if token == "" {
+		return nil, fmt.Errorf("transit config: referenced token env is empty: %w", encryption.ErrInvalidConfig)
+	}
+	transit, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+		Address:   transitCfg.Address,
+		MountPath: transitCfg.MountPath,
+		KeyName:   transitCfg.KeyName,
+		Token:     token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("transit config: %w", err)
+	}
+	return transit, nil
 }
 
 func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransport, error) {

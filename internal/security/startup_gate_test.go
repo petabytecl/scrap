@@ -162,6 +162,38 @@ func TestProductionStartupGatesRejectInvalidPolicyAndTransitInputs(t *testing.T)
 			want: ClassTransitConfig,
 		},
 		{
+			name: "invalid transit address",
+			mutate: func(t *testing.T, cfg *StartupGateConfig) {
+				t.Helper()
+				cfg.Transit.Address = "openbao.internal"
+			},
+			want: ClassTransitConfig,
+		},
+		{
+			name: "http transit address",
+			mutate: func(t *testing.T, cfg *StartupGateConfig) {
+				t.Helper()
+				cfg.Transit.Address = "http://openbao.internal"
+			},
+			want: ClassTransitConfig,
+		},
+		{
+			name: "invalid transit mount path",
+			mutate: func(t *testing.T, cfg *StartupGateConfig) {
+				t.Helper()
+				cfg.Transit.MountPath = "../transit"
+			},
+			want: ClassTransitConfig,
+		},
+		{
+			name: "invalid transit key path",
+			mutate: func(t *testing.T, cfg *StartupGateConfig) {
+				t.Helper()
+				cfg.Transit.KeyName = "documents//active"
+			},
+			want: ClassTransitConfig,
+		},
+		{
 			name: "invalid audit policy json",
 			mutate: func(t *testing.T, cfg *StartupGateConfig) {
 				t.Helper()
@@ -206,6 +238,9 @@ func TestProductionStartupGatesRejectInvalidPolicyAndTransitInputs(t *testing.T)
 			}
 			if got := ErrorClass(err); got != tt.want {
 				t.Fatalf("ErrorClass() = %q, want %q; err=%v", got, tt.want, err)
+			}
+			if strings.Contains(err.Error(), "openbao.internal") || strings.Contains(err.Error(), "http://openbao.internal") || strings.Contains(err.Error(), "../transit") {
+				t.Fatalf("startup gate error leaked Transit config value: %v", err)
 			}
 		})
 	}

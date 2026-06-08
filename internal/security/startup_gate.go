@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -319,6 +320,39 @@ func validateTransitConfig(cfg TransitConfig) error {
 	}
 	if !cfg.TokenPresent {
 		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_TOKEN_ENV", "referenced Transit token environment variable is required")
+	}
+	if err := validateTransitAddress(cfg.Address); err != nil {
+		return err
+	}
+	if err := validateTransitPath("SCRAP_TRANSIT_MOUNT", cfg.MountPath); err != nil {
+		return err
+	}
+	if err := validateTransitPath("SCRAP_TRANSIT_KEY", cfg.KeyName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateTransitAddress(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_ADDR", "address must be an absolute https URL")
+	}
+	if parsed.Scheme != "https" {
+		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_ADDR", "address must be an absolute https URL")
+	}
+	return nil
+}
+
+func validateTransitPath(key, raw string) error {
+	raw = strings.Trim(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return newGateError(ClassTransitConfig, key, "path is required")
+	}
+	for _, segment := range strings.Split(raw, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return newGateError(ClassTransitConfig, key, "path must not contain empty or relative segments")
+		}
 	}
 	return nil
 }

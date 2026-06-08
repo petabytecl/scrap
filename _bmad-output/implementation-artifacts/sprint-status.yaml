@@ -35,22 +35,22 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-08T10:58:32-04:00"
-last_updated: "2026-06-08T16:00:43-04:00"
+last_updated: "2026-06-08T17:23:01-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
 story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-production-security-mode-startup-gates: done
   1-2-mtls-credentials-and-member-identity-extraction: done
   1-3-role-authorization-from-authenticated-member-identity: done
-  1-4-bounded-audit-records-for-security-decisions: review
-  1-5-identity-aware-rate-controls-for-security-surfaces: review
+  1-4-bounded-audit-records-for-security-decisions: done
+  1-5-identity-aware-rate-controls-for-security-surfaces: done
   epic-1-retrospective: optional
-  epic-2: backlog
-  2-1-openbao-transit-boundary-and-test-only-fake: backlog
+  epic-2: in-progress
+  2-1-openbao-transit-boundary-and-test-only-fake: review
   2-2-encrypted-document-write-and-read-path: backlog
   2-3-durable-envelope-rewrap-workflow: backlog
   epic-2-retrospective: optional
