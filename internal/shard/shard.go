@@ -23,6 +23,7 @@ import (
 	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/localblock"
 	scrapraft "github.com/petabytecl/scrap/internal/raft"
+	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/scrub"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 	"github.com/petabytecl/scrap/internal/telemetry"
@@ -135,6 +136,9 @@ type Shard struct {
 	evictionHealthMu       sync.Mutex
 	evictionHealthSnapshot eviction.HealthSnapshot
 	evictionHealthBlocks   map[uint64]evictionHealthBlockContribution
+
+	rewrapHealthMu       sync.Mutex
+	rewrapHealthSnapshot rewrap.HealthSnapshot
 
 	restoreMu sync.Mutex
 	restores  map[uint64]*blockRestoreCall

@@ -59,6 +59,7 @@ const (
 	OperationEvictionPlanCreate  = "eviction_plan_create"
 	OperationEvictionPlanStatus  = "eviction_plan_status"
 	OperationEvictionApply       = "eviction_apply"
+	OperationRewrapDocument      = "rewrap_document"
 	OperationPprofIndex          = "pprof_index"
 	OperationPprofCmdline        = "pprof_cmdline"
 	OperationPprofProfile        = "pprof_profile"
@@ -326,6 +327,7 @@ var allowedOperations = set(
 	OperationEvictionPlanCreate,
 	OperationEvictionPlanStatus,
 	OperationEvictionApply,
+	OperationRewrapDocument,
 	OperationPprofIndex,
 	OperationPprofCmdline,
 	OperationPprofProfile,

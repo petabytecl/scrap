@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 )
 
@@ -39,6 +41,14 @@ func (uploadPressureProviderStub) UploadPressureSnapshot() (level int, levelName
 
 type evictionHealthProviderStub struct{}
 
+type rewrapServiceStub struct {
+	calls  int
+	req    rewrap.Request
+	result rewrap.Result
+	err    error
+	health rewrap.HealthSnapshot
+}
+
 func (evictionHealthProviderStub) EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error) {
 	return eviction.HealthSnapshot{
 		Pressure:               "degraded",
@@ -53,6 +63,16 @@ func (evictionHealthProviderStub) EvictionHealthSnapshot(context.Context) (evict
 			eviction.RestoreFailureBackendUnavailable: 6,
 		},
 	}, nil
+}
+
+func (s *rewrapServiceStub) RewrapDocument(_ context.Context, req rewrap.Request) (rewrap.Result, error) {
+	s.calls++
+	s.req = req
+	return s.result, s.err
+}
+
+func (s *rewrapServiceStub) RewrapHealthSnapshot() rewrap.HealthSnapshot {
+	return s.health
 }
 
 func TestServer_HealthEndpointReportsUploadPressure(t *testing.T) {
@@ -167,6 +187,126 @@ func TestServer_HealthEndpointReportsEvictionLifecycleSeparately(t *testing.T) {
 	}
 	if reasons["backend_restore_unavailable"] != float64(6) {
 		t.Fatalf("backend restore failures = %v, want 6", reasons["backend_restore_unavailable"])
+	}
+}
+
+func TestServer_HealthEndpointReportsBoundedRewrapStatus(t *testing.T) {
+	rewrappedAt := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	service := &rewrapServiceStub{
+		health: rewrap.HealthSnapshot{
+			Status:           rewrap.StatusDegraded,
+			LastResult:       rewrap.StatusFailed,
+			LastReason:       rewrap.ReasonCryptoUnavailable,
+			LastTransitMount: "transit",
+			LastTransitKey:   "documents",
+			LastOldVersion:   1,
+			LastNewVersion:   1,
+			LastAt:           rewrappedAt,
+			FailuresByReason: map[string]int{
+				rewrap.ReasonCryptoUnavailable: 2,
+			},
+		},
+	}
+	srv := admin.New(admin.WithRewrapService(service))
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	assertNoSensitiveRewrapFields(t, body, "transaction_id", "document_name")
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	for key, want := range map[string]string{
+		"status":                    "degraded",
+		"rewrap_status":             rewrap.StatusDegraded,
+		"rewrap_last_result":        rewrap.StatusFailed,
+		"rewrap_last_reason":        rewrap.ReasonCryptoUnavailable,
+		"rewrap_last_transit_mount": "transit",
+		"rewrap_last_transit_key":   "documents",
+		"rewrap_last_at":            "2026-06-08T12:00:00Z",
+	} {
+		if got[key] != want {
+			t.Fatalf("%s = %v, want %q", key, got[key], want)
+		}
+	}
+	assertHealthNumber(t, got, "rewrap_last_old_version", 1)
+	assertHealthNumber(t, got, "rewrap_last_new_version", 1)
+	reasons, ok := got["rewrap_failures_by_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("rewrap_failures_by_reason = %T, want object", got["rewrap_failures_by_reason"])
+	}
+	if reasons[rewrap.ReasonCryptoUnavailable] != float64(2) {
+		t.Fatalf("crypto unavailable failures = %v, want 2", reasons[rewrap.ReasonCryptoUnavailable])
+	}
+}
+
+func TestServer_RewrapDocumentEndpointCallsServiceWithSafeResponse(t *testing.T) {
+	service := &rewrapServiceStub{
+		result: rewrap.Result{
+			Status:        rewrap.StatusOK,
+			Reason:        rewrap.ReasonOK,
+			Changed:       true,
+			TransactionID: "tx-rewrap",
+			DocumentName:  "doc.xml",
+			BlockID:       7,
+			TransitMount:  "transit",
+			TransitKey:    "documents",
+			OldKeyVersion: 1,
+			NewKeyVersion: 2,
+		},
+	}
+	srv := admin.New(admin.WithRewrapService(service))
+
+	req := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/admin/rewrap/document",
+		strings.NewReader(`{"transaction_id":"tx-rewrap","document_name":"doc.xml","key_version":2,"reason":"rotate"}`),
+	)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.calls != 1 {
+		t.Fatalf("rewrap calls = %d, want 1", service.calls)
+	}
+	if service.req.TransactionID != "tx-rewrap" || service.req.DocumentName != "doc.xml" || service.req.KeyVersion != 2 || service.req.Reason != "rotate" {
+		t.Fatalf("rewrap request mismatch: %+v", service.req)
+	}
+	body := resp.Body.String()
+	assertNoSensitiveRewrapFields(t, body)
+	assertRewrapResponse(t, body, rewrap.StatusOK, 1, 2, true)
+}
+
+func assertNoSensitiveRewrapFields(t *testing.T, body string, extraForbidden ...string) {
+	t.Helper()
+
+	forbidden := append([]string{"wrapped_data_key", "ciphertext", "plaintext"}, extraForbidden...)
+	for _, value := range forbidden {
+		if strings.Contains(body, value) {
+			t.Fatalf("rewrap evidence leaked %q: %s", value, body)
+		}
+	}
+}
+
+func assertRewrapResponse(t *testing.T, body, status string, oldVersion, newVersion int, changed bool) {
+	t.Helper()
+
+	var got rewrap.Result
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode rewrap response: %v", err)
+	}
+	if got.Status != status || got.OldKeyVersion != oldVersion || got.NewKeyVersion != newVersion || got.Changed != changed {
+		t.Fatalf("rewrap response mismatch: %+v", got)
 	}
 }
 

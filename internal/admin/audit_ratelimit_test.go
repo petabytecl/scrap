@@ -86,6 +86,32 @@ func TestAdminAuditsDeniedDangerousOperation(t *testing.T) {
 	}
 }
 
+func TestAdminAuditsRewrapRouteAsDocumentOperation(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	service := &rewrapServiceStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithRewrapService(service))
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminOperator),
+	})
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/rewrap/document", bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":"doc.xml"}`)))
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	events := sink.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].Operation != audit.OperationRewrapDocument || events[0].Target != audit.TargetDocument || events[0].Result != audit.ResultAllowed {
+		t.Fatalf("audit event = %+v, want rewrap_document/document allowed", events[0])
+	}
+}
+
 func TestAdminAuditsWildcardPprofRoutesAsProfiles(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	sink := audit.NewMemorySink()

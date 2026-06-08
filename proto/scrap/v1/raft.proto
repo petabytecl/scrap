@@ -8,6 +8,7 @@ message RaftCommand {
     RequestConsistencyCheck     consistency_check = 2;
     SealBlock                   seal_block        = 3;
     ConfirmUpload               confirm_upload    = 4;
+    RewrapDocumentEnvelope      rewrap_doc        = 7;
   }
 
   // W3C trace context, injected by the proposing leader and extracted by every
@@ -45,6 +46,16 @@ message ConfirmUpload {
   int64                 confirmed_at_us = 4;
   BackendObjectMetadata block_object    = 6;
   BackendObjectMetadata index_object    = 7;
+}
+
+message RewrapDocumentEnvelope {
+  string transaction_id      = 1;
+  string document_name       = 2;
+  uint64 block_id            = 3;
+  bytes  encryption_envelope = 4;
+  int32  old_key_version     = 5;
+  int32  new_key_version     = 6;
+  int64  rewrapped_at_us     = 7;
 }
 
 message CommitDocument {
