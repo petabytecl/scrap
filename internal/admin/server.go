@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 const (
@@ -53,6 +54,8 @@ type Server struct {
 	evictionApplier    EvictionApplier
 	evictionPlanStatus EvictionPlanStatusProvider
 	evictionHealth     EvictionHealthProvider
+	securityMode       security.Mode
+	readiness          security.Readiness
 	logger             *slog.Logger
 }
 
@@ -89,6 +92,13 @@ func WithMetrics(handler http.Handler) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(s *Server) {
 		s.logger = logger
+	}
+}
+
+func WithSecurityStatus(mode security.Mode, readiness security.Readiness) Option {
+	return func(s *Server) {
+		s.securityMode = mode
+		s.readiness = readiness
 	}
 }
 
@@ -218,6 +228,9 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 
 type healthResponse struct {
 	Status                  string         `json:"status"`
+	SecurityMode            string         `json:"security_mode,omitempty"`
+	ProductionReadyStatus   string         `json:"production_readiness_status,omitempty"`
+	ProductionReadyReason   string         `json:"production_readiness_reason,omitempty"`
 	UploadPressure          string         `json:"upload_pressure"`
 	UploadPressureLevel     int            `json:"upload_pressure_level"`
 	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
@@ -249,6 +262,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		UploadPressure:      "ok",
 		UploadPressureLevel: 0,
 		EvictionPressure:    eviction.HealthPressureOK,
+	}
+	if s.securityMode != "" {
+		readiness := s.readiness
+		if readiness.Status == "" {
+			readiness = security.ProductionReadinessForMode(s.securityMode)
+		}
+		resp.SecurityMode = s.securityMode.String()
+		resp.ProductionReadyStatus = string(readiness.Status)
+		resp.ProductionReadyReason = readiness.Reason
 	}
 	if s.uploadPressure != nil {
 		level, levelName, pendingBytes, pendingBlocks := s.uploadPressure.UploadPressureSnapshot()

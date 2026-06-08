@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/shard"
 )
 
@@ -39,6 +40,7 @@ type Config struct {
 	RawTelemetryIDs   bool
 	TestHooks         bool
 	PprofEnabled      bool
+	SecurityMode      security.Mode
 
 	// Peer-resolution environment.
 	Replicas        int
@@ -51,6 +53,10 @@ type Config struct {
 	Scrub          scrub.Config
 	UploadPressure shard.UploadPressureConfig
 	Eviction       shard.EvictionConfig
+
+	// Production security gates. These are parsed from environment but enforced
+	// in newApp before any serving surface or backend is opened.
+	ProductionGates security.StartupGateConfig
 }
 
 // loadConfig assembles Config from the given command-line arguments and the
@@ -100,7 +106,10 @@ func loadCheckedEnv(cfg *Config) error {
 	if err := loadBoolEnv(cfg); err != nil {
 		return err
 	}
-	return loadIntEnv(cfg)
+	if err := loadIntEnv(cfg); err != nil {
+		return err
+	}
+	return loadSecurityEnv(cfg)
 }
 
 func loadSubsystemEnv(cfg *Config) error {
@@ -141,6 +150,71 @@ func loadIntEnv(cfg *Config) error {
 		return err
 	}
 	return nil
+}
+
+func loadSecurityEnv(cfg *Config) error {
+	mode, err := security.ParseMode(os.Getenv("SCRAP_SECURITY_MODE"))
+	if err != nil {
+		return err
+	}
+	transitFake, err := envBoolChecked("SCRAP_TRANSIT_FAKE", false)
+	if err != nil {
+		return err
+	}
+	transitTokenEnv := os.Getenv("SCRAP_TRANSIT_TOKEN_ENV")
+
+	cfg.SecurityMode = mode
+	cfg.ProductionGates = security.StartupGateConfig{
+		Mode: mode,
+		TLS: security.TLSConfig{
+			Public:   surfaceTLSFiles("SCRAP_TLS_PUBLIC"),
+			Peer:     surfaceTLSFiles("SCRAP_TLS_PEER"),
+			Admin:    surfaceTLSFiles("SCRAP_TLS_ADMIN"),
+			Scrapctl: surfaceTLSFiles("SCRAP_TLS_SCRAPCTL"),
+		},
+		RolePolicyPath:         os.Getenv("SCRAP_ROLE_POLICY_FILE"),
+		PeerIdentityPolicyPath: os.Getenv("SCRAP_PEER_IDENTITY_POLICY_FILE"),
+		Transit: security.TransitConfig{
+			Address:      os.Getenv("SCRAP_TRANSIT_ADDR"),
+			MountPath:    os.Getenv("SCRAP_TRANSIT_MOUNT"),
+			KeyName:      os.Getenv("SCRAP_TRANSIT_KEY"),
+			TokenEnv:     transitTokenEnv,
+			TokenPresent: transitTokenPresent(transitTokenEnv),
+			Fake:         transitFake,
+		},
+		AuditSink:  security.AuditSinkConfig{PolicyPath: os.Getenv("SCRAP_AUDIT_POLICY_FILE")},
+		RateLimits: security.RateLimitConfig{PolicyPath: os.Getenv("SCRAP_RATE_LIMIT_POLICY_FILE")},
+		TestHooks:  cfg.TestHooks,
+		Pprof:      security.PprofConfig{Enabled: cfg.PprofEnabled},
+	}
+	return nil
+}
+
+func surfaceTLSFiles(prefix string) security.TLSFiles {
+	return security.TLSFiles{
+		ServerCertPath: os.Getenv(prefix + "_CERT"),
+		ServerKeyPath:  os.Getenv(prefix + "_KEY"),
+		ClientCAPath:   os.Getenv(prefix + "_CLIENT_CA"),
+		ServerName:     os.Getenv(prefix + "_SERVER_NAME"),
+	}
+}
+
+func transitTokenPresent(tokenEnv string) bool {
+	tokenEnv = strings.TrimSpace(tokenEnv)
+	if tokenEnv == "" {
+		return false
+	}
+	token, ok := os.LookupEnv(tokenEnv)
+	return ok && strings.TrimSpace(token) != ""
+}
+
+func (c Config) startupGateConfig(peerIdentity security.PeerIdentityConfig) security.StartupGateConfig {
+	gates := c.ProductionGates
+	gates.Mode = c.SecurityMode
+	gates.PeerIdentity = peerIdentity
+	gates.TestHooks = c.TestHooks
+	gates.Pprof.Enabled = c.PprofEnabled
+	return gates
 }
 
 // validate enforces ranges on typed values. It only rejects values that are

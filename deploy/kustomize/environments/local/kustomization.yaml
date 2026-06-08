@@ -8,6 +8,9 @@ components:
   - ../../components/localstack
   - ../../components/nodeports
 
+patches:
+  - path: statefulset-security-mode-patch.yaml
+
 images:
   - name: ghcr.io/petabytecl/scrap/scrapd
     newName: localhost/scrapd

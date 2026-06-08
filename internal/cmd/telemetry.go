@@ -23,6 +23,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
 	scraptelemetry "github.com/petabytecl/scrap/internal/telemetry"
@@ -111,8 +112,8 @@ type scrapdTelemetryRuntime struct {
 	resourceConfig scraptelemetry.ResourceConfig
 }
 
-func newScrapdTelemetry(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo) (*scrapdTelemetryRuntime, error) {
-	resourceConfig := scrapdTelemetryResourceConfig(memberSlotID, memberID, raftID, shardID, build)
+func newScrapdTelemetryWithSecurity(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo, mode security.Mode) (*scrapdTelemetryRuntime, error) {
+	resourceConfig := scrapdTelemetryResourceConfigWithSecurity(memberSlotID, memberID, raftID, shardID, build, mode)
 	otelResource, err := scraptelemetry.NewResource(ctx, resourceConfig)
 	if err != nil {
 		return nil, err
@@ -226,16 +227,29 @@ func scrapdRPCServerDurationSecondBuckets() []float64 {
 	return []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 }
 
-func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shardID uint64, build BuildInfo) (*scrapdTelemetryRuntime, error) {
-	memberSlotID, err := os.Hostname()
-	if err != nil {
-		return nil, fmt.Errorf("hostname: %w", err)
-	}
-	memberID, err := resolveScrapdTelemetryMemberID(dataDir)
+func newScrapdTelemetryForHost(ctx context.Context, dataDir string, raftID, shardID uint64, build BuildInfo, mode security.Mode) (*scrapdTelemetryRuntime, error) {
+	identity, err := resolveScrapdMemberIdentity(dataDir, envString("SCRAP_CELL_ID", localTelemetryIdentity))
 	if err != nil {
 		return nil, err
 	}
-	return newScrapdTelemetry(ctx, memberSlotID, memberID, raftID, shardID, build)
+	return newScrapdTelemetryWithSecurity(ctx, identity.MemberHostname, identity.MemberID, raftID, shardID, build, mode)
+}
+
+type scrapdMemberIdentity struct {
+	MemberHostname string
+	MemberID       string
+}
+
+func resolveScrapdMemberIdentity(dataDir, cellID string) (scrapdMemberIdentity, error) {
+	memberSlotID, err := os.Hostname()
+	if err != nil {
+		return scrapdMemberIdentity{}, fmt.Errorf("hostname: %w", err)
+	}
+	memberID, err := resolveScrapdTelemetryMemberIDForCell(dataDir, cellID)
+	if err != nil {
+		return scrapdMemberIdentity{}, err
+	}
+	return scrapdMemberIdentity{MemberHostname: memberSlotID, MemberID: memberID}, nil
 }
 
 type shardTelemetryBundle struct {
@@ -313,6 +327,10 @@ func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 }
 
 func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo) scraptelemetry.ResourceConfig {
+	return scrapdTelemetryResourceConfigWithSecurity(memberSlotID, memberID, raftID, shardID, build, "")
+}
+
+func scrapdTelemetryResourceConfigWithSecurity(memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo, mode security.Mode) scraptelemetry.ResourceConfig {
 	build = build.withDefaults()
 	instanceID := scrapdTelemetryInstanceID(memberSlotID, memberID)
 	if memberSlotID == "" {
@@ -322,7 +340,7 @@ func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardI
 		memberID = localTelemetryIdentity
 	}
 
-	return scraptelemetry.ResourceConfig{
+	cfg := scraptelemetry.ResourceConfig{
 		ServiceName:  "scrapd",
 		Environment:  envString("SCRAP_ENVIRONMENT", localTelemetryIdentity),
 		Version:      build.Version,
@@ -335,6 +353,13 @@ func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardI
 		ShardID:      shardID,
 		RaftID:       raftID,
 	}
+	if mode != "" {
+		readiness := security.ProductionReadinessForMode(mode)
+		cfg.SecurityMode = mode.String()
+		cfg.ProductionReadinessStatus = string(readiness.Status)
+		cfg.ProductionReadinessReason = readiness.Reason
+	}
+	return cfg
 }
 
 func scrapdTelemetryInstanceID(memberSlotID, memberID string) string {
@@ -352,10 +377,15 @@ type memberIdentityRecord struct {
 }
 
 func resolveScrapdTelemetryMemberID(dataDir string) (string, error) {
+	return resolveScrapdTelemetryMemberIDForCell(dataDir, envString("SCRAP_CELL_ID", localTelemetryIdentity))
+}
+
+func resolveScrapdTelemetryMemberIDForCell(dataDir, cellID string) (string, error) {
 	if memberID := strings.TrimSpace(os.Getenv("SCRAP_MEMBER_ID")); memberID != "" {
 		return memberID, nil
 	}
-	if envString("SCRAP_CELL_ID", localTelemetryIdentity) == localTelemetryIdentity {
+	cellID = strings.TrimSpace(cellID)
+	if cellID == "" || cellID == localTelemetryIdentity {
 		return localTelemetryIdentity, nil
 	}
 	if strings.TrimSpace(dataDir) == "" {

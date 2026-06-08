@@ -11,17 +11,20 @@ import (
 
 func TestNewResourceIncludesScrapIdentityAndBuildAttributes(t *testing.T) {
 	res, err := telemetry.NewResource(context.Background(), telemetry.ResourceConfig{
-		ServiceName:  "scrapd",
-		Environment:  "stress",
-		InstanceID:   "scrapd-explicit",
-		Version:      "v2.3.4",
-		BuildSHA:     "abc123",
-		BuildTime:    "2026-05-28T12:00:00Z",
-		CellID:       "cell-a",
-		MemberSlotID: "scrapd-0",
-		MemberID:     "member-123",
-		ShardID:      7,
-		RaftID:       3,
+		ServiceName:               "scrapd",
+		Environment:               "stress",
+		InstanceID:                "scrapd-explicit",
+		Version:                   "v2.3.4",
+		BuildSHA:                  "abc123",
+		BuildTime:                 "2026-05-28T12:00:00Z",
+		CellID:                    "cell-a",
+		MemberSlotID:              "scrapd-0",
+		MemberID:                  "member-123",
+		ShardID:                   7,
+		RaftID:                    3,
+		SecurityMode:              "development",
+		ProductionReadinessStatus: "not_ready",
+		ProductionReadinessReason: "non_production_security_mode",
 	})
 	if err != nil {
 		t.Fatalf("NewResource: %v", err)
@@ -39,6 +42,9 @@ func TestNewResourceIncludesScrapIdentityAndBuildAttributes(t *testing.T) {
 	assertAttr(t, attrs, "scrap.member_id", "member-123")
 	assertAttr(t, attrs, "scrap.shard_id", "7")
 	assertAttr(t, attrs, "scrap.raft_id", "3")
+	assertAttr(t, attrs, "scrap.security_mode", "development")
+	assertAttr(t, attrs, "scrap.production_readiness.status", "not_ready")
+	assertAttr(t, attrs, "scrap.production_readiness.reason", "non_production_security_mode")
 
 	for _, forbidden := range []string{"transaction_id", "document_name"} {
 		if _, ok := attrs[attribute.Key(forbidden)]; ok {

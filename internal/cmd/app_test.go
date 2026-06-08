@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/scrub"
+	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/shard"
 )
 
@@ -25,6 +26,7 @@ func TestAppRunCleanShutdown(t *testing.T) {
 		UploadConcurrency: shard.DefaultUploadConcurrency,
 		PeerPort:          defaultPeerPort,
 		Namespace:         "default",
+		SecurityMode:      security.ModeTest,
 		Scrub:             scrub.ParseConfig(),
 		UploadPressure:    shard.ParseUploadPressureConfigFromEnv(),
 	}
@@ -52,5 +54,31 @@ func TestAppRunCleanShutdown(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("Run did not return within 15s after context cancel")
+	}
+}
+
+func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {
+	t.Setenv("SCRAP_BACKEND_TYPE", "s3")
+	cfg := Config{
+		DataDir:           t.TempDir(),
+		ListenAddr:        "127.0.0.1:0",
+		PeerAddr:          "127.0.0.1:0",
+		AdminAddr:         "127.0.0.1:0",
+		BlockSealSize:     shard.DefaultBlockSealSize,
+		UploadEnabled:     true,
+		UploadConcurrency: shard.DefaultUploadConcurrency,
+		PeerPort:          defaultPeerPort,
+		Namespace:         "default",
+		SecurityMode:      security.ModeProduction,
+		Scrub:             scrub.ParseConfig(),
+		UploadPressure:    shard.ParseUploadPressureConfigFromEnv(),
+	}
+
+	_, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+	if err == nil {
+		t.Fatal("newApp succeeded, want production security gate error")
+	}
+	if got := security.ErrorClass(err); got != security.ClassTLSConfig {
+		t.Fatalf("ErrorClass() = %q, want %q; err=%v", got, security.ClassTLSConfig, err)
 	}
 }

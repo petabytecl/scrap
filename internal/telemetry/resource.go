@@ -40,6 +40,12 @@ type ResourceConfig struct {
 	ShardID uint64
 	// RaftID identifies this member within the Shard's Raft group.
 	RaftID uint64
+	// SecurityMode is the bounded configured security mode.
+	SecurityMode string
+	// ProductionReadinessStatus is the bounded production-readiness state.
+	ProductionReadinessStatus string
+	// ProductionReadinessReason is the bounded reason for non-ready status.
+	ProductionReadinessReason string
 }
 
 // NewResource returns the OpenTelemetry resource used by scrapd telemetry.
@@ -82,6 +88,15 @@ func resourceAttributes(cfg ResourceConfig) []attribute.KeyValue {
 	}
 	if cfg.BuildTime != "" {
 		attrs = append(attrs, attribute.String("scrap.build.time", cfg.BuildTime))
+	}
+	if cfg.SecurityMode != "" {
+		attrs = append(attrs, attribute.String("scrap.security_mode", cfg.SecurityMode))
+	}
+	if cfg.ProductionReadinessStatus != "" {
+		attrs = append(attrs, attribute.String("scrap.production_readiness.status", cfg.ProductionReadinessStatus))
+	}
+	if cfg.ProductionReadinessReason != "" {
+		attrs = append(attrs, attribute.String("scrap.production_readiness.reason", cfg.ProductionReadinessReason))
 	}
 	return attrs
 }

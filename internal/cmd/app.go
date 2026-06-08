@@ -13,6 +13,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/peer"
+	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
 	"github.com/petabytecl/scrap/internal/telemetry"
@@ -49,6 +50,11 @@ type App struct {
 //
 //nolint:cyclop // linear construction of all subsystems; complexity is inherent
 func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInfo) (*App, error) {
+	memberIdentity, err := validateStartupSecurityGates(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	var cleanup []func()
 	fail := func(err error) (*App, error) {
 		for i := len(cleanup) - 1; i >= 0; i-- {
@@ -79,7 +85,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	clientAddrs := resolveClientAddrs(cfg, peers)
 
-	telemetryRuntime, err := newScrapdTelemetryForHost(context.Background(), cfg.DataDir, raftID, 0, build)
+	telemetryRuntime, err := newScrapdTelemetryWithSecurity(context.Background(), memberIdentity.MemberHostname, memberIdentity.MemberID, raftID, 0, build, cfg.SecurityMode)
 	if err != nil {
 		return fail(err)
 	}
@@ -174,6 +180,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 
 	adminOpts := []admin.Option{
 		admin.WithLogger(logger),
+		admin.WithSecurityStatus(cfg.SecurityMode, security.ProductionReadinessForMode(cfg.SecurityMode)),
 		admin.WithUploadPressureProvider(s),
 		admin.WithEvictionPlanner(s),
 		admin.WithEvictionApplier(s),
@@ -206,6 +213,22 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		raftID:      raftID,
 		uploadCfg:   uploadCfg,
 	}, nil
+}
+
+func validateStartupSecurityGates(cfg Config) (scrapdMemberIdentity, error) {
+	memberIdentity, err := resolveScrapdMemberIdentity(cfg.DataDir, cfg.CellID)
+	if err != nil {
+		return scrapdMemberIdentity{}, err
+	}
+	peerIdentity := security.PeerIdentityConfig{
+		CellID:         cfg.CellID,
+		MemberHostname: memberIdentity.MemberHostname,
+		MemberID:       memberIdentity.MemberID,
+	}
+	if err := security.ValidateStartupGates(cfg.startupGateConfig(peerIdentity)); err != nil {
+		return scrapdMemberIdentity{}, fmt.Errorf("production security gates: %w", err)
+	}
+	return memberIdentity, nil
 }
 
 // Run serves the client, peer, and admin servers until ctx is cancelled or one

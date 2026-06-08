@@ -4,12 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/shard"
 )
 
 // configEnvKeys are every environment variable loadConfig reads at the
 // cmd/scrapd level. Tests clear them so the process environment cannot leak in.
 var configEnvKeys = []string{
+	"SCRAP_SECURITY_MODE",
 	"SCRAP_CELL_ID",
 	"SCRAP_HEADLESS_SERVICE",
 	"POD_NAMESPACE",
@@ -26,6 +28,31 @@ var configEnvKeys = []string{
 	"SCRAP_EVICTION_RECOMMENDED_MAX_BLOCKS",
 	"SCRAP_EVICTION_RECOMMENDED_MAX_BYTES",
 	"SCRAP_EVICTION_MAX_VALIDATE_SAMPLES",
+	"SCRAP_TLS_PUBLIC_CERT",
+	"SCRAP_TLS_PUBLIC_KEY",
+	"SCRAP_TLS_PUBLIC_CLIENT_CA",
+	"SCRAP_TLS_PUBLIC_SERVER_NAME",
+	"SCRAP_TLS_PEER_CERT",
+	"SCRAP_TLS_PEER_KEY",
+	"SCRAP_TLS_PEER_CLIENT_CA",
+	"SCRAP_TLS_PEER_SERVER_NAME",
+	"SCRAP_TLS_ADMIN_CERT",
+	"SCRAP_TLS_ADMIN_KEY",
+	"SCRAP_TLS_ADMIN_CLIENT_CA",
+	"SCRAP_TLS_ADMIN_SERVER_NAME",
+	"SCRAP_TLS_SCRAPCTL_CERT",
+	"SCRAP_TLS_SCRAPCTL_KEY",
+	"SCRAP_TLS_SCRAPCTL_CLIENT_CA",
+	"SCRAP_TLS_SCRAPCTL_SERVER_NAME",
+	"SCRAP_ROLE_POLICY_FILE",
+	"SCRAP_PEER_IDENTITY_POLICY_FILE",
+	"SCRAP_TRANSIT_ADDR",
+	"SCRAP_TRANSIT_MOUNT",
+	"SCRAP_TRANSIT_KEY",
+	"SCRAP_TRANSIT_TOKEN_ENV",
+	"SCRAP_TRANSIT_FAKE",
+	"SCRAP_AUDIT_POLICY_FILE",
+	"SCRAP_RATE_LIMIT_POLICY_FILE",
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -37,6 +64,7 @@ func clearConfigEnv(t *testing.T) {
 
 func TestLoadConfigDefaults(t *testing.T) {
 	clearConfigEnv(t)
+	t.Setenv("SCRAP_SECURITY_MODE", "development")
 
 	c, err := loadConfig(nil)
 	if err != nil {
@@ -60,10 +88,14 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if c.Namespace != "default" {
 		t.Errorf("Namespace = %q, want default", c.Namespace)
 	}
+	if c.SecurityMode != security.ModeDevelopment {
+		t.Errorf("SecurityMode = %q, want development", c.SecurityMode)
+	}
 }
 
 func TestLoadConfigValid(t *testing.T) {
 	clearConfigEnv(t)
+	t.Setenv("SCRAP_SECURITY_MODE", "test")
 	t.Setenv("SCRAP_UPLOAD_ENABLED", "false")
 	t.Setenv("SCRAP_UPLOAD_CONCURRENCY", "8")
 	t.Setenv("SCRAP_REPLICAS", "3")
@@ -93,6 +125,7 @@ func TestLoadConfigValid(t *testing.T) {
 		{"TestHooks", c.TestHooks, true},
 		{"PprofEnabled", c.PprofEnabled, true},
 		{"CellID", c.CellID, "cell-a"},
+		{"SecurityMode", c.SecurityMode, security.ModeTest},
 		{"EvictionEnabled", c.Eviction.Enabled, true},
 		{"EvictionHotResidencyWindow", c.Eviction.HotResidencyWindow.String(), "30m0s"},
 	}
@@ -110,6 +143,8 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 		env     map[string]string
 		wantErr string // substring the error must contain (the offending key)
 	}{
+		{"missing security mode", nil, nil, "SCRAP_SECURITY_MODE"},
+		{"unknown security mode", nil, map[string]string{"SCRAP_SECURITY_MODE": "staging"}, "SCRAP_SECURITY_MODE"},
 		{"malformed int", nil, map[string]string{"SCRAP_UPLOAD_CONCURRENCY": "two"}, "SCRAP_UPLOAD_CONCURRENCY"},
 		{"malformed bool", nil, map[string]string{"SCRAP_UPLOAD_ENABLED": "yesplease"}, "SCRAP_UPLOAD_ENABLED"},
 		{"out-of-range port", nil, map[string]string{"SCRAP_PEER_PORT": "99999"}, "SCRAP_PEER_PORT"},
@@ -120,6 +155,9 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clearConfigEnv(t)
+			if tt.wantErr != "SCRAP_SECURITY_MODE" {
+				t.Setenv("SCRAP_SECURITY_MODE", "development")
+			}
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}

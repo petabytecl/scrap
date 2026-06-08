@@ -10,6 +10,4 @@ spec:
         - name: scrapd
           env:
             - name: SCRAP_SECURITY_MODE
-              value: test
-            - name: SCRAP_TEST_HOOKS
-              value: "1"
+              value: development

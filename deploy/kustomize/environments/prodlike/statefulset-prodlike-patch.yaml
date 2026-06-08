@@ -13,6 +13,8 @@ spec:
               value: kind-prodlike
             - name: SCRAP_ENVIRONMENT
               value: prodlike
+            - name: SCRAP_SECURITY_MODE
+              value: development
             - name: SCRAP_PPROF_ENABLED
               value: "true"
             - name: SCRAP_SCRUB_ENABLED

@@ -19,6 +19,9 @@ const (
 
 type Health struct {
 	Status                  string         `json:"status"`
+	SecurityMode            string         `json:"security_mode,omitempty"`
+	ProductionReadyStatus   string         `json:"production_readiness_status,omitempty"`
+	ProductionReadyReason   string         `json:"production_readiness_reason,omitempty"`
 	UploadPressure          string         `json:"upload_pressure"`
 	UploadPressureLevel     int            `json:"upload_pressure_level"`
 	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
