@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/security"
@@ -71,11 +72,11 @@ func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver 
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
-	publicGRPCOptions, err := newPublicGRPCServerOptions(cfg, authorizer)
+	publicGRPCOptions, err := newPublicGRPCServerOptions(cfg, authorizer, auditSink, rateLimiter)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
-	peerGRPCOptions, err := newPeerGRPCServerOptions(cfg, authorizer)
+	peerGRPCOptions, err := newPeerGRPCServerOptions(cfg, authorizer, auditSink, rateLimiter)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
@@ -147,7 +148,7 @@ func newPeerClient(cfg Config) (*peer.Client, error) {
 	return peer.NewClient(peer.WithClientTransportCredentials(credentials.NewTLS(clientTLS))), nil
 }
 
-func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer) ([]grpc.ServerOption, error) {
+func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer, auditSink audit.Sink, rateLimiter *security.RateLimiter) ([]grpc.ServerOption, error) {
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
 	if !cfg.SecurityMode.IsProduction() {
 		return opts, nil
@@ -158,12 +159,16 @@ func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer) ([]
 	}
 	return append(opts,
 		grpc.Creds(credentials.NewTLS(serverTLS)),
-		grpc.ChainUnaryInterceptor(security.PrincipalUnaryServerInterceptor(authorizer)),
-		grpc.ChainStreamInterceptor(security.PrincipalStreamServerInterceptor(authorizer)),
+		grpc.ChainUnaryInterceptor(security.PrincipalUnaryServerInterceptor(authorizer,
+			security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePublic, publicGRPCAuditInfo),
+		)),
+		grpc.ChainStreamInterceptor(security.PrincipalStreamServerInterceptor(authorizer,
+			security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePublic, publicGRPCAuditInfo),
+		)),
 	), nil
 }
 
-func newPeerGRPCServerOptions(cfg Config, authorizer *security.Authorizer) ([]grpc.ServerOption, error) {
+func newPeerGRPCServerOptions(cfg Config, authorizer *security.Authorizer, auditSink audit.Sink, rateLimiter *security.RateLimiter) ([]grpc.ServerOption, error) {
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
 	if !cfg.SecurityMode.IsProduction() {
 		return opts, nil
@@ -175,14 +180,52 @@ func newPeerGRPCServerOptions(cfg Config, authorizer *security.Authorizer) ([]gr
 	return append(opts,
 		grpc.Creds(credentials.NewTLS(serverTLS)),
 		grpc.ChainUnaryInterceptor(
-			security.PrincipalUnaryServerInterceptor(authorizer),
+			security.PrincipalUnaryServerInterceptor(authorizer,
+				security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePeer, peerGRPCAuditInfo),
+			),
 			security.PeerIdentityUnaryServerInterceptor(),
 		),
 		grpc.ChainStreamInterceptor(
-			security.PrincipalStreamServerInterceptor(authorizer),
+			security.PrincipalStreamServerInterceptor(authorizer,
+				security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePeer, peerGRPCAuditInfo),
+			),
 			security.PeerIdentityStreamServerInterceptor(),
 		),
 	), nil
+}
+
+func publicGRPCAuditInfo(fullMethod string) (security.GRPCAuditInfo, bool) {
+	switch fullMethod {
+	case scrapv1.DocumentService_WriteDocument_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RoleDocumentWriter, Operation: audit.OperationWriteDocument, Target: audit.TargetDocument}, true
+	case scrapv1.DocumentService_HeadDocument_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RoleDocumentReader, Operation: audit.OperationHeadDocument, Target: audit.TargetDocument}, true
+	case scrapv1.DocumentService_ReadDocument_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RoleDocumentReader, Operation: audit.OperationReadDocument, Target: audit.TargetDocument}, true
+	case scrapv1.DocumentService_FindDocuments_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RoleDocumentReader, Operation: audit.OperationFindDocuments, Target: audit.TargetDocument}, true
+	default:
+		return security.GRPCAuditInfo{}, false
+	}
+}
+
+func peerGRPCAuditInfo(fullMethod string) (security.GRPCAuditInfo, bool) {
+	switch fullMethod {
+	case scrapv1.PeerService_ReplicateDocument_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RolePeerMember, Operation: audit.OperationReplicateDocument, Target: audit.TargetDocument}, true
+	case scrapv1.PeerService_TransferBlock_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RolePeerMember, Operation: audit.OperationTransferBlock, Target: audit.TargetBlock}, true
+	case scrapv1.PeerService_ConsistencyCheck_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RolePeerMember, Operation: audit.OperationConsistencyCheck, Target: audit.TargetPeer}, true
+	case scrapv1.PeerService_RequestIndexRebuild_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RolePeerMember, Operation: audit.OperationRequestIndexRebuild, Target: audit.TargetPeer}, true
+	case scrapv1.PeerService_ForwardRaft_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RolePeerMember, Operation: audit.OperationForwardRaft, Target: audit.TargetPeer}, true
+	case scrapv1.PeerService_ForwardRaftStream_FullMethodName:
+		return security.GRPCAuditInfo{Role: security.RolePeerMember, Operation: audit.OperationForwardRaftStream, Target: audit.TargetPeer}, true
+	default:
+		return security.GRPCAuditInfo{}, false
+	}
 }
 
 func newAdminTLSConfig(cfg Config) (adminTLSConfig, error) {

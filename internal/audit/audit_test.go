@@ -3,6 +3,7 @@ package audit_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -127,6 +128,46 @@ func TestLoggerAndNopSinksAcceptValidEvents(t *testing.T) {
 	if err := audit.NewNopSink().Record(context.Background(), event); err != nil {
 		t.Fatalf("nop sink record: %v", err)
 	}
+}
+
+func TestLoggerSinkReturnsHandlerErrors(t *testing.T) {
+	event, err := audit.NewEvent(audit.EventInput{
+		PrincipalID: "principal",
+		Role:        "admin_operator",
+		Surface:     audit.SurfaceAdmin,
+		Operation:   audit.OperationEvictionApply,
+		Target:      audit.TargetBlock,
+		Result:      audit.ResultAllowed,
+		Reason:      audit.ReasonAllowed,
+	})
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	wantErr := errors.New("write audit")
+	sink := audit.NewLoggerSink(slog.New(errorHandler{err: wantErr}))
+	if err := sink.Record(context.Background(), event); !errors.Is(err, wantErr) {
+		t.Fatalf("Record = %v, want handler error", err)
+	}
+}
+
+type errorHandler struct {
+	err error
+}
+
+func (h errorHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h errorHandler) Handle(context.Context, slog.Record) error {
+	return h.err
+}
+
+func (h errorHandler) WithAttrs([]slog.Attr) slog.Handler {
+	return h
+}
+
+func (h errorHandler) WithGroup(string) slog.Handler {
+	return h
 }
 
 func writeAuditJSONFixture(t *testing.T, value any) string {

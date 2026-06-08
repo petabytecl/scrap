@@ -145,7 +145,7 @@ func (a *Authorizer) Authorize(ctx context.Context, role Role) error {
 	}
 	if !principal.Roles.has(role) {
 		a.RecordAuthorizationStatus(AuthorizationStatusMissingRole)
-		return newAuthorizationError(ErrPermissionDenied, "permission denied")
+		return newAuthorizationErrorWithStatus(ErrPermissionDenied, "permission denied", AuthorizationStatusMissingRole)
 	}
 	return nil
 }
@@ -224,6 +224,12 @@ func PermissionDeniedError(message string) error {
 	return newAuthorizationError(ErrPermissionDenied, message)
 }
 
+// PermissionDeniedErrorWithStatus returns a permission-denied error with the
+// request-local bounded authorization status attached.
+func PermissionDeniedErrorWithStatus(message, authzStatus string) error {
+	return newAuthorizationErrorWithStatus(ErrPermissionDenied, message, authzStatus)
+}
+
 // UnauthenticatedError returns a bounded unauthenticated authorization error.
 func UnauthenticatedError(message string) error {
 	return newAuthorizationError(ErrUnauthenticated, message)
@@ -232,13 +238,40 @@ func UnauthenticatedError(message string) error {
 type AuthorizationError struct {
 	cause   error
 	message string
+	status  string
 }
 
 func newAuthorizationError(cause error, message string) error {
+	return newAuthorizationErrorWithStatus(cause, message, authorizationStatusForCause(cause))
+}
+
+func newAuthorizationErrorWithStatus(cause error, message, authzStatus string) error {
 	if message == "" {
 		message = cause.Error()
 	}
-	return &AuthorizationError{cause: cause, message: message}
+	if !validAuthorizationStatus(authzStatus) {
+		authzStatus = authorizationStatusForCause(cause)
+	}
+	return &AuthorizationError{cause: cause, message: message, status: authzStatus}
+}
+
+func authorizationStatusForCause(cause error) string {
+	switch {
+	case errors.Is(cause, ErrUnauthenticated), errors.Is(cause, ErrPermissionDenied):
+		return AuthorizationStatusDenied
+	default:
+		return ""
+	}
+}
+
+// AuthorizationStatusForError returns the request-local bounded authorization
+// status attached to err, when the error was produced by this package.
+func AuthorizationStatusForError(err error) string {
+	var authErr *AuthorizationError
+	if errors.As(err, &authErr) && validAuthorizationStatus(authErr.status) {
+		return authErr.status
+	}
+	return authorizationStatusForCause(err)
 }
 
 func (e *AuthorizationError) Error() string {

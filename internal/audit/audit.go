@@ -179,15 +179,19 @@ func (s *LoggerSink) Record(ctx context.Context, event Event) error {
 	if err := validateEvent(event); err != nil {
 		return err
 	}
-	s.logger.InfoContext(ctx, "security audit event",
-		"audit.principal", event.Principal,
-		"audit.role", event.Role,
-		"audit.surface", event.Surface,
-		"audit.operation", event.Operation,
-		"audit.target", event.Target,
-		"audit.result", event.Result,
-		"audit.reason", event.Reason,
+	record := slog.NewRecord(event.Time, slog.LevelInfo, "security audit event", 0)
+	record.AddAttrs(
+		slog.String("audit.principal", event.Principal),
+		slog.String("audit.role", event.Role),
+		slog.String("audit.surface", event.Surface),
+		slog.String("audit.operation", event.Operation),
+		slog.String("audit.target", event.Target),
+		slog.String("audit.result", event.Result),
+		slog.String("audit.reason", event.Reason),
 	)
+	if err := s.logger.Handler().Handle(ctx, record); err != nil {
+		return fmt.Errorf("write audit event: %w", err)
+	}
 	return nil
 }
 

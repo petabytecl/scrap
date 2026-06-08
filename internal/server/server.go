@@ -337,7 +337,7 @@ func (s *documentServer) auditReasonForError(err error) string {
 	case errors.Is(err, security.ErrUnauthenticated):
 		return audit.ReasonUnauthenticated
 	case errors.Is(err, security.ErrPermissionDenied):
-		if s.authorizer != nil && s.authorizer.AuthorizationStatus() == security.AuthorizationStatusMissingRole {
+		if security.AuthorizationStatusForError(err) == security.AuthorizationStatusMissingRole {
 			return audit.ReasonMissingRole
 		}
 		return audit.ReasonPermissionDenied

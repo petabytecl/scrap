@@ -10,9 +10,10 @@ const (
 	RoleAdminReader     Role = "admin_reader"
 	RoleAdminOperator   Role = "admin_operator"
 	RoleAdminBreakGlass Role = "admin_break_glass"
+	RoleUnknown         Role = "unknown"
 )
 
-var knownRoles = map[Role]struct{}{
+var knownRoles = map[Role]struct{}{ //nolint:exhaustive // RoleUnknown is an audit-only fallback, not a policy role.
 	RoleDocumentWriter:  {},
 	RoleDocumentReader:  {},
 	RolePeerMember:      {},

@@ -367,7 +367,7 @@ func (s *Server) authorizePeerIdentity(ctx context.Context) error {
 	}
 	if identity.CellID != s.expectedPeerIdentity.CellID {
 		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
-		return security.PermissionDeniedError("peer identity mismatch")
+		return security.PermissionDeniedErrorWithStatus("peer identity mismatch", security.AuthorizationStatusMismatch)
 	}
 	principal, ok := security.PrincipalFromContext(ctx)
 	if !ok {
@@ -376,7 +376,7 @@ func (s *Server) authorizePeerIdentity(ctx context.Context) error {
 	}
 	if principal.ID != security.PeerIdentityPrincipalID(identity) {
 		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
-		return security.PermissionDeniedError("peer identity mismatch")
+		return security.PermissionDeniedErrorWithStatus("peer identity mismatch", security.AuthorizationStatusMismatch)
 	}
 	return nil
 }
@@ -412,13 +412,11 @@ func (s *Server) auditReasonForError(err error) string {
 	case errors.Is(err, security.ErrUnauthenticated):
 		return audit.ReasonUnauthenticated
 	case errors.Is(err, security.ErrPermissionDenied):
-		if s.authorizer != nil {
-			switch s.authorizer.AuthorizationStatus() {
-			case security.AuthorizationStatusMissingRole:
-				return audit.ReasonMissingRole
-			case security.AuthorizationStatusMismatch:
-				return audit.ReasonMismatch
-			}
+		switch security.AuthorizationStatusForError(err) {
+		case security.AuthorizationStatusMissingRole:
+			return audit.ReasonMissingRole
+		case security.AuthorizationStatusMismatch:
+			return audit.ReasonMismatch
 		}
 		return audit.ReasonPermissionDenied
 	default:

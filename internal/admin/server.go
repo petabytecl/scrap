@@ -286,7 +286,7 @@ func (s *Server) auditReasonForError(err error) string {
 	case errors.Is(err, security.ErrUnauthenticated):
 		return audit.ReasonUnauthenticated
 	case errors.Is(err, security.ErrPermissionDenied):
-		if s.authorizer != nil && s.authorizer.AuthorizationStatus() == security.AuthorizationStatusMissingRole {
+		if security.AuthorizationStatusForError(err) == security.AuthorizationStatusMissingRole {
 			return audit.ReasonMissingRole
 		}
 		return audit.ReasonPermissionDenied
@@ -302,6 +302,9 @@ func auditRequest(r *http.Request, role security.Role) (operation, target string
 	}
 	if strings.HasPrefix(path, "/admin/eviction/plans") {
 		return auditEvictionRequest(r)
+	}
+	if strings.HasPrefix(path, "/debug/pprof/") {
+		return audit.OperationPprofProfile, audit.TargetProfile
 	}
 	if role == security.RoleAdminBreakGlass {
 		return audit.OperationProjectionKeyHook, audit.TargetAdmin
