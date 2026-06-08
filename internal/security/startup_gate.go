@@ -336,10 +336,10 @@ func validateTransitConfig(cfg TransitConfig) error {
 func validateTransitAddress(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_ADDR", "address must be an absolute http or https URL")
+		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_ADDR", "address must be an absolute https URL")
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_ADDR", "address must be an absolute http or https URL")
+	if parsed.Scheme != "https" {
+		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_ADDR", "address must be an absolute https URL")
 	}
 	return nil
 }

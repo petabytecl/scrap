@@ -109,6 +109,9 @@ func (t *FakeTransit) RewrapDataKey(_ context.Context, req RewrapDataKeyRequest)
 	if req.KeyVersion > 0 {
 		targetVersion = req.KeyVersion
 	}
+	if targetVersion > t.currentVersion {
+		return RewrappedKey{}, fmt.Errorf("transit fake future key version: %w", ErrInvalidRequest)
+	}
 	if key.version >= targetVersion {
 		return RewrappedKey{WrappedKey: req.WrappedKey, Version: key.version}, nil
 	}

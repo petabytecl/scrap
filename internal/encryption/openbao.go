@@ -148,14 +148,20 @@ func (t *OpenBaoTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyReq
 
 func (t *OpenBaoTransit) Readiness(ctx context.Context) (Readiness, error) {
 	var out struct {
-		LatestVersion            int `json:"latest_version"`
-		MinimumDecryptionVersion int `json:"min_decryption_version"`
+		LatestVersion            int  `json:"latest_version"`
+		MinimumDecryptionVersion int  `json:"min_decryption_version"`
+		SoftDeleted              bool `json:"soft_deleted"`
+		SupportsEncryption       bool `json:"supports_encryption"`
+		SupportsDecryption       bool `json:"supports_decryption"`
 	}
 	if err := t.write(ctx, http.MethodGet, t.path("keys", t.keyName), nil, &out); err != nil {
 		return Readiness{}, err
 	}
 	if out.LatestVersion < 1 {
 		return Readiness{}, fmt.Errorf("openbao transit key metadata missing latest version: %w", ErrMissingKey)
+	}
+	if out.SoftDeleted || !out.SupportsEncryption || !out.SupportsDecryption {
+		return Readiness{}, fmt.Errorf("openbao transit key is not usable for envelope encryption: %w", ErrUnavailable)
 	}
 	return Readiness{
 		Ready:                    true,
@@ -311,7 +317,7 @@ func classifyOpenBaoFailure(statusCode int, body []byte) error {
 		cause = ErrAuthDenied
 	case statusCode == http.StatusNotFound:
 		cause = ErrMissingKey
-	case strings.Contains(bodyText, "minimum") && strings.Contains(bodyText, "version"):
+	case isMinimumVersionFailure(bodyText):
 		cause = ErrMinimumVersion
 	case statusCode == http.StatusBadRequest:
 		cause = ErrInvalidRequest
@@ -321,4 +327,9 @@ func classifyOpenBaoFailure(statusCode int, body []byte) error {
 		cause = ErrUnavailable
 	}
 	return fmt.Errorf("openbao transit request failed with provider status %d: %w", statusCode, cause)
+}
+
+func isMinimumVersionFailure(bodyText string) bool {
+	return strings.Contains(bodyText, "minimum") && strings.Contains(bodyText, "version") ||
+		strings.Contains(bodyText, "disallowed by policy") && strings.Contains(bodyText, "too old")
 }

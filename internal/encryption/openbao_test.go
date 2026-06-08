@@ -46,11 +46,11 @@ func TestOpenBaoTransitReadinessAcceptsLargeSuccessfulPayload(t *testing.T) {
 		keyVersions[strconv.Itoa(i)] = map[string]any{"creation_time": "2026-06-08T00:00:00Z"}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeOpenBaoData(t, w, map[string]any{
-			"latest_version":         400,
-			"min_decryption_version": 2,
-			"keys":                   keyVersions,
-		})
+		data := validOpenBaoKeyMetadata()
+		data["latest_version"] = 400
+		data["min_decryption_version"] = 2
+		data["keys"] = keyVersions
+		writeOpenBaoData(t, w, data)
 	}))
 	defer srv.Close()
 
@@ -70,6 +70,56 @@ func TestOpenBaoTransitReadinessAcceptsLargeSuccessfulPayload(t *testing.T) {
 	}
 	if !ready.Ready || ready.LatestVersion != 400 || ready.MinimumDecryptionVersion != 2 {
 		t.Fatalf("Readiness = %+v, want large-key metadata", ready)
+	}
+}
+
+func TestOpenBaoTransitReadinessRejectsUnusableKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "soft deleted",
+			mutate: func(data map[string]any) {
+				data["soft_deleted"] = true
+			},
+		},
+		{
+			name: "no encryption support",
+			mutate: func(data map[string]any) {
+				data["supports_encryption"] = false
+			},
+		},
+		{
+			name: "no decryption support",
+			mutate: func(data map[string]any) {
+				data["supports_decryption"] = false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				data := validOpenBaoKeyMetadata()
+				tt.mutate(data)
+				writeOpenBaoData(t, w, data)
+			}))
+			defer srv.Close()
+
+			transit, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+				Address:   srv.URL,
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Token:     "test-token",
+			})
+			if err != nil {
+				t.Fatalf("NewOpenBaoTransit: %v", err)
+			}
+			_, err = transit.Readiness(context.Background())
+			if !errors.Is(err, encryption.ErrUnavailable) {
+				t.Fatalf("Readiness error = %v, want unavailable", err)
+			}
+		})
 	}
 }
 
@@ -186,10 +236,7 @@ func (s *openBaoTransitTestServer) Paths() []string {
 }
 
 func (s *openBaoTransitTestServer) handleKeys(w http.ResponseWriter, _ *http.Request) {
-	writeOpenBaoData(s.t, w, map[string]any{
-		"latest_version":         2,
-		"min_decryption_version": 1,
-	})
+	writeOpenBaoData(s.t, w, validOpenBaoKeyMetadata())
 }
 
 func (s *openBaoTransitTestServer) handleDataKey(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +280,7 @@ func TestOpenBaoTransitClassifiesAndRedactsProviderFailures(t *testing.T) {
 		{name: "auth denied", statusCode: http.StatusForbidden, body: `{"errors":["denied ` + token + `"]}`, want: encryption.ErrAuthDenied},
 		{name: "missing key", statusCode: http.StatusNotFound, body: `{"errors":["no key named scrap-documents"]}`, want: encryption.ErrMissingKey},
 		{name: "minimum version", statusCode: http.StatusBadRequest, body: `{"errors":["ciphertext below minimum decryption version"]}`, want: encryption.ErrMinimumVersion},
+		{name: "too old version", statusCode: http.StatusBadRequest, body: `{"errors":["ciphertext or signature version is disallowed by policy (too old)"]}`, want: encryption.ErrMinimumVersion},
 		{name: "outage", statusCode: http.StatusServiceUnavailable, body: `{"errors":["sealed"]}`, want: encryption.ErrUnavailable},
 	}
 	for _, tt := range tests {
@@ -278,5 +326,15 @@ func writeOpenBaoData(t *testing.T, w http.ResponseWriter, data map[string]any) 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
 		t.Fatalf("encode response: %v", err)
+	}
+}
+
+func validOpenBaoKeyMetadata() map[string]any {
+	return map[string]any{
+		"latest_version":         2,
+		"min_decryption_version": 1,
+		"supports_encryption":    true,
+		"supports_decryption":    true,
+		"soft_deleted":           false,
 	}
 }

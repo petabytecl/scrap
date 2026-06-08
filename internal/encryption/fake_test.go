@@ -106,6 +106,23 @@ func TestFakeTransitMinimumVersionFailure(t *testing.T) {
 	}
 }
 
+func TestFakeTransitRejectsFutureRewrapVersion(t *testing.T) {
+	ctx := context.Background()
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{})
+	dataKey, err := transit.GenerateDataKey(ctx, encryption.GenerateDataKeyRequest{Bits: 256})
+	if err != nil {
+		t.Fatalf("GenerateDataKey: %v", err)
+	}
+
+	_, err = transit.RewrapDataKey(ctx, encryption.RewrapDataKeyRequest{
+		WrappedKey: dataKey.WrappedKey,
+		KeyVersion: dataKey.Version + 1,
+	})
+	if !errors.Is(err, encryption.ErrInvalidRequest) {
+		t.Fatalf("RewrapDataKey error = %v, want invalid request", err)
+	}
+}
+
 func TestFakeTransitCannotSatisfyProduction(t *testing.T) {
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{})
 	if encryption.ProductionCapable(transit) {
