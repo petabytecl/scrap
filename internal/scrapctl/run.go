@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os/exec"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 const (
@@ -115,12 +117,14 @@ type commonOptions struct {
 	timeout        time.Duration
 	rolloutTimeout time.Duration
 	output         string
+	tls            security.ClientTLSFiles
 }
 
 type flagSetOption func(*flag.FlagSet, *commonOptions)
 
 func newFlagSet(name string, opts *commonOptions, configure ...flagSetOption) *flag.FlagSet {
 	fs := flag.NewFlagSet("scrapctl "+name, flag.ContinueOnError)
+	applyTLSDefaults(opts)
 	fs.StringVar(&opts.namespace, "namespace", defaultNamespace, "Kubernetes namespace containing the Cell")
 	fs.StringVar(&opts.cluster, "cluster", defaultCluster, "Kind cluster name for host runtime checks")
 	fs.StringVar(&opts.kubectl, "kubectl", "kubectl", "kubectl command")
@@ -133,6 +137,10 @@ func newFlagSet(name string, opts *commonOptions, configure ...flagSetOption) *f
 	fs.StringVar(&opts.adminAddr, "admin-addr", defaultAdminAddr, "admin NodePort host:port")
 	fs.DurationVar(&opts.timeout, "timeout", defaultTimeout, "per-check timeout")
 	fs.StringVar(&opts.output, "output", "text", "output format: text or json")
+	fs.StringVar(&opts.tls.CertPath, "tls-cert", opts.tls.CertPath, "mTLS client certificate path for admin/public HTTP calls")
+	fs.StringVar(&opts.tls.KeyPath, "tls-key", opts.tls.KeyPath, "mTLS client key path for admin/public HTTP calls")
+	fs.StringVar(&opts.tls.RootCAPath, "tls-ca", opts.tls.RootCAPath, "server CA bundle path for admin/public HTTP calls")
+	fs.StringVar(&opts.tls.ServerName, "tls-server-name", opts.tls.ServerName, "expected admin/public server certificate name")
 	for _, apply := range configure {
 		apply(fs, opts)
 	}

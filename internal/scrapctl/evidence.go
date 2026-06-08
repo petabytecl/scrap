@@ -50,7 +50,11 @@ func runEvidence(args []string, stdout, stderr io.Writer, deps Deps) error {
 }
 
 func runEvidenceBundle(args []string, stdout, stderr io.Writer, deps Deps) error {
-	opts, err := parseEvidenceBundleOptions(args)
+	opts, common, err := parseEvidenceBundleRunOptions(args)
+	if err != nil {
+		return err
+	}
+	deps, err = withHTTPClientTLS(deps, common, common.adminURL)
 	if err != nil {
 		return err
 	}
@@ -73,37 +77,43 @@ func runEvidenceBundle(args []string, stdout, stderr io.Writer, deps Deps) error
 }
 
 func parseEvidenceBundleOptions(args []string) (evidencebundle.Config, error) {
+	opts, _, err := parseEvidenceBundleRunOptions(args)
+	return opts, err
+}
+
+func parseEvidenceBundleRunOptions(args []string) (evidencebundle.Config, commonOptions, error) {
 	common := commonOptions{}
 	fs := newFlagSet("evidence bundle", &common)
 
 	defaults, err := bundleDefaultsFromEnv()
 	if err != nil {
-		return evidencebundle.Config{}, err
+		return evidencebundle.Config{}, commonOptions{}, err
 	}
 
 	registerEvidenceBundleFlags(fs, &defaults)
 	if err := fs.Parse(args); err != nil {
-		return evidencebundle.Config{}, fmt.Errorf("parse flags: %w", err)
+		return evidencebundle.Config{}, commonOptions{}, fmt.Errorf("parse flags: %w", err)
 	}
 	applyEvidenceEnvDefaults(fs, &common)
 	if err := validateCommon(common); err != nil {
-		return evidencebundle.Config{}, err
+		return evidencebundle.Config{}, commonOptions{}, err
 	}
 	remaining := fs.Args()
 	scenario, err := bundleScenario(remaining)
 	if err != nil {
-		return evidencebundle.Config{}, err
+		return evidencebundle.Config{}, commonOptions{}, err
 	}
 	if defaults.settleSeconds < 0 {
-		return evidencebundle.Config{}, errors.New("EVIDENCE_SETTLE_SECONDS must be a non-negative integer")
+		return evidencebundle.Config{}, commonOptions{}, errors.New("EVIDENCE_SETTLE_SECONDS must be a non-negative integer")
 	}
 	if defaults.probeSeconds <= 0 {
-		return evidencebundle.Config{}, errors.New("EVIDENCE_PROBE_TIMEOUT_SECONDS must be a positive integer")
+		return evidencebundle.Config{}, commonOptions{}, errors.New("EVIDENCE_PROBE_TIMEOUT_SECONDS must be a positive integer")
 	}
 	adminURL := common.adminURL
 	if !flagWasSet(fs, "admin-url") {
 		adminURL = envString("SCRAP_ADMIN_URL", adminURL)
 	}
+	common.adminURL = adminURL
 	if defaults.stressAddr == "" {
 		defaults.stressAddr = common.clientAddr
 	}
@@ -129,7 +139,7 @@ func parseEvidenceBundleOptions(args []string) (evidencebundle.Config, error) {
 		Settle:         time.Duration(defaults.settleSeconds) * time.Second,
 		ProbeTimeout:   time.Duration(defaults.probeSeconds) * time.Second,
 		GoCommand:      defaults.goCommand,
-	}, nil
+	}, common, nil
 }
 
 type evidenceBundleDefaults struct {
@@ -266,6 +276,10 @@ func runEvidenceLogProbe(args []string, stdout io.Writer, deps Deps) error {
 	if err != nil {
 		return err
 	}
+	deps, err = withHTTPClientTLS(deps, opts.common, opts.common.adminURL)
+	if err != nil {
+		return err
+	}
 	if opts.marker == "" {
 		opts.marker = "scrapctl-evidence-" + time.Now().UTC().Format("20060102T150405Z")
 	}
@@ -301,6 +315,10 @@ func runEvidencePprof(args []string, stdout io.Writer, deps Deps) error {
 	if err != nil {
 		return err
 	}
+	deps, err = withHTTPClientTLS(deps, opts.common, opts.common.adminURL)
+	if err != nil {
+		return err
+	}
 	if opts.outPath == "" {
 		return errors.New("out is required")
 	}
@@ -310,25 +328,12 @@ func runEvidencePprof(args []string, stdout io.Writer, deps Deps) error {
 	}
 	cctx, cancel := commandContext(context.Background(), opts.common.timeout+time.Duration(opts.seconds)*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, strings.TrimRight(opts.common.adminURL, "/")+path, nil)
+	body, err := fetchPprofProfile(cctx, opts.common, deps, path)
 	if err != nil {
-		return fmt.Errorf("build pprof request: %w", err)
+		return err
 	}
-	resp, err := deps.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("GET pprof: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("GET pprof status: %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read pprof: %w", err)
-	}
-	if err := os.WriteFile(opts.outPath, body, 0o600); err != nil {
-		return fmt.Errorf("write pprof %s: %w", opts.outPath, err)
+	if err := writePprofProfile(opts.outPath, body); err != nil {
+		return err
 	}
 	return writeByFormat(stdout, opts.common.output, operationReport{
 		Status:  "ok",
@@ -336,6 +341,34 @@ func runEvidencePprof(args []string, stdout io.Writer, deps Deps) error {
 		Profile: opts.profile,
 		Path:    opts.outPath,
 	})
+}
+
+func fetchPprofProfile(ctx context.Context, opts commonOptions, deps Deps, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(opts.adminURL, "/")+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build pprof request: %w", err)
+	}
+	resp, err := deps.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET pprof: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GET pprof status: %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read pprof: %w", err)
+	}
+	return body, nil
+}
+
+func writePprofProfile(path string, body []byte) error {
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		return fmt.Errorf("write pprof %s: %w", path, err)
+	}
+	return nil
 }
 
 func parseEvidenceOptions(name string, args []string, configure func(*flag.FlagSet, *evidenceOptions)) (evidenceOptions, error) {

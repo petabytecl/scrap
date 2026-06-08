@@ -200,6 +200,10 @@ func parseEvictionStatusOptions(args []string) (evictionStatusOptions, error) {
 }
 
 func postEvictionPlan(ctx context.Context, opts commonOptions, deps Deps, planReq eviction.PlanRequest) (eviction.Plan, error) {
+	deps, err := withHTTPClientTLS(deps, opts, opts.adminURL)
+	if err != nil {
+		return eviction.Plan{}, err
+	}
 	body, err := json.Marshal(planReq)
 	if err != nil {
 		return eviction.Plan{}, fmt.Errorf("marshal eviction plan request: %w", err)
@@ -229,6 +233,10 @@ func postEvictionPlan(ctx context.Context, opts commonOptions, deps Deps, planRe
 }
 
 func postEvictionApply(ctx context.Context, opts commonOptions, deps Deps, planID string) (eviction.ApplyResult, error) {
+	deps, err := withHTTPClientTLS(deps, opts, opts.adminURL)
+	if err != nil {
+		return eviction.ApplyResult{}, err
+	}
 	endpoint := strings.TrimRight(opts.adminURL, "/") + "/admin/eviction/plans/" + url.PathEscape(planID) + "/apply"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader("{}"))
 	if err != nil {
@@ -254,6 +262,10 @@ func postEvictionApply(ctx context.Context, opts commonOptions, deps Deps, planI
 }
 
 func getEvictionStatus(ctx context.Context, opts commonOptions, deps Deps, planID string) (eviction.PlanStatus, error) {
+	deps, err := withHTTPClientTLS(deps, opts, opts.adminURL)
+	if err != nil {
+		return eviction.PlanStatus{}, err
+	}
 	endpoint := strings.TrimRight(opts.adminURL, "/") + "/admin/eviction/plans/" + url.PathEscape(planID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

@@ -113,6 +113,10 @@ func runLeader(args []string, stdout io.Writer, deps Deps) error {
 }
 
 func fetchLeaderStatus(ctx context.Context, opts commonOptions, deps Deps) (LeaderStatus, error) {
+	deps, err := withHTTPClientTLS(deps, opts, opts.metricsURL)
+	if err != nil {
+		return LeaderStatus{}, err
+	}
 	cctx, cancel := commandContext(ctx, opts.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodGet, opts.metricsURL, nil)
@@ -152,6 +156,10 @@ func fetchHealthCheck(ctx context.Context, opts commonOptions, deps Deps) (*Heal
 }
 
 func fetchHealth(ctx context.Context, opts commonOptions, deps Deps) (Health, error) {
+	deps, err := withHTTPClientTLS(deps, opts, opts.adminURL)
+	if err != nil {
+		return Health{}, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(opts.adminURL, "/")+"/healthz", nil)
 	if err != nil {
 		return Health{}, fmt.Errorf("build health request: %w", err)

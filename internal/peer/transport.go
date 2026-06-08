@@ -9,6 +9,7 @@ import (
 	"go.etcd.io/raft/v3/raftpb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
@@ -131,19 +132,35 @@ func (ps *peerSender) drain(ctx context.Context) {
 }
 
 type SharedTransport struct {
-	mu      sync.Mutex
-	peers   map[uint64]string
-	conns   map[string]*grpc.ClientConn
-	senders map[string]*peerSender
-	closed  bool
+	mu        sync.Mutex
+	peers     map[uint64]string
+	conns     map[string]*grpc.ClientConn
+	senders   map[string]*peerSender
+	transport credentials.TransportCredentials
+	closed    bool
 }
 
-func NewSharedTransport(peers map[uint64]string) *SharedTransport {
-	return &SharedTransport{
-		peers:   peers,
-		conns:   make(map[string]*grpc.ClientConn),
-		senders: make(map[string]*peerSender),
+type SharedTransportOption func(*SharedTransport)
+
+func WithSharedTransportCredentials(creds credentials.TransportCredentials) SharedTransportOption {
+	return func(t *SharedTransport) {
+		if creds != nil {
+			t.transport = creds
+		}
 	}
+}
+
+func NewSharedTransport(peers map[uint64]string, opts ...SharedTransportOption) *SharedTransport {
+	t := &SharedTransport{
+		peers:     peers,
+		conns:     make(map[string]*grpc.ClientConn),
+		senders:   make(map[string]*peerSender),
+		transport: insecure.NewCredentials(),
+	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *SharedTransport) ForShard(shardID uint64, peers map[uint64]string) *ShardTransport {
@@ -167,7 +184,7 @@ func (t *SharedTransport) getSender(addr string) *peerSender {
 	}
 
 	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(t.transport.Clone()),
 		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: reconnectBackoff}),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)

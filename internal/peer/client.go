@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
@@ -20,12 +21,30 @@ import (
 const maxTransferBytes int64 = 4 << 30 // 4 GiB safety limit for block transfers
 
 type Client struct {
-	mu    sync.Mutex
-	conns map[string]*grpc.ClientConn
+	mu        sync.Mutex
+	conns     map[string]*grpc.ClientConn
+	transport credentials.TransportCredentials
 }
 
-func NewClient() *Client {
-	return &Client{conns: make(map[string]*grpc.ClientConn)}
+type ClientOption func(*Client)
+
+func WithClientTransportCredentials(creds credentials.TransportCredentials) ClientOption {
+	return func(c *Client) {
+		if creds != nil {
+			c.transport = creds
+		}
+	}
+}
+
+func NewClient(opts ...ClientOption) *Client {
+	c := &Client{
+		conns:     make(map[string]*grpc.ClientConn),
+		transport: insecure.NewCredentials(),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *Client) getConn(addr string) (*grpc.ClientConn, error) {
@@ -37,7 +56,7 @@ func (c *Client) getConn(addr string) (*grpc.ClientConn, error) {
 	}
 
 	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(c.transport.Clone()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
