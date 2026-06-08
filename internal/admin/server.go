@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,23 +159,46 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) ListenAndServe(addr string) error {
+	return s.listenAndServe(addr, nil)
+}
+
+func (s *Server) ListenAndServeTLS(addr string, cfg *tls.Config) error {
+	if cfg == nil {
+		return errors.New("admin TLS config is required")
+	}
+	return s.listenAndServe(addr, cfg)
+}
+
+func (s *Server) listenAndServe(addr string, cfg *tls.Config) error {
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("admin listen %s: %w", addr, err)
+	}
+	return s.serveListener(ln, cfg)
+}
+
+func (s *Server) serveListener(ln net.Listener, cfg *tls.Config) error {
 	srv := &http.Server{
-		Addr:              addr,
+		Addr:              ln.Addr().String(),
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
+	}
+	if cfg != nil {
+		srv.TLSConfig = cfg.Clone()
 	}
 
 	s.mu.Lock()
 	s.httpSrv = srv
 	s.mu.Unlock()
 
-	lc := net.ListenConfig{}
-	ln, err := lc.Listen(context.Background(), "tcp", addr)
-	if err != nil {
-		return fmt.Errorf("admin listen %s: %w", addr, err)
+	serve := srv.Serve
+	if cfg != nil {
+		serve = func(listener net.Listener) error {
+			return srv.ServeTLS(listener, "", "")
+		}
 	}
-
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("admin serve: %w", err)
 	}
 	return nil

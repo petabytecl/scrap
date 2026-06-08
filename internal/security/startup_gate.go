@@ -237,6 +237,9 @@ func validateServerCertificate(key string, cert tls.Certificate, serverName stri
 	if err := validateCertificateValidity(key, leaf, "server certificate"); err != nil {
 		return err
 	}
+	if !hasExtKeyUsage(leaf, x509.ExtKeyUsageServerAuth) {
+		return newGateError(ClassTLSConfig, key, "server certificate is invalid")
+	}
 	return validateCertificateIdentity(key, leaf, serverName)
 }
 

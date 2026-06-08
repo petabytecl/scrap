@@ -8,7 +8,6 @@ import (
 	"net"
 
 	"go.etcd.io/raft/v3/raftpb"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -34,6 +33,7 @@ type App struct {
 	clientGS   *grpc.Server
 	peerGS     *grpc.Server
 	adminSrv   *admin.Server
+	adminTLS   adminTLSConfig
 	clientLis  net.Listener
 	peerLis    net.Listener
 
@@ -72,12 +72,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	// emitted only in the reserved local non-production Cell, and the request is
 	// refused (fail-closed) anywhere else. See ADR 0013 §4.
 	identifierMode := telemetry.ResolveIdentifierMode(cfg.CellID, cfg.RawTelemetryIDs)
-	switch {
-	case identifierMode == telemetry.RawIdentifiersForLocalDebug:
-		logger.WarnContext(ctx, "telemetry raw identifiers ENABLED for local debugging (local non-production Cell only)", "cell_id", cfg.CellID)
-	case cfg.RawTelemetryIDs:
-		logger.WarnContext(ctx, "SCRAP_TELEMETRY_RAW_IDS ignored: raw telemetry identifiers are permitted only in the local non-production Cell", "cell_id", cfg.CellID)
-	}
+	logIdentifierMode(ctx, logger, cfg, identifierMode)
 
 	peers, raftID, err := resolvePeers(cfg)
 	if err != nil {
@@ -105,11 +100,15 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		Metrics:     shardTel.uploadMetrics,
 	}
 
-	transport := peer.NewSharedTransport(peers)
+	securityRuntime, err := newAppSecurityRuntime(cfg, peers)
+	if err != nil {
+		return fail(err)
+	}
+	transport := securityRuntime.transport
 	cleanup = append(cleanup, transport.Close)
 	shardTransport := transport.ForShard(0, peers)
 
-	peerClient := peer.NewClient()
+	peerClient := securityRuntime.peerClient
 	cleanup = append(cleanup, peerClient.Close)
 
 	s, err := shard.Open(shard.Config{
@@ -157,7 +156,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	cleanup = append(cleanup, func() { _ = clientLis.Close() })
 
-	clientGS := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	clientGS := grpc.NewServer(securityRuntime.publicGRPCOptions...)
 	server.Register(clientGS, s,
 		server.WithTelemetry(telemetryRuntime.server),
 		server.WithIdentifierMode(identifierMode),
@@ -171,7 +170,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	cleanup = append(cleanup, func() { _ = peerLis.Close() })
 
-	peerGS := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	peerGS := grpc.NewServer(securityRuntime.peerGRPCOptions...)
 	peerSrv := peer.NewServer(cfg.DataDir+"/blocks", peer.WithScrubCache(s), peer.WithRebuildHandler(s), peer.WithReplicationSink(s))
 	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
 		return s.RaftStep(ctx, msg)
@@ -206,6 +205,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		clientGS:    clientGS,
 		peerGS:      peerGS,
 		adminSrv:    admin.New(adminOpts...),
+		adminTLS:    securityRuntime.adminTLS,
 		clientLis:   clientLis,
 		peerLis:     peerLis,
 		backendType: backendType,
@@ -213,6 +213,15 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		raftID:      raftID,
 		uploadCfg:   uploadCfg,
 	}, nil
+}
+
+func logIdentifierMode(ctx context.Context, logger *slog.Logger, cfg Config, identifierMode telemetry.IdentifierMode) {
+	switch {
+	case identifierMode == telemetry.RawIdentifiersForLocalDebug:
+		logger.WarnContext(ctx, "telemetry raw identifiers ENABLED for local debugging (local non-production Cell only)", "cell_id", cfg.CellID)
+	case cfg.RawTelemetryIDs:
+		logger.WarnContext(ctx, "SCRAP_TELEMETRY_RAW_IDS ignored: raw telemetry identifiers are permitted only in the local non-production Cell", "cell_id", cfg.CellID)
+	}
 }
 
 func validateStartupSecurityGates(cfg Config) (scrapdMemberIdentity, error) {
@@ -242,7 +251,7 @@ func (a *App) Run(ctx context.Context) error {
 	go func() { serveErrs <- a.serveClientGRPC() }()
 	go func() { serveErrs <- a.servePeerGRPC() }()
 	// admin.ListenAndServe already treats http.ErrServerClosed as a clean stop.
-	go func() { serveErrs <- a.adminSrv.ListenAndServe(a.cfg.AdminAddr) }()
+	go func() { serveErrs <- a.serveAdmin() }()
 
 	// Wait for a shutdown signal or the first server to fail.
 	var serveErr error
@@ -284,6 +293,13 @@ func (a *App) servePeerGRPC() error {
 		return fmt.Errorf("peer server: %w", err)
 	}
 	return nil
+}
+
+func (a *App) serveAdmin() error {
+	if a.adminTLS.enabled {
+		return a.adminSrv.ListenAndServeTLS(a.cfg.AdminAddr, a.adminTLS.config)
+	}
+	return a.adminSrv.ListenAndServe(a.cfg.AdminAddr)
 }
 
 // Shutdown tears the App down in the reverse order of startup, documented here

@@ -44,7 +44,7 @@ story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-art
 development_status:
   epic-1: in-progress
   1-1-production-security-mode-startup-gates: done
-  1-2-mtls-credentials-and-member-identity-extraction: backlog
+  1-2-mtls-credentials-and-member-identity-extraction: review
   1-3-role-authorization-from-authenticated-member-identity: backlog
   1-4-bounded-audit-records-for-security-decisions: backlog
   1-5-identity-aware-rate-controls-for-security-surfaces: backlog
