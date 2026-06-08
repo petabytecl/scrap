@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -125,6 +126,24 @@ func TestAdminAuthorizationAllowsReaderEndpoint(t *testing.T) {
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+}
+
+func TestAdminHealthReportsBoundedAuthorizationStatus(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	authz.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+	srv := admin.New(admin.WithAuthorizer(authz))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"authorization_status":"mismatch"`) {
+		t.Fatalf("health body missing bounded authorization status: %s", resp.Body.String())
 	}
 }
 

@@ -41,6 +41,23 @@ func PeerIdentityFromContext(ctx context.Context) (PeerIdentityConfig, bool) {
 	return identity, ok
 }
 
+// PeerIdentityPrincipalID returns the canonical URI SAN principal for identity.
+func PeerIdentityPrincipalID(identity PeerIdentityConfig) string {
+	cellID, ok := cleanIdentityPart(identity.CellID)
+	if !ok {
+		return ""
+	}
+	memberHostname, ok := cleanIdentityPart(identity.MemberHostname)
+	if !ok {
+		return ""
+	}
+	memberID, ok := cleanIdentityPart(identity.MemberID)
+	if !ok {
+		return ""
+	}
+	return "spiffe://scrap/cell/" + cellID + "/member/" + memberHostname + "/" + memberID
+}
+
 func verifiedPeerCertificate(state tls.ConnectionState) (*x509.Certificate, error) {
 	if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
 		return nil, errMissingCertificate

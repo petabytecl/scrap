@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net/http"
+	"sync/atomic"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,6 +18,13 @@ var (
 
 type principalContextKey struct{}
 
+const (
+	AuthorizationStatusConfigured  = "configured"
+	AuthorizationStatusDenied      = "denied"
+	AuthorizationStatusMismatch    = "mismatch"
+	AuthorizationStatusMissingRole = "missing_role"
+)
+
 // Principal is an authenticated caller and its resolved roles.
 type Principal struct {
 	ID    string
@@ -26,16 +34,21 @@ type Principal struct {
 // Authorizer evaluates role requirements against authenticated principals.
 type Authorizer struct {
 	policy *RolePolicy
+	status atomic.Value
 }
 
 // NewAuthorizer creates an authorizer backed by policy.
 func NewAuthorizer(policy *RolePolicy) *Authorizer {
-	return &Authorizer{policy: policy}
+	authorizer := &Authorizer{policy: policy}
+	authorizer.status.Store(AuthorizationStatusConfigured)
+	return authorizer
 }
 
 // NewStaticAuthorizer creates an authorizer for tests or pre-resolved contexts.
 func NewStaticAuthorizer() *Authorizer {
-	return &Authorizer{}
+	authorizer := &Authorizer{}
+	authorizer.status.Store(AuthorizationStatusConfigured)
+	return authorizer
 }
 
 // ContextWithPrincipal attaches a pre-resolved principal to ctx.
@@ -62,6 +75,7 @@ func (a *Authorizer) ContextWithPrincipalID(ctx context.Context, id string) (con
 	}
 	cleanID, ok := cleanPrincipalID(id)
 	if !ok {
+		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
 		return nil, newAuthorizationError(ErrUnauthenticated, "authentication required")
 	}
 	if a.policy == nil {
@@ -69,6 +83,7 @@ func (a *Authorizer) ContextWithPrincipalID(ctx context.Context, id string) (con
 	}
 	roles, ok := a.policy.rolesForPrincipal(cleanID)
 	if !ok {
+		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
 		return nil, newAuthorizationError(ErrPermissionDenied, "permission denied")
 	}
 	return ContextWithPrincipal(ctx, Principal{ID: cleanID, Roles: roles}), nil
@@ -91,12 +106,44 @@ func (a *Authorizer) Authorize(ctx context.Context, role Role) error {
 	}
 	principal, ok := PrincipalFromContext(ctx)
 	if !ok {
+		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
 		return newAuthorizationError(ErrUnauthenticated, "authentication required")
 	}
 	if !principal.Roles.has(role) {
+		a.RecordAuthorizationStatus(AuthorizationStatusMissingRole)
 		return newAuthorizationError(ErrPermissionDenied, "permission denied")
 	}
 	return nil
+}
+
+// AuthorizationStatus returns the last bounded authorization state.
+func (a *Authorizer) AuthorizationStatus() string {
+	if a == nil {
+		return ""
+	}
+	status, ok := a.status.Load().(string)
+	if !ok || status == "" {
+		return AuthorizationStatusConfigured
+	}
+	return status
+}
+
+// RecordAuthorizationStatus records a bounded authorization state for health
+// and evidence surfaces.
+func (a *Authorizer) RecordAuthorizationStatus(status string) {
+	if a == nil || !validAuthorizationStatus(status) {
+		return
+	}
+	a.status.Store(status)
+}
+
+func validAuthorizationStatus(status string) bool {
+	switch status {
+	case AuthorizationStatusConfigured, AuthorizationStatusDenied, AuthorizationStatusMismatch, AuthorizationStatusMissingRole:
+		return true
+	default:
+		return false
+	}
 }
 
 // PrincipalIDFromTLSState extracts a bounded URI SAN principal from a verified

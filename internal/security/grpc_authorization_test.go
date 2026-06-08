@@ -58,6 +58,32 @@ func TestPrincipalInterceptorRejectsMissingOrNonTLSPeer(t *testing.T) {
 	}
 }
 
+func TestPrincipalInterceptorsExemptGRPCHealthMethods(t *testing.T) {
+	authz := rolePolicyAuthorizer(t, security.RoleAdminReader)
+	unary := security.PrincipalUnaryServerInterceptor(authz)
+	resp, err := unary(context.Background(), "request", &grpc.UnaryServerInfo{
+		FullMethod: "/grpc.health.v1.Health/Check",
+	}, func(context.Context, any) (any, error) {
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("health unary interceptor: %v", err)
+	}
+	if resp != "ok" {
+		t.Fatalf("health unary response = %v, want ok", resp)
+	}
+
+	stream := security.PrincipalStreamServerInterceptor(authz)
+	err = stream("service", &principalServerStream{ctx: context.Background()}, &grpc.StreamServerInfo{
+		FullMethod: "/grpc.health.v1.Health/Watch",
+	}, func(any, grpc.ServerStream) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("health stream interceptor: %v", err)
+	}
+}
+
 func rolePolicyAuthorizer(t *testing.T, role security.Role) *security.Authorizer {
 	t.Helper()
 	policy, err := security.ParseRolePolicy([]byte(`{

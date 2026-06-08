@@ -221,6 +221,8 @@ GPT-5 Codex
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` failed on the existing repo-wide lint baseline in `internal/spike` and generated `gen/go/scrap/v1` files, outside the touched paths.
 - BMAD code review found one coverage gap for explicit side-effect-boundary assertions; added focused tests and reran focused tests, full tests, race tests, touched-path lint, diff check, build, and `make check`.
 - PR coverage follow-up added direct security authorization and gRPC interceptor tests; `internal/security` local coverage is 84.5% with `env GOCACHE=/tmp/scrap-v2-go-build go test -coverprofile=/tmp/issue403-security.cover ./internal/security ./internal/server ./internal/peer ./internal/admin ./internal/cmd`.
+- Codex review follow-up fixed three findings: same-Cell peer callers no longer need to equal the receiving member identity, gRPC health `Check`/`Watch` bypass document principal authorization, and admin health reports bounded authorization status such as `mismatch` and `missing_role`.
+- After Codex review fixes, focused tests, full tests, race tests, touched-path lint, coverage, diff check, and `make build` passed; `make check` still fails only on the existing repo-wide lint baseline outside touched paths.
 
 ### Completion Notes List
 
@@ -233,6 +235,7 @@ GPT-5 Codex
 - Wired production runtime authorization from the existing `SCRAP_ROLE_POLICY_FILE` startup-gate path while preserving explicit non-production behavior.
 - Added focused tests for policy validation, denial behavior, public/peer/admin side-effect prevention, and production/non-production composition.
 - Added focused coverage for authorization helper transport mappings, TLS principal resolution, policy loader/parser edge cases, gRPC principal interceptors, nil-authorizer compatibility, and peer missing-identity denial.
+- Addressed Codex review findings for peer caller identity semantics, public gRPC health checks, and bounded admin authorization status reporting.
 - Local BMAD code review is complete with no unresolved patch or decision-needed findings.
 
 ### File List
@@ -252,6 +255,8 @@ GPT-5 Codex
 - `internal/security/authorization_test.go`
 - `internal/security/grpc_authorization_test.go`
 - `internal/security/grpc_authorization.go`
+- `internal/security/identity.go`
+- `internal/security/identity_test.go`
 - `internal/security/mode_test.go`
 - `internal/security/policy.go`
 - `internal/security/roles.go`

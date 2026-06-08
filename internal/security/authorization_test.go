@@ -45,6 +45,9 @@ func TestRolePolicyAuthorizesPrincipalRoles(t *testing.T) {
 	if !errors.Is(err, security.ErrPermissionDenied) {
 		t.Fatalf("Authorize(admin operator) = %v, want permission denied", err)
 	}
+	if got := authz.AuthorizationStatus(); got != security.AuthorizationStatusMissingRole {
+		t.Fatalf("AuthorizationStatus = %q, want missing_role", got)
+	}
 	if strings.Contains(err.Error(), principalA) {
 		t.Fatalf("authorization error leaked principal: %v", err)
 	}

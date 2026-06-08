@@ -406,7 +406,7 @@ func (s *Server) authorizationStatus() string {
 	if s.authorizer == nil {
 		return ""
 	}
-	return "configured"
+	return s.authorizer.AuthorizationStatus()
 }
 
 func applyEvictionHealthSnapshot(resp *healthResponse, snapshot eviction.HealthSnapshot) {

@@ -328,9 +328,20 @@ func (s *Server) authorizePeer(ctx context.Context) error {
 	}
 	identity, ok := security.PeerIdentityFromContext(ctx)
 	if !ok {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
 		return security.UnauthenticatedError("verified peer identity is required")
 	}
-	if identity != s.expectedPeerIdentity {
+	if identity.CellID != s.expectedPeerIdentity.CellID {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+		return security.PermissionDeniedError("peer identity mismatch")
+	}
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
+		return security.UnauthenticatedError("verified peer identity is required")
+	}
+	if principal.ID != security.PeerIdentityPrincipalID(identity) {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
 		return security.PermissionDeniedError("peer identity mismatch")
 	}
 	return nil

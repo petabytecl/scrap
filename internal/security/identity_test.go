@@ -62,3 +62,20 @@ func TestPeerIdentityContextRoundTrip(t *testing.T) {
 		t.Fatalf("identity = %#v, want %#v", got, want)
 	}
 }
+
+func TestPeerIdentityPrincipalID(t *testing.T) {
+	identity := security.PeerIdentityConfig{
+		CellID:         "cell-a",
+		MemberHostname: "member-a",
+		MemberID:       "member-1",
+	}
+	got := security.PeerIdentityPrincipalID(identity)
+	if got != "spiffe://scrap/cell/cell-a/member/member-a/member-1" {
+		t.Fatalf("PeerIdentityPrincipalID = %q", got)
+	}
+
+	identity.MemberID = "bad member"
+	if got := security.PeerIdentityPrincipalID(identity); got != "" {
+		t.Fatalf("PeerIdentityPrincipalID invalid = %q, want empty", got)
+	}
+}

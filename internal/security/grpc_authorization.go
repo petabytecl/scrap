@@ -11,7 +11,10 @@ import (
 // PrincipalUnaryServerInterceptor attaches a role-resolved principal to unary
 // gRPC requests.
 func PrincipalUnaryServerInterceptor(authorizer *Authorizer) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if isGRPCHealthMethod(info.FullMethod) {
+			return handler(ctx, req)
+		}
 		principalCtx, err := contextWithGRPCPrincipal(ctx, authorizer)
 		if err != nil {
 			return nil, err
@@ -23,7 +26,10 @@ func PrincipalUnaryServerInterceptor(authorizer *Authorizer) grpc.UnaryServerInt
 // PrincipalStreamServerInterceptor attaches a role-resolved principal to stream
 // gRPC requests.
 func PrincipalStreamServerInterceptor(authorizer *Authorizer) grpc.StreamServerInterceptor {
-	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if isGRPCHealthMethod(info.FullMethod) {
+			return handler(srv, stream)
+		}
 		principalCtx, err := contextWithGRPCPrincipal(stream.Context(), authorizer)
 		if err != nil {
 			return err
@@ -50,4 +56,13 @@ func contextWithGRPCPrincipal(ctx context.Context, authorizer *Authorizer) (cont
 		return nil, UnauthenticatedError("authentication required")
 	}
 	return authorizer.ContextWithTLSPrincipal(ctx, tlsInfo.State)
+}
+
+func isGRPCHealthMethod(fullMethod string) bool {
+	switch fullMethod {
+	case "/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch":
+		return true
+	default:
+		return false
+	}
 }

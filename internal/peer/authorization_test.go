@@ -36,18 +36,30 @@ func TestPeerServerDeniesUnauthorizedBeforeRaftRoute(t *testing.T) {
 		t.Fatalf("ForwardRaft no role = %v, want permission denied", err)
 	}
 
-	mismatch := security.ContextWithPrincipal(context.Background(), security.Principal{
+	principalMismatch := security.ContextWithPrincipal(context.Background(), security.Principal{
 		ID:    "peer",
 		Roles: security.NewRoleSet(security.RolePeerMember),
 	})
-	mismatch = security.ContextWithPeerIdentity(mismatch, security.PeerIdentityConfig{
+	principalMismatch = security.ContextWithPeerIdentity(principalMismatch, security.PeerIdentityConfig{
 		CellID:         "cell-a",
 		MemberHostname: "scrapd-1",
 		MemberID:       "member-b",
 	})
 
-	if _, err := srv.ForwardRaft(mismatch, &scrapv1.ForwardRaftRequest{}); !errors.Is(err, security.ErrPermissionDenied) {
-		t.Fatalf("ForwardRaft mismatch = %v, want permission denied", err)
+	if _, err := srv.ForwardRaft(principalMismatch, &scrapv1.ForwardRaftRequest{}); !errors.Is(err, security.ErrPermissionDenied) {
+		t.Fatalf("ForwardRaft principal mismatch = %v, want permission denied", err)
+	}
+	if got := authz.AuthorizationStatus(); got != security.AuthorizationStatusMismatch {
+		t.Fatalf("authorization status = %q, want mismatch", got)
+	}
+
+	crossCell := peerAuthContext(security.NewRoleSet(security.RolePeerMember), security.PeerIdentityConfig{
+		CellID:         "cell-b",
+		MemberHostname: "scrapd-1",
+		MemberID:       "member-b",
+	})
+	if _, err := srv.ForwardRaft(crossCell, &scrapv1.ForwardRaftRequest{}); !errors.Is(err, security.ErrPermissionDenied) {
+		t.Fatalf("ForwardRaft cross-cell = %v, want permission denied", err)
 	}
 	if router.calls != 0 {
 		t.Fatalf("router calls = %d, want 0", router.calls)
@@ -62,6 +74,19 @@ func TestPeerServerDeniesUnauthorizedBeforeRaftRoute(t *testing.T) {
 	}
 	if router.calls != 0 {
 		t.Fatalf("router calls after missing identity = %d, want 0", router.calls)
+	}
+
+	otherMember := security.PeerIdentityConfig{
+		CellID:         "cell-a",
+		MemberHostname: "scrapd-1",
+		MemberID:       "member-b",
+	}
+	allowed := peerAuthContext(security.NewRoleSet(security.RolePeerMember), otherMember)
+	if _, err := srv.ForwardRaft(allowed, &scrapv1.ForwardRaftRequest{Message: marshalRaftMessage(t)}); err != nil {
+		t.Fatalf("ForwardRaft same-cell peer: %v", err)
+	}
+	if router.calls != 1 {
+		t.Fatalf("router calls after allowed peer = %d, want 1", router.calls)
 	}
 }
 
@@ -97,7 +122,7 @@ func TestPeerServerDeniesUnauthorizedBeforeRebuildAndScrub(t *testing.T) {
 	defer func() { _ = srv.Close() }()
 
 	ctx := peerAuthContext(security.NewRoleSet(security.RolePeerMember), security.PeerIdentityConfig{
-		CellID:         "cell-a",
+		CellID:         "cell-b",
 		MemberHostname: "scrapd-2",
 		MemberID:       "member-b",
 	})
@@ -143,10 +168,19 @@ func peerAuthExpectedIdentity() security.PeerIdentityConfig {
 
 func peerAuthContext(roles security.RoleSet, identity security.PeerIdentityConfig) context.Context {
 	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
-		ID:    "peer",
+		ID:    security.PeerIdentityPrincipalID(identity),
 		Roles: roles,
 	})
 	return security.ContextWithPeerIdentity(ctx, identity)
+}
+
+func marshalRaftMessage(t *testing.T) []byte {
+	t.Helper()
+	data, err := (&raftpb.Message{}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal raft message: %v", err)
+	}
+	return data
 }
 
 type recordingRaftRouter struct {
