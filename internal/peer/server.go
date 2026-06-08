@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
@@ -61,6 +62,18 @@ func WithAuthorizer(authorizer *security.Authorizer, expected security.PeerIdent
 	}
 }
 
+func WithAuditSink(sink audit.Sink) ServerOption {
+	return func(s *Server) {
+		s.auditSink = sink
+	}
+}
+
+func WithRateLimiter(limiter *security.RateLimiter) ServerOption {
+	return func(s *Server) {
+		s.rateLimiter = limiter
+	}
+}
+
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
 	blocksDir            string
@@ -69,6 +82,8 @@ type Server struct {
 	replicationSink      ReplicationSink
 	authorizer           *security.Authorizer
 	expectedPeerIdentity security.PeerIdentityConfig
+	auditSink            audit.Sink
+	rateLimiter          *security.RateLimiter
 	raftRouter           atomic.Pointer[RaftRouter]
 	mu                   sync.Mutex
 	writers              map[uint64]*blockState
@@ -130,7 +145,7 @@ func (s *Server) getOrCreateBlock(blockID, shardID uint64) (*blockState, error) 
 }
 
 func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse]) error {
-	if err := s.authorizePeer(stream.Context()); err != nil {
+	if err := s.authorizePeer(stream.Context(), audit.OperationReplicateDocument, audit.TargetDocument); err != nil {
 		return err
 	}
 
@@ -247,7 +262,7 @@ func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateD
 }
 
 func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftRequest) (*scrapv1.ForwardRaftResponse, error) {
-	if err := s.authorizePeer(ctx); err != nil {
+	if err := s.authorizePeer(ctx, audit.OperationForwardRaft, audit.TargetPeer); err != nil {
 		return nil, err
 	}
 	router := s.raftRouter.Load()
@@ -265,7 +280,7 @@ func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftReques
 }
 
 func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse]) error {
-	if err := s.authorizePeer(stream.Context()); err != nil {
+	if err := s.authorizePeer(stream.Context(), audit.OperationForwardRaftStream, audit.TargetPeer); err != nil {
 		return err
 	}
 	router := s.raftRouter.Load()
@@ -286,7 +301,7 @@ func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.Forwa
 }
 
 func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestIndexRebuildRequest) (*scrapv1.RequestIndexRebuildResponse, error) {
-	if err := s.authorizePeer(ctx); err != nil {
+	if err := s.authorizePeer(ctx, audit.OperationRequestIndexRebuild, audit.TargetPeer); err != nil {
 		return nil, err
 	}
 	if s.rebuildHandler == nil {
@@ -302,7 +317,7 @@ func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestInde
 }
 
 func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyCheckRequest) (*scrapv1.ConsistencyCheckResponse, error) {
-	if err := s.authorizePeer(ctx); err != nil {
+	if err := s.authorizePeer(ctx, audit.OperationConsistencyCheck, audit.TargetPeer); err != nil {
 		return nil, err
 	}
 	if s.scrubCache == nil {
@@ -319,7 +334,26 @@ func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyC
 	}, nil
 }
 
-func (s *Server) authorizePeer(ctx context.Context) error {
+func (s *Server) authorizePeer(ctx context.Context, operation, target string) error {
+	if decision := s.checkRateLimit(ctx, operation); decision.Limited {
+		if err := s.recordAudit(ctx, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
+			return status.Error(codes.Internal, "audit event failed")
+		}
+		return security.RateLimitedError()
+	}
+	if err := s.authorizePeerIdentity(ctx); err != nil {
+		if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+			return status.Error(codes.Internal, "audit event failed")
+		}
+		return err
+	}
+	if err := s.recordAudit(ctx, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+		return status.Error(codes.Internal, "audit event failed")
+	}
+	return nil
+}
+
+func (s *Server) authorizePeerIdentity(ctx context.Context) error {
 	if s.authorizer == nil {
 		return nil
 	}
@@ -333,7 +367,7 @@ func (s *Server) authorizePeer(ctx context.Context) error {
 	}
 	if identity.CellID != s.expectedPeerIdentity.CellID {
 		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
-		return security.PermissionDeniedError("peer identity mismatch")
+		return security.PermissionDeniedErrorWithStatus("peer identity mismatch", security.AuthorizationStatusMismatch)
 	}
 	principal, ok := security.PrincipalFromContext(ctx)
 	if !ok {
@@ -342,9 +376,60 @@ func (s *Server) authorizePeer(ctx context.Context) error {
 	}
 	if principal.ID != security.PeerIdentityPrincipalID(identity) {
 		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
-		return security.PermissionDeniedError("peer identity mismatch")
+		return security.PermissionDeniedErrorWithStatus("peer identity mismatch", security.AuthorizationStatusMismatch)
 	}
 	return nil
+}
+
+func (s *Server) checkRateLimit(ctx context.Context, operation string) security.RateLimitDecision {
+	if s.rateLimiter == nil {
+		return security.RateLimitDecision{}
+	}
+	return s.rateLimiter.Allow(ctx, security.RateLimitSurfacePeer, peerPrincipalID(ctx), operation)
+}
+
+func (s *Server) recordAudit(ctx context.Context, operation, target, result, reason string) error {
+	if s.auditSink == nil {
+		return nil
+	}
+	event, err := audit.NewEvent(audit.EventInput{
+		PrincipalID: peerPrincipalID(ctx),
+		Role:        string(security.RolePeerMember),
+		Surface:     audit.SurfacePeer,
+		Operation:   operation,
+		Target:      target,
+		Result:      result,
+		Reason:      reason,
+	})
+	if err != nil {
+		return err
+	}
+	return s.auditSink.Record(ctx, event)
+}
+
+func (s *Server) auditReasonForError(err error) string {
+	switch {
+	case errors.Is(err, security.ErrUnauthenticated):
+		return audit.ReasonUnauthenticated
+	case errors.Is(err, security.ErrPermissionDenied):
+		switch security.AuthorizationStatusForError(err) {
+		case security.AuthorizationStatusMissingRole:
+			return audit.ReasonMissingRole
+		case security.AuthorizationStatusMismatch:
+			return audit.ReasonMismatch
+		}
+		return audit.ReasonPermissionDenied
+	default:
+		return audit.ReasonInternalError
+	}
+}
+
+func peerPrincipalID(ctx context.Context) string {
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return principal.ID
 }
 
 // Close flushes and closes every block and index writer the server owns. It is

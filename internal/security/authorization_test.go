@@ -46,6 +46,9 @@ func TestRolePolicyAuthorizesPrincipalRoles(t *testing.T) {
 	if !errors.Is(err, security.ErrPermissionDenied) {
 		t.Fatalf("Authorize(admin operator) = %v, want permission denied", err)
 	}
+	if got := security.AuthorizationStatusForError(err); got != security.AuthorizationStatusMissingRole {
+		t.Fatalf("AuthorizationStatusForError = %q, want missing_role", got)
+	}
 	if got := authz.AuthorizationStatus(); got != security.AuthorizationStatusMissingRole {
 		t.Fatalf("AuthorizationStatus = %q, want missing_role", got)
 	}

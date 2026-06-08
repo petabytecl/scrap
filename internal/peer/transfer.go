@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/localblock"
 )
@@ -27,7 +28,7 @@ const (
 )
 
 func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.ServerStreamingServer[scrapv1.TransferBlockResponse]) error {
-	if err := s.authorizePeer(stream.Context()); err != nil {
+	if err := s.authorizePeer(stream.Context(), audit.OperationTransferBlock, audit.TargetBlock); err != nil {
 		return err
 	}
 

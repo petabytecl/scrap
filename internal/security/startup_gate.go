@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/audit"
 )
 
 // StartupGateConfig is the production startup security gate input.
@@ -101,10 +103,10 @@ func validateProductionStartupGates(cfg StartupGateConfig) error {
 		func() error { return validatePeerIdentityPolicy(cfg.PeerIdentityPolicyPath, cfg.PeerIdentity) },
 		func() error { return validateTransitConfig(cfg.Transit) },
 		func() error {
-			return validateJSONPolicy(ClassAuditConfig, "SCRAP_AUDIT_POLICY_FILE", cfg.AuditSink.PolicyPath)
+			return validateAuditPolicy(cfg.AuditSink.PolicyPath)
 		},
 		func() error {
-			return validateJSONPolicy(ClassRateLimitConfig, "SCRAP_RATE_LIMIT_POLICY_FILE", cfg.RateLimits.PolicyPath)
+			return validateRateLimitPolicy(cfg.RateLimits.PolicyPath)
 		},
 		func() error { return validateDangerousHooks(cfg.TestHooks, cfg.Pprof) },
 	}
@@ -254,6 +256,26 @@ func validateRolePolicy(path string) error {
 	return err
 }
 
+func validateAuditPolicy(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return newGateError(ClassAuditConfig, "SCRAP_AUDIT_POLICY_FILE", "policy path is required")
+	}
+	if _, err := audit.LoadPolicy(path); err != nil {
+		return newGateError(ClassAuditConfig, "SCRAP_AUDIT_POLICY_FILE", err.Error())
+	}
+	return nil
+}
+
+func validateRateLimitPolicy(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return newGateError(ClassRateLimitConfig, "SCRAP_RATE_LIMIT_POLICY_FILE", "policy path is required")
+	}
+	if _, err := LoadRateLimitPolicy(path); err != nil {
+		return newGateError(ClassRateLimitConfig, "SCRAP_RATE_LIMIT_POLICY_FILE", err.Error())
+	}
+	return nil
+}
+
 func validatePeerIdentityPolicy(path string, expected PeerIdentityConfig) error {
 	var policy struct {
 		CellID         string `json:"cell_id"`
@@ -297,17 +319,6 @@ func validateTransitConfig(cfg TransitConfig) error {
 	}
 	if !cfg.TokenPresent {
 		return newGateError(ClassTransitConfig, "SCRAP_TRANSIT_TOKEN_ENV", "referenced Transit token environment variable is required")
-	}
-	return nil
-}
-
-func validateJSONPolicy(class ConfigClass, key, path string) error {
-	var raw map[string]any
-	if err := readJSONPolicy(class, key, path, &raw); err != nil {
-		return err
-	}
-	if len(raw) == 0 {
-		return newGateError(class, key, "policy file must contain at least one setting")
 	}
 	return nil
 }

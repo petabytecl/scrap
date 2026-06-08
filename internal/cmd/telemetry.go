@@ -293,6 +293,11 @@ func (r *scrapdTelemetryRuntime) newShardTelemetry() (*shardTelemetryBundle, err
 	}, nil
 }
 
+func (r *scrapdTelemetryRuntime) newRateLimitMetrics() (*security.RateLimitOTelMetrics, error) {
+	m := r.meterProvider.Meter(instrumentationScope)
+	return security.NewRateLimitOTelMetrics(m)
+}
+
 func (r *scrapdTelemetryRuntime) registerRaftMetrics(provider scraptelemetry.RaftStateProvider) error {
 	m := r.meterProvider.Meter(instrumentationScope)
 	rm, err := scraptelemetry.NewRaftMetrics(m, provider)

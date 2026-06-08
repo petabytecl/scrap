@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/security"
 )
@@ -58,6 +60,8 @@ type Server struct {
 	securityMode       security.Mode
 	readiness          security.Readiness
 	authorizer         *security.Authorizer
+	auditSink          audit.Sink
+	rateLimiter        *security.RateLimiter
 	logger             *slog.Logger
 }
 
@@ -110,6 +114,18 @@ func WithAuthorizer(authorizer *security.Authorizer) Option {
 	}
 }
 
+func WithAuditSink(sink audit.Sink) Option {
+	return func(s *Server) {
+		s.auditSink = sink
+	}
+}
+
+func WithRateLimiter(limiter *security.RateLimiter) Option {
+	return func(s *Server) {
+		s.rateLimiter = limiter
+	}
+}
+
 func New(opts ...Option) *Server {
 	s := &Server{}
 	for _, opt := range opts {
@@ -134,10 +150,10 @@ func New(opts ...Option) *Server {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
 		// method, including HEAD — which net/http's ServeMux otherwise routes to a
 		// GET handler, so HEAD /debug/pprof/profile would still start CPU collection.
-		mux.HandleFunc("/debug/pprof/", s.authorizedPprof(getOnly(pprof.Index)))
-		mux.HandleFunc("/debug/pprof/cmdline", s.authorizedFunc(security.RoleAdminReader, getOnly(pprof.Cmdline)))
-		mux.HandleFunc("/debug/pprof/profile", s.authorizedFunc(security.RoleAdminBreakGlass, getOnly(pprof.Profile)))
-		mux.HandleFunc("/debug/pprof/trace", s.authorizedFunc(security.RoleAdminBreakGlass, getOnly(pprof.Trace)))
+		mux.HandleFunc("/debug/pprof/", s.authorizedGetPprof(pprof.Index))
+		mux.HandleFunc("/debug/pprof/cmdline", s.authorizedGetFunc(security.RoleAdminReader, pprof.Cmdline))
+		mux.HandleFunc("/debug/pprof/profile", s.authorizedGetFunc(security.RoleAdminBreakGlass, pprof.Profile))
+		mux.HandleFunc("/debug/pprof/trace", s.authorizedGetFunc(security.RoleAdminBreakGlass, pprof.Trace))
 		// /symbol is exempt from getOnly: unlike the endpoints above it has no side
 		// effects (it's a stateless PC→name lookup), and `go tool pprof` POSTs the
 		// address list in the request body whenever it exceeds URL length limits.
@@ -166,7 +182,16 @@ func (s *Server) authorizedFunc(role security.Role, next http.HandlerFunc) http.
 	}
 }
 
-func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
+func (s *Server) authorizedGetFunc(role security.Role, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorizeMethod(w, r, role, http.MethodGet) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) authorizedGetPprof(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role := security.RoleAdminReader
 		switch r.URL.Path {
@@ -174,7 +199,7 @@ func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
 		default:
 			role = security.RoleAdminBreakGlass
 		}
-		if !s.authorize(w, r, role) {
+		if !s.authorizeMethod(w, r, role, http.MethodGet) {
 			return
 		}
 		next(w, r)
@@ -182,27 +207,164 @@ func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security.Role) bool {
-	if s.authorizer == nil {
-		return true
+	return s.authorizeMethod(w, r, role, "")
+}
+
+func (s *Server) authorizeMethod(w http.ResponseWriter, r *http.Request, role security.Role, method string) bool {
+	operation, target := auditRequest(r, role)
+	resolvedRequest, principalErr := s.requestWithResolvedPrincipal(r)
+	if decision := s.checkRateLimit(resolvedRequest.Context(), operation); decision.Limited {
+		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
+		http.Error(w, security.ErrRateLimited.Error(), http.StatusTooManyRequests)
+		return false
 	}
-	if err := s.authorizer.AuthorizeHTTPRequest(r, role); err != nil {
+	if principalErr != nil {
+		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(principalErr)); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
+		http.Error(w, principalErr.Error(), security.HTTPStatusForAuthorization(principalErr))
+		return false
+	}
+	if s.authorizer == nil {
+		return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+	}
+	if err := s.authorizer.Authorize(resolvedRequest.Context(), role); err != nil {
+		if auditErr := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
 		http.Error(w, err.Error(), security.HTTPStatusForAuthorization(err))
+		return false
+	}
+	return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+}
+
+func (s *Server) auditAllowedOrMethodDenied(w http.ResponseWriter, r *http.Request, role security.Role, operation, target, method string) bool {
+	if method != "" && r.Method != method {
+		if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultDenied, audit.ReasonMethodNotAllowed); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+		http.Error(w, "audit event failed", http.StatusInternalServerError)
 		return false
 	}
 	return true
 }
 
-// getOnly rejects any method other than GET — including HEAD, which net/http's
-// ServeMux routes to a GET handler by default — so a read-only diagnostic
-// endpoint cannot be triggered (e.g. start CPU profiling) by a non-GET request.
-func getOnly(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		h(w, r)
+func (s *Server) requestWithResolvedPrincipal(r *http.Request) (*http.Request, error) {
+	if s.authorizer == nil {
+		return r, nil
 	}
+	if _, ok := security.PrincipalFromContext(r.Context()); ok {
+		return r, nil
+	}
+	if r.TLS == nil {
+		return r, nil
+	}
+	ctx, err := s.authorizer.ContextWithTLSPrincipal(r.Context(), *r.TLS)
+	if err != nil {
+		return r, err
+	}
+	return r.WithContext(ctx), nil
+}
+
+func (s *Server) checkRateLimit(ctx context.Context, operation string) security.RateLimitDecision {
+	if s.rateLimiter == nil {
+		return security.RateLimitDecision{}
+	}
+	return s.rateLimiter.Allow(ctx, security.RateLimitSurfaceAdmin, adminPrincipalID(ctx), operation)
+}
+
+func (s *Server) recordAudit(ctx context.Context, role security.Role, operation, target, result, reason string) error {
+	if s.auditSink == nil {
+		return nil
+	}
+	event, err := audit.NewEvent(audit.EventInput{
+		PrincipalID: adminPrincipalID(ctx),
+		Role:        string(role),
+		Surface:     audit.SurfaceAdmin,
+		Operation:   operation,
+		Target:      target,
+		Result:      result,
+		Reason:      reason,
+	})
+	if err != nil {
+		return err
+	}
+	return s.auditSink.Record(ctx, event)
+}
+
+func (s *Server) auditReasonForError(err error) string {
+	switch {
+	case errors.Is(err, security.ErrUnauthenticated):
+		return audit.ReasonUnauthenticated
+	case errors.Is(err, security.ErrPermissionDenied):
+		if security.AuthorizationStatusForError(err) == security.AuthorizationStatusMissingRole {
+			return audit.ReasonMissingRole
+		}
+		return audit.ReasonPermissionDenied
+	default:
+		return audit.ReasonInternalError
+	}
+}
+
+func auditRequest(r *http.Request, role security.Role) (operation, target string) {
+	path := r.URL.Path
+	if route, ok := adminAuditRoutes[path]; ok {
+		return route.operation, route.target
+	}
+	if strings.HasPrefix(path, "/admin/eviction/plans") {
+		return auditEvictionRequest(r)
+	}
+	if strings.HasPrefix(path, "/debug/pprof/") {
+		return audit.OperationPprofProfile, audit.TargetProfile
+	}
+	if role == security.RoleAdminBreakGlass {
+		return audit.OperationProjectionKeyHook, audit.TargetAdmin
+	}
+	return audit.OperationHealth, audit.TargetAdmin
+}
+
+type auditRoute struct {
+	operation string
+	target    string
+}
+
+var adminAuditRoutes = map[string]auditRoute{
+	"/healthz":                   {operation: audit.OperationHealth, target: audit.TargetAdmin},
+	"/metrics":                   {operation: audit.OperationMetrics, target: audit.TargetMetrics},
+	"/test-hooks/projection-key": {operation: audit.OperationProjectionKeyHook, target: audit.TargetEvidence},
+	"/debug/pprof/":              {operation: audit.OperationPprofIndex, target: audit.TargetProfile},
+	"/debug/pprof/cmdline":       {operation: audit.OperationPprofCmdline, target: audit.TargetProfile},
+	"/debug/pprof/profile":       {operation: audit.OperationPprofProfile, target: audit.TargetProfile},
+	"/debug/pprof/trace":         {operation: audit.OperationPprofTrace, target: audit.TargetProfile},
+	"/debug/pprof/symbol":        {operation: audit.OperationPprofSymbol, target: audit.TargetProfile},
+}
+
+func auditEvictionRequest(r *http.Request) (string, string) {
+	if r.URL.Path == "/admin/eviction/plans" && r.Method == http.MethodPost {
+		return audit.OperationEvictionPlanCreate, audit.TargetBlock
+	}
+	if strings.HasSuffix(r.URL.Path, "/apply") {
+		return audit.OperationEvictionApply, audit.TargetBlock
+	}
+	return audit.OperationEvictionPlanStatus, audit.TargetBlock
+}
+
+func adminPrincipalID(ctx context.Context) string {
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return principal.ID
 }
 
 func (s *Server) Handler() http.Handler {

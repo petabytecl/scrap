@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	grpcpeer "google.golang.org/grpc/peer"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/security"
 )
 
@@ -58,6 +60,59 @@ func TestPrincipalInterceptorRejectsMissingOrNonTLSPeer(t *testing.T) {
 	}
 }
 
+func TestPrincipalInterceptorAuditsAndRateLimitsEarlyDenials(t *testing.T) {
+	authz := rolePolicyAuthorizerForPrincipal(t, "spiffe://scrap/cell/cell-a/member/other/member-2", security.RoleDocumentReader)
+	sink := audit.NewMemorySink()
+	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+		Surfaces: []security.RateLimitSurfacePolicy{
+			{Surface: security.RateLimitSurfacePublic, Limit: 1, Window: time.Minute},
+		},
+	})
+	interceptor := security.PrincipalUnaryServerInterceptor(authz, security.WithPrincipalAudit(
+		sink,
+		limiter,
+		security.RateLimitSurfacePublic,
+		func(string) (security.GRPCAuditInfo, bool) {
+			return security.GRPCAuditInfo{
+				Role:      security.RoleDocumentReader,
+				Operation: audit.OperationHeadDocument,
+				Target:    audit.TargetDocument,
+			}, true
+		},
+	))
+	handler := func(context.Context, any) (any, error) {
+		t.Fatal("handler called for denied principal")
+		return "unexpected", nil
+	}
+	info := &grpc.UnaryServerInfo{FullMethod: "/scrap.v1.DocumentService/HeadDocument"}
+
+	if _, err := interceptor(principalGRPCContext(t), "request", info, handler); !errors.Is(err, security.ErrPermissionDenied) {
+		t.Fatalf("first interceptor call = %v, want permission denied", err)
+	}
+	if _, err := interceptor(principalGRPCContext(t), "request", info, handler); !errors.Is(err, security.ErrRateLimited) {
+		t.Fatalf("second interceptor call = %v, want rate limited", err)
+	}
+	events := sink.Events()
+	if len(events) != 2 {
+		t.Fatalf("audit events = %d, want 2: %+v", len(events), events)
+	}
+	assertEarlyDenialAuditEvent(t, events[0], audit.ResultDenied, audit.ReasonPermissionDenied)
+	assertEarlyDenialAuditEvent(t, events[1], audit.ResultRateLimited, audit.ReasonRateLimited)
+}
+
+func assertEarlyDenialAuditEvent(t *testing.T, event audit.Event, result, reason string) {
+	t.Helper()
+	if event.Principal == audit.PrincipalAnonymous {
+		t.Fatalf("first audit principal = anonymous, want TLS principal handle")
+	}
+	if event.Result != result || event.Reason != reason {
+		t.Fatalf("audit event = %+v, want %s/%s", event, result, reason)
+	}
+	if event.Surface != audit.SurfacePublic || event.Operation != audit.OperationHeadDocument {
+		t.Fatalf("unexpected audit classification: %+v", event)
+	}
+}
+
 func TestPrincipalInterceptorsExemptGRPCHealthMethods(t *testing.T) {
 	authz := rolePolicyAuthorizer(t, security.RoleAdminReader)
 	unary := security.PrincipalUnaryServerInterceptor(authz)
@@ -86,10 +141,15 @@ func TestPrincipalInterceptorsExemptGRPCHealthMethods(t *testing.T) {
 
 func rolePolicyAuthorizer(t *testing.T, role security.Role) *security.Authorizer {
 	t.Helper()
+	return rolePolicyAuthorizerForPrincipal(t, principalA, role)
+}
+
+func rolePolicyAuthorizerForPrincipal(t *testing.T, principal string, role security.Role) *security.Authorizer {
+	t.Helper()
 	policy, err := security.ParseRolePolicy([]byte(`{
 		"roles": ["document_writer", "document_reader", "peer_member", "admin_reader", "admin_operator", "admin_break_glass"],
 		"principals": [
-			{"id": "spiffe://scrap/cell/cell-a/member/member-a/member-1", "roles": ["` + string(role) + `"]}
+			{"id": "` + principal + `", "roles": ["` + string(role) + `"]}
 		]
 	}`))
 	if err != nil {

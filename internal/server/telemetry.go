@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	grpccodes "google.golang.org/grpc/codes"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
@@ -66,6 +67,20 @@ func WithLogger(logger *slog.Logger) Option {
 func WithAuthorizer(authorizer *security.Authorizer) Option {
 	return func(s *documentServer) {
 		s.authorizer = authorizer
+	}
+}
+
+// WithAuditSink enables bounded audit records for Document security decisions.
+func WithAuditSink(sink audit.Sink) Option {
+	return func(s *documentServer) {
+		s.auditSink = sink
+	}
+}
+
+// WithRateLimiter enables public-surface request budgets for Document RPCs.
+func WithRateLimiter(limiter *security.RateLimiter) Option {
+	return func(s *documentServer) {
+		s.rateLimiter = limiter
 	}
 }
 

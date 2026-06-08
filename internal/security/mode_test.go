@@ -168,7 +168,13 @@ func validProductionGateConfig(t *testing.T) StartupGateConfig {
 		"member_id":       "member-a",
 	})
 	auditPolicyPath := writeJSONFixture(t, dir, "audit.json", map[string]any{"sink": "stderr"})
-	rateLimitPolicyPath := writeJSONFixture(t, dir, "rate-limit.json", map[string]any{"default_rps": 100})
+	rateLimitPolicyPath := writeJSONFixture(t, dir, "rate-limit.json", map[string]any{
+		"surfaces": []map[string]any{
+			{"surface": "public", "limit": 100, "window": "1m"},
+			{"surface": "peer", "limit": 100, "window": "1m"},
+			{"surface": "admin", "limit": 100, "window": "1m"},
+		},
+	})
 
 	tlsFiles := TLSFiles{
 		ServerCertPath: certPath,
