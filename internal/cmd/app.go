@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
@@ -135,11 +136,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		MemberID:           telemetryRuntime.resourceConfig.MemberID,
 		WriteTelemetry:     shardTel.writeTelemetry,
 		IdentifierMode:     identifierMode,
-		Encryption: shard.EncryptionConfig{
-			Transit:      securityRuntime.transit,
-			TransitMount: cfg.ProductionGates.Transit.MountPath,
-			TransitKey:   cfg.ProductionGates.Transit.KeyName,
-		},
+		Encryption:         appShardEncryptionConfig(cfg, securityRuntime.transit),
 	})
 	if err != nil {
 		return fail(fmt.Errorf("open shard: %w", err))
@@ -341,6 +338,17 @@ func (a *App) serveAdmin() error {
 		return a.adminSrv.ListenAndServeTLS(a.cfg.AdminAddr, a.adminTLS.config)
 	}
 	return a.adminSrv.ListenAndServe(a.cfg.AdminAddr)
+}
+
+func appShardEncryptionConfig(cfg Config, transit encryption.Transit) shard.EncryptionConfig {
+	if !encryption.ProductionCapable(transit) {
+		return shard.EncryptionConfig{}
+	}
+	return shard.EncryptionConfig{
+		Transit:      transit,
+		TransitMount: cfg.ProductionGates.Transit.MountPath,
+		TransitKey:   cfg.ProductionGates.Transit.KeyName,
+	}
 }
 
 // Shutdown tears the App down in the reverse order of startup, documented here

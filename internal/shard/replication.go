@@ -100,7 +100,7 @@ func splitReplicationChunks(data []byte) [][]byte {
 	return chunks
 }
 
-func (s *Shard) AppendReplicatedDocument(_ context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) ([]byte, error) {
+func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -118,7 +118,7 @@ func (s *Shard) AppendReplicatedDocument(_ context.Context, init *scrapv1.Replic
 		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
 	}
 
-	result, err := s.appendReplicatedPayload(init, body)
+	result, err := s.appendReplicatedPayload(ctx, init, body)
 	if err != nil {
 		return nil, fmt.Errorf("shard: append replicated document: %w", err)
 	}
@@ -137,30 +137,40 @@ func (s *Shard) AppendReplicatedDocument(_ context.Context, init *scrapv1.Replic
 	return result.SHA256[:], nil
 }
 
-func (s *Shard) appendReplicatedPayload(init *scrapv1.ReplicateDocumentInit, body io.Reader) (block.AppendResult, error) {
+func (s *Shard) appendReplicatedPayload(ctx context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) (block.AppendResult, error) {
 	if len(init.GetEncryptionEnvelope()) == 0 {
 		return s.blockWriter.AppendDocument(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), body)
 	}
 
 	envelope, err := encryption.ParseEnvelope(init.GetEncryptionEnvelope())
 	if err != nil {
-		return block.AppendResult{}, err
+		return block.AppendResult{}, mapEncryptionError(err)
 	}
 	storedBytes, err := io.ReadAll(body)
 	if err != nil {
 		return block.AppendResult{}, fmt.Errorf("shard: read replicated encrypted payload: %w", err)
 	}
 	if int64(len(storedBytes)) != envelope.CiphertextLength {
-		return block.AppendResult{}, fmt.Errorf("shard: replicated ciphertext length %d, want %d", len(storedBytes), envelope.CiphertextLength)
+		return block.AppendResult{}, fmt.Errorf("%w: replicated ciphertext length %d, want %d", storeapi.ErrDataLoss, len(storedBytes), envelope.CiphertextLength)
 	}
 	var sha [sha256.Size]byte
 	if len(init.GetSha256()) != sha256.Size {
-		return block.AppendResult{}, fmt.Errorf("shard: replicated SHA-256 length %d, want %d", len(init.GetSha256()), sha256.Size)
+		return block.AppendResult{}, fmt.Errorf("%w: replicated SHA-256 length %d, want %d", storeapi.ErrDataLoss, len(init.GetSha256()), sha256.Size)
 	}
 	copy(sha[:], init.GetSha256())
 	frames, err := splitReplicatedStoredFrames(storedBytes, init.GetFrameCount())
 	if err != nil {
 		return block.AppendResult{}, err
+	}
+	if !s.encryption.enabled() {
+		return block.AppendResult{}, storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
+	}
+	_, err = encryption.DecryptDocument(ctx, s.encryption.Transit, encryption.DocumentIdentity{
+		TransactionID: init.GetTransactionId(),
+		DocumentName:  init.GetDocumentName(),
+	}, init.GetEncryptionEnvelope(), frames, sha, init.GetTotalBytes())
+	if err != nil {
+		return block.AppendResult{}, mapEncryptionError(err)
 	}
 	return s.blockWriter.AppendDocumentFrames(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), block.DocumentFrames{
 		Payloads: frames,

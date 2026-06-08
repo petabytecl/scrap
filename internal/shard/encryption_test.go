@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/shard"
@@ -139,6 +140,38 @@ func TestEnvelopeDecryptVerifiesPlaintextSHA256(t *testing.T) {
 	}
 }
 
+func TestEncryptedReplicationAuthenticatesCiphertext(t *testing.T) {
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	content := bytes.Repeat([]byte("replicated encrypted payload:"), 8)
+	encrypted, err := encryption.EncryptDocument(context.Background(), encryption.DocumentConfig{
+		Transit:      transit,
+		TransitMount: testTransitMount,
+		TransitKey:   testTransitKey,
+	}, encryption.DocumentIdentity{TransactionID: "tx-repl-encrypted", DocumentName: "doc.xml"}, bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("EncryptDocument: %v", err)
+	}
+
+	tamperedCiphertext := flattenFramesForTest(encrypted.Frames)
+	tamperedCiphertext[0] ^= 0xff
+	s, _ := openEncryptedTestShard(t, transit)
+
+	_, err = s.AppendReplicatedDocument(context.Background(), &scrapv1.ReplicateDocumentInit{
+		TransactionId:      "tx-repl-encrypted",
+		DocumentName:       "doc.xml",
+		ContentType:        "text/xml",
+		BlockId:            1,
+		StartOffset:        block.HeaderSize,
+		FrameCount:         uint32(len(encrypted.Frames)), //nolint:gosec // test-generated frames are bounded by in-memory fixture size.
+		TotalBytes:         encrypted.PlaintextSize,
+		Sha256:             encrypted.PlaintextSHA256[:],
+		EncryptionEnvelope: encrypted.Envelope,
+	}, bytes.NewReader(tamperedCiphertext))
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("AppendReplicatedDocument error = %v, want ErrDataLoss", err)
+	}
+}
+
 func openEncryptedTestShard(t *testing.T, transit encryption.Transit) (*shard.Shard, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -183,6 +216,18 @@ func readOnlyIndexEntry(t *testing.T, dataDir, txID, docName string) block.Index
 		t.Fatalf("Find index entry: %v", err)
 	}
 	return entry
+}
+
+func flattenFramesForTest(frames [][]byte) []byte {
+	var total int
+	for _, frame := range frames {
+		total += len(frame)
+	}
+	out := make([]byte, 0, total)
+	for _, frame := range frames {
+		out = append(out, frame...)
+	}
+	return out
 }
 
 func assertBlockOmitsPlaintext(t *testing.T, dataDir string, content []byte) {

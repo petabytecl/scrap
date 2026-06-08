@@ -510,20 +510,22 @@ func (s *Shard) readDocumentFromProjection(
 	if err := s.ensureReadableBlockLockedForReason(ctx, entry.blockID, restoreReason); err != nil {
 		return nil, storeapi.DocumentMeta{}, err
 	}
-	defer s.mu.Unlock()
 
 	blkPath := s.blockPath(entry.blockID)
-	rc, err := s.readDocumentBytes(ctx, blkPath, entry.IndexEntry)
-	if err != nil {
-		return nil, storeapi.DocumentMeta{}, mapReadDocumentError(err)
-	}
-
+	indexEntry := entry.IndexEntry
+	indexEntry.EncryptionEnvelope = append([]byte(nil), entry.EncryptionEnvelope...)
 	meta := storeapi.DocumentMeta{
 		Name:        entry.DocName,
 		ContentType: entry.ContentType,
 		Size:        entry.TotalBytes,
 		SHA256:      entry.SHA256,
 		CreatedAt:   entry.CreatedAt,
+	}
+	s.mu.Unlock()
+
+	rc, err := s.readDocumentBytes(ctx, blkPath, indexEntry)
+	if err != nil {
+		return nil, storeapi.DocumentMeta{}, mapReadDocumentError(err)
 	}
 	return rc, meta, nil
 }
