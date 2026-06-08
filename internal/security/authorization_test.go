@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,6 +221,39 @@ func TestAuthorizeHTTPRequestResolvesTLSPrincipal(t *testing.T) {
 	err = authz.AuthorizeHTTPRequest(req, security.RoleAdminReader)
 	if !errors.Is(err, security.ErrUnauthenticated) {
 		t.Fatalf("AuthorizeHTTPRequest without TLS = %v, want unauthenticated", err)
+	}
+}
+
+func TestContextWithTLSPrincipalTriesAllPolicyMappedURIs(t *testing.T) {
+	policy, err := security.ParseRolePolicy([]byte(`{
+		"roles": ["admin_reader"],
+		"principals": [
+			{"id": "spiffe://scrap/cell/cell-a/member/member-a/member-1", "roles": ["admin_reader"]}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("ParseRolePolicy: %v", err)
+	}
+	auxURI, err := url.Parse("spiffe://scrap/auxiliary")
+	if err != nil {
+		t.Fatalf("parse auxiliary URI: %v", err)
+	}
+	roleURI, err := url.Parse(principalA)
+	if err != nil {
+		t.Fatalf("parse role URI: %v", err)
+	}
+	state := *verifiedTLSState(t)
+	cert := *state.VerifiedChains[0][0]
+	cert.URIs = []*url.URL{auxURI, roleURI}
+	state.VerifiedChains = [][]*x509.Certificate{{&cert}}
+
+	authz := security.NewAuthorizer(policy)
+	ctx, err := authz.ContextWithTLSPrincipal(context.Background(), state)
+	if err != nil {
+		t.Fatalf("ContextWithTLSPrincipal: %v", err)
+	}
+	if err := authz.Authorize(ctx, security.RoleAdminReader); err != nil {
+		t.Fatalf("Authorize(admin reader): %v", err)
 	}
 }
 

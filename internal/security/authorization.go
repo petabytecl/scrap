@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"sync/atomic"
@@ -92,11 +93,44 @@ func (a *Authorizer) ContextWithPrincipalID(ctx context.Context, id string) (con
 // ContextWithTLSPrincipal resolves the verified certificate URI principal and
 // attaches its roles to ctx.
 func (a *Authorizer) ContextWithTLSPrincipal(ctx context.Context, state tls.ConnectionState) (context.Context, error) {
-	id, err := PrincipalIDFromTLSState(state)
+	cert, err := verifiedPeerCertificate(state)
 	if err != nil {
+		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
+		return nil, newAuthorizationError(ErrUnauthenticated, "authentication required")
+	}
+	if a != nil && a.policy != nil {
+		return a.contextWithPolicyTLSPrincipal(ctx, cert)
+	}
+	id, err := firstPrincipalIDFromCertificate(cert)
+	if err != nil {
+		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
 		return nil, err
 	}
 	return a.ContextWithPrincipalID(ctx, id)
+}
+
+func (a *Authorizer) contextWithPolicyTLSPrincipal(ctx context.Context, cert *x509.Certificate) (context.Context, error) {
+	hasUsableURI := false
+	for _, uri := range cert.URIs {
+		if uri == nil {
+			continue
+		}
+		id, ok := cleanPrincipalID(uri.String())
+		if !ok {
+			continue
+		}
+		hasUsableURI = true
+		roles, ok := a.policy.rolesForPrincipal(id)
+		if ok {
+			return ContextWithPrincipal(ctx, Principal{ID: id, Roles: roles}), nil
+		}
+	}
+	if hasUsableURI {
+		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
+		return nil, newAuthorizationError(ErrPermissionDenied, "permission denied")
+	}
+	a.RecordAuthorizationStatus(AuthorizationStatusDenied)
+	return nil, newAuthorizationError(ErrUnauthenticated, "authentication required")
 }
 
 // Authorize requires role on the principal attached to ctx.
@@ -153,6 +187,10 @@ func PrincipalIDFromTLSState(state tls.ConnectionState) (string, error) {
 	if err != nil {
 		return "", newAuthorizationError(ErrUnauthenticated, "authentication required")
 	}
+	return firstPrincipalIDFromCertificate(cert)
+}
+
+func firstPrincipalIDFromCertificate(cert *x509.Certificate) (string, error) {
 	for _, uri := range cert.URIs {
 		if uri == nil {
 			continue

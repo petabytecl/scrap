@@ -223,6 +223,7 @@ GPT-5 Codex
 - PR coverage follow-up added direct security authorization and gRPC interceptor tests; `internal/security` local coverage is 84.5% with `env GOCACHE=/tmp/scrap-v2-go-build go test -coverprofile=/tmp/issue403-security.cover ./internal/security ./internal/server ./internal/peer ./internal/admin ./internal/cmd`.
 - Codex review follow-up fixed three findings: same-Cell peer callers no longer need to equal the receiving member identity, gRPC health `Check`/`Watch` bypass document principal authorization, and admin health reports bounded authorization status such as `mismatch` and `missing_role`.
 - After Codex review fixes, focused tests, full tests, race tests, touched-path lint, coverage, diff check, and `make build` passed; `make check` still fails only on the existing repo-wide lint baseline outside touched paths.
+- Additional Codex follow-up fixed multi-URI SAN role resolution so policy-backed TLS authorization tries all bounded URI SAN principals before denying; `internal/security` local coverage is 82.7%.
 
 ### Completion Notes List
 
@@ -236,6 +237,7 @@ GPT-5 Codex
 - Added focused tests for policy validation, denial behavior, public/peer/admin side-effect prevention, and production/non-production composition.
 - Added focused coverage for authorization helper transport mappings, TLS principal resolution, policy loader/parser edge cases, gRPC principal interceptors, nil-authorizer compatibility, and peer missing-identity denial.
 - Addressed Codex review findings for peer caller identity semantics, public gRPC health checks, and bounded admin authorization status reporting.
+- Addressed Codex review finding for certificates with multiple URI SANs by resolving against every bounded URI SAN before returning permission denied.
 - Local BMAD code review is complete with no unresolved patch or decision-needed findings.
 
 ### File List
