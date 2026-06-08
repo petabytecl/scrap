@@ -220,6 +220,7 @@ GPT-5 Codex
 - `env GOCACHE=/tmp/scrap-v2-go-build GOFLAGS=-buildvcs=false make build` passed.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` failed on the existing repo-wide lint baseline in `internal/spike` and generated `gen/go/scrap/v1` files, outside the touched paths.
 - BMAD code review found one coverage gap for explicit side-effect-boundary assertions; added focused tests and reran focused tests, full tests, race tests, touched-path lint, diff check, build, and `make check`.
+- PR coverage follow-up added direct security authorization and gRPC interceptor tests; `internal/security` local coverage is 84.5% with `env GOCACHE=/tmp/scrap-v2-go-build go test -coverprofile=/tmp/issue403-security.cover ./internal/security ./internal/server ./internal/peer ./internal/admin ./internal/cmd`.
 
 ### Completion Notes List
 
@@ -231,6 +232,7 @@ GPT-5 Codex
 - Enforced admin reader/operator/break-glass roles across health, metrics, pprof, eviction, and dangerous test hooks.
 - Wired production runtime authorization from the existing `SCRAP_ROLE_POLICY_FILE` startup-gate path while preserving explicit non-production behavior.
 - Added focused tests for policy validation, denial behavior, public/peer/admin side-effect prevention, and production/non-production composition.
+- Added focused coverage for authorization helper transport mappings, TLS principal resolution, policy loader/parser edge cases, gRPC principal interceptors, nil-authorizer compatibility, and peer missing-identity denial.
 - Local BMAD code review is complete with no unresolved patch or decision-needed findings.
 
 ### File List
@@ -248,6 +250,7 @@ GPT-5 Codex
 - `internal/peer/transfer.go`
 - `internal/security/authorization.go`
 - `internal/security/authorization_test.go`
+- `internal/security/grpc_authorization_test.go`
 - `internal/security/grpc_authorization.go`
 - `internal/security/mode_test.go`
 - `internal/security/policy.go`

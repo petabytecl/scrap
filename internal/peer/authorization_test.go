@@ -52,6 +52,17 @@ func TestPeerServerDeniesUnauthorizedBeforeRaftRoute(t *testing.T) {
 	if router.calls != 0 {
 		t.Fatalf("router calls = %d, want 0", router.calls)
 	}
+
+	missingIdentity := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "peer",
+		Roles: security.NewRoleSet(security.RolePeerMember),
+	})
+	if _, err := srv.ForwardRaft(missingIdentity, &scrapv1.ForwardRaftRequest{}); !errors.Is(err, security.ErrUnauthenticated) {
+		t.Fatalf("ForwardRaft missing identity = %v, want unauthenticated", err)
+	}
+	if router.calls != 0 {
+		t.Fatalf("router calls after missing identity = %d, want 0", router.calls)
+	}
 }
 
 func TestPeerServerDeniesUnauthorizedBeforeReplicationSink(t *testing.T) {
