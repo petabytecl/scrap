@@ -197,12 +197,16 @@ func encodeOpenBaoRequestBody(body any) (io.Reader, error) {
 }
 
 func decodeOpenBaoResponse(resp *http.Response, out any) error {
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		if err != nil {
+			return fmt.Errorf("openbao transit response read failed: %w", ErrUnavailable)
+		}
+		return classifyOpenBaoFailure(resp.StatusCode, respBody)
+	}
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("openbao transit response read failed: %w", ErrUnavailable)
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return classifyOpenBaoFailure(resp.StatusCode, respBody)
 	}
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`

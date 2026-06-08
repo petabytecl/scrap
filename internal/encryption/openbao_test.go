@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,6 +37,40 @@ func TestOpenBaoTransitMapsTransitOperations(t *testing.T) {
 	assertOpenBaoUnwrap(t, transit, dataKey.WrappedKey)
 	assertOpenBaoRewrap(t, transit, dataKey.WrappedKey)
 	assertOpenBaoPaths(t, srv.Paths())
+}
+
+func TestOpenBaoTransitReadinessAcceptsLargeSuccessfulPayload(t *testing.T) {
+	const token = "test-token"
+	keyVersions := map[string]any{}
+	for i := 1; i <= 400; i++ {
+		keyVersions[strconv.Itoa(i)] = map[string]any{"creation_time": "2026-06-08T00:00:00Z"}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeOpenBaoData(t, w, map[string]any{
+			"latest_version":         400,
+			"min_decryption_version": 2,
+			"keys":                   keyVersions,
+		})
+	}))
+	defer srv.Close()
+
+	transit, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+		Address:   srv.URL,
+		MountPath: "transit",
+		KeyName:   "scrap-documents",
+		Token:     token,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenBaoTransit: %v", err)
+	}
+
+	ready, err := transit.Readiness(context.Background())
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	if !ready.Ready || ready.LatestVersion != 400 || ready.MinimumDecryptionVersion != 2 {
+		t.Fatalf("Readiness = %+v, want large-key metadata", ready)
+	}
 }
 
 func assertOpenBaoReadiness(t *testing.T, transit encryption.Transit) {

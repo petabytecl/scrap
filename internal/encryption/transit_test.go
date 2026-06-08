@@ -1,6 +1,7 @@
 package encryption_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -30,6 +31,17 @@ func TestTransitErrorClassSentinels(t *testing.T) {
 				t.Fatalf("ErrorClass() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTransitRejectsUnsupportedDataKeySizes(t *testing.T) {
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{})
+	_, err := transit.GenerateDataKey(context.Background(), encryption.GenerateDataKeyRequest{Bits: 192})
+	if !errors.Is(err, encryption.ErrInvalidRequest) {
+		t.Fatalf("GenerateDataKey error = %v, want invalid request", err)
+	}
+	if got := encryption.ErrorClass(err); got != encryption.ClassInvalidRequest {
+		t.Fatalf("ErrorClass() = %q, want %q", got, encryption.ClassInvalidRequest)
 	}
 }
 

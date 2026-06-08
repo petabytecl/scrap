@@ -13,6 +13,9 @@ import (
 const (
 	defaultFakeKeyName = "scrap-documents"
 	fakeWrappedPrefix  = "fake-transit:v"
+	dataKeyBits128     = 128
+	dataKeyBits256     = 256
+	dataKeyBits512     = 512
 )
 
 type FakeConfig struct {
@@ -194,10 +197,12 @@ func (t *FakeTransit) wrapLocked(version int, plaintext, context []byte, sequenc
 
 func requestedKeyBytes(bits int) (int, error) {
 	bits = dataKeyBits(bits)
-	if bits <= 0 || bits%8 != 0 {
-		return 0, fmt.Errorf("transit data key bits must be a positive multiple of 8: %w", ErrInvalidRequest)
+	switch bits {
+	case dataKeyBits128, dataKeyBits256, dataKeyBits512:
+		return bits / bitsPerByte, nil
+	default:
+		return 0, fmt.Errorf("transit data key bits must be 128, 256, or 512: %w", ErrInvalidRequest)
 	}
-	return bits / bitsPerByte, nil
 }
 
 func contextHandle(context []byte) string {
