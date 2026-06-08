@@ -183,13 +183,17 @@ func newPeerGRPCServerOptions(cfg Config, authorizer *security.Authorizer, audit
 			security.PrincipalUnaryServerInterceptor(authorizer,
 				security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePeer, peerGRPCAuditInfo),
 			),
-			security.PeerIdentityUnaryServerInterceptor(),
+			security.PeerIdentityUnaryServerInterceptor(
+				security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePeer, peerGRPCAuditInfo),
+			),
 		),
 		grpc.ChainStreamInterceptor(
 			security.PrincipalStreamServerInterceptor(authorizer,
 				security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePeer, peerGRPCAuditInfo),
 			),
-			security.PeerIdentityStreamServerInterceptor(),
+			security.PeerIdentityStreamServerInterceptor(
+				security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePeer, peerGRPCAuditInfo),
+			),
 		),
 	), nil
 }

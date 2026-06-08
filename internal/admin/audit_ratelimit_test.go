@@ -110,6 +110,30 @@ func TestAdminAuditsWildcardPprofRoutesAsProfiles(t *testing.T) {
 	}
 }
 
+func TestAdminAuditsRejectedPprofMethodsAsDenials(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithPprof())
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminBreakGlass),
+	})
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/debug/pprof/profile", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405: %s", resp.Code, resp.Body.String())
+	}
+	events := sink.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].Operation != audit.OperationPprofProfile || events[0].Result != audit.ResultDenied || events[0].Reason != audit.ReasonMethodNotAllowed {
+		t.Fatalf("audit event = %+v, want pprof_profile denied method_not_allowed", events[0])
+	}
+}
+
 type successfulEvictionApplier struct {
 	calls int
 }

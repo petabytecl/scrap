@@ -4,27 +4,29 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	grpcpeer "google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 )
 
-func PeerIdentityUnaryServerInterceptor() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+func PeerIdentityUnaryServerInterceptor(opts ...PrincipalInterceptorOption) grpc.UnaryServerInterceptor {
+	cfg := newPrincipalInterceptorConfig(opts...)
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		identityCtx, err := contextWithGRPCPeerIdentity(ctx)
 		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, "verified peer identity is required")
+			principalID := principalIDFromGRPCContext(ctx)
+			return nil, cfg.handlePrincipalError(ctx, info.FullMethod, principalID, UnauthenticatedError("verified peer identity is required"))
 		}
 		return handler(identityCtx, req)
 	}
 }
 
-func PeerIdentityStreamServerInterceptor() grpc.StreamServerInterceptor {
-	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func PeerIdentityStreamServerInterceptor(opts ...PrincipalInterceptorOption) grpc.StreamServerInterceptor {
+	cfg := newPrincipalInterceptorConfig(opts...)
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		identityCtx, err := contextWithGRPCPeerIdentity(stream.Context())
 		if err != nil {
-			return status.Error(codes.Unauthenticated, "verified peer identity is required")
+			principalID := principalIDFromGRPCContext(stream.Context())
+			return cfg.handlePrincipalError(stream.Context(), info.FullMethod, principalID, UnauthenticatedError("verified peer identity is required"))
 		}
 		return handler(srv, contextServerStream{ServerStream: stream, ctx: identityCtx})
 	}

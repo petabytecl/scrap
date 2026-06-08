@@ -150,10 +150,10 @@ func New(opts ...Option) *Server {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
 		// method, including HEAD — which net/http's ServeMux otherwise routes to a
 		// GET handler, so HEAD /debug/pprof/profile would still start CPU collection.
-		mux.HandleFunc("/debug/pprof/", s.authorizedPprof(getOnly(pprof.Index)))
-		mux.HandleFunc("/debug/pprof/cmdline", s.authorizedFunc(security.RoleAdminReader, getOnly(pprof.Cmdline)))
-		mux.HandleFunc("/debug/pprof/profile", s.authorizedFunc(security.RoleAdminBreakGlass, getOnly(pprof.Profile)))
-		mux.HandleFunc("/debug/pprof/trace", s.authorizedFunc(security.RoleAdminBreakGlass, getOnly(pprof.Trace)))
+		mux.HandleFunc("/debug/pprof/", s.authorizedGetPprof(pprof.Index))
+		mux.HandleFunc("/debug/pprof/cmdline", s.authorizedGetFunc(security.RoleAdminReader, pprof.Cmdline))
+		mux.HandleFunc("/debug/pprof/profile", s.authorizedGetFunc(security.RoleAdminBreakGlass, pprof.Profile))
+		mux.HandleFunc("/debug/pprof/trace", s.authorizedGetFunc(security.RoleAdminBreakGlass, pprof.Trace))
 		// /symbol is exempt from getOnly: unlike the endpoints above it has no side
 		// effects (it's a stateless PC→name lookup), and `go tool pprof` POSTs the
 		// address list in the request body whenever it exceeds URL length limits.
@@ -182,7 +182,16 @@ func (s *Server) authorizedFunc(role security.Role, next http.HandlerFunc) http.
 	}
 }
 
-func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
+func (s *Server) authorizedGetFunc(role security.Role, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorizeMethod(w, r, role, http.MethodGet) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) authorizedGetPprof(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role := security.RoleAdminReader
 		switch r.URL.Path {
@@ -190,7 +199,7 @@ func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
 		default:
 			role = security.RoleAdminBreakGlass
 		}
-		if !s.authorize(w, r, role) {
+		if !s.authorizeMethod(w, r, role, http.MethodGet) {
 			return
 		}
 		next(w, r)
@@ -198,6 +207,10 @@ func (s *Server) authorizedPprof(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security.Role) bool {
+	return s.authorizeMethod(w, r, role, "")
+}
+
+func (s *Server) authorizeMethod(w http.ResponseWriter, r *http.Request, role security.Role, method string) bool {
 	operation, target := auditRequest(r, role)
 	resolvedRequest, principalErr := s.requestWithResolvedPrincipal(r)
 	if decision := s.checkRateLimit(resolvedRequest.Context(), operation); decision.Limited {
@@ -217,11 +230,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security
 		return false
 	}
 	if s.authorizer == nil {
-		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
-			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return false
-		}
-		return true
+		return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
 	}
 	if err := s.authorizer.Authorize(resolvedRequest.Context(), role); err != nil {
 		if auditErr := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
@@ -231,7 +240,19 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security
 		http.Error(w, err.Error(), security.HTTPStatusForAuthorization(err))
 		return false
 	}
-	if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+	return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+}
+
+func (s *Server) auditAllowedOrMethodDenied(w http.ResponseWriter, r *http.Request, role security.Role, operation, target, method string) bool {
+	if method != "" && r.Method != method {
+		if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultDenied, audit.ReasonMethodNotAllowed); err != nil {
+			http.Error(w, "audit event failed", http.StatusInternalServerError)
+			return false
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
 		http.Error(w, "audit event failed", http.StatusInternalServerError)
 		return false
 	}
@@ -344,19 +365,6 @@ func adminPrincipalID(ctx context.Context) string {
 		return ""
 	}
 	return principal.ID
-}
-
-// getOnly rejects any method other than GET — including HEAD, which net/http's
-// ServeMux routes to a GET handler by default — so a read-only diagnostic
-// endpoint cannot be triggered (e.g. start CPU profiling) by a non-GET request.
-func getOnly(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		h(w, r)
-	}
 }
 
 func (s *Server) Handler() http.Handler {
