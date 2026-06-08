@@ -50,6 +50,29 @@ func TestAdminAuthorizationDeniesPlannerBeforeSideEffect(t *testing.T) {
 	}
 }
 
+func TestAdminAuthorizationDeniesRewrapBeforeSideEffect(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	service := &rewrapServiceStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithRewrapService(service))
+
+	req := httptest.NewRequestWithContext(
+		adminAuthContext(security.RoleAdminReader),
+		http.MethodPost,
+		"/admin/rewrap/document",
+		bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":"doc.xml"}`)),
+	)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.Code)
+	}
+	if service.calls != 0 {
+		t.Fatalf("rewrap calls = %d, want 0", service.calls)
+	}
+}
+
 func TestAdminAuthorizationAllowsReaderStatusEndpoint(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	status := &recordingEvictionStatusProvider{}

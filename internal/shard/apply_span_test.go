@@ -53,6 +53,14 @@ func TestApplySpanInfo(t *testing.T) {
 			wantKeys: []string{"scrap.block_id"},
 		},
 		{
+			name: "rewrap_document carries hashed identity and block_id",
+			cmd: &scrapv1.RaftCommand{Command: &scrapv1.RaftCommand_RewrapDoc{
+				RewrapDoc: &scrapv1.RewrapDocumentEnvelope{TransactionId: "tx", DocumentName: "doc", BlockId: 11},
+			}},
+			wantOp:   "rewrap_document",
+			wantKeys: []string{"scrap.transaction.hash", "scrap.document.hash", "scrap.block_id"},
+		},
+		{
 			name: "confirm_upload carries block_id",
 			cmd: &scrapv1.RaftCommand{Command: &scrapv1.RaftCommand_ConfirmUpload{
 				ConfirmUpload: &scrapv1.ConfirmUpload{BlockId: 9},

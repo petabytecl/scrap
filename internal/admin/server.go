@@ -17,6 +17,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 )
 
@@ -57,6 +58,7 @@ type Server struct {
 	evictionApplier    EvictionApplier
 	evictionPlanStatus EvictionPlanStatusProvider
 	evictionHealth     EvictionHealthProvider
+	rewrapService      RewrapService
 	securityMode       security.Mode
 	readiness          security.Readiness
 	authorizer         *security.Authorizer
@@ -145,6 +147,9 @@ func New(opts ...Option) *Server {
 	}
 	if s.evictionApplier != nil || s.evictionPlanStatus != nil {
 		mux.HandleFunc("/admin/eviction/plans/", s.handleEvictionPlanByID)
+	}
+	if s.rewrapService != nil {
+		mux.HandleFunc("/admin/rewrap/document", s.handleRewrapDocument)
 	}
 	if s.pprofEnabled {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
@@ -341,6 +346,7 @@ type auditRoute struct {
 var adminAuditRoutes = map[string]auditRoute{
 	"/healthz":                   {operation: audit.OperationHealth, target: audit.TargetAdmin},
 	"/metrics":                   {operation: audit.OperationMetrics, target: audit.TargetMetrics},
+	"/admin/rewrap/document":     {operation: audit.OperationRewrapDocument, target: audit.TargetDocument},
 	"/test-hooks/projection-key": {operation: audit.OperationProjectionKeyHook, target: audit.TargetEvidence},
 	"/debug/pprof/":              {operation: audit.OperationPprofIndex, target: audit.TargetProfile},
 	"/debug/pprof/cmdline":       {operation: audit.OperationPprofCmdline, target: audit.TargetProfile},
@@ -485,6 +491,16 @@ type healthResponse struct {
 	QuarantinedBlocks       int            `json:"quarantined_blocks"`
 	RestoreFailedBlocks     int            `json:"restore_failed_blocks"`
 	RestoreFailuresByReason map[string]int `json:"restore_failures_by_reason,omitempty"`
+	RewrapStatus            string         `json:"rewrap_status,omitempty"`
+	RewrapLastResult        string         `json:"rewrap_last_result,omitempty"`
+	RewrapLastReason        string         `json:"rewrap_last_reason,omitempty"`
+	RewrapLastTransitMount  string         `json:"rewrap_last_transit_mount,omitempty"`
+	RewrapLastTransitKey    string         `json:"rewrap_last_transit_key,omitempty"`
+	RewrapLastOldVersion    int            `json:"rewrap_last_old_version,omitempty"`
+	RewrapLastNewVersion    int            `json:"rewrap_last_new_version,omitempty"`
+	RewrapLastChanged       bool           `json:"rewrap_last_changed,omitempty"`
+	RewrapLastAt            time.Time      `json:"rewrap_last_at,omitempty"`
+	RewrapFailuresByReason  map[string]int `json:"rewrap_failures_by_reason,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -505,6 +521,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.applySecurityHealth(&resp)
 	s.applyUploadPressure(&resp)
 	s.applyEvictionHealth(r.Context(), &resp)
+	s.applyRewrapHealth(&resp)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -561,6 +578,29 @@ func (s *Server) applyEvictionHealth(ctx context.Context, resp *healthResponse) 
 		} else {
 			applyEvictionHealthSnapshot(resp, snapshot)
 		}
+	}
+}
+
+func (s *Server) applyRewrapHealth(resp *healthResponse) {
+	if s.rewrapService == nil {
+		return
+	}
+	snapshot := s.rewrapService.RewrapHealthSnapshot()
+	resp.RewrapStatus = snapshot.Status
+	if resp.RewrapStatus == "" {
+		resp.RewrapStatus = rewrap.StatusOK
+	}
+	resp.RewrapLastResult = snapshot.LastResult
+	resp.RewrapLastReason = snapshot.LastReason
+	resp.RewrapLastTransitMount = snapshot.LastTransitMount
+	resp.RewrapLastTransitKey = snapshot.LastTransitKey
+	resp.RewrapLastOldVersion = snapshot.LastOldVersion
+	resp.RewrapLastNewVersion = snapshot.LastNewVersion
+	resp.RewrapLastChanged = snapshot.LastChanged
+	resp.RewrapLastAt = snapshot.LastAt
+	resp.RewrapFailuresByReason = snapshot.FailuresByReason
+	if resp.RewrapStatus != rewrap.StatusOK {
+		resp.Status = "degraded"
 	}
 }
 

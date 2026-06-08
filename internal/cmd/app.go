@@ -190,6 +190,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithEvictionApplier(s),
 		admin.WithEvictionPlanStatusProvider(s),
 		admin.WithEvictionHealthProvider(s),
+		admin.WithRewrapService(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
 		admin.WithAuthorizer(securityRuntime.authorizer),
 		admin.WithAuditSink(securityRuntime.auditSink),

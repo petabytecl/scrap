@@ -1,6 +1,7 @@
 package block_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,6 +80,112 @@ func TestIndexRoundTrip(t *testing.T) { //nolint:cyclop // test function with ex
 	}
 	if !got.CreatedAt.Equal(now) {
 		t.Fatalf("CreatedAt: got %v, want %v", got.CreatedAt, now)
+	}
+}
+
+func TestReplaceDocumentEnvelopeRewritesOnlyTargetEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+	now := time.Now().Truncate(time.Microsecond)
+
+	writeBlockIndexEntries(t, path,
+		block.IndexEntry{
+			TransactionID:      "tx-001",
+			DocName:            "invoice.xml",
+			ContentType:        "application/xml",
+			CreatedAt:          now,
+			FirstFrameOff:      40,
+			FrameCount:         1,
+			TotalBytes:         1024,
+			SHA256:             [32]byte{0xAA},
+			EncryptionEnvelope: []byte(`{"version":1,"wrapped_data_key":"vault:v1:old"}`),
+		},
+		block.IndexEntry{
+			TransactionID:      "tx-001",
+			DocName:            "receipt.pdf",
+			ContentType:        "application/pdf",
+			CreatedAt:          now,
+			FirstFrameOff:      1074,
+			FrameCount:         3,
+			TotalBytes:         2048,
+			SHA256:             [32]byte{0xBB},
+			EncryptionEnvelope: []byte(`{"version":1,"wrapped_data_key":"vault:v1:keep"}`),
+		},
+	)
+
+	updated, changed, err := block.ReplaceDocumentEnvelope(path, "tx-001", "invoice.xml", []byte(`{"version":1,"wrapped_data_key":"vault:v2:new"}`))
+	if err != nil {
+		t.Fatalf("ReplaceDocumentEnvelope: %v", err)
+	}
+	if !changed {
+		t.Fatal("ReplaceDocumentEnvelope changed = false, want true")
+	}
+	if string(updated.EncryptionEnvelope) != `{"version":1,"wrapped_data_key":"vault:v2:new"}` {
+		t.Fatalf("updated envelope = %q", updated.EncryptionEnvelope)
+	}
+	if updated.ContentType != "application/xml" || updated.TotalBytes != 1024 || updated.SHA256 != [32]byte{0xAA} {
+		t.Fatalf("updated metadata drifted: %+v", updated)
+	}
+
+	ir, err := block.OpenIndexReader(path)
+	if err != nil {
+		t.Fatalf("OpenIndexReader: %v", err)
+	}
+	defer func() { _ = ir.Close() }()
+	kept, err := ir.Find("tx-001", "receipt.pdf")
+	if err != nil {
+		t.Fatalf("Find receipt.pdf: %v", err)
+	}
+	if string(kept.EncryptionEnvelope) != `{"version":1,"wrapped_data_key":"vault:v1:keep"}` {
+		t.Fatalf("non-target envelope = %q", kept.EncryptionEnvelope)
+	}
+}
+
+func TestReplaceDocumentEnvelopeNoopsWhenEnvelopeMatches(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+	envelope := []byte(`{"version":1,"wrapped_data_key":"vault:v1:same"}`)
+	writeBlockIndexEntries(t, path, block.IndexEntry{
+		TransactionID:      "tx-001",
+		DocName:            "invoice.xml",
+		ContentType:        "application/xml",
+		CreatedAt:          time.Now().Truncate(time.Microsecond),
+		FirstFrameOff:      40,
+		FrameCount:         1,
+		TotalBytes:         1024,
+		SHA256:             [32]byte{0xAA},
+		EncryptionEnvelope: envelope,
+	})
+
+	updated, changed, err := block.ReplaceDocumentEnvelope(path, "tx-001", "invoice.xml", envelope)
+	if err != nil {
+		t.Fatalf("ReplaceDocumentEnvelope: %v", err)
+	}
+	if changed {
+		t.Fatal("ReplaceDocumentEnvelope changed = true, want false")
+	}
+	if string(updated.EncryptionEnvelope) != string(envelope) {
+		t.Fatalf("updated envelope = %q, want %q", updated.EncryptionEnvelope, envelope)
+	}
+}
+
+func TestReplaceDocumentEnvelopeMissingDocument(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+	writeBlockIndexEntries(t, path, block.IndexEntry{
+		TransactionID: "tx-001",
+		DocName:       "invoice.xml",
+		ContentType:   "application/xml",
+		CreatedAt:     time.Now().Truncate(time.Microsecond),
+		FirstFrameOff: 40,
+		FrameCount:    1,
+		TotalBytes:    1024,
+		SHA256:        [32]byte{0xAA},
+	})
+
+	_, _, err := block.ReplaceDocumentEnvelope(path, "tx-001", "missing.xml", []byte(`{"version":1}`))
+	if !errors.Is(err, block.ErrDocNotFound) {
+		t.Fatalf("ReplaceDocumentEnvelope error = %v, want ErrDocNotFound", err)
 	}
 }
 

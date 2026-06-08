@@ -1,12 +1,14 @@
 package block
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -98,6 +100,84 @@ func RepairIndexTail(path string) error {
 		return err
 	}
 	return repairIndexTail(f, path)
+}
+
+func ReplaceDocumentEnvelope(path, txID, docName string, envelope []byte) (IndexEntry, bool, error) {
+	ir, err := OpenIndexReader(path)
+	if err != nil {
+		return IndexEntry{}, false, err
+	}
+	entries := append([]IndexEntry(nil), ir.Entries()...)
+	if err := ir.Close(); err != nil {
+		return IndexEntry{}, false, err
+	}
+
+	target := -1
+	for i, entry := range entries {
+		if entry.TransactionID == txID && entry.DocName == docName {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		return IndexEntry{}, false, ErrDocNotFound
+	}
+	if bytes.Equal(entries[target].EncryptionEnvelope, envelope) {
+		return entries[target], false, nil
+	}
+
+	entries[target].EncryptionEnvelope = append([]byte(nil), envelope...)
+	if err := rewriteIndexEntries(path, entries); err != nil {
+		return IndexEntry{}, false, err
+	}
+	return entries[target], true, nil
+}
+
+func rewriteIndexEntries(path string, entries []IndexEntry) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".rewrite-*")
+	if err != nil {
+		return fmt.Errorf("block: create replacement index: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("block: close replacement index placeholder: %w", err)
+	}
+	if err := os.Remove(tmpPath); err != nil {
+		return fmt.Errorf("block: remove replacement index placeholder: %w", err)
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	iw, err := NewIndexWriter(tmpPath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := iw.Append(entry); err != nil {
+			_ = iw.Close()
+			return fmt.Errorf("block: rewrite index entry: %w", err)
+		}
+	}
+	if err := iw.Close(); err != nil {
+		return fmt.Errorf("block: close replacement index: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("block: replace index: %w", err)
+	}
+	return syncIndexDir(dir)
+}
+
+func syncIndexDir(dir string) error {
+	f, err := os.Open(dir) //nolint:gosec // directory path is derived from caller-controlled Block index path.
+	if err != nil {
+		return fmt.Errorf("block: open index dir: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("block: fsync index dir: %w", err)
+	}
+	return nil
 }
 
 func repairIndexTail(f *os.File, path string) error {
