@@ -77,6 +77,7 @@ require_target prodlike-up
 require_target prodlike-doctor
 require_target prodlike-kind-deploy-e2e
 require_target prodlike-test-security-assets
+require_target prodlike-test-security-rollout
 require_target prodlike-e2e-cell-up
 require_target cell-doctor
 require_target tier2-e2e-hooks-check
@@ -100,8 +101,8 @@ target_must_depend_on tier2-e2e-up prodlike-e2e-cell-up
 target_must_depend_on tier2-e2e-up tier2-e2e
 target_must_depend_on prodlike-e2e-cell-up prodlike-kind-deploy-e2e
 target_must_depend_on prodlike-kind-deploy-e2e prodlike-test-security-assets
-target_must_depend_on tier2-e2e prodlike-doctor
 target_must_depend_on tier2-e2e prodlike-test-security-assets
+target_must_depend_on tier2-e2e prodlike-test-security-rollout
 target_must_depend_on tier2-e2e tier2-e2e-hooks-check
 target_must_depend_on evidence-up stress-setup
 target_must_depend_on tier3-evidence-up evidence-up
@@ -124,10 +125,11 @@ require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*BackendUploadAdmissionPress
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*LightScrub' "$MAKEFILE" "Tier 2 fast scrub coverage"
 require_pattern '^TIER2_E2E_TEST_RUN[[:space:]]*\?=.*ProdlikeSecurityEncryptionEvidence' "$MAKEFILE" "Tier 2 prod-like security evidence coverage"
 require_pattern '^TIER2_SECURITY_EVIDENCE_REPORT[[:space:]]*\?=.*security-evidence\.json' "$MAKEFILE" "Tier 2 security evidence report default"
-require_pattern '^SECURITY_EVIDENCE_REPORT[[:space:]]*\?=[[:space:]]*$' "$MAKEFILE" "optional Tier 3 security evidence report default"
+require_pattern '^SECURITY_EVIDENCE_REPORT[[:space:]]*\?=.*TIER2_SECURITY_EVIDENCE_REPORT' "$MAKEFILE" "Tier 3 security evidence report default"
 require_pattern 'SCRAP_E2E_CELL_ID="kind-prodlike"' "$MAKEFILE" "prod-like Cell ID in Tier 2"
 require_pattern 'SCRAP_E2E_SECURITY_REPORT=.*TIER2_SECURITY_EVIDENCE_REPORT' "$MAKEFILE" "Tier 2 security evidence report path"
 require_pattern 'SECURITY_EVIDENCE_REPORT=.*SECURITY_EVIDENCE_REPORT' "$MAKEFILE" "Tier 3 security report export"
+require_pattern 'rollout restart statefulset/scrapd' "$MAKEFILE" "Tier 2 security asset rollout restart"
 require_pattern '^prodlike-e2e-cell-up: PRODLIKE_KUBE_CONTEXT=\$\(PRODLIKE_E2E_KUBE_CONTEXT\)' "$MAKEFILE" "prod-like E2E cell-up kube context"
 require_pattern '^tier2-e2e: PRODLIKE_KUBE_CONTEXT=\$\(PRODLIKE_E2E_KUBE_CONTEXT\)' "$MAKEFILE" "Tier 2 prerequisite kube context"
 require_pattern 'test ./test/e2e/.*-count=1' "$MAKEFILE" "uncached E2E execution"
@@ -166,6 +168,8 @@ require_pattern 'collect-kind-artifacts' "$PRODLIKE_WORKFLOW" "Tier 2 failure ar
 require_pattern 'kind-scrap-prodlike' "$PRODLIKE_WORKFLOW" "Tier 2 prod-like Kind context"
 
 require_pattern 'workflow_dispatch:' "$EVIDENCE_WORKFLOW" "manual Tier 3 workflow dispatch"
+require_pattern 'make tier2-e2e-up' "$EVIDENCE_WORKFLOW" "Tier 3 security evidence pre-run"
+require_pattern 'make prodlike-kind-delete' "$EVIDENCE_WORKFLOW" "Tier 3 prod-like cleanup before stress Cell"
 require_pattern 'make tier3-evidence-up' "$EVIDENCE_WORKFLOW" "Tier 3 evidence command"
 require_pattern 'upload-artifact' "$EVIDENCE_WORKFLOW" "Tier 3 bundle artifact upload"
 require_pattern 'tier3-bundle-path\.txt' "$EVIDENCE_WORKFLOW" "Tier 3 bundle path artifact"

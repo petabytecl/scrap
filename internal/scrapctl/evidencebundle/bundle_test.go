@@ -234,15 +234,16 @@ func TestGenerateFailsWhenSecurityReportIsMissing(t *testing.T) {
 	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
 }
 
-func TestGeneratePassesWhenSecurityReportIsNotConfigured(t *testing.T) {
+func TestGenerateFailsWhenSecurityReportIsNotConfigured(t *testing.T) {
 	result := generateTestBundle(t, fakeSignals{securityReportNotConfigured: true})
 
-	if !result.Gate.Pass {
-		t.Fatalf("gate pass = false, checks = %+v", result.Gate.Checks)
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
 	}
-	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", true)
-	assertBundleCheck(t, result.Gate, "audit_samples_recorded", true)
-	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", true)
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", false)
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", false)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", false)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
 	assertSecurityEvidenceReportNotConfigured(t, result.BundlePath)
 }
 
@@ -253,6 +254,15 @@ func TestGenerateFailsWhenSecurityReportUsesDevelopmentMode(t *testing.T) {
 		t.Fatalf("gate pass = true, want false")
 	}
 	assertBundleCheck(t, result.Gate, "security_mode_recorded", false)
+}
+
+func TestGeneratePassesWhenReportIsProdlikeAndHealthIsDevelopment(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{developmentHealthWithSecurityReport: true})
+
+	if !result.Gate.Pass {
+		t.Fatalf("gate pass = false, checks = %+v", result.Gate.Checks)
+	}
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", true)
 }
 
 func TestGenerateFailsWhenEncryptedRestoreProofIsMissing(t *testing.T) {
@@ -329,18 +339,19 @@ func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 }
 
 type fakeSignals struct {
-	missingMetricDelta                 bool
-	missingLog                         bool
-	missingTrace                       bool
-	missingCPUProfile                  bool
-	missingHeapProfile                 bool
-	missingSecurityReport              bool
-	securityReportNotConfigured        bool
-	developmentSecurityMode            bool
-	missingSecurityRestore             bool
-	adminProbeFailed                   bool
-	evictionPlanID                     string
-	requireEvictionHealthBeforeMetrics bool
+	missingMetricDelta                  bool
+	missingLog                          bool
+	missingTrace                        bool
+	missingCPUProfile                   bool
+	missingHeapProfile                  bool
+	missingSecurityReport               bool
+	securityReportNotConfigured         bool
+	developmentSecurityMode             bool
+	developmentHealthWithSecurityReport bool
+	missingSecurityRestore              bool
+	adminProbeFailed                    bool
+	evictionPlanID                      string
+	requireEvictionHealthBeforeMetrics  bool
 }
 
 func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
@@ -352,15 +363,22 @@ func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
 		return filepath.Join(t.TempDir(), "missing-security.json")
 	}
 	report := securityReportEvidence{
-		PublicUnauthorizedDenied: true,
-		PeerUnauthorizedDenied:   true,
-		AdminUnauthorizedDenied:  true,
-		AuditSamplesRecorded:     true,
-		EncryptedWriteReadOK:     true,
-		EncryptedBackendUploadOK: true,
-		EncryptedRestoreOK:       !signals.missingSecurityRestore,
-		RewrapOK:                 true,
-		Phase5EntryBlocked:       true,
+		SecurityMode:              "test",
+		ProductionReadinessStatus: "not_ready",
+		ProductionReadinessReason: "non_production_security_mode",
+		AuthorizationStatus:       "configured",
+		PublicUnauthorizedDenied:  true,
+		PeerUnauthorizedDenied:    true,
+		AdminUnauthorizedDenied:   true,
+		AuditSamplesRecorded:      true,
+		EncryptedWriteReadOK:      true,
+		EncryptedBackendUploadOK:  true,
+		EncryptedRestoreOK:        !signals.missingSecurityRestore,
+		RewrapOK:                  true,
+		Phase5EntryBlocked:        true,
+	}
+	if signals.developmentSecurityMode {
+		report.SecurityMode = "development"
 	}
 	path := filepath.Join(t.TempDir(), "security-evidence.json")
 	data, err := json.Marshal(report)
@@ -377,12 +395,11 @@ func assertSecurityEvidenceReportNotConfigured(t *testing.T, root string) {
 	t.Helper()
 
 	var report struct {
-		Status string `json:"status"`
-		Reason string `json:"reason"`
+		Error string `json:"error"`
 	}
 	readBundleJSON(t, root, "security/e2e-report.json", &report)
-	if report.Status != "not_configured" || report.Reason == "" {
-		t.Fatalf("security report placeholder = %+v, want not_configured", report)
+	if report.Error == "" {
+		t.Fatalf("security report placeholder = %+v, want error", report)
 	}
 }
 
@@ -449,7 +466,7 @@ func (p fakeAdminProbe) Emit(context.Context, AdminProbeRequest) (AdminProbeResu
 	if p.signals.adminProbeFailed {
 		return AdminProbeResult{Body: []byte(`{"error":"admin evidence log probe failed"}`)}, errors.New("probe failed")
 	}
-	if p.signals.securityReportNotConfigured || p.signals.developmentSecurityMode {
+	if p.signals.securityReportNotConfigured || p.signals.developmentSecurityMode || p.signals.developmentHealthWithSecurityReport {
 		return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
 	}
 	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"configured","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil

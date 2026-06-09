@@ -225,18 +225,14 @@ func adminUnauthorizedDenied(t *testing.T, pod string) bool {
 		return clientCertificateRejected(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+	return false
 }
 
 func deniedBeforeHandler(err error) bool {
 	if err == nil {
 		return false
 	}
-	code := status.Code(err)
-	if code == codes.Unauthenticated || code == codes.PermissionDenied {
-		return true
-	}
-	return code == codes.Unavailable && clientCertificateRejected(err)
+	return status.Code(err) == codes.Unavailable && clientCertificateRejected(err)
 }
 
 func clientCertificateRejected(err error) bool {
@@ -249,18 +245,18 @@ func clientCertificateRejected(err error) bool {
 		strings.Contains(msg, "bad certificate")
 }
 
-func TestDeniedBeforeHandlerRequiresAuthorizationOrCertificateDenial(t *testing.T) {
-	if !deniedBeforeHandler(status.Error(codes.Unauthenticated, "missing identity")) {
-		t.Fatal("Unauthenticated should count as a denial")
+func TestDeniedBeforeHandlerRequiresClientCertificateRejection(t *testing.T) {
+	if deniedBeforeHandler(status.Error(codes.Unauthenticated, "missing identity")) {
+		t.Fatal("Unauthenticated should not count as mTLS denial evidence")
 	}
-	if !deniedBeforeHandler(status.Error(codes.PermissionDenied, "role denied")) {
-		t.Fatal("PermissionDenied should count as a denial")
+	if deniedBeforeHandler(status.Error(codes.PermissionDenied, "role denied")) {
+		t.Fatal("PermissionDenied should not count as mTLS denial evidence")
 	}
 	if !deniedBeforeHandler(status.Error(codes.Unavailable, "connection error: desc = \"transport: authentication handshake failed: remote error: tls: certificate required\"")) {
-		t.Fatal("client certificate rejection should count as a denial")
+		t.Fatal("client certificate rejection should count as mTLS denial evidence")
 	}
 	if deniedBeforeHandler(status.Error(codes.Unavailable, "connection refused")) {
-		t.Fatal("generic transport outage should not count as a denial")
+		t.Fatal("generic transport outage should not count as mTLS denial evidence")
 	}
 }
 

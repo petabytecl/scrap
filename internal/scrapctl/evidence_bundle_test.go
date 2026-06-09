@@ -234,6 +234,10 @@ func writeScrapctlSecurityReportFixture(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "security-evidence.json")
 	body := `{
+  "security_mode": "test",
+  "production_readiness_status": "not_ready",
+  "production_readiness_reason": "non_production_security_mode",
+  "authorization_status": "configured",
   "public_unauthorized_denied": true,
   "peer_unauthorized_denied": true,
   "admin_unauthorized_denied": true,

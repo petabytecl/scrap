@@ -211,7 +211,7 @@ TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPat
 ##? STRESS_DURATION Duration of the stress test run.
 ##? STRESS_DOC_SIZE Document payload size in bytes.
 ##? BUNDLE_DIR Directory where evidence bundles are written.
-##? SECURITY_EVIDENCE_REPORT Optional prod-like security report copied into Tier 3 evidence bundles.
+##? SECURITY_EVIDENCE_REPORT Prod-like security report copied into Tier 3 evidence bundles.
 ##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
 ##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
@@ -225,7 +225,7 @@ STRESS_WORKERS ?= 8
 STRESS_DURATION ?= 60s
 STRESS_DOC_SIZE ?= 16384
 BUNDLE_DIR ?= evidence
-SECURITY_EVIDENCE_REPORT ?=
+SECURITY_EVIDENCE_REPORT ?= $(TIER2_SECURITY_EVIDENCE_REPORT)
 EVIDENCE_BASELINE_SAMPLING ?= 100
 EVIDENCE_LOWRATE_SAMPLING ?= 10
 
@@ -521,6 +521,12 @@ prodlike-test-security-assets:
 		KUBECTL="$(KUBECTL)" \
 		scripts/prodlike-test-security-assets.sh "$(PRODLIKE_SECURITY_ASSET_DIR)"
 
+.PHONY: prodlike-test-security-rollout
+prodlike-test-security-rollout: prodlike-doctor prodlike-test-security-assets
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout restart statefulset/scrapd
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+
 .PHONY: prodlike-cell-doctor
 prodlike-cell-doctor:
 	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
@@ -631,7 +637,7 @@ tier1-check: check vuln ## Run the Tier 1 commit gate.
 
 .PHONY: tier2-e2e
 tier2-e2e: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
-tier2-e2e: prodlike-doctor prodlike-test-security-assets tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
+tier2-e2e: prodlike-test-security-assets prodlike-test-security-rollout tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
 	@printf 'TIER2_E2E_STATUS=running\n'
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \

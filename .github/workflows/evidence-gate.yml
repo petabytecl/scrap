@@ -43,9 +43,13 @@ concurrency:
 jobs:
   tier3-evidence:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       GOCACHE: /tmp/scrap-v2-go-build
+      PRODLIKE_KIND_CLUSTER: scrap-prodlike
+      PRODLIKE_KUBE_CONTEXT: kind-scrap-prodlike
+      PRODLIKE_E2E_KUBE_CONTEXT: kind-scrap-prodlike
+      SCRAP_E2E_KUBE_CONTEXT: kind-scrap-prodlike
       STRESS_KIND_CLUSTER: scrap-stress
       STRESS_SCENARIO: ${{ inputs.scenario }}
       STRESS_DURATION: ${{ inputs.duration }}
@@ -68,6 +72,9 @@ jobs:
         run: |
           mkdir -p artifacts evidence
           set -o pipefail
+          trap 'make prodlike-kind-delete || true' EXIT
+          make tier2-e2e-up 2>&1 | tee artifacts/tier2-e2e.log
+          make prodlike-kind-delete
           make tier3-evidence-up 2>&1 | tee artifacts/tier3-evidence.log
           find evidence -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1 > artifacts/tier3-bundle-path.txt
 

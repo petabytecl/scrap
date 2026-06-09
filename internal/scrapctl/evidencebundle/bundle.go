@@ -475,15 +475,19 @@ type securityHealthEvidence struct {
 }
 
 type securityReportEvidence struct {
-	PublicUnauthorizedDenied bool `json:"public_unauthorized_denied"`
-	PeerUnauthorizedDenied   bool `json:"peer_unauthorized_denied"`
-	AdminUnauthorizedDenied  bool `json:"admin_unauthorized_denied"`
-	AuditSamplesRecorded     bool `json:"audit_samples_recorded"`
-	EncryptedWriteReadOK     bool `json:"encrypted_write_read_ok"`
-	EncryptedBackendUploadOK bool `json:"encrypted_backend_upload_ok"`
-	EncryptedRestoreOK       bool `json:"encrypted_restore_ok"`
-	RewrapOK                 bool `json:"rewrap_ok"`
-	Phase5EntryBlocked       bool `json:"phase5_entry_blocked"`
+	SecurityMode              string `json:"security_mode"`
+	ProductionReadinessStatus string `json:"production_readiness_status"`
+	ProductionReadinessReason string `json:"production_readiness_reason"`
+	AuthorizationStatus       string `json:"authorization_status"`
+	PublicUnauthorizedDenied  bool   `json:"public_unauthorized_denied"`
+	PeerUnauthorizedDenied    bool   `json:"peer_unauthorized_denied"`
+	AdminUnauthorizedDenied   bool   `json:"admin_unauthorized_denied"`
+	AuditSamplesRecorded      bool   `json:"audit_samples_recorded"`
+	EncryptedWriteReadOK      bool   `json:"encrypted_write_read_ok"`
+	EncryptedBackendUploadOK  bool   `json:"encrypted_backend_upload_ok"`
+	EncryptedRestoreOK        bool   `json:"encrypted_restore_ok"`
+	RewrapOK                  bool   `json:"rewrap_ok"`
+	Phase5EntryBlocked        bool   `json:"phase5_entry_blocked"`
 }
 
 func captureSecurityEvidence(cfg Config, state *generationState) error {
@@ -499,21 +503,17 @@ func captureSecurityEvidence(cfg Config, state *generationState) error {
 	if err != nil {
 		return err
 	}
-	applySecuritySignals(&state.signals, health, report, reportLoaded, strings.TrimSpace(cfg.SecurityReportPath) != "")
+	applySecuritySignals(&state.signals, health, report, reportLoaded)
 	return nil
 }
 
-func applySecuritySignals(signals *signalResults, health securityHealthEvidence, report securityReportEvidence, reportLoaded, reportRequired bool) {
-	signals.securityModeOK = securityModeOK(health, reportRequired)
-	signals.securityModeReason = securityModeReason(health)
-	if !reportRequired {
-		applySecurityReportNotConfigured(signals)
-		return
-	}
+func applySecuritySignals(signals *signalResults, health securityHealthEvidence, report securityReportEvidence, reportLoaded bool) {
 	if !reportLoaded {
 		applyMissingSecurityReportSignals(signals)
 		return
 	}
+	signals.securityModeOK = securityReportModeOK(report)
+	signals.securityModeReason = securityReportModeReason(report, health)
 	signals.authzOK = securityReportAuthzOK(report)
 	signals.authzReason = securityReportReason(signals.authzOK, reportLoaded, "unauthorized public/peer/admin denied", "missing unauthorized denial proof")
 	signals.auditOK = report.AuditSamplesRecorded
@@ -521,38 +521,23 @@ func applySecuritySignals(signals *signalResults, health securityHealthEvidence,
 	signals.encryptionOK = securityReportEncryptionOK(report)
 	signals.encryptionReason = securityReportReason(signals.encryptionOK, reportLoaded, "encrypted write/read, backend upload, and restore passed", "missing encrypted write/read/upload/restore proof")
 	signals.rewrapOK = securityReportRewrapOK(report)
-	signals.rewrapReason = rewrapEvidenceReason(signals.rewrapOK, reportLoaded, health)
-	signals.phase5GateOK = securityReportPhase5GateOK(report, health)
-	signals.phase5GateReason = phase5GateReason(signals.phase5GateOK, reportLoaded, health)
+	signals.rewrapReason = rewrapEvidenceReason(signals.rewrapOK, reportLoaded)
+	signals.phase5GateOK = securityReportPhase5GateOK(report)
+	signals.phase5GateReason = phase5GateReason(signals.phase5GateOK, reportLoaded, report)
 }
 
-func securityModeOK(health securityHealthEvidence, reportRequired bool) bool {
-	if health.SecurityMode == "" || health.ProductionReadinessStatus == "" {
+func securityReportModeOK(report securityReportEvidence) bool {
+	if report.SecurityMode == "" || report.ProductionReadinessStatus == "" {
 		return false
 	}
-	if !reportRequired {
-		return true
-	}
-	modeOK := health.SecurityMode == "test" || health.SecurityMode == "production"
-	authzOK := health.AuthorizationStatus == "configured" || health.AuthorizationStatus == "denied"
+	modeOK := report.SecurityMode == "test" || report.SecurityMode == "production"
+	authzOK := report.AuthorizationStatus == "configured" || report.AuthorizationStatus == "denied"
 	return modeOK && authzOK
 }
 
-func applySecurityReportNotConfigured(signals *signalResults) {
-	reason := "security evidence report not configured"
-	signals.authzOK = true
-	signals.authzReason = reason
-	signals.auditOK = true
-	signals.auditReason = reason
-	signals.encryptionOK = true
-	signals.encryptionReason = reason
-	signals.rewrapOK = true
-	signals.rewrapReason = reason
-	signals.phase5GateOK = true
-	signals.phase5GateReason = reason
-}
-
 func applyMissingSecurityReportSignals(signals *signalResults) {
+	signals.securityModeOK = false
+	signals.securityModeReason = "security evidence report unavailable"
 	signals.authzOK = false
 	signals.authzReason = "security evidence report unavailable"
 	signals.auditOK = false
@@ -577,8 +562,8 @@ func securityReportRewrapOK(report securityReportEvidence) bool {
 	return report.RewrapOK
 }
 
-func securityReportPhase5GateOK(report securityReportEvidence, health securityHealthEvidence) bool {
-	return report.Phase5EntryBlocked || health.ProductionReadinessStatus == "ready"
+func securityReportPhase5GateOK(report securityReportEvidence) bool {
+	return report.Phase5EntryBlocked || report.ProductionReadinessStatus == "ready"
 }
 
 func parseSecurityHealth(body []byte) securityHealthEvidence {
@@ -589,7 +574,7 @@ func parseSecurityHealth(body []byte) securityHealthEvidence {
 
 func captureSecurityReport(path, dir string) (securityReportEvidence, bool, error) {
 	if strings.TrimSpace(path) == "" {
-		body := []byte(`{"status":"not_configured","reason":"security evidence report not configured"}`)
+		body := []byte(`{"error":"security evidence report path not configured"}`)
 		return securityReportEvidence{}, false, writeRawJSONFile(filepath.Join(dir, "e2e-report.json"), body)
 	}
 	body, err := os.ReadFile(path) //nolint:gosec // Operator-selected report path is copied into the bundle.
@@ -607,19 +592,22 @@ func captureSecurityReport(path, dir string) (securityReportEvidence, bool, erro
 	return report, true, nil
 }
 
-func securityModeReason(health securityHealthEvidence) string {
-	if health.SecurityMode == "" {
+func securityReportModeReason(report securityReportEvidence, health securityHealthEvidence) string {
+	if report.SecurityMode == "" {
 		return "missing security_mode"
 	}
-	if health.ProductionReadinessStatus == "" {
+	if report.ProductionReadinessStatus == "" {
 		return "missing production_readiness_status"
 	}
-	reasonText := "mode=" + health.SecurityMode + " readiness=" + health.ProductionReadinessStatus
-	if health.ProductionReadinessReason != "" {
-		reasonText += " reason=" + health.ProductionReadinessReason
+	reasonText := "report_mode=" + report.SecurityMode + " report_readiness=" + report.ProductionReadinessStatus
+	if report.ProductionReadinessReason != "" {
+		reasonText += " reason=" + report.ProductionReadinessReason
 	}
-	if health.AuthorizationStatus != "" {
-		reasonText += " authz=" + health.AuthorizationStatus
+	if report.AuthorizationStatus != "" {
+		reasonText += " report_authz=" + report.AuthorizationStatus
+	}
+	if health.SecurityMode != "" {
+		reasonText += " health_mode=" + health.SecurityMode
 	}
 	return reasonText
 }
@@ -634,19 +622,16 @@ func securityReportReason(ok, reportLoaded bool, pass, fail string) string {
 	return fail
 }
 
-func rewrapEvidenceReason(ok, reportLoaded bool, health securityHealthEvidence) string {
+func rewrapEvidenceReason(ok, reportLoaded bool) string {
 	if ok {
-		if health.RewrapLastReason != "" {
-			return "rewrap recorded reason=" + health.RewrapLastReason
-		}
 		return "rewrap recorded"
 	}
 	return securityReportReason(false, reportLoaded, "", "missing rewrap proof")
 }
 
-func phase5GateReason(ok, reportLoaded bool, health securityHealthEvidence) string {
+func phase5GateReason(ok, reportLoaded bool, report securityReportEvidence) string {
 	if ok {
-		if health.ProductionReadinessStatus == "ready" {
+		if report.ProductionReadinessStatus == "ready" {
 			return "phase5 gate can evaluate production readiness"
 		}
 		return "phase5 entry blocked by non-ready production posture"
