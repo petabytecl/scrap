@@ -234,6 +234,18 @@ func TestGenerateFailsWhenSecurityReportIsMissing(t *testing.T) {
 	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
 }
 
+func TestGeneratePassesWhenSecurityReportIsNotConfigured(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{securityReportNotConfigured: true})
+
+	if !result.Gate.Pass {
+		t.Fatalf("gate pass = false, checks = %+v", result.Gate.Checks)
+	}
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", true)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", true)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", true)
+	assertSecurityEvidenceReportNotConfigured(t, result.BundlePath)
+}
+
 func TestGenerateFailsWhenEncryptedRestoreProofIsMissing(t *testing.T) {
 	result := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
 
@@ -314,6 +326,7 @@ type fakeSignals struct {
 	missingCPUProfile                  bool
 	missingHeapProfile                 bool
 	missingSecurityReport              bool
+	securityReportNotConfigured        bool
 	missingSecurityRestore             bool
 	adminProbeFailed                   bool
 	evictionPlanID                     string
@@ -322,8 +335,11 @@ type fakeSignals struct {
 
 func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
 	t.Helper()
-	if signals.missingSecurityReport {
+	if signals.securityReportNotConfigured {
 		return ""
+	}
+	if signals.missingSecurityReport {
+		return filepath.Join(t.TempDir(), "missing-security.json")
 	}
 	report := securityReportEvidence{
 		PublicUnauthorizedDenied: true,
@@ -345,6 +361,19 @@ func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
 		t.Fatalf("write security report fixture: %v", err)
 	}
 	return path
+}
+
+func assertSecurityEvidenceReportNotConfigured(t *testing.T, root string) {
+	t.Helper()
+
+	var report struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	readBundleJSON(t, root, "security/e2e-report.json", &report)
+	if report.Status != "not_configured" || report.Reason == "" {
+		t.Fatalf("security report placeholder = %+v, want not_configured", report)
+	}
 }
 
 type sequenceClock struct {

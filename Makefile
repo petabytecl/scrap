@@ -178,6 +178,7 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
 ##? PRODLIKE_E2E_KUBE_CONTEXT kubectl context used by the prod-like Tier 2 E2E gate.
 ##? PRODLIKE_SECURITY_ASSET_DIR Directory for generated prod-like E2E test TLS assets.
+##? TIER2_SECURITY_EVIDENCE_REPORT Prod-like security report written by the Tier 2 E2E gate.
 ##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
 ##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
@@ -193,6 +194,7 @@ PRODLIKE_E2E_KUBE_CONTEXT := $(PRODLIKE_KUBE_CONTEXT)
 endif
 PRODLIKE_E2E_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_E2E_KUBE_CONTEXT)"
 PRODLIKE_SECURITY_ASSET_DIR ?= artifacts/prodlike-security
+TIER2_SECURITY_EVIDENCE_REPORT ?= $(PRODLIKE_SECURITY_ASSET_DIR)/security-evidence.json
 E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
 TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub|ProdlikeSecurityEncryptionEvidence)
@@ -209,7 +211,7 @@ TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPat
 ##? STRESS_DURATION Duration of the stress test run.
 ##? STRESS_DOC_SIZE Document payload size in bytes.
 ##? BUNDLE_DIR Directory where evidence bundles are written.
-##? SECURITY_EVIDENCE_REPORT Prod-like security report copied into Tier 3 evidence bundles.
+##? SECURITY_EVIDENCE_REPORT Optional prod-like security report copied into Tier 3 evidence bundles.
 ##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
 ##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
@@ -223,7 +225,7 @@ STRESS_WORKERS ?= 8
 STRESS_DURATION ?= 60s
 STRESS_DOC_SIZE ?= 16384
 BUNDLE_DIR ?= evidence
-SECURITY_EVIDENCE_REPORT ?= $(PRODLIKE_SECURITY_ASSET_DIR)/security-evidence.json
+SECURITY_EVIDENCE_REPORT ?=
 EVIDENCE_BASELINE_SAMPLING ?= 100
 EVIDENCE_LOWRATE_SAMPLING ?= 10
 
@@ -648,7 +650,7 @@ tier2-e2e: prodlike-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E
 		SCRAP_E2E_TLS_KEY="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.key)" \
 		SCRAP_E2E_TLS_CA="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/ca.pem)" \
 		SCRAP_E2E_TLS_SERVER_NAME="scrap.local" \
-		SCRAP_E2E_SECURITY_REPORT="$(abspath $(SECURITY_EVIDENCE_REPORT))" \
+		SCRAP_E2E_SECURITY_REPORT="$(abspath $(TIER2_SECURITY_EVIDENCE_REPORT))" \
 		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
 		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -count=1 -v -timeout 600s
 	@printf 'TIER2_E2E_STATUS=passed\n'

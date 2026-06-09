@@ -5,9 +5,17 @@ asset_dir=${1:-artifacts/prodlike-security}
 namespace=${SCRAP_E2E_NAMESPACE:-scrap}
 server_name=${SCRAP_E2E_TLS_SERVER_NAME:-scrap.local}
 principal=${SCRAP_E2E_PRINCIPAL:-spiffe://scrap/cell/kind-prodlike/member/scrapd-e2e/member-1}
+renew_window_seconds=${SCRAP_E2E_CERT_RENEW_WINDOW_SECONDS:-86400}
 kubectl_bin=${KUBECTL:-kubectl}
 kube_context=${PRODLIKE_E2E_KUBE_CONTEXT:-${PRODLIKE_KUBE_CONTEXT:-}}
 kubeconfig=${KUBECONFIG:-}
+
+case "$renew_window_seconds" in
+	''|*[!0-9]*)
+		echo "SCRAP_E2E_CERT_RENEW_WINDOW_SECONDS must be a non-negative integer" >&2
+		exit 2
+		;;
+esac
 
 kubectl_args=()
 if [ -n "$kube_context" ]; then
@@ -31,9 +39,15 @@ report_file="$asset_dir/security-evidence.json"
 
 rm -f "$report_file"
 
+cert_is_current() {
+	local cert=$1
+	[ -s "$cert" ] || return 1
+	openssl x509 -in "$cert" -noout -checkend "$renew_window_seconds" >/dev/null 2>&1
+}
+
 ca_is_usable() {
 	local cert_text
-	if [ ! -s "$ca_cert" ]; then
+	if ! cert_is_current "$ca_cert"; then
 		return 1
 	fi
 	cert_text=$(openssl x509 -in "$ca_cert" -noout -text 2>/dev/null) || return 1
@@ -41,7 +55,7 @@ ca_is_usable() {
 	grep -q 'Certificate Sign' <<<"$cert_text" || return 1
 }
 
-if [ ! -s "$ca_key" ] || [ ! -s "$leaf_key" ] || [ ! -s "$leaf_cert" ] || ! ca_is_usable; then
+if [ ! -s "$ca_key" ] || [ ! -s "$leaf_key" ] || ! cert_is_current "$leaf_cert" || ! ca_is_usable; then
 	rm -f "$ca_key" "$ca_cert" "$leaf_key" "$leaf_csr" "$leaf_cert" "$ext_file" "$asset_dir/ca.srl"
 
 	openssl ecparam -name prime256v1 -genkey -noout -out "$ca_key"

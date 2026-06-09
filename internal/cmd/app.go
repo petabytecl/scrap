@@ -196,9 +196,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithAuditSink(securityRuntime.auditSink),
 		admin.WithRateLimiter(securityRuntime.rateLimiter),
 	}
-	if cfg.TestHooks {
-		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
-	}
+	adminOpts = appendTestHookAdminOptions(adminOpts, cfg, s, securityRuntime.transit)
 	if cfg.PprofEnabled {
 		adminOpts = append(adminOpts, admin.WithPprof())
 	}
@@ -222,6 +220,26 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		raftID:      raftID,
 		uploadCfg:   uploadCfg,
 	}, nil
+}
+
+func appendTestHookAdminOptions(opts []admin.Option, cfg Config, shard *shard.Shard, transit any) []admin.Option {
+	if !cfg.TestHooks {
+		return opts
+	}
+	opts = append(opts, admin.WithProjectionInjector(shard))
+	if rotator, ok := transit.(interface{ Rotate() }); ok {
+		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
+	}
+	return opts
+}
+
+type appTransitRotator struct {
+	transit interface{ Rotate() }
+}
+
+func (r appTransitRotator) RotateTransitKey(context.Context) error {
+	r.transit.Rotate()
+	return nil
 }
 
 func newAppSecurityRuntimeForTelemetry(cfg Config, peers map[uint64]string, logger *slog.Logger, telemetryRuntime *scrapdTelemetryRuntime) (appSecurityRuntime, error) {

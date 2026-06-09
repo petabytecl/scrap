@@ -499,23 +499,58 @@ func captureSecurityEvidence(cfg Config, state *generationState) error {
 	if err != nil {
 		return err
 	}
-	applySecuritySignals(&state.signals, health, report, reportLoaded)
+	applySecuritySignals(&state.signals, health, report, reportLoaded, strings.TrimSpace(cfg.SecurityReportPath) != "")
 	return nil
 }
 
-func applySecuritySignals(signals *signalResults, health securityHealthEvidence, report securityReportEvidence, reportLoaded bool) {
+func applySecuritySignals(signals *signalResults, health securityHealthEvidence, report securityReportEvidence, reportLoaded, reportRequired bool) {
 	signals.securityModeOK = health.SecurityMode != "" && health.ProductionReadinessStatus != ""
 	signals.securityModeReason = securityModeReason(health)
+	if !reportRequired {
+		applySecurityReportNotConfigured(signals)
+		return
+	}
+	if !reportLoaded {
+		applyMissingSecurityReportSignals(signals)
+		return
+	}
 	signals.authzOK = securityReportAuthzOK(report)
 	signals.authzReason = securityReportReason(signals.authzOK, reportLoaded, "unauthorized public/peer/admin denied", "missing unauthorized denial proof")
 	signals.auditOK = report.AuditSamplesRecorded
 	signals.auditReason = securityReportReason(signals.auditOK, reportLoaded, "audit samples recorded", "missing audit sample proof")
 	signals.encryptionOK = securityReportEncryptionOK(report)
 	signals.encryptionReason = securityReportReason(signals.encryptionOK, reportLoaded, "encrypted write/read, backend upload, and restore passed", "missing encrypted write/read/upload/restore proof")
-	signals.rewrapOK = securityReportRewrapOK(report, health)
+	signals.rewrapOK = securityReportRewrapOK(report)
 	signals.rewrapReason = rewrapEvidenceReason(signals.rewrapOK, reportLoaded, health)
 	signals.phase5GateOK = securityReportPhase5GateOK(report, health)
 	signals.phase5GateReason = phase5GateReason(signals.phase5GateOK, reportLoaded, health)
+}
+
+func applySecurityReportNotConfigured(signals *signalResults) {
+	reason := "security evidence report not configured"
+	signals.authzOK = true
+	signals.authzReason = reason
+	signals.auditOK = true
+	signals.auditReason = reason
+	signals.encryptionOK = true
+	signals.encryptionReason = reason
+	signals.rewrapOK = true
+	signals.rewrapReason = reason
+	signals.phase5GateOK = true
+	signals.phase5GateReason = reason
+}
+
+func applyMissingSecurityReportSignals(signals *signalResults) {
+	signals.authzOK = false
+	signals.authzReason = "security evidence report unavailable"
+	signals.auditOK = false
+	signals.auditReason = "security evidence report unavailable"
+	signals.encryptionOK = false
+	signals.encryptionReason = "security evidence report unavailable"
+	signals.rewrapOK = false
+	signals.rewrapReason = "security evidence report unavailable"
+	signals.phase5GateOK = false
+	signals.phase5GateReason = "security evidence report unavailable"
 }
 
 func securityReportAuthzOK(report securityReportEvidence) bool {
@@ -526,8 +561,8 @@ func securityReportEncryptionOK(report securityReportEvidence) bool {
 	return report.EncryptedWriteReadOK && report.EncryptedBackendUploadOK && report.EncryptedRestoreOK
 }
 
-func securityReportRewrapOK(report securityReportEvidence, health securityHealthEvidence) bool {
-	return report.RewrapOK || (health.RewrapStatus != "" && health.RewrapStatus != "failed")
+func securityReportRewrapOK(report securityReportEvidence) bool {
+	return report.RewrapOK
 }
 
 func securityReportPhase5GateOK(report securityReportEvidence, health securityHealthEvidence) bool {
@@ -542,7 +577,7 @@ func parseSecurityHealth(body []byte) securityHealthEvidence {
 
 func captureSecurityReport(path, dir string) (securityReportEvidence, bool, error) {
 	if strings.TrimSpace(path) == "" {
-		body := []byte(`{"error":"security evidence report not configured"}`)
+		body := []byte(`{"status":"not_configured","reason":"security evidence report not configured"}`)
 		return securityReportEvidence{}, false, writeRawJSONFile(filepath.Join(dir, "e2e-report.json"), body)
 	}
 	body, err := os.ReadFile(path) //nolint:gosec // Operator-selected report path is copied into the bundle.

@@ -219,6 +219,7 @@ func TestE2ELeaderFailover(t *testing.T) {
 
 	leader := findLeaderPod(t, txID, "doc.xml")
 	deletePodAndWaitReady(t, leader)
+	waitForCellWriteQuorum(t)
 
 	headResp := headDocE2E(t, client, txID, "doc.xml")
 	if headResp.GetSize() != int64(len(content)) {
@@ -227,5 +228,14 @@ func TestE2ELeaderFailover(t *testing.T) {
 	readBack := readDocE2E(t, client, txID, "doc.xml")
 	if !bytes.Equal(readBack, content) {
 		t.Fatalf("read after leader failover: got %d bytes, want %d", len(readBack), len(content))
+	}
+}
+
+func waitForCellWriteQuorum(t *testing.T) {
+	t.Helper()
+	client := connect(t)
+	txID := uniqueName("tx-e2e-quorum")
+	if _, err := tryWriteDocE2E(t, client, txID, "ready.xml", "text/xml", []byte("ready")); err != nil {
+		t.Fatalf("cell did not accept canary write after leader replacement: %v", err)
 	}
 }

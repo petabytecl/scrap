@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,8 @@ func TestE2EProdlikeSecurityEncryptionEvidence(t *testing.T) {
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
 
 	leader := findLeaderPod(t, txID, docName)
-	rewrapResult := postRewrapDocument(t, leader, txID, docName)
+	postTransitRotate(t, leader)
+	rewrapResult := postRewrapDocument(t, leader, txID, docName, 2)
 	restoreOK := encryptedRestoreOK(t, leader, pair.blk.key, txID, docName, content)
 
 	report := buildSecurityEvidenceReport(t, health, leader, pair, readBack, content, restoreOK, rewrapResult)
@@ -116,7 +118,7 @@ func buildSecurityEvidenceReport(
 		EncryptedWriteReadOK:      bytes.Equal(readBack, content),
 		EncryptedBackendUploadOK:  pair.blk.key != "" && pair.idx.key != "",
 		EncryptedRestoreOK:        restoreOK,
-		RewrapOK:                  rewrapResult.Status == rewrap.StatusOK,
+		RewrapOK:                  securityRewrapChanged(rewrapResult),
 		Phase5EntryBlocked:        health.ProductionReadinessStatus != string(security.ReadinessStatusReady),
 	}
 }
@@ -140,6 +142,13 @@ func securityDenialsRecorded(report securityEvidenceReport) bool {
 
 func securityEncryptionRecorded(report securityEvidenceReport) bool {
 	return report.EncryptedWriteReadOK && report.EncryptedBackendUploadOK && report.EncryptedRestoreOK && report.RewrapOK
+}
+
+func securityRewrapChanged(result rewrap.Result) bool {
+	return result.Status == rewrap.StatusOK &&
+		result.Changed &&
+		result.OldKeyVersion == 1 &&
+		result.NewKeyVersion == 2
 }
 
 func fetchSecurityHealth(t *testing.T) securityHealth {
@@ -227,11 +236,35 @@ func deniedBeforeHandler(err error) bool {
 	return code == codes.Unauthenticated || code == codes.PermissionDenied || code == codes.Unavailable
 }
 
-func postRewrapDocument(t *testing.T, pod, txID, docName string) rewrap.Result {
+func postTransitRotate(t *testing.T, pod string) {
 	t.Helper()
 	addr, stop := startPodPortForward(t, pod, 9100)
 	defer stop()
-	body := bytes.NewReader([]byte(`{"transaction_id":` + quotedJSON(txID) + `,"document_name":` + quotedJSON(docName) + `,"key_version":1,"reason":"e2e_security_evidence"}`))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/test-hooks/transit-rotate"), nil)
+	if err != nil {
+		t.Fatalf("new transit rotate request: %v", err)
+	}
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("POST transit rotate: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read transit rotate response: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("transit rotate status: got %d, want 204: %s", resp.StatusCode, string(data))
+	}
+}
+
+func postRewrapDocument(t *testing.T, pod, txID, docName string, keyVersion int) rewrap.Result {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+	body := bytes.NewReader([]byte(`{"transaction_id":` + quotedJSON(txID) + `,"document_name":` + quotedJSON(docName) + `,"key_version":` + strconv.Itoa(keyVersion) + `,"reason":"e2e_security_evidence"}`))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/admin/rewrap/document"), body)
