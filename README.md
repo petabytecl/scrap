@@ -52,7 +52,12 @@ make test
 make test-race
 make integration
 make check
+make production-rehearsal-security
 ```
+
+`make production-rehearsal-security` runs the local production-mode security
+rehearsal with real OpenBao Transit and a filesystem Backend. The full S3
+rehearsal and evidence rules are documented in `docs/production-rehearsal.md`.
 
 Local GitHub Actions validation uses `act` and the repo-local `.actrc`:
 

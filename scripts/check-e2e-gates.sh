@@ -8,6 +8,7 @@ EVIDENCE_WORKFLOW=${EVIDENCE_WORKFLOW:-.github/workflows/evidence-gate.yml}
 SCRUB_E2E=${SCRUB_E2E:-test/e2e/scrub_e2e_test.go}
 PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
 PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodlike-e2e}
+PRODUCTION_REHEARSAL_SCRIPT=${PRODUCTION_REHEARSAL_SCRIPT:-scripts/production-rehearsal.sh}
 PRD_CLOSURE_POLICY=${PRD_CLOSURE_POLICY:-docs/prd-closure-policy.md}
 
 fail() {
@@ -86,6 +87,9 @@ require_target tier2-e2e-up
 require_target evidence-up
 require_target tier3-evidence
 require_target tier3-evidence-up
+require_target production-rehearsal-security
+require_target production-rehearsal
+require_target production-rehearsal-down
 
 target_must_not_depend_on e2e e2e-setup
 target_must_not_depend_on e2e-scrub e2e-setup
@@ -113,6 +117,10 @@ reject_pattern 'SCRAP_E2E_CLEANUP' "$SCRUB_E2E" "cluster cleanup during E2E exec
 reject_pattern 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "test hooks in prod-like overlay"
 
 require_pattern '^PRODLIKE_E2E_OVERLAY[[:space:]]*\?=' "$MAKEFILE" "prod-like E2E overlay variable"
+require_pattern '^PRODUCTION_REHEARSAL_SCRIPT[[:space:]]*\?=' "$MAKEFILE" "production rehearsal script variable"
+require_pattern '^PRODUCTION_REHEARSAL_OPENBAO_IMAGE[[:space:]]*\?=.*openbao/openbao:2\.5\.4' "$MAKEFILE" "pinned production rehearsal OpenBao image"
+require_pattern 'SCRAP_PROD_REHEARSAL_BACKEND=fs' "$MAKEFILE" "security-only production rehearsal backend"
+require_pattern 'SCRAP_PROD_REHEARSAL_BACKEND=s3' "$MAKEFILE" "S3 production rehearsal backend"
 require_pattern '^PRODLIKE_KUBE_CONTEXT[[:space:]]*\?=' "$MAKEFILE" "prod-like kube context variable"
 require_pattern '^ifndef PRODLIKE_E2E_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context conditional default"
 require_pattern '^PRODLIKE_E2E_KUBE_CONTEXT[[:space:]]*:=.*PRODLIKE_KUBE_CONTEXT' "$MAKEFILE" "Tier 2 kube context default"
@@ -140,6 +148,9 @@ require_pattern 'SCRAP_TLS_PUBLIC_CERT' "$PRODLIKE_E2E_OVERLAY/statefulset-test-
 require_pattern 'SCRAP_TLS_PEER_CERT' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "peer TLS in prod-like E2E overlay"
 require_pattern 'SCRAP_TLS_ADMIN_CERT' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "admin TLS in prod-like E2E overlay"
 require_pattern 'SCRAP_TRANSIT_FAKE' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "explicit test Transit in prod-like E2E overlay"
+require_pattern 'SCRAP_SECURITY_MODE="production"' "$PRODUCTION_REHEARSAL_SCRIPT" "production mode in production rehearsal"
+require_pattern 'openbao_transit": "real"' "$PRODUCTION_REHEARSAL_SCRIPT" "real OpenBao report marker in production rehearsal"
+reject_pattern 'SCRAP_TRANSIT_FAKE' "$PRODUCTION_REHEARSAL_SCRIPT" "fake Transit in production rehearsal"
 require_pattern 'SCRAP_TEST_HOOKS' "$MAKEFILE" "Tier 2 E2E hook overlay check"
 require_pattern '^[[:space:]]+types:' "$WORKFLOW" "explicit pull_request activity types"
 require_pattern '^[[:space:]]+- labeled[[:space:]]*$' "$WORKFLOW" "E2E label CI trigger"
