@@ -34,6 +34,7 @@ leaf_key="$asset_dir/scrap.key"
 leaf_csr="$asset_dir/scrap.csr"
 leaf_cert="$asset_dir/scrap.pem"
 ext_file="$asset_dir/scrap.ext"
+identity_file="$asset_dir/scrap.identity"
 roles_file="$asset_dir/roles.json"
 report_file="$asset_dir/security-evidence.json"
 
@@ -55,14 +56,32 @@ ca_is_usable() {
 	grep -q 'Certificate Sign' <<<"$cert_text" || return 1
 }
 
-if [ ! -s "$ca_key" ] || [ ! -s "$leaf_key" ] || ! cert_is_current "$leaf_cert" || ! ca_is_usable; then
-	rm -f "$ca_key" "$ca_cert" "$leaf_key" "$leaf_csr" "$leaf_cert" "$ext_file" "$asset_dir/ca.srl"
+leaf_identity_is_current() {
+	local identity
+	[ -s "$identity_file" ] || return 1
+	identity=$(cat "$identity_file")
+	[ "$identity" = "$(printf 'server_name=%s\nprincipal=%s' "$server_name" "$principal")" ]
+}
+
+write_leaf_identity() {
+	printf 'server_name=%s\nprincipal=%s\n' "$server_name" "$principal" > "$identity_file"
+}
+
+regenerated_ca=0
+if [ ! -s "$ca_key" ] || ! ca_is_usable; then
+	rm -f "$ca_key" "$ca_cert" "$leaf_key" "$leaf_csr" "$leaf_cert" "$ext_file" "$identity_file" "$asset_dir/ca.srl"
 
 	openssl ecparam -name prime256v1 -genkey -noout -out "$ca_key"
 	openssl req -x509 -new -key "$ca_key" -sha256 -days 7 -out "$ca_cert" \
 		-subj "/CN=scrap prodlike e2e CA" \
 		-addext "basicConstraints=critical,CA:TRUE" \
 		-addext "keyUsage=critical,keyCertSign,cRLSign"
+	chmod 600 "$ca_key"
+	regenerated_ca=1
+fi
+
+if [ "$regenerated_ca" -eq 1 ] || [ ! -s "$leaf_key" ] || ! cert_is_current "$leaf_cert" || ! leaf_identity_is_current; then
+	rm -f "$leaf_key" "$leaf_csr" "$leaf_cert" "$ext_file" "$identity_file"
 
 	openssl ecparam -name prime256v1 -genkey -noout -out "$leaf_key"
 	openssl req -new -key "$leaf_key" -out "$leaf_csr" -subj "/CN=scrap prodlike e2e"
@@ -74,7 +93,8 @@ subjectAltName=DNS:${server_name},IP:127.0.0.1,URI:${principal}
 EOF
 	openssl x509 -req -in "$leaf_csr" -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
 		-out "$leaf_cert" -days 7 -sha256 -extfile "$ext_file"
-	chmod 600 "$ca_key" "$leaf_key"
+	chmod 600 "$leaf_key"
+	write_leaf_identity
 fi
 
 cat > "$roles_file" <<EOF

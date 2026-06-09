@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,11 +14,14 @@ import (
 	"testing"
 	"time"
 
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
@@ -72,13 +76,14 @@ func TestE2EProdlikeSecurityEncryptionEvidence(t *testing.T) {
 	pair := waitNewBackendPair(t, s3Client, before, securityEvidenceTimeout)
 	verifyS3ObjectMD5(t, s3Client, pair.blk)
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
+	backendUploadOK := encryptedBackendUploadOK(t, s3Client, pair, txID, docName, content)
 
 	leader := findLeaderPod(t, txID, docName)
 	postTransitRotate(t, leader)
 	rewrapResult := postRewrapDocument(t, leader, txID, docName, 2)
 	restoreOK := encryptedRestoreOK(t, leader, pair.blk.key, txID, docName, content)
 
-	report := buildSecurityEvidenceReport(t, health, leader, pair, readBack, content, restoreOK, rewrapResult)
+	report := buildSecurityEvidenceReport(t, health, leader, backendUploadOK, readBack, content, restoreOK, rewrapResult)
 	writeSecurityEvidenceReport(t, report)
 	assertSecurityEvidenceReportComplete(t, report, rewrapResult)
 }
@@ -99,7 +104,7 @@ func buildSecurityEvidenceReport(
 	t *testing.T,
 	health securityHealth,
 	leader string,
-	pair backendPair,
+	backendUploadOK bool,
 	readBack []byte,
 	content []byte,
 	restoreOK bool,
@@ -116,11 +121,66 @@ func buildSecurityEvidenceReport(
 		AdminUnauthorizedDenied:   adminUnauthorizedDenied(t, leader),
 		AuditSamplesRecorded:      auditSamplesRecorded(t, leader),
 		EncryptedWriteReadOK:      bytes.Equal(readBack, content),
-		EncryptedBackendUploadOK:  pair.blk.key != "" && pair.idx.key != "",
+		EncryptedBackendUploadOK:  backendUploadOK,
 		EncryptedRestoreOK:        restoreOK,
 		RewrapOK:                  securityRewrapChanged(rewrapResult),
 		Phase5EntryBlocked:        health.ProductionReadinessStatus != string(security.ReadinessStatusReady),
 	}
+}
+
+func encryptedBackendUploadOK(t *testing.T, client *awss3.Client, pair backendPair, txID, docName string, plaintext []byte) bool {
+	t.Helper()
+	if pair.blk.key == "" || pair.idx.key == "" {
+		return false
+	}
+
+	blockBody := readS3Object(t, client, pair.blk)
+	if bytes.Contains(blockBody, plaintext) {
+		t.Fatalf("backend Block %s contains plaintext Document bytes", pair.blk.key)
+	}
+
+	entry := backendIndexEntry(t, readS3Object(t, client, pair.idx), txID, docName)
+	envelope, err := encryption.ParseEnvelope(entry.EncryptionEnvelope)
+	if err != nil {
+		t.Fatalf("backend index encryption envelope: %v", err)
+	}
+	if envelope.PayloadAlgorithm != encryption.PayloadAlgorithmAES256GCM {
+		t.Fatalf("backend envelope payload algorithm = %q, want %q", envelope.PayloadAlgorithm, encryption.PayloadAlgorithmAES256GCM)
+	}
+	if envelope.PlaintextLength != int64(len(plaintext)) {
+		t.Fatalf("backend envelope plaintext length = %d, want %d", envelope.PlaintextLength, len(plaintext))
+	}
+	if envelope.CiphertextLength <= int64(len(plaintext)) {
+		t.Fatalf("backend envelope ciphertext length = %d, want > plaintext length %d", envelope.CiphertextLength, len(plaintext))
+	}
+
+	sum := sha256.Sum256(plaintext)
+	if entry.SHA256 != sum || !bytes.Equal(envelope.PlaintextSHA256, sum[:]) {
+		t.Fatalf("backend envelope plaintext digest does not match written Document")
+	}
+	return true
+}
+
+func backendIndexEntry(t *testing.T, body []byte, txID, docName string) block.IndexEntry {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "backend.idx")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write backend index fixture: %v", err)
+	}
+	reader, err := block.OpenIndexReader(path)
+	if err != nil {
+		t.Fatalf("open backend index: %v", err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close backend index: %v", err)
+		}
+	}()
+	entry, err := reader.Find(txID, docName)
+	if err != nil {
+		t.Fatalf("find backend index entry for %s/%s: %v", txID, docName, err)
+	}
+	return entry
 }
 
 func assertSecurityEvidenceReportComplete(t *testing.T, report securityEvidenceReport, rewrapResult rewrap.Result) {
