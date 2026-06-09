@@ -43,3 +43,19 @@ make tier3-evidence-up STRESS_SCENARIO=throughput
 ```
 
 The local command writes a timestamped bundle under `evidence/`.
+
+## Production rehearsal path
+
+Production security and encryption closure can use the production rehearsal
+targets documented in `docs/production-rehearsal.md`.
+
+Use `make production-rehearsal-security` for local proof that production mode
+starts with real mTLS, policy files, audit/rate-limit gates, and real OpenBao
+Transit. This target uses the filesystem Backend and proves the security and
+Transit path only.
+
+Use `make production-rehearsal` when the closure claim includes real S3/IAM
+Backend behavior. The issue or pull request must link the generated report and
+name the tested commit or branch. Do not paste tokens, private keys, generated
+certificate material, Document payloads, raw Backend keys, or raw logs into
+public tracker comments.

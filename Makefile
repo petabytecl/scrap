@@ -146,6 +146,9 @@ LOCAL_KIND_OVERLAY ?= deploy/kustomize/environments/local
 ##? PRODLIKE_OVERLAY Kustomize environment used for the prod-like Cell.
 ##? PRODLIKE_E2E_OVERLAY Kustomize environment used for prod-like E2E test hooks.
 ##? PRODLIKE_KUBE_CONTEXT kubectl context used by prod-like Kind targets.
+##? PRODUCTION_REHEARSAL_SCRIPT Script used by production-mode readiness rehearsal targets.
+##? PRODUCTION_REHEARSAL_DIR Directory for generated production rehearsal assets.
+##? PRODUCTION_REHEARSAL_OPENBAO_IMAGE OpenBao image used by production rehearsal.
 ##? CILIUM_VERSION Cilium chart version used by prod-like Kind targets.
 ##? CILIUM_CHART_DIR Vendored Cilium chart used by prod-like Kind targets.
 ##? CILIUM_VALUES Helm values used for prod-like Cilium.
@@ -156,6 +159,9 @@ PRODLIKE_KIND_CONFIG ?= deploy/kind/cluster-prodlike-cilium.yaml
 PRODLIKE_OVERLAY ?= deploy/kustomize/environments/prodlike
 PRODLIKE_E2E_OVERLAY ?= deploy/kustomize/environments/prodlike-e2e
 PRODLIKE_KUBE_CONTEXT ?= kind-$(PRODLIKE_KIND_CLUSTER)
+PRODUCTION_REHEARSAL_SCRIPT ?= scripts/production-rehearsal.sh
+PRODUCTION_REHEARSAL_DIR ?= artifacts/production-rehearsal
+PRODUCTION_REHEARSAL_OPENBAO_IMAGE ?= openbao/openbao:2.5.4
 CILIUM_VERSION ?= 1.19.4
 CILIUM_CHART_DIR ?= deploy/cilium/charts/cilium
 CILIUM_VALUES ?= deploy/cilium/prodlike-values.yaml
@@ -565,6 +571,29 @@ tier2-e2e-hooks-check:
 
 .PHONY: prodlike-e2e-smoke
 prodlike-e2e-smoke: tier2-e2e
+
+.PHONY: production-rehearsal-security
+production-rehearsal-security: build ## Run local production-mode security rehearsal with real OpenBao Transit and FS Backend.
+	SCRAP_PROD_REHEARSAL_BACKEND=fs \
+		SCRAP_PROD_REHEARSAL_DIR="$(PRODUCTION_REHEARSAL_DIR)" \
+		SCRAP_PROD_REHEARSAL_OPENBAO_IMAGE="$(PRODUCTION_REHEARSAL_OPENBAO_IMAGE)" \
+		SCRAPD_BIN="$(abspath scrapd)" \
+		SCRAPCTL_BIN="$(abspath scrapctl)" \
+		"$(PRODUCTION_REHEARSAL_SCRIPT)" run
+
+.PHONY: production-rehearsal
+production-rehearsal: build ## Run production-mode rehearsal with real OpenBao Transit and real S3/IAM-style Backend config.
+	SCRAP_PROD_REHEARSAL_BACKEND=s3 \
+		SCRAP_PROD_REHEARSAL_DIR="$(PRODUCTION_REHEARSAL_DIR)" \
+		SCRAP_PROD_REHEARSAL_OPENBAO_IMAGE="$(PRODUCTION_REHEARSAL_OPENBAO_IMAGE)" \
+		SCRAPD_BIN="$(abspath scrapd)" \
+		SCRAPCTL_BIN="$(abspath scrapctl)" \
+		"$(PRODUCTION_REHEARSAL_SCRIPT)" run
+
+.PHONY: production-rehearsal-down
+production-rehearsal-down: ## Stop production rehearsal processes.
+	SCRAP_PROD_REHEARSAL_DIR="$(PRODUCTION_REHEARSAL_DIR)" \
+		"$(PRODUCTION_REHEARSAL_SCRIPT)" down
 
 ##@ Local Dev
 
