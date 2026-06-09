@@ -267,6 +267,18 @@ validate_backend_config() {
 	esac
 }
 
+validate_rehearsal_config() {
+	case "$block_seal_size" in
+	''|*[!0-9]*)
+		die "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE must be a positive integer, got: $block_seal_size"
+		;;
+	esac
+	if [ "$((10#$block_seal_size))" -le 0 ]; then
+		die "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE must be greater than zero, got: $block_seal_size"
+	fi
+	validate_backend_config
+}
+
 start_openbao() {
 	stop_openbao
 	log "starting OpenBao $openbao_image with TLS on 127.0.0.1:$openbao_port"
@@ -444,19 +456,30 @@ grpcurl_common_args() {
 		-proto proto/scrap/v1/document.proto
 }
 
-write_read_document() {
-	local tx_id doc_name payload payload_b64 write_req write_out head_out read_out
-	tx_id="prod-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)"
-	doc_name="readiness.txt"
-	payload="production rehearsal encrypted document payload ${tx_id}"
+rehearsal_payload() {
+	local tx_id=$1
+	local prefix filler_size target_size
+	prefix="production rehearsal encrypted document payload ${tx_id} "
+	target_size=$((10#$block_seal_size + 512))
+	filler_size=$((target_size - ${#prefix}))
+	printf '%s' "$prefix"
+	if [ "$filler_size" -gt 0 ]; then
+		printf '%*s' "$filler_size" '' | tr ' ' 'x'
+	fi
+}
+
+write_document() {
+	local tx_id=$1
+	local doc_name=$2
+	local idempotency_key=$3
+	local payload=$4
+	local write_req=$5
+	local write_out=$6
+	local payload_b64
 	payload_b64=$(printf '%s' "$payload" | base64 -w0)
-	write_req="$runtime_dir/write-request.json"
-	write_out="$runtime_dir/write-response.json"
-	head_out="$runtime_dir/head-response.json"
-	read_out="$runtime_dir/read-response.json"
 
 	cat > "$write_req" <<EOF
-{"init":{"transactionId":"${tx_id}","documentName":"${doc_name}","contentType":"text/plain","idempotencyKey":"${tx_id}"}}
+{"init":{"transactionId":"${tx_id}","documentName":"${doc_name}","contentType":"text/plain","idempotencyKey":"${idempotency_key}"}}
 {"chunkData":"${payload_b64}"}
 EOF
 	"$grpcurl_bin" $(grpcurl_common_args) \
@@ -464,6 +487,33 @@ EOF
 		< "$write_req" > "$write_out"
 	"$jq_bin" -e '.size > 0 and .sha256Checksum != ""' "$write_out" >/dev/null ||
 		die "WriteDocument response is incomplete; see $write_out"
+}
+
+write_upload_trigger_document() {
+	local tx_id=$1
+	local trigger_doc trigger_payload trigger_req trigger_out
+	trigger_doc="seal-trigger.txt"
+	trigger_payload="production rehearsal upload trigger for ${tx_id}"
+	trigger_req="$runtime_dir/seal-trigger-write-request.json"
+	trigger_out="$runtime_dir/seal-trigger-write-response.json"
+	write_document "$tx_id" "$trigger_doc" "${tx_id}-seal-trigger" "$trigger_payload" "$trigger_req" "$trigger_out"
+	if grep -R -a -F "$trigger_payload" "$data_dir" >/dev/null 2>&1; then
+		die "plaintext trigger payload was found under $data_dir"
+	fi
+}
+
+write_read_document() {
+	local tx_id doc_name payload payload_b64 write_req write_out head_out read_out
+	tx_id="prod-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)"
+	doc_name="readiness.txt"
+	payload=$(rehearsal_payload "$tx_id")
+	payload_b64=$(printf '%s' "$payload" | base64 -w0)
+	write_req="$runtime_dir/write-request.json"
+	write_out="$runtime_dir/write-response.json"
+	head_out="$runtime_dir/head-response.json"
+	read_out="$runtime_dir/read-response.json"
+
+	write_document "$tx_id" "$doc_name" "$tx_id" "$payload" "$write_req" "$write_out"
 
 	"$grpcurl_bin" $(grpcurl_common_args) \
 		-d "{\"transactionId\":\"${tx_id}\",\"documentName\":\"${doc_name}\"}" \
@@ -480,7 +530,45 @@ EOF
 	if grep -R -a -F "$payload" "$data_dir" >/dev/null 2>&1; then
 		die "plaintext payload was found under $data_dir"
 	fi
+	write_upload_trigger_document "$tx_id"
+	wait_backend_upload_confirmed
 	wait_uploads_drained
+}
+
+confirmed_upload_count() {
+	local count marker
+	count=0
+	while IFS= read -r marker; do
+		if "$jq_bin" -e \
+			'.block_id >= 0 and .confirmed_at_us >= 0 and .block_object.key != "" and .index_object.key != "" and .block_object.validation_token != "" and .index_object.validation_token != ""' \
+			"$marker" >/dev/null; then
+			count=$((count + 1))
+		fi
+	done < <(find "$data_dir" -type f -name '*.confirmed-upload.json' -print)
+	printf '%s\n' "$count"
+}
+
+wait_backend_upload_confirmed() {
+	local deadline count proof_file
+	proof_file="$runtime_dir/upload-confirmation.json"
+	deadline=$(($(date +%s) + 60))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		count=$(confirmed_upload_count)
+		if [ "$count" -gt 0 ]; then
+			cat > "$proof_file" <<EOF
+{
+  "backend_upload_confirmed": true,
+  "confirmed_upload_count": ${count}
+}
+EOF
+			return
+		fi
+		if [ -s "$scrapd_pid_file" ] && ! kill -0 "$(cat "$scrapd_pid_file")" >/dev/null 2>&1; then
+			die "scrapd exited before a Backend upload was confirmed; see $scrapd_log"
+		fi
+		sleep 1
+	done
+	die "no committed Backend upload confirmation was observed; expected at least one *.confirmed-upload.json marker under $data_dir"
 }
 
 wait_uploads_drained() {
@@ -501,9 +589,11 @@ wait_uploads_drained() {
 
 write_report() {
 	local health_file="$runtime_dir/health.json"
-	local status readiness
+	local upload_confirmation_file="$runtime_dir/upload-confirmation.json"
+	local status readiness confirmed_count
 	status=$("$jq_bin" -r '.security_mode' "$health_file")
 	readiness=$("$jq_bin" -r '.production_readiness_status' "$health_file")
+	confirmed_count=$("$jq_bin" -r '.confirmed_upload_count' "$upload_confirmation_file")
 	cat > "$report_file" <<EOF
 {
   "status": "passed",
@@ -516,6 +606,8 @@ write_report() {
   "pprof_enabled": false,
   "encrypted_write_read_ok": true,
   "plaintext_leak_scan_ok": true,
+  "backend_upload_confirmed": true,
+  "confirmed_upload_count": ${confirmed_count},
   "log_dir": "${log_dir}"
 }
 EOF
@@ -530,7 +622,7 @@ run_rehearsal() {
 	require_command "$grpcurl_bin" grpcurl
 	require_file "$scrapd_bin" scrapd
 	require_file "$scrapctl_bin" scrapctl
-	validate_backend_config
+	validate_rehearsal_config
 	prepare_workspace
 	write_tls_material
 	write_policies

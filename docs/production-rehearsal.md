@@ -2,7 +2,8 @@
 
 The production rehearsal target proves that `scrapd` can start in production
 security mode, use real OpenBao Transit, write and read an encrypted Document,
-and reject the test-only shortcuts that are valid in local E2E fixtures.
+confirm at least one sealed Block upload through the configured Backend, and
+reject the test-only shortcuts that are valid in local E2E fixtures.
 
 This rehearsal is not a Kubernetes deployment manifest. It is a local operator
 gate that generates short-lived credentials under `artifacts/`, starts OpenBao
@@ -71,12 +72,13 @@ The report records:
 - pprof disabled
 - encrypted write/read success
 - plaintext leak scan success
+- committed Backend upload confirmation success and count
 - log directory for local inspection
 
 Generated TLS material, OpenBao initialization data, tokens, logs, and runtime
 state stay under `artifacts/production-rehearsal/`, which is ignored by Git.
-Do not copy token values, private keys, Document payloads, or raw logs into
-public issues or pull requests.
+Do not copy token values, private keys, Document payloads, raw Backend object
+keys, validation tokens, or raw logs into public issues or pull requests.
 
 ## What This Proves
 
@@ -89,10 +91,13 @@ can:
 - connect to a real TLS OpenBao Transit endpoint
 - write, head, and read a Document through the public gRPC API with mTLS
 - keep the plaintext payload out of the local data directory
+- force a Block seal, upload the sealed Block through the configured Backend,
+  and observe committed `ConfirmUpload` authority before declaring success
 - report production readiness through the admin status surface
 
 `production-rehearsal` adds S3 Backend proof when run with real S3 credentials
-and a real bucket.
+and a real bucket. A successful S3 run proves that the same committed upload
+confirmation path completed after S3 PUT and HEAD verification.
 
 ## What This Does Not Prove
 
