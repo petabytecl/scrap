@@ -4,16 +4,19 @@ set -eu
 KUSTOMIZE_CMD=${KUSTOMIZE_CMD:-"go tool -modfile=tools.go.mod kustomize"}
 LOCAL_KIND_OVERLAY=${LOCAL_KIND_OVERLAY:-deploy/kustomize/environments/local}
 PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
+PRODLIKE_OPENBAO_OVERLAY=${PRODLIKE_OPENBAO_OVERLAY:-deploy/kustomize/environments/prodlike-openbao}
 EVIDENCE_OVERLAY=${EVIDENCE_OVERLAY:-deploy/kustomize/environments/evidence}
 EVIDENCE_STACK=${EVIDENCE_STACK:-deploy/kustomize/components/evidence-stack}
+OPENBAO_DEPLOYMENT_CONTRACT=${OPENBAO_DEPLOYMENT_CONTRACT:-docs/openbao-deployment-contract.md}
 
 base_render="$(mktemp)"
 local_kind_render="$(mktemp)"
 prodlike_render="$(mktemp)"
+prodlike_openbao_render="$(mktemp)"
 evidence_render="$(mktemp)"
 evidence_stack_render="$(mktemp)"
 statefulset_render="$(mktemp)"
-trap 'rm -f "$base_render" "$local_kind_render" "$prodlike_render" "$evidence_render" "$evidence_stack_render" "$statefulset_render"' EXIT
+trap 'rm -f "$base_render" "$local_kind_render" "$prodlike_render" "$prodlike_openbao_render" "$evidence_render" "$evidence_stack_render" "$statefulset_render"' EXIT
 
 render() {
 	# KUSTOMIZE_CMD intentionally supports commands with arguments.
@@ -74,12 +77,14 @@ extract_first_kind() {
 render deploy/kustomize/base > "$base_render"
 render "$LOCAL_KIND_OVERLAY" > "$local_kind_render"
 render "$PRODLIKE_OVERLAY" > "$prodlike_render"
+render "$PRODLIKE_OPENBAO_OVERLAY" > "$prodlike_openbao_render"
 render "$EVIDENCE_OVERLAY" > "$evidence_render"
 render "$EVIDENCE_STACK" > "$evidence_stack_render"
 
 test -s "$base_render"
 test -s "$local_kind_render"
 test -s "$prodlike_render"
+test -s "$prodlike_openbao_render"
 test -s "$evidence_render"
 test -s "$evidence_stack_render"
 
@@ -89,6 +94,7 @@ test -s "$statefulset_render"
 require '../../components/localstack' deploy/kustomize/environments/local/kustomization.yaml "explicit local LocalStack component"
 require '../../components/nodeports' deploy/kustomize/environments/local/kustomization.yaml "explicit local NodePort component"
 require '../../components/stress-tuning' deploy/kustomize/environments/evidence/kustomization.yaml "explicit evidence stress tuning component"
+require '../../components/external-openbao-transit' deploy/kustomize/environments/prodlike-openbao/kustomization.yaml "explicit OpenBao Transit component"
 
 reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "NodePort service in base render"
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
@@ -119,6 +125,18 @@ require 'SCRAP_CELL_ID' "$prodlike_render" "prod-like Cell ID marker"
 require 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$prodlike_render" "explicit prod-like security mode"
 require 'value:[[:space:]]*development' "$prodlike_render" "prod-like development security mode"
 require 'NetworkPolicy' "$prodlike_render" "prod-like NetworkPolicy"
+reject 'SCRAP_TRANSIT_FAKE' "$prodlike_render" "fake Transit in prod-like render"
+require 'name:[[:space:]]*scrap-openbao-transit-config' "$prodlike_openbao_render" "OpenBao Transit ConfigMap"
+require 'key:[[:space:]]*address' "$prodlike_openbao_render" "OpenBao Transit address key"
+require 'name:[[:space:]]*SCRAP_TRANSIT_ADDR' "$prodlike_openbao_render" "OpenBao Transit address env"
+require 'name:[[:space:]]*SCRAP_TRANSIT_MOUNT' "$prodlike_openbao_render" "OpenBao Transit mount env"
+require 'name:[[:space:]]*SCRAP_TRANSIT_KEY' "$prodlike_openbao_render" "OpenBao Transit key env"
+require 'name:[[:space:]]*SCRAP_TRANSIT_TOKEN_ENV' "$prodlike_openbao_render" "OpenBao Transit token env selector"
+require 'value:[[:space:]]*OPENBAO_TOKEN' "$prodlike_openbao_render" "OpenBao token env name"
+require 'secretKeyRef:' "$prodlike_openbao_render" "OpenBao token Secret reference"
+require 'name:[[:space:]]*scrap-openbao-transit-token' "$prodlike_openbao_render" "OpenBao token Secret name"
+reject 'SCRAP_TRANSIT_FAKE' "$prodlike_openbao_render" "fake Transit in OpenBao prod-like render"
+reject '^kind:[[:space:]]*Secret[[:space:]]*$' "$prodlike_openbao_render" "committed OpenBao token Secret"
 reject 'name:[[:space:]]*otel-collector' "$evidence_render" "evidence stack in S.C.R.A.P. workload render"
 require 'name:[[:space:]]*otel-collector' "$evidence_stack_render" "evidence stack collector"
 require 'name:[[:space:]]*kube-state-metrics' "$evidence_stack_render" "evidence stack kube-state-metrics"
@@ -131,3 +149,13 @@ require 'kubernetes-cluster\.json:' "$evidence_stack_render" "Kubernetes cluster
 require 'kubernetes-workloads\.json:' "$evidence_stack_render" "Kubernetes workloads dashboard"
 reject '^[[:space:]]*-[[:space:]]*secrets[[:space:]]*$' "$evidence_stack_render" "kube-state-metrics secrets collector RBAC"
 reject '^kind:[[:space:]]*StatefulSet[[:space:]]*$' "$evidence_stack_render" "S.C.R.A.P. workload in evidence stack render"
+
+require 'platform-managed OpenBao' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao ownership contract"
+require 'SCRAP_TRANSIT_ADDR' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao address deployment documentation"
+require 'SCRAP_TRANSIT_MOUNT' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao mount deployment documentation"
+require 'SCRAP_TRANSIT_KEY' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao key deployment documentation"
+require 'SCRAP_TRANSIT_TOKEN_ENV' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao token env deployment documentation"
+require 'scrap-openbao-transit-token' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao token Secret documentation"
+require 'SSL_CERT_FILE' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao TLS trust documentation"
+require 'NetworkPolicy' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao NetworkPolicy documentation"
+require 'RBAC' "$OPENBAO_DEPLOYMENT_CONTRACT" "OpenBao RBAC documentation"
