@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scrap-openbao-transit-config
+  namespace: scrap
+data:
+  address: https://openbao.openbao.svc:8200
+  mount: transit
+  key: scrap-documents
