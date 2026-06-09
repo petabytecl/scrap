@@ -63,7 +63,7 @@ type Node struct {
 	cfg       Config
 	logger    *slog.Logger
 	node      raft.Node
-	storage   *raft.MemoryStorage
+	storage   durableStorage
 	wal       *wal.WAL
 	snap      *snap.Snapshotter
 	transport Transport
@@ -206,7 +206,8 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	}
 	n.wal = w
 
-	n.storage = raft.NewMemoryStorage()
+	baseStorage := raft.NewMemoryStorage()
+	n.storage = baseStorage
 
 	if snapshot != nil {
 		if err := n.storage.ApplySnapshot(*snapshot); err != nil {
@@ -228,6 +229,14 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	if err := n.storage.SetHardState(hardState); err != nil {
 		return fmt.Errorf("raft: set hard state: %w", err)
 	}
+	if snapshot == nil {
+		if cs := deriveCommittedConfState(entries, hardState.Commit); cs != nil {
+			n.storage = &initialConfStateStorage{
+				MemoryStorage: baseStorage,
+				confState:     *cs,
+			}
+		}
+	}
 	// Replay watermark = the durably applied index (the loaded snapshot's index, set
 	// above as n.appliedIndex, or 0 with no snapshot) — NOT hardState.Commit. Entries
 	// committed but not yet applied before a crash are re-delivered and applied for the
@@ -238,12 +247,6 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	atomic.StoreUint64(&n.commitIndex, hardState.Commit)
 	if err := n.storage.Append(entries); err != nil {
 		return fmt.Errorf("raft: append entries: %w", err)
-	}
-
-	if snapshot == nil {
-		if err := applyDerivedConfState(n.storage, entries, hardState); err != nil {
-			return fmt.Errorf("raft: apply derived conf state: %w", err)
-		}
 	}
 
 	c := &raft.Config{
@@ -261,21 +264,28 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	return nil
 }
 
-func applyDerivedConfState(storage *raft.MemoryStorage, entries []raftpb.Entry, hardState raftpb.HardState) error {
-	cs := deriveConfState(entries, nil)
-	if cs == nil {
+type durableStorage interface {
+	raft.Storage
+	SetHardState(raftpb.HardState) error
+	ApplySnapshot(raftpb.Snapshot) error
+	Append([]raftpb.Entry) error
+}
+
+type initialConfStateStorage struct {
+	*raft.MemoryStorage
+	confState raftpb.ConfState
+}
+
+func (s *initialConfStateStorage) InitialState() (raftpb.HardState, raftpb.ConfState, error) {
+	hardState, _, err := s.MemoryStorage.InitialState()
+	return hardState, s.confState, err
+}
+
+func deriveCommittedConfState(entries []raftpb.Entry, commit uint64) *raftpb.ConfState {
+	if commit == 0 {
 		return nil
 	}
-	if hardState.Commit == 0 {
-		return nil
-	}
-	return storage.ApplySnapshot(raftpb.Snapshot{
-		Metadata: raftpb.SnapshotMetadata{
-			Index:     hardState.Commit,
-			Term:      hardState.Term,
-			ConfState: *cs,
-		},
-	})
+	return deriveConfState(entries, nil, commit)
 }
 
 func (n *Node) run() {
@@ -451,34 +461,55 @@ func (n *Node) CommitIndex() uint64 {
 	return atomic.LoadUint64(&n.commitIndex)
 }
 
-func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot) *raftpb.ConfState {
+func deriveConfState(entries []raftpb.Entry, snapshot *raftpb.Snapshot, commit uint64) *raftpb.ConfState {
 	if snapshot != nil {
 		return new(snapshot.Metadata.ConfState)
 	}
 
-	var voters []uint64
-	for _, e := range entries {
-		if e.Type != raftpb.EntryConfChange {
-			continue
-		}
-		var cc raftpb.ConfChange
-		if err := cc.Unmarshal(e.Data); err != nil {
-			continue
-		}
-		switch cc.Type {
-		case raftpb.ConfChangeAddNode:
-			voters = appendUnique(voters, cc.NodeID)
-		case raftpb.ConfChangeRemoveNode:
-			voters = removeID(voters, cc.NodeID)
-		case raftpb.ConfChangeUpdateNode, raftpb.ConfChangeAddLearnerNode:
-			// no voter-set changes needed for updates or learner additions
-		}
-	}
-
+	voters := deriveVoters(entries, commit)
 	if len(voters) == 0 {
 		return nil
 	}
 	return &raftpb.ConfState{Voters: voters}
+}
+
+func deriveVoters(entries []raftpb.Entry, commit uint64) []uint64 {
+	var voters []uint64
+	for _, e := range entries {
+		cc, ok := committedConfChange(e, commit)
+		if !ok {
+			continue
+		}
+		voters = applyConfChangeToVoters(voters, cc)
+	}
+	return voters
+}
+
+func committedConfChange(e raftpb.Entry, commit uint64) (raftpb.ConfChange, bool) {
+	if commit > 0 && e.Index > commit {
+		return raftpb.ConfChange{}, false
+	}
+	if e.Type != raftpb.EntryConfChange {
+		return raftpb.ConfChange{}, false
+	}
+	var cc raftpb.ConfChange
+	if err := cc.Unmarshal(e.Data); err != nil {
+		return raftpb.ConfChange{}, false
+	}
+	return cc, true
+}
+
+func applyConfChangeToVoters(voters []uint64, cc raftpb.ConfChange) []uint64 {
+	switch cc.Type {
+	case raftpb.ConfChangeAddNode:
+		return appendUnique(voters, cc.NodeID)
+	case raftpb.ConfChangeRemoveNode:
+		return removeID(voters, cc.NodeID)
+	case raftpb.ConfChangeUpdateNode, raftpb.ConfChangeAddLearnerNode:
+		return voters
+	default:
+		return voters
+	}
 }
 
 func appendUnique(ids []uint64, id uint64) []uint64 {
