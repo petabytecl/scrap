@@ -631,7 +631,7 @@ tier1-check: check vuln ## Run the Tier 1 commit gate.
 
 .PHONY: tier2-e2e
 tier2-e2e: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
-tier2-e2e: prodlike-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
+tier2-e2e: prodlike-doctor prodlike-test-security-assets tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
 	@printf 'TIER2_E2E_STATUS=running\n'
 	SCRAP_E2E=1 \
 		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \

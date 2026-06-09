@@ -85,6 +85,7 @@ func TestE2ELightScrubDetectsProjectionDivergence(t *testing.T) {
 
 	mismatchesBefore := cellMetricSum(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`})
 	injectProjectionKey(t, victim, uniqueName("tx-e2e-divergent"))
+	triggerLightScrub(t, txID, "doc.xml")
 
 	waitCellMetricSumAbove(t, "scrap_scrub_light_runs_total", []string{`result="mismatch"`}, mismatchesBefore, lightScrubE2ETimeout)
 
@@ -369,6 +370,46 @@ func injectProjectionKey(t *testing.T, pod, txID string) {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("projection hook status: got %d, want 204: %s", resp.StatusCode, string(respBody))
 	}
+}
+
+func triggerLightScrub(t *testing.T, txID, docName string) {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	var lastErr string
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		pod := findLeaderPod(t, txID, docName)
+		errText := postLightScrub(t, pod)
+		if errText == "" {
+			return
+		}
+		lastErr = fmt.Sprintf("%s: %s", pod, errText)
+		waitBeforeRetry(context.Background(), attempt)
+	}
+	t.Fatalf("light scrub hook did not succeed: %s", lastErr)
+}
+
+func postLightScrub(t *testing.T, pod string) string {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/test-hooks/light-scrub"), nil)
+	if err != nil {
+		t.Fatalf("new light scrub hook request: %v", err)
+	}
+
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("POST light scrub hook: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Sprintf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return ""
 }
 
 func fetchMetricValue(t *testing.T, url, name string) float64 {

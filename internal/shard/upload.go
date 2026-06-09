@@ -157,6 +157,7 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 			if deleteErr := s.idx.DeletePendingUpload(confirm.GetBlockId()); deleteErr != nil {
 				return fmt.Errorf("shard: clear unsafe pending upload %d: %w", confirm.GetBlockId(), deleteErr)
 			}
+			s.blockUploadLifecycleLocked().forgetUploadObligation(confirm.GetBlockId())
 			s.recordEvictionHealthMetadataLossBlock(confirm.GetBlockId())
 			return s.refreshUploadPressureLocked()
 		}

@@ -194,7 +194,7 @@ func (rt *evidenceBundleRoundTripper) evidenceBundleResponseBody(req *http.Reque
 	raw := req.URL.RawQuery
 	switch {
 	case strings.Contains(path, "/healthz"):
-		return `{"status":"ok","security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"enabled","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`
+		return `{"status":"ok","security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"configured","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`
 	case strings.Contains(path, "/loki/api/v1/query_range"):
 		return `{"status":"success","data":{"resultType":"streams","result":[{"values":[["1","evidence marker"]]}]}}`
 	case strings.Contains(path, "/api/search"):

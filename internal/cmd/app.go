@@ -227,6 +227,7 @@ func appendTestHookAdminOptions(opts []admin.Option, cfg Config, shard *shard.Sh
 		return opts
 	}
 	opts = append(opts, admin.WithProjectionInjector(shard))
+	opts = append(opts, admin.WithLightScrubber(shard))
 	if rotator, ok := transit.(interface{ Rotate() }); ok {
 		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
 	}

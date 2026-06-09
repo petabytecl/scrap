@@ -222,7 +222,7 @@ func adminUnauthorizedDenied(t *testing.T, pod string) bool {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e2eHTTPClientWithoutCertificate(t).Do(req)
 	if err != nil {
-		return true
+		return clientCertificateRejected(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
@@ -233,7 +233,35 @@ func deniedBeforeHandler(err error) bool {
 		return false
 	}
 	code := status.Code(err)
-	return code == codes.Unauthenticated || code == codes.PermissionDenied || code == codes.Unavailable
+	if code == codes.Unauthenticated || code == codes.PermissionDenied {
+		return true
+	}
+	return code == codes.Unavailable && clientCertificateRejected(err)
+}
+
+func clientCertificateRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "certificate required") ||
+		strings.Contains(msg, "client didn't provide a certificate") ||
+		strings.Contains(msg, "bad certificate")
+}
+
+func TestDeniedBeforeHandlerRequiresAuthorizationOrCertificateDenial(t *testing.T) {
+	if !deniedBeforeHandler(status.Error(codes.Unauthenticated, "missing identity")) {
+		t.Fatal("Unauthenticated should count as a denial")
+	}
+	if !deniedBeforeHandler(status.Error(codes.PermissionDenied, "role denied")) {
+		t.Fatal("PermissionDenied should count as a denial")
+	}
+	if !deniedBeforeHandler(status.Error(codes.Unavailable, "connection error: desc = \"transport: authentication handshake failed: remote error: tls: certificate required\"")) {
+		t.Fatal("client certificate rejection should count as a denial")
+	}
+	if deniedBeforeHandler(status.Error(codes.Unavailable, "connection refused")) {
+		t.Fatal("generic transport outage should not count as a denial")
+	}
 }
 
 func postTransitRotate(t *testing.T, pod string) {

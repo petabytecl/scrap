@@ -101,6 +101,7 @@ target_must_depend_on tier2-e2e-up tier2-e2e
 target_must_depend_on prodlike-e2e-cell-up prodlike-kind-deploy-e2e
 target_must_depend_on prodlike-kind-deploy-e2e prodlike-test-security-assets
 target_must_depend_on tier2-e2e prodlike-doctor
+target_must_depend_on tier2-e2e prodlike-test-security-assets
 target_must_depend_on tier2-e2e tier2-e2e-hooks-check
 target_must_depend_on evidence-up stress-setup
 target_must_depend_on tier3-evidence-up evidence-up

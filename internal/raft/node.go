@@ -334,10 +334,7 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 		if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
 			panic(fmt.Sprintf("raft: save snapshot: %v", err))
 		}
-		if err := n.wal.SaveSnapshot(walpb.Snapshot{
-			Index: rd.Snapshot.Metadata.Index,
-			Term:  rd.Snapshot.Metadata.Term,
-		}); err != nil {
+		if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(rd.Snapshot)); err != nil {
 			panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
 		}
 		if err := n.storage.ApplySnapshot(rd.Snapshot); err != nil {
@@ -365,6 +362,14 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 	n.publishReadStates(rd.ReadStates)
 
 	n.node.Advance()
+}
+
+func walSnapshotFromReadySnapshot(snapshot raftpb.Snapshot) walpb.Snapshot {
+	return walpb.Snapshot{
+		Index:     snapshot.Metadata.Index,
+		Term:      snapshot.Metadata.Term,
+		ConfState: &snapshot.Metadata.ConfState,
+	}
 }
 
 func (n *Node) publishReadStates(states []raft.ReadState) {

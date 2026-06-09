@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,9 +161,19 @@ func retryableE2EStatus(err error) bool {
 		return true
 	case codes.ResourceExhausted:
 		return !isUploadPressureError(err)
+	case codes.DataLoss:
+		return transientProjectionCatchupError(err)
 	default:
 		return false
 	}
+}
+
+func transientProjectionCatchupError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "projection resolution corrupt") &&
+		(strings.Contains(msg, "no such file or directory") ||
+			strings.Contains(msg, "not open") ||
+			strings.Contains(msg, "missing from block"))
 }
 
 func waitBeforeRetry(ctx context.Context, attempt int) {

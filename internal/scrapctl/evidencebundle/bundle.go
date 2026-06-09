@@ -504,7 +504,7 @@ func captureSecurityEvidence(cfg Config, state *generationState) error {
 }
 
 func applySecuritySignals(signals *signalResults, health securityHealthEvidence, report securityReportEvidence, reportLoaded, reportRequired bool) {
-	signals.securityModeOK = health.SecurityMode != "" && health.ProductionReadinessStatus != ""
+	signals.securityModeOK = securityModeOK(health, reportRequired)
 	signals.securityModeReason = securityModeReason(health)
 	if !reportRequired {
 		applySecurityReportNotConfigured(signals)
@@ -524,6 +524,18 @@ func applySecuritySignals(signals *signalResults, health securityHealthEvidence,
 	signals.rewrapReason = rewrapEvidenceReason(signals.rewrapOK, reportLoaded, health)
 	signals.phase5GateOK = securityReportPhase5GateOK(report, health)
 	signals.phase5GateReason = phase5GateReason(signals.phase5GateOK, reportLoaded, health)
+}
+
+func securityModeOK(health securityHealthEvidence, reportRequired bool) bool {
+	if health.SecurityMode == "" || health.ProductionReadinessStatus == "" {
+		return false
+	}
+	if !reportRequired {
+		return true
+	}
+	modeOK := health.SecurityMode == "test" || health.SecurityMode == "production"
+	authzOK := health.AuthorizationStatus == "configured" || health.AuthorizationStatus == "denied"
+	return modeOK && authzOK
 }
 
 func applySecurityReportNotConfigured(signals *signalResults) {

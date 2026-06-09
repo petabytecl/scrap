@@ -67,6 +67,7 @@ const (
 	OperationPprofSymbol         = "pprof_symbol"
 	OperationProjectionKeyHook   = "projection_key_hook"
 	OperationTransitRotateHook   = "transit_rotate_hook"
+	OperationLightScrubHook      = "light_scrub_hook"
 
 	PrincipalAnonymous = "anonymous"
 )
@@ -336,6 +337,7 @@ var allowedOperations = set(
 	OperationPprofSymbol,
 	OperationProjectionKeyHook,
 	OperationTransitRotateHook,
+	OperationLightScrubHook,
 )
 
 func set(values ...string) map[string]struct{} {

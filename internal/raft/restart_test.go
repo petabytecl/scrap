@@ -83,6 +83,34 @@ func TestRestartWithSnapshotNewerThanHardStateCommit(t *testing.T) {
 	node.Stop()
 }
 
+func TestWALSnapshotFromReadySnapshotIncludesConfState(t *testing.T) {
+	snapshot := raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 12,
+			Term:  34,
+			ConfState: raftpb.ConfState{
+				Voters: []uint64{1, 2, 3},
+			},
+		},
+	}
+
+	walSnap := walSnapshotFromReadySnapshot(snapshot)
+	if walSnap.Index != snapshot.Metadata.Index || walSnap.Term != snapshot.Metadata.Term {
+		t.Fatalf("wal snapshot metadata = %d/%d, want %d/%d",
+			walSnap.Index,
+			walSnap.Term,
+			snapshot.Metadata.Index,
+			snapshot.Metadata.Term,
+		)
+	}
+	if walSnap.ConfState == nil {
+		t.Fatal("wal snapshot ConfState is nil")
+	}
+	if !slices.Equal(walSnap.ConfState.Voters, []uint64{1, 2, 3}) {
+		t.Fatalf("wal snapshot voters = %v, want [1 2 3]", walSnap.ConfState.Voters)
+	}
+}
+
 func TestApplyDerivedConfStateAppliesVoters(t *testing.T) {
 	storage := raft.NewMemoryStorage()
 	entries := []raftpb.Entry{

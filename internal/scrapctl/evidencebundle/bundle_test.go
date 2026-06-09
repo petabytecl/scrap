@@ -65,8 +65,8 @@ func assertEvidenceProbeHealthIncludesSecurityMode(t *testing.T, root string) {
 		ProductionReadinessReason string `json:"production_readiness_reason"`
 	}
 	readBundleJSON(t, root, "logs/evidence-probe-health.json", &health)
-	if health.SecurityMode != "development" {
-		t.Fatalf("security_mode = %q, want development", health.SecurityMode)
+	if health.SecurityMode != "test" {
+		t.Fatalf("security_mode = %q, want test", health.SecurityMode)
 	}
 	if health.ProductionReadinessStatus != "not_ready" {
 		t.Fatalf("production_readiness_status = %q, want not_ready", health.ProductionReadinessStatus)
@@ -246,6 +246,15 @@ func TestGeneratePassesWhenSecurityReportIsNotConfigured(t *testing.T) {
 	assertSecurityEvidenceReportNotConfigured(t, result.BundlePath)
 }
 
+func TestGenerateFailsWhenSecurityReportUsesDevelopmentMode(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{developmentSecurityMode: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", false)
+}
+
 func TestGenerateFailsWhenEncryptedRestoreProofIsMissing(t *testing.T) {
 	result := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
 
@@ -291,7 +300,7 @@ func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 		Sleeper:      noSleep,
 		Command:      fakeMetadataCommand{},
 		StressRunner: fakeStressRunner{scenario: "throughput"},
-		AdminProbe:   fakeAdminProbe{failed: signals.adminProbeFailed},
+		AdminProbe:   fakeAdminProbe{signals: signals},
 		HTTPClient:   &http.Client{Transport: transport},
 		Logf:         func(string, ...any) {},
 	})
@@ -327,6 +336,7 @@ type fakeSignals struct {
 	missingHeapProfile                 bool
 	missingSecurityReport              bool
 	securityReportNotConfigured        bool
+	developmentSecurityMode            bool
 	missingSecurityRestore             bool
 	adminProbeFailed                   bool
 	evictionPlanID                     string
@@ -432,14 +442,17 @@ func (r fakeStressRunner) RunStress(context.Context, StressRequest) (StressResul
 }
 
 type fakeAdminProbe struct {
-	failed bool
+	signals fakeSignals
 }
 
 func (p fakeAdminProbe) Emit(context.Context, AdminProbeRequest) (AdminProbeResult, error) {
-	if p.failed {
+	if p.signals.adminProbeFailed {
 		return AdminProbeResult{Body: []byte(`{"error":"admin evidence log probe failed"}`)}, errors.New("probe failed")
 	}
-	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"enabled","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
+	if p.signals.securityReportNotConfigured || p.signals.developmentSecurityMode {
+		return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
+	}
+	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"configured","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
 }
 
 type fakeEvidenceTransport struct {

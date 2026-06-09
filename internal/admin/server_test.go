@@ -33,6 +33,11 @@ type transitRotatorStub struct {
 	calls int
 }
 
+type lightScrubberStub struct {
+	calls int
+	err   error
+}
+
 func (s *projectionInjectorStub) InjectProjectionKey(_ context.Context, txID string, blockID uint64, docCount uint16, completed bool) error {
 	s.txID = txID
 	s.blockID = blockID
@@ -48,6 +53,11 @@ func (uploadPressureProviderStub) UploadPressureSnapshot() (level int, levelName
 func (s *transitRotatorStub) RotateTransitKey(context.Context) error {
 	s.calls++
 	return nil
+}
+
+func (s *lightScrubberStub) RunLightScrub(context.Context) error {
+	s.calls++
+	return s.err
 }
 
 type evictionHealthProviderStub struct{}
@@ -482,6 +492,27 @@ func TestServer_TestHookProjectionInjectionDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestServer_TestHookLightScrubDisabledByDefault(t *testing.T) {
+	srv := admin.New()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/test-hooks/light-scrub", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST light scrub hook: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestServer_TestHookProjectionInjection(t *testing.T) {
 	injector := &projectionInjectorStub{}
 	srv := admin.New(admin.WithProjectionInjector(injector))
@@ -516,6 +547,31 @@ func TestServer_TestHookProjectionInjection(t *testing.T) {
 	}
 	if injector.txID != "tx-divergent" || injector.blockID != 42 || injector.docCount != 3 || !injector.completed {
 		t.Fatalf("injected payload mismatch: %+v", injector)
+	}
+}
+
+func TestServer_TestHookLightScrub(t *testing.T) {
+	scrubber := &lightScrubberStub{}
+	srv := admin.New(admin.WithLightScrubber(scrubber))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/test-hooks/light-scrub", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST light scrub hook: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status: got %d, want 204", resp.StatusCode)
+	}
+	if scrubber.calls != 1 {
+		t.Fatalf("light scrub calls = %d, want 1", scrubber.calls)
 	}
 }
 

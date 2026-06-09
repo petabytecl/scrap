@@ -47,6 +47,12 @@ func TestApplyConfirmUploadSkipsCatalogAndClearsPendingOnBlockSizeMismatch(t *te
 	confirm := confirmUploadCommandForApplyTest()
 	confirm.BlockObject.SizeBytes--
 	s := shardForApplyTest(t, idx)
+	s.blockUploadLifecycleLocked().recordLocalSeal(index.PendingUpload{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700000000000,
+	})
 	err := s.applyConfirmUpload(confirm)
 	if err != nil {
 		t.Fatalf("applyConfirmUpload: %v", err)
@@ -56,6 +62,9 @@ func TestApplyConfirmUploadSkipsCatalogAndClearsPendingOnBlockSizeMismatch(t *te
 	}
 	if _, err := idx.GetPendingUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrPendingUploadNotFound) {
 		t.Fatalf("GetPendingUpload error = %v, want ErrPendingUploadNotFound", err)
+	}
+	if got := s.blockUploadLifecycleLocked().obligationCount(); got != 0 {
+		t.Fatalf("upload obligations = %d, want 0", got)
 	}
 
 	health, err := s.EvictionHealthSnapshot(context.Background())
