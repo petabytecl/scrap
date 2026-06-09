@@ -46,11 +46,7 @@ func WithEvictionPlanStatusProvider(provider EvictionPlanStatusProvider) Option 
 }
 
 func (s *Server) handleEvictionPlans(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r, security.RoleAdminOperator) {
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !s.authorizeMethod(w, r, security.RoleAdminOperator, http.MethodPost) {
 		return
 	}
 
