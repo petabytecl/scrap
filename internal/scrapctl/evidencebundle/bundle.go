@@ -26,6 +26,7 @@ type bundlePaths struct {
 	logs     string
 	profiles string
 	eviction string
+	security string
 }
 
 type metricQuery struct {
@@ -67,6 +68,18 @@ type signalResults struct {
 	cpuReason           string
 	heapProfileOK       bool
 	heapReason          string
+	securityModeOK      bool
+	securityModeReason  string
+	authzOK             bool
+	authzReason         string
+	auditOK             bool
+	auditReason         string
+	encryptionOK        bool
+	encryptionReason    string
+	rewrapOK            bool
+	rewrapReason        string
+	phase5GateOK        bool
+	phase5GateReason    string
 }
 
 type generationState struct {
@@ -74,6 +87,7 @@ type generationState struct {
 	marker       string
 	baseline     []metricSample
 	stressOutput string
+	adminHealth  []byte
 	window       runWindow
 	probeFailed  bool
 	signals      signalResults
@@ -118,6 +132,7 @@ func initializeBundle(ctx context.Context, cfg Config, opts Options) (generation
 		logs:     filepath.Join(cfg.BundleDir, bundleName, "logs"),
 		profiles: filepath.Join(cfg.BundleDir, bundleName, "profiles"),
 		eviction: filepath.Join(cfg.BundleDir, bundleName, "eviction"),
+		security: filepath.Join(cfg.BundleDir, bundleName, "security"),
 	}
 	if err := createBundleDirs(paths); err != nil {
 		return generationState{}, err
@@ -179,6 +194,7 @@ func emitAdminProbe(ctx context.Context, cfg Config, opts Options, state *genera
 	if len(probeResult.Body) == 0 {
 		probeResult.Body = []byte(`{"error":"admin evidence log probe failed"}`)
 	}
+	state.adminHealth = append([]byte(nil), probeResult.Body...)
 	return writeRawJSONFile(filepath.Join(state.paths.logs, "evidence-probe-health.json"), probeResult.Body)
 }
 
@@ -216,6 +232,9 @@ func captureTelemetryEvidence(ctx context.Context, cfg Config, opts Options, sta
 	if err := captureEvictionHealth(ctx, opts.HTTPClient, cfg, state.paths.eviction); err != nil {
 		return err
 	}
+	if err := captureSecurityEvidence(cfg, state); err != nil {
+		return err
+	}
 	if err := captureMetricEvidence(ctx, opts.HTTPClient, cfg, state.paths.metrics, state.baseline, state.window.QueryUnixSeconds, &state.signals, opts.Logf); err != nil {
 		return err
 	}
@@ -249,6 +268,18 @@ func writeGate(_ context.Context, opts Options, state generationState) (Gate, er
 		CPUReason:           state.signals.cpuReason,
 		HeapProfileOK:       state.signals.heapProfileOK,
 		HeapReason:          state.signals.heapReason,
+		SecurityModeOK:      state.signals.securityModeOK,
+		SecurityModeReason:  state.signals.securityModeReason,
+		AuthzOK:             state.signals.authzOK,
+		AuthzReason:         state.signals.authzReason,
+		AuditOK:             state.signals.auditOK,
+		AuditReason:         state.signals.auditReason,
+		EncryptionOK:        state.signals.encryptionOK,
+		EncryptionReason:    state.signals.encryptionReason,
+		RewrapOK:            state.signals.rewrapOK,
+		RewrapReason:        state.signals.rewrapReason,
+		Phase5GateOK:        state.signals.phase5GateOK,
+		Phase5GateReason:    state.signals.phase5GateReason,
 	})
 	if err := writeJSONFile(filepath.Join(state.paths.root, "gates.json"), gate); err != nil {
 		return Gate{}, err
@@ -297,7 +328,7 @@ func (opts Options) logf(format string, args ...any) {
 }
 
 func createBundleDirs(paths bundlePaths) error {
-	for _, dir := range []string{paths.root, paths.metrics, paths.traces, paths.logs, paths.profiles, paths.eviction} {
+	for _, dir := range []string{paths.root, paths.metrics, paths.traces, paths.logs, paths.profiles, paths.eviction, paths.security} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("create bundle dir %s: %w", dir, err)
 		}
@@ -431,6 +462,149 @@ func metricQueries() []metricQuery {
 		{name: "eviction_evicted_blocks", query: "scrap_eviction_evicted_blocks"},
 		{name: "eviction_restore_failed_blocks", query: "scrap_eviction_restore_failed_blocks"},
 	}
+}
+
+type securityHealthEvidence struct {
+	SecurityMode              string `json:"security_mode"`
+	ProductionReadinessStatus string `json:"production_readiness_status"`
+	ProductionReadinessReason string `json:"production_readiness_reason"`
+	AuthorizationStatus       string `json:"authorization_status"`
+	RewrapStatus              string `json:"rewrap_status"`
+	RewrapLastResult          string `json:"rewrap_last_result"`
+	RewrapLastReason          string `json:"rewrap_last_reason"`
+}
+
+type securityReportEvidence struct {
+	PublicUnauthorizedDenied bool `json:"public_unauthorized_denied"`
+	PeerUnauthorizedDenied   bool `json:"peer_unauthorized_denied"`
+	AdminUnauthorizedDenied  bool `json:"admin_unauthorized_denied"`
+	AuditSamplesRecorded     bool `json:"audit_samples_recorded"`
+	EncryptedWriteReadOK     bool `json:"encrypted_write_read_ok"`
+	EncryptedBackendUploadOK bool `json:"encrypted_backend_upload_ok"`
+	EncryptedRestoreOK       bool `json:"encrypted_restore_ok"`
+	RewrapOK                 bool `json:"rewrap_ok"`
+	Phase5EntryBlocked       bool `json:"phase5_entry_blocked"`
+}
+
+func captureSecurityEvidence(cfg Config, state *generationState) error {
+	healthBody := state.adminHealth
+	if len(healthBody) == 0 {
+		healthBody = []byte(`{"error":"admin security health unavailable"}`)
+	}
+	if err := writeRawJSONFile(filepath.Join(state.paths.security, "health.json"), healthBody); err != nil {
+		return err
+	}
+	health := parseSecurityHealth(healthBody)
+	report, reportLoaded, err := captureSecurityReport(cfg.SecurityReportPath, state.paths.security)
+	if err != nil {
+		return err
+	}
+	applySecuritySignals(&state.signals, health, report, reportLoaded)
+	return nil
+}
+
+func applySecuritySignals(signals *signalResults, health securityHealthEvidence, report securityReportEvidence, reportLoaded bool) {
+	signals.securityModeOK = health.SecurityMode != "" && health.ProductionReadinessStatus != ""
+	signals.securityModeReason = securityModeReason(health)
+	signals.authzOK = securityReportAuthzOK(report)
+	signals.authzReason = securityReportReason(signals.authzOK, reportLoaded, "unauthorized public/peer/admin denied", "missing unauthorized denial proof")
+	signals.auditOK = report.AuditSamplesRecorded
+	signals.auditReason = securityReportReason(signals.auditOK, reportLoaded, "audit samples recorded", "missing audit sample proof")
+	signals.encryptionOK = securityReportEncryptionOK(report)
+	signals.encryptionReason = securityReportReason(signals.encryptionOK, reportLoaded, "encrypted write/read, backend upload, and restore passed", "missing encrypted write/read/upload/restore proof")
+	signals.rewrapOK = securityReportRewrapOK(report, health)
+	signals.rewrapReason = rewrapEvidenceReason(signals.rewrapOK, reportLoaded, health)
+	signals.phase5GateOK = securityReportPhase5GateOK(report, health)
+	signals.phase5GateReason = phase5GateReason(signals.phase5GateOK, reportLoaded, health)
+}
+
+func securityReportAuthzOK(report securityReportEvidence) bool {
+	return report.PublicUnauthorizedDenied && report.PeerUnauthorizedDenied && report.AdminUnauthorizedDenied
+}
+
+func securityReportEncryptionOK(report securityReportEvidence) bool {
+	return report.EncryptedWriteReadOK && report.EncryptedBackendUploadOK && report.EncryptedRestoreOK
+}
+
+func securityReportRewrapOK(report securityReportEvidence, health securityHealthEvidence) bool {
+	return report.RewrapOK || (health.RewrapStatus != "" && health.RewrapStatus != "failed")
+}
+
+func securityReportPhase5GateOK(report securityReportEvidence, health securityHealthEvidence) bool {
+	return report.Phase5EntryBlocked || health.ProductionReadinessStatus == "ready"
+}
+
+func parseSecurityHealth(body []byte) securityHealthEvidence {
+	var health securityHealthEvidence
+	_ = json.Unmarshal(body, &health)
+	return health
+}
+
+func captureSecurityReport(path, dir string) (securityReportEvidence, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		body := []byte(`{"error":"security evidence report not configured"}`)
+		return securityReportEvidence{}, false, writeRawJSONFile(filepath.Join(dir, "e2e-report.json"), body)
+	}
+	body, err := os.ReadFile(path) //nolint:gosec // Operator-selected report path is copied into the bundle.
+	if err != nil {
+		body = []byte(`{"error":"security evidence report unavailable"}`)
+		return securityReportEvidence{}, false, writeRawJSONFile(filepath.Join(dir, "e2e-report.json"), body)
+	}
+	if err := writeRawJSONFile(filepath.Join(dir, "e2e-report.json"), body); err != nil {
+		return securityReportEvidence{}, false, err
+	}
+	var report securityReportEvidence
+	if err := json.Unmarshal(body, &report); err != nil {
+		return securityReportEvidence{}, false, fmt.Errorf("parse security evidence report: %w", err)
+	}
+	return report, true, nil
+}
+
+func securityModeReason(health securityHealthEvidence) string {
+	if health.SecurityMode == "" {
+		return "missing security_mode"
+	}
+	if health.ProductionReadinessStatus == "" {
+		return "missing production_readiness_status"
+	}
+	reasonText := "mode=" + health.SecurityMode + " readiness=" + health.ProductionReadinessStatus
+	if health.ProductionReadinessReason != "" {
+		reasonText += " reason=" + health.ProductionReadinessReason
+	}
+	if health.AuthorizationStatus != "" {
+		reasonText += " authz=" + health.AuthorizationStatus
+	}
+	return reasonText
+}
+
+func securityReportReason(ok, reportLoaded bool, pass, fail string) string {
+	if ok {
+		return pass
+	}
+	if !reportLoaded {
+		return "security evidence report unavailable"
+	}
+	return fail
+}
+
+func rewrapEvidenceReason(ok, reportLoaded bool, health securityHealthEvidence) string {
+	if ok {
+		if health.RewrapLastReason != "" {
+			return "rewrap recorded reason=" + health.RewrapLastReason
+		}
+		return "rewrap recorded"
+	}
+	return securityReportReason(false, reportLoaded, "", "missing rewrap proof")
+}
+
+func phase5GateReason(ok, reportLoaded bool, health securityHealthEvidence) string {
+	if ok {
+		if health.ProductionReadinessStatus == "ready" {
+			return "phase5 gate can evaluate production readiness"
+		}
+		return "phase5 entry blocked by non-ready production posture"
+	}
+	return securityReportReason(false, reportLoaded, "", "missing phase5 gate proof")
 }
 
 func writeQueriesFile(cfg Config, marker, root string) error {

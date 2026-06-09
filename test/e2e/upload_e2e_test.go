@@ -167,7 +167,7 @@ func isUploadPressureError(err error) bool {
 	}
 	st, ok := status.FromError(err)
 	if !ok {
-		return true
+		return false
 	}
 	for _, detail := range st.Details() {
 		info, ok := detail.(*errdetails.ErrorInfo)
@@ -175,7 +175,7 @@ func isUploadPressureError(err error) bool {
 			return true
 		}
 	}
-	return true
+	return false
 }
 
 func restoreLocalStack(t *testing.T) {
@@ -405,11 +405,11 @@ func fetchUploadHealth(t *testing.T, pod string) uploadHealth {
 	defer stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2eAdminURL(addr, "/healthz"), nil)
 	if err != nil {
 		t.Fatalf("new health request: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e2eHTTPClient(t).Do(req)
 	if err != nil {
 		t.Fatalf("GET healthz: %v", err)
 	}
@@ -431,7 +431,7 @@ func waitCellMetricAbove(t *testing.T, name string, labels []string, previous fl
 	for time.Now().Before(deadline) {
 		for _, pod := range podNames(t) {
 			addr, stop := startPodPortForward(t, pod, 9100)
-			current := fetchMetricValueWithLabels(t, "http://"+addr+"/metrics", name, labels)
+			current := fetchMetricValueWithLabels(t, e2eAdminURL(addr, "/metrics"), name, labels)
 			stop()
 			if current > previous {
 				return
@@ -459,7 +459,7 @@ func cellMetricSum(t *testing.T, name string, labels []string) float64 {
 	var total float64
 	for _, pod := range podNames(t) {
 		addr, stop := startPodPortForward(t, pod, 9100)
-		current := fetchMetricValueWithLabels(t, "http://"+addr+"/metrics", name, labels)
+		current := fetchMetricValueWithLabels(t, e2eAdminURL(addr, "/metrics"), name, labels)
 		stop()
 		total += current
 	}

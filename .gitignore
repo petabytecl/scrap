@@ -23,6 +23,7 @@ Thumbs.db
 /bin/
 /build/
 /dist/
+/artifacts/
 /tmp/
 /scrapd
 /scrapctl

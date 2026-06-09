@@ -23,27 +23,28 @@ const (
 
 // Config describes one Tier 3 evidence bundle run.
 type Config struct {
-	RepoRoot       string
-	BundleDir      string
-	GrafanaURL     string
-	AdminURL       string
-	Kubectl        string
-	Namespace      string
-	KubeContext    string
-	Kubeconfig     string
-	MimirProxy     string
-	TempoProxy     string
-	LokiProxy      string
-	PyroscopeURL   string
-	EvictionPlanID string
-	Scenario       string
-	StressAddr     string
-	Workers        int
-	Duration       string
-	DocSizeBytes   int
-	Settle         time.Duration
-	ProbeTimeout   time.Duration
-	GoCommand      string
+	RepoRoot           string
+	BundleDir          string
+	GrafanaURL         string
+	AdminURL           string
+	Kubectl            string
+	Namespace          string
+	KubeContext        string
+	Kubeconfig         string
+	MimirProxy         string
+	TempoProxy         string
+	LokiProxy          string
+	PyroscopeURL       string
+	EvictionPlanID     string
+	SecurityReportPath string
+	Scenario           string
+	StressAddr         string
+	Workers            int
+	Duration           string
+	DocSizeBytes       int
+	Settle             time.Duration
+	ProbeTimeout       time.Duration
+	GoCommand          string
 }
 
 // Options wires Config to replaceable adapters.
@@ -149,4 +150,16 @@ type GateInput struct {
 	CPUReason           string
 	HeapProfileOK       bool
 	HeapReason          string
+	SecurityModeOK      bool
+	SecurityModeReason  string
+	AuthzOK             bool
+	AuthzReason         string
+	AuditOK             bool
+	AuditReason         string
+	EncryptionOK        bool
+	EncryptionReason    string
+	RewrapOK            bool
+	RewrapReason        string
+	Phase5GateOK        bool
+	Phase5GateReason    string
 }

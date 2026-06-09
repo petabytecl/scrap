@@ -32,6 +32,18 @@ func TestFakeTransitSupportsDataKeyUnwrapAndRewrap(t *testing.T) {
 	assertFakeUnwrap(t, transit, rewrapped.WrappedKey, dataKey.Plaintext)
 }
 
+func TestFakeTransitUnwrapsAcrossInstances(t *testing.T) {
+	writer := encryption.NewFakeTransit(encryption.FakeConfig{
+		KeyName: "scrap-documents",
+	})
+	reader := encryption.NewFakeTransit(encryption.FakeConfig{
+		KeyName: "scrap-documents",
+	})
+
+	dataKey := generateFakeDataKey(t, writer)
+	assertFakeUnwrap(t, reader, dataKey.WrappedKey, dataKey.Plaintext)
+}
+
 func generateFakeDataKey(t *testing.T, transit *encryption.FakeTransit) encryption.DataKey {
 	t.Helper()
 	dataKey, err := transit.GenerateDataKey(context.Background(), encryption.GenerateDataKeyRequest{

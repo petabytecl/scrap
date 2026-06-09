@@ -177,6 +177,7 @@ LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 ##? SCRAP_E2E_KUBE_CONTEXT kubectl context used by safety-gated E2E fault commands.
 ##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
 ##? PRODLIKE_E2E_KUBE_CONTEXT kubectl context used by the prod-like Tier 2 E2E gate.
+##? PRODLIKE_SECURITY_ASSET_DIR Directory for generated prod-like E2E test TLS assets.
 ##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
 ##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
 ##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
@@ -191,9 +192,10 @@ ifndef PRODLIKE_E2E_KUBE_CONTEXT
 PRODLIKE_E2E_KUBE_CONTEXT := $(PRODLIKE_KUBE_CONTEXT)
 endif
 PRODLIKE_E2E_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_E2E_KUBE_CONTEXT)"
+PRODLIKE_SECURITY_ASSET_DIR ?= artifacts/prodlike-security
 E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
-TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub)
+TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub|ProdlikeSecurityEncryptionEvidence)
 
 ##@ Stress Variables
 
@@ -207,6 +209,7 @@ TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPat
 ##? STRESS_DURATION Duration of the stress test run.
 ##? STRESS_DOC_SIZE Document payload size in bytes.
 ##? BUNDLE_DIR Directory where evidence bundles are written.
+##? SECURITY_EVIDENCE_REPORT Prod-like security report copied into Tier 3 evidence bundles.
 ##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
 ##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
@@ -220,6 +223,7 @@ STRESS_WORKERS ?= 8
 STRESS_DURATION ?= 60s
 STRESS_DOC_SIZE ?= 16384
 BUNDLE_DIR ?= evidence
+SECURITY_EVIDENCE_REPORT ?= $(PRODLIKE_SECURITY_ASSET_DIR)/security-evidence.json
 EVIDENCE_BASELINE_SAMPLING ?= 100
 EVIDENCE_LOWRATE_SAMPLING ?= 10
 
@@ -499,14 +503,21 @@ prodlike-kind-deploy: manifests-check
 	$(PRODLIKE_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
 .PHONY: prodlike-kind-deploy-e2e
-prodlike-kind-deploy-e2e: LOCAL_KIND_OVERLAY=$(PRODLIKE_E2E_OVERLAY)
-prodlike-kind-deploy-e2e: manifests-check
+prodlike-kind-deploy-e2e: prodlike-test-security-assets manifests-check
 	$(KUSTOMIZE) build "$(PRODLIKE_E2E_OVERLAY)" | $(PRODLIKE_E2E_KUBECTL) apply -f -
 	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
 	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
 	$(PRODLIKE_E2E_KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout restart statefulset/scrapd
 	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
 	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+
+.PHONY: prodlike-test-security-assets
+prodlike-test-security-assets:
+	PRODLIKE_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		KUBECTL="$(KUBECTL)" \
+		scripts/prodlike-test-security-assets.sh "$(PRODLIKE_SECURITY_ASSET_DIR)"
 
 .PHONY: prodlike-cell-doctor
 prodlike-cell-doctor:
@@ -628,6 +639,16 @@ tier2-e2e: prodlike-doctor tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E
 		SCRAP_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
 		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
 		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
+		SCRAP_SECURITY_MODE="test" \
+		SCRAP_TLS_SCRAPCTL_CERT="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.pem)" \
+		SCRAP_TLS_SCRAPCTL_KEY="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.key)" \
+		SCRAP_TLS_SCRAPCTL_CLIENT_CA="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/ca.pem)" \
+		SCRAP_TLS_SCRAPCTL_SERVER_NAME="scrap.local" \
+		SCRAP_E2E_TLS_CERT="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.pem)" \
+		SCRAP_E2E_TLS_KEY="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.key)" \
+		SCRAP_E2E_TLS_CA="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/ca.pem)" \
+		SCRAP_E2E_TLS_SERVER_NAME="scrap.local" \
+		SCRAP_E2E_SECURITY_REPORT="$(abspath $(SECURITY_EVIDENCE_REPORT))" \
 		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
 		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -count=1 -v -timeout 600s
 	@printf 'TIER2_E2E_STATUS=passed\n'
@@ -738,6 +759,7 @@ evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
 	STRESS_WORKERS="$(STRESS_WORKERS)" \
 	STRESS_DURATION="$(STRESS_DURATION)" \
 	STRESS_DOC_SIZE="$(STRESS_DOC_SIZE)" \
+	SECURITY_EVIDENCE_REPORT="$(SECURITY_EVIDENCE_REPORT)" \
 	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
 
 .PHONY: stress-teardown

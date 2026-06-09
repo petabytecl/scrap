@@ -29,6 +29,7 @@ printf '{"scenario":"throughput","total_ops":20,"failed_ops":0}'
 	t.Setenv("SCRAP_REPO_ROOT", repoRoot)
 	t.Setenv("EVIDENCE_SETTLE_SECONDS", "0")
 	t.Setenv("GO", fakeGo)
+	t.Setenv("SECURITY_EVIDENCE_REPORT", writeScrapctlSecurityReportFixture(t))
 
 	runner := &fakeRunner{run: evidenceMetadataCommand}
 	client := &http.Client{Transport: &evidenceBundleRoundTripper{}}
@@ -64,6 +65,7 @@ func TestParseEvidenceBundleOptionsUsesEnvironmentAndFlags(t *testing.T) {
 	t.Setenv("STRESS_WORKERS", "3")
 	t.Setenv("STRESS_DOC_SIZE", "1024")
 	t.Setenv("EVICTION_PLAN_ID", "plan-env")
+	t.Setenv("SCRAP_E2E_SECURITY_REPORT", "/env/security.json")
 
 	cfg, err := parseEvidenceBundleOptions([]string{
 		"--bundle-dir=/flag/bundles",
@@ -71,6 +73,7 @@ func TestParseEvidenceBundleOptionsUsesEnvironmentAndFlags(t *testing.T) {
 		"--stress-doc-size=4096",
 		"--settle-seconds=0",
 		"--eviction-plan-id=plan-flag",
+		"--security-report=/flag/security.json",
 		"mixed",
 	})
 	if err != nil {
@@ -82,23 +85,29 @@ func TestParseEvidenceBundleOptionsUsesEnvironmentAndFlags(t *testing.T) {
 func assertParsedEvidenceBundleOptions(t *testing.T, cfg evidencebundle.Config) {
 	t.Helper()
 
-	if cfg.BundleDir != "/flag/bundles" {
-		t.Fatalf("bundle dir = %q", cfg.BundleDir)
+	assertString(t, "bundle dir", cfg.BundleDir, "/flag/bundles")
+	assertString(t, "admin URL", cfg.AdminURL, "http://admin.env")
+	assertString(t, "kubectl", cfg.Kubectl, "kubectl-env")
+	assertString(t, "namespace", cfg.Namespace, "scrap-env")
+	assertString(t, "kube context", cfg.KubeContext, "ctx-env")
+	assertInt(t, "stress workers", cfg.Workers, testBundleWorkers)
+	assertInt(t, "stress doc size", cfg.DocSizeBytes, testBundleDocSize)
+	assertString(t, "scenario", cfg.Scenario, "mixed")
+	assertString(t, "eviction plan ID", cfg.EvictionPlanID, "plan-flag")
+	assertString(t, "security report path", cfg.SecurityReportPath, "/flag/security.json")
+}
+
+func assertString(t *testing.T, label, got, want string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("%s = %q, want %q", label, got, want)
 	}
-	if cfg.AdminURL != "http://admin.env" {
-		t.Fatalf("admin URL = %q", cfg.AdminURL)
-	}
-	if cfg.Kubectl != "kubectl-env" || cfg.Namespace != "scrap-env" || cfg.KubeContext != "ctx-env" {
-		t.Fatalf("kube defaults = kubectl:%q namespace:%q context:%q", cfg.Kubectl, cfg.Namespace, cfg.KubeContext)
-	}
-	if cfg.Workers != testBundleWorkers || cfg.DocSizeBytes != testBundleDocSize {
-		t.Fatalf("stress config = workers:%d doc_size:%d", cfg.Workers, cfg.DocSizeBytes)
-	}
-	if cfg.Scenario != "mixed" {
-		t.Fatalf("scenario = %q", cfg.Scenario)
-	}
-	if cfg.EvictionPlanID != "plan-flag" {
-		t.Fatalf("eviction plan ID = %q", cfg.EvictionPlanID)
+}
+
+func assertInt(t *testing.T, label string, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("%s = %d, want %d", label, got, want)
 	}
 }
 
@@ -185,7 +194,7 @@ func (rt *evidenceBundleRoundTripper) evidenceBundleResponseBody(req *http.Reque
 	raw := req.URL.RawQuery
 	switch {
 	case strings.Contains(path, "/healthz"):
-		return `{"status":"ok"}`
+		return `{"status":"ok","security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"enabled","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`
 	case strings.Contains(path, "/loki/api/v1/query_range"):
 		return `{"status":"success","data":{"resultType":"streams","result":[{"values":[["1","evidence marker"]]}]}}`
 	case strings.Contains(path, "/api/search"):
@@ -219,4 +228,24 @@ func writeTestExecutable(t *testing.T, path, content string) {
 	if err := os.Chmod(path, 0o700); err != nil {
 		t.Fatalf("chmod %s: %v", path, err)
 	}
+}
+
+func writeScrapctlSecurityReportFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "security-evidence.json")
+	body := `{
+  "public_unauthorized_denied": true,
+  "peer_unauthorized_denied": true,
+  "admin_unauthorized_denied": true,
+  "audit_samples_recorded": true,
+  "encrypted_write_read_ok": true,
+  "encrypted_backend_upload_ok": true,
+  "encrypted_restore_ok": true,
+  "rewrap_ok": true,
+  "phase5_entry_blocked": true
+}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write security report fixture: %v", err)
+	}
+	return path
 }

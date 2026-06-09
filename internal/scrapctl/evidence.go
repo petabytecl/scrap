@@ -118,46 +118,48 @@ func parseEvidenceBundleRunOptions(args []string) (evidencebundle.Config, common
 		defaults.stressAddr = common.clientAddr
 	}
 	return evidencebundle.Config{
-		RepoRoot:       defaults.repoRoot,
-		BundleDir:      defaults.bundleDir,
-		GrafanaURL:     defaults.grafanaURL,
-		AdminURL:       adminURL,
-		Kubectl:        common.kubectl,
-		Namespace:      common.namespace,
-		KubeContext:    common.kubeContext,
-		Kubeconfig:     common.kubeconfig,
-		MimirProxy:     defaults.mimirProxy,
-		TempoProxy:     defaults.tempoProxy,
-		LokiProxy:      defaults.lokiProxy,
-		PyroscopeURL:   defaults.pyroscopeProxy,
-		EvictionPlanID: defaults.evictionPlanID,
-		Scenario:       scenario,
-		StressAddr:     defaults.stressAddr,
-		Workers:        defaults.workers,
-		Duration:       defaults.duration,
-		DocSizeBytes:   defaults.docSize,
-		Settle:         time.Duration(defaults.settleSeconds) * time.Second,
-		ProbeTimeout:   time.Duration(defaults.probeSeconds) * time.Second,
-		GoCommand:      defaults.goCommand,
+		RepoRoot:           defaults.repoRoot,
+		BundleDir:          defaults.bundleDir,
+		GrafanaURL:         defaults.grafanaURL,
+		AdminURL:           adminURL,
+		Kubectl:            common.kubectl,
+		Namespace:          common.namespace,
+		KubeContext:        common.kubeContext,
+		Kubeconfig:         common.kubeconfig,
+		MimirProxy:         defaults.mimirProxy,
+		TempoProxy:         defaults.tempoProxy,
+		LokiProxy:          defaults.lokiProxy,
+		PyroscopeURL:       defaults.pyroscopeProxy,
+		EvictionPlanID:     defaults.evictionPlanID,
+		SecurityReportPath: defaults.securityReportPath,
+		Scenario:           scenario,
+		StressAddr:         defaults.stressAddr,
+		Workers:            defaults.workers,
+		Duration:           defaults.duration,
+		DocSizeBytes:       defaults.docSize,
+		Settle:             time.Duration(defaults.settleSeconds) * time.Second,
+		ProbeTimeout:       time.Duration(defaults.probeSeconds) * time.Second,
+		GoCommand:          defaults.goCommand,
 	}, common, nil
 }
 
 type evidenceBundleDefaults struct {
-	bundleDir      string
-	repoRoot       string
-	grafanaURL     string
-	mimirProxy     string
-	tempoProxy     string
-	lokiProxy      string
-	pyroscopeProxy string
-	evictionPlanID string
-	stressAddr     string
-	duration       string
-	goCommand      string
-	workers        int
-	docSize        int
-	settleSeconds  int
-	probeSeconds   int
+	bundleDir          string
+	repoRoot           string
+	grafanaURL         string
+	mimirProxy         string
+	tempoProxy         string
+	lokiProxy          string
+	pyroscopeProxy     string
+	evictionPlanID     string
+	securityReportPath string
+	stressAddr         string
+	duration           string
+	goCommand          string
+	workers            int
+	docSize            int
+	settleSeconds      int
+	probeSeconds       int
 }
 
 func bundleDefaultsFromEnv() (evidenceBundleDefaults, error) {
@@ -178,21 +180,22 @@ func bundleDefaultsFromEnv() (evidenceBundleDefaults, error) {
 		return evidenceBundleDefaults{}, err
 	}
 	return evidenceBundleDefaults{
-		bundleDir:      os.Getenv("BUNDLE_DIR"),
-		repoRoot:       os.Getenv("SCRAP_REPO_ROOT"),
-		grafanaURL:     os.Getenv("GRAFANA_URL"),
-		mimirProxy:     os.Getenv("MIMIR_PROXY"),
-		tempoProxy:     os.Getenv("TEMPO_PROXY"),
-		lokiProxy:      os.Getenv("LOKI_PROXY"),
-		pyroscopeProxy: os.Getenv("PYROSCOPE_PROXY"),
-		evictionPlanID: envString("EVICTION_PLAN_ID", ""),
-		stressAddr:     os.Getenv("STRESS_ADDR"),
-		duration:       envString("STRESS_DURATION", "60s"),
-		goCommand:      envString("GO", "go"),
-		workers:        workers,
-		docSize:        docSize,
-		settleSeconds:  settleSeconds,
-		probeSeconds:   probeSeconds,
+		bundleDir:          os.Getenv("BUNDLE_DIR"),
+		repoRoot:           os.Getenv("SCRAP_REPO_ROOT"),
+		grafanaURL:         os.Getenv("GRAFANA_URL"),
+		mimirProxy:         os.Getenv("MIMIR_PROXY"),
+		tempoProxy:         os.Getenv("TEMPO_PROXY"),
+		lokiProxy:          os.Getenv("LOKI_PROXY"),
+		pyroscopeProxy:     os.Getenv("PYROSCOPE_PROXY"),
+		evictionPlanID:     envString("EVICTION_PLAN_ID", ""),
+		securityReportPath: firstEnv("SECURITY_EVIDENCE_REPORT", "SCRAP_E2E_SECURITY_REPORT"),
+		stressAddr:         os.Getenv("STRESS_ADDR"),
+		duration:           envString("STRESS_DURATION", "60s"),
+		goCommand:          envString("GO", "go"),
+		workers:            workers,
+		docSize:            docSize,
+		settleSeconds:      settleSeconds,
+		probeSeconds:       probeSeconds,
 	}, nil
 }
 
@@ -205,6 +208,7 @@ func registerEvidenceBundleFlags(fs *flag.FlagSet, defaults *evidenceBundleDefau
 	fs.StringVar(&defaults.lokiProxy, "loki-proxy", defaults.lokiProxy, "Loki query base URL")
 	fs.StringVar(&defaults.pyroscopeProxy, "pyroscope-proxy", defaults.pyroscopeProxy, "Pyroscope query base URL")
 	fs.StringVar(&defaults.evictionPlanID, "eviction-plan-id", defaults.evictionPlanID, "Eviction plan ID to include campaign evidence")
+	fs.StringVar(&defaults.securityReportPath, "security-report", defaults.securityReportPath, "Prod-like security evidence report JSON to include")
 	fs.StringVar(&defaults.stressAddr, "stress-addr", defaults.stressAddr, "Stress target address")
 	fs.IntVar(&defaults.workers, "stress-workers", defaults.workers, "Stress worker count")
 	fs.StringVar(&defaults.duration, "stress-duration", defaults.duration, "Stress run duration")
@@ -255,6 +259,15 @@ func envString(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func envInt(name string, fallback int) (int, error) {

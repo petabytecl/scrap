@@ -104,7 +104,7 @@ func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver 
 }
 
 func newAppAuthorizer(cfg Config) (appAuthorizerConfig, error) {
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return appAuthorizerConfig{}, nil
 	}
 	policy, err := security.LoadRolePolicy(cfg.ProductionGates.RolePolicyPath)
@@ -115,8 +115,11 @@ func newAppAuthorizer(cfg Config) (appAuthorizerConfig, error) {
 }
 
 func newAppAuditSink(cfg Config, logger *slog.Logger) (audit.Sink, error) {
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return audit.NewNopSink(), nil
+	}
+	if cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.AuditSink.PolicyPath) == "" {
+		return audit.NewLoggerSink(logger), nil
 	}
 	if _, err := audit.LoadPolicy(cfg.ProductionGates.AuditSink.PolicyPath); err != nil {
 		return nil, fmt.Errorf("audit policy: %w", err)
@@ -125,8 +128,11 @@ func newAppAuditSink(cfg Config, logger *slog.Logger) (audit.Sink, error) {
 }
 
 func newAppRateLimiter(cfg Config, observer security.RateLimitObserver) (*security.RateLimiter, error) {
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return security.NewRateLimiter(security.RateLimitPolicy{}), nil
+	}
+	if cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.RateLimits.PolicyPath) == "" {
+		return security.NewRateLimiter(security.RateLimitPolicy{}, security.WithRateLimitObserver(observer)), nil
 	}
 	policy, err := security.LoadRateLimitPolicy(cfg.ProductionGates.RateLimits.PolicyPath)
 	if err != nil {
@@ -164,7 +170,7 @@ func newAppTransit(cfg Config) (encryption.Transit, error) {
 }
 
 func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransport, error) {
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return peer.NewSharedTransport(peers), nil
 	}
 	clientTLS, err := security.BuildMTLSClientConfig("SCRAP_TLS_PEER", security.ClientTLSFilesFromSurface(cfg.ProductionGates.TLS.Peer))
@@ -175,7 +181,7 @@ func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransp
 }
 
 func newPeerClient(cfg Config) (*peer.Client, error) {
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return peer.NewClient(), nil
 	}
 	clientTLS, err := security.BuildMTLSClientConfig("SCRAP_TLS_PEER", security.ClientTLSFilesFromSurface(cfg.ProductionGates.TLS.Peer))
@@ -187,7 +193,7 @@ func newPeerClient(cfg Config) (*peer.Client, error) {
 
 func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer, auditSink audit.Sink, rateLimiter *security.RateLimiter) ([]grpc.ServerOption, error) {
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return opts, nil
 	}
 	serverTLS, err := security.BuildMTLSServerConfig("SCRAP_TLS_PUBLIC", cfg.ProductionGates.TLS.Public)
@@ -207,7 +213,7 @@ func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer, aud
 
 func newPeerGRPCServerOptions(cfg Config, authorizer *security.Authorizer, auditSink audit.Sink, rateLimiter *security.RateLimiter) ([]grpc.ServerOption, error) {
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return opts, nil
 	}
 	serverTLS, err := security.BuildMTLSServerConfig("SCRAP_TLS_PEER", cfg.ProductionGates.TLS.Peer)
@@ -270,7 +276,7 @@ func peerGRPCAuditInfo(fullMethod string) (security.GRPCAuditInfo, bool) {
 }
 
 func newAdminTLSConfig(cfg Config) (adminTLSConfig, error) {
-	if !cfg.SecurityMode.IsProduction() {
+	if !appSecurityControlsEnabled(cfg) {
 		return adminTLSConfig{}, nil
 	}
 	adminTLS, err := security.BuildMTLSServerConfig("SCRAP_TLS_ADMIN", cfg.ProductionGates.TLS.Admin)
@@ -278,4 +284,11 @@ func newAdminTLSConfig(cfg Config) (adminTLSConfig, error) {
 		return adminTLSConfig{}, fmt.Errorf("admin TLS: %w", err)
 	}
 	return adminTLSConfig{config: adminTLS, enabled: true}, nil
+}
+
+func appSecurityControlsEnabled(cfg Config) bool {
+	if cfg.SecurityMode.IsProduction() {
+		return true
+	}
+	return cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.RolePolicyPath) != ""
 }

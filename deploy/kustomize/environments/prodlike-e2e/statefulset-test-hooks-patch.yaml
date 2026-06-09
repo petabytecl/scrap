@@ -6,6 +6,10 @@ metadata:
 spec:
   template:
     spec:
+      volumes:
+        - name: scrap-test-security
+          secret:
+            secretName: scrap-test-security
       containers:
         - name: scrapd
           env:
@@ -13,3 +17,51 @@ spec:
               value: test
             - name: SCRAP_TEST_HOOKS
               value: "1"
+            - name: SCRAP_ROLE_POLICY_FILE
+              value: /etc/scrap/test-security/roles.json
+            - name: SCRAP_TLS_PUBLIC_CERT
+              value: /etc/scrap/test-security/scrap.pem
+            - name: SCRAP_TLS_PUBLIC_KEY
+              value: /etc/scrap/test-security/scrap.key
+            - name: SCRAP_TLS_PUBLIC_CLIENT_CA
+              value: /etc/scrap/test-security/ca.pem
+            - name: SCRAP_TLS_PUBLIC_SERVER_NAME
+              value: scrap.local
+            - name: SCRAP_TLS_PEER_CERT
+              value: /etc/scrap/test-security/scrap.pem
+            - name: SCRAP_TLS_PEER_KEY
+              value: /etc/scrap/test-security/scrap.key
+            - name: SCRAP_TLS_PEER_CLIENT_CA
+              value: /etc/scrap/test-security/ca.pem
+            - name: SCRAP_TLS_PEER_SERVER_NAME
+              value: scrap.local
+            - name: SCRAP_TLS_ADMIN_CERT
+              value: /etc/scrap/test-security/scrap.pem
+            - name: SCRAP_TLS_ADMIN_KEY
+              value: /etc/scrap/test-security/scrap.key
+            - name: SCRAP_TLS_ADMIN_CLIENT_CA
+              value: /etc/scrap/test-security/ca.pem
+            - name: SCRAP_TLS_ADMIN_SERVER_NAME
+              value: scrap.local
+            - name: SCRAP_TLS_SCRAPCTL_CERT
+              value: /etc/scrap/test-security/scrap.pem
+            - name: SCRAP_TLS_SCRAPCTL_KEY
+              value: /etc/scrap/test-security/scrap.key
+            - name: SCRAP_TLS_SCRAPCTL_CLIENT_CA
+              value: /etc/scrap/test-security/ca.pem
+            - name: SCRAP_TLS_SCRAPCTL_SERVER_NAME
+              value: scrap.local
+            - name: SCRAP_TRANSIT_FAKE
+              value: "true"
+            - name: SCRAP_TRANSIT_MOUNT
+              value: transit
+            - name: SCRAP_TRANSIT_KEY
+              value: scrap-documents
+            - name: SCRAP_EVICTION_ENABLED
+              value: "true"
+            - name: SCRAP_EVICTION_HOT_RESIDENCY_WINDOW
+              value: 0s
+          volumeMounts:
+            - name: scrap-test-security
+              mountPath: /etc/scrap/test-security
+              readOnly: true

@@ -3,7 +3,10 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -19,10 +22,12 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 const (
@@ -47,7 +52,7 @@ func TestE2EDeepScrubDetectsAndRepairsBlock(t *testing.T) {
 	leader := findLeaderPod(t, txID, "sealed.xml")
 	metricsURL, stopMetrics := startPodPortForward(t, leader, 9100)
 	defer stopMetrics()
-	metricsEndpoint := "http://" + metricsURL + "/metrics"
+	metricsEndpoint := e2eAdminURL(metricsURL, "/metrics")
 
 	quarantinesBefore := fetchMetricValue(t, metricsEndpoint, "scrap_scrub_deep_quarantines_total")
 	repairsBefore := fetchMetricValueWithLabels(t, metricsEndpoint, "scrap_scrub_deep_repairs_total", []string{`result="ok"`})
@@ -220,7 +225,7 @@ func findLeaderPod(t *testing.T, txID, docName string) string {
 
 func newDocumentClientAt(t *testing.T, addr string) scrapv1.DocumentServiceClient {
 	t.Helper()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(e2eGRPCCredentials(t)))
 	if err != nil {
 		t.Fatalf("Dial %s: %v", addr, err)
 	}
@@ -349,13 +354,13 @@ func injectProjectionKey(t *testing.T, pod, txID string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/test-hooks/projection-key", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/test-hooks/projection-key"), bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("new projection hook request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e2eHTTPClient(t).Do(req)
 	if err != nil {
 		t.Fatalf("POST projection hook: %v", err)
 	}
@@ -401,7 +406,7 @@ func fetchMetrics(t *testing.T, url string) string {
 	if err != nil {
 		t.Fatalf("new metrics request: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e2eHTTPClient(t).Do(req)
 	if err != nil {
 		t.Fatalf("GET metrics: %v", err)
 	}
@@ -414,6 +419,78 @@ func fetchMetrics(t *testing.T, url string) string {
 		t.Fatalf("read metrics: %v", err)
 	}
 	return string(body)
+}
+
+func e2eAdminURL(addr, path string) string {
+	scheme := "http"
+	if e2eTLSConfigured() {
+		scheme = "https"
+	}
+	return scheme + "://" + addr + path
+}
+
+func e2eHTTPClient(t *testing.T) *http.Client {
+	t.Helper()
+	if !e2eTLSConfigured() {
+		return http.DefaultClient
+	}
+	tlsConfig, err := security.BuildMTLSClientConfig("SCRAP_E2E_TLS", e2eTLSFiles())
+	if err != nil {
+		t.Fatalf("build E2E HTTP TLS config: %v", err)
+	}
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
+}
+
+func e2eHTTPClientWithoutCertificate(t *testing.T) *http.Client {
+	t.Helper()
+	if !e2eTLSConfigured() {
+		return http.DefaultClient
+	}
+	files := e2eTLSFiles()
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    loadE2ERootCAs(t, files.RootCAPath),
+		ServerName: files.ServerName,
+	}}}
+}
+
+func e2eGRPCCredentialsWithoutCertificate(t *testing.T) credentials.TransportCredentials {
+	t.Helper()
+	if !e2eTLSConfigured() {
+		return insecure.NewCredentials()
+	}
+	files := e2eTLSFiles()
+	return credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    loadE2ERootCAs(t, files.RootCAPath),
+		ServerName: files.ServerName,
+	})
+}
+
+func loadE2ERootCAs(t *testing.T, path string) *x509.CertPool {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // E2E CA path is supplied by the test harness.
+	if err != nil {
+		t.Fatalf("read E2E root CA: %v", err)
+	}
+	pool := x509.NewCertPool()
+	rest := data
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse E2E root CA: %v", err)
+		}
+		pool.AddCert(cert)
+	}
+	return pool
 }
 
 func metricValue(body, name string, labels []string) (float64, bool) {
@@ -457,12 +534,13 @@ func lineContainsLabels(metricToken string, labels []string) bool {
 //nolint:gocognit,cyclop // test helper handles streaming reads, retry deadlines, and leader redirects.
 func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName string) []byte {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	deadline := time.Now().Add(60 * time.Second)
 
 	activeClient := client
-	for attempt := 0; ; attempt++ {
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if ctx.Err() != nil {
+			cancel()
 			break
 		}
 		stream, err := activeClient.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{
@@ -470,13 +548,14 @@ func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 			DocumentName:  docName,
 		})
 		if err != nil {
+			cancel()
 			if leaderClient, redirected := clientForLeaderHint(t, err); redirected {
 				activeClient = leaderClient
-				waitBeforeRetry(ctx, attempt)
+				waitBeforeRetry(context.Background(), attempt)
 				continue
 			}
-			if status.Code(err) == codes.Unavailable {
-				waitBeforeRetry(ctx, attempt)
+			if retryableE2EStatus(err) {
+				waitBeforeRetry(context.Background(), attempt)
 				continue
 			}
 			t.Fatalf("ReadDocument: %v", err)
@@ -484,18 +563,20 @@ func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 
 		first, err := stream.Recv()
 		if err != nil {
+			cancel()
 			if leaderClient, redirected := clientForLeaderHint(t, err); redirected {
 				activeClient = leaderClient
-				waitBeforeRetry(ctx, attempt)
+				waitBeforeRetry(context.Background(), attempt)
 				continue
 			}
-			if status.Code(err) == codes.Unavailable {
-				waitBeforeRetry(ctx, attempt)
+			if retryableE2EStatus(err) {
+				waitBeforeRetry(context.Background(), attempt)
 				continue
 			}
 			t.Fatalf("Recv meta: %v", err)
 		}
 		if first.GetMeta() == nil {
+			cancel()
 			t.Fatal("first ReadDocument message should be metadata")
 		}
 
@@ -503,9 +584,15 @@ func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 		for {
 			msg, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
+				cancel()
 				return out
 			}
 			if err != nil {
+				cancel()
+				if retryableE2EStatus(err) {
+					waitBeforeRetry(context.Background(), attempt)
+					break
+				}
 				t.Fatalf("Recv chunk: %v", err)
 			}
 			out = append(out, msg.GetChunkData()...)
@@ -517,28 +604,27 @@ func readDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docNam
 
 func headDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName string) *scrapv1.HeadDocumentResponse {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	deadline := time.Now().Add(60 * time.Second)
 
 	activeClient := client
-	for attempt := 0; ; attempt++ {
-		if ctx.Err() != nil {
-			break
-		}
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		resp, err := activeClient.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
 			TransactionId: txID,
 			DocumentName:  docName,
 		})
 		if err == nil {
+			cancel()
 			return resp
 		}
+		cancel()
 		if leaderClient, redirected := clientForLeaderHint(t, err); redirected {
 			activeClient = leaderClient
-			waitBeforeRetry(ctx, attempt)
+			waitBeforeRetry(context.Background(), attempt)
 			continue
 		}
-		if status.Code(err) == codes.Unavailable {
-			waitBeforeRetry(ctx, attempt)
+		if retryableE2EStatus(err) {
+			waitBeforeRetry(context.Background(), attempt)
 			continue
 		}
 		t.Fatalf("HeadDocument: %v", err)

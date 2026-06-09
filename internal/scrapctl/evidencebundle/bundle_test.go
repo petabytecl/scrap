@@ -34,6 +34,8 @@ func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) 
 		"logs/scrapd.json",
 		"profiles/cpu.json",
 		"profiles/heap_inuse_space.json",
+		"security/health.json",
+		"security/e2e-report.json",
 	} {
 		if _, err := os.Stat(filepath.Join(result.BundlePath, rel)); err != nil {
 			t.Fatalf("expected bundle file %s: %v", rel, err)
@@ -44,7 +46,14 @@ func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) 
 	assertBundleCheck(t, result.Gate, "logs_captured", true)
 	assertBundleCheck(t, result.Gate, "cpu_profile_captured", true)
 	assertBundleCheck(t, result.Gate, "heap_profile_captured", true)
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", true)
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", true)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", true)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", true)
+	assertBundleCheck(t, result.Gate, "rewrap_outcomes_recorded", true)
+	assertBundleCheck(t, result.Gate, "phase5_gate_recorded", true)
 	assertEvidenceProbeHealthIncludesSecurityMode(t, result.BundlePath)
+	assertSecurityEvidenceReport(t, result.BundlePath)
 }
 
 func assertEvidenceProbeHealthIncludesSecurityMode(t *testing.T, root string) {
@@ -64,6 +73,19 @@ func assertEvidenceProbeHealthIncludesSecurityMode(t *testing.T, root string) {
 	}
 	if health.ProductionReadinessReason != "non_production_security_mode" {
 		t.Fatalf("production_readiness_reason = %q, want non_production_security_mode", health.ProductionReadinessReason)
+	}
+}
+
+func assertSecurityEvidenceReport(t *testing.T, root string) {
+	t.Helper()
+
+	var report securityReportEvidence
+	readBundleJSON(t, root, "security/e2e-report.json", &report)
+	if !report.PublicUnauthorizedDenied || !report.PeerUnauthorizedDenied || !report.AdminUnauthorizedDenied {
+		t.Fatalf("unauthorized denial report = %+v, want all true", report)
+	}
+	if !report.EncryptedWriteReadOK || !report.EncryptedBackendUploadOK || !report.EncryptedRestoreOK {
+		t.Fatalf("encryption report = %+v, want write/read/upload/restore true", report)
 	}
 }
 
@@ -201,10 +223,31 @@ func TestGenerateFailsWhenHeapProfileIsMissing(t *testing.T) {
 	assertBundleCheck(t, result.Gate, "heap_profile_captured", false)
 }
 
+func TestGenerateFailsWhenSecurityReportIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingSecurityReport: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", false)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", false)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
+}
+
+func TestGenerateFailsWhenEncryptedRestoreProofIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
+}
+
 func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 	t.Helper()
 
 	bundleDir := t.TempDir()
+	securityReportPath := writeSecurityReportFixture(t, signals)
 	clock := &sequenceClock{values: []time.Time{
 		time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC),
@@ -215,21 +258,22 @@ func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 	transport := &fakeEvidenceTransport{signals: signals}
 	result, err := Generate(context.Background(), Options{
 		Config: Config{
-			RepoRoot:       "/repo",
-			BundleDir:      bundleDir,
-			GrafanaURL:     "http://grafana.local",
-			AdminURL:       "http://admin.local",
-			MimirProxy:     "http://grafana.local/mimir",
-			TempoProxy:     "http://grafana.local/tempo",
-			LokiProxy:      "http://grafana.local/loki",
-			PyroscopeURL:   "http://grafana.local/pyroscope",
-			EvictionPlanID: signals.evictionPlanID,
-			Scenario:       "throughput",
-			StressAddr:     "127.0.0.1:18090",
-			Workers:        8,
-			Duration:       "60s",
-			DocSizeBytes:   16384,
-			Settle:         0,
+			RepoRoot:           "/repo",
+			BundleDir:          bundleDir,
+			GrafanaURL:         "http://grafana.local",
+			AdminURL:           "http://admin.local",
+			MimirProxy:         "http://grafana.local/mimir",
+			TempoProxy:         "http://grafana.local/tempo",
+			LokiProxy:          "http://grafana.local/loki",
+			PyroscopeURL:       "http://grafana.local/pyroscope",
+			EvictionPlanID:     signals.evictionPlanID,
+			SecurityReportPath: securityReportPath,
+			Scenario:           "throughput",
+			StressAddr:         "127.0.0.1:18090",
+			Workers:            8,
+			Duration:           "60s",
+			DocSizeBytes:       16384,
+			Settle:             0,
 		},
 		Clock:        clock,
 		Sleeper:      noSleep,
@@ -269,9 +313,38 @@ type fakeSignals struct {
 	missingTrace                       bool
 	missingCPUProfile                  bool
 	missingHeapProfile                 bool
+	missingSecurityReport              bool
+	missingSecurityRestore             bool
 	adminProbeFailed                   bool
 	evictionPlanID                     string
 	requireEvictionHealthBeforeMetrics bool
+}
+
+func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
+	t.Helper()
+	if signals.missingSecurityReport {
+		return ""
+	}
+	report := securityReportEvidence{
+		PublicUnauthorizedDenied: true,
+		PeerUnauthorizedDenied:   true,
+		AdminUnauthorizedDenied:  true,
+		AuditSamplesRecorded:     true,
+		EncryptedWriteReadOK:     true,
+		EncryptedBackendUploadOK: true,
+		EncryptedRestoreOK:       !signals.missingSecurityRestore,
+		RewrapOK:                 true,
+		Phase5EntryBlocked:       true,
+	}
+	path := filepath.Join(t.TempDir(), "security-evidence.json")
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal security report fixture: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write security report fixture: %v", err)
+	}
+	return path
 }
 
 type sequenceClock struct {
@@ -337,7 +410,7 @@ func (p fakeAdminProbe) Emit(context.Context, AdminProbeRequest) (AdminProbeResu
 	if p.failed {
 		return AdminProbeResult{Body: []byte(`{"error":"admin evidence log probe failed"}`)}, errors.New("probe failed")
 	}
-	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode"}`)}, nil
+	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"enabled","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
 }
 
 type fakeEvidenceTransport struct {

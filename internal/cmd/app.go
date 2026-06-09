@@ -342,7 +342,7 @@ func (a *App) serveAdmin() error {
 }
 
 func appShardEncryptionConfig(cfg Config, transit encryption.Transit) shard.EncryptionConfig {
-	if !encryption.ProductionCapable(transit) {
+	if !encryption.ProductionCapable(transit) && !testModeFakeTransitEncryptionEnabled(cfg) {
 		return shard.EncryptionConfig{}
 	}
 	return shard.EncryptionConfig{
@@ -350,6 +350,10 @@ func appShardEncryptionConfig(cfg Config, transit encryption.Transit) shard.Encr
 		TransitMount: cfg.ProductionGates.Transit.MountPath,
 		TransitKey:   cfg.ProductionGates.Transit.KeyName,
 	}
+}
+
+func testModeFakeTransitEncryptionEnabled(cfg Config) bool {
+	return cfg.SecurityMode == security.ModeTest && cfg.ProductionGates.Transit.Fake
 }
 
 // Shutdown tears the App down in the reverse order of startup, documented here

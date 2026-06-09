@@ -10,10 +10,12 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 func scrapAddr() string {
@@ -25,12 +27,38 @@ func scrapAddr() string {
 
 func connect(t *testing.T) scrapv1.DocumentServiceClient {
 	t.Helper()
-	conn, err := grpc.NewClient(scrapAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(scrapAddr(), grpc.WithTransportCredentials(e2eGRPCCredentials(t)))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return scrapv1.NewDocumentServiceClient(conn)
+}
+
+func e2eGRPCCredentials(t *testing.T) credentials.TransportCredentials {
+	t.Helper()
+	if !e2eTLSConfigured() {
+		return insecure.NewCredentials()
+	}
+	tlsConfig, err := security.BuildMTLSClientConfig("SCRAP_E2E_TLS", e2eTLSFiles())
+	if err != nil {
+		t.Fatalf("build E2E TLS credentials: %v", err)
+	}
+	return credentials.NewTLS(tlsConfig)
+}
+
+func e2eTLSConfigured() bool {
+	files := e2eTLSFiles()
+	return files.CertPath != "" || files.KeyPath != "" || files.RootCAPath != "" || files.ServerName != ""
+}
+
+func e2eTLSFiles() security.ClientTLSFiles {
+	return security.ClientTLSFiles{
+		CertPath:   envOrDefault("SCRAP_E2E_TLS_CERT", os.Getenv("SCRAP_TLS_SCRAPCTL_CERT")),
+		KeyPath:    envOrDefault("SCRAP_E2E_TLS_KEY", os.Getenv("SCRAP_TLS_SCRAPCTL_KEY")),
+		RootCAPath: envOrDefault("SCRAP_E2E_TLS_CA", os.Getenv("SCRAP_TLS_SCRAPCTL_CLIENT_CA")),
+		ServerName: envOrDefault("SCRAP_E2E_TLS_SERVER_NAME", os.Getenv("SCRAP_TLS_SCRAPCTL_SERVER_NAME")),
+	}
 }
 
 func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, data []byte) *scrapv1.WriteDocumentResponse {
@@ -99,12 +127,24 @@ func tryWriteDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, do
 		}
 
 		st, ok := status.FromError(lastErr)
-		if ok && st.Code() == codes.Unavailable {
-			if leaderClient, redirected := clientForLeaderHint(t, lastErr); redirected {
-				activeClient = leaderClient
+		if ok {
+			switch st.Code() {
+			case codes.Unavailable:
+				if leaderClient, redirected := clientForLeaderHint(t, lastErr); redirected {
+					activeClient = leaderClient
+				}
+				waitBeforeRetry(ctx, attempt)
+				continue
+			case codes.ResourceExhausted:
+				if !isUploadPressureError(lastErr) {
+					waitBeforeRetry(ctx, attempt)
+					continue
+				}
+			case codes.DeadlineExceeded, codes.Canceled:
+				waitBeforeRetry(ctx, attempt)
+				continue
+			default:
 			}
-			waitBeforeRetry(ctx, attempt)
-			continue
 		}
 		break
 	}
@@ -112,6 +152,17 @@ func tryWriteDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, do
 		lastErr = fmt.Errorf("write document %s/%s did not complete", txID, docName)
 	}
 	return nil, lastErr
+}
+
+func retryableE2EStatus(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	case codes.ResourceExhausted:
+		return !isUploadPressureError(err)
+	default:
+		return false
+	}
 }
 
 func waitBeforeRetry(ctx context.Context, attempt int) {

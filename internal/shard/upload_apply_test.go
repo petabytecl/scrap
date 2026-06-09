@@ -1,29 +1,39 @@
 package shard
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
 )
 
 const uploadApplyTestBlockID = 42
 
-func TestApplyConfirmUploadFailsClosedWithoutSealedMetadata(t *testing.T) {
+func TestApplyConfirmUploadSkipsCatalogWithoutSealedMetadata(t *testing.T) {
 	idx := openApplyTestIndex(t)
 
 	s := shardForApplyTest(t, idx)
 	err := s.applyConfirmUpload(confirmUploadCommandForApplyTest())
-	if !errors.Is(err, index.ErrPendingUploadNotFound) {
-		t.Fatalf("applyConfirmUpload error = %v, want ErrPendingUploadNotFound", err)
+	if err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
 	}
 	if _, err := idx.GetConfirmedUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
 	}
+
+	health, err := s.EvictionHealthSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if health.Pressure != eviction.HealthPressureDegraded || health.MetadataLossBlocks != 1 {
+		t.Fatalf("eviction health = %+v, want degraded metadata loss", health)
+	}
 }
 
-func TestApplyConfirmUploadRejectsBlockSizeMismatch(t *testing.T) {
+func TestApplyConfirmUploadSkipsCatalogAndClearsPendingOnBlockSizeMismatch(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	if err := idx.PutPendingUpload(index.PendingUpload{
 		BlockID:         uploadApplyTestBlockID,
@@ -36,15 +46,24 @@ func TestApplyConfirmUploadRejectsBlockSizeMismatch(t *testing.T) {
 
 	confirm := confirmUploadCommandForApplyTest()
 	confirm.BlockObject.SizeBytes--
-	err := shardForApplyTest(t, idx).applyConfirmUpload(confirm)
-	if err == nil {
-		t.Fatal("applyConfirmUpload succeeded with mismatched Block size")
+	s := shardForApplyTest(t, idx)
+	err := s.applyConfirmUpload(confirm)
+	if err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
 	}
 	if _, err := idx.GetConfirmedUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
 	}
-	if _, err := idx.GetPendingUpload(uploadApplyTestBlockID); err != nil {
-		t.Fatalf("GetPendingUpload after rejected confirm: %v", err)
+	if _, err := idx.GetPendingUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrPendingUploadNotFound) {
+		t.Fatalf("GetPendingUpload error = %v, want ErrPendingUploadNotFound", err)
+	}
+
+	health, err := s.EvictionHealthSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if health.Pressure != eviction.HealthPressureDegraded || health.MetadataLossBlocks != 1 {
+		t.Fatalf("eviction health = %+v, want degraded metadata loss", health)
 	}
 }
 

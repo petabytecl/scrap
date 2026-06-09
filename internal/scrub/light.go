@@ -2,12 +2,18 @@ package scrub
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/ulid"
+)
+
+const (
+	defaultPeerResultTimeout      = 10 * time.Second
+	defaultPeerResultPollInterval = 200 * time.Millisecond
 )
 
 type Proposer interface {
@@ -40,6 +46,8 @@ type LightConfig struct {
 	PeerAddrs          []string
 	Interval           time.Duration
 	Jitter             float64
+	PeerResultTimeout  time.Duration
+	PeerResultPoll     time.Duration
 }
 
 type Light struct {
@@ -54,6 +62,12 @@ func NewLight(cfg LightConfig) *Light {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.PeerResultTimeout <= 0 {
+		cfg.PeerResultTimeout = defaultPeerResultTimeout
+	}
+	if cfg.PeerResultPoll <= 0 {
+		cfg.PeerResultPoll = defaultPeerResultPollInterval
 	}
 	return &Light{cfg: cfg}
 }
@@ -104,14 +118,16 @@ func (ls *Light) RunOnce(ctx context.Context) error { //nolint:gocognit // rebui
 
 	leaderResult, err := ls.cfg.Proposer.ProposeConsistencyCheck(ctx, scrubID)
 	if err != nil {
+		ls.cfg.Logger.WarnContext(ctx, "scrub: consistency check proposal failed", "scrub_id", scrubID, "err", err)
 		ls.cfg.Metrics.RecordRun("error", time.Since(start).Seconds())
 		return err
 	}
 
 	var divergent []string
 	for _, addr := range ls.cfg.PeerAddrs {
-		peerResult, err := ls.cfg.ConsistencyChecker.CheckConsistency(ctx, addr, scrubID)
+		peerResult, err := ls.checkPeerConsistency(ctx, addr, scrubID)
 		if err != nil {
+			ls.cfg.Logger.WarnContext(ctx, "scrub: peer consistency check failed", "addr", addr, "scrub_id", scrubID, "err", err)
 			ls.cfg.Metrics.RecordRun("error", time.Since(start).Seconds())
 			return err
 		}
@@ -134,4 +150,32 @@ func (ls *Light) RunOnce(ctx context.Context) error { //nolint:gocognit // rebui
 		ls.cfg.Metrics.RecordRun("ok", duration)
 	}
 	return nil
+}
+
+func (ls *Light) checkPeerConsistency(ctx context.Context, addr, scrubID string) (Result, error) {
+	deadline := time.NewTimer(ls.cfg.PeerResultTimeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(ls.cfg.PeerResultPoll)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		result, err := ls.cfg.ConsistencyChecker.CheckConsistency(ctx, addr, scrubID)
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, ErrConsistencyResultNotReady) {
+			return Result{}, err
+		}
+		lastErr = err
+
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			return Result{}, lastErr
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		}
+	}
 }

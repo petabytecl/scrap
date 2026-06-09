@@ -204,6 +204,23 @@ run_probe() {
 			--command -- sh -c "wget -qO- -T 3 '$url' >/dev/null"
 }
 
+run_tcp_probe() {
+	namespace=$1
+	name=$2
+	labels=$3
+	host=$4
+	port=$5
+
+	run_kubectl -n "$namespace" run "$name" \
+		--restart=Never \
+		--rm \
+		--attach \
+		--quiet \
+		--image=busybox:1.36 \
+			--labels "$labels" \
+			--command -- sh -c "nc -z -w 3 '$host' '$port' >/dev/null"
+}
+
 check_headless_dns() {
 	name="scrap-dns-check-$$"
 	target="scrapd-0.scrap-headless.$NAMESPACE.svc.cluster.local"
@@ -228,13 +245,13 @@ check_network_policy() {
 		die "monitoring namespace is required before policy checks"
 
 	allowed="scrap-admin-allow-$$"
-	run_probe monitoring "$allowed" "app=otel-collector" \
-		"http://scrapd-0.scrap-headless.$NAMESPACE.svc.cluster.local:9100/healthz" >/dev/null ||
+	run_tcp_probe monitoring "$allowed" "app=otel-collector" \
+		"scrapd-0.scrap-headless.$NAMESPACE.svc.cluster.local" 9100 >/dev/null ||
 		die "NetworkPolicy allow check from monitoring/otel-collector failed"
 
 	denied="scrap-admin-deny-$$"
-	if run_probe "$NAMESPACE" "$denied" "app=scrap-netcheck" \
-		"http://scrapd-0.scrap-headless.$NAMESPACE.svc.cluster.local:9100/healthz" >/dev/null 2>&1; then
+	if run_tcp_probe "$NAMESPACE" "$denied" "app=scrap-netcheck" \
+		"scrapd-0.scrap-headless.$NAMESPACE.svc.cluster.local" 9100 >/dev/null 2>&1; then
 		die "NetworkPolicy deny check unexpectedly reached admin port"
 	fi
 }
