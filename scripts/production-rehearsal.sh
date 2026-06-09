@@ -5,7 +5,8 @@ command_name=${1:-run}
 
 work_dir=${SCRAP_PROD_REHEARSAL_DIR:-artifacts/production-rehearsal}
 backend=${SCRAP_PROD_REHEARSAL_BACKEND:-s3}
-cell_id=${SCRAP_PROD_REHEARSAL_CELL_ID:-production-rehearsal}
+run_id=${SCRAP_PROD_REHEARSAL_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+cell_id=${SCRAP_PROD_REHEARSAL_CELL_ID:-production-rehearsal-${run_id}}
 member_id=${SCRAP_PROD_REHEARSAL_MEMBER_ID:-member-a}
 server_name=${SCRAP_PROD_REHEARSAL_SERVER_NAME:-scrap.local}
 openbao_image=${SCRAP_PROD_REHEARSAL_OPENBAO_IMAGE:-openbao/openbao:2.5.4}
@@ -24,6 +25,8 @@ grpcurl_bin=${GRPCURL:-grpcurl}
 curl_bin=${CURL:-curl}
 jq_bin=${JQ:-jq}
 openssl_bin=${OPENSSL:-openssl}
+base64_bin=${BASE64:-base64}
+cmp_bin=${CMP:-cmp}
 
 runtime_dir="$work_dir/runtime"
 tls_dir="$runtime_dir/tls"
@@ -253,6 +256,9 @@ validate_backend_config() {
 	s3)
 		[ -n "${SCRAP_S3_BUCKET:-}" ] || die "SCRAP_S3_BUCKET is required for production-rehearsal"
 		[ -n "${SCRAP_S3_REGION:-}" ] || die "SCRAP_S3_REGION is required for production-rehearsal"
+		if [ "${SCRAP_PROD_REHEARSAL_CELL_ID:-}" = "production-rehearsal" ]; then
+			die "SCRAP_PROD_REHEARSAL_CELL_ID=production-rehearsal reuses Backend object keys; choose a unique Cell ID or unset it for the per-run default"
+		fi
 		case "${SCRAP_S3_ENDPOINT:-}" in
 		*localhost*|*127.0.0.1*|*localstack*)
 			if [ "${SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3:-false}" != "true" ]; then
@@ -265,6 +271,18 @@ validate_backend_config() {
 		die "SCRAP_PROD_REHEARSAL_BACKEND must be fs or s3, got: $backend"
 		;;
 	esac
+}
+
+validate_rehearsal_config() {
+	case "$block_seal_size" in
+	''|*[!0-9]*)
+		die "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE must be a positive integer, got: $block_seal_size"
+		;;
+	esac
+	if [ "$((10#$block_seal_size))" -le 0 ]; then
+		die "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE must be greater than zero, got: $block_seal_size"
+	fi
+	validate_backend_config
 }
 
 start_openbao() {
@@ -444,19 +462,30 @@ grpcurl_common_args() {
 		-proto proto/scrap/v1/document.proto
 }
 
-write_read_document() {
-	local tx_id doc_name payload payload_b64 write_req write_out head_out read_out
-	tx_id="prod-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)"
-	doc_name="readiness.txt"
-	payload="production rehearsal encrypted document payload ${tx_id}"
-	payload_b64=$(printf '%s' "$payload" | base64 -w0)
-	write_req="$runtime_dir/write-request.json"
-	write_out="$runtime_dir/write-response.json"
-	head_out="$runtime_dir/head-response.json"
-	read_out="$runtime_dir/read-response.json"
+rehearsal_payload() {
+	local tx_id=$1
+	local prefix filler_size target_size
+	prefix="production rehearsal encrypted document payload ${tx_id} "
+	target_size=$((10#$block_seal_size + 512))
+	filler_size=$((target_size - ${#prefix}))
+	printf '%s' "$prefix"
+	if [ "$filler_size" -gt 0 ]; then
+		printf '%*s' "$filler_size" '' | tr ' ' 'x'
+	fi
+}
+
+write_document() {
+	local tx_id=$1
+	local doc_name=$2
+	local idempotency_key=$3
+	local payload=$4
+	local write_req=$5
+	local write_out=$6
+	local payload_b64
+	payload_b64=$(printf '%s' "$payload" | "$base64_bin" -w0)
 
 	cat > "$write_req" <<EOF
-{"init":{"transactionId":"${tx_id}","documentName":"${doc_name}","contentType":"text/plain","idempotencyKey":"${tx_id}"}}
+{"init":{"transactionId":"${tx_id}","documentName":"${doc_name}","contentType":"text/plain","idempotencyKey":"${idempotency_key}"}}
 {"chunkData":"${payload_b64}"}
 EOF
 	"$grpcurl_bin" $(grpcurl_common_args) \
@@ -464,6 +493,46 @@ EOF
 		< "$write_req" > "$write_out"
 	"$jq_bin" -e '.size > 0 and .sha256Checksum != ""' "$write_out" >/dev/null ||
 		die "WriteDocument response is incomplete; see $write_out"
+}
+
+write_upload_trigger_document() {
+	local tx_id=$1
+	local trigger_doc trigger_payload trigger_req trigger_out
+	trigger_doc="seal-trigger.txt"
+	trigger_payload="production rehearsal upload trigger for ${tx_id}"
+	trigger_req="$runtime_dir/seal-trigger-write-request.json"
+	trigger_out="$runtime_dir/seal-trigger-write-response.json"
+	write_document "$tx_id" "$trigger_doc" "${tx_id}-seal-trigger" "$trigger_payload" "$trigger_req" "$trigger_out"
+	if grep -R -a -F "$trigger_payload" "$data_dir" >/dev/null 2>&1; then
+		die "plaintext trigger payload was found under $data_dir"
+	fi
+}
+
+decode_read_payload() {
+	local read_out=$1
+	local payload_out=$2
+	local chunk
+	: > "$payload_out"
+	while IFS= read -r chunk; do
+		[ -n "$chunk" ] || continue
+		printf '%s' "$chunk" | "$base64_bin" -d >> "$payload_out" ||
+			die "ReadDocument returned invalid base64 payload; see $read_out"
+	done < <("$jq_bin" -r 'select(.chunkData != null) | .chunkData' "$read_out")
+}
+
+write_read_document() {
+	local tx_id doc_name payload write_req write_out head_out read_out expected_payload read_payload
+	tx_id="prod-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)"
+	doc_name="readiness.txt"
+	payload=$(rehearsal_payload "$tx_id")
+	write_req="$runtime_dir/write-request.json"
+	write_out="$runtime_dir/write-response.json"
+	head_out="$runtime_dir/head-response.json"
+	read_out="$runtime_dir/read-response.json"
+	expected_payload="$runtime_dir/read-expected-payload.txt"
+	read_payload="$runtime_dir/read-payload.txt"
+
+	write_document "$tx_id" "$doc_name" "$tx_id" "$payload" "$write_req" "$write_out"
 
 	"$grpcurl_bin" $(grpcurl_common_args) \
 		-d "{\"transactionId\":\"${tx_id}\",\"documentName\":\"${doc_name}\"}" \
@@ -474,13 +543,53 @@ EOF
 	"$grpcurl_bin" $(grpcurl_common_args) \
 		-d "{\"transactionId\":\"${tx_id}\",\"documentName\":\"${doc_name}\"}" \
 		"127.0.0.1:${client_port}" scrap.v1.DocumentService/ReadDocument > "$read_out"
-	grep -F "$payload_b64" "$read_out" >/dev/null ||
+	printf '%s' "$payload" > "$expected_payload"
+	decode_read_payload "$read_out" "$read_payload"
+	"$cmp_bin" -s "$expected_payload" "$read_payload" ||
 		die "ReadDocument did not return the written payload; see $read_out"
 
 	if grep -R -a -F "$payload" "$data_dir" >/dev/null 2>&1; then
 		die "plaintext payload was found under $data_dir"
 	fi
+	write_upload_trigger_document "$tx_id"
+	wait_backend_upload_confirmed
 	wait_uploads_drained
+}
+
+confirmed_upload_count() {
+	local count marker
+	count=0
+	while IFS= read -r marker; do
+		if "$jq_bin" -e \
+			'.block_id >= 0 and .confirmed_at_us >= 0 and .block_object.key != "" and .index_object.key != "" and .block_object.validation_token != "" and .index_object.validation_token != ""' \
+			"$marker" >/dev/null; then
+			count=$((count + 1))
+		fi
+	done < <(find "$data_dir" -type f -name '*.confirmed-upload.json' -print)
+	printf '%s\n' "$count"
+}
+
+wait_backend_upload_confirmed() {
+	local deadline count proof_file
+	proof_file="$runtime_dir/upload-confirmation.json"
+	deadline=$(($(date +%s) + 60))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		count=$(confirmed_upload_count)
+		if [ "$count" -gt 0 ]; then
+			cat > "$proof_file" <<EOF
+{
+  "backend_upload_confirmed": true,
+  "confirmed_upload_count": ${count}
+}
+EOF
+			return
+		fi
+		if [ -s "$scrapd_pid_file" ] && ! kill -0 "$(cat "$scrapd_pid_file")" >/dev/null 2>&1; then
+			die "scrapd exited before a Backend upload was confirmed; see $scrapd_log"
+		fi
+		sleep 1
+	done
+	die "no committed Backend upload confirmation was observed; expected at least one *.confirmed-upload.json marker under $data_dir"
 }
 
 wait_uploads_drained() {
@@ -501,9 +610,11 @@ wait_uploads_drained() {
 
 write_report() {
 	local health_file="$runtime_dir/health.json"
-	local status readiness
+	local upload_confirmation_file="$runtime_dir/upload-confirmation.json"
+	local status readiness confirmed_count
 	status=$("$jq_bin" -r '.security_mode' "$health_file")
 	readiness=$("$jq_bin" -r '.production_readiness_status' "$health_file")
+	confirmed_count=$("$jq_bin" -r '.confirmed_upload_count' "$upload_confirmation_file")
 	cat > "$report_file" <<EOF
 {
   "status": "passed",
@@ -516,6 +627,8 @@ write_report() {
   "pprof_enabled": false,
   "encrypted_write_read_ok": true,
   "plaintext_leak_scan_ok": true,
+  "backend_upload_confirmed": true,
+  "confirmed_upload_count": ${confirmed_count},
   "log_dir": "${log_dir}"
 }
 EOF
@@ -528,9 +641,11 @@ run_rehearsal() {
 	require_command "$jq_bin" jq
 	require_command "$curl_bin" curl
 	require_command "$grpcurl_bin" grpcurl
+	require_command "$base64_bin" base64
+	require_command "$cmp_bin" cmp
 	require_file "$scrapd_bin" scrapd
 	require_file "$scrapctl_bin" scrapctl
-	validate_backend_config
+	validate_rehearsal_config
 	prepare_workspace
 	write_tls_material
 	write_policies
