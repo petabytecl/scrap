@@ -405,7 +405,7 @@ var adminAuditRoutes = map[string]auditRoute{
 }
 
 func auditEvictionRequest(r *http.Request) (string, string) {
-	if r.URL.Path == "/admin/eviction/plans" && r.Method == http.MethodPost {
+	if r.URL.Path == "/admin/eviction/plans" {
 		return audit.OperationEvictionPlanCreate, audit.TargetBlock
 	}
 	if strings.HasSuffix(r.URL.Path, "/apply") {

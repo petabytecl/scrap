@@ -118,6 +118,38 @@ func TestAdminAuditsMethodDeniedDangerousOperation(t *testing.T) {
 	}
 }
 
+func TestAdminAuditsEvictionPlanCollectionMethodDenialAsCreate(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	planner := &recordingEvictionPlanner{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithEvictionPlanner(planner))
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminOperator),
+	})
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/admin/eviction/plans", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405: %s", resp.Code, resp.Body.String())
+	}
+	if planner.calls != 0 {
+		t.Fatalf("planner calls = %d, want 0", planner.calls)
+	}
+	events := sink.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].Operation != audit.OperationEvictionPlanCreate ||
+		events[0].Target != audit.TargetBlock ||
+		events[0].Result != audit.ResultDenied ||
+		events[0].Reason != audit.ReasonMethodNotAllowed {
+		t.Fatalf("audit event = %+v, want eviction_plan_create/block denied method_not_allowed", events[0])
+	}
+}
+
 func TestAdminAuditsDistinctDeniedTLSPrincipals(t *testing.T) {
 	authz := adminAuthorizerForPrincipal(t, "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a", security.RoleAdminReader)
 	sink := audit.NewMemorySink()
