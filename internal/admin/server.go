@@ -36,6 +36,14 @@ type ProjectionInjector interface {
 	InjectProjectionKey(ctx context.Context, txID string, blockID uint64, docCount uint16, completed bool) error
 }
 
+type TransitRotator interface {
+	RotateTransitKey(context.Context) error
+}
+
+type LightScrubber interface {
+	RunLightScrub(context.Context) error
+}
+
 type UploadPressureProvider interface {
 	UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int)
 }
@@ -51,6 +59,8 @@ type Server struct {
 	httpSrv            *http.Server
 	handler            http.Handler
 	projectionInjector ProjectionInjector
+	transitRotator     TransitRotator
+	lightScrubber      LightScrubber
 	uploadPressure     UploadPressureProvider
 	pprofEnabled       bool
 	metricsHandler     http.Handler
@@ -70,6 +80,18 @@ type Server struct {
 func WithProjectionInjector(injector ProjectionInjector) Option {
 	return func(s *Server) {
 		s.projectionInjector = injector
+	}
+}
+
+func WithTransitRotator(rotator TransitRotator) Option {
+	return func(s *Server) {
+		s.transitRotator = rotator
+	}
+}
+
+func WithLightScrubber(scrubber LightScrubber) Option {
+	return func(s *Server) {
+		s.lightScrubber = scrubber
 	}
 }
 
@@ -136,9 +158,7 @@ func New(opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
-	if s.projectionInjector != nil {
-		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
-	}
+	s.registerTestHooks(mux)
 	if s.metricsHandler != nil {
 		mux.Handle("/metrics", s.authorizedHandler(security.RoleAdminReader, s.metricsHandler))
 	}
@@ -167,6 +187,18 @@ func New(opts ...Option) *Server {
 	}
 	s.handler = mux
 	return s
+}
+
+func (s *Server) registerTestHooks(mux *http.ServeMux) {
+	if s.projectionInjector != nil {
+		mux.HandleFunc("/test-hooks/projection-key", s.handleProjectionKeyHook)
+	}
+	if s.transitRotator != nil {
+		mux.HandleFunc("/test-hooks/transit-rotate", s.handleTransitRotateHook)
+	}
+	if s.lightScrubber != nil {
+		mux.HandleFunc("/test-hooks/light-scrub", s.handleLightScrubHook)
+	}
 }
 
 func (s *Server) authorizedHandler(role security.Role, next http.Handler) http.Handler {
@@ -348,6 +380,8 @@ var adminAuditRoutes = map[string]auditRoute{
 	"/metrics":                   {operation: audit.OperationMetrics, target: audit.TargetMetrics},
 	"/admin/rewrap/document":     {operation: audit.OperationRewrapDocument, target: audit.TargetDocument},
 	"/test-hooks/projection-key": {operation: audit.OperationProjectionKeyHook, target: audit.TargetEvidence},
+	"/test-hooks/transit-rotate": {operation: audit.OperationTransitRotateHook, target: audit.TargetEvidence},
+	"/test-hooks/light-scrub":    {operation: audit.OperationLightScrubHook, target: audit.TargetEvidence},
 	"/debug/pprof/":              {operation: audit.OperationPprofIndex, target: audit.TargetProfile},
 	"/debug/pprof/cmdline":       {operation: audit.OperationPprofCmdline, target: audit.TargetProfile},
 	"/debug/pprof/profile":       {operation: audit.OperationPprofProfile, target: audit.TargetProfile},
@@ -467,6 +501,36 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 
 	if err := s.projectionInjector.InjectProjectionKey(r.Context(), req.TransactionID, req.BlockID, req.DocCount, req.Completed); err != nil {
 		http.Error(w, "projection injection failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleTransitRotateHook(w http.ResponseWriter, r *http.Request) {
+	if !s.authorize(w, r, security.RoleAdminBreakGlass) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.transitRotator.RotateTransitKey(r.Context()); err != nil {
+		http.Error(w, "transit rotate failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleLightScrubHook(w http.ResponseWriter, r *http.Request) {
+	if !s.authorize(w, r, security.RoleAdminBreakGlass) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.lightScrubber.RunLightScrub(r.Context()); err != nil {
+		http.Error(w, "light scrub failed", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

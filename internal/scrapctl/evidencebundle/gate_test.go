@@ -22,15 +22,27 @@ func TestEvaluateGateIsScenarioAware(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gate := EvaluateGate(GateInput{
-				StressResults: tc.stress,
-				TraceOK:       true,
-				TraceReason:   "trace",
-				LogOK:         true,
-				LogReason:     "log",
-				CPUProfileOK:  true,
-				CPUReason:     "cpu",
-				HeapProfileOK: true,
-				HeapReason:    "heap",
+				StressResults:      tc.stress,
+				TraceOK:            true,
+				TraceReason:        "trace",
+				LogOK:              true,
+				LogReason:          "log",
+				CPUProfileOK:       true,
+				CPUReason:          "cpu",
+				HeapProfileOK:      true,
+				HeapReason:         "heap",
+				SecurityModeOK:     true,
+				SecurityModeReason: "mode=test",
+				AuthzOK:            true,
+				AuthzReason:        "unauthorized denied",
+				AuditOK:            true,
+				AuditReason:        "audit samples recorded",
+				EncryptionOK:       true,
+				EncryptionReason:   "encrypted write/read/upload ok",
+				RewrapOK:           true,
+				RewrapReason:       "rewrap ok",
+				Phase5GateOK:       true,
+				Phase5GateReason:   "phase5 blocked by non-production mode",
 			})
 			if !gate.Pass {
 				t.Fatalf("gate pass = false, checks = %+v", gate.Checks)
@@ -39,6 +51,26 @@ func TestEvaluateGateIsScenarioAware(t *testing.T) {
 			assertBundleCheck(t, gate, "error_rate_below_1pct", true)
 		})
 	}
+}
+
+func TestEvaluateGateFailsMissingSecurityEvidence(t *testing.T) {
+	gate := EvaluateGate(GateInput{
+		StressResults: `{"scenario":"throughput","total_ops":10,"failed_ops":0}`,
+		TraceOK:       true,
+		TraceReason:   "trace",
+		LogOK:         true,
+		LogReason:     "log",
+		CPUProfileOK:  true,
+		CPUReason:     "cpu",
+		HeapProfileOK: true,
+		HeapReason:    "heap",
+	})
+
+	if gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, gate, "security_mode_recorded", false)
+	assertBundleCheck(t, gate, "encryption_outcomes_recorded", false)
 }
 
 func TestEvaluateGateFailsInvalidStressOutput(t *testing.T) {

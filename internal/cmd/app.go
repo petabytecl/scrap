@@ -196,9 +196,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithAuditSink(securityRuntime.auditSink),
 		admin.WithRateLimiter(securityRuntime.rateLimiter),
 	}
-	if cfg.TestHooks {
-		adminOpts = append(adminOpts, admin.WithProjectionInjector(s))
-	}
+	adminOpts = appendTestHookAdminOptions(adminOpts, cfg, s, securityRuntime.transit)
 	if cfg.PprofEnabled {
 		adminOpts = append(adminOpts, admin.WithPprof())
 	}
@@ -222,6 +220,27 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		raftID:      raftID,
 		uploadCfg:   uploadCfg,
 	}, nil
+}
+
+func appendTestHookAdminOptions(opts []admin.Option, cfg Config, shard *shard.Shard, transit any) []admin.Option {
+	if !cfg.TestHooks {
+		return opts
+	}
+	opts = append(opts, admin.WithProjectionInjector(shard))
+	opts = append(opts, admin.WithLightScrubber(shard))
+	if rotator, ok := transit.(interface{ Rotate() }); ok {
+		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
+	}
+	return opts
+}
+
+type appTransitRotator struct {
+	transit interface{ Rotate() }
+}
+
+func (r appTransitRotator) RotateTransitKey(context.Context) error {
+	r.transit.Rotate()
+	return nil
 }
 
 func newAppSecurityRuntimeForTelemetry(cfg Config, peers map[uint64]string, logger *slog.Logger, telemetryRuntime *scrapdTelemetryRuntime) (appSecurityRuntime, error) {
@@ -342,7 +361,7 @@ func (a *App) serveAdmin() error {
 }
 
 func appShardEncryptionConfig(cfg Config, transit encryption.Transit) shard.EncryptionConfig {
-	if !encryption.ProductionCapable(transit) {
+	if !encryption.ProductionCapable(transit) && !testModeFakeTransitEncryptionEnabled(cfg) {
 		return shard.EncryptionConfig{}
 	}
 	return shard.EncryptionConfig{
@@ -350,6 +369,10 @@ func appShardEncryptionConfig(cfg Config, transit encryption.Transit) shard.Encr
 		TransitMount: cfg.ProductionGates.Transit.MountPath,
 		TransitKey:   cfg.ProductionGates.Transit.KeyName,
 	}
+}
+
+func testModeFakeTransitEncryptionEnabled(cfg Config) bool {
+	return cfg.SecurityMode == security.ModeTest && cfg.ProductionGates.Transit.Fake
 }
 
 // Shutdown tears the App down in the reverse order of startup, documented here

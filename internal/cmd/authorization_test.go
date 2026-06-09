@@ -72,6 +72,35 @@ func TestAppSecurityRuntimeLeavesDevelopmentAuthorizerUnset(t *testing.T) {
 	}
 }
 
+func TestAppSecurityRuntimeEnforcesExplicitTestControls(t *testing.T) {
+	bundle := securityfixture.WriteCertBundle(t, t.TempDir(), securityfixture.CertOptions{
+		ServerName: "scrap.local",
+	})
+	cfg := Config{
+		SecurityMode: security.ModeTest,
+		ProductionGates: security.StartupGateConfig{
+			TLS: security.TLSConfig{
+				Public:   productionTLSFiles(bundle),
+				Peer:     productionTLSFiles(bundle),
+				Admin:    productionTLSFiles(bundle),
+				Scrapctl: productionTLSFiles(bundle),
+			},
+			RolePolicyPath: writeRolePolicy(t, t.TempDir()),
+		},
+	}
+
+	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil)
+	if err != nil {
+		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
+	}
+	if runtime.authorizer == nil {
+		t.Fatal("test runtime authorizer is nil")
+	}
+	if len(runtime.publicGRPCOptions) == 0 || len(runtime.peerGRPCOptions) == 0 || !runtime.adminTLS.enabled {
+		t.Fatalf("test runtime TLS/authz options not configured: %+v", runtime)
+	}
+}
+
 func TestAppSecurityRuntimeRejectsProductionFakeTransit(t *testing.T) {
 	cfg := Config{
 		SecurityMode: security.ModeProduction,
@@ -110,6 +139,23 @@ func TestAppShardEncryptionConfigSkipsDevelopmentFakeTransit(t *testing.T) {
 	got := appShardEncryptionConfig(cfg, encryption.NewFakeTransit(encryption.FakeConfig{KeyName: "scrap-documents"}))
 	if got.Transit != nil || got.TransitMount != "" || got.TransitKey != "" {
 		t.Fatalf("development fake Transit enabled shard encryption: %+v", got)
+	}
+}
+
+func TestAppShardEncryptionConfigAllowsExplicitTestFakeTransit(t *testing.T) {
+	cfg := Config{
+		SecurityMode: security.ModeTest,
+		ProductionGates: security.StartupGateConfig{
+			Transit: security.TransitConfig{
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Fake:      true,
+			},
+		},
+	}
+	got := appShardEncryptionConfig(cfg, encryption.NewFakeTransit(encryption.FakeConfig{KeyName: "scrap-documents"}))
+	if got.Transit == nil || got.TransitMount != "transit" || got.TransitKey != "scrap-documents" {
+		t.Fatalf("test fake Transit encryption disabled: %+v", got)
 	}
 }
 

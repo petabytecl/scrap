@@ -2,6 +2,7 @@ package shard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -137,6 +138,13 @@ func (c *scrubCoordinator) Stop() {
 	if c.deepScrub != nil {
 		c.deepScrub.Stop()
 	}
+}
+
+func (c *scrubCoordinator) RunLightScrub(ctx context.Context) error {
+	if c == nil || c.lightScrub == nil {
+		return errors.New("shard: light scrub is not configured")
+	}
+	return c.lightScrub.RunOnce(ctx)
 }
 
 func (c *scrubCoordinator) IsLeader() bool {

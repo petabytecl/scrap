@@ -110,9 +110,16 @@ func (c *Client) ConsistencyCheck(ctx context.Context, addr, scrubID string) (*s
 		ScrubId: scrubID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("peer: consistency check %s: %w", addr, err)
+		return nil, fmt.Errorf("peer: consistency check %s: %w", addr, mapConsistencyCheckError(err))
 	}
 	return resp, nil
+}
+
+func mapConsistencyCheckError(err error) error {
+	if status.Code(err) == codes.NotFound {
+		return fmt.Errorf("%w: %w", scrub.ErrConsistencyResultNotReady, err)
+	}
+	return err
 }
 
 func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) (*scrapv1.RequestIndexRebuildResponse, error) {

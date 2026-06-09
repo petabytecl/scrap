@@ -106,6 +106,27 @@ func TestApplySealBlock_ClosesMatchingFollowerBlock(t *testing.T) {
 	}
 }
 
+func TestConfirmUploadWithoutSealedMetadataClosesMatchingOpenBlock(t *testing.T) {
+	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
+	ctx := context.Background()
+
+	if got := s.CurrentBlockIDForTest(); got != 1 {
+		t.Fatalf("current Block = %d, want 1", got)
+	}
+	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(1)); err != nil {
+		t.Fatalf("ConfirmUploadForTest: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := s.CurrentBlockIDForTest(); got > 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("confirm upload without sealed metadata left confirmed Block open")
+}
+
 func TestOrphanedSeals_RetryOnNextSeal(t *testing.T) {
 	s := openUploadTestShard(t, shard.UploadConfig{Enabled: true})
 	ctx := context.Background()

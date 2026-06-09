@@ -2,6 +2,7 @@ package scrub_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,9 +27,11 @@ func (m *mockProposer) ProposeConsistencyCheck(_ context.Context, scrubID string
 type mockConsistencyChecker struct {
 	results map[string]scrub.Result
 	err     error
+	calls   atomic.Int32
 }
 
 func (m *mockConsistencyChecker) CheckConsistency(_ context.Context, addr, scrubID string) (scrub.Result, error) {
+	m.calls.Add(1)
 	if m.err != nil {
 		return scrub.Result{}, m.err
 	}
@@ -99,6 +102,22 @@ func TestLightScrubber_AllMatch(t *testing.T) {
 	}
 }
 
+type transientConsistencyChecker struct {
+	result   scrub.Result
+	failures atomic.Int32
+	calls    atomic.Int32
+}
+
+func (c *transientConsistencyChecker) CheckConsistency(_ context.Context, _, scrubID string) (scrub.Result, error) {
+	c.calls.Add(1)
+	if c.failures.Add(-1) >= 0 {
+		return scrub.Result{}, scrub.ErrConsistencyResultNotReady
+	}
+	result := c.result
+	result.ScrubID = scrubID
+	return result, nil
+}
+
 func TestLightScrubber_Mismatch(t *testing.T) {
 	leaderHash := [32]byte{0xaa, 0xbb}
 	peerHash := [32]byte{0xcc, 0xdd}
@@ -127,6 +146,62 @@ func TestLightScrubber_Mismatch(t *testing.T) {
 	}
 	if metrics.recorded.ok != 0 {
 		t.Fatalf("expected 0 ok, got %d", metrics.recorded.ok)
+	}
+}
+
+func TestLightScrubber_RetriesTransientPeerResultNotReady(t *testing.T) {
+	hash := [32]byte{0xde, 0xad}
+	checker := &transientConsistencyChecker{
+		result:   scrub.Result{AppliedIndex: 10, SHA256: hash},
+		failures: atomic.Int32{},
+	}
+	checker.failures.Store(1)
+	metrics := &mockMetrics{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: hash}},
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		PeerAddrs:          []string{"peer-1:9091"},
+		PeerResultTimeout:  100 * time.Millisecond,
+		PeerResultPoll:     time.Millisecond,
+	})
+
+	err := ls.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if checker.calls.Load() < 2 {
+		t.Fatalf("expected retry after transient not-ready, got %d calls", checker.calls.Load())
+	}
+	if metrics.recorded.ok != 1 || metrics.recorded.errCount != 0 {
+		t.Fatalf("metrics = %+v, want one ok and no errors", metrics.recorded)
+	}
+}
+
+func TestLightScrubber_ReportsPeerResultTimeout(t *testing.T) {
+	checker := &mockConsistencyChecker{err: scrub.ErrConsistencyResultNotReady}
+	metrics := &mockMetrics{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           &mockProposer{result: scrub.Result{}},
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		PeerAddrs:          []string{"peer-1:9091"},
+		PeerResultTimeout:  5 * time.Millisecond,
+		PeerResultPoll:     time.Millisecond,
+	})
+
+	err := ls.RunOnce(context.Background())
+	if !errors.Is(err, scrub.ErrConsistencyResultNotReady) {
+		t.Fatalf("RunOnce error = %v, want %v", err, scrub.ErrConsistencyResultNotReady)
+	}
+
+	if metrics.recorded.errCount != 1 {
+		t.Fatalf("expected 1 error run, got %d", metrics.recorded.errCount)
 	}
 }
 

@@ -116,7 +116,8 @@ func TestAdminAuthorizationDeniesMetricsBeforeHandler(t *testing.T) {
 func TestAdminAuthorizationDeniesBreakGlassEndpointsBeforeSideEffect(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	injector := &projectionInjectorStub{}
-	srv := admin.New(admin.WithAuthorizer(authz), admin.WithProjectionInjector(injector), admin.WithPprof())
+	rotator := &transitRotatorStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithProjectionInjector(injector), admin.WithTransitRotator(rotator), admin.WithPprof())
 
 	hookReq := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodPost, "/test-hooks/projection-key", bytes.NewReader([]byte(`{}`)))
 	hookResp := httptest.NewRecorder()
@@ -129,12 +130,76 @@ func TestAdminAuthorizationDeniesBreakGlassEndpointsBeforeSideEffect(t *testing.
 		t.Fatalf("projection injector was called: %+v", injector)
 	}
 
+	rotateReq := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodPost, "/test-hooks/transit-rotate", nil)
+	rotateResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rotateResp, rotateReq)
+
+	if rotateResp.Code != http.StatusForbidden {
+		t.Fatalf("rotate status = %d, want 403", rotateResp.Code)
+	}
+	if rotator.calls != 0 {
+		t.Fatalf("transit rotate calls = %d, want 0", rotator.calls)
+	}
+
 	profileReq := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodGet, "/debug/pprof/profile", nil)
 	profileResp := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(profileResp, profileReq)
 
 	if profileResp.Code != http.StatusForbidden {
 		t.Fatalf("profile status = %d, want 403", profileResp.Code)
+	}
+}
+
+func TestAdminAuthorizationDeniesLightScrubHookBeforeSideEffect(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	scrubber := &lightScrubberStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithLightScrubber(scrubber))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminReader), http.MethodPost, "/test-hooks/light-scrub", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.Code)
+	}
+	if scrubber.calls != 0 {
+		t.Fatalf("light scrub calls = %d, want 0", scrubber.calls)
+	}
+}
+
+func TestAdminAuthorizationAllowsTransitRotateHookForBreakGlass(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	rotator := &transitRotatorStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithTransitRotator(rotator))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminBreakGlass), http.MethodPost, "/test-hooks/transit-rotate", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.Code)
+	}
+	if rotator.calls != 1 {
+		t.Fatalf("transit rotate calls = %d, want 1", rotator.calls)
+	}
+}
+
+func TestAdminAuthorizationAllowsLightScrubHookForBreakGlass(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	scrubber := &lightScrubberStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithLightScrubber(scrubber))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminBreakGlass), http.MethodPost, "/test-hooks/light-scrub", nil)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.Code)
+	}
+	if scrubber.calls != 1 {
+		t.Fatalf("light scrub calls = %d, want 1", scrubber.calls)
 	}
 }
 

@@ -44,6 +44,10 @@ func (l *blockUploadLifecycle) obligationCount() int {
 	return l.obligations.len()
 }
 
+func (l *blockUploadLifecycle) forgetUploadObligation(blockID uint64) {
+	l.obligations.forget(blockID)
+}
+
 func (l *blockUploadLifecycle) applyCommittedSeal(idx *index.Index, seal *scrapv1.SealBlock) error {
 	if err := idx.PutPendingUpload(index.PendingUpload{
 		BlockID:         seal.GetBlockId(),

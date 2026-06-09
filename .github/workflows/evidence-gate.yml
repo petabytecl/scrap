@@ -43,9 +43,13 @@ concurrency:
 jobs:
   tier3-evidence:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       GOCACHE: /tmp/scrap-v2-go-build
+      PRODLIKE_KIND_CLUSTER: scrap-prodlike
+      PRODLIKE_KUBE_CONTEXT: kind-scrap-prodlike
+      PRODLIKE_E2E_KUBE_CONTEXT: kind-scrap-prodlike
+      SCRAP_E2E_KUBE_CONTEXT: kind-scrap-prodlike
       STRESS_KIND_CLUSTER: scrap-stress
       STRESS_SCENARIO: ${{ inputs.scenario }}
       STRESS_DURATION: ${{ inputs.duration }}
@@ -68,6 +72,9 @@ jobs:
         run: |
           mkdir -p artifacts evidence
           set -o pipefail
+          make tier2-e2e-up 2>&1 | tee artifacts/tier2-e2e.log
+          make prodlike-kind-delete
+          unset PRODLIKE_KUBE_CONTEXT PRODLIKE_E2E_KUBE_CONTEXT SCRAP_E2E_KUBE_CONTEXT
           make tier3-evidence-up 2>&1 | tee artifacts/tier3-evidence.log
           find evidence -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1 > artifacts/tier3-bundle-path.txt
 
@@ -81,10 +88,15 @@ jobs:
 
       - name: Collect Kind diagnostics
         if: ${{ always() }}
+        shell: bash
         run: |
-          ARTIFACT_DIR=artifacts/kind \
-          KUBE_CONTEXT=kind-scrap-stress \
-          scripts/collect-kind-artifacts.sh
+          for context in kind-scrap-prodlike kind-scrap-stress; do
+            if kubectl config get-contexts "$context" >/dev/null 2>&1; then
+              ARTIFACT_DIR="artifacts/kind/$context" \
+              KUBE_CONTEXT="$context" \
+              scripts/collect-kind-artifacts.sh || true
+            fi
+          done
 
       - name: Upload Tier 3 artifacts
         if: ${{ always() && env.ACT != 'true' }}
@@ -98,4 +110,6 @@ jobs:
 
       - name: Delete evidence Kind Cell
         if: ${{ always() && inputs.cleanup }}
-        run: make stress-teardown || true
+        run: |
+          make prodlike-kind-delete || true
+          make stress-teardown || true

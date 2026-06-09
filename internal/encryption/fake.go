@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 const (
 	defaultFakeKeyName = "scrap-documents"
 	fakeWrappedPrefix  = "fake-transit:v"
+	fakeWrappedParts   = 4
 	dataKeyBits128     = 128
 	dataKeyBits256     = 256
 	dataKeyBits512     = 512
@@ -42,6 +44,8 @@ type fakeDataKey struct {
 	plaintext []byte
 	context   string
 	version   int
+	bits      int
+	seed      uint64
 }
 
 func NewFakeTransit(cfg FakeConfig) *FakeTransit {
@@ -79,8 +83,10 @@ func (t *FakeTransit) GenerateDataKey(_ context.Context, req GenerateDataKeyRequ
 		return DataKey{}, err
 	}
 	t.sequence++
-	plaintext := t.derivePlaintext(req.Context, keyBytes, t.sequence)
-	wrappedKey := t.wrapLocked(t.currentVersion, plaintext, req.Context, t.sequence)
+	seed := t.sequence
+	bits := dataKeyBits(req.Bits)
+	plaintext := t.derivePlaintext(req.Context, keyBytes, seed)
+	wrappedKey := t.wrapLocked(t.currentVersion, req.Context, bits, seed)
 	return DataKey{
 		Plaintext:  cloneBytes(plaintext),
 		WrappedKey: wrappedKey,
@@ -115,8 +121,7 @@ func (t *FakeTransit) RewrapDataKey(_ context.Context, req RewrapDataKeyRequest)
 	if key.version >= targetVersion {
 		return RewrappedKey{WrappedKey: req.WrappedKey, Version: key.version}, nil
 	}
-	t.sequence++
-	wrappedKey := t.wrapLocked(targetVersion, key.plaintext, req.Context, t.sequence)
+	wrappedKey := t.wrapLocked(targetVersion, req.Context, key.bits, key.seed)
 	return RewrappedKey{WrappedKey: wrappedKey, Version: targetVersion, Changed: true}, nil
 }
 
@@ -165,7 +170,13 @@ func (t *FakeTransit) lookupLocked(wrappedKey string, context []byte) (fakeDataK
 	if err := t.stateError(); err != nil {
 		return fakeDataKey{}, err
 	}
-	key, ok := t.keys[wrappedKey]
+	key, ok, err := t.parseWrappedKey(wrappedKey, context)
+	if err != nil {
+		return fakeDataKey{}, err
+	}
+	if !ok {
+		key, ok = t.keys[wrappedKey]
+	}
 	if !ok {
 		return fakeDataKey{}, fmt.Errorf("transit fake missing key: %w", ErrMissingKey)
 	}
@@ -178,24 +189,74 @@ func (t *FakeTransit) lookupLocked(wrappedKey string, context []byte) (fakeDataK
 	return key, nil
 }
 
-func (t *FakeTransit) derivePlaintext(context []byte, size int, sequence uint64) []byte {
+func (t *FakeTransit) parseWrappedKey(wrappedKey string, context []byte) (fakeDataKey, bool, error) {
+	if !strings.HasPrefix(wrappedKey, fakeWrappedPrefix) {
+		return fakeDataKey{}, false, nil
+	}
+	rest := strings.TrimPrefix(wrappedKey, fakeWrappedPrefix)
+	parts := strings.Split(rest, ":")
+	if len(parts) != fakeWrappedParts {
+		return fakeDataKey{}, false, fmt.Errorf("transit fake wrapped key parts: got %d, want %d", len(parts), fakeWrappedParts)
+	}
+	version, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fakeDataKey{}, false, fmt.Errorf("transit fake wrapped key version: %w", err)
+	}
+	if version < 1 {
+		return fakeDataKey{}, false, fmt.Errorf("transit fake wrapped key version %d is invalid", version)
+	}
+	bits, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fakeDataKey{}, false, fmt.Errorf("transit fake wrapped key bits: %w", err)
+	}
+	keyBytes, err := requestedKeyBytes(bits)
+	if err != nil {
+		return fakeDataKey{}, false, err
+	}
+	seed, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		return fakeDataKey{}, false, fmt.Errorf("transit fake wrapped key seed: %w", err)
+	}
+	if seed == 0 {
+		return fakeDataKey{}, false, errors.New("transit fake wrapped key seed is required")
+	}
+	if parts[3] != t.wrapMAC(version, bits, context, seed) {
+		return fakeDataKey{}, false, fmt.Errorf("transit fake context mismatch: %w", ErrAuthDenied)
+	}
+	plaintext := t.derivePlaintext(context, keyBytes, seed)
+	return fakeDataKey{
+		plaintext: plaintext,
+		context:   contextHandle(context),
+		version:   version,
+		bits:      bits,
+		seed:      seed,
+	}, true, nil
+}
+
+func (t *FakeTransit) derivePlaintext(context []byte, size int, seed uint64) []byte {
 	plaintext := make([]byte, 0, size)
 	for len(plaintext) < size {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%d|%d", t.keyName, t.currentVersion, contextHandle(context), sequence, len(plaintext))))
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%d", t.keyName, contextHandle(context), seed, len(plaintext))))
 		plaintext = append(plaintext, sum[:]...)
 	}
 	return plaintext[:size]
 }
 
-func (t *FakeTransit) wrapLocked(version int, plaintext, context []byte, sequence uint64) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%d", t.keyName, version, contextHandle(context), sequence)))
-	wrappedKey := fmt.Sprintf("%s%d:%s", fakeWrappedPrefix, version, hex.EncodeToString(sum[:8]))
+func (t *FakeTransit) wrapLocked(version int, context []byte, bits int, seed uint64) string {
+	wrappedKey := fmt.Sprintf("%s%d:%d:%d:%s", fakeWrappedPrefix, version, bits, seed, t.wrapMAC(version, bits, context, seed))
 	t.keys[wrappedKey] = fakeDataKey{
-		plaintext: cloneBytes(plaintext),
+		plaintext: t.derivePlaintext(context, bits/bitsPerByte, seed),
 		context:   contextHandle(context),
 		version:   version,
+		bits:      bits,
+		seed:      seed,
 	}
 	return wrappedKey
+}
+
+func (t *FakeTransit) wrapMAC(version, bits int, context []byte, seed uint64) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%s|%d", t.keyName, version, bits, contextHandle(context), seed)))
+	return hex.EncodeToString(sum[:8])
 }
 
 func requestedKeyBytes(bits int) (int, error) {

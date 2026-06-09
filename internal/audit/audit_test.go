@@ -59,6 +59,29 @@ func TestNewEventRejectsHighCardinalityLabels(t *testing.T) {
 	}
 }
 
+func TestNewEventAcceptsEvidenceHookOperations(t *testing.T) {
+	for _, operation := range []string{
+		audit.OperationProjectionKeyHook,
+		audit.OperationTransitRotateHook,
+		audit.OperationLightScrubHook,
+	} {
+		t.Run(operation, func(t *testing.T) {
+			_, err := audit.NewEvent(audit.EventInput{
+				PrincipalID: "principal",
+				Role:        "admin_break_glass",
+				Surface:     audit.SurfaceAdmin,
+				Operation:   operation,
+				Target:      audit.TargetEvidence,
+				Result:      audit.ResultAllowed,
+				Reason:      audit.ReasonAllowed,
+			})
+			if err != nil {
+				t.Fatalf("NewEvent: %v", err)
+			}
+		})
+	}
+}
+
 func TestMemorySinkStoresImmutableEvents(t *testing.T) {
 	sink := audit.NewMemorySink()
 	event, err := audit.NewEvent(audit.EventInput{

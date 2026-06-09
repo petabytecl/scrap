@@ -689,6 +689,10 @@ func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err
 	return s.rebuilder.Trigger(ctx)
 }
 
+func (s *Shard) RunLightScrub(ctx context.Context) error {
+	return s.scrubs.RunLightScrub(ctx)
+}
+
 func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) error {
 	if err := s.idx.Close(); err != nil {
 		return fmt.Errorf("shard: close current index: %w", err)

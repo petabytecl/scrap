@@ -93,10 +93,20 @@ func gateChecks(values gateValues, metricsOK bool, input GateInput) []GateCheck 
 		{Name: "logs_captured", Pass: input.LogOK, Reason: input.LogReason},
 		{Name: "cpu_profile_captured", Pass: input.CPUProfileOK, Reason: input.CPUReason},
 		{Name: "heap_profile_captured", Pass: input.HeapProfileOK, Reason: input.HeapReason},
+		{Name: "security_mode_recorded", Pass: input.SecurityModeOK, Reason: input.SecurityModeReason},
+		{Name: "authorization_denials_recorded", Pass: input.AuthzOK, Reason: input.AuthzReason},
+		{Name: "audit_samples_recorded", Pass: input.AuditOK, Reason: input.AuditReason},
+		{Name: "encryption_outcomes_recorded", Pass: input.EncryptionOK, Reason: input.EncryptionReason},
+		{Name: "rewrap_outcomes_recorded", Pass: input.RewrapOK, Reason: input.RewrapReason},
+		{Name: "phase5_gate_recorded", Pass: input.Phase5GateOK, Reason: input.Phase5GateReason},
 	}
 }
 
 func gatePasses(values gateValues, metricsOK bool, input GateInput) bool {
+	return coreGatePasses(values, metricsOK, input) && securityGatePasses(input)
+}
+
+func coreGatePasses(values gateValues, metricsOK bool, input GateInput) bool {
 	return values.completed &&
 		values.writes > 0 &&
 		values.ops > 0 &&
@@ -106,6 +116,15 @@ func gatePasses(values gateValues, metricsOK bool, input GateInput) bool {
 		input.LogOK &&
 		input.CPUProfileOK &&
 		input.HeapProfileOK
+}
+
+func securityGatePasses(input GateInput) bool {
+	return input.SecurityModeOK &&
+		input.AuthzOK &&
+		input.AuditOK &&
+		input.EncryptionOK &&
+		input.RewrapOK &&
+		input.Phase5GateOK
 }
 
 func writesForScenario(scenario string, stress map[string]any) float64 {

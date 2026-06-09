@@ -5,15 +5,18 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 func scrapAddr() string {
@@ -25,12 +28,38 @@ func scrapAddr() string {
 
 func connect(t *testing.T) scrapv1.DocumentServiceClient {
 	t.Helper()
-	conn, err := grpc.NewClient(scrapAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(scrapAddr(), grpc.WithTransportCredentials(e2eGRPCCredentials(t)))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return scrapv1.NewDocumentServiceClient(conn)
+}
+
+func e2eGRPCCredentials(t *testing.T) credentials.TransportCredentials {
+	t.Helper()
+	if !e2eTLSConfigured() {
+		return insecure.NewCredentials()
+	}
+	tlsConfig, err := security.BuildMTLSClientConfig("SCRAP_E2E_TLS", e2eTLSFiles())
+	if err != nil {
+		t.Fatalf("build E2E TLS credentials: %v", err)
+	}
+	return credentials.NewTLS(tlsConfig)
+}
+
+func e2eTLSConfigured() bool {
+	files := e2eTLSFiles()
+	return files.CertPath != "" || files.KeyPath != "" || files.RootCAPath != "" || files.ServerName != ""
+}
+
+func e2eTLSFiles() security.ClientTLSFiles {
+	return security.ClientTLSFiles{
+		CertPath:   envOrDefault("SCRAP_E2E_TLS_CERT", os.Getenv("SCRAP_TLS_SCRAPCTL_CERT")),
+		KeyPath:    envOrDefault("SCRAP_E2E_TLS_KEY", os.Getenv("SCRAP_TLS_SCRAPCTL_KEY")),
+		RootCAPath: envOrDefault("SCRAP_E2E_TLS_CA", os.Getenv("SCRAP_TLS_SCRAPCTL_CLIENT_CA")),
+		ServerName: envOrDefault("SCRAP_E2E_TLS_SERVER_NAME", os.Getenv("SCRAP_TLS_SCRAPCTL_SERVER_NAME")),
+	}
 }
 
 func writeDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, data []byte) *scrapv1.WriteDocumentResponse {
@@ -99,12 +128,24 @@ func tryWriteDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, do
 		}
 
 		st, ok := status.FromError(lastErr)
-		if ok && st.Code() == codes.Unavailable {
-			if leaderClient, redirected := clientForLeaderHint(t, lastErr); redirected {
-				activeClient = leaderClient
+		if ok {
+			switch st.Code() {
+			case codes.Unavailable:
+				if leaderClient, redirected := clientForLeaderHint(t, lastErr); redirected {
+					activeClient = leaderClient
+				}
+				waitBeforeRetry(ctx, attempt)
+				continue
+			case codes.ResourceExhausted:
+				if !isUploadPressureError(lastErr) {
+					waitBeforeRetry(ctx, attempt)
+					continue
+				}
+			case codes.DeadlineExceeded, codes.Canceled:
+				waitBeforeRetry(ctx, attempt)
+				continue
+			default:
 			}
-			waitBeforeRetry(ctx, attempt)
-			continue
 		}
 		break
 	}
@@ -112,6 +153,27 @@ func tryWriteDocE2E(t *testing.T, client scrapv1.DocumentServiceClient, txID, do
 		lastErr = fmt.Errorf("write document %s/%s did not complete", txID, docName)
 	}
 	return nil, lastErr
+}
+
+func retryableE2EStatus(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	case codes.ResourceExhausted:
+		return !isUploadPressureError(err)
+	case codes.DataLoss:
+		return transientProjectionCatchupError(err)
+	default:
+		return false
+	}
+}
+
+func transientProjectionCatchupError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "projection resolution corrupt") &&
+		(strings.Contains(msg, "no such file or directory") ||
+			strings.Contains(msg, "not open") ||
+			strings.Contains(msg, "missing from block"))
 }
 
 func waitBeforeRetry(ctx context.Context, attempt int) {
@@ -168,6 +230,7 @@ func TestE2ELeaderFailover(t *testing.T) {
 
 	leader := findLeaderPod(t, txID, "doc.xml")
 	deletePodAndWaitReady(t, leader)
+	waitForCellWriteQuorum(t)
 
 	headResp := headDocE2E(t, client, txID, "doc.xml")
 	if headResp.GetSize() != int64(len(content)) {
@@ -176,5 +239,14 @@ func TestE2ELeaderFailover(t *testing.T) {
 	readBack := readDocE2E(t, client, txID, "doc.xml")
 	if !bytes.Equal(readBack, content) {
 		t.Fatalf("read after leader failover: got %d bytes, want %d", len(readBack), len(content))
+	}
+}
+
+func waitForCellWriteQuorum(t *testing.T) {
+	t.Helper()
+	client := connect(t)
+	txID := uniqueName("tx-e2e-quorum")
+	if _, err := tryWriteDocE2E(t, client, txID, "ready.xml", "text/xml", []byte("ready")); err != nil {
+		t.Fatalf("cell did not accept canary write after leader replacement: %v", err)
 	}
 }

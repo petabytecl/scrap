@@ -137,6 +137,21 @@ func (s *Shard) recordEvictionHealthBlockBestEffort(blockID uint64) {
 	}
 }
 
+func (s *Shard) recordEvictionHealthMetadataLossBlock(blockID uint64) {
+	s.evictionHealthMu.Lock()
+	defer s.evictionHealthMu.Unlock()
+
+	if s.evictionHealthBlocks == nil {
+		s.evictionHealthBlocks = make(map[uint64]evictionHealthBlockContribution)
+	}
+	old := s.evictionHealthBlocks[blockID]
+	applyEvictionHealthContribution(&s.evictionHealthSnapshot, old, -1)
+
+	contribution := evictionHealthBlockContribution{State: localblock.StateMetadataLoss}
+	s.evictionHealthBlocks[blockID] = contribution
+	applyEvictionHealthContribution(&s.evictionHealthSnapshot, contribution, 1)
+}
+
 func (s *Shard) evictionHealthContributionForBlock(blockID uint64) (evictionHealthBlockContribution, error) {
 	quarantined, err := quarantinedBlockExists(s.blocksDir, blockID)
 	if err != nil {

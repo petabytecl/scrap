@@ -30,6 +30,8 @@ const (
 	maxTransientBackoff = 30 * time.Second
 )
 
+var errConfirmUploadSealedMetadataMismatch = errors.New("shard: confirm upload sealed metadata mismatch")
+
 type UploadConfig struct {
 	Enabled     bool
 	Backend     backend.Backend
@@ -145,10 +147,46 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 
 	confirmed, err := s.blockUploadLifecycleLocked().applyCommittedConfirm(s.blocksDir, s.idx, confirm)
 	if err != nil {
+		if errors.Is(err, index.ErrPendingUploadNotFound) || errors.Is(err, errConfirmUploadSealedMetadataMismatch) {
+			if s.logger != nil {
+				s.logger.Warn("shard: confirm upload skipped unsafe catalog", "block_id", confirm.GetBlockId(), "err", err)
+			}
+			if closeErr := s.closeConfirmedOpenBlockLocked(confirm.GetBlockId()); closeErr != nil {
+				return closeErr
+			}
+			if deleteErr := s.idx.DeletePendingUpload(confirm.GetBlockId()); deleteErr != nil {
+				return fmt.Errorf("shard: clear unsafe pending upload %d: %w", confirm.GetBlockId(), deleteErr)
+			}
+			s.blockUploadLifecycleLocked().forgetUploadObligation(confirm.GetBlockId())
+			s.recordEvictionHealthMetadataLossBlock(confirm.GetBlockId())
+			return s.refreshUploadPressureLocked()
+		}
+		return err
+	}
+	if err := s.closeConfirmedOpenBlockLocked(confirm.GetBlockId()); err != nil {
 		return err
 	}
 	s.recordEvictionHealthBlockBestEffort(confirmed.BlockID)
 	return s.refreshUploadPressureLocked()
+}
+
+func (s *Shard) closeConfirmedOpenBlockLocked(blockID uint64) error {
+	if s.blockWriter == nil || s.blockWriter.BlockID() != blockID {
+		return nil
+	}
+	if s.idxWriter == nil {
+		return fmt.Errorf("shard: confirmed block %d index writer is not open", blockID)
+	}
+	if err := s.idxWriter.Close(); err != nil {
+		return fmt.Errorf("shard: close confirmed block index: %w", err)
+	}
+	if err := s.blockWriter.Close(); err != nil {
+		return fmt.Errorf("shard: close confirmed block: %w", err)
+	}
+	if err := s.openNewBlock(); err != nil {
+		return fmt.Errorf("shard: open block after confirm upload apply: %w", err)
+	}
+	return nil
 }
 
 func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {
@@ -165,7 +203,8 @@ func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64
 func validateConfirmedUploadMatchesSeal(upload index.ConfirmedUpload) error {
 	if upload.BlockObject.SizeBytes != upload.SealedSizeBytes {
 		return fmt.Errorf(
-			"shard: confirmed block object size %d does not match sealed size %d for block %d",
+			"%w: confirmed block object size %d does not match sealed size %d for block %d",
+			errConfirmUploadSealedMetadataMismatch,
 			upload.BlockObject.SizeBytes,
 			upload.SealedSizeBytes,
 			upload.BlockID,

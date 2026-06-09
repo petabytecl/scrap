@@ -1,5 +1,9 @@
 package scrub
 
+import "errors"
+
+var ErrConsistencyResultNotReady = errors.New("scrub: consistency result not ready")
+
 type Result struct {
 	ScrubID      string
 	AppliedIndex uint64
