@@ -5,7 +5,8 @@ command_name=${1:-run}
 
 work_dir=${SCRAP_PROD_REHEARSAL_DIR:-artifacts/production-rehearsal}
 backend=${SCRAP_PROD_REHEARSAL_BACKEND:-s3}
-cell_id=${SCRAP_PROD_REHEARSAL_CELL_ID:-production-rehearsal}
+run_id=${SCRAP_PROD_REHEARSAL_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+cell_id=${SCRAP_PROD_REHEARSAL_CELL_ID:-production-rehearsal-${run_id}}
 member_id=${SCRAP_PROD_REHEARSAL_MEMBER_ID:-member-a}
 server_name=${SCRAP_PROD_REHEARSAL_SERVER_NAME:-scrap.local}
 openbao_image=${SCRAP_PROD_REHEARSAL_OPENBAO_IMAGE:-openbao/openbao:2.5.4}
@@ -24,6 +25,8 @@ grpcurl_bin=${GRPCURL:-grpcurl}
 curl_bin=${CURL:-curl}
 jq_bin=${JQ:-jq}
 openssl_bin=${OPENSSL:-openssl}
+base64_bin=${BASE64:-base64}
+cmp_bin=${CMP:-cmp}
 
 runtime_dir="$work_dir/runtime"
 tls_dir="$runtime_dir/tls"
@@ -253,6 +256,9 @@ validate_backend_config() {
 	s3)
 		[ -n "${SCRAP_S3_BUCKET:-}" ] || die "SCRAP_S3_BUCKET is required for production-rehearsal"
 		[ -n "${SCRAP_S3_REGION:-}" ] || die "SCRAP_S3_REGION is required for production-rehearsal"
+		if [ "${SCRAP_PROD_REHEARSAL_CELL_ID:-}" = "production-rehearsal" ]; then
+			die "SCRAP_PROD_REHEARSAL_CELL_ID=production-rehearsal reuses Backend object keys; choose a unique Cell ID or unset it for the per-run default"
+		fi
 		case "${SCRAP_S3_ENDPOINT:-}" in
 		*localhost*|*127.0.0.1*|*localstack*)
 			if [ "${SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3:-false}" != "true" ]; then
@@ -476,7 +482,7 @@ write_document() {
 	local write_req=$5
 	local write_out=$6
 	local payload_b64
-	payload_b64=$(printf '%s' "$payload" | base64 -w0)
+	payload_b64=$(printf '%s' "$payload" | "$base64_bin" -w0)
 
 	cat > "$write_req" <<EOF
 {"init":{"transactionId":"${tx_id}","documentName":"${doc_name}","contentType":"text/plain","idempotencyKey":"${idempotency_key}"}}
@@ -502,16 +508,29 @@ write_upload_trigger_document() {
 	fi
 }
 
+decode_read_payload() {
+	local read_out=$1
+	local payload_out=$2
+	local chunk
+	: > "$payload_out"
+	while IFS= read -r chunk; do
+		[ -n "$chunk" ] || continue
+		printf '%s' "$chunk" | "$base64_bin" -d >> "$payload_out" ||
+			die "ReadDocument returned invalid base64 payload; see $read_out"
+	done < <("$jq_bin" -r 'select(.chunkData != null) | .chunkData' "$read_out")
+}
+
 write_read_document() {
-	local tx_id doc_name payload payload_b64 write_req write_out head_out read_out
+	local tx_id doc_name payload write_req write_out head_out read_out expected_payload read_payload
 	tx_id="prod-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)"
 	doc_name="readiness.txt"
 	payload=$(rehearsal_payload "$tx_id")
-	payload_b64=$(printf '%s' "$payload" | base64 -w0)
 	write_req="$runtime_dir/write-request.json"
 	write_out="$runtime_dir/write-response.json"
 	head_out="$runtime_dir/head-response.json"
 	read_out="$runtime_dir/read-response.json"
+	expected_payload="$runtime_dir/read-expected-payload.txt"
+	read_payload="$runtime_dir/read-payload.txt"
 
 	write_document "$tx_id" "$doc_name" "$tx_id" "$payload" "$write_req" "$write_out"
 
@@ -524,7 +543,9 @@ write_read_document() {
 	"$grpcurl_bin" $(grpcurl_common_args) \
 		-d "{\"transactionId\":\"${tx_id}\",\"documentName\":\"${doc_name}\"}" \
 		"127.0.0.1:${client_port}" scrap.v1.DocumentService/ReadDocument > "$read_out"
-	grep -F "$payload_b64" "$read_out" >/dev/null ||
+	printf '%s' "$payload" > "$expected_payload"
+	decode_read_payload "$read_out" "$read_payload"
+	"$cmp_bin" -s "$expected_payload" "$read_payload" ||
 		die "ReadDocument did not return the written payload; see $read_out"
 
 	if grep -R -a -F "$payload" "$data_dir" >/dev/null 2>&1; then
@@ -620,6 +641,8 @@ run_rehearsal() {
 	require_command "$jq_bin" jq
 	require_command "$curl_bin" curl
 	require_command "$grpcurl_bin" grpcurl
+	require_command "$base64_bin" base64
+	require_command "$cmp_bin" cmp
 	require_file "$scrapd_bin" scrapd
 	require_file "$scrapctl_bin" scrapctl
 	validate_rehearsal_config

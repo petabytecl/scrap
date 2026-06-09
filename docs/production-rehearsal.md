@@ -48,6 +48,10 @@ endpoint unless `SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3=true` is set explicitly.
 That override is for development diagnosis only and does not satisfy production
 readiness evidence.
 
+The default rehearsal Cell ID includes a per-run suffix so repeated S3 runs do
+not reuse Backend object keys. If `SCRAP_PROD_REHEARSAL_CELL_ID` is supplied
+explicitly, choose an isolated value for that run.
+
 ```sh
 make production-rehearsal-down
 ```
