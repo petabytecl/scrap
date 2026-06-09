@@ -62,9 +62,10 @@ type RateLimiter struct {
 }
 
 type surfaceBudget struct {
-	limit  int
-	window time.Duration
-	keys   map[string]windowCounter
+	limit     int
+	window    time.Duration
+	nextPrune time.Time
+	keys      map[string]windowCounter
 }
 
 type windowCounter struct {
@@ -126,6 +127,7 @@ func (l *RateLimiter) Allow(ctx context.Context, surface RateLimitSurface, key s
 		return RateLimitDecision{Surface: surface, Operation: op}
 	}
 	now := l.now()
+	budget.pruneExpired(now)
 	cleanKey := rateLimitKey(key)
 	counter := budget.keys[cleanKey]
 	if counter.reset.IsZero() || !now.Before(counter.reset) {
@@ -147,6 +149,21 @@ func (l *RateLimiter) Allow(ctx context.Context, surface RateLimitSurface, key s
 	budget.keys[cleanKey] = counter
 	l.mu.Unlock()
 	return decision
+}
+
+func (b *surfaceBudget) pruneExpired(now time.Time) {
+	if b == nil {
+		return
+	}
+	if !b.nextPrune.IsZero() && now.Before(b.nextPrune) {
+		return
+	}
+	for key, counter := range b.keys {
+		if !counter.reset.IsZero() && !now.Before(counter.reset) {
+			delete(b.keys, key)
+		}
+	}
+	b.nextPrune = now.Add(b.window)
 }
 
 func LoadRateLimitPolicy(path string) (RateLimitPolicy, error) {

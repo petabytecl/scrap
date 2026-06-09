@@ -308,9 +308,24 @@ func (s *Server) requestWithResolvedPrincipal(r *http.Request) (*http.Request, e
 	}
 	ctx, err := s.authorizer.ContextWithTLSPrincipal(r.Context(), *r.TLS)
 	if err != nil {
-		return r, err
+		return requestWithAuditPrincipal(r, err)
 	}
 	return r.WithContext(ctx), nil
+}
+
+func requestWithAuditPrincipal(r *http.Request, authErr error) (*http.Request, error) {
+	if r.TLS == nil {
+		return r, authErr
+	}
+	principalID, err := security.PrincipalIDFromTLSState(*r.TLS)
+	if err != nil {
+		return r, authErr
+	}
+	ctx := security.ContextWithPrincipal(r.Context(), security.Principal{
+		ID:    principalID,
+		Roles: security.NewRoleSet(),
+	})
+	return r.WithContext(ctx), authErr
 }
 
 func (s *Server) checkRateLimit(ctx context.Context, operation string) security.RateLimitDecision {
@@ -479,11 +494,7 @@ type projectionKeyRequest struct {
 }
 
 func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r, security.RoleAdminBreakGlass) {
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost) {
 		return
 	}
 
@@ -507,11 +518,7 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleTransitRotateHook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r, security.RoleAdminBreakGlass) {
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost) {
 		return
 	}
 	if err := s.transitRotator.RotateTransitKey(r.Context()); err != nil {
@@ -522,11 +529,7 @@ func (s *Server) handleTransitRotateHook(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleLightScrubHook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r, security.RoleAdminBreakGlass) {
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost) {
 		return
 	}
 	if err := s.lightScrubber.RunLightScrub(r.Context()); err != nil {
