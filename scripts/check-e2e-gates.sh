@@ -170,10 +170,13 @@ require_pattern 'kind-scrap-prodlike' "$PRODLIKE_WORKFLOW" "Tier 2 prod-like Kin
 require_pattern 'workflow_dispatch:' "$EVIDENCE_WORKFLOW" "manual Tier 3 workflow dispatch"
 require_pattern 'make tier2-e2e-up' "$EVIDENCE_WORKFLOW" "Tier 3 security evidence pre-run"
 require_pattern 'make prodlike-kind-delete' "$EVIDENCE_WORKFLOW" "Tier 3 prod-like cleanup before stress Cell"
+require_pattern 'unset PRODLIKE_KUBE_CONTEXT PRODLIKE_E2E_KUBE_CONTEXT SCRAP_E2E_KUBE_CONTEXT' "$EVIDENCE_WORKFLOW" "Tier 3 prod-like context reset before stress Cell"
 require_pattern 'make tier3-evidence-up' "$EVIDENCE_WORKFLOW" "Tier 3 evidence command"
 require_pattern 'upload-artifact' "$EVIDENCE_WORKFLOW" "Tier 3 bundle artifact upload"
 require_pattern 'tier3-bundle-path\.txt' "$EVIDENCE_WORKFLOW" "Tier 3 bundle path artifact"
 require_pattern 'collect-kind-artifacts' "$EVIDENCE_WORKFLOW" "Tier 3 failure artifact collection"
+require_pattern 'kind-scrap-prodlike' "$EVIDENCE_WORKFLOW" "Tier 3 prod-like failure artifact collection"
+require_pattern 'kind-scrap-stress' "$EVIDENCE_WORKFLOW" "Tier 3 stress failure artifact collection"
 
 require_pattern '#312' "$PRD_CLOSURE_POLICY" "PRD #312 closure guard"
 require_pattern '#337' "$PRD_CLOSURE_POLICY" "PRD #337 closure guard"

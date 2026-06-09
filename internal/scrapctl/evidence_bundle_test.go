@@ -2,6 +2,7 @@ package scrapctl
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -52,6 +53,51 @@ printf '{"scenario":"throughput","total_ops":20,"failed_ops":0}'
 	}
 	if !strings.Contains(stderr.String(), "PASS - Evidence bundle") {
 		t.Fatalf("stderr missing pass summary:\n%s", stderr.String())
+	}
+}
+
+func TestEvidenceBundleCommandFailsWhenGateFails(t *testing.T) {
+	bundleDir := t.TempDir()
+	repoRoot := t.TempDir()
+	fakeGo := filepath.Join(t.TempDir(), "go")
+	writeTestExecutable(t, fakeGo, `#!/usr/bin/env bash
+printf '{"scenario":"throughput","total_ops":20,"failed_ops":0}'
+`)
+	t.Setenv("BUNDLE_DIR", bundleDir)
+	t.Setenv("SCRAP_REPO_ROOT", repoRoot)
+	t.Setenv("EVIDENCE_SETTLE_SECONDS", "0")
+	t.Setenv("GO", fakeGo)
+
+	runner := &fakeRunner{run: evidenceMetadataCommand}
+	client := &http.Client{Transport: &evidenceBundleRoundTripper{}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := Run([]string{"evidence", "bundle", "throughput"}, &stdout, &stderr, Deps{
+		Runner:     runner,
+		HTTPClient: client,
+	})
+	if err == nil || !strings.Contains(err.Error(), "evidence gate failed") {
+		t.Fatalf("Run evidence bundle error = %v, want gate failure\nstderr:\n%s", err, stderr.String())
+	}
+	bundlePath := strings.TrimSpace(stdout.String())
+	if bundlePath == "" {
+		t.Fatal("bundle path is empty")
+	}
+	var gate evidencebundle.Gate
+	//nolint:gosec // bundlePath is produced by the test-owned evidence command under t.TempDir.
+	data, readErr := os.ReadFile(filepath.Join(bundlePath, "gates.json"))
+	if readErr != nil {
+		t.Fatalf("read gates.json: %v", readErr)
+	}
+	if err := json.Unmarshal(data, &gate); err != nil {
+		t.Fatalf("parse gates.json: %v\n%s", err, data)
+	}
+	if gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	if !strings.Contains(stderr.String(), "FAIL - Evidence bundle") {
+		t.Fatalf("stderr missing fail summary:\n%s", stderr.String())
 	}
 }
 

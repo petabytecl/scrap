@@ -73,6 +73,9 @@ func runEvidenceBundle(args []string, stdout, stderr io.Writer, deps Deps) error
 	if err != nil {
 		return fmt.Errorf("write evidence bundle path: %w", err)
 	}
+	if !result.Gate.Pass {
+		return fmt.Errorf("evidence gate failed: %s", result.BundlePath)
+	}
 	return nil
 }
 
