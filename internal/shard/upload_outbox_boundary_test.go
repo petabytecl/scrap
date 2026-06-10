@@ -34,6 +34,44 @@ func TestUploadOutboxAppliesBlockSealedEvent(t *testing.T) {
 	}
 }
 
+func TestUploadOutboxAppliesDuplicateBlockSealedEventIdempotently(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	lifecycle := newBlockUploadLifecycle()
+	outbox := newUploadOutbox(t.TempDir(), idx, lifecycle)
+	event := blockSealedEvent{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 4096,
+		SealedAtUs:      1716700000000000,
+	}
+
+	outbox.RecordBlockSealed(event)
+	if err := outbox.ApplyBlockSealed(event); err != nil {
+		t.Fatalf("first ApplyBlockSealed: %v", err)
+	}
+	if err := outbox.ApplyBlockSealed(event); err != nil {
+		t.Fatalf("duplicate ApplyBlockSealed: %v", err)
+	}
+
+	uploads, err := collectPendingUploads(idx)
+	if err != nil {
+		t.Fatalf("collectPendingUploads: %v", err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("pending uploads = %d, want 1", len(uploads))
+	}
+	if uploads[0] != event.pendingUpload() {
+		t.Fatalf("pending upload = %+v, want %+v", uploads[0], event.pendingUpload())
+	}
+	controller := newUploadController(nil, UploadConfig{}, 7, nil, nil, nil)
+	if err := outbox.RefreshPressure(controller); err != nil {
+		t.Fatalf("RefreshPressure: %v", err)
+	}
+	if got := controller.snapshot(); got.PendingBlocks != 1 || got.PendingBytes != event.SealedSizeBytes {
+		t.Fatalf("pressure snapshot = %+v, want one committed pending Block", got)
+	}
+}
+
 func TestUploadOutboxAppliesUploadConfirmedEvent(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	sealed := blockSealedEvent{
@@ -65,6 +103,75 @@ func TestUploadOutboxAppliesUploadConfirmedEvent(t *testing.T) {
 	}
 	if got != confirmed {
 		t.Fatalf("confirmed upload = %+v, want %+v", got, confirmed)
+	}
+}
+
+func TestUploadOutboxAppliesDuplicateUploadConfirmedEventIdempotently(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	outbox := newUploadOutbox(t.TempDir(), idx, newBlockUploadLifecycle())
+	sealed := blockSealedEvent{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700000000000,
+	}
+	if err := outbox.ApplyBlockSealed(sealed); err != nil {
+		t.Fatalf("ApplyBlockSealed: %v", err)
+	}
+	event := uploadConfirmedEventFromUpload(confirmedUploadForApplyTest(
+		1716700001000000,
+		shardApplyValidationValue("block"),
+		shardApplyValidationValue("index"),
+	))
+
+	first, err := outbox.ApplyUploadConfirmed(event)
+	if err != nil {
+		t.Fatalf("first ApplyUploadConfirmed: %v", err)
+	}
+	second, err := outbox.ApplyUploadConfirmed(event)
+	if err != nil {
+		t.Fatalf("duplicate ApplyUploadConfirmed: %v", err)
+	}
+	if second != first {
+		t.Fatalf("duplicate confirmed upload = %+v, want %+v", second, first)
+	}
+	if _, err := idx.GetPendingUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrPendingUploadNotFound) {
+		t.Fatalf("GetPendingUpload error = %v, want ErrPendingUploadNotFound", err)
+	}
+}
+
+func TestUploadOutboxRejectsStaleUploadConfirmedGeneration(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	if err := idx.PutPendingUpload(index.PendingUpload{
+		BlockID:          uploadApplyTestBlockID,
+		ShardID:          7,
+		SealedSizeBytes:  67108864,
+		SealedAtUs:       1716700000000000,
+		UploadGeneration: 1716700002000000,
+	}); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+	stale := confirmedUploadForApplyTest(
+		1716700001000000,
+		shardApplyValidationValue("block"),
+		shardApplyValidationValue("index"),
+	)
+	stale.UploadGeneration = 1716700001000000
+	outbox := newUploadOutbox(t.TempDir(), idx, newBlockUploadLifecycle())
+
+	_, err := outbox.ApplyUploadConfirmed(uploadConfirmedEventFromUpload(stale))
+	if !errors.Is(err, errConfirmUploadGenerationMismatch) {
+		t.Fatalf("ApplyUploadConfirmed error = %v, want generation mismatch", err)
+	}
+	pending, err := idx.GetPendingUpload(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if pending.UploadGeneration != 1716700002000000 {
+		t.Fatalf("pending generation = %d, want 1716700002000000", pending.UploadGeneration)
+	}
+	if _, err := idx.GetConfirmedUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
 	}
 }
 

@@ -199,6 +199,36 @@ func TestShardUploadProcessorKeepsPendingUploadWhenIndexFileMissing(t *testing.T
 	}
 }
 
+func TestShardUploadProcessorKeepsPendingUploadWhenIndexVerificationFails(t *testing.T) {
+	ctx := context.Background()
+	backendStore := newIndexVerificationMismatchShardBackend()
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:        true,
+		Backend:        backendStore,
+		CellID:         testCellID,
+		Concurrency:    1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	if _, err := s.WriteDocument(ctx, "tx-bad-idx-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-bad-idx-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+
+	backendStore.waitIndexVerification(t)
+	blockMeta, err := backendStore.HeadObject(ctx, backendObjectKey(1, "blk"))
+	if err != nil {
+		t.Fatalf("HeadObject uploaded .blk: %v", err)
+	}
+	if blockMeta.Size == 0 || blockMeta.ETag == "" {
+		t.Fatalf("uploaded .blk metadata = %+v, want size and validation token", blockMeta)
+	}
+	waitPendingUploadBlock(t, s, 1)
+	assertConfirmedUploadMissingFor(t, s, 1, 150*time.Millisecond)
+}
+
 func TestShardUploadProcessorResumesPendingUploadAfterReopen(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -551,6 +581,71 @@ func (b *gatedBackend) waitBlockPutDone(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for Backend .blk put to finish")
 	}
+}
+
+type indexVerificationMismatchShardBackend struct {
+	mu       sync.Mutex
+	objects  map[string]backend.ObjectMeta
+	idxHeads atomic.Int32
+}
+
+func newIndexVerificationMismatchShardBackend() *indexVerificationMismatchShardBackend {
+	return &indexVerificationMismatchShardBackend{objects: make(map[string]backend.ObjectMeta)}
+}
+
+func (b *indexVerificationMismatchShardBackend) PutObject(_ context.Context, key string, body io.Reader, size int64, _ backend.PutOpts) (backend.PutResult, error) {
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		return backend.PutResult{}, fmt.Errorf("%w: read object: %w", backend.ErrPermanent, err)
+	}
+
+	meta := backend.ObjectMeta{
+		Size:        size,
+		ETag:        "validation-" + strings.TrimPrefix(filepath.Ext(key), "."),
+		ContentType: backend.DefaultContentType,
+	}
+	b.mu.Lock()
+	b.objects[key] = meta
+	b.mu.Unlock()
+	return backend.PutResult{Size: size, ETag: meta.ETag}, nil
+}
+
+func (b *indexVerificationMismatchShardBackend) HeadObject(_ context.Context, key string) (backend.ObjectMeta, error) {
+	b.mu.Lock()
+	meta, ok := b.objects[key]
+	b.mu.Unlock()
+	if !ok {
+		return backend.ObjectMeta{}, backend.ErrNotFound
+	}
+	if strings.HasSuffix(key, ".idx") {
+		b.idxHeads.Add(1)
+		meta.ETag = "mismatched-index-validation"
+	}
+	return meta, nil
+}
+
+func (b *indexVerificationMismatchShardBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	return nil, backend.ObjectMeta{}, backend.ErrPermanent
+}
+
+func (b *indexVerificationMismatchShardBackend) DeleteObject(context.Context, string) error {
+	return backend.ErrPermanent
+}
+
+func (b *indexVerificationMismatchShardBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+	return nil, backend.ErrPermanent
+}
+
+func (b *indexVerificationMismatchShardBackend) waitIndexVerification(t *testing.T) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.idxHeads.Load() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for Backend .idx verification")
 }
 
 func assertConfirmedUploadMissingFor(t *testing.T, s *shard.Shard, blockID uint64, duration time.Duration) {

@@ -340,11 +340,11 @@ func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, pre
 	}
 	if meta.Size != result.Size || meta.ETag != result.ETag {
 		c.recordVerifyMetric("fail")
-		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification mismatch for %s", backend.ErrCorrupt, key)
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification mismatch for %s object", backend.ErrCorrupt, kind)
 	}
 	if result.ETag == "" {
 		c.recordVerifyMetric("fail")
-		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification missing validation token for %s", backend.ErrCorrupt, key)
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload verification missing validation token for %s object", backend.ErrCorrupt, kind)
 	}
 	c.recordVerifyMetric("pass")
 	return index.BackendObjectMetadata{
@@ -355,19 +355,7 @@ func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, pre
 }
 
 func (c *uploadController) proposeConfirmUpload(ctx context.Context, upload index.ConfirmedUpload) error {
-	cmd := &scrapv1.RaftCommand{
-		Command: &scrapv1.RaftCommand_ConfirmUpload{
-			ConfirmUpload: &scrapv1.ConfirmUpload{
-				BlockId:          upload.BlockID,
-				ShardId:          upload.ShardID,
-				BlockObject:      protoBackendObject(upload.BlockObject),
-				IndexObject:      protoBackendObject(upload.IndexObject),
-				ConfirmedAtUs:    upload.ConfirmedAtUs,
-				UploadGeneration: upload.UploadGeneration,
-			},
-		},
-	}
-	return proposeUploadCommand(ctx, c.core, c.cellID(), c.shardID, "confirm upload", cmd)
+	return proposeUploadConfirmedEvent(ctx, c.core, c.cellID(), c.shardID, uploadConfirmedEventFromUpload(upload))
 }
 
 func protoBackendObject(meta index.BackendObjectMetadata) *scrapv1.BackendObjectMetadata {
