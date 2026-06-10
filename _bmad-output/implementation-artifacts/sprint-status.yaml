@@ -1,5 +1,5 @@
 # generated: 2026-06-10T01:10:17-04:00
-# last_updated: 2026-06-10T11:39:00-04:00
+# last_updated: 2026-06-10T12:23:32-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T01:10:17-04:00"
-last_updated: "2026-06-10T11:39:00-04:00"
+last_updated: "2026-06-10T12:23:32-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -60,5 +60,5 @@ development_status:
   epic-4: in-progress
   4-1-upload-outbox-event-boundary-and-characterization-harness: review
   4-2-replay-safe-upload-confirmation-and-backend-failure-handling: review
-  4-3-upload-pressure-pause-gate-and-scrub-coordination-ownership: backlog
+  4-3-upload-pressure-pause-gate-and-scrub-coordination-ownership: review
   epic-4-retrospective: optional

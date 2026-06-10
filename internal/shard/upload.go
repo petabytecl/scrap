@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 const DefaultUploadConcurrency = 2
@@ -297,15 +297,42 @@ func (s *Shard) pendingUploads() ([]PendingUpload, error) {
 	return collectPendingUploads(s.idx)
 }
 
-func (s *Shard) localUploadSource(blockID uint64) (uploadLocalSource, bool) {
-	blockPath := s.blockPath(blockID)
-	if _, err := os.Stat(blockPath); err != nil {
-		return nil, false
+func (s *Shard) localUploadSource(blockID uint64) (uploadLocalSource, uploadLocalAvailability) {
+	availability := s.localUploadAvailability(blockID)
+	if !availability.ready() {
+		return nil, availability
 	}
 	return fileUploadSource{
-		blockPath: blockPath,
+		blockPath: s.blockPath(blockID),
 		indexPath: s.idxPath(blockID),
-	}, true
+	}, availability
+}
+
+func (s *Shard) localUploadAvailability(blockID uint64) uploadLocalAvailability {
+	quarantined, err := quarantinedBlockExists(s.blocksDir, blockID)
+	if err != nil {
+		return uploadLocalAvailability{status: uploadLocalAvailabilityClassifyFailed}
+	}
+	if quarantined {
+		return uploadLocalAvailability{status: uploadLocalAvailabilityQuarantined}
+	}
+
+	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
+	if err != nil {
+		return uploadLocalAvailability{status: uploadLocalAvailabilityClassifyFailed}
+	}
+	switch lifecycle.State {
+	case localblock.StateHot, localblock.StateHotCleanupNeeded:
+		return readyUploadLocalAvailability()
+	case localblock.StateEvicted:
+		return uploadLocalAvailability{status: uploadLocalAvailabilityEvicted}
+	case localblock.StateMetadataLoss:
+		return uploadLocalAvailability{status: uploadLocalAvailabilityMetadataLoss}
+	case localblock.StateUnexpectedLoss:
+		return uploadLocalAvailability{status: uploadLocalAvailabilityUnexpectedLoss}
+	default:
+		return uploadLocalAvailability{status: uploadLocalAvailabilityClassifyFailed}
+	}
 }
 
 func collectPendingUploads(idx *index.Index) ([]PendingUpload, error) {

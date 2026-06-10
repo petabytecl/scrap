@@ -71,10 +71,10 @@ func (s *Shard) UploadConcurrencyForTest() int {
 }
 
 func (s *Shard) DeepScrubPausedForTest() bool {
-	if s.uploadPressureScrubGate == nil {
+	if s.uploadPressure == nil {
 		return false
 	}
-	return s.uploadPressureScrubGate.IsPaused()
+	return s.uploadPressure.DeepScrubPaused()
 }
 
 func (s *Shard) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
@@ -86,6 +86,35 @@ func (s *Shard) UploadPressureSnapshot() (level int, levelName string, pendingBy
 // pushes the resulting stats to the upload controller (the "pressure push" seam).
 func (s *Shard) refreshUploadPressureLocked() error {
 	return s.uploadOutboxLocked().RefreshPressure(s.uploads)
+}
+
+type uploadPressureCoordinator struct {
+	scrubGate *pressurePauseGate
+}
+
+func newUploadPressureCoordinator() *uploadPressureCoordinator {
+	return &uploadPressureCoordinator{scrubGate: newPressurePauseGate()}
+}
+
+func (c *uploadPressureCoordinator) ScrubPauseController() *pressurePauseGate {
+	if c == nil {
+		return nil
+	}
+	return c.scrubGate
+}
+
+func (c *uploadPressureCoordinator) ApplyPressureLevel(level UploadPressureLevel) {
+	if c == nil || c.scrubGate == nil {
+		return
+	}
+	c.scrubGate.SetPaused(level == UploadPressureLevelCritical)
+}
+
+func (c *uploadPressureCoordinator) DeepScrubPaused() bool {
+	if c == nil || c.scrubGate == nil {
+		return false
+	}
+	return c.scrubGate.IsPaused()
 }
 
 func (cfg UploadPressureConfig) levelFor(pendingBytes int64) UploadPressureLevel {

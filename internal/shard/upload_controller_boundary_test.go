@@ -158,9 +158,12 @@ func (c *uploadControllerBoundaryCore) pendingUploads() ([]PendingUpload, error)
 	return []PendingUpload{uploadControllerBoundaryPending()}, nil
 }
 
-func (c *uploadControllerBoundaryCore) localUploadSource(blockID uint64) (uploadLocalSource, bool) {
+func (c *uploadControllerBoundaryCore) localUploadSource(blockID uint64) (uploadLocalSource, uploadLocalAvailability) {
 	source, ok := c.sources[blockID]
-	return source, ok
+	if !ok {
+		return nil, uploadLocalAvailability{status: uploadLocalAvailabilityMetadataLoss}
+	}
+	return source, readyUploadLocalAvailability()
 }
 
 type memoryUploadSource map[uploadObjectKind][]byte

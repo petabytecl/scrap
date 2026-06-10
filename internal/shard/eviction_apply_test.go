@@ -876,12 +876,12 @@ func TestRefreshRuntimeStateAfterRaftOpenPropagatesHealthRebuildError(t *testing
 	t.Cleanup(func() { _ = idx.Close() })
 
 	s := &Shard{
-		blocksDir:               t.TempDir(),
-		shardID:                 evictionApplyTestShardID,
-		idx:                     idx,
-		uploadPressureScrubGate: newPressurePauseGate(),
+		blocksDir:      t.TempDir(),
+		shardID:        evictionApplyTestShardID,
+		idx:            idx,
+		uploadPressure: newUploadPressureCoordinator(),
 	}
-	s.uploads = newUploadController(s, UploadConfig{}, s.shardID, nil, nil, s.uploadPressureScrubGate)
+	s.uploads = newUploadController(s, UploadConfig{}, s.shardID, nil, nil, s.uploadPressure)
 
 	err = s.refreshRuntimeStateAfterRaftOpen()
 	if err == nil || !strings.Contains(err.Error(), "rebuild eviction health") {

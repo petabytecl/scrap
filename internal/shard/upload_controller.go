@@ -26,7 +26,7 @@ type uploadCore interface {
 	IsLeader() bool
 	retryUploadObligations(ctx context.Context)
 	pendingUploads() ([]PendingUpload, error)
-	localUploadSource(blockID uint64) (uploadLocalSource, bool)
+	localUploadSource(blockID uint64) (uploadLocalSource, uploadLocalAvailability)
 }
 
 type uploadObjectKind string
@@ -38,6 +38,29 @@ const (
 
 type uploadLocalSource interface {
 	Open(kind uploadObjectKind) (io.ReadCloser, int64, error)
+}
+
+type uploadLocalAvailabilityStatus string
+
+const (
+	uploadLocalAvailabilityReady          uploadLocalAvailabilityStatus = "ready"
+	uploadLocalAvailabilityQuarantined    uploadLocalAvailabilityStatus = "quarantined"
+	uploadLocalAvailabilityEvicted        uploadLocalAvailabilityStatus = "evicted"
+	uploadLocalAvailabilityMetadataLoss   uploadLocalAvailabilityStatus = "metadata_loss"
+	uploadLocalAvailabilityUnexpectedLoss uploadLocalAvailabilityStatus = "unexpected_loss"
+	uploadLocalAvailabilityClassifyFailed uploadLocalAvailabilityStatus = "classify_failed"
+)
+
+type uploadLocalAvailability struct {
+	status uploadLocalAvailabilityStatus
+}
+
+func readyUploadLocalAvailability() uploadLocalAvailability {
+	return uploadLocalAvailability{status: uploadLocalAvailabilityReady}
+}
+
+func (a uploadLocalAvailability) ready() bool {
+	return a.status == uploadLocalAvailabilityReady
 }
 
 type fileUploadSource struct {
@@ -84,7 +107,7 @@ type uploadController struct {
 	shardID   uint64
 	logger    *slog.Logger
 	telemetry WriteStageRecorder
-	scrubGate *pressurePauseGate // shared: controller pauses, deep scrubber waits
+	pressure  *uploadPressureCoordinator
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -99,16 +122,17 @@ type uploadController struct {
 	pressureLevel      UploadPressureLevel
 	pendingBytes       int64
 	pendingBlocks      int
+	localAvailability  map[uint64]uploadLocalAvailabilityStatus
 }
 
-func newUploadController(core uploadCore, cfg UploadConfig, shardID uint64, logger *slog.Logger, telemetry WriteStageRecorder, scrubGate *pressurePauseGate) *uploadController {
+func newUploadController(core uploadCore, cfg UploadConfig, shardID uint64, logger *slog.Logger, telemetry WriteStageRecorder, pressure *uploadPressureCoordinator) *uploadController {
 	return &uploadController{
 		core:      core,
 		cfg:       cfg,
 		shardID:   shardID,
 		logger:    logger,
 		telemetry: telemetry,
-		scrubGate: scrubGate,
+		pressure:  pressure,
 		notify:    make(chan struct{}, 1),
 	}
 }
@@ -211,9 +235,11 @@ func (c *uploadController) processPendingOnce(ctx context.Context) {
 
 func (c *uploadController) enqueueUploadJobs(ctx context.Context, jobs chan<- PendingUpload, uploads []PendingUpload) bool {
 	for _, upload := range uploads {
-		if _, ok := c.core.localUploadSource(upload.BlockID); !ok {
+		if _, availability := c.core.localUploadSource(upload.BlockID); !availability.ready() {
+			c.recordLocalUploadUnavailable(upload.BlockID, availability)
 			continue
 		}
+		c.clearLocalUploadUnavailable(upload.BlockID)
 		select {
 		case <-ctx.Done():
 			close(jobs)
@@ -313,10 +339,12 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 }
 
 func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix string, kind uploadObjectKind) (index.BackendObjectMetadata, error) {
-	source, ok := c.core.localUploadSource(blockID)
-	if !ok {
-		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload source unavailable for %s", backend.ErrPermanent, kind)
+	source, availability := c.core.localUploadSource(blockID)
+	if !availability.ready() {
+		c.recordLocalUploadUnavailable(blockID, availability)
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload source unavailable for %s: %s", backend.ErrPermanent, kind, availability.status)
 	}
+	c.clearLocalUploadUnavailable(blockID)
 
 	file, size, err := source.Open(kind)
 	if err != nil {
@@ -445,6 +473,32 @@ func (c *uploadController) markRequeued(blockID uint64) {
 	c.requeued[blockID] = struct{}{}
 }
 
+func (c *uploadController) recordLocalUploadUnavailable(blockID uint64, availability uploadLocalAvailability) {
+	c.mu.Lock()
+	if c.localAvailability == nil {
+		c.localAvailability = make(map[uint64]uploadLocalAvailabilityStatus)
+	}
+	previous := c.localAvailability[blockID]
+	c.localAvailability[blockID] = availability.status
+	c.mu.Unlock()
+
+	if previous == availability.status {
+		return
+	}
+	if c.logger == nil {
+		return
+	}
+	c.logger.Warn("upload: local Block not uploadable", "block_id", blockID, "status", availability.status)
+}
+
+func (c *uploadController) clearLocalUploadUnavailable(blockID uint64) {
+	c.mu.Lock()
+	if c.localAvailability != nil {
+		delete(c.localAvailability, blockID)
+	}
+	c.mu.Unlock()
+}
+
 func (c *uploadController) orderPending(uploads []PendingUpload) []PendingUpload {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -509,8 +563,9 @@ func (c *uploadController) authRetryDelay() time.Duration {
 }
 
 // SetPressure recomputes the upload-pressure level and adaptive concurrency from
-// stats pushed by the core's apply loop, toggles the shared scrub pause gate on
-// Critical, and records pressure metrics. This is the "pressure push" seam.
+// stats pushed by the core's apply loop, emits the bounded pressure event that
+// drives scrub pause, and records pressure metrics. This is the "pressure push"
+// seam.
 func (c *uploadController) SetPressure(stats uploadPressureStats) {
 	cfg := normalizeUploadPressureConfig(c.cfg.Pressure)
 	level := cfg.levelFor(stats.pendingBytes)
@@ -523,9 +578,7 @@ func (c *uploadController) SetPressure(stats uploadPressureStats) {
 	concurrency := c.applyPressureConcurrencyLocked(previousLevel, level)
 	c.mu.Unlock()
 
-	if c.scrubGate != nil {
-		c.scrubGate.SetPaused(level == UploadPressureLevelCritical)
-	}
+	c.pressure.ApplyPressureLevel(level)
 	c.recordPressureMetrics(stats, level, concurrency)
 }
 

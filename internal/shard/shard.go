@@ -121,10 +121,10 @@ type Shard struct {
 	proposalMu sync.Mutex
 	proposals  map[string]chan error
 
-	scrubs                  *scrubCoordinator
-	uploads                 *uploadController
-	uploadPressureScrubGate *pressurePauseGate
-	blockUploads            *blockUploadLifecycle
+	scrubs         *scrubCoordinator
+	uploads        *uploadController
+	uploadPressure *uploadPressureCoordinator
+	blockUploads   *blockUploadLifecycle
 
 	rebuilder *projectionRebuilder
 
@@ -222,43 +222,43 @@ func Open(cfg Config) (*Shard, error) {
 	}
 
 	s := &Shard{
-		dataDir:                 cfg.DataDir,
-		blocksDir:               blocksDir,
-		openlogDir:              openlogDir,
-		shardID:                 cfg.ShardID,
-		raftID:                  cfg.RaftID,
-		peers:                   cfg.Peers,
-		clientAddrs:             cfg.ClientAddrs,
-		idx:                     idx,
-		baseLogger:              baseLogger,
-		logger:                  logger,
-		replicator:              cfg.Replicator,
-		upload:                  cfg.Upload,
-		eviction:                cfg.Eviction,
-		evictionMetrics:         cfg.EvictionMetrics,
-		memberHostname:          cfg.MemberHostname,
-		memberID:                cfg.MemberID,
-		writeTelemetry:          cfg.WriteTelemetry,
-		identifierMode:          cfg.IdentifierMode,
-		encryption:              cfg.Encryption,
-		blockSealSize:           cfg.BlockSealSize,
-		nextBlockID:             nextID,
-		proposals:               make(map[string]chan error),
-		evictionCampaigns:       eviction.NewCampaigns(),
-		evictionHealthBlocks:    make(map[uint64]evictionHealthBlockContribution),
-		blockUploads:            newBlockUploadLifecycle(),
-		restores:                make(map[uint64]*blockRestoreCall),
-		uploadPressureScrubGate: newPressurePauseGate(),
-		raftStartedAt:           time.Now(),
-		bootstrapGrace:          cfg.BootstrapGrace,
+		dataDir:              cfg.DataDir,
+		blocksDir:            blocksDir,
+		openlogDir:           openlogDir,
+		shardID:              cfg.ShardID,
+		raftID:               cfg.RaftID,
+		peers:                cfg.Peers,
+		clientAddrs:          cfg.ClientAddrs,
+		idx:                  idx,
+		baseLogger:           baseLogger,
+		logger:               logger,
+		replicator:           cfg.Replicator,
+		upload:               cfg.Upload,
+		eviction:             cfg.Eviction,
+		evictionMetrics:      cfg.EvictionMetrics,
+		memberHostname:       cfg.MemberHostname,
+		memberID:             cfg.MemberID,
+		writeTelemetry:       cfg.WriteTelemetry,
+		identifierMode:       cfg.IdentifierMode,
+		encryption:           cfg.Encryption,
+		blockSealSize:        cfg.BlockSealSize,
+		nextBlockID:          nextID,
+		proposals:            make(map[string]chan error),
+		evictionCampaigns:    eviction.NewCampaigns(),
+		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
+		blockUploads:         newBlockUploadLifecycle(),
+		restores:             make(map[uint64]*blockRestoreCall),
+		uploadPressure:       newUploadPressureCoordinator(),
+		raftStartedAt:        time.Now(),
+		bootstrapGrace:       cfg.BootstrapGrace,
 	}
-	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressureScrubGate)
+	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressure.ScrubPauseController())
 	s.rebuilder = newProjectionRebuilder(s, cfg.DataDir, blocksDir, cfg.ShardID, cfg.Upload, logger)
 	// Raft Open starts its run loop before returning and can replay committed upload
 	// commands immediately. The apply path refreshes upload pressure, so the
 	// controller must exist before Raft replay begins. Start still waits until after
 	// s.raft is assigned below.
-	s.uploads = newUploadController(s, cfg.Upload, s.shardID, s.logger, s.writeTelemetry, s.uploadPressureScrubGate)
+	s.uploads = newUploadController(s, cfg.Upload, s.shardID, s.logger, s.writeTelemetry, s.uploadPressure)
 	s.uploads.resetConcurrency()
 
 	if err := s.recoverOpenlog(); err != nil {
