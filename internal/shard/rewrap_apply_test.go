@@ -3,7 +3,6 @@ package shard
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
-	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/index"
@@ -174,87 +172,6 @@ func TestApplyRewrapRequeuesAlreadyAppliedReplay(t *testing.T) {
 	if string(got) != string(replacementEnvelope) {
 		t.Fatal("already-applied envelope changed during replay")
 	}
-}
-
-func TestUploadProcessorSkipsPendingUploadWithoutLocalBlock(t *testing.T) {
-	ctx := context.Background()
-	backendStore := newCountingBackend()
-	core := &uploadCoreStub{
-		leader: true,
-		pending: []PendingUpload{{
-			BlockID:          1,
-			ShardID:          7,
-			SealedSizeBytes:  10,
-			SealedAtUs:       77,
-			UploadGeneration: 77,
-		}},
-	}
-	controller := newUploadController(core, UploadConfig{
-		Enabled:     true,
-		Backend:     backendStore,
-		CellID:      "cell-a",
-		Concurrency: 1,
-	}, 7, nil, nil, nil)
-
-	controller.processPendingOnce(ctx)
-
-	if backendStore.puts != 0 {
-		t.Fatalf("backend puts = %d, want 0 for missing local Block", backendStore.puts)
-	}
-}
-
-type uploadCoreStub struct {
-	leader  bool
-	pending []PendingUpload
-}
-
-func (c *uploadCoreStub) Propose(context.Context, []byte) error { return nil }
-
-func (c *uploadCoreStub) IsLeader() bool { return c.leader }
-
-func (c *uploadCoreStub) retryUploadObligations(context.Context) {}
-
-func (c *uploadCoreStub) pendingUploads() ([]PendingUpload, error) {
-	return append([]PendingUpload(nil), c.pending...), nil
-}
-
-func (c *uploadCoreStub) hasLocalBlock(uint64) bool { return false }
-
-func (c *uploadCoreStub) blockPath(uint64) string { return "" }
-
-func (c *uploadCoreStub) idxPath(uint64) string { return "" }
-
-type countingBackend struct {
-	puts int
-}
-
-func newCountingBackend() *countingBackend {
-	return &countingBackend{}
-}
-
-func (b *countingBackend) PutObject(context.Context, string, io.Reader, int64, backend.PutOpts) (backend.PutResult, error) {
-	b.puts++
-	return backend.PutResult{}, nil
-}
-
-func (b *countingBackend) HeadObject(context.Context, string) (backend.ObjectMeta, error) {
-	return backend.ObjectMeta{}, backend.ErrNotFound
-}
-
-func (b *countingBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
-	return nil, backend.ObjectMeta{}, backend.ErrNotFound
-}
-
-func (b *countingBackend) DeleteObject(context.Context, string) error { return nil }
-
-func (b *countingBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
-	return emptyBackendIterator{}, nil
-}
-
-type emptyBackendIterator struct{}
-
-func (emptyBackendIterator) Next() (backend.ObjectInfo, error) {
-	return backend.ObjectInfo{}, io.EOF
 }
 
 func TestApplyRewrapReopensCurrentIndexAfterStaleEnvelope(t *testing.T) {

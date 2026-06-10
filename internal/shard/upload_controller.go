@@ -3,6 +3,7 @@ package shard
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -18,16 +19,59 @@ import (
 
 // uploadCore is the narrow seam the upload controller uses to reach the Shard's
 // projection-authority core: consensus (propose/leadership), the pending-upload
-// projection read (under the core's mutex), and block/index file paths. The
-// controller never touches s.idx or s.mu directly.
+// projection read (under the core's mutex), and local Block sources. The
+// controller never touches s.idx, s.mu, or Shard file-path helpers directly.
 type uploadCore interface {
 	Propose(ctx context.Context, data []byte) error
 	IsLeader() bool
 	retryUploadObligations(ctx context.Context)
 	pendingUploads() ([]PendingUpload, error)
-	hasLocalBlock(blockID uint64) bool
-	blockPath(blockID uint64) string
-	idxPath(blockID uint64) string
+	localUploadSource(blockID uint64) (uploadLocalSource, bool)
+}
+
+type uploadObjectKind string
+
+const (
+	uploadObjectBlock uploadObjectKind = "blk"
+	uploadObjectIndex uploadObjectKind = "idx"
+)
+
+type uploadLocalSource interface {
+	Open(kind uploadObjectKind) (io.ReadCloser, int64, error)
+}
+
+type fileUploadSource struct {
+	blockPath string
+	indexPath string
+}
+
+func (s fileUploadSource) Open(kind uploadObjectKind) (io.ReadCloser, int64, error) {
+	path, ok := s.path(kind)
+	if !ok {
+		return nil, 0, fmt.Errorf("%w: upload source kind %q", backend.ErrPermanent, kind)
+	}
+
+	file, err := os.Open(path) //nolint:gosec // paths are derived from controlled shard block IDs
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: upload open %s failed", backend.ErrPermanent, kind)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, 0, fmt.Errorf("%w: upload stat %s failed", backend.ErrPermanent, kind)
+	}
+	return file, info.Size(), nil
+}
+
+func (s fileUploadSource) path(kind uploadObjectKind) (string, bool) {
+	switch kind {
+	case uploadObjectBlock:
+		return s.blockPath, true
+	case uploadObjectIndex:
+		return s.indexPath, true
+	default:
+		return "", false
+	}
 }
 
 // uploadController owns the backend-upload responsibility extracted from Shard:
@@ -167,7 +211,7 @@ func (c *uploadController) processPendingOnce(ctx context.Context) {
 
 func (c *uploadController) enqueueUploadJobs(ctx context.Context, jobs chan<- PendingUpload, uploads []PendingUpload) bool {
 	for _, upload := range uploads {
-		if !c.core.hasLocalBlock(upload.BlockID) {
+		if _, ok := c.core.localUploadSource(upload.BlockID); !ok {
 			continue
 		}
 		select {
@@ -245,13 +289,13 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 	blockAttr := trace.WithAttributes(blockIDAttribute(upload.BlockID))
 
 	putBlkCtx, putBlk := c.telemetry.StartSpan(bctx, "scrap.upload/put.blk", blockAttr)
-	blk, err := c.uploadObject(putBlkCtx, upload.BlockID, prefix, "blk")
+	blk, err := c.uploadObject(putBlkCtx, upload.BlockID, prefix, uploadObjectBlock)
 	putBlk.End(err)
 	if err != nil {
 		return err
 	}
 	putIdxCtx, putIdx := c.telemetry.StartSpan(bctx, "scrap.upload/put.idx", blockAttr)
-	idx, err := c.uploadObject(putIdxCtx, upload.BlockID, prefix, "idx")
+	idx, err := c.uploadObject(putIdxCtx, upload.BlockID, prefix, uploadObjectIndex)
 	putIdx.End(err)
 	if err != nil {
 		return err
@@ -268,27 +312,23 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 	})
 }
 
-func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix, ext string) (index.BackendObjectMetadata, error) {
-	path := c.core.blockPath(blockID)
-	if ext == "idx" {
-		path = c.core.idxPath(blockID)
+func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix string, kind uploadObjectKind) (index.BackendObjectMetadata, error) {
+	source, ok := c.core.localUploadSource(blockID)
+	if !ok {
+		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload source unavailable for %s", backend.ErrPermanent, kind)
 	}
 
-	file, err := os.Open(path) //nolint:gosec // path is derived from controlled shard block IDs
+	file, size, err := source.Open(kind)
 	if err != nil {
-		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload open %s: %w", backend.ErrPermanent, ext, err)
+		return index.BackendObjectMetadata{}, err
 	}
 	defer func() {
 		_ = file.Close()
 	}()
 
-	info, err := file.Stat()
-	if err != nil {
-		return index.BackendObjectMetadata{}, fmt.Errorf("%w: upload stat %s: %w", backend.ErrPermanent, ext, err)
-	}
-
+	ext := string(kind)
 	key := prefix + "." + ext
-	result, err := c.cfg.Backend.PutObject(ctx, key, file, info.Size(), backend.PutOpts{})
+	result, err := c.cfg.Backend.PutObject(ctx, key, file, size, backend.PutOpts{})
 	if err != nil {
 		return index.BackendObjectMetadata{}, err
 	}

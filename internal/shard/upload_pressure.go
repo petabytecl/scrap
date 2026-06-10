@@ -85,7 +85,7 @@ func (s *Shard) UploadPressureSnapshot() (level int, levelName string, pendingBy
 // refreshUploadPressureLocked reads the pending-upload outbox under s.mu and
 // pushes the resulting stats to the upload controller (the "pressure push" seam).
 func (s *Shard) refreshUploadPressureLocked() error {
-	return s.blockUploadLifecycleLocked().refreshPressure(s.idx, s.uploads)
+	return s.uploadOutboxLocked().RefreshPressure(s.uploads)
 }
 
 func (cfg UploadPressureConfig) levelFor(pendingBytes int64) UploadPressureLevel {

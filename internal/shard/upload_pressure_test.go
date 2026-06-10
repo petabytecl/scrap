@@ -240,7 +240,7 @@ func assertUploadPressureError(t *testing.T, err error) {
 	}
 }
 
-func waitPendingUploadBlock(t *testing.T, s *shard.Shard, blockID uint64) shard.PendingUpload {
+func waitPendingUploadBlock(t *testing.T, s *shard.Shard, blockID uint64) {
 	t.Helper()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -251,13 +251,12 @@ func waitPendingUploadBlock(t *testing.T, s *shard.Shard, blockID uint64) shard.
 		}
 		for _, upload := range uploads {
 			if upload.BlockID == blockID {
-				return upload
+				return
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for pending upload block %d", blockID)
-	return shard.PendingUpload{}
 }
 
 func waitUploadPressureLevel(t *testing.T, s *shard.Shard, want shard.UploadPressureLevel) {

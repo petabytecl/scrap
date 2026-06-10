@@ -780,7 +780,7 @@ func (s *Shard) pendingUploadForRebuild(blockID uint64) (index.PendingUpload, er
 }
 
 func (s *Shard) committedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
-	confirmed, loadedFromDisk, err := s.blockUploadLifecycleLocked().confirmedUploadAuthority(s.blocksDir, blockID)
+	confirmed, loadedFromDisk, err := s.uploadOutboxLocked().ConfirmedUploadAuthority(blockID)
 	if err != nil {
 		return index.ConfirmedUpload{}, err
 	}
@@ -820,7 +820,7 @@ func (s *Shard) CurrentBlockIDForTest() uint64 {
 func (s *Shard) OrphanedSealsForTest() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.blockUploadLifecycleLocked().obligationCount()
+	return s.uploadOutboxLocked().UploadObligationCount()
 }
 
 func (s *Shard) SetRebuildingForTest(v bool) {

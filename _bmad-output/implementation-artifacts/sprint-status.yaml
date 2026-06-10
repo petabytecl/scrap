@@ -1,5 +1,5 @@
-# generated: 2026-06-08T10:58:32-04:00
-# last_updated: 2026-06-08T15:26:54-04:00
+# generated: 2026-06-10T01:10:17-04:00
+# last_updated: 2026-06-10T01:35:31-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -34,8 +34,8 @@
 # - Developer typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: "2026-06-08T10:58:32-04:00"
-last_updated: "2026-06-08T17:23:01-04:00"
+generated: "2026-06-10T01:10:17-04:00"
+last_updated: "2026-06-10T01:35:31-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -44,17 +44,21 @@ story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-art
 development_status:
   epic-1: done
   1-1-production-security-mode-startup-gates: done
-  1-2-mtls-credentials-and-member-identity-extraction: done
-  1-3-role-authorization-from-authenticated-member-identity: done
-  1-4-bounded-audit-records-for-security-decisions: done
-  1-5-identity-aware-rate-controls-for-security-surfaces: done
+  1-2-per-surface-mtls-credential-loading: done
+  1-3-role-authorization-and-peer-identity-checks: done
+  1-4-bounded-audit-events-and-independent-rate-limits: done
   epic-1-retrospective: optional
-  epic-2: in-progress
-  2-1-openbao-transit-boundary-and-test-only-fake: review
-  2-2-encrypted-document-write-and-read-path: backlog
-  2-3-durable-envelope-rewrap-workflow: backlog
+  epic-2: done
+  2-1-openbao-transit-boundary-and-deterministic-fake: done
+  2-2-envelope-encrypted-document-write-and-read-path: done
+  2-3-durable-envelope-rewrap-workflow: done
   epic-2-retrospective: optional
-  epic-3: backlog
-  3-1-phase-4-5-evidence-contract-and-closure-map: backlog
-  3-2-prod-like-security-and-encryption-gate-execution: backlog
+  epic-3: done
+  3-1-phase-4-5-evidence-contract-and-closure-map: done
+  3-2-prod-like-security-and-encryption-gate-execution: done
   epic-3-retrospective: optional
+  epic-4: in-progress
+  4-1-upload-outbox-event-boundary-and-characterization-harness: review
+  4-2-replay-safe-upload-confirmation-and-backend-failure-handling: backlog
+  4-3-upload-pressure-pause-gate-and-scrub-coordination-ownership: backlog
+  epic-4-retrospective: optional

@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/shard"
 )
@@ -136,6 +140,62 @@ func TestShardUploadProcessorRejectsEmptyValidationToken(t *testing.T) {
 	waitPendingUploads(t, s, 1)
 	if _, err := s.ConfirmedUploadForTest(1); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("ConfirmedUploadForTest error = %v, want ErrConfirmedUploadNotFound", err)
+	}
+}
+
+func TestShardUploadProcessorSkipsPendingUploadWithoutLocalBlock(t *testing.T) {
+	ctx := context.Background()
+	backendStore := newCountingBackend()
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:        true,
+		Backend:        backendStore,
+		CellID:         testCellID,
+		Concurrency:    1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	s.AddOrphanedSealForTest(shard.PendingUpload{
+		BlockID:          99,
+		ShardID:          testShardID,
+		SealedSizeBytes:  10,
+		SealedAtUs:       time.Now().UnixMicro(),
+		UploadGeneration: time.Now().UnixMicro(),
+	})
+
+	waitPendingUploadBlock(t, s, 99)
+	backendStore.assertNoPuts(ctx, t)
+}
+
+func TestShardUploadProcessorKeepsPendingUploadWhenIndexFileMissing(t *testing.T) {
+	ctx := context.Background()
+	backendStore := newGatedBackend()
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:        true,
+		Backend:        backendStore,
+		CellID:         testCellID,
+		Concurrency:    1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	if _, err := s.WriteDocument(ctx, "tx-missing-idx-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-missing-idx-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+
+	backendStore.waitBlockPutStarted(t)
+	idxPath := block.IdxFilePath(filepath.Join(s.DataDirForTest(), "blocks"), 1)
+	if err := os.Remove(idxPath); err != nil {
+		t.Fatalf("Remove sealed Block index: %v", err)
+	}
+	backendStore.releaseBlockPut()
+	backendStore.waitBlockPutDone(t)
+
+	waitPendingUploadBlock(t, s, 1)
+	assertConfirmedUploadMissingFor(t, s, 1, 150*time.Millisecond)
+	if got := backendStore.idxPuts.Load(); got != 0 {
+		t.Fatalf("backend .idx puts = %d, want 0 when local Block index is missing", got)
 	}
 }
 
@@ -351,4 +411,160 @@ func (transientBackend) DeleteObject(context.Context, string) error {
 
 func (transientBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
 	return nil, backend.ErrTransient
+}
+
+type countingBackend struct {
+	puts atomic.Int32
+}
+
+func newCountingBackend() *countingBackend {
+	return &countingBackend{}
+}
+
+func (b *countingBackend) PutObject(context.Context, string, io.Reader, int64, backend.PutOpts) (backend.PutResult, error) {
+	b.puts.Add(1)
+	return backend.PutResult{}, backend.ErrPermanent
+}
+
+func (b *countingBackend) HeadObject(context.Context, string) (backend.ObjectMeta, error) {
+	return backend.ObjectMeta{}, backend.ErrNotFound
+}
+
+func (b *countingBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	return nil, backend.ObjectMeta{}, backend.ErrPermanent
+}
+
+func (b *countingBackend) DeleteObject(context.Context, string) error {
+	return backend.ErrPermanent
+}
+
+func (b *countingBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+	return nil, backend.ErrPermanent
+}
+
+func (b *countingBackend) assertNoPuts(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	timer := time.NewTimer(150 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		t.Fatalf("context ended while checking backend puts: %v", ctx.Err())
+	case <-timer.C:
+	}
+	if got := b.puts.Load(); got != 0 {
+		t.Fatalf("backend puts = %d, want 0 for pending upload without local Block", got)
+	}
+}
+
+type gatedBackend struct {
+	mu              sync.Mutex
+	objects         map[string]backend.ObjectMeta
+	blockPutStarted chan struct{}
+	blockPutDone    chan struct{}
+	releaseBlock    chan struct{}
+	startOnce       sync.Once
+	doneOnce        sync.Once
+	releaseOnce     sync.Once
+	idxPuts         atomic.Int32
+}
+
+func newGatedBackend() *gatedBackend {
+	return &gatedBackend{
+		objects:         make(map[string]backend.ObjectMeta),
+		blockPutStarted: make(chan struct{}),
+		blockPutDone:    make(chan struct{}),
+		releaseBlock:    make(chan struct{}),
+	}
+}
+
+func (b *gatedBackend) PutObject(ctx context.Context, key string, body io.Reader, size int64, _ backend.PutOpts) (backend.PutResult, error) {
+	if strings.HasSuffix(key, ".blk") {
+		b.startOnce.Do(func() { close(b.blockPutStarted) })
+		select {
+		case <-ctx.Done():
+			return backend.PutResult{}, ctx.Err()
+		case <-b.releaseBlock:
+		}
+	}
+	if strings.HasSuffix(key, ".idx") {
+		b.idxPuts.Add(1)
+	}
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		return backend.PutResult{}, fmt.Errorf("%w: read object: %w", backend.ErrPermanent, err)
+	}
+
+	meta := backend.ObjectMeta{
+		Size:        size,
+		ETag:        "validation-" + strings.TrimPrefix(filepath.Ext(key), "."),
+		ContentType: backend.DefaultContentType,
+	}
+	b.mu.Lock()
+	b.objects[key] = meta
+	b.mu.Unlock()
+
+	if strings.HasSuffix(key, ".blk") {
+		b.doneOnce.Do(func() { close(b.blockPutDone) })
+	}
+	return backend.PutResult{Size: size, ETag: meta.ETag}, nil
+}
+
+func (b *gatedBackend) HeadObject(_ context.Context, key string) (backend.ObjectMeta, error) {
+	b.mu.Lock()
+	meta, ok := b.objects[key]
+	b.mu.Unlock()
+	if !ok {
+		return backend.ObjectMeta{}, backend.ErrNotFound
+	}
+	return meta, nil
+}
+
+func (b *gatedBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	return nil, backend.ObjectMeta{}, backend.ErrPermanent
+}
+
+func (b *gatedBackend) DeleteObject(context.Context, string) error {
+	return backend.ErrPermanent
+}
+
+func (b *gatedBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+	return nil, backend.ErrPermanent
+}
+
+func (b *gatedBackend) waitBlockPutStarted(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.blockPutStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Backend .blk put to start")
+	}
+}
+
+func (b *gatedBackend) releaseBlockPut() {
+	b.releaseOnce.Do(func() { close(b.releaseBlock) })
+}
+
+func (b *gatedBackend) waitBlockPutDone(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.blockPutDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Backend .blk put to finish")
+	}
+}
+
+func assertConfirmedUploadMissingFor(t *testing.T, s *shard.Shard, blockID uint64, duration time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		_, err := s.ConfirmedUploadForTest(blockID)
+		if err == nil {
+			t.Fatalf("ConfirmedUploadForTest block %d succeeded, want no false ConfirmUpload", blockID)
+		}
+		if !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+			t.Fatalf("ConfirmedUploadForTest block %d error = %v, want ErrConfirmedUploadNotFound", blockID, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

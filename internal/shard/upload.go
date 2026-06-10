@@ -62,19 +62,14 @@ func (s *Shard) Propose(ctx context.Context, data []byte) error {
 	return s.raft.Propose(ctx, data)
 }
 
-func (s *Shard) proposeSealBlock(ctx context.Context, upload index.PendingUpload) error {
+func (s *Shard) proposeSealBlock(ctx context.Context, event blockSealedEvent) error {
 	if !s.upload.Enabled {
 		return nil
 	}
 
 	cmd := &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_SealBlock{
-			SealBlock: &scrapv1.SealBlock{
-				BlockId:         upload.BlockID,
-				ShardId:         upload.ShardID,
-				SealedSizeBytes: upload.SealedSizeBytes,
-				SealedAtUs:      upload.SealedAtUs,
-			},
+			SealBlock: event.command(),
 		},
 	}
 	return proposeUploadCommand(ctx, s.raft, cellIDOrLocal(s.upload.CellID), s.shardID, "seal block", cmd)
@@ -84,9 +79,10 @@ func (s *Shard) proposeSealBlock(ctx context.Context, upload index.PendingUpload
 // removed only by applySealBlock, after Raft has committed the Upload Outbox row.
 func (s *Shard) proposeSeals(ctx context.Context, seals []index.PendingUpload) {
 	for _, seal := range seals {
-		if err := s.proposeSealBlock(ctx, seal); err != nil {
+		event := blockSealedEventFromPending(seal)
+		if err := s.proposeSealBlock(ctx, event); err != nil {
 			s.mu.Lock()
-			s.blockUploadLifecycleLocked().markSealRetryFailed(seal.BlockID, time.Now().Add(s.uploadSealRetryDelay()))
+			s.uploadOutboxLocked().MarkBlockSealRetryFailed(seal.BlockID, time.Now().Add(s.uploadSealRetryDelay()))
 			s.mu.Unlock()
 			s.logger.WarnContext(ctx, "shard: seal proposal failed, will retry", "block_id", seal.BlockID, "err", err)
 		}
@@ -122,7 +118,7 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.blockUploadLifecycleLocked().applyCommittedSeal(s.idx, seal); err != nil {
+	if err := s.uploadOutboxLocked().ApplyBlockSealed(blockSealedEventFromCommand(seal)); err != nil {
 		return err
 	}
 
@@ -149,7 +145,7 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	confirmed, err := s.blockUploadLifecycleLocked().applyCommittedConfirm(s.blocksDir, s.idx, confirm)
+	confirmed, err := s.uploadOutboxLocked().ApplyUploadConfirmed(uploadConfirmedEventFromCommand(confirm))
 	if err != nil {
 		return s.handleConfirmUploadApplyErrorLocked(confirm, err)
 	}
@@ -189,7 +185,7 @@ func (s *Shard) skipUnsafeConfirmUploadLocked(confirm *scrapv1.ConfirmUpload, er
 	if deleteErr := s.idx.DeletePendingUpload(confirm.GetBlockId()); deleteErr != nil {
 		return fmt.Errorf("shard: clear unsafe pending upload %d: %w", confirm.GetBlockId(), deleteErr)
 	}
-	s.blockUploadLifecycleLocked().forgetUploadObligation(confirm.GetBlockId())
+	s.uploadOutboxLocked().ForgetUploadObligation(confirm.GetBlockId())
 	s.recordEvictionHealthMetadataLossBlock(confirm.GetBlockId())
 	return s.refreshUploadPressureLocked()
 }
@@ -252,7 +248,7 @@ func indexBackendObject(meta *scrapv1.BackendObjectMetadata) index.BackendObject
 func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.blockUploadLifecycleLocked().recordLocalSeal(seal)
+	s.uploadOutboxLocked().RecordBlockSealed(blockSealedEventFromPending(seal))
 	if err := s.refreshUploadPressureLocked(); err != nil {
 		panic(err)
 	}
@@ -267,7 +263,7 @@ func (s *Shard) retryUploadObligations(ctx context.Context) {
 }
 
 func (s *Shard) beginUploadObligationRetryLocked(now time.Time) []index.PendingUpload {
-	return s.blockUploadLifecycleLocked().beginSealRetry(now, now.Add(s.uploadSealRetryDelay()))
+	return s.uploadOutboxLocked().BeginBlockSealRetry(now, now.Add(s.uploadSealRetryDelay()))
 }
 
 func (s *Shard) RetryOrphanedSealsForTest(ctx context.Context) {
@@ -301,9 +297,15 @@ func (s *Shard) pendingUploads() ([]PendingUpload, error) {
 	return collectPendingUploads(s.idx)
 }
 
-func (s *Shard) hasLocalBlock(blockID uint64) bool {
-	_, err := os.Stat(s.blockPath(blockID))
-	return err == nil
+func (s *Shard) localUploadSource(blockID uint64) (uploadLocalSource, bool) {
+	blockPath := s.blockPath(blockID)
+	if _, err := os.Stat(blockPath); err != nil {
+		return nil, false
+	}
+	return fileUploadSource{
+		blockPath: blockPath,
+		indexPath: s.idxPath(blockID),
+	}, true
 }
 
 func collectPendingUploads(idx *index.Index) ([]PendingUpload, error) {
