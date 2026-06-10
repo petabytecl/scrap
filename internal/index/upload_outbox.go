@@ -13,18 +13,21 @@ import (
 var ErrPendingUploadNotFound = errors.New("index: pending upload not found")
 
 const (
-	pendingUploadPrefix       = "\x00upload\x00"
-	pendingUploadUpperBound   = "\x00upload\x01"
-	pendingUploadValueVersion = 0x01
-	pendingUploadKeyLen       = len(pendingUploadPrefix) + sizeBlockID
-	pendingUploadValueLen     = 1 + sizeBlockID + 8 + 8 // version + shard_id + sealed_size + sealed_at_us
+	pendingUploadPrefix         = "\x00upload\x00"
+	pendingUploadUpperBound     = "\x00upload\x01"
+	pendingUploadValueVersionV1 = 0x01
+	pendingUploadValueVersion   = 0x02
+	pendingUploadKeyLen         = len(pendingUploadPrefix) + sizeBlockID
+	pendingUploadValueLenV1     = 1 + sizeBlockID + 8 + 8 // version + shard_id + sealed_size + sealed_at_us
+	pendingUploadValueLen       = pendingUploadValueLenV1 + 8
 )
 
 type PendingUpload struct {
-	BlockID         uint64
-	ShardID         uint64
-	SealedSizeBytes int64
-	SealedAtUs      int64
+	BlockID          uint64
+	ShardID          uint64
+	SealedSizeBytes  int64
+	SealedAtUs       int64
+	UploadGeneration int64
 }
 
 type PendingUploadIterator interface {
@@ -40,6 +43,9 @@ func (idx *Index) PutPendingUpload(upload PendingUpload) error {
 	}
 	if upload.SealedAtUs < 0 {
 		return fmt.Errorf("index: pending upload sealed_at_us is negative: %d", upload.SealedAtUs)
+	}
+	if upload.UploadGeneration < 0 {
+		return fmt.Errorf("index: pending upload generation is negative: %d", upload.UploadGeneration)
 	}
 	return idx.db.Set(pendingUploadKey(upload.BlockID), encodePendingUpload(upload), pebble.Sync)
 }
@@ -110,6 +116,7 @@ func encodePendingUpload(upload PendingUpload) []byte {
 	binary.LittleEndian.PutUint64(buf[1:9], upload.ShardID)
 	putNonNegativeInt64(buf[9:17], upload.SealedSizeBytes)
 	putNonNegativeInt64(buf[17:25], upload.SealedAtUs)
+	putNonNegativeInt64(buf[25:33], upload.UploadGeneration)
 	return buf
 }
 
@@ -117,11 +124,9 @@ func decodePendingUpload(key, val []byte) (PendingUpload, error) {
 	if len(key) != pendingUploadKeyLen {
 		return PendingUpload{}, fmt.Errorf("index: pending upload key length %d", len(key))
 	}
-	if len(val) != pendingUploadValueLen {
-		return PendingUpload{}, fmt.Errorf("index: pending upload value length %d", len(val))
-	}
-	if val[0] != pendingUploadValueVersion {
-		return PendingUpload{}, fmt.Errorf("index: pending upload value version %d", val[0])
+	version, err := pendingUploadValueVersionForDecode(val)
+	if err != nil {
+		return PendingUpload{}, err
 	}
 
 	sealedSize, err := readNonNegativeInt64(val[9:17], "sealed_size")
@@ -132,13 +137,46 @@ func decodePendingUpload(key, val []byte) (PendingUpload, error) {
 	if err != nil {
 		return PendingUpload{}, err
 	}
+	uploadGeneration, err := decodePendingUploadGeneration(version, val)
+	if err != nil {
+		return PendingUpload{}, err
+	}
 
 	return PendingUpload{
-		BlockID:         binary.BigEndian.Uint64(key[len(pendingUploadPrefix):]),
-		ShardID:         binary.LittleEndian.Uint64(val[1:9]),
-		SealedSizeBytes: sealedSize,
-		SealedAtUs:      sealedAt,
+		BlockID:          binary.BigEndian.Uint64(key[len(pendingUploadPrefix):]),
+		ShardID:          binary.LittleEndian.Uint64(val[1:9]),
+		SealedSizeBytes:  sealedSize,
+		SealedAtUs:       sealedAt,
+		UploadGeneration: uploadGeneration,
 	}, nil
+}
+
+func pendingUploadValueVersionForDecode(val []byte) (byte, error) {
+	if len(val) == 0 {
+		return 0, fmt.Errorf("index: pending upload value length %d", len(val))
+	}
+	switch version := val[0]; version {
+	case pendingUploadValueVersionV1:
+		return version, requirePendingUploadValueLen(val, pendingUploadValueLenV1)
+	case pendingUploadValueVersion:
+		return version, requirePendingUploadValueLen(val, pendingUploadValueLen)
+	default:
+		return 0, fmt.Errorf("index: pending upload value version %d", version)
+	}
+}
+
+func requirePendingUploadValueLen(val []byte, want int) error {
+	if len(val) != want {
+		return fmt.Errorf("index: pending upload value length %d", len(val))
+	}
+	return nil
+}
+
+func decodePendingUploadGeneration(version byte, val []byte) (int64, error) {
+	if version == pendingUploadValueVersionV1 {
+		return 0, nil
+	}
+	return readNonNegativeInt64(val[25:33], "upload_generation")
 }
 
 func putNonNegativeInt64(buf []byte, v int64) {

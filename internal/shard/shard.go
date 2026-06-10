@@ -769,6 +769,16 @@ func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload
 	return s.committedConfirmUploadAuthorityLocked(blockID)
 }
 
+func (s *Shard) pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.idx == nil {
+		return index.PendingUpload{}, fmt.Errorf("%w: projection is nil", storeapi.ErrDataLoss)
+	}
+	return s.idx.GetPendingUpload(blockID)
+}
+
 func (s *Shard) committedConfirmUploadAuthorityLocked(blockID uint64) (index.ConfirmedUpload, error) {
 	confirmed, loadedFromDisk, err := s.blockUploadLifecycleLocked().confirmedUploadAuthority(s.blocksDir, blockID)
 	if err != nil {

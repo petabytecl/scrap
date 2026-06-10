@@ -75,10 +75,11 @@ func TestConfirmedUploadsIteratesByBlockID(t *testing.T) {
 
 func confirmedUploadCatalogFixture() index.ConfirmedUpload {
 	return index.ConfirmedUpload{
-		BlockID:         42,
-		ShardID:         7,
-		ConfirmedAtUs:   1716700001000000,
-		SealedSizeBytes: 67108864,
+		BlockID:          42,
+		ShardID:          7,
+		ConfirmedAtUs:    1716700001000000,
+		SealedSizeBytes:  67108864,
+		UploadGeneration: 1716700002000000,
 		BlockObject: index.BackendObjectMetadata{
 			Key:             "cell-a/shards/0000000000000007/000000000000002a.blk",
 			SizeBytes:       67108864,
@@ -103,6 +104,7 @@ func putConfirmedUpload(t *testing.T, idx *index.Index, blockID uint64) {
 	confirmed.BlockID = blockID
 	confirmed.ConfirmedAtUs += confirmedUploadOffsetForTest(t, blockID)
 	confirmed.SealedSizeBytes = confirmedUploadSizeForTest(t, blockID)
+	confirmed.UploadGeneration = confirmedUploadGenerationForTest(t, blockID)
 	confirmed.BlockObject.Key = "cell-a/shards/0000000000000007/block.blk"
 	confirmed.BlockObject.SizeBytes = confirmed.SealedSizeBytes
 	if err := idx.PutConfirmedUpload(confirmed); err != nil {
@@ -129,6 +131,10 @@ func assertConfirmedUpload(t *testing.T, upload index.ConfirmedUpload, blockID u
 	wantSize := confirmedUploadSizeForTest(t, blockID)
 	if upload.SealedSizeBytes != wantSize {
 		t.Fatalf("SealedSizeBytes = %d, want %d", upload.SealedSizeBytes, wantSize)
+	}
+	wantGeneration := confirmedUploadGenerationForTest(t, blockID)
+	if upload.UploadGeneration != wantGeneration {
+		t.Fatalf("UploadGeneration = %d, want %d", upload.UploadGeneration, wantGeneration)
 	}
 }
 
@@ -158,6 +164,22 @@ func confirmedUploadSizeForTest(t *testing.T, blockID uint64) int64 {
 		return 2048
 	case 3:
 		return 3072
+	default:
+		t.Fatalf("unexpected test Block ID %d", blockID)
+		return 0
+	}
+}
+
+func confirmedUploadGenerationForTest(t *testing.T, blockID uint64) int64 {
+	t.Helper()
+
+	switch blockID {
+	case 1:
+		return 1716700002000001
+	case 2:
+		return 1716700002000002
+	case 3:
+		return 1716700002000003
 	default:
 		t.Fatalf("unexpected test Block ID %d", blockID)
 		return 0

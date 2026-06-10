@@ -71,6 +71,8 @@ func mapEncryptionError(err error) error {
 		return storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
 	case errors.Is(err, encryption.ErrInvalidEnvelope), errors.Is(err, encryption.ErrIntegrity):
 		return fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+	case errors.Is(err, encryption.ErrInvalidRequest):
+		return fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 	default:
 		return err
 	}

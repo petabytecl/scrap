@@ -352,14 +352,15 @@ func (x *BackendObjectMetadata) GetValidationToken() string {
 }
 
 type ConfirmUpload struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BlockId       uint64                 `protobuf:"varint,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
-	ShardId       uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	ConfirmedAtUs int64                  `protobuf:"varint,4,opt,name=confirmed_at_us,json=confirmedAtUs,proto3" json:"confirmed_at_us,omitempty"`
-	BlockObject   *BackendObjectMetadata `protobuf:"bytes,6,opt,name=block_object,json=blockObject,proto3" json:"block_object,omitempty"`
-	IndexObject   *BackendObjectMetadata `protobuf:"bytes,7,opt,name=index_object,json=indexObject,proto3" json:"index_object,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	BlockId          uint64                 `protobuf:"varint,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	ShardId          uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	ConfirmedAtUs    int64                  `protobuf:"varint,4,opt,name=confirmed_at_us,json=confirmedAtUs,proto3" json:"confirmed_at_us,omitempty"`
+	BlockObject      *BackendObjectMetadata `protobuf:"bytes,6,opt,name=block_object,json=blockObject,proto3" json:"block_object,omitempty"`
+	IndexObject      *BackendObjectMetadata `protobuf:"bytes,7,opt,name=index_object,json=indexObject,proto3" json:"index_object,omitempty"`
+	UploadGeneration int64                  `protobuf:"varint,8,opt,name=upload_generation,json=uploadGeneration,proto3" json:"upload_generation,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ConfirmUpload) Reset() {
@@ -427,6 +428,13 @@ func (x *ConfirmUpload) GetIndexObject() *BackendObjectMetadata {
 	return nil
 }
 
+func (x *ConfirmUpload) GetUploadGeneration() int64 {
+	if x != nil {
+		return x.UploadGeneration
+	}
+	return 0
+}
+
 type RewrapDocumentEnvelope struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TransactionId      string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
@@ -436,6 +444,7 @@ type RewrapDocumentEnvelope struct {
 	OldKeyVersion      int32                  `protobuf:"varint,5,opt,name=old_key_version,json=oldKeyVersion,proto3" json:"old_key_version,omitempty"`
 	NewKeyVersion      int32                  `protobuf:"varint,6,opt,name=new_key_version,json=newKeyVersion,proto3" json:"new_key_version,omitempty"`
 	RewrappedAtUs      int64                  `protobuf:"varint,7,opt,name=rewrapped_at_us,json=rewrappedAtUs,proto3" json:"rewrapped_at_us,omitempty"`
+	ProposalId         string                 `protobuf:"bytes,8,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -517,6 +526,13 @@ func (x *RewrapDocumentEnvelope) GetRewrappedAtUs() int64 {
 		return x.RewrappedAtUs
 	}
 	return 0
+}
+
+func (x *RewrapDocumentEnvelope) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
 }
 
 type CommitDocument struct {
@@ -759,13 +775,14 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x02 \x01(\x03R\tsizeBytes\x12)\n" +
-	"\x10validation_token\x18\x03 \x01(\tR\x0fvalidationToken\"\x9b\x02\n" +
+	"\x10validation_token\x18\x03 \x01(\tR\x0fvalidationToken\"\xc8\x02\n" +
 	"\rConfirmUpload\x12\x19\n" +
 	"\bblock_id\x18\x01 \x01(\x04R\ablockId\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\x04R\ashardId\x12&\n" +
 	"\x0fconfirmed_at_us\x18\x04 \x01(\x03R\rconfirmedAtUs\x12B\n" +
 	"\fblock_object\x18\x06 \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vblockObject\x12B\n" +
-	"\findex_object\x18\a \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vindexObjectJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06R\x12backend_key_prefixR\x04etag\"\xa8\x02\n" +
+	"\findex_object\x18\a \x01(\v2\x1f.scrap.v1.BackendObjectMetadataR\vindexObject\x12+\n" +
+	"\x11upload_generation\x18\b \x01(\x03R\x10uploadGenerationJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06R\x12backend_key_prefixR\x04etag\"\xc9\x02\n" +
 	"\x16RewrapDocumentEnvelope\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x19\n" +
@@ -773,7 +790,9 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\x13encryption_envelope\x18\x04 \x01(\fR\x12encryptionEnvelope\x12&\n" +
 	"\x0fold_key_version\x18\x05 \x01(\x05R\roldKeyVersion\x12&\n" +
 	"\x0fnew_key_version\x18\x06 \x01(\x05R\rnewKeyVersion\x12&\n" +
-	"\x0frewrapped_at_us\x18\a \x01(\x03R\rrewrappedAtUs\"\x9a\x03\n" +
+	"\x0frewrapped_at_us\x18\a \x01(\x03R\rrewrappedAtUs\x12\x1f\n" +
+	"\vproposal_id\x18\b \x01(\tR\n" +
+	"proposalId\"\x9a\x03\n" +
 	"\x0eCommitDocument\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +

@@ -21,6 +21,7 @@ import (
 type projectionRebuildCore interface {
 	currentOpenBlockID() uint64
 	confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error)
+	pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error)
 	swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (idxNil bool, err error)
 }
 
@@ -202,11 +203,18 @@ func (r *projectionRebuilder) rebuildCommittedUploadAuthorities(projection *inde
 func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projection *index.Index, blockID uint64) error {
 	info, statErr := os.Stat(r.blockPath(blockID))
 	if statErr == nil {
-		confirmed, ok, err := r.committedUploadAuthorityForRebuild(blockID)
+		pending, hasPending, err := r.pendingUploadForRebuild(blockID)
 		if err != nil {
 			return err
 		}
-		if ok {
+		confirmed, hasConfirmed, err := r.committedUploadAuthorityForRebuild(blockID)
+		if err != nil {
+			return err
+		}
+		if shouldPreservePendingUploadForRebuild(pending, hasPending, confirmed, hasConfirmed) {
+			return r.putPendingUploadForRebuild(projection, pending)
+		}
+		if hasConfirmed {
 			if err := projection.PutConfirmedUpload(confirmed); err != nil {
 				return fmt.Errorf("shard: rebuild confirmed upload %d: %w", blockID, err)
 			}
@@ -287,6 +295,39 @@ func (r *projectionRebuilder) committedUploadAuthorityForRebuild(blockID uint64)
 		return index.ConfirmedUpload{}, false, fmt.Errorf("shard: rebuild pending upload %d committed ConfirmUpload: %w", blockID, err)
 	}
 	return confirmed, true, nil
+}
+
+func (r *projectionRebuilder) pendingUploadForRebuild(blockID uint64) (index.PendingUpload, bool, error) {
+	pending, err := r.core.pendingUploadForRebuild(blockID)
+	if err != nil {
+		if errors.Is(err, index.ErrPendingUploadNotFound) {
+			return index.PendingUpload{}, false, nil
+		}
+		return index.PendingUpload{}, false, fmt.Errorf("shard: rebuild pending upload %d current outbox: %w", blockID, err)
+	}
+	return pending, true, nil
+}
+
+func shouldPreservePendingUploadForRebuild(
+	pending index.PendingUpload,
+	hasPending bool,
+	confirmed index.ConfirmedUpload,
+	hasConfirmed bool,
+) bool {
+	if !hasPending {
+		return false
+	}
+	if !hasConfirmed {
+		return true
+	}
+	return pending.UploadGeneration > confirmed.UploadGeneration
+}
+
+func (r *projectionRebuilder) putPendingUploadForRebuild(projection *index.Index, upload index.PendingUpload) error {
+	if err := projection.PutPendingUpload(upload); err != nil {
+		return fmt.Errorf("shard: rebuild pending upload %d: %w", upload.BlockID, err)
+	}
+	return nil
 }
 
 func (r *projectionRebuilder) putRebuiltPendingUpload(projection *index.Index, blockID uint64, info os.FileInfo) error {

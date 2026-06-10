@@ -76,6 +76,37 @@ func TestApplyConfirmUploadSkipsCatalogAndClearsPendingOnBlockSizeMismatch(t *te
 	}
 }
 
+func TestApplyConfirmUploadIgnoresStaleGenerationAndKeepsPending(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	if err := idx.PutPendingUpload(index.PendingUpload{
+		BlockID:          uploadApplyTestBlockID,
+		ShardID:          7,
+		SealedSizeBytes:  67108864,
+		SealedAtUs:       1716700000000000,
+		UploadGeneration: 1716700002000000,
+	}); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+
+	staleConfirm := confirmUploadCommandForApplyTest()
+	staleConfirm.UploadGeneration = 1716700001000000
+	s := shardForApplyTest(t, idx)
+	if err := s.applyConfirmUpload(staleConfirm); err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
+	}
+
+	pending, err := idx.GetPendingUpload(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if pending.UploadGeneration != 1716700002000000 {
+		t.Fatalf("pending upload generation = %d, want replacement generation", pending.UploadGeneration)
+	}
+	if _, err := idx.GetConfirmedUpload(uploadApplyTestBlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
+	}
+}
+
 func TestApplyConfirmUploadUpdatesDuplicateConfirmationMetadata(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	existing := confirmedUploadForApplyTest(1716700001000000, shardApplyValidationValue("old-block"), shardApplyValidationValue("old-index"))
@@ -98,6 +129,77 @@ func TestApplyConfirmUploadUpdatesDuplicateConfirmationMetadata(t *testing.T) {
 	want := confirmedUploadForApplyTest(confirm.GetConfirmedAtUs(), shardApplyValidationValue("new-block"), shardApplyValidationValue("new-index"))
 	if got != want {
 		t.Fatalf("confirmed upload = %+v, want %+v", got, want)
+	}
+}
+
+func TestApplyConfirmUploadIgnoresStaleDuplicateGeneration(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	existing := confirmedUploadForApplyTest(1716700002000000, shardApplyValidationValue("new-block"), shardApplyValidationValue("new-index"))
+	existing.UploadGeneration = 1716700002000000
+	if err := idx.PutConfirmedUpload(existing); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+
+	staleConfirm := confirmUploadCommandForApplyTest()
+	staleConfirm.ConfirmedAtUs = 1716700003000000
+	staleConfirm.UploadGeneration = 1716700001000000
+	staleConfirm.BlockObject.ValidationToken = shardApplyValidationValue("stale-block")
+	staleConfirm.IndexObject.ValidationToken = shardApplyValidationValue("stale-index")
+
+	if err := shardForApplyTest(t, idx).applyConfirmUpload(staleConfirm); err != nil {
+		t.Fatalf("applyConfirmUpload: %v", err)
+	}
+	got, err := idx.GetConfirmedUpload(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	if got != existing {
+		t.Fatalf("confirmed upload = %+v, want existing %+v", got, existing)
+	}
+}
+
+func TestApplySealBlockPreservesPendingRewrapGeneration(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	replacement := index.PendingUpload{
+		BlockID:          uploadApplyTestBlockID,
+		ShardID:          7,
+		SealedSizeBytes:  67108864,
+		SealedAtUs:       1716700002000000,
+		UploadGeneration: 1716700002000000,
+	}
+	if err := idx.PutPendingUpload(replacement); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+
+	staleSeal := &scrapv1.SealBlock{
+		BlockId:         uploadApplyTestBlockID,
+		ShardId:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700001000000,
+	}
+	if err := shardForApplyTest(t, idx).applySealBlock(staleSeal); err != nil {
+		t.Fatalf("applySealBlock: %v", err)
+	}
+
+	got, err := idx.GetPendingUpload(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if got != replacement {
+		t.Fatalf("pending upload = %+v, want replacement %+v", got, replacement)
+	}
+}
+
+func TestBackendKeyPrefixIncludesNonZeroUploadGeneration(t *testing.T) {
+	legacy := backendKeyPrefix("cell-a", 7, uploadApplyTestBlockID, 0)
+	if legacy != "cell-a/shards/0000000000000007/000000000000002a" {
+		t.Fatalf("legacy backend key prefix = %q", legacy)
+	}
+
+	generated := backendKeyPrefix("cell-a", 7, uploadApplyTestBlockID, 15)
+	want := "cell-a/shards/0000000000000007/000000000000002a/generations/000000000000000f"
+	if generated != want {
+		t.Fatalf("generated backend key prefix = %q, want %q", generated, want)
 	}
 }
 

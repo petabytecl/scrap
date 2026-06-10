@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -14,6 +15,7 @@ import (
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	storeapi "github.com/petabytecl/scrap/internal/store"
+	"github.com/petabytecl/scrap/internal/ulid"
 )
 
 func (s *Shard) RewrapDocument(ctx context.Context, req rewrap.Request) (rewrap.Result, error) {
@@ -69,7 +71,7 @@ func (s *Shard) rewrapDocumentEnvelope(
 		KeyVersion: req.KeyVersion,
 	})
 	if err != nil {
-		return result, mapEncryptionError(err)
+		return result, mapRewrapEncryptionError(err)
 	}
 	if !rewrapped.Changed && (req.KeyVersion == 0 || rewrapped.Version == envelope.KeyVersion) {
 		result.Status = rewrap.StatusOK
@@ -150,9 +152,13 @@ func (s *Shard) proposeRewrapDocument(
 	if err != nil {
 		return err
 	}
+	if err := s.validateLeaderHistoricalRewrapUploadRequeue(blockID); err != nil {
+		return err
+	}
 
 	doneCh := make(chan error, 1)
-	key := rewrapProposalKey(req.TransactionID, req.DocumentName)
+	proposalID := ulid.New().String()
+	key := rewrapProposalKey(proposalID, req.TransactionID, req.DocumentName)
 	s.proposalMu.Lock()
 	s.proposals[key] = doneCh
 	s.proposalMu.Unlock()
@@ -167,6 +173,7 @@ func (s *Shard) proposeRewrapDocument(
 				OldKeyVersion:      oldKeyVersion,
 				NewKeyVersion:      newKeyVersion,
 				RewrappedAtUs:      result.RewrappedAt.UnixMicro(),
+				ProposalId:         proposalID,
 			},
 		},
 	}
@@ -203,23 +210,35 @@ func (s *Shard) forgetProposal(key string) {
 	s.proposalMu.Unlock()
 }
 
-func (s *Shard) applyRewrapDocumentEnvelopeCommand(cmd *scrapv1.RewrapDocumentEnvelope) {
-	key := rewrapProposalKey(cmd.GetTransactionId(), cmd.GetDocumentName())
-	applyErr := s.applyRewrapDocumentEnvelope(cmd)
+func (s *Shard) applyRewrapDocumentEnvelopeCommand(cmd *scrapv1.RewrapDocumentEnvelope, entryIndex uint64) error {
+	key := rewrapProposalKey(cmd.GetProposalId(), cmd.GetTransactionId(), cmd.GetDocumentName())
+	applyErr := s.applyRewrapDocumentEnvelope(cmd, rewrapUploadGeneration(cmd, entryIndex))
 
 	s.proposalMu.Lock()
-	defer s.proposalMu.Unlock()
 	if ch, ok := s.proposals[key]; ok {
 		ch <- applyErr
 		delete(s.proposals, key)
 	}
+	s.proposalMu.Unlock()
+
+	if errors.Is(applyErr, rewrap.ErrStaleEnvelope) {
+		return nil
+	}
+	return applyErr
 }
 
-func rewrapProposalKey(txID, docName string) string {
+func rewrapUploadGeneration(cmd *scrapv1.RewrapDocumentEnvelope, entryIndex uint64) int64 {
+	return uploadGenerationFromApplyIndex(entryIndex, cmd.GetRewrappedAtUs())
+}
+
+func rewrapProposalKey(proposalID, txID, docName string) string {
+	if proposalID != "" {
+		return "rewrap-proposal\x00" + proposalID
+	}
 	return "rewrap\x00" + txID + "\x00" + docName
 }
 
-func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope) error {
+func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope, uploadGeneration int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -232,7 +251,7 @@ func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope)
 	if err != nil {
 		return err
 	}
-	return s.finishRewrapApplyLocked(cmd.GetBlockId(), current, changed)
+	return s.finishRewrapApplyLocked(cmd.GetBlockId(), current, changed, uploadGeneration)
 }
 
 func validateRewrapCommand(cmd *scrapv1.RewrapDocumentEnvelope) error {
@@ -253,6 +272,14 @@ func (s *Shard) replaceRewrapEnvelopeLocked(cmd *scrapv1.RewrapDocumentEnvelope,
 		s.idxWriter = nil
 	}
 
+	alreadyApplied, err := validateRewrapCurrentEnvelope(s.idxPath(cmd.GetBlockId()), cmd)
+	if err != nil {
+		return false, s.reopenCurrentIndexAfterRewrapErrorLocked(current, cmd.GetBlockId(), err)
+	}
+	if alreadyApplied {
+		reopenErr := s.reopenCurrentIndexAfterRewrapLocked(current, cmd.GetBlockId())
+		return true, reopenErr
+	}
 	_, changed, replaceErr := block.ReplaceDocumentEnvelope(
 		s.idxPath(cmd.GetBlockId()),
 		cmd.GetTransactionId(),
@@ -266,9 +293,62 @@ func (s *Shard) replaceRewrapEnvelopeLocked(cmd *scrapv1.RewrapDocumentEnvelope,
 	return changed, nil
 }
 
-func (s *Shard) finishRewrapApplyLocked(blockID uint64, current, changed bool) error {
+func (s *Shard) validateLeaderHistoricalRewrapUploadRequeue(blockID uint64) error {
+	if !s.upload.Enabled {
+		return nil
+	}
+	s.mu.Lock()
+	current := s.blockWriter != nil && s.blockWriter.BlockID() == blockID
+	path := s.blockPath(blockID)
+	s.mu.Unlock()
+	if current {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("shard: rewrap requires local Block data for upload requeue: %w", err)
+	}
+	return nil
+}
+
+func (s *Shard) reopenCurrentIndexAfterRewrapErrorLocked(current bool, blockID uint64, err error) error {
+	if reopenErr := s.reopenCurrentIndexAfterRewrapLocked(current, blockID); reopenErr != nil {
+		return reopenErr
+	}
+	return err
+}
+
+func validateRewrapCurrentEnvelope(path string, cmd *scrapv1.RewrapDocumentEnvelope) (bool, error) {
+	ir, err := block.OpenIndexReader(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = ir.Close() }()
+
+	entry, err := ir.Find(cmd.GetTransactionId(), cmd.GetDocumentName())
+	if err != nil {
+		return false, mapRewrapIndexError(err)
+	}
+	current, err := encryption.ParseEnvelope(entry.EncryptionEnvelope)
+	if err != nil {
+		return false, mapEncryptionError(err)
+	}
+	if current.KeyVersion == int(cmd.GetOldKeyVersion()) {
+		return false, nil
+	}
+	if current.KeyVersion == int(cmd.GetNewKeyVersion()) {
+		return true, nil
+	}
+	return false, fmt.Errorf(
+		"%w: current key version %d does not match command old key version %d",
+		rewrap.ErrStaleEnvelope,
+		current.KeyVersion,
+		cmd.GetOldKeyVersion(),
+	)
+}
+
+func (s *Shard) finishRewrapApplyLocked(blockID uint64, current, changed bool, uploadGeneration int64) error {
 	if changed && !current {
-		return s.requeueBlockUploadAfterIndexAppend(blockID)
+		return s.requeueBlockUploadAfterIndexAppend(blockID, uploadGeneration)
 	}
 	return nil
 }
@@ -296,6 +376,13 @@ func mapRewrapIndexError(err error) error {
 	}
 }
 
+func mapRewrapEncryptionError(err error) error {
+	if errors.Is(err, encryption.ErrInvalidRequest) {
+		return fmt.Errorf("%w: %w", rewrap.ErrInvalidRequest, err)
+	}
+	return mapEncryptionError(err)
+}
+
 func (s *Shard) finishRewrap(result rewrap.Result, err error) (rewrap.Result, error) {
 	if err != nil {
 		result.Status = rewrap.StatusFailed
@@ -311,6 +398,10 @@ func rewrapReasonForError(err error) string {
 		return rewrap.ReasonOK
 	case errors.Is(err, rewrap.ErrInvalidRequest):
 		return rewrap.ReasonInvalidRequest
+	case isNotLeader(err):
+		return rewrap.ReasonNotLeader
+	case errors.Is(err, rewrap.ErrStaleEnvelope):
+		return rewrap.ReasonStaleEnvelope
 	case errors.Is(err, rewrap.ErrNotEncrypted):
 		return rewrap.ReasonNotEncrypted
 	case errors.Is(err, storeapi.ErrUnavailable):
@@ -322,6 +413,11 @@ func rewrapReasonForError(err error) string {
 	default:
 		return rewrap.ReasonInternalError
 	}
+}
+
+func isNotLeader(err error) bool {
+	var notLeader *storeapi.NotLeaderError
+	return errors.As(err, &notLeader)
 }
 
 func (s *Shard) recordRewrapResult(result rewrap.Result) {

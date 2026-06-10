@@ -25,6 +25,7 @@ type uploadCore interface {
 	IsLeader() bool
 	retryUploadObligations(ctx context.Context)
 	pendingUploads() ([]PendingUpload, error)
+	hasLocalBlock(blockID uint64) bool
 	blockPath(blockID uint64) string
 	idxPath(blockID uint64) string
 }
@@ -157,17 +158,27 @@ func (c *uploadController) processPendingOnce(ctx context.Context) {
 		}()
 	}
 
+	if !c.enqueueUploadJobs(ctx, jobs, uploads) {
+		wg.Wait()
+		return
+	}
+	wg.Wait()
+}
+
+func (c *uploadController) enqueueUploadJobs(ctx context.Context, jobs chan<- PendingUpload, uploads []PendingUpload) bool {
 	for _, upload := range uploads {
+		if !c.core.hasLocalBlock(upload.BlockID) {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			close(jobs)
-			wg.Wait()
-			return
+			return false
 		case jobs <- upload:
 		}
 	}
 	close(jobs)
-	wg.Wait()
+	return true
 }
 
 func (c *uploadController) uploadProcessingPaused() bool {
@@ -227,7 +238,7 @@ func (c *uploadController) handleThrottled(ctx context.Context, state *uploadRet
 }
 
 func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingUpload) error {
-	prefix := backendKeyPrefix(c.cellID(), upload.ShardID, upload.BlockID)
+	prefix := backendKeyPrefix(c.cellID(), upload.ShardID, upload.BlockID, upload.UploadGeneration)
 	// Root backend I/O in the deterministic per-block trace so the PUT/verify spans
 	// share a trace_id with the seal/confirm apply spans and the documents' links.
 	bctx := trace.ContextWithSpanContext(ctx, blockTraceContext(c.cellID(), c.shardID, upload.BlockID))
@@ -247,12 +258,13 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 	}
 
 	return c.proposeConfirmUpload(ctx, index.ConfirmedUpload{
-		BlockID:         upload.BlockID,
-		ShardID:         upload.ShardID,
-		ConfirmedAtUs:   time.Now().UnixMicro(),
-		SealedSizeBytes: upload.SealedSizeBytes,
-		BlockObject:     blk,
-		IndexObject:     idx,
+		BlockID:          upload.BlockID,
+		ShardID:          upload.ShardID,
+		ConfirmedAtUs:    time.Now().UnixMicro(),
+		SealedSizeBytes:  upload.SealedSizeBytes,
+		UploadGeneration: upload.UploadGeneration,
+		BlockObject:      blk,
+		IndexObject:      idx,
 	})
 }
 
@@ -306,11 +318,12 @@ func (c *uploadController) proposeConfirmUpload(ctx context.Context, upload inde
 	cmd := &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_ConfirmUpload{
 			ConfirmUpload: &scrapv1.ConfirmUpload{
-				BlockId:       upload.BlockID,
-				ShardId:       upload.ShardID,
-				BlockObject:   protoBackendObject(upload.BlockObject),
-				IndexObject:   protoBackendObject(upload.IndexObject),
-				ConfirmedAtUs: upload.ConfirmedAtUs,
+				BlockId:          upload.BlockID,
+				ShardId:          upload.ShardID,
+				BlockObject:      protoBackendObject(upload.BlockObject),
+				IndexObject:      protoBackendObject(upload.IndexObject),
+				ConfirmedAtUs:    upload.ConfirmedAtUs,
+				UploadGeneration: upload.UploadGeneration,
 			},
 		},
 	}

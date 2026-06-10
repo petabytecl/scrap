@@ -15,9 +15,9 @@ func TestPendingUploadsRoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	putPendingUpload(t, idx, 3, 4096, 1716700000000003)
-	putPendingUpload(t, idx, 1, 1024, 1716700000000001)
-	putPendingUpload(t, idx, 2, 2048, 1716700000000002)
+	putPendingUpload(t, idx, 3, 4096, 1716700000000003, 1716700001000003)
+	putPendingUpload(t, idx, 1, 1024, 1716700000000001, 1716700001000001)
+	putPendingUpload(t, idx, 2, 2048, 1716700000000002, 1716700001000002)
 
 	if err := idx.DeletePendingUpload(2); err != nil {
 		t.Fatalf("DeletePendingUpload block 2: %v", err)
@@ -28,8 +28,8 @@ func TestPendingUploadsRoundTrip(t *testing.T) {
 		t.Fatalf("PendingUploads: %v", err)
 	}
 
-	assertPendingUpload(t, nextPendingUpload(t, iter, "first"), 1, 1024, 1716700000000001)
-	assertPendingUpload(t, nextPendingUpload(t, iter, "second"), 3, 4096, 1716700000000003)
+	assertPendingUpload(t, nextPendingUpload(t, iter, "first"), 1, 1024, 1716700000000001, 1716700001000001)
+	assertPendingUpload(t, nextPendingUpload(t, iter, "second"), 3, 4096, 1716700000000003, 1716700001000003)
 
 	if _, err := iter.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after final error = %v, want EOF", err)
@@ -46,7 +46,7 @@ func nextPendingUpload(t *testing.T, iter index.PendingUploadIterator, label str
 	return upload
 }
 
-func assertPendingUpload(t *testing.T, upload index.PendingUpload, blockID uint64, sealedSize, sealedAt int64) {
+func assertPendingUpload(t *testing.T, upload index.PendingUpload, blockID uint64, sealedSize, sealedAt, uploadGeneration int64) {
 	t.Helper()
 
 	if upload.BlockID != blockID {
@@ -61,16 +61,20 @@ func assertPendingUpload(t *testing.T, upload index.PendingUpload, blockID uint6
 	if upload.SealedAtUs != sealedAt {
 		t.Fatalf("SealedAtUs = %d, want %d", upload.SealedAtUs, sealedAt)
 	}
+	if upload.UploadGeneration != uploadGeneration {
+		t.Fatalf("UploadGeneration = %d, want %d", upload.UploadGeneration, uploadGeneration)
+	}
 }
 
-func putPendingUpload(t *testing.T, idx *index.Index, blockID uint64, sealedSize, sealedAt int64) {
+func putPendingUpload(t *testing.T, idx *index.Index, blockID uint64, sealedSize, sealedAt, uploadGeneration int64) {
 	t.Helper()
 
 	if err := idx.PutPendingUpload(index.PendingUpload{
-		BlockID:         blockID,
-		ShardID:         7,
-		SealedSizeBytes: sealedSize,
-		SealedAtUs:      sealedAt,
+		BlockID:          blockID,
+		ShardID:          7,
+		SealedSizeBytes:  sealedSize,
+		SealedAtUs:       sealedAt,
+		UploadGeneration: uploadGeneration,
 	}); err != nil {
 		t.Fatalf("PutPendingUpload block %d: %v", blockID, err)
 	}

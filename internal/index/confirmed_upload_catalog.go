@@ -26,12 +26,13 @@ type BackendObjectMetadata struct {
 }
 
 type ConfirmedUpload struct {
-	BlockID         uint64
-	ShardID         uint64
-	ConfirmedAtUs   int64
-	SealedSizeBytes int64
-	BlockObject     BackendObjectMetadata
-	IndexObject     BackendObjectMetadata
+	BlockID          uint64
+	ShardID          uint64
+	ConfirmedAtUs    int64
+	SealedSizeBytes  int64
+	UploadGeneration int64
+	BlockObject      BackendObjectMetadata
+	IndexObject      BackendObjectMetadata
 }
 
 type ConfirmedUploadIterator interface {
@@ -39,13 +40,14 @@ type ConfirmedUploadIterator interface {
 }
 
 type confirmedUploadRecord struct {
-	Version         byte                  `json:"version"`
-	BlockID         uint64                `json:"block_id"`
-	ShardID         uint64                `json:"shard_id"`
-	ConfirmedAtUs   int64                 `json:"confirmed_at_us"`
-	SealedSizeBytes int64                 `json:"sealed_size_bytes"`
-	BlockObject     BackendObjectMetadata `json:"block_object"`
-	IndexObject     BackendObjectMetadata `json:"index_object"`
+	Version          byte                  `json:"version"`
+	BlockID          uint64                `json:"block_id"`
+	ShardID          uint64                `json:"shard_id"`
+	ConfirmedAtUs    int64                 `json:"confirmed_at_us"`
+	SealedSizeBytes  int64                 `json:"sealed_size_bytes"`
+	UploadGeneration int64                 `json:"upload_generation"`
+	BlockObject      BackendObjectMetadata `json:"block_object"`
+	IndexObject      BackendObjectMetadata `json:"index_object"`
 }
 
 func (idx *Index) PutConfirmedUpload(upload ConfirmedUpload) error {
@@ -125,13 +127,14 @@ func confirmedUploadBlockID(key []byte) (uint64, error) {
 
 func encodeConfirmedUpload(upload ConfirmedUpload) ([]byte, error) {
 	record := confirmedUploadRecord{
-		Version:         confirmedUploadValueVersion,
-		BlockID:         upload.BlockID,
-		ShardID:         upload.ShardID,
-		ConfirmedAtUs:   upload.ConfirmedAtUs,
-		SealedSizeBytes: upload.SealedSizeBytes,
-		BlockObject:     upload.BlockObject,
-		IndexObject:     upload.IndexObject,
+		Version:          confirmedUploadValueVersion,
+		BlockID:          upload.BlockID,
+		ShardID:          upload.ShardID,
+		ConfirmedAtUs:    upload.ConfirmedAtUs,
+		SealedSizeBytes:  upload.SealedSizeBytes,
+		UploadGeneration: upload.UploadGeneration,
+		BlockObject:      upload.BlockObject,
+		IndexObject:      upload.IndexObject,
 	}
 	val, err := json.Marshal(record)
 	if err != nil {
@@ -149,12 +152,13 @@ func decodeConfirmedUpload(blockID uint64, val []byte) (ConfirmedUpload, error) 
 		return ConfirmedUpload{}, fmt.Errorf("index: confirmed upload value version %d", record.Version)
 	}
 	upload := ConfirmedUpload{
-		BlockID:         record.BlockID,
-		ShardID:         record.ShardID,
-		ConfirmedAtUs:   record.ConfirmedAtUs,
-		SealedSizeBytes: record.SealedSizeBytes,
-		BlockObject:     record.BlockObject,
-		IndexObject:     record.IndexObject,
+		BlockID:          record.BlockID,
+		ShardID:          record.ShardID,
+		ConfirmedAtUs:    record.ConfirmedAtUs,
+		SealedSizeBytes:  record.SealedSizeBytes,
+		UploadGeneration: record.UploadGeneration,
+		BlockObject:      record.BlockObject,
+		IndexObject:      record.IndexObject,
 	}
 	if upload.BlockID != blockID {
 		return ConfirmedUpload{}, fmt.Errorf("index: confirmed upload block_id mismatch: key %d value %d", blockID, upload.BlockID)
@@ -174,6 +178,9 @@ func validateConfirmedUpload(upload ConfirmedUpload) error {
 	}
 	if upload.SealedSizeBytes < 0 {
 		return fmt.Errorf("index: confirmed upload sealed size is negative: %d", upload.SealedSizeBytes)
+	}
+	if upload.UploadGeneration < 0 {
+		return fmt.Errorf("index: confirmed upload generation is negative: %d", upload.UploadGeneration)
 	}
 	if err := validateBackendObjectMetadata("block", upload.BlockObject); err != nil {
 		return err

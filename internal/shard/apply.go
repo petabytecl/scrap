@@ -114,9 +114,9 @@ func blockIDAttribute(blockID uint64) attribute.KeyValue {
 func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) error {
 	switch c := cmd.Command.(type) {
 	case *scrapv1.RaftCommand_CommitDoc:
-		s.applyCommitDocumentCommand(c.CommitDoc)
+		s.applyCommitDocumentCommand(c.CommitDoc, entryIndex)
 	case *scrapv1.RaftCommand_RewrapDoc:
-		s.applyRewrapDocumentEnvelopeCommand(c.RewrapDoc)
+		return s.applyRewrapDocumentEnvelopeCommand(c.RewrapDoc, entryIndex)
 	case *scrapv1.RaftCommand_ConsistencyCheck:
 		s.scrubs.applyConsistencyCheck(c.ConsistencyCheck, entryIndex)
 	case *scrapv1.RaftCommand_SealBlock:
@@ -127,9 +127,9 @@ func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) e
 	return nil
 }
 
-func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument) {
+func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument, entryIndex uint64) {
 	key := doc.TransactionId + "\x00" + doc.DocumentName
-	applyErr := s.applyCommitDocument(doc)
+	applyErr := s.applyCommitDocument(doc, entryIndex)
 
 	s.proposalMu.Lock()
 	defer s.proposalMu.Unlock()

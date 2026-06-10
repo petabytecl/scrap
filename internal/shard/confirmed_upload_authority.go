@@ -9,13 +9,14 @@ import (
 )
 
 type confirmedUploadAuthorityRecord struct {
-	Version         int                         `json:"version"`
-	BlockID         uint64                      `json:"block_id"`
-	ShardID         uint64                      `json:"shard_id"`
-	ConfirmedAtUs   int64                       `json:"confirmed_at_us"`
-	SealedSizeBytes int64                       `json:"sealed_size_bytes"`
-	BlockObject     index.BackendObjectMetadata `json:"block_object"`
-	IndexObject     index.BackendObjectMetadata `json:"index_object"`
+	Version          int                         `json:"version"`
+	BlockID          uint64                      `json:"block_id"`
+	ShardID          uint64                      `json:"shard_id"`
+	ConfirmedAtUs    int64                       `json:"confirmed_at_us"`
+	SealedSizeBytes  int64                       `json:"sealed_size_bytes"`
+	UploadGeneration int64                       `json:"upload_generation"`
+	BlockObject      index.BackendObjectMetadata `json:"block_object"`
+	IndexObject      index.BackendObjectMetadata `json:"index_object"`
 }
 
 func confirmedUploadAuthorityPath(blocksDir string, blockID uint64) string {
@@ -24,13 +25,14 @@ func confirmedUploadAuthorityPath(blocksDir string, blockID uint64) string {
 
 func writeConfirmedUploadAuthority(blocksDir string, upload index.ConfirmedUpload) error {
 	record := confirmedUploadAuthorityRecord{
-		Version:         localblock.MarkerVersion,
-		BlockID:         upload.BlockID,
-		ShardID:         upload.ShardID,
-		ConfirmedAtUs:   upload.ConfirmedAtUs,
-		SealedSizeBytes: upload.SealedSizeBytes,
-		BlockObject:     upload.BlockObject,
-		IndexObject:     upload.IndexObject,
+		Version:          localblock.MarkerVersion,
+		BlockID:          upload.BlockID,
+		ShardID:          upload.ShardID,
+		ConfirmedAtUs:    upload.ConfirmedAtUs,
+		SealedSizeBytes:  upload.SealedSizeBytes,
+		UploadGeneration: upload.UploadGeneration,
+		BlockObject:      upload.BlockObject,
+		IndexObject:      upload.IndexObject,
 	}
 	if err := validateConfirmedUploadAuthorityRecord(record, upload.BlockID); err != nil {
 		return err
@@ -50,12 +52,13 @@ func readConfirmedUploadAuthority(blocksDir string, blockID uint64) (index.Confi
 		return index.ConfirmedUpload{}, err
 	}
 	return index.ConfirmedUpload{
-		BlockID:         record.BlockID,
-		ShardID:         record.ShardID,
-		ConfirmedAtUs:   record.ConfirmedAtUs,
-		SealedSizeBytes: record.SealedSizeBytes,
-		BlockObject:     record.BlockObject,
-		IndexObject:     record.IndexObject,
+		BlockID:          record.BlockID,
+		ShardID:          record.ShardID,
+		ConfirmedAtUs:    record.ConfirmedAtUs,
+		SealedSizeBytes:  record.SealedSizeBytes,
+		UploadGeneration: record.UploadGeneration,
+		BlockObject:      record.BlockObject,
+		IndexObject:      record.IndexObject,
 	}, nil
 }
 
@@ -68,6 +71,8 @@ func validateConfirmedUploadAuthorityRecord(record confirmedUploadAuthorityRecor
 		return fmt.Errorf("%w: committed ConfirmUpload confirmed_at_us is negative: %d", localblock.ErrMarkerInvalid, record.ConfirmedAtUs)
 	case record.SealedSizeBytes < 0:
 		return fmt.Errorf("%w: committed ConfirmUpload sealed_size_bytes is negative: %d", localblock.ErrMarkerInvalid, record.SealedSizeBytes)
+	case record.UploadGeneration < 0:
+		return fmt.Errorf("%w: committed ConfirmUpload upload_generation is negative: %d", localblock.ErrMarkerInvalid, record.UploadGeneration)
 	}
 	if err := validateConfirmedUploadAuthorityObject("block", record.BlockObject); err != nil {
 		return err

@@ -19,12 +19,15 @@ const (
 	ReasonNotFound          = "not_found"
 	ReasonDataLoss          = "data_loss"
 	ReasonInvalidRequest    = "invalid_request"
+	ReasonNotLeader         = "not_leader"
+	ReasonStaleEnvelope     = "stale_envelope"
 	ReasonInternalError     = "internal_error"
 )
 
 var (
 	ErrInvalidRequest = errors.New("rewrap invalid request")
 	ErrNotEncrypted   = errors.New("rewrap document is not encrypted")
+	ErrStaleEnvelope  = errors.New("rewrap stale envelope")
 )
 
 type Request struct {

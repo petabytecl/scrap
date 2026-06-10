@@ -18,6 +18,7 @@ import (
 type projectionRebuildCoreStub struct {
 	openBlockID      uint64
 	confirmedUploads map[uint64]index.ConfirmedUpload
+	pendingUploads   map[uint64]index.PendingUpload
 	swapStarted      chan struct{}
 	releaseSwap      chan struct{}
 	swapOnce         sync.Once
@@ -35,6 +36,14 @@ func (s *projectionRebuildCoreStub) confirmedUploadForRebuild(blockID uint64) (i
 		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
 	}
 	return confirmed, nil
+}
+
+func (s *projectionRebuildCoreStub) pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error) {
+	upload, ok := s.pendingUploads[blockID]
+	if !ok {
+		return index.PendingUpload{}, index.ErrPendingUploadNotFound
+	}
+	return upload, nil
 }
 
 func (s *projectionRebuildCoreStub) swapRebuiltProjection(_, _, _ string) (bool, error) {
@@ -154,7 +163,7 @@ func TestProjectionRebuilderLeavesShardUnavailableWhenSwapLosesIndex(t *testing.
 func TestProjectionRebuilderRequeuesSealedBlockForRaftConfirmation(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")
-	blockInfo := writeRebuildBlock(t, blocksDir, 1)
+	blockInfo := writeRebuildBlock(t, blocksDir)
 	projection := openProjectionForRebuildTest(t)
 
 	r := newProjectionRebuilder(&projectionRebuildCoreStub{}, dataDir, blocksDir, 7, UploadConfig{
@@ -182,7 +191,7 @@ func TestProjectionRebuilderRequeuesSealedBlockForRaftConfirmation(t *testing.T)
 func TestProjectionRebuilderPreservesHotConfirmedBlock(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")
-	writeRebuildBlock(t, blocksDir, 1)
+	writeRebuildBlock(t, blocksDir)
 	if err := os.WriteFile(filepath.Join(blocksDir, "0000000000000001.idx"), []byte("index bytes"), 0o600); err != nil {
 		t.Fatalf("write Block index: %v", err)
 	}
@@ -215,10 +224,56 @@ func TestProjectionRebuilderPreservesHotConfirmedBlock(t *testing.T) {
 	}
 }
 
+func TestProjectionRebuilderPreservesPendingRewrapUploadOverConfirmedAuthority(t *testing.T) {
+	dataDir := t.TempDir()
+	blocksDir := filepath.Join(dataDir, "blocks")
+	blockInfo := writeRebuildBlock(t, blocksDir)
+	if err := os.WriteFile(filepath.Join(blocksDir, "0000000000000001.idx"), []byte("index bytes"), 0o600); err != nil {
+		t.Fatalf("write Block index: %v", err)
+	}
+
+	replacement := index.PendingUpload{
+		BlockID:          1,
+		ShardID:          7,
+		SealedSizeBytes:  blockInfo.Size(),
+		SealedAtUs:       1716700002000000,
+		UploadGeneration: 1716700002000000,
+	}
+	core := &projectionRebuildCoreStub{
+		confirmedUploads: map[uint64]index.ConfirmedUpload{
+			1: confirmedUploadForEvictionApply(1, blockInfo.Size()),
+		},
+		pendingUploads: map[uint64]index.PendingUpload{
+			1: replacement,
+		},
+	}
+	projection := openProjectionForRebuildTest(t)
+	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{
+		Enabled: true,
+		Backend: noopRebuildBackend{},
+		CellID:  "cell-a",
+	}, nil)
+
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+		t.Fatalf("rebuildUploadOutbox: %v", err)
+	}
+
+	pending, err := projection.GetPendingUpload(1)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if pending != replacement {
+		t.Fatalf("pending upload = %+v, want replacement %+v", pending, replacement)
+	}
+	if _, err := projection.GetConfirmedUpload(1); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("GetConfirmedUpload error = %v, want ErrConfirmedUploadNotFound", err)
+	}
+}
+
 func TestProjectionRebuilderPreservesHotConfirmedBlockWhenUploadsDisabled(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")
-	writeRebuildBlock(t, blocksDir, 1)
+	writeRebuildBlock(t, blocksDir)
 	if err := os.WriteFile(filepath.Join(blocksDir, "0000000000000001.idx"), []byte("index bytes"), 0o600); err != nil {
 		t.Fatalf("write Block index: %v", err)
 	}
@@ -419,13 +474,13 @@ func TestProjectionRebuilderPreservesEvictedCommittedBlockAfterRestart(t *testin
 	}
 }
 
-func writeRebuildBlock(t *testing.T, blocksDir string, blockID uint64) os.FileInfo {
+func writeRebuildBlock(t *testing.T, blocksDir string) os.FileInfo {
 	t.Helper()
 
 	if err := os.MkdirAll(blocksDir, 0o750); err != nil {
 		t.Fatalf("mkdir blocks dir: %v", err)
 	}
-	path := filepath.Join(blocksDir, fmt.Sprintf("%016x.blk", blockID))
+	path := filepath.Join(blocksDir, "0000000000000001.blk")
 	if err := os.WriteFile(path, []byte("sealed block"), 0o600); err != nil {
 		t.Fatalf("write block: %v", err)
 	}

@@ -49,6 +49,15 @@ func (l *blockUploadLifecycle) forgetUploadObligation(blockID uint64) {
 }
 
 func (l *blockUploadLifecycle) applyCommittedSeal(idx *index.Index, seal *scrapv1.SealBlock) error {
+	pending, err := idx.GetPendingUpload(seal.GetBlockId())
+	if err != nil && !errors.Is(err, index.ErrPendingUploadNotFound) {
+		return fmt.Errorf("shard: get pending upload for committed seal %d: %w", seal.GetBlockId(), err)
+	}
+	if err == nil && pending.UploadGeneration > 0 {
+		l.obligations.forget(seal.GetBlockId())
+		return nil
+	}
+
 	if err := idx.PutPendingUpload(index.PendingUpload{
 		BlockID:         seal.GetBlockId(),
 		ShardID:         seal.GetShardId(),
@@ -65,6 +74,15 @@ func (l *blockUploadLifecycle) applyCommittedConfirm(blocksDir string, idx *inde
 	pending, err := idx.GetPendingUpload(confirm.GetBlockId())
 	if err != nil {
 		return l.applyConfirmWithoutPending(blocksDir, idx, confirm, err)
+	}
+	if pending.UploadGeneration != confirm.GetUploadGeneration() {
+		return index.ConfirmedUpload{}, fmt.Errorf(
+			"%w: block %d pending generation %d confirm generation %d",
+			errConfirmUploadGenerationMismatch,
+			confirm.GetBlockId(),
+			pending.UploadGeneration,
+			confirm.GetUploadGeneration(),
+		)
 	}
 
 	confirmed, err := l.putConfirmedUploadFromCommand(blocksDir, idx, confirm, pending.SealedSizeBytes)
@@ -95,6 +113,15 @@ func (l *blockUploadLifecycle) applyConfirmWithoutPending(
 			return index.ConfirmedUpload{}, fmt.Errorf("shard: get confirmed upload for block %d: %w", confirm.GetBlockId(), catalogErr)
 		}
 		return index.ConfirmedUpload{}, fmt.Errorf("shard: confirm upload missing sealed metadata for block %d: %w", confirm.GetBlockId(), pendingErr)
+	}
+	if existing.UploadGeneration != confirm.GetUploadGeneration() {
+		return index.ConfirmedUpload{}, fmt.Errorf(
+			"%w: block %d confirmed generation %d confirm generation %d",
+			errConfirmUploadGenerationMismatch,
+			confirm.GetBlockId(),
+			existing.UploadGeneration,
+			confirm.GetUploadGeneration(),
+		)
 	}
 
 	confirmed, err := l.putConfirmedUploadFromCommand(blocksDir, idx, confirm, existing.SealedSizeBytes)

@@ -348,6 +348,7 @@ func TestServer_RewrapDocumentEndpointMapsServiceErrors(t *testing.T) {
 		reason string
 	}{
 		{name: "invalid request", err: rewrap.ErrInvalidRequest, status: http.StatusBadRequest, reason: rewrap.ReasonInvalidRequest},
+		{name: "not leader", err: &storeapi.NotLeaderError{LeaderAddr: "scrapd-1:9090"}, status: http.StatusServiceUnavailable, reason: rewrap.ReasonNotLeader},
 		{name: "not encrypted", err: rewrap.ErrNotEncrypted, status: http.StatusPreconditionFailed, reason: rewrap.ReasonNotEncrypted},
 		{name: "data loss", err: storeapi.ErrDataLoss, status: http.StatusPreconditionFailed, reason: rewrap.ReasonDataLoss},
 		{name: "not found", err: storeapi.ErrNotFound, status: http.StatusNotFound, reason: rewrap.ReasonNotFound},

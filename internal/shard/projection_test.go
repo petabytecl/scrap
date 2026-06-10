@@ -70,7 +70,7 @@ func TestApplyCommitDocumentWritesHistoricalBlockIndex(t *testing.T) {
 		TotalBytes:    4,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("applyCommitDocument: %v", err)
 	}
@@ -106,12 +106,48 @@ func TestApplyCommitDocumentRequeuesHistoricalUploadAfterIndexAppend(t *testing.
 		TotalBytes:    4,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("applyCommitDocument: %v", err)
 	}
 
 	requirePendingUpload(t, idx, 7, 1)
+}
+
+func TestApplyCommitDocumentRequeuesHistoricalUploadWithEntryIndexGeneration(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeEmptyBlockAndIndex(t, dir, 7, 1)
+
+	s := &Shard{
+		blocksDir: dir,
+		shardID:   7,
+		idx:       idx,
+		upload:    UploadConfig{Enabled: true},
+	}
+	s.uploads = newUploadController(s, s.upload, s.shardID, nil, nil, nil)
+
+	if err := s.applyEntryCommand(&scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_CommitDoc{
+			CommitDoc: &scrapv1.CommitDocument{
+				TransactionId: "tx-requeue-entry",
+				DocumentName:  "doc.xml",
+				ContentType:   "text/xml",
+				BlockId:       1,
+				FrameCount:    1,
+				TotalBytes:    4,
+				Sha256:        make([]byte, 32),
+				CreatedAtUs:   1716700001000000,
+			},
+		},
+	}, 88); err != nil {
+		t.Fatalf("applyEntryCommand: %v", err)
+	}
+
+	pending := requirePendingUpload(t, idx, 7, 1)
+	if pending.UploadGeneration != 88 || pending.SealedAtUs != 88 {
+		t.Fatalf("pending generation = %d/%d, want apply entry index", pending.UploadGeneration, pending.SealedAtUs)
+	}
 }
 
 func TestApplyCommitDocumentRequeuesHistoricalUploadWhenIndexEntryAlreadyPresent(t *testing.T) {
@@ -190,7 +226,7 @@ func openProjectionTestIndex(t *testing.T) *index.Index {
 	return idx
 }
 
-func requirePendingUpload(t *testing.T, idx *index.Index, shardID, blockID uint64) {
+func requirePendingUpload(t *testing.T, idx *index.Index, shardID, blockID uint64) index.PendingUpload {
 	t.Helper()
 	uploads, err := collectPendingUploads(idx)
 	if err != nil {
@@ -205,6 +241,7 @@ func requirePendingUpload(t *testing.T, idx *index.Index, shardID, blockID uint6
 	if uploads[0].SealedSizeBytes <= 0 {
 		t.Fatalf("SealedSizeBytes = %d, want > 0", uploads[0].SealedSizeBytes)
 	}
+	return uploads[0]
 }
 
 func writeEmptyBlockAndIndex(t *testing.T, dir string, shardID, blockID uint64) {
@@ -271,7 +308,7 @@ func newProjectionCommit(txID, docName string) *scrapv1.CommitDocument {
 
 func applyProjectionCommit(t *testing.T, s *Shard, doc *scrapv1.CommitDocument) {
 	t.Helper()
-	if err := s.applyCommitDocument(doc); err != nil {
+	if err := s.applyCommitDocument(doc, 0); err != nil {
 		t.Fatalf("applyCommitDocument: %v", err)
 	}
 }
@@ -341,7 +378,7 @@ func TestApplyCommitDocumentWritesCurrentBlockIndex(t *testing.T) {
 		TotalBytes:    4,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("applyCommitDocument: %v", err)
 	}
@@ -382,7 +419,7 @@ func TestAppendDocumentIndexEntryReportsCurrentWriterError(t *testing.T) {
 	err = s.appendDocumentIndexEntry(&scrapv1.CommitDocument{BlockId: 1}, block.IndexEntry{
 		TransactionID: "tx-current-error",
 		DocName:       "doc.xml",
-	})
+	}, 0)
 	if err == nil {
 		t.Fatal("expected current writer error")
 	}
@@ -426,7 +463,7 @@ func TestApplyCommitDocumentSkipsExistingHistoricalIndexEntry(t *testing.T) {
 		TotalBytes:    4,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("applyCommitDocument: %v", err)
 	}
@@ -473,7 +510,7 @@ func TestApplyCommitDocumentRejectsExistingVisibleDocument(t *testing.T) {
 		BlockId:       1,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
-	})
+	}, 0)
 	if err == nil {
 		t.Fatal("expected duplicate visible document error")
 	}
@@ -497,7 +534,7 @@ func TestApplyCommitDocumentFailsWhenHistoricalIndexMissing(t *testing.T) {
 		BlockId:       1,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
-	})
+	}, 0)
 	if err == nil {
 		t.Fatal("expected missing historical index error")
 	}
