@@ -44,6 +44,9 @@ func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.Se
 	if err != nil {
 		return s.transferIndexStatError(blockID, blkPath, idxPath, err)
 	}
+	if err := block.VerifyHeader(blkPath, req.GetShardId(), blockID); err != nil {
+		return status.Errorf(codes.DataLoss, "block header verification failed: %v", err)
+	}
 
 	if err := stream.Send(&scrapv1.TransferBlockResponse{
 		Part: &scrapv1.TransferBlockResponse_Meta{

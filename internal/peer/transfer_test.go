@@ -156,6 +156,18 @@ func TestTransferBlockNotFound(t *testing.T) {
 	}
 }
 
+func TestTransferBlockRejectsShardHeaderMismatch(t *testing.T) {
+	dir := t.TempDir()
+	seedTransferBlock(t, dir)
+	addr := startPeerServer(t, dir)
+
+	err := transferBlockFirstRecvErrorForShard(t, addr, 1, 1)
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.DataLoss || !strings.Contains(st.Message(), "block header verification failed") {
+		t.Fatalf("TransferBlock Shard mismatch error = %v, want DATA_LOSS header verification failure", err)
+	}
+}
+
 func TestTransferBlockDistinguishesLocalLossStates(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -242,13 +254,18 @@ func TestTransferBlockEvictedReturnsFailedPrecondition(t *testing.T) {
 
 	c := peer.NewClient()
 	defer c.Close()
-	_, _, err := c.TransferBlock(context.Background(), addr, 1)
+	_, _, err := c.TransferBlock(context.Background(), addr, 0, 1)
 	if !errors.Is(err, scrub.ErrPeerBlockEvicted) {
 		t.Fatalf("TransferBlock error = %v, want ErrPeerBlockEvicted", err)
 	}
 }
 
 func transferBlockFirstRecvError(t *testing.T, addr string, blockID uint64) error {
+	t.Helper()
+	return transferBlockFirstRecvErrorForShard(t, addr, 0, blockID)
+}
+
+func transferBlockFirstRecvErrorForShard(t *testing.T, addr string, shardID, blockID uint64) error {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -258,7 +275,7 @@ func transferBlockFirstRecvError(t *testing.T, addr string, blockID uint64) erro
 
 	client := scrapv1.NewPeerServiceClient(conn)
 	stream, err := client.TransferBlock(context.Background(), &scrapv1.TransferBlockRequest{
-		ShardId: 0,
+		ShardId: shardID,
 		BlockId: blockID,
 	})
 	if err != nil {

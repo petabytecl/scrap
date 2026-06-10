@@ -21,7 +21,7 @@ var (
 )
 
 type BlockTransferer interface {
-	TransferBlock(ctx context.Context, addr string, blockID uint64) ([]byte, []byte, error)
+	TransferBlock(ctx context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error)
 }
 
 type BackendBlockRestorer interface {
@@ -34,6 +34,7 @@ type BlockRepairer interface {
 
 type BlockRepairConfig struct {
 	BlocksDir       string
+	ShardID         uint64
 	Transferer      BlockTransferer
 	BackendRestorer BackendBlockRestorer
 	Metrics         DeepMetrics
@@ -145,7 +146,7 @@ func (r *BlockRepair) decrementQuarantined() {
 }
 
 func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAddr string) error {
-	blkData, idxData, err := r.cfg.Transferer.TransferBlock(ctx, peerAddr, blockID)
+	blkData, idxData, err := r.cfg.Transferer.TransferBlock(ctx, peerAddr, r.cfg.ShardID, blockID)
 	if err != nil {
 		return fmt.Errorf("fetch replacement: %w", err)
 	}
