@@ -178,16 +178,8 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 		return err
 	}
 
-	first, err := stream.Recv()
+	init, err := s.receiveReplicateDocumentInit(stream)
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "receive init: %v", err)
-	}
-
-	init := first.GetInit()
-	if init == nil {
-		return status.Error(codes.InvalidArgument, "first message must be init")
-	}
-	if err := s.authorizePeerShardScope(stream.Context(), audit.OperationReplicateDocument, audit.TargetDocument, init.GetShardId()); err != nil {
 		return err
 	}
 	if s.replicationSink != nil {
@@ -240,6 +232,21 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 	return stream.SendAndClose(&scrapv1.ReplicateDocumentResponse{
 		Sha256: computedSHA,
 	})
+}
+
+func (s *Server) receiveReplicateDocumentInit(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse]) (*scrapv1.ReplicateDocumentInit, error) {
+	first, err := stream.Recv()
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "receive init: %v", err)
+	}
+	init := first.GetInit()
+	if init == nil {
+		return nil, status.Error(codes.InvalidArgument, "first message must be init")
+	}
+	if err := s.authorizePeerShardScope(stream.Context(), audit.OperationReplicateDocument, audit.TargetDocument, init.GetShardId()); err != nil {
+		return nil, err
+	}
+	return init, nil
 }
 
 func (s *Server) replicateToSink(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], init *scrapv1.ReplicateDocumentInit) error {
