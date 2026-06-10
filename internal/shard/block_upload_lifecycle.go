@@ -49,6 +49,15 @@ func (l *blockUploadLifecycle) forgetUploadObligation(blockID uint64) {
 }
 
 func (l *blockUploadLifecycle) applyCommittedSeal(idx *index.Index, seal *scrapv1.SealBlock) error {
+	pending, err := idx.GetPendingUpload(seal.GetBlockId())
+	if err != nil && !errors.Is(err, index.ErrPendingUploadNotFound) {
+		return fmt.Errorf("shard: get pending upload for committed seal %d: %w", seal.GetBlockId(), err)
+	}
+	if err == nil && pending.UploadGeneration > 0 {
+		l.obligations.forget(seal.GetBlockId())
+		return nil
+	}
+
 	if err := idx.PutPendingUpload(index.PendingUpload{
 		BlockID:         seal.GetBlockId(),
 		ShardID:         seal.GetShardId(),

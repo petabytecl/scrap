@@ -158,6 +158,38 @@ func TestApplyConfirmUploadIgnoresStaleDuplicateGeneration(t *testing.T) {
 	}
 }
 
+func TestApplySealBlockPreservesPendingRewrapGeneration(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	replacement := index.PendingUpload{
+		BlockID:          uploadApplyTestBlockID,
+		ShardID:          7,
+		SealedSizeBytes:  67108864,
+		SealedAtUs:       1716700002000000,
+		UploadGeneration: 1716700002000000,
+	}
+	if err := idx.PutPendingUpload(replacement); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+
+	staleSeal := &scrapv1.SealBlock{
+		BlockId:         uploadApplyTestBlockID,
+		ShardId:         7,
+		SealedSizeBytes: 67108864,
+		SealedAtUs:      1716700001000000,
+	}
+	if err := shardForApplyTest(t, idx).applySealBlock(staleSeal); err != nil {
+		t.Fatalf("applySealBlock: %v", err)
+	}
+
+	got, err := idx.GetPendingUpload(uploadApplyTestBlockID)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if got != replacement {
+		t.Fatalf("pending upload = %+v, want replacement %+v", got, replacement)
+	}
+}
+
 func TestBackendKeyPrefixIncludesNonZeroUploadGeneration(t *testing.T) {
 	legacy := backendKeyPrefix("cell-a", 7, uploadApplyTestBlockID, 0)
 	if legacy != "cell-a/shards/0000000000000007/000000000000002a" {

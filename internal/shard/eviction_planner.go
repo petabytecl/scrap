@@ -54,6 +54,15 @@ func (s *Shard) EvictionPlanForTest(planID string) (eviction.Plan, bool) {
 }
 
 func (s *Shard) evictionCandidatesLocked() ([]eviction.PlanCandidate, error) {
+	pendingUploads, err := collectPendingUploads(s.idx)
+	if err != nil {
+		return nil, err
+	}
+	pendingByBlockID := make(map[uint64]struct{}, len(pendingUploads))
+	for _, upload := range pendingUploads {
+		pendingByBlockID[upload.BlockID] = struct{}{}
+	}
+
 	iter, err := s.idx.ConfirmedUploads()
 	if err != nil {
 		return nil, err
@@ -63,6 +72,9 @@ func (s *Shard) evictionCandidatesLocked() ([]eviction.PlanCandidate, error) {
 	for {
 		upload, err := iter.Next()
 		if err == nil {
+			if _, pending := pendingByBlockID[upload.BlockID]; pending {
+				continue
+			}
 			lifecycle, err := localblock.Classify(s.blocksDir, upload.BlockID)
 			if err != nil {
 				return nil, fmt.Errorf("shard: classify local Block %d: %w", upload.BlockID, err)
