@@ -230,6 +230,9 @@ func (s *Shard) repairRestoreInput(ctx context.Context, blockID uint64) (restore
 	if err != nil {
 		return restoreInput{}, fmt.Errorf("%w: Block %d has no committed ConfirmUpload for repair: %w", storeapi.ErrDataLoss, blockID, err)
 	}
+	if err := s.rejectRepairRestoreDuringPendingReplacementLocked(blockID, confirmed.UploadGeneration); err != nil {
+		return restoreInput{}, err
+	}
 	if s.upload.Backend == nil {
 		return restoreInput{}, storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "Backend repair restore is not configured")
 	}
@@ -242,6 +245,23 @@ func (s *Shard) repairRestoreInput(ctx context.Context, blockID uint64) (restore
 		blockPath: s.blockPath(blockID),
 		indexPath: s.idxPath(blockID) + block.QuarantineSuffix,
 	}, nil
+}
+
+func (s *Shard) rejectRepairRestoreDuringPendingReplacementLocked(blockID uint64, confirmedGeneration int64) error {
+	pending, err := s.idx.GetPendingUpload(blockID)
+	if err != nil {
+		if errors.Is(err, index.ErrPendingUploadNotFound) {
+			return nil
+		}
+		return fmt.Errorf("%w: Block %d pending upload lookup for repair: %w", storeapi.ErrDataLoss, blockID, err)
+	}
+	if pending.UploadGeneration <= confirmedGeneration {
+		return nil
+	}
+	return storeapi.NewUnavailable(
+		storeapi.UnavailableReasonUploadPending,
+		fmt.Sprintf("Block %d replacement upload is pending", blockID),
+	)
 }
 
 func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput, error) {

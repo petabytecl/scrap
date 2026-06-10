@@ -32,7 +32,7 @@ func (s *Shard) scrubProjectionResult(scrubID string, entryIndex uint64) scrub.R
 	return result
 }
 
-func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
+func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -58,7 +58,7 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument) error {
 		TotalBytes:         doc.TotalBytes,
 		SHA256:             sha,
 		EncryptionEnvelope: append([]byte(nil), doc.EncryptionEnvelope...),
-	}); err != nil {
+	}, entryIndex); err != nil {
 		return err
 	}
 
@@ -146,7 +146,7 @@ func (s *Shard) blockIndexEntriesForApply(blockID uint64, txID string) ([]block.
 	return ir.FindByTransaction(txID), nil
 }
 
-func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry) error {
+func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry, entryIndex uint64) error {
 	idxW := s.idxWriterForBlock(doc.BlockId)
 	if idxW != nil {
 		if err := idxW.Append(entry); err != nil {
@@ -154,13 +154,14 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 		}
 		return nil
 	}
+	uploadGeneration := uploadGenerationFromApplyIndex(entryIndex, doc.GetCreatedAtUs())
 
 	contains, err := s.blockIndexContainsDocumentRepairingTail(doc.BlockId, doc.TransactionId, doc.DocumentName)
 	if err != nil {
 		return err
 	}
 	if contains {
-		return s.requeueBlockUploadAfterIndexAppend(doc.BlockId, doc.GetCreatedAtUs())
+		return s.requeueBlockUploadAfterIndexAppend(doc.BlockId, uploadGeneration)
 	}
 
 	idxW, err = block.OpenIndexWriter(s.idxPath(doc.BlockId))
@@ -174,7 +175,7 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 	if err := idxW.Close(); err != nil {
 		return fmt.Errorf("shard: close historical write idx: %w", err)
 	}
-	if err := s.requeueBlockUploadAfterIndexAppend(doc.BlockId, doc.GetCreatedAtUs()); err != nil {
+	if err := s.requeueBlockUploadAfterIndexAppend(doc.BlockId, uploadGeneration); err != nil {
 		return err
 	}
 	return nil

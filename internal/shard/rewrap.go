@@ -228,10 +228,7 @@ func (s *Shard) applyRewrapDocumentEnvelopeCommand(cmd *scrapv1.RewrapDocumentEn
 }
 
 func rewrapUploadGeneration(cmd *scrapv1.RewrapDocumentEnvelope, entryIndex uint64) int64 {
-	if entryIndex > 0 && entryIndex <= math.MaxInt64 {
-		return int64(entryIndex)
-	}
-	return cmd.GetRewrappedAtUs()
+	return uploadGenerationFromApplyIndex(entryIndex, cmd.GetRewrappedAtUs())
 }
 
 func rewrapProposalKey(proposalID, txID, docName string) string {
@@ -275,8 +272,12 @@ func (s *Shard) replaceRewrapEnvelopeLocked(cmd *scrapv1.RewrapDocumentEnvelope,
 		s.idxWriter = nil
 	}
 
-	if err := validateRewrapCurrentEnvelope(s.idxPath(cmd.GetBlockId()), cmd); err != nil {
+	alreadyApplied, err := validateRewrapCurrentEnvelope(s.idxPath(cmd.GetBlockId()), cmd)
+	if err != nil {
 		return false, s.reopenCurrentIndexAfterRewrapErrorLocked(current, cmd.GetBlockId(), err)
+	}
+	if alreadyApplied {
+		return true, nil
 	}
 	_, changed, replaceErr := block.ReplaceDocumentEnvelope(
 		s.idxPath(cmd.GetBlockId()),
@@ -315,30 +316,33 @@ func (s *Shard) reopenCurrentIndexAfterRewrapErrorLocked(current bool, blockID u
 	return err
 }
 
-func validateRewrapCurrentEnvelope(path string, cmd *scrapv1.RewrapDocumentEnvelope) error {
+func validateRewrapCurrentEnvelope(path string, cmd *scrapv1.RewrapDocumentEnvelope) (bool, error) {
 	ir, err := block.OpenIndexReader(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = ir.Close() }()
 
 	entry, err := ir.Find(cmd.GetTransactionId(), cmd.GetDocumentName())
 	if err != nil {
-		return mapRewrapIndexError(err)
+		return false, mapRewrapIndexError(err)
 	}
 	current, err := encryption.ParseEnvelope(entry.EncryptionEnvelope)
 	if err != nil {
-		return mapEncryptionError(err)
+		return false, mapEncryptionError(err)
 	}
-	if current.KeyVersion != int(cmd.GetOldKeyVersion()) {
-		return fmt.Errorf(
-			"%w: current key version %d does not match command old key version %d",
-			rewrap.ErrStaleEnvelope,
-			current.KeyVersion,
-			cmd.GetOldKeyVersion(),
-		)
+	if current.KeyVersion == int(cmd.GetOldKeyVersion()) {
+		return false, nil
 	}
-	return nil
+	if current.KeyVersion == int(cmd.GetNewKeyVersion()) {
+		return true, nil
+	}
+	return false, fmt.Errorf(
+		"%w: current key version %d does not match command old key version %d",
+		rewrap.ErrStaleEnvelope,
+		current.KeyVersion,
+		cmd.GetOldKeyVersion(),
+	)
 }
 
 func (s *Shard) finishRewrapApplyLocked(blockID uint64, current, changed bool, uploadGeneration int64) error {

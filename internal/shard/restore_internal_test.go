@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -108,6 +109,45 @@ func TestRequireQuarantinedRepairFilesFailsClosed(t *testing.T) {
 	}
 	if err := requireQuarantinedRepairFiles(blocksDir, blockID); err != nil {
 		t.Fatalf("requireQuarantinedRepairFiles: %v", err)
+	}
+}
+
+func TestRepairRestoreInputRejectsPendingReplacementUpload(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	confirmed := confirmedUploadForApplyTest(1716700001000000, shardApplyValidationValue("block"), shardApplyValidationValue("index"))
+	if err := idx.PutConfirmedUpload(confirmed); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+	if err := idx.PutPendingUpload(index.PendingUpload{
+		BlockID:          confirmed.BlockID,
+		ShardID:          confirmed.ShardID,
+		SealedSizeBytes:  confirmed.SealedSizeBytes,
+		SealedAtUs:       1716700002000000,
+		UploadGeneration: 1716700002000000,
+	}); err != nil {
+		t.Fatalf("PutPendingUpload: %v", err)
+	}
+
+	blocksDir := t.TempDir()
+	if err := os.WriteFile(block.FilePath(blocksDir, confirmed.BlockID)+block.QuarantineSuffix, []byte("blk"), 0o600); err != nil {
+		t.Fatalf("write quarantined Block: %v", err)
+	}
+	if err := os.WriteFile(block.IdxFilePath(blocksDir, confirmed.BlockID)+block.QuarantineSuffix, []byte("idx"), 0o600); err != nil {
+		t.Fatalf("write quarantined index: %v", err)
+	}
+	s := &Shard{
+		blocksDir: blocksDir,
+		idx:       idx,
+		upload:    UploadConfig{Backend: backend.NewFS(t.TempDir())},
+	}
+
+	_, err := s.repairRestoreInput(context.Background(), confirmed.BlockID)
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("repairRestoreInput error = %v, want ErrUnavailable", err)
+	}
+	reason, ok := storeapi.UnavailableReason(err)
+	if !ok || reason != storeapi.UnavailableReasonUploadPending {
+		t.Fatalf("unavailable reason = %q/%v, want upload_pending", reason, ok)
 	}
 }
 

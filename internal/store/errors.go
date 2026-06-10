@@ -7,6 +7,7 @@ const (
 
 	UnavailableReasonBackendRestoreUnavailable = "backend_restore_unavailable"
 	UnavailableReasonCryptoUnavailable         = "crypto_unavailable"
+	UnavailableReasonUploadPending             = "upload_pending"
 )
 
 var (

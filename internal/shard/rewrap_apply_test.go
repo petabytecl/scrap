@@ -112,6 +112,70 @@ func TestApplyRewrapRequeuesWithEntryIndexGeneration(t *testing.T) {
 	}
 }
 
+func TestApplyRewrapRequeuesAlreadyAppliedReplay(t *testing.T) {
+	blocksDir := t.TempDir()
+	idx := openApplyTestIndex(t)
+	replacementEnvelope := rewrapApplyEnvelope(t, 2)
+	writeRewrapApplyIndex(t, blocksDir, replacementEnvelope)
+	if err := os.WriteFile(block.FilePath(blocksDir, 1), []byte("block bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile block: %v", err)
+	}
+	if err := idx.PutConfirmedUpload(index.ConfirmedUpload{
+		BlockID:         1,
+		ShardID:         7,
+		ConfirmedAtUs:   1716700001000000,
+		SealedSizeBytes: 67108864,
+		BlockObject: index.BackendObjectMetadata{
+			Key:             "cell-a/shards/0000000000000007/0000000000000001.blk",
+			SizeBytes:       67108864,
+			ValidationToken: "block-validation",
+		},
+		IndexObject: index.BackendObjectMetadata{
+			Key:             "cell-a/shards/0000000000000007/0000000000000001.idx",
+			SizeBytes:       4096,
+			ValidationToken: "index-validation",
+		},
+	}); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: blocksDir,
+		idx:       idx,
+		upload:    UploadConfig{Enabled: true},
+		uploads:   newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
+		shardID:   7,
+	}
+	err := s.applyEntryCommand(&scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_RewrapDoc{
+			RewrapDoc: &scrapv1.RewrapDocumentEnvelope{
+				TransactionId:      "tx-rewrap",
+				DocumentName:       "doc.xml",
+				BlockId:            1,
+				EncryptionEnvelope: replacementEnvelope,
+				OldKeyVersion:      1,
+				NewKeyVersion:      2,
+				RewrappedAtUs:      1716700002000000,
+			},
+		},
+	}, 99)
+	if err != nil {
+		t.Fatalf("apply rewrap replay: %v", err)
+	}
+
+	pending, err := idx.GetPendingUpload(1)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if pending.UploadGeneration != 99 {
+		t.Fatalf("pending upload generation = %d, want replay entry index", pending.UploadGeneration)
+	}
+	got := readRewrapApplyEnvelope(t, blocksDir)
+	if string(got) != string(replacementEnvelope) {
+		t.Fatal("already-applied envelope changed during replay")
+	}
+}
+
 func TestUploadProcessorSkipsPendingUploadWithoutLocalBlock(t *testing.T) {
 	ctx := context.Background()
 	backendStore := newCountingBackend()
