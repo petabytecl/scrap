@@ -19,6 +19,8 @@ import (
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
+const appShardID uint64 = 0
+
 // App owns the long-lived scrapd components and their lifecycle. Construction
 // (newApp) wires everything; Run serves until the context is cancelled or a
 // server fails; Shutdown tears down in one explicit, documented order.
@@ -81,7 +83,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	clientAddrs := resolveClientAddrs(cfg, peers)
 
-	telemetryRuntime, err := newScrapdTelemetryWithSecurity(context.Background(), memberIdentity.MemberHostname, memberIdentity.MemberID, raftID, 0, build, cfg.SecurityMode)
+	telemetryRuntime, err := newScrapdTelemetryWithSecurity(context.Background(), memberIdentity.MemberHostname, memberIdentity.MemberID, raftID, appShardID, build, cfg.SecurityMode)
 	if err != nil {
 		return fail(err)
 	}
@@ -107,14 +109,14 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	transport := securityRuntime.transport
 	cleanup = append(cleanup, transport.Close)
-	shardTransport := transport.ForShard(0, peers)
+	shardTransport := transport.ForShard(appShardID, peers)
 
 	peerClient := securityRuntime.peerClient
 	cleanup = append(cleanup, peerClient.Close)
 
 	s, err := shard.Open(shard.Config{
 		DataDir:            cfg.DataDir,
-		ShardID:            0,
+		ShardID:            appShardID,
 		RaftID:             raftID,
 		Peers:              peers,
 		ClientAddrs:        clientAddrs,
@@ -256,6 +258,7 @@ func newPeerServer(cfg Config, shard *shard.Shard, securityRuntime appSecurityRu
 		peer.WithScrubCache(shard),
 		peer.WithRebuildHandler(shard),
 		peer.WithReplicationSink(shard),
+		peer.WithAuthorizedShards(appShardID),
 	}
 	if securityRuntime.authorizer != nil {
 		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{

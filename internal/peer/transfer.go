@@ -28,7 +28,7 @@ const (
 )
 
 func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.ServerStreamingServer[scrapv1.TransferBlockResponse]) error {
-	if err := s.authorizePeer(stream.Context(), audit.OperationTransferBlock, audit.TargetBlock); err != nil {
+	if err := s.authorizePeerForShard(stream.Context(), audit.OperationTransferBlock, audit.TargetBlock, req.GetShardId()); err != nil {
 		return err
 	}
 

@@ -18,7 +18,7 @@ make production-rehearsal-security
 Runs the local production security rehearsal with:
 
 - `SCRAP_SECURITY_MODE=production`
-- real TLS on public, peer, admin, and `scrapctl` paths
+- TLS 1.3 mTLS on public, peer, admin, and `scrapctl` paths
 - generated role, peer identity, audit, and rate-limit policies
 - real OpenBao Transit over TLS
 - filesystem Backend
@@ -83,6 +83,23 @@ Generated TLS material, OpenBao initialization data, tokens, logs, and runtime
 state stay under `artifacts/production-rehearsal/`, which is ignored by Git.
 Do not copy token values, private keys, Document payloads, raw Backend object
 keys, validation tokens, or raw logs into public issues or pull requests.
+
+## Certificate Rotation
+
+The initial production bridge uses restart-based certificate rotation. To rotate
+SCRAP listener, client, or CA material:
+
+1. Write the replacement certificate, key, and CA bundle to the mounted secret
+   or host path for the affected surface.
+2. Restart or roll the affected `scrapd` Members and `scrapctl` clients.
+3. Verify startup succeeds in `SCRAP_SECURITY_MODE=production`; startup gates
+   fail closed if files are missing, expired, untrusted, or not valid for the
+   configured server name or client identity.
+4. Run `make production-rehearsal-security` and keep the generated report with
+   the relevant production-readiness issue or pull request.
+
+Hot certificate reload is not part of the Phase 4.5 production contract. Adding
+it requires a separate design for connection draining, rollback, and evidence.
 
 ## What This Proves
 

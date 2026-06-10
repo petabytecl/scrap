@@ -604,7 +604,8 @@ client-facing `DocumentService`. Two RPCs:
 
 - `ReplicateDocument` (client-streaming): hot-path write replication. Leader pushes
   document frames to a follower during a write. Mirrors `WriteDocument`'s init + chunk
-  streaming shape. Follower writes to its local Block, verifies checksums, ACKs.
+  streaming shape, with `shard_id` on the init message. Follower writes to its local
+  Block, verifies checksums, ACKs.
 - `TransferBlock` (server-streaming): recovery path. Transfers a sealed Block + `.idx`
   to a new or lagging member. Used during snapshot catch-up and repair.
 
@@ -613,12 +614,18 @@ voters) and `RequestIndexRebuild` (leader instructs divergent voter to wipe + re
 projection from Raft state). Phase 2b also adds `RequestConsistencyCheck` to the
 `RaftCommand` oneof (fields: `scrub_id` ULID, `requested_at_us`).
 
+Peer authorization verifies role, Cell, Member identity, principal binding, and
+configured Shard membership before Shard-scoped Raft or byte-transfer handlers run.
+See ADR 0024.
+
 ### Phase 2 Read Path
 
 Leader-only reads for the Phase 2 safety milestone. ReadIndex from followers is a known extension.
 Client routing: smart Go client library with redirect-on-leader-change, no gateway.
 Non-leader members return `UNAVAILABLE` with a `LeaderHint` gRPC status detail containing
 the current leader's address. The client extracts the hint and retries directly.
+This direct address remains the authenticated V2 redirect contract; changing it to an
+opaque route hint or gateway token requires a new wire-contract ADR. See ADR 0024.
 Document resolution: the projection maps Transaction → Block IDs; .idx file resolves
 per-Document metadata (offset, size, checksum). See ADR 0004.
 
@@ -714,9 +721,9 @@ via Raft. Upload Outbox tracks obligations. Three-level admission pressure
 (WARN/PRESSURE/CRITICAL) prevents unbounded upload lag from filling local disk.
 Phase 4: Partial eviction → followers evict uploaded `.blk` data files while
 retaining local `.idx` files for metadata reads (see ADR 0016).
-Phase 4.5: Production security bridge → mTLS/authz/audit/rate-limit boundaries
-and OpenBao Transit envelope encryption before cold-only reads (see ADR 0019
-and ADR 0020).
+Phase 4.5: Production security bridge → mTLS/authz/audit/rate-limit boundaries,
+peer Shard-scope policy, production topology policy, and OpenBao Transit envelope
+encryption before cold-only reads (see ADR 0019, ADR 0020, and ADR 0024).
 Phase 5 (future): Cold-only → all local copies evicted, Backend-only reads.
 
 ### Raft Operations

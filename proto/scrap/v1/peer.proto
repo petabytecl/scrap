@@ -28,6 +28,7 @@ message ReplicateDocumentInit {
   int64  total_bytes     = 7;
   bytes  sha256          = 8;
   bytes  encryption_envelope = 9;
+  uint64 shard_id        = 10;
 }
 
 message ReplicateDocumentResponse {
