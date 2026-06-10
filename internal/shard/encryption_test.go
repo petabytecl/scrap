@@ -205,6 +205,27 @@ func TestShardRewrapRejectsInvalidAndUnavailableRequests(t *testing.T) {
 	}
 }
 
+func TestEncryptedShardRewrapMapsInvalidTransitRequest(t *testing.T) {
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	s, _ := openEncryptedTestShard(t, transit)
+	if _, err := s.WriteDocument(context.Background(), "tx-rewrap-invalid", "doc.xml", "text/xml", "", bytes.NewReader([]byte("payload"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	result, err := s.RewrapDocument(context.Background(), rewrap.Request{
+		TransactionID: "tx-rewrap-invalid",
+		DocumentName:  "doc.xml",
+		KeyVersion:    99,
+		Reason:        "test",
+	})
+	if !errors.Is(err, rewrap.ErrInvalidRequest) {
+		t.Fatalf("RewrapDocument error = %v, want ErrInvalidRequest", err)
+	}
+	if result.Reason != rewrap.ReasonInvalidRequest {
+		t.Fatalf("RewrapDocument reason = %q, want invalid_request", result.Reason)
+	}
+}
+
 func assertBlockPayloadUnchanged(t *testing.T, dataDir string, before []byte) {
 	t.Helper()
 

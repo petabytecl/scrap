@@ -116,7 +116,7 @@ func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) e
 	case *scrapv1.RaftCommand_CommitDoc:
 		s.applyCommitDocumentCommand(c.CommitDoc)
 	case *scrapv1.RaftCommand_RewrapDoc:
-		s.applyRewrapDocumentEnvelopeCommand(c.RewrapDoc)
+		return s.applyRewrapDocumentEnvelopeCommand(c.RewrapDoc)
 	case *scrapv1.RaftCommand_ConsistencyCheck:
 		s.scrubs.applyConsistencyCheck(c.ConsistencyCheck, entryIndex)
 	case *scrapv1.RaftCommand_SealBlock:

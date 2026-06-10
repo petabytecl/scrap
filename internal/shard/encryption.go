@@ -9,6 +9,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/rewrap"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -71,6 +72,8 @@ func mapEncryptionError(err error) error {
 		return storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
 	case errors.Is(err, encryption.ErrInvalidEnvelope), errors.Is(err, encryption.ErrIntegrity):
 		return fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+	case errors.Is(err, encryption.ErrInvalidRequest):
+		return fmt.Errorf("%w: %w", rewrap.ErrInvalidRequest, err)
 	default:
 		return err
 	}

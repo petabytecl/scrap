@@ -199,11 +199,13 @@ func (s *Shard) requeueBlockUploadAfterIndexAppend(blockID uint64) error {
 	if err != nil {
 		return fmt.Errorf("shard: stat historical block for upload: %w", err)
 	}
+	requeuedAtUs := time.Now().UnixMicro()
 	if err := s.idx.PutPendingUpload(index.PendingUpload{
-		BlockID:         blockID,
-		ShardID:         s.shardID,
-		SealedSizeBytes: info.Size(),
-		SealedAtUs:      time.Now().UnixMicro(),
+		BlockID:          blockID,
+		ShardID:          s.shardID,
+		SealedSizeBytes:  info.Size(),
+		SealedAtUs:       requeuedAtUs,
+		UploadGeneration: requeuedAtUs,
 	}); err != nil {
 		return fmt.Errorf("shard: requeue historical block upload: %w", err)
 	}

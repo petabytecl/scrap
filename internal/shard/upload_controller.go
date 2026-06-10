@@ -247,12 +247,13 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 	}
 
 	return c.proposeConfirmUpload(ctx, index.ConfirmedUpload{
-		BlockID:         upload.BlockID,
-		ShardID:         upload.ShardID,
-		ConfirmedAtUs:   time.Now().UnixMicro(),
-		SealedSizeBytes: upload.SealedSizeBytes,
-		BlockObject:     blk,
-		IndexObject:     idx,
+		BlockID:          upload.BlockID,
+		ShardID:          upload.ShardID,
+		ConfirmedAtUs:    time.Now().UnixMicro(),
+		SealedSizeBytes:  upload.SealedSizeBytes,
+		UploadGeneration: upload.UploadGeneration,
+		BlockObject:      blk,
+		IndexObject:      idx,
 	})
 }
 
@@ -306,11 +307,12 @@ func (c *uploadController) proposeConfirmUpload(ctx context.Context, upload inde
 	cmd := &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_ConfirmUpload{
 			ConfirmUpload: &scrapv1.ConfirmUpload{
-				BlockId:       upload.BlockID,
-				ShardId:       upload.ShardID,
-				BlockObject:   protoBackendObject(upload.BlockObject),
-				IndexObject:   protoBackendObject(upload.IndexObject),
-				ConfirmedAtUs: upload.ConfirmedAtUs,
+				BlockId:          upload.BlockID,
+				ShardId:          upload.ShardID,
+				BlockObject:      protoBackendObject(upload.BlockObject),
+				IndexObject:      protoBackendObject(upload.IndexObject),
+				ConfirmedAtUs:    upload.ConfirmedAtUs,
+				UploadGeneration: upload.UploadGeneration,
 			},
 		},
 	}

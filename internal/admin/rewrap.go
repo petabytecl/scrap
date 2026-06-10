@@ -67,6 +67,10 @@ func rewrapHTTPStatus(err error) int {
 	switch {
 	case errors.Is(err, rewrap.ErrInvalidRequest):
 		return http.StatusBadRequest
+	case errors.Is(err, rewrap.ErrStaleEnvelope):
+		return http.StatusConflict
+	case isNotLeader(err):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, rewrap.ErrNotEncrypted), errors.Is(err, storeapi.ErrDataLoss):
 		return http.StatusPreconditionFailed
 	case errors.Is(err, storeapi.ErrTxNotFound), errors.Is(err, storeapi.ErrNotFound):
@@ -76,4 +80,9 @@ func rewrapHTTPStatus(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+func isNotLeader(err error) bool {
+	var notLeader *storeapi.NotLeaderError
+	return errors.As(err, &notLeader)
 }

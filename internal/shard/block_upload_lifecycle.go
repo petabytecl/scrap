@@ -66,6 +66,15 @@ func (l *blockUploadLifecycle) applyCommittedConfirm(blocksDir string, idx *inde
 	if err != nil {
 		return l.applyConfirmWithoutPending(blocksDir, idx, confirm, err)
 	}
+	if pending.UploadGeneration != confirm.GetUploadGeneration() {
+		return index.ConfirmedUpload{}, fmt.Errorf(
+			"%w: block %d pending generation %d confirm generation %d",
+			errConfirmUploadGenerationMismatch,
+			confirm.GetBlockId(),
+			pending.UploadGeneration,
+			confirm.GetUploadGeneration(),
+		)
+	}
 
 	confirmed, err := l.putConfirmedUploadFromCommand(blocksDir, idx, confirm, pending.SealedSizeBytes)
 	if err != nil {
@@ -95,6 +104,15 @@ func (l *blockUploadLifecycle) applyConfirmWithoutPending(
 			return index.ConfirmedUpload{}, fmt.Errorf("shard: get confirmed upload for block %d: %w", confirm.GetBlockId(), catalogErr)
 		}
 		return index.ConfirmedUpload{}, fmt.Errorf("shard: confirm upload missing sealed metadata for block %d: %w", confirm.GetBlockId(), pendingErr)
+	}
+	if existing.UploadGeneration != confirm.GetUploadGeneration() {
+		return index.ConfirmedUpload{}, fmt.Errorf(
+			"%w: block %d confirmed generation %d confirm generation %d",
+			errConfirmUploadGenerationMismatch,
+			confirm.GetBlockId(),
+			existing.UploadGeneration,
+			confirm.GetUploadGeneration(),
+		)
 	}
 
 	confirmed, err := l.putConfirmedUploadFromCommand(blocksDir, idx, confirm, existing.SealedSizeBytes)

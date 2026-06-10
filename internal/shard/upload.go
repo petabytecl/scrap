@@ -30,7 +30,10 @@ const (
 	maxTransientBackoff = 30 * time.Second
 )
 
-var errConfirmUploadSealedMetadataMismatch = errors.New("shard: confirm upload sealed metadata mismatch")
+var (
+	errConfirmUploadSealedMetadataMismatch = errors.New("shard: confirm upload sealed metadata mismatch")
+	errConfirmUploadGenerationMismatch     = errors.New("shard: confirm upload generation mismatch")
+)
 
 type UploadConfig struct {
 	Enabled     bool
@@ -147,26 +150,46 @@ func (s *Shard) applyConfirmUpload(confirm *scrapv1.ConfirmUpload) error {
 
 	confirmed, err := s.blockUploadLifecycleLocked().applyCommittedConfirm(s.blocksDir, s.idx, confirm)
 	if err != nil {
-		if errors.Is(err, index.ErrPendingUploadNotFound) || errors.Is(err, errConfirmUploadSealedMetadataMismatch) {
-			if s.logger != nil {
-				s.logger.Warn("shard: confirm upload skipped unsafe catalog", "block_id", confirm.GetBlockId(), "err", err)
-			}
-			if closeErr := s.closeConfirmedOpenBlockLocked(confirm.GetBlockId()); closeErr != nil {
-				return closeErr
-			}
-			if deleteErr := s.idx.DeletePendingUpload(confirm.GetBlockId()); deleteErr != nil {
-				return fmt.Errorf("shard: clear unsafe pending upload %d: %w", confirm.GetBlockId(), deleteErr)
-			}
-			s.blockUploadLifecycleLocked().forgetUploadObligation(confirm.GetBlockId())
-			s.recordEvictionHealthMetadataLossBlock(confirm.GetBlockId())
-			return s.refreshUploadPressureLocked()
-		}
-		return err
+		return s.handleConfirmUploadApplyErrorLocked(confirm, err)
 	}
 	if err := s.closeConfirmedOpenBlockLocked(confirm.GetBlockId()); err != nil {
 		return err
 	}
 	s.recordEvictionHealthBlockBestEffort(confirmed.BlockID)
+	return s.refreshUploadPressureLocked()
+}
+
+func (s *Shard) handleConfirmUploadApplyErrorLocked(confirm *scrapv1.ConfirmUpload, err error) error {
+	switch {
+	case errors.Is(err, errConfirmUploadGenerationMismatch):
+		if s.logger != nil {
+			s.logger.Warn("shard: stale confirm upload skipped", "block_id", confirm.GetBlockId(), "err", err)
+		}
+		return s.refreshUploadPressureLocked()
+	case isUnsafeConfirmUploadApplyError(err):
+		return s.skipUnsafeConfirmUploadLocked(confirm, err)
+	default:
+		return err
+	}
+}
+
+func isUnsafeConfirmUploadApplyError(err error) bool {
+	return errors.Is(err, index.ErrPendingUploadNotFound) ||
+		errors.Is(err, errConfirmUploadSealedMetadataMismatch)
+}
+
+func (s *Shard) skipUnsafeConfirmUploadLocked(confirm *scrapv1.ConfirmUpload, err error) error {
+	if s.logger != nil {
+		s.logger.Warn("shard: confirm upload skipped unsafe catalog", "block_id", confirm.GetBlockId(), "err", err)
+	}
+	if closeErr := s.closeConfirmedOpenBlockLocked(confirm.GetBlockId()); closeErr != nil {
+		return closeErr
+	}
+	if deleteErr := s.idx.DeletePendingUpload(confirm.GetBlockId()); deleteErr != nil {
+		return fmt.Errorf("shard: clear unsafe pending upload %d: %w", confirm.GetBlockId(), deleteErr)
+	}
+	s.blockUploadLifecycleLocked().forgetUploadObligation(confirm.GetBlockId())
+	s.recordEvictionHealthMetadataLossBlock(confirm.GetBlockId())
 	return s.refreshUploadPressureLocked()
 }
 
@@ -191,12 +214,13 @@ func (s *Shard) closeConfirmedOpenBlockLocked(blockID uint64) error {
 
 func confirmedUploadFromCommand(confirm *scrapv1.ConfirmUpload, sealedSize int64) index.ConfirmedUpload {
 	return index.ConfirmedUpload{
-		BlockID:         confirm.GetBlockId(),
-		ShardID:         confirm.GetShardId(),
-		ConfirmedAtUs:   confirm.GetConfirmedAtUs(),
-		SealedSizeBytes: sealedSize,
-		BlockObject:     indexBackendObject(confirm.GetBlockObject()),
-		IndexObject:     indexBackendObject(confirm.GetIndexObject()),
+		BlockID:          confirm.GetBlockId(),
+		ShardID:          confirm.GetShardId(),
+		ConfirmedAtUs:    confirm.GetConfirmedAtUs(),
+		SealedSizeBytes:  sealedSize,
+		UploadGeneration: confirm.GetUploadGeneration(),
+		BlockObject:      indexBackendObject(confirm.GetBlockObject()),
+		IndexObject:      indexBackendObject(confirm.GetIndexObject()),
 	}
 }
 

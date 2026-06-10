@@ -151,7 +151,8 @@ func TestRaftCommandConfirmUploadRoundTrip(t *testing.T) {
 					SizeBytes:       4096,
 					ValidationToken: protoValidationValue("index"),
 				},
-				ConfirmedAtUs: 1716700001000000,
+				ConfirmedAtUs:    1716700001000000,
+				UploadGeneration: 1716700002000000,
 			},
 		},
 	})
@@ -170,6 +171,55 @@ func TestRaftCommandConfirmUploadRoundTrip(t *testing.T) {
 	assertRaftBackendObject(t, "IndexObject", confirm.GetIndexObject(), "cell-a/shards/0000000000000007/000000000000002a.idx", 4096, protoValidationValue("index"))
 	if confirm.GetConfirmedAtUs() != 1716700001000000 {
 		t.Fatalf("ConfirmedAtUs: got %d", confirm.GetConfirmedAtUs())
+	}
+	if confirm.GetUploadGeneration() != 1716700002000000 {
+		t.Fatalf("UploadGeneration: got %d", confirm.GetUploadGeneration())
+	}
+}
+
+func TestRaftCommandRewrapDocumentEnvelopeRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_RewrapDoc{
+			RewrapDoc: &scrapv1.RewrapDocumentEnvelope{
+				TransactionId:      "tx-rewrap",
+				DocumentName:       "invoice.xml",
+				BlockId:            42,
+				EncryptionEnvelope: []byte(`{"version":1,"key_version":2}`),
+				OldKeyVersion:      1,
+				NewKeyVersion:      2,
+				RewrappedAtUs:      1716700003000000,
+				ProposalId:         "proposal-001",
+			},
+		},
+	})
+
+	rewrap := decoded.GetRewrapDoc()
+	if rewrap == nil {
+		t.Fatal("decoded RewrapDocumentEnvelope should not be nil")
+	}
+	if rewrap.GetTransactionId() != "tx-rewrap" {
+		t.Fatalf("TransactionId: got %q", rewrap.GetTransactionId())
+	}
+	if rewrap.GetDocumentName() != "invoice.xml" {
+		t.Fatalf("DocumentName: got %q", rewrap.GetDocumentName())
+	}
+	if rewrap.GetBlockId() != 42 {
+		t.Fatalf("BlockId: got %d", rewrap.GetBlockId())
+	}
+	if string(rewrap.GetEncryptionEnvelope()) != `{"version":1,"key_version":2}` {
+		t.Fatalf("EncryptionEnvelope: got %q", rewrap.GetEncryptionEnvelope())
+	}
+	if rewrap.GetOldKeyVersion() != 1 {
+		t.Fatalf("OldKeyVersion: got %d", rewrap.GetOldKeyVersion())
+	}
+	if rewrap.GetNewKeyVersion() != 2 {
+		t.Fatalf("NewKeyVersion: got %d", rewrap.GetNewKeyVersion())
+	}
+	if rewrap.GetRewrappedAtUs() != 1716700003000000 {
+		t.Fatalf("RewrappedAtUs: got %d", rewrap.GetRewrappedAtUs())
+	}
+	if rewrap.GetProposalId() != "proposal-001" {
+		t.Fatalf("ProposalId: got %q", rewrap.GetProposalId())
 	}
 }
 
