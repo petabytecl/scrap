@@ -44,14 +44,14 @@ Apply validates the command before replacing the Block index entry:
 
 For sealed historical Blocks, the leader must verify that its local `.blk` exists
 before proposing the rewrap command when uploads are enabled. Followers apply the
-committed command deterministically and may rebuild the upload obligation from
-existing pending or confirmed upload metadata if their local `.blk` has already
-been evicted. Phase 4.5 does not introduce index-only Backend updates for evicted
-Blocks.
+committed command deterministically and may retain the replacement upload
+obligation even if their local `.blk` has already been evicted. The upload worker
+does not attempt Backend PUTs for pending uploads until the local `.blk` exists.
+Phase 4.5 does not introduce index-only Backend updates for evicted Blocks.
 
 `ConfirmUpload` also carries an additive `upload_generation` field. Initial sealed
 uploads use generation `0` for replay compatibility. A rewrap requeue uses the
-committed command timestamp as a non-zero generation in the Upload Outbox, and
+committed Raft log entry index as a non-zero generation in the Upload Outbox, and
 upload confirmation must match the pending or already-confirmed generation before
 it can clear the outbox or update the Confirmed Upload Catalog. Non-zero
 generations are also included in Backend object keys so stale in-flight writers

@@ -210,9 +210,9 @@ func (s *Shard) forgetProposal(key string) {
 	s.proposalMu.Unlock()
 }
 
-func (s *Shard) applyRewrapDocumentEnvelopeCommand(cmd *scrapv1.RewrapDocumentEnvelope) error {
+func (s *Shard) applyRewrapDocumentEnvelopeCommand(cmd *scrapv1.RewrapDocumentEnvelope, entryIndex uint64) error {
 	key := rewrapProposalKey(cmd.GetProposalId(), cmd.GetTransactionId(), cmd.GetDocumentName())
-	applyErr := s.applyRewrapDocumentEnvelope(cmd)
+	applyErr := s.applyRewrapDocumentEnvelope(cmd, rewrapUploadGeneration(cmd, entryIndex))
 
 	s.proposalMu.Lock()
 	if ch, ok := s.proposals[key]; ok {
@@ -227,6 +227,13 @@ func (s *Shard) applyRewrapDocumentEnvelopeCommand(cmd *scrapv1.RewrapDocumentEn
 	return applyErr
 }
 
+func rewrapUploadGeneration(cmd *scrapv1.RewrapDocumentEnvelope, entryIndex uint64) int64 {
+	if entryIndex > 0 && entryIndex <= math.MaxInt64 {
+		return int64(entryIndex)
+	}
+	return cmd.GetRewrappedAtUs()
+}
+
 func rewrapProposalKey(proposalID, txID, docName string) string {
 	if proposalID != "" {
 		return "rewrap-proposal\x00" + proposalID
@@ -234,7 +241,7 @@ func rewrapProposalKey(proposalID, txID, docName string) string {
 	return "rewrap\x00" + txID + "\x00" + docName
 }
 
-func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope) error {
+func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope, uploadGeneration int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -247,7 +254,7 @@ func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope)
 	if err != nil {
 		return err
 	}
-	return s.finishRewrapApplyLocked(cmd.GetBlockId(), current, changed, cmd.GetRewrappedAtUs())
+	return s.finishRewrapApplyLocked(cmd.GetBlockId(), current, changed, uploadGeneration)
 }
 
 func validateRewrapCommand(cmd *scrapv1.RewrapDocumentEnvelope) error {

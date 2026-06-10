@@ -25,6 +25,7 @@ type uploadCore interface {
 	IsLeader() bool
 	retryUploadObligations(ctx context.Context)
 	pendingUploads() ([]PendingUpload, error)
+	hasLocalBlock(blockID uint64) bool
 	blockPath(blockID uint64) string
 	idxPath(blockID uint64) string
 }
@@ -157,17 +158,27 @@ func (c *uploadController) processPendingOnce(ctx context.Context) {
 		}()
 	}
 
+	if !c.enqueueUploadJobs(ctx, jobs, uploads) {
+		wg.Wait()
+		return
+	}
+	wg.Wait()
+}
+
+func (c *uploadController) enqueueUploadJobs(ctx context.Context, jobs chan<- PendingUpload, uploads []PendingUpload) bool {
 	for _, upload := range uploads {
+		if !c.core.hasLocalBlock(upload.BlockID) {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			close(jobs)
-			wg.Wait()
-			return
+			return false
 		case jobs <- upload:
 		}
 	}
 	close(jobs)
-	wg.Wait()
+	return true
 }
 
 func (c *uploadController) uploadProcessingPaused() bool {

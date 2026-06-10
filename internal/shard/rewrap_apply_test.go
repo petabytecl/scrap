@@ -3,12 +3,15 @@ package shard
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/index"
@@ -30,7 +33,7 @@ func TestApplyRewrapRejectsStaleEnvelopeWithoutReplacingIndex(t *testing.T) {
 		OldKeyVersion:      1,
 		NewKeyVersion:      3,
 		RewrappedAtUs:      1716700003000000,
-	})
+	}, 1716700003000000)
 	if !errors.Is(err, rewrap.ErrStaleEnvelope) {
 		t.Fatalf("applyRewrapDocumentEnvelope error = %v, want ErrStaleEnvelope", err)
 	}
@@ -41,12 +44,15 @@ func TestApplyRewrapRejectsStaleEnvelopeWithoutReplacingIndex(t *testing.T) {
 	}
 }
 
-func TestApplyRewrapRequeuesFollowerMissingBlockWithCommandGeneration(t *testing.T) {
+func TestApplyRewrapRequeuesWithEntryIndexGeneration(t *testing.T) {
 	blocksDir := t.TempDir()
 	idx := openApplyTestIndex(t)
 	currentEnvelope := rewrapApplyEnvelope(t, 1)
 	replacementEnvelope := rewrapApplyEnvelope(t, 2)
 	writeRewrapApplyIndex(t, blocksDir, currentEnvelope)
+	if err := os.WriteFile(block.FilePath(blocksDir, 1), []byte("block bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile block: %v", err)
+	}
 	if err := idx.PutConfirmedUpload(index.ConfirmedUpload{
 		BlockID:         1,
 		ShardID:         7,
@@ -73,15 +79,19 @@ func TestApplyRewrapRequeuesFollowerMissingBlockWithCommandGeneration(t *testing
 		uploads:   newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
 		shardID:   7,
 	}
-	err := s.applyRewrapDocumentEnvelope(&scrapv1.RewrapDocumentEnvelope{
-		TransactionId:      "tx-rewrap",
-		DocumentName:       "doc.xml",
-		BlockId:            1,
-		EncryptionEnvelope: replacementEnvelope,
-		OldKeyVersion:      1,
-		NewKeyVersion:      2,
-		RewrappedAtUs:      1716700002000000,
-	})
+	err := s.applyEntryCommand(&scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_RewrapDoc{
+			RewrapDoc: &scrapv1.RewrapDocumentEnvelope{
+				TransactionId:      "tx-rewrap",
+				DocumentName:       "doc.xml",
+				BlockId:            1,
+				EncryptionEnvelope: replacementEnvelope,
+				OldKeyVersion:      1,
+				NewKeyVersion:      2,
+				RewrappedAtUs:      1716700002000000,
+			},
+		},
+	}, 77)
 	if err != nil {
 		t.Fatalf("applyRewrapDocumentEnvelope: %v", err)
 	}
@@ -94,12 +104,93 @@ func TestApplyRewrapRequeuesFollowerMissingBlockWithCommandGeneration(t *testing
 	if err != nil {
 		t.Fatalf("GetPendingUpload: %v", err)
 	}
-	if pending.UploadGeneration != 1716700002000000 || pending.SealedAtUs != 1716700002000000 {
-		t.Fatalf("pending generation = %d/%d, want command timestamp", pending.UploadGeneration, pending.SealedAtUs)
+	if pending.UploadGeneration != 77 || pending.SealedAtUs != 77 {
+		t.Fatalf("pending generation = %d/%d, want apply entry index", pending.UploadGeneration, pending.SealedAtUs)
 	}
-	if pending.SealedSizeBytes != 67108864 {
-		t.Fatalf("pending sealed size = %d, want confirmed size", pending.SealedSizeBytes)
+	if pending.SealedSizeBytes != int64(len("block bytes")) {
+		t.Fatalf("pending sealed size = %d, want local block size", pending.SealedSizeBytes)
 	}
+}
+
+func TestUploadProcessorSkipsPendingUploadWithoutLocalBlock(t *testing.T) {
+	ctx := context.Background()
+	backendStore := newCountingBackend()
+	core := &uploadCoreStub{
+		leader: true,
+		pending: []PendingUpload{{
+			BlockID:          1,
+			ShardID:          7,
+			SealedSizeBytes:  10,
+			SealedAtUs:       77,
+			UploadGeneration: 77,
+		}},
+	}
+	controller := newUploadController(core, UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      "cell-a",
+		Concurrency: 1,
+	}, 7, nil, nil, nil)
+
+	controller.processPendingOnce(ctx)
+
+	if backendStore.puts != 0 {
+		t.Fatalf("backend puts = %d, want 0 for missing local Block", backendStore.puts)
+	}
+}
+
+type uploadCoreStub struct {
+	leader  bool
+	pending []PendingUpload
+}
+
+func (c *uploadCoreStub) Propose(context.Context, []byte) error { return nil }
+
+func (c *uploadCoreStub) IsLeader() bool { return c.leader }
+
+func (c *uploadCoreStub) retryUploadObligations(context.Context) {}
+
+func (c *uploadCoreStub) pendingUploads() ([]PendingUpload, error) {
+	return append([]PendingUpload(nil), c.pending...), nil
+}
+
+func (c *uploadCoreStub) hasLocalBlock(uint64) bool { return false }
+
+func (c *uploadCoreStub) blockPath(uint64) string { return "" }
+
+func (c *uploadCoreStub) idxPath(uint64) string { return "" }
+
+type countingBackend struct {
+	puts int
+}
+
+func newCountingBackend() *countingBackend {
+	return &countingBackend{}
+}
+
+func (b *countingBackend) PutObject(context.Context, string, io.Reader, int64, backend.PutOpts) (backend.PutResult, error) {
+	b.puts++
+	return backend.PutResult{}, nil
+}
+
+func (b *countingBackend) HeadObject(context.Context, string) (backend.ObjectMeta, error) {
+	return backend.ObjectMeta{}, backend.ErrNotFound
+}
+
+func (b *countingBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	return nil, backend.ObjectMeta{}, backend.ErrNotFound
+}
+
+func (b *countingBackend) DeleteObject(context.Context, string) error { return nil }
+
+func (b *countingBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+	return emptyBackendIterator{}, nil
+}
+
+type emptyBackendIterator struct{}
+
+func (emptyBackendIterator) Next() (backend.ObjectInfo, error) {
+	return backend.ObjectInfo{}, io.EOF
 }
 
 func TestApplyRewrapReopensCurrentIndexAfterStaleEnvelope(t *testing.T) {
@@ -130,7 +221,7 @@ func TestApplyRewrapReopensCurrentIndexAfterStaleEnvelope(t *testing.T) {
 		OldKeyVersion:      1,
 		NewKeyVersion:      3,
 		RewrappedAtUs:      1716700003000000,
-	})
+	}, 88)
 	if err != nil {
 		t.Fatalf("applyRewrapDocumentEnvelopeCommand: %v", err)
 	}
@@ -212,7 +303,7 @@ func TestApplyRewrapNotifiesMatchingProposalID(t *testing.T) {
 		OldKeyVersion:      1,
 		NewKeyVersion:      2,
 		RewrappedAtUs:      1716700002000000,
-	})
+	}, 11)
 	if err == nil {
 		t.Fatal("applyRewrapDocumentEnvelopeCommand error = nil, want missing index failure")
 	}

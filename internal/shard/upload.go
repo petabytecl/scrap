@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -298,6 +299,11 @@ func (s *Shard) pendingUploads() ([]PendingUpload, error) {
 	defer s.mu.Unlock()
 
 	return collectPendingUploads(s.idx)
+}
+
+func (s *Shard) hasLocalBlock(blockID uint64) bool {
+	_, err := os.Stat(s.blockPath(blockID))
+	return err == nil
 }
 
 func collectPendingUploads(idx *index.Index) ([]PendingUpload, error) {
