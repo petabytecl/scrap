@@ -63,6 +63,16 @@ func WithAuthorizer(authorizer *security.Authorizer, expected security.PeerIdent
 	}
 }
 
+func WithAuthorizedShards(shardIDs ...uint64) ServerOption {
+	authorizedShardIDs := make(map[uint64]struct{}, len(shardIDs))
+	for _, shardID := range shardIDs {
+		authorizedShardIDs[shardID] = struct{}{}
+	}
+	return func(s *Server) {
+		s.authorizedShardIDs = cloneShardIDSet(authorizedShardIDs)
+	}
+}
+
 func WithAuditSink(sink audit.Sink) ServerOption {
 	return func(s *Server) {
 		s.auditSink = sink
@@ -89,6 +99,7 @@ type Server struct {
 	replicationSink      ReplicationSink
 	authorizer           *security.Authorizer
 	expectedPeerIdentity security.PeerIdentityConfig
+	authorizedShardIDs   map[uint64]struct{}
 	auditSink            audit.Sink
 	rateLimiter          *security.RateLimiter
 	raftRouter           atomic.Pointer[RaftRouter]
@@ -123,6 +134,14 @@ func RegisterServer(gs *grpc.Server, s *Server) {
 	scrapv1.RegisterPeerServiceServer(gs, s)
 }
 
+func cloneShardIDSet(shardIDs map[uint64]struct{}) map[uint64]struct{} {
+	cloned := make(map[uint64]struct{}, len(shardIDs))
+	for shardID := range shardIDs {
+		cloned[shardID] = struct{}{}
+	}
+	return cloned
+}
+
 func (s *Server) getOrCreateBlock(blockID, shardID uint64) (*blockState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,18 +174,16 @@ func (s *Server) getOrCreateBlock(blockID, shardID uint64) (*blockState, error) 
 }
 
 func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse]) error {
-	if err := s.authorizePeer(stream.Context(), audit.OperationReplicateDocument, audit.TargetDocument); err != nil {
+	if err := s.checkPeerAuthorization(stream.Context(), audit.OperationReplicateDocument, audit.TargetDocument); err != nil {
 		return err
 	}
 
-	first, err := stream.Recv()
+	init, err := s.receiveReplicateDocumentInit(stream)
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "receive init: %v", err)
+		return err
 	}
-
-	init := first.GetInit()
-	if init == nil {
-		return status.Error(codes.InvalidArgument, "first message must be init")
+	if err := s.authorizePeerShardAfterPrecheck(stream.Context(), audit.OperationReplicateDocument, audit.TargetDocument, init.GetShardId()); err != nil {
+		return err
 	}
 	if s.replicationSink != nil {
 		return s.replicateToSink(stream, init)
@@ -183,7 +200,7 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 		defer close(done)
 		defer func() { _ = pr.Close() }()
 
-		bs, bsErr := s.getOrCreateBlock(init.BlockId, 0)
+		bs, bsErr := s.getOrCreateBlock(init.BlockId, init.GetShardId())
 		if bsErr != nil {
 			appendErr = bsErr
 			return
@@ -218,6 +235,18 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 	return stream.SendAndClose(&scrapv1.ReplicateDocumentResponse{
 		Sha256: computedSHA,
 	})
+}
+
+func (s *Server) receiveReplicateDocumentInit(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse]) (*scrapv1.ReplicateDocumentInit, error) {
+	first, err := stream.Recv()
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "receive init: %v", err)
+	}
+	init := first.GetInit()
+	if init == nil {
+		return nil, status.Error(codes.InvalidArgument, "first message must be init")
+	}
+	return init, nil
 }
 
 func (s *Server) replicateToSink(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], init *scrapv1.ReplicateDocumentInit) error {
@@ -272,7 +301,7 @@ func (s *Server) recvChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateD
 }
 
 func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftRequest) (*scrapv1.ForwardRaftResponse, error) {
-	if err := s.authorizePeer(ctx, audit.OperationForwardRaft, audit.TargetPeer); err != nil {
+	if err := s.authorizePeerForShard(ctx, audit.OperationForwardRaft, audit.TargetPeer, req.GetShardId()); err != nil {
 		return nil, err
 	}
 	router := s.raftRouter.Load()
@@ -291,27 +320,45 @@ func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftReques
 }
 
 func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse]) error {
-	if err := s.authorizePeer(stream.Context(), audit.OperationForwardRaftStream, audit.TargetPeer); err != nil {
+	if err := s.checkPeerAuthorization(stream.Context(), audit.OperationForwardRaftStream, audit.TargetPeer); err != nil {
 		return err
 	}
 	router := s.raftRouter.Load()
 	if router == nil {
 		return status.Error(codes.FailedPrecondition, "raft router not configured")
 	}
+	allowedAuditRecorded := false
 	for {
 		req, err := stream.Recv()
 		if err != nil {
 			return err
 		}
-		var msg raftpb.Message
-		if err := msg.Unmarshal(req.Message); err != nil {
-			s.recordMalformedRaftMessage(stream.Context(), audit.OperationForwardRaftStream, req.ShardId, err)
-			continue
+		recordedAllowed, err := s.handleForwardRaftStreamRequest(stream.Context(), router, req, !allowedAuditRecorded)
+		if err != nil {
+			return err
 		}
-		if err := (*router).RouteRaftMessage(stream.Context(), req.ShardId, msg); err != nil {
-			s.recordRaftRouteError(stream.Context(), audit.OperationForwardRaftStream, req.ShardId, err)
+		allowedAuditRecorded = allowedAuditRecorded || recordedAllowed
+	}
+}
+
+func (s *Server) handleForwardRaftStreamRequest(ctx context.Context, router *RaftRouter, req *scrapv1.ForwardRaftStreamRequest, recordAllowed bool) (bool, error) {
+	if err := s.authorizePeerShardScope(ctx, audit.OperationForwardRaftStream, audit.TargetPeer, req.GetShardId()); err != nil {
+		return false, err
+	}
+	if recordAllowed {
+		if err := s.recordAllowedAudit(ctx, audit.OperationForwardRaftStream, audit.TargetPeer); err != nil {
+			return false, err
 		}
 	}
+	var msg raftpb.Message
+	if err := msg.Unmarshal(req.Message); err != nil {
+		s.recordMalformedRaftMessage(ctx, audit.OperationForwardRaftStream, req.ShardId, err)
+		return recordAllowed, nil
+	}
+	if err := (*router).RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
+		s.recordRaftRouteError(ctx, audit.OperationForwardRaftStream, req.ShardId, err)
+	}
+	return recordAllowed, nil
 }
 
 func (s *Server) recordMalformedRaftMessage(ctx context.Context, operation string, shardID uint64, err error) {
@@ -379,6 +426,31 @@ func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyC
 }
 
 func (s *Server) authorizePeer(ctx context.Context, operation, target string) error {
+	return s.authorizePeerWithChecks(ctx, operation, target)
+}
+
+func (s *Server) authorizePeerForShard(ctx context.Context, operation, target string, shardID uint64) error {
+	return s.authorizePeerWithChecks(ctx, operation, target, func() error {
+		return s.authorizeShard(shardID)
+	})
+}
+
+func (s *Server) authorizePeerWithChecks(ctx context.Context, operation, target string, checks ...func() error) error {
+	if err := s.checkPeerAuthorization(ctx, operation, target); err != nil {
+		return err
+	}
+	for _, check := range checks {
+		if err := check(); err != nil {
+			if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+				return status.Error(codes.Internal, "audit event failed")
+			}
+			return err
+		}
+	}
+	return s.recordAllowedAudit(ctx, operation, target)
+}
+
+func (s *Server) checkPeerAuthorization(ctx context.Context, operation, target string) error {
 	if decision := s.checkRateLimit(ctx, operation); decision.Limited {
 		if err := s.recordAudit(ctx, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
 			return status.Error(codes.Internal, "audit event failed")
@@ -390,9 +462,6 @@ func (s *Server) authorizePeer(ctx context.Context, operation, target string) er
 			return status.Error(codes.Internal, "audit event failed")
 		}
 		return err
-	}
-	if err := s.recordAudit(ctx, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
-		return status.Error(codes.Internal, "audit event failed")
 	}
 	return nil
 }
@@ -421,6 +490,43 @@ func (s *Server) authorizePeerIdentity(ctx context.Context) error {
 	if principal.ID != security.PeerIdentityPrincipalID(identity) {
 		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
 		return security.PermissionDeniedErrorWithStatus("peer identity mismatch", security.AuthorizationStatusMismatch)
+	}
+	return nil
+}
+
+func (s *Server) authorizePeerShardScope(ctx context.Context, operation, target string, shardID uint64) error {
+	if err := s.authorizeShard(shardID); err != nil {
+		if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+			return status.Error(codes.Internal, "audit event failed")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Server) authorizePeerShardAfterPrecheck(ctx context.Context, operation, target string, shardID uint64) error {
+	if err := s.authorizePeerShardScope(ctx, operation, target, shardID); err != nil {
+		return err
+	}
+	return s.recordAllowedAudit(ctx, operation, target)
+}
+
+func (s *Server) authorizeShard(shardID uint64) error {
+	if s.authorizedShardIDs == nil {
+		return nil
+	}
+	if _, ok := s.authorizedShardIDs[shardID]; ok {
+		return nil
+	}
+	if s.authorizer != nil {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
+	}
+	return security.PermissionDeniedErrorWithStatus("peer Shard not authorized", security.AuthorizationStatusDenied)
+}
+
+func (s *Server) recordAllowedAudit(ctx context.Context, operation, target string) error {
+	if err := s.recordAudit(ctx, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
+		return status.Error(codes.Internal, "audit event failed")
 	}
 	return nil
 }

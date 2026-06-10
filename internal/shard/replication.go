@@ -37,6 +37,7 @@ func (s *Shard) replicateDocument(ctx context.Context, prep *scrapv1.OpenlogEntr
 		TotalBytes:         result.Size,
 		Sha256:             result.SHA256[:],
 		EncryptionEnvelope: envelope,
+		ShardId:            s.shardID,
 	}
 	chunks := splitReplicationChunks(data)
 

@@ -106,6 +106,7 @@ func (c *scrubCoordinator) defaultBlockRepairer(cfg Config) scrub.BlockRepairer 
 	}
 	return scrub.NewBlockRepair(scrub.BlockRepairConfig{
 		BlocksDir:       c.blocksDir,
+		ShardID:         cfg.ShardID,
 		Transferer:      cfg.BlockTransferer,
 		BackendRestorer: backendRestorer,
 		Metrics:         cfg.DeepMetrics,

@@ -46,7 +46,7 @@ func BuildMTLSServerConfig(key string, files TLSFiles) (*tls.Config, error) {
 		return nil, err
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{cert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    clientCAs,
@@ -70,7 +70,7 @@ func BuildMTLSClientConfig(key string, files ClientTLSFiles) (*tls.Config, error
 		return nil, err
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      rootCAs,
 		ServerName:   strings.TrimSpace(files.ServerName),

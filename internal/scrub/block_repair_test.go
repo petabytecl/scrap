@@ -13,6 +13,8 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
+const testRepairShardID uint64 = 1
+
 type transferPayload struct {
 	blk []byte
 	idx []byte
@@ -26,11 +28,12 @@ type recordingBlockTransferer struct {
 
 type transferCall struct {
 	addr    string
+	shardID uint64
 	blockID uint64
 }
 
-func (t *recordingBlockTransferer) TransferBlock(_ context.Context, addr string, blockID uint64) ([]byte, []byte, error) {
-	t.calls = append(t.calls, transferCall{addr: addr, blockID: blockID})
+func (t *recordingBlockTransferer) TransferBlock(_ context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error) {
+	t.calls = append(t.calls, transferCall{addr: addr, shardID: shardID, blockID: blockID})
 	if t.err != nil {
 		return nil, nil, t.err
 	}
@@ -72,6 +75,9 @@ func TestBlockRepair_FailedPeerTransferLeavesQuarantineIntact(t *testing.T) {
 	if len(transferer.calls) != 1 {
 		t.Fatalf("transfer calls = %d, want 1", len(transferer.calls))
 	}
+	if transferer.calls[0].shardID != testRepairShardID {
+		t.Fatalf("transfer ShardID = %d, want %d", transferer.calls[0].shardID, testRepairShardID)
+	}
 	if metrics.repairsFailed != 1 || metrics.repairsOK != 0 {
 		t.Fatalf("repair metrics ok=%d failed=%d, want ok=0 failed=1", metrics.repairsOK, metrics.repairsFailed)
 	}
@@ -92,6 +98,7 @@ func TestBlockRepair_FallsBackToBackendWhenPeersAreEvicted(t *testing.T) {
 	}
 	repair := scrub.NewBlockRepair(scrub.BlockRepairConfig{
 		BlocksDir:       dir,
+		ShardID:         testRepairShardID,
 		Transferer:      transferer,
 		BackendRestorer: restorer,
 		Metrics:         metrics,
@@ -153,6 +160,7 @@ func TestBlockRepair_BackendFallbackFailureLeavesQuarantineIntact(t *testing.T) 
 	restorer := &recordingBackendRestorer{err: errors.New("backend unavailable")}
 	repair := scrub.NewBlockRepair(scrub.BlockRepairConfig{
 		BlocksDir:       dir,
+		ShardID:         testRepairShardID,
 		Transferer:      transferer,
 		BackendRestorer: restorer,
 		Metrics:         metrics,
@@ -289,6 +297,9 @@ func TestBlockRepair_RotatesPeersAcrossConfiguredMembers(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("peer rotation = %v, want %v", got, want)
 		}
+		if transferer.calls[i].shardID != testRepairShardID {
+			t.Fatalf("transfer call %d ShardID = %d, want %d", i, transferer.calls[i].shardID, testRepairShardID)
+		}
 	}
 	if metrics.repairsOK != 3 || metrics.repairsFailed != 0 {
 		t.Fatalf("repair metrics ok=%d failed=%d, want ok=3 failed=0", metrics.repairsOK, metrics.repairsFailed)
@@ -346,6 +357,7 @@ func TestBlockRepair_WaitsForPressurePause(t *testing.T) {
 	pause := newControlledPause()
 	repair := scrub.NewBlockRepair(scrub.BlockRepairConfig{
 		BlocksDir:       dir,
+		ShardID:         testRepairShardID,
 		Transferer:      transferer,
 		Metrics:         metrics,
 		PauseController: pause,
@@ -384,6 +396,7 @@ func TestBlockRepair_WaitsForPressurePause(t *testing.T) {
 func newTestBlockRepair(dir string, transferer *recordingBlockTransferer, metrics *deepScrubMetrics, peers []string) *scrub.BlockRepair {
 	return scrub.NewBlockRepair(scrub.BlockRepairConfig{
 		BlocksDir:  dir,
+		ShardID:    testRepairShardID,
 		Transferer: transferer,
 		Metrics:    metrics,
 		PeerAddrs:  peers,
@@ -417,7 +430,7 @@ func replacementPayload(t *testing.T, blockID uint64, body []byte) transferPaylo
 func writeRepairBlock(t *testing.T, dir string, blockID uint64, body []byte) {
 	t.Helper()
 
-	bw, err := block.NewWriter(block.FilePath(dir, blockID), 1, blockID)
+	bw, err := block.NewWriter(block.FilePath(dir, blockID), testRepairShardID, blockID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}

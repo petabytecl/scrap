@@ -137,13 +137,14 @@ func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) 
 	return resp, nil
 }
 
-func (c *Client) TransferBlock(ctx context.Context, addr string, blockID uint64) ([]byte, []byte, error) {
+func (c *Client) TransferBlock(ctx context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error) {
 	conn, err := c.getConn(addr)
 	if err != nil {
 		return nil, nil, err
 	}
 	client := scrapv1.NewPeerServiceClient(conn)
 	stream, err := client.TransferBlock(ctx, &scrapv1.TransferBlockRequest{
+		ShardId: shardID,
 		BlockId: blockID,
 	})
 	if err != nil {

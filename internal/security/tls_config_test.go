@@ -34,8 +34,8 @@ func TestBuildMTLSServerConfigRequiresVerifiedClientCertificates(t *testing.T) {
 	if len(cfg.Certificates) != 1 {
 		t.Fatalf("Certificates = %d, want 1", len(cfg.Certificates))
 	}
-	if cfg.MinVersion < tls.VersionTLS12 {
-		t.Fatalf("MinVersion = %x, want at least TLS 1.2", cfg.MinVersion)
+	if cfg.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MinVersion = %x, want TLS 1.3", cfg.MinVersion)
 	}
 }
 
@@ -62,6 +62,9 @@ func TestBuildMTLSClientConfigPresentsCertificateAndVerifiesServer(t *testing.T)
 	}
 	if cfg.ServerName != "admin.scrap.local" {
 		t.Fatalf("ServerName = %q, want admin.scrap.local", cfg.ServerName)
+	}
+	if cfg.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MinVersion = %x, want TLS 1.3", cfg.MinVersion)
 	}
 }
 

@@ -23,6 +23,7 @@ func TestReplicateDocumentRequestOneofInit(t *testing.T) {
 				EncryptionEnvelope: []byte(
 					`{"version":1,"wrapped_data_key":"vault:v1:test"}`,
 				),
+				ShardId: 7,
 			},
 		},
 	}
@@ -36,6 +37,9 @@ func TestReplicateDocumentRequestOneofInit(t *testing.T) {
 	}
 	if init.GetBlockId() != 42 {
 		t.Fatalf("BlockId: got %d", init.GetBlockId())
+	}
+	if init.GetShardId() != 7 {
+		t.Fatalf("ShardId: got %d", init.GetShardId())
 	}
 	if string(init.GetEncryptionEnvelope()) != `{"version":1,"wrapped_data_key":"vault:v1:test"}` {
 		t.Fatalf("EncryptionEnvelope: got %q", init.GetEncryptionEnvelope())
