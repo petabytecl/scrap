@@ -42,17 +42,21 @@ Apply validates the command before replacing the Block index entry:
 - local apply errors that are not stale are returned to the Raft apply loop so a
   voter cannot silently miss a rewrap update.
 
-For sealed historical Blocks, rewrap must be able to requeue Backend upload before
-mutating the retained `.idx`. If uploads are enabled and the local `.blk` is
-missing, the command is rejected before the index is rewritten. Phase 4.5 does not
-introduce index-only Backend updates for evicted Blocks.
+For sealed historical Blocks, the leader must verify that its local `.blk` exists
+before proposing the rewrap command when uploads are enabled. Followers apply the
+committed command deterministically and may rebuild the upload obligation from
+existing pending or confirmed upload metadata if their local `.blk` has already
+been evicted. Phase 4.5 does not introduce index-only Backend updates for evicted
+Blocks.
 
 `ConfirmUpload` also carries an additive `upload_generation` field. Initial sealed
-uploads use generation `0` for replay compatibility. A rewrap requeue uses a fresh
-non-zero generation in the Upload Outbox, and upload confirmation must match the
-pending or already-confirmed generation before it can clear the outbox or update
-the Confirmed Upload Catalog. Stale confirmations are ignored and leave the newer
-upload obligation intact.
+uploads use generation `0` for replay compatibility. A rewrap requeue uses the
+committed command timestamp as a non-zero generation in the Upload Outbox, and
+upload confirmation must match the pending or already-confirmed generation before
+it can clear the outbox or update the Confirmed Upload Catalog. Non-zero
+generations are also included in Backend object keys so stale in-flight writers
+cannot overwrite the replacement `.idx` object. Stale confirmations are ignored
+and leave the newer upload obligation intact.
 
 ## Consequences
 
@@ -63,12 +67,13 @@ Positive:
 - stale rewrap commands cannot downgrade a newer envelope;
 - stale pre-rewrap upload confirmations cannot clear the replacement upload
   obligation;
+- stale pre-rewrap upload writers cannot overwrite generation-scoped replacement
+  Backend objects;
 - replay remains compatible with old seal/confirm entries that have generation
   `0`.
 
 Negative:
 
-- rewrap of an already-evicted Block is rejected until a future index-only Backend
-  metadata update or restore-first workflow is designed;
+- rewrap proposal is rejected when the leader lacks the historical Block payload;
 - `ConfirmUpload` and pending-upload Projection records carry another versioning
   field that must be preserved by rebuild and evidence tooling.

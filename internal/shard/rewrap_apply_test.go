@@ -1,14 +1,17 @@
 package shard
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/rewrap"
 )
 
@@ -38,16 +41,37 @@ func TestApplyRewrapRejectsStaleEnvelopeWithoutReplacingIndex(t *testing.T) {
 	}
 }
 
-func TestApplyRewrapRejectsMissingHistoricalBlockBeforeReplacingIndex(t *testing.T) {
+func TestApplyRewrapRequeuesFollowerMissingBlockWithCommandGeneration(t *testing.T) {
 	blocksDir := t.TempDir()
+	idx := openApplyTestIndex(t)
 	currentEnvelope := rewrapApplyEnvelope(t, 1)
 	replacementEnvelope := rewrapApplyEnvelope(t, 2)
 	writeRewrapApplyIndex(t, blocksDir, currentEnvelope)
+	if err := idx.PutConfirmedUpload(index.ConfirmedUpload{
+		BlockID:         1,
+		ShardID:         7,
+		ConfirmedAtUs:   1716700001000000,
+		SealedSizeBytes: 67108864,
+		BlockObject: index.BackendObjectMetadata{
+			Key:             "cell-a/shards/0000000000000007/0000000000000001.blk",
+			SizeBytes:       67108864,
+			ValidationToken: "block-validation",
+		},
+		IndexObject: index.BackendObjectMetadata{
+			Key:             "cell-a/shards/0000000000000007/0000000000000001.idx",
+			SizeBytes:       4096,
+			ValidationToken: "index-validation",
+		},
+	}); err != nil {
+		t.Fatalf("PutConfirmedUpload: %v", err)
+	}
 
 	s := &Shard{
 		blocksDir: blocksDir,
+		idx:       idx,
 		upload:    UploadConfig{Enabled: true},
 		uploads:   newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
+		shardID:   7,
 	}
 	err := s.applyRewrapDocumentEnvelope(&scrapv1.RewrapDocumentEnvelope{
 		TransactionId:      "tx-rewrap",
@@ -58,13 +82,91 @@ func TestApplyRewrapRejectsMissingHistoricalBlockBeforeReplacingIndex(t *testing
 		NewKeyVersion:      2,
 		RewrappedAtUs:      1716700002000000,
 	})
-	if err == nil {
-		t.Fatal("applyRewrapDocumentEnvelope error = nil, want missing Block failure")
+	if err != nil {
+		t.Fatalf("applyRewrapDocumentEnvelope: %v", err)
 	}
 
 	got := readRewrapApplyEnvelope(t, blocksDir)
-	if string(got) != string(currentEnvelope) {
-		t.Fatal("stored envelope was replaced even though upload requeue could not read the Block")
+	if string(got) != string(replacementEnvelope) {
+		t.Fatal("stored envelope was not replaced")
+	}
+	pending, err := idx.GetPendingUpload(1)
+	if err != nil {
+		t.Fatalf("GetPendingUpload: %v", err)
+	}
+	if pending.UploadGeneration != 1716700002000000 || pending.SealedAtUs != 1716700002000000 {
+		t.Fatalf("pending generation = %d/%d, want command timestamp", pending.UploadGeneration, pending.SealedAtUs)
+	}
+	if pending.SealedSizeBytes != 67108864 {
+		t.Fatalf("pending sealed size = %d, want confirmed size", pending.SealedSizeBytes)
+	}
+}
+
+func TestApplyRewrapReopensCurrentIndexAfterStaleEnvelope(t *testing.T) {
+	blocksDir := t.TempDir()
+	currentEnvelope := rewrapApplyEnvelope(t, 2)
+	writeRewrapApplyIndex(t, blocksDir, currentEnvelope)
+	blockWriter, err := block.NewWriter(block.FilePath(blocksDir, 1), 7, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = blockWriter.Close() })
+	idxWriter, err := block.OpenIndexWriter(block.IdxFilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("OpenIndexWriter: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir:   blocksDir,
+		blockWriter: blockWriter,
+		idxWriter:   idxWriter,
+		uploads:     newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
+	}
+	err = s.applyRewrapDocumentEnvelopeCommand(&scrapv1.RewrapDocumentEnvelope{
+		TransactionId:      "tx-rewrap",
+		DocumentName:       "doc.xml",
+		BlockId:            1,
+		EncryptionEnvelope: rewrapApplyEnvelope(t, 3),
+		OldKeyVersion:      1,
+		NewKeyVersion:      3,
+		RewrappedAtUs:      1716700003000000,
+	})
+	if err != nil {
+		t.Fatalf("applyRewrapDocumentEnvelopeCommand: %v", err)
+	}
+	if s.idxWriter == nil {
+		t.Fatal("idxWriter was not reopened after stale rewrap")
+	}
+	t.Cleanup(func() { _ = s.idxWriter.Close() })
+	if err := s.idxWriter.Append(block.IndexEntry{
+		TransactionID: "tx-after-stale",
+		DocName:       "after.xml",
+		CreatedAt:     time.UnixMicro(1716700004000000),
+		FrameCount:    1,
+		SHA256:        [32]byte{2},
+	}); err != nil {
+		t.Fatalf("Append after stale rewrap: %v", err)
+	}
+}
+
+func TestProposeRewrapRejectsMissingHistoricalBlockBeforeConsensus(t *testing.T) {
+	s := &Shard{
+		blocksDir: t.TempDir(),
+		upload:    UploadConfig{Enabled: true},
+	}
+	err := s.proposeRewrapDocument(
+		context.Background(),
+		1,
+		rewrap.Request{TransactionID: "tx-rewrap", DocumentName: "doc.xml"},
+		rewrap.Result{
+			OldKeyVersion: 1,
+			NewKeyVersion: 2,
+			RewrappedAt:   time.UnixMicro(1716700002000000),
+		},
+		rewrapApplyEnvelope(t, 2),
+	)
+	if err == nil || !strings.Contains(err.Error(), "local Block data") {
+		t.Fatalf("proposeRewrapDocument error = %v, want local Block preflight failure", err)
 	}
 }
 

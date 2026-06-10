@@ -346,8 +346,12 @@ func handleTransientUpload(ctx context.Context, state *uploadRetryState) (bool, 
 	return true, nil
 }
 
-func backendKeyPrefix(cellID string, shardID, blockID uint64) string {
-	return filepath.ToSlash(fmt.Sprintf("%s/shards/%016x/%016x", cellID, shardID, blockID))
+func backendKeyPrefix(cellID string, shardID, blockID uint64, uploadGeneration int64) string {
+	base := fmt.Sprintf("%s/shards/%016x/%016x", cellID, shardID, blockID)
+	if uploadGeneration > 0 {
+		base = fmt.Sprintf("%s/generations/%016x", base, uploadGeneration)
+	}
+	return filepath.ToSlash(base)
 }
 
 func cellIDOrLocal(cellID string) string {

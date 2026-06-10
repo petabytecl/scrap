@@ -158,6 +158,19 @@ func TestApplyConfirmUploadIgnoresStaleDuplicateGeneration(t *testing.T) {
 	}
 }
 
+func TestBackendKeyPrefixIncludesNonZeroUploadGeneration(t *testing.T) {
+	legacy := backendKeyPrefix("cell-a", 7, uploadApplyTestBlockID, 0)
+	if legacy != "cell-a/shards/0000000000000007/000000000000002a" {
+		t.Fatalf("legacy backend key prefix = %q", legacy)
+	}
+
+	generated := backendKeyPrefix("cell-a", 7, uploadApplyTestBlockID, 15)
+	want := "cell-a/shards/0000000000000007/000000000000002a/generations/000000000000000f"
+	if generated != want {
+		t.Fatalf("generated backend key prefix = %q, want %q", generated, want)
+	}
+}
+
 func TestApplyConfirmUploadRecordsCommittedAuthorityForRebuild(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	if err := idx.PutPendingUpload(index.PendingUpload{

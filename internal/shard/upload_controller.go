@@ -227,7 +227,7 @@ func (c *uploadController) handleThrottled(ctx context.Context, state *uploadRet
 }
 
 func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingUpload) error {
-	prefix := backendKeyPrefix(c.cellID(), upload.ShardID, upload.BlockID)
+	prefix := backendKeyPrefix(c.cellID(), upload.ShardID, upload.BlockID, upload.UploadGeneration)
 	// Root backend I/O in the deterministic per-block trace so the PUT/verify spans
 	// share a trace_id with the seal/confirm apply spans and the documents' links.
 	bctx := trace.ContextWithSpanContext(ctx, blockTraceContext(c.cellID(), c.shardID, upload.BlockID))

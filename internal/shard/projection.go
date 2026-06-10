@@ -160,7 +160,7 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 		return err
 	}
 	if contains {
-		return s.requeueBlockUploadAfterIndexAppend(doc.BlockId)
+		return s.requeueBlockUploadAfterIndexAppend(doc.BlockId, doc.GetCreatedAtUs())
 	}
 
 	idxW, err = block.OpenIndexWriter(s.idxPath(doc.BlockId))
@@ -174,7 +174,7 @@ func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry bloc
 	if err := idxW.Close(); err != nil {
 		return fmt.Errorf("shard: close historical write idx: %w", err)
 	}
-	if err := s.requeueBlockUploadAfterIndexAppend(doc.BlockId); err != nil {
+	if err := s.requeueBlockUploadAfterIndexAppend(doc.BlockId, doc.GetCreatedAtUs()); err != nil {
 		return err
 	}
 	return nil
@@ -191,21 +191,20 @@ func (s *Shard) blockIndexContainsDocumentRepairingTail(blockID uint64, txID, do
 	return s.blockIndexContainsDocument(blockID, txID, docName)
 }
 
-func (s *Shard) requeueBlockUploadAfterIndexAppend(blockID uint64) error {
+func (s *Shard) requeueBlockUploadAfterIndexAppend(blockID uint64, uploadGeneration int64) error {
 	if !s.upload.Enabled {
 		return nil
 	}
-	info, err := os.Stat(s.blockPath(blockID))
+	sealedSize, err := s.sealedSizeForUploadRequeueLocked(blockID)
 	if err != nil {
-		return fmt.Errorf("shard: stat historical block for upload: %w", err)
+		return err
 	}
-	requeuedAtUs := time.Now().UnixMicro()
 	if err := s.idx.PutPendingUpload(index.PendingUpload{
 		BlockID:          blockID,
 		ShardID:          s.shardID,
-		SealedSizeBytes:  info.Size(),
-		SealedAtUs:       requeuedAtUs,
-		UploadGeneration: requeuedAtUs,
+		SealedSizeBytes:  sealedSize,
+		SealedAtUs:       uploadGeneration,
+		UploadGeneration: uploadGeneration,
 	}); err != nil {
 		return fmt.Errorf("shard: requeue historical block upload: %w", err)
 	}
@@ -214,6 +213,27 @@ func (s *Shard) requeueBlockUploadAfterIndexAppend(blockID uint64) error {
 	}
 	s.uploads.Notify()
 	return nil
+}
+
+func (s *Shard) sealedSizeForUploadRequeueLocked(blockID uint64) (int64, error) {
+	info, err := os.Stat(s.blockPath(blockID))
+	if err == nil {
+		return info.Size(), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("shard: stat historical block for upload: %w", err)
+	}
+	if pending, pendingErr := s.idx.GetPendingUpload(blockID); pendingErr == nil {
+		return pending.SealedSizeBytes, nil
+	} else if !errors.Is(pendingErr, index.ErrPendingUploadNotFound) {
+		return 0, fmt.Errorf("shard: get pending upload size for requeue: %w", pendingErr)
+	}
+	if confirmed, confirmedErr := s.idx.GetConfirmedUpload(blockID); confirmedErr == nil {
+		return confirmed.SealedSizeBytes, nil
+	} else if !errors.Is(confirmedErr, index.ErrConfirmedUploadNotFound) {
+		return 0, fmt.Errorf("shard: get confirmed upload size for requeue: %w", confirmedErr)
+	}
+	return 0, fmt.Errorf("shard: stat historical block for upload: %w", err)
 }
 
 func (s *Shard) blockIndexContainsDocument(blockID uint64, txID, docName string) (bool, error) {

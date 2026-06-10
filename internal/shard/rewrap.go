@@ -152,6 +152,9 @@ func (s *Shard) proposeRewrapDocument(
 	if err != nil {
 		return err
 	}
+	if err := s.validateLeaderHistoricalRewrapUploadRequeue(blockID); err != nil {
+		return err
+	}
 
 	doneCh := make(chan error, 1)
 	proposalID := ulid.New().String()
@@ -244,7 +247,7 @@ func (s *Shard) applyRewrapDocumentEnvelope(cmd *scrapv1.RewrapDocumentEnvelope)
 	if err != nil {
 		return err
 	}
-	return s.finishRewrapApplyLocked(cmd.GetBlockId(), current, changed)
+	return s.finishRewrapApplyLocked(cmd.GetBlockId(), current, changed, cmd.GetRewrappedAtUs())
 }
 
 func validateRewrapCommand(cmd *scrapv1.RewrapDocumentEnvelope) error {
@@ -266,10 +269,7 @@ func (s *Shard) replaceRewrapEnvelopeLocked(cmd *scrapv1.RewrapDocumentEnvelope,
 	}
 
 	if err := validateRewrapCurrentEnvelope(s.idxPath(cmd.GetBlockId()), cmd); err != nil {
-		return false, err
-	}
-	if err := s.validateHistoricalRewrapUploadRequeueLocked(cmd.GetBlockId(), current); err != nil {
-		return false, err
+		return false, s.reopenCurrentIndexAfterRewrapErrorLocked(current, cmd.GetBlockId(), err)
 	}
 	_, changed, replaceErr := block.ReplaceDocumentEnvelope(
 		s.idxPath(cmd.GetBlockId()),
@@ -284,14 +284,28 @@ func (s *Shard) replaceRewrapEnvelopeLocked(cmd *scrapv1.RewrapDocumentEnvelope,
 	return changed, nil
 }
 
-func (s *Shard) validateHistoricalRewrapUploadRequeueLocked(blockID uint64, current bool) error {
-	if current || !s.upload.Enabled {
+func (s *Shard) validateLeaderHistoricalRewrapUploadRequeue(blockID uint64) error {
+	if !s.upload.Enabled {
 		return nil
 	}
-	if _, err := os.Stat(s.blockPath(blockID)); err != nil {
+	s.mu.Lock()
+	current := s.blockWriter != nil && s.blockWriter.BlockID() == blockID
+	path := s.blockPath(blockID)
+	s.mu.Unlock()
+	if current {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("shard: rewrap requires local Block data for upload requeue: %w", err)
 	}
 	return nil
+}
+
+func (s *Shard) reopenCurrentIndexAfterRewrapErrorLocked(current bool, blockID uint64, err error) error {
+	if reopenErr := s.reopenCurrentIndexAfterRewrapLocked(current, blockID); reopenErr != nil {
+		return reopenErr
+	}
+	return err
 }
 
 func validateRewrapCurrentEnvelope(path string, cmd *scrapv1.RewrapDocumentEnvelope) error {
@@ -320,9 +334,9 @@ func validateRewrapCurrentEnvelope(path string, cmd *scrapv1.RewrapDocumentEnvel
 	return nil
 }
 
-func (s *Shard) finishRewrapApplyLocked(blockID uint64, current, changed bool) error {
+func (s *Shard) finishRewrapApplyLocked(blockID uint64, current, changed bool, uploadGeneration int64) error {
 	if changed && !current {
-		return s.requeueBlockUploadAfterIndexAppend(blockID)
+		return s.requeueBlockUploadAfterIndexAppend(blockID, uploadGeneration)
 	}
 	return nil
 }
