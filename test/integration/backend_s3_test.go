@@ -1,11 +1,12 @@
-package backend_test
+//go:build integration
+
+package integration_test
 
 import (
 	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"testing"
 	"time"
 
@@ -15,40 +16,39 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/test/integration/testinfra"
+	scraplocalstack "github.com/petabytecl/scrap/test/integration/testinfra/localstack"
 )
 
 //nolint:gocognit,cyclop // LocalStack integration exercises the full required S3 round trip in one scenario.
-func TestS3BackendLocalStackRoundTrip(t *testing.T) {
-	if os.Getenv("SCRAP_S3_LOCALSTACK") != "1" {
-		t.Skip("set SCRAP_S3_LOCALSTACK=1 with SCRAP_S3_ENDPOINT to run LocalStack S3 integration")
+//goland:noinspection ALL
+func TestIntegrationS3BackendLocalStackRoundTrip(t *testing.T) {
+	ctx := integrationTestContext(t)
+	stack, err := scraplocalstack.Run(ctx, scraplocalstack.DefaultImage)
+	if stack != nil {
+		testinfra.CleanupContainer(t, stack)
 	}
-
-	ctx := context.Background()
-	endpoint := os.Getenv("SCRAP_S3_ENDPOINT")
-	if endpoint == "" {
-		t.Fatal("SCRAP_S3_ENDPOINT is required for LocalStack integration")
+	if err != nil {
+		t.Fatalf("start LocalStack testcontainer: %v", err)
 	}
-	region := os.Getenv("SCRAP_S3_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-	bucket := os.Getenv("SCRAP_S3_BUCKET")
-	if bucket == "" {
-		bucket = fmt.Sprintf("scrap-s3-test-%d", time.Now().UnixNano())
-	}
+	bucket := fmt.Sprintf("scrap-s3-test-%d", time.Now().UnixNano())
 
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(region),
+		awsconfig.WithRegion(scraplocalstack.DefaultRegion),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
 	)
 	if err != nil {
 		t.Fatalf("load AWS config: %v", err)
 	}
 	client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
+		endpoint, err := stack.HTTPHostAddress(ctx)
+		if err != nil {
+			t.Fatalf("resolve LocalStack endpoint: %v", err)
+		}
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = true
 	})
@@ -56,15 +56,16 @@ func TestS3BackendLocalStackRoundTrip(t *testing.T) {
 		t.Fatalf("CreateBucket: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = client.DeleteBucket(context.Background(), &awss3.DeleteBucketInput{Bucket: aws.String(bucket)})
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = client.DeleteBucket(cleanupCtx, &awss3.DeleteBucketInput{Bucket: aws.String(bucket)})
 	})
 
-	store, err := backend.NewS3FromConfig(ctx, backend.S3Config{
-		Bucket:    bucket,
-		Region:    region,
-		Endpoint:  endpoint,
-		PathStyle: true,
-	})
+	s3Config, err := stack.S3Config(ctx, bucket)
+	if err != nil {
+		t.Fatalf("build S3 config: %v", err)
+	}
+	store, err := backend.NewS3FromConfig(ctx, s3Config)
 	if err != nil {
 		t.Fatalf("NewS3FromConfig: %v", err)
 	}

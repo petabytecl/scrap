@@ -120,7 +120,9 @@ linters:
             - github.com/aws/aws-sdk-go-v2
             - github.com/aws/smithy-go
             - github.com/cockroachdb/pebble
+            - github.com/openbao/openbao/api
             - github.com/prometheus/client_golang
+            - github.com/testcontainers/testcontainers-go
             - go.etcd.io/etcd
             - go.etcd.io/raft/v3
             - go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc

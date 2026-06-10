@@ -27,6 +27,15 @@ operator-visible.
 | 9. Add durable rewrap workflow and evidence | #407 |
 | 10. Add prod-like security and encryption evidence gates | #408 |
 
+## Deferred Follow-ups
+
+- Add `scrapctl` OpenBao bootstrap commands for local/prod-like operator
+  workflows. The commands should initialize, unseal, mount Transit, and create
+  the S.C.R.A.P. Transit key through the official OpenBao Go API client, then
+  emit redacted evidence suitable for production rehearsal notes. Keep this
+  separate from Testcontainers integration fixtures; it is operator tooling for
+  production-mode rehearsal and explicit prod-like environments.
+
 ## Proposed Slices
 
 ### 1. ADR 0019: production security boundary (#399)

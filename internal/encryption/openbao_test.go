@@ -181,9 +181,9 @@ func assertOpenBaoPaths(t *testing.T, paths []string) {
 	t.Helper()
 	wantPaths := []string{
 		"GET /v1/transit/keys/scrap-documents",
-		"POST /v1/transit/datakey/plaintext/scrap-documents",
-		"POST /v1/transit/decrypt/scrap-documents",
-		"POST /v1/transit/rewrap/scrap-documents",
+		"PUT /v1/transit/datakey/plaintext/scrap-documents",
+		"PUT /v1/transit/decrypt/scrap-documents",
+		"PUT /v1/transit/rewrap/scrap-documents",
 	}
 	if got := strings.Join(paths, "\n"); got != strings.Join(wantPaths, "\n") {
 		t.Fatalf("paths:\n%s\nwant:\n%s", got, strings.Join(wantPaths, "\n"))
@@ -201,10 +201,10 @@ func newOpenBaoTransitTestServer(t *testing.T, token string) *openBaoTransitTest
 	t.Helper()
 	srv := &openBaoTransitTestServer{t: t, token: token}
 	routes := map[string]http.HandlerFunc{
-		"GET /v1/transit/keys/scrap-documents":               srv.handleKeys,
-		"POST /v1/transit/datakey/plaintext/scrap-documents": srv.handleDataKey,
-		"POST /v1/transit/decrypt/scrap-documents":           srv.handleDecrypt,
-		"POST /v1/transit/rewrap/scrap-documents":            srv.handleRewrap,
+		"GET /v1/transit/keys/scrap-documents":              srv.handleKeys,
+		"PUT /v1/transit/datakey/plaintext/scrap-documents": srv.handleDataKey,
+		"PUT /v1/transit/decrypt/scrap-documents":           srv.handleDecrypt,
+		"PUT /v1/transit/rewrap/scrap-documents":            srv.handleRewrap,
 	}
 	srv.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route := r.Method + " " + r.URL.Path
@@ -309,6 +309,46 @@ func TestOpenBaoTransitClassifiesAndRedactsProviderFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenBaoTransitPreservesContextFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "canceled", err: context.Canceled, want: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded, want: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transit, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+				Address:   "http://127.0.0.1:8200",
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Token:     "test-token",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, tt.err
+				})},
+			})
+			if err != nil {
+				t.Fatalf("NewOpenBaoTransit: %v", err)
+			}
+			_, err = transit.Readiness(context.Background())
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Readiness error = %v, want %v", err, tt.want)
+			}
+			if errors.Is(err, encryption.ErrUnavailable) {
+				t.Fatalf("Readiness error = %v, want context error without unavailable classification", err)
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return fn(r)
 }
 
 func readJSONBody(t *testing.T, r *http.Request) map[string]any {

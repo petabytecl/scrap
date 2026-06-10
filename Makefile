@@ -306,7 +306,7 @@ test-cover: ## Run tests producing both coverage profile and JUnit XML in one pa
 
 .PHONY: integration
 integration: ## Run integration tests.
-	$(GO) test ./test/integration/ -v -timeout 120s
+	$(GO) test -tags=integration ./test/integration/... -v -timeout 5m
 
 .PHONY: build
 build: ## Build all supported command binaries.

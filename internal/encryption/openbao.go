@@ -1,24 +1,24 @@
 package encryption
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"path"
+	"strconv"
 	"strings"
 	"time"
+
+	baoapi "github.com/openbao/openbao/api"
 )
 
 const (
-	openBaoAPIPrefix     = "v1"
-	openBaoTokenHeader   = "X-Vault-Token" //nolint:gosec // Header name only; token values come from runtime config.
 	defaultClientTimeout = 10 * time.Second
-	maxErrorBodyBytes    = 4096
+	defaultClientRetries = 0
+	minimumKeyVersion    = 1
 )
 
 type OpenBaoConfig struct {
@@ -30,11 +30,17 @@ type OpenBaoConfig struct {
 }
 
 type OpenBaoTransit struct {
-	baseURL    url.URL
-	mountPath  string
-	keyName    string
-	token      string
-	httpClient *http.Client
+	client    *baoapi.Client
+	mountPath string
+	keyName   string
+}
+
+type transitKeyMetadata struct {
+	latestVersion            int
+	minimumDecryptionVersion int
+	softDeleted              bool
+	supportsEncryption       bool
+	supportsDecryption       bool
 }
 
 func NewOpenBaoTransit(cfg OpenBaoConfig) (*OpenBaoTransit, error) {
@@ -54,16 +60,14 @@ func NewOpenBaoTransit(cfg OpenBaoConfig) (*OpenBaoTransit, error) {
 	if token == "" {
 		return nil, fmt.Errorf("openbao transit config: token is required: %w", ErrInvalidConfig)
 	}
-	httpClient := cfg.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultClientTimeout}
+	client, err := newOpenBaoClient(baseURL.String(), token, cfg.HTTPClient)
+	if err != nil {
+		return nil, err
 	}
 	return &OpenBaoTransit{
-		baseURL:    baseURL,
-		mountPath:  mountPath,
-		keyName:    keyName,
-		token:      token,
-		httpClient: httpClient,
+		client:    client,
+		mountPath: mountPath,
+		keyName:   keyName,
 	}, nil
 }
 
@@ -80,24 +84,29 @@ func (t *OpenBaoTransit) GenerateDataKey(ctx context.Context, req GenerateDataKe
 	if len(req.Context) > 0 {
 		body["context"] = base64.StdEncoding.EncodeToString(req.Context)
 	}
-	var out struct {
-		Plaintext  string `json:"plaintext"`
-		Ciphertext string `json:"ciphertext"`
-	}
-	if err := t.write(ctx, http.MethodPost, t.path("datakey", "plaintext", t.keyName), body, &out); err != nil {
-		return DataKey{}, err
-	}
-	plaintext, err := decodeTransitBase64("datakey plaintext", out.Plaintext)
+	data, err := t.write(ctx, t.path("datakey", "plaintext", t.keyName), body)
 	if err != nil {
 		return DataKey{}, err
 	}
-	if out.Ciphertext == "" {
+	plaintextValue, err := transitString(data, "datakey plaintext", "plaintext")
+	if err != nil {
+		return DataKey{}, err
+	}
+	plaintext, err := decodeTransitBase64("datakey plaintext", plaintextValue)
+	if err != nil {
+		return DataKey{}, err
+	}
+	ciphertext, err := transitString(data, "datakey ciphertext", "ciphertext")
+	if err != nil {
+		return DataKey{}, err
+	}
+	if ciphertext == "" {
 		return DataKey{}, fmt.Errorf("openbao transit datakey response missing ciphertext: %w", ErrUnavailable)
 	}
 	return DataKey{
 		Plaintext:  plaintext,
-		WrappedKey: out.Ciphertext,
-		Version:    versionFromWrappedKey(out.Ciphertext),
+		WrappedKey: ciphertext,
+		Version:    versionFromWrappedKey(ciphertext),
 	}, nil
 }
 
@@ -106,13 +115,15 @@ func (t *OpenBaoTransit) UnwrapDataKey(ctx context.Context, req UnwrapDataKeyReq
 	if len(req.Context) > 0 {
 		body["context"] = base64.StdEncoding.EncodeToString(req.Context)
 	}
-	var out struct {
-		Plaintext string `json:"plaintext"`
-	}
-	if err := t.write(ctx, http.MethodPost, t.path("decrypt", t.keyName), body, &out); err != nil {
+	data, err := t.write(ctx, t.path("decrypt", t.keyName), body)
+	if err != nil {
 		return UnwrappedDataKey{}, err
 	}
-	plaintext, err := decodeTransitBase64("decrypt plaintext", out.Plaintext)
+	plaintextValue, err := transitString(data, "decrypt plaintext", "plaintext")
+	if err != nil {
+		return UnwrappedDataKey{}, err
+	}
+	plaintext, err := decodeTransitBase64("decrypt plaintext", plaintextValue)
 	if err != nil {
 		return UnwrappedDataKey{}, err
 	}
@@ -130,120 +141,178 @@ func (t *OpenBaoTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyReq
 	if req.KeyVersion > 0 {
 		body["key_version"] = req.KeyVersion
 	}
-	var out struct {
-		Ciphertext string `json:"ciphertext"`
-	}
-	if err := t.write(ctx, http.MethodPost, t.path("rewrap", t.keyName), body, &out); err != nil {
+	data, err := t.write(ctx, t.path("rewrap", t.keyName), body)
+	if err != nil {
 		return RewrappedKey{}, err
 	}
-	if out.Ciphertext == "" {
+	ciphertext, err := transitString(data, "rewrap ciphertext", "ciphertext")
+	if err != nil {
+		return RewrappedKey{}, err
+	}
+	if ciphertext == "" {
 		return RewrappedKey{}, fmt.Errorf("openbao transit rewrap response missing ciphertext: %w", ErrUnavailable)
 	}
 	return RewrappedKey{
-		WrappedKey: out.Ciphertext,
-		Version:    versionFromWrappedKey(out.Ciphertext),
-		Changed:    out.Ciphertext != req.WrappedKey,
+		WrappedKey: ciphertext,
+		Version:    versionFromWrappedKey(ciphertext),
+		Changed:    ciphertext != req.WrappedKey,
 	}, nil
 }
 
 func (t *OpenBaoTransit) Readiness(ctx context.Context) (Readiness, error) {
-	var out struct {
-		LatestVersion            int  `json:"latest_version"`
-		MinimumDecryptionVersion int  `json:"min_decryption_version"`
-		SoftDeleted              bool `json:"soft_deleted"`
-		SupportsEncryption       bool `json:"supports_encryption"`
-		SupportsDecryption       bool `json:"supports_decryption"`
-	}
-	if err := t.write(ctx, http.MethodGet, t.path("keys", t.keyName), nil, &out); err != nil {
+	data, err := t.read(ctx, t.path("keys", t.keyName))
+	if err != nil {
 		return Readiness{}, err
 	}
-	if out.LatestVersion < 1 {
+	metadata, err := transitKeyMetadataFromData(data)
+	if err != nil {
+		return Readiness{}, err
+	}
+	if metadata.latestVersion < minimumKeyVersion {
 		return Readiness{}, fmt.Errorf("openbao transit key metadata missing latest version: %w", ErrMissingKey)
 	}
-	if out.SoftDeleted || !out.SupportsEncryption || !out.SupportsDecryption {
+	if metadata.softDeleted || !metadata.supportsEncryption || !metadata.supportsDecryption {
 		return Readiness{}, fmt.Errorf("openbao transit key is not usable for envelope encryption: %w", ErrUnavailable)
 	}
 	return Readiness{
 		Ready:                    true,
-		LatestVersion:            out.LatestVersion,
-		MinimumDecryptionVersion: out.MinimumDecryptionVersion,
+		LatestVersion:            metadata.latestVersion,
+		MinimumDecryptionVersion: metadata.minimumDecryptionVersion,
 	}, nil
 }
 
-func (t *OpenBaoTransit) write(ctx context.Context, method, apiPath string, body, out any) error {
-	reader, err := encodeOpenBaoRequestBody(body)
+func transitKeyMetadataFromData(data map[string]any) (transitKeyMetadata, error) {
+	latestVersion, err := transitInt(data, "latest_version")
 	if err != nil {
-		return err
+		return transitKeyMetadata{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, t.endpoint(apiPath), reader)
+	minimumDecryptionVersion, err := optionalTransitInt(data, "min_decryption_version")
 	if err != nil {
-		return fmt.Errorf("openbao transit request build failed: %w", ErrInvalidConfig)
+		return transitKeyMetadata{}, err
 	}
-	req.Header.Set(openBaoTokenHeader, t.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := t.httpClient.Do(req)
+	softDeleted, err := optionalTransitBool(data, "soft_deleted")
 	if err != nil {
-		return fmt.Errorf("openbao transit request failed: %w", ErrUnavailable)
+		return transitKeyMetadata{}, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	return decodeOpenBaoResponse(resp, out)
+	supportsEncryption, err := optionalTransitBool(data, "supports_encryption")
+	if err != nil {
+		return transitKeyMetadata{}, err
+	}
+	supportsDecryption, err := optionalTransitBool(data, "supports_decryption")
+	if err != nil {
+		return transitKeyMetadata{}, err
+	}
+	return transitKeyMetadata{
+		latestVersion:            latestVersion,
+		minimumDecryptionVersion: minimumDecryptionVersion,
+		softDeleted:              softDeleted,
+		supportsEncryption:       supportsEncryption,
+		supportsDecryption:       supportsDecryption,
+	}, nil
 }
 
-func encodeOpenBaoRequestBody(body any) (io.Reader, error) {
-	if body == nil {
-		return http.NoBody, nil
+func newOpenBaoClient(address, token string, httpClient *http.Client) (*baoapi.Client, error) {
+	cfg := baoapi.DefaultConfig()
+	cfg.Address = address
+	cfg.Timeout = defaultClientTimeout
+	cfg.MaxRetries = defaultClientRetries
+	if httpClient != nil {
+		cfg.HttpClient = httpClient
 	}
-	data, err := json.Marshal(body)
+	client, err := baoapi.NewClient(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("openbao transit request encode failed: %w", ErrInvalidRequest)
+		return nil, fmt.Errorf("openbao transit client config: %w", ErrInvalidConfig)
 	}
-	return bytes.NewReader(data), nil
+	client.SetToken(token)
+	return client, nil
 }
 
-func decodeOpenBaoResponse(resp *http.Response, out any) error {
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		if err != nil {
-			return fmt.Errorf("openbao transit response read failed: %w", ErrUnavailable)
-		}
-		return classifyOpenBaoFailure(resp.StatusCode, respBody)
-	}
-	respBody, err := io.ReadAll(resp.Body)
+func (t *OpenBaoTransit) read(ctx context.Context, apiPath string) (map[string]any, error) {
+	secret, err := t.client.Logical().ReadWithContext(ctx, apiPath)
 	if err != nil {
-		return fmt.Errorf("openbao transit response read failed: %w", ErrUnavailable)
+		return nil, classifyOpenBaoError(err)
 	}
-	var envelope struct {
-		Data   json.RawMessage `json:"data"`
-		Errors []string        `json:"errors"`
-	}
-	if err := json.Unmarshal(respBody, &envelope); err != nil {
-		return fmt.Errorf("openbao transit response decode failed: %w", ErrUnavailable)
-	}
-	if len(envelope.Errors) > 0 {
-		return classifyOpenBaoFailure(resp.StatusCode, respBody)
-	}
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return fmt.Errorf("openbao transit response missing data: %w", ErrUnavailable)
-	}
-	if err := json.Unmarshal(envelope.Data, out); err != nil {
-		return fmt.Errorf("openbao transit data decode failed: %w", ErrUnavailable)
-	}
-	return nil
+	return transitData(secret, ErrMissingKey)
 }
 
-func (t *OpenBaoTransit) endpoint(apiPath string) string {
-	u := t.baseURL
-	u.Path = joinURLPath(u.Path, apiPath)
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
+func (t *OpenBaoTransit) write(ctx context.Context, apiPath string, body map[string]any) (map[string]any, error) {
+	secret, err := t.client.Logical().WriteWithContext(ctx, apiPath, body)
+	if err != nil {
+		return nil, classifyOpenBaoError(err)
+	}
+	return transitData(secret, ErrUnavailable)
+}
+
+func transitData(secret *baoapi.Secret, missing error) (map[string]any, error) {
+	if secret == nil || secret.Data == nil {
+		return nil, fmt.Errorf("openbao transit response missing data: %w", missing)
+	}
+	return secret.Data, nil
+}
+
+func transitString(data map[string]any, label, key string) (string, error) {
+	value, ok := data[key]
+	if !ok {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("openbao transit %s decode failed: %w", label, ErrUnavailable)
+	}
+	return text, nil
+}
+
+func transitInt(data map[string]any, key string) (int, error) {
+	value, ok := data[key]
+	if !ok {
+		return 0, fmt.Errorf("openbao transit key metadata missing latest version: %w", ErrMissingKey)
+	}
+	out, err := openBaoInt(value)
+	if err != nil {
+		return 0, fmt.Errorf("openbao transit %s decode failed: %w", key, ErrUnavailable)
+	}
+	return out, nil
+}
+
+func optionalTransitInt(data map[string]any, key string) (int, error) {
+	value, ok := data[key]
+	if !ok {
+		return 0, nil
+	}
+	out, err := openBaoInt(value)
+	if err != nil {
+		return 0, fmt.Errorf("openbao transit %s decode failed: %w", key, ErrUnavailable)
+	}
+	return out, nil
+}
+
+func optionalTransitBool(data map[string]any, key string) (bool, error) {
+	value, ok := data[key]
+	if !ok {
+		return false, nil
+	}
+	out, ok := value.(bool)
+	if !ok {
+		return false, fmt.Errorf("openbao transit %s decode failed: %w", key, ErrUnavailable)
+	}
+	return out, nil
+}
+
+func openBaoInt(value any) (int, error) {
+	switch typed := value.(type) {
+	case int:
+		return typed, nil
+	case int64:
+		return strconv.Atoi(strconv.FormatInt(typed, 10))
+	case json.Number:
+		return strconv.Atoi(typed.String())
+	default:
+		return 0, fmt.Errorf("unexpected %T", value)
+	}
 }
 
 func (t *OpenBaoTransit) path(parts ...string) string {
-	segments := []string{openBaoAPIPrefix}
-	segments = append(segments, splitTransitPath(t.mountPath)...)
+	segments := splitTransitPath(t.mountPath)
 	for _, part := range parts {
 		segments = append(segments, splitTransitPath(part)...)
 	}
@@ -251,15 +320,6 @@ func (t *OpenBaoTransit) path(parts ...string) string {
 		segments[i] = url.PathEscape(segment)
 	}
 	return strings.Join(segments, "/")
-}
-
-func joinURLPath(basePath, apiPath string) string {
-	basePath = strings.Trim(basePath, "/")
-	apiPath = strings.Trim(apiPath, "/")
-	if basePath == "" {
-		return "/" + apiPath
-	}
-	return "/" + path.Join(basePath, apiPath)
 }
 
 func validateOpenBaoAddress(raw string) (url.URL, error) {
@@ -309,8 +369,21 @@ func decodeTransitBase64(label, value string) ([]byte, error) {
 	return decoded, nil
 }
 
-func classifyOpenBaoFailure(statusCode int, body []byte) error {
-	bodyText := strings.ToLower(string(body))
+func classifyOpenBaoError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("openbao transit request canceled: %w", context.Canceled)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("openbao transit request deadline exceeded: %w", context.DeadlineExceeded)
+	}
+	var responseErr *baoapi.ResponseError
+	if !errors.As(err, &responseErr) {
+		return fmt.Errorf("openbao transit request failed: %w", ErrUnavailable)
+	}
+	return classifyOpenBaoFailure(responseErr.StatusCode, strings.ToLower(strings.Join(responseErr.Errors, "\n")))
+}
+
+func classifyOpenBaoFailure(statusCode int, bodyText string) error {
 	var cause error
 	switch {
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
