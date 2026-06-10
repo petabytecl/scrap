@@ -17,7 +17,13 @@ spec:
     spec:
       containers:
         - name: pyroscope
-          image: grafana/pyroscope:1.13.3
+          image: grafana/pyroscope:1.13.3@sha256:545ef78ff6ad3217b9c81e76bad2bcec947a6ac134c2ed3e6019b3165142292f
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           ports:
             - containerPort: 4040
           resources:

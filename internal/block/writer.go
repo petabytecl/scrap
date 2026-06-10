@@ -43,7 +43,7 @@ type Writer struct {
 //
 //	created_at_unix_micro(8) + reserved(4) + header_crc32c(4)
 func NewWriter(path string, shardID, blockID uint64) (*Writer, error) {
-	f, err := os.Create(path) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: create %s: %w", path, err)
 	}
@@ -197,6 +197,23 @@ func (w *Writer) DocCount() uint32 {
 
 func (w *Writer) Offset() int64 {
 	return w.offset
+}
+
+func (w *Writer) Truncate(offset int64) error {
+	if offset < HeaderSize {
+		return fmt.Errorf("block: truncate offset %d before header", offset)
+	}
+	if err := w.f.Truncate(offset); err != nil {
+		return fmt.Errorf("block: truncate: %w", err)
+	}
+	if _, err := w.f.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf("block: seek after truncate: %w", err)
+	}
+	if err := w.f.Sync(); err != nil {
+		return fmt.Errorf("block: fsync after truncate: %w", err)
+	}
+	w.offset = offset
+	return nil
 }
 
 func (w *Writer) BlockID() uint64 {

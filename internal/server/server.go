@@ -74,15 +74,17 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 	docName := init.GetDocumentName()
 	contentType := init.GetContentType()
 	idempotencyKey := init.GetIdempotencyKey()
+	tenantID := init.GetTenantId()
 	rpc.AddSpanAttributes(telemetry.DocumentIdentityAttributes(
 		txID,
 		docName,
 		s.identifierMode,
 	)...)
 
-	if txID == "" || docName == "" {
-		rpcCode = codes.InvalidArgument
-		return status.Error(codes.InvalidArgument, "transaction_id and document_name are required")
+	if err := storeapi.ValidateWriteMetadata(txID, docName, contentType, tenantID, idempotencyKey); err != nil {
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return mappedErr
 	}
 
 	pr, pw := io.Pipe()
@@ -125,27 +127,90 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 // recvChunks reads chunk messages from the stream and writes them into pw.
 // It closes pw (with an error if needed) and waits on done before returning on failure.
 func (s *documentServer) recvChunks(ctx context.Context, stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], pw *io.PipeWriter, done <-chan struct{}, writeErr *error) error {
+	var totalBytes int64
 	for {
 		msg, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
 		if err != nil {
-			pw.CloseWithError(err)
-			<-done
-			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+			return s.handleRecvError(ctx, pw, done, totalBytes, err)
 		}
 		chunk := msg.GetChunkData()
-		if len(chunk) > 0 {
-			if _, err := pw.Write(chunk); err != nil {
-				_ = pw.Close()
-				<-done
-				if *writeErr != nil {
-					return s.mapStoreError(ctx, "WriteDocument", *writeErr)
-				}
-				return status.Errorf(codes.Internal, "write chunk: %v", err)
-			}
+		if len(chunk) == 0 {
+			continue
 		}
+		nextTotal, err := validateIncomingChunk(totalBytes, chunk)
+		if err != nil {
+			return closePipeAndMapStoreError(pw, done, err)
+		}
+		totalBytes = nextTotal
+		if err := s.writeChunk(ctx, pw, done, writeErr, chunk); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *documentServer) handleRecvError(ctx context.Context, pw *io.PipeWriter, done <-chan struct{}, totalBytes int64, recvErr error) error {
+	if errors.Is(recvErr, io.EOF) {
+		if totalBytes > 0 {
+			return nil
+		}
+		err := fmt.Errorf("%w: document body is empty", storeapi.ErrInvalidArgument)
+		return closePipeAndMapStoreError(pw, done, err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		pw.CloseWithError(ctxErr)
+		<-done
+		return status.FromContextError(ctxErr).Err()
+	}
+	pw.CloseWithError(recvErr)
+	<-done
+	return status.Errorf(codes.Internal, "receive chunk: %v", recvErr)
+}
+
+func validateIncomingChunk(totalBytes int64, chunk []byte) (int64, error) {
+	if err := storeapi.ValidateClientChunk(chunk); err != nil {
+		return 0, err
+	}
+	nextTotal := totalBytes + int64(len(chunk))
+	if nextTotal > storeapi.MaxDocumentBytes {
+		return 0, storeapi.NewResourceExhausted(storeapi.ResourceExhaustedReasonDocumentTooLarge, "document too large")
+	}
+	return nextTotal, nil
+}
+
+func closePipeAndMapStoreError(pw *io.PipeWriter, done <-chan struct{}, err error) error {
+	pw.CloseWithError(err)
+	<-done
+	return mapStoreError(err)
+}
+
+func (s *documentServer) writeChunk(ctx context.Context, pw *io.PipeWriter, done <-chan struct{}, writeErr *error, chunk []byte) error {
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := pw.Write(chunk)
+		writeDone <- err
+	}()
+
+	select {
+	case err := <-writeDone:
+		if err == nil {
+			return nil
+		}
+		_ = pw.Close()
+		<-done
+		if *writeErr != nil {
+			return s.mapStoreError(ctx, "WriteDocument", *writeErr)
+		}
+		return status.Errorf(codes.Internal, "write chunk: %v", err)
+	case <-done:
+		_ = pw.Close()
+		if *writeErr != nil {
+			return s.mapStoreError(ctx, "WriteDocument", *writeErr)
+		}
+		return status.Error(codes.Internal, "write consumer stopped")
+	case <-ctx.Done():
+		_ = pw.CloseWithError(ctx.Err())
+		<-done
+		return status.FromContextError(ctx.Err()).Err()
 	}
 }
 
@@ -162,6 +227,11 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 	if err := s.requireSecurity(ctx, security.RoleDocumentReader, audit.OperationHeadDocument); err != nil {
 		rpcCode = status.Code(err)
 		return nil, err
+	}
+	if err := storeapi.ValidateDocumentIdentity(req.GetTransactionId(), req.GetDocumentName(), req.GetTenantId()); err != nil {
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return nil, mappedErr
 	}
 
 	meta, err := s.store.HeadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
@@ -193,6 +263,11 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 	if err := s.requireSecurity(ctx, security.RoleDocumentReader, audit.OperationReadDocument); err != nil {
 		rpcCode = status.Code(err)
 		return err
+	}
+	if err := storeapi.ValidateDocumentIdentity(req.GetTransactionId(), req.GetDocumentName(), req.GetTenantId()); err != nil {
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return mappedErr
 	}
 
 	rc, meta, err := s.store.ReadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
@@ -257,6 +332,11 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 	if err := s.requireSecurity(ctx, security.RoleDocumentReader, audit.OperationFindDocuments); err != nil {
 		rpcCode = status.Code(err)
 		return nil, err
+	}
+	if err := storeapi.ValidateTransactionLookup(req.GetTransactionId(), req.GetTenantId()); err != nil {
+		mappedErr := mapStoreError(err)
+		rpcCode = status.Code(mappedErr)
+		return nil, mappedErr
 	}
 
 	docs, err := s.store.FindDocuments(ctx, req.GetTransactionId())

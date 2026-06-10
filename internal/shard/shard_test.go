@@ -77,6 +77,21 @@ func TestWriteAndHeadDocument(t *testing.T) {
 	}
 }
 
+func TestWriteRejectsInvalidMetadataAndZeroByteDocument(t *testing.T) {
+	s := openTestShard(t)
+	ctx := context.Background()
+
+	_, err := s.WriteDocument(ctx, "tx-\ninvalid", "a.xml", "text/xml", "", bytes.NewReader([]byte("payload")))
+	if !errors.Is(err, storeapi.ErrInvalidArgument) {
+		t.Fatalf("invalid metadata error = %v, want ErrInvalidArgument", err)
+	}
+
+	_, err = s.WriteDocument(ctx, "tx-empty", "a.xml", "text/xml", "", bytes.NewReader(nil))
+	if !errors.Is(err, storeapi.ErrInvalidArgument) {
+		t.Fatalf("empty document error = %v, want ErrInvalidArgument", err)
+	}
+}
+
 func TestWriteAndReadDocument(t *testing.T) {
 	s := openTestShard(t)
 	ctx := context.Background()

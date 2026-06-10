@@ -17,7 +17,13 @@ spec:
     spec:
       containers:
         - name: mimir
-          image: grafana/mimir:2.17.0
+          image: grafana/mimir:2.17.0@sha256:614146229384e3dd3367d98cbd9ddc195dffe13fdfb88d77520148f09735fa8f
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           args:
             - -target=all
             - -auth.multitenancy-enabled=false

@@ -17,7 +17,13 @@ spec:
     spec:
       containers:
         - name: tempo
-          image: grafana/tempo:2.7.2
+          image: grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           args:
             - -config.file=/etc/tempo/config.yaml
             - -target=all

@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/server"
@@ -60,6 +63,105 @@ func TestGRPCWriteAndRead(t *testing.T) {
 	}
 }
 
+func TestGRPCWriteRejectsInvalidMetadata(t *testing.T) {
+	client := startTestServer(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		init *scrapv1.WriteDocumentInit
+	}{
+		{
+			name: "control transaction",
+			init: &scrapv1.WriteDocumentInit{
+				TransactionId: "tx-\n1",
+				DocumentName:  "doc.xml",
+				ContentType:   "text/xml",
+			},
+		},
+		{
+			name: "oversized document name",
+			init: &scrapv1.WriteDocumentInit{
+				TransactionId: "tx-1",
+				DocumentName:  string(bytes.Repeat([]byte("d"), 513)),
+				ContentType:   "text/xml",
+			},
+		},
+		{
+			name: "missing content type",
+			init: &scrapv1.WriteDocumentInit{
+				TransactionId: "tx-1",
+				DocumentName:  "doc.xml",
+			},
+		},
+		{
+			name: "oversized tenant",
+			init: &scrapv1.WriteDocumentInit{
+				TransactionId: "tx-1",
+				DocumentName:  "doc.xml",
+				ContentType:   "text/xml",
+				TenantId:      string(bytes.Repeat([]byte("t"), 257)),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := writeDocumentWithMessages(ctx, client, []*scrapv1.WriteDocumentRequest{
+				{Part: &scrapv1.WriteDocumentRequest_Init{Init: tt.init}},
+				{Part: &scrapv1.WriteDocumentRequest_ChunkData{ChunkData: []byte("payload")}},
+			})
+			assertStatusCode(t, err, codes.InvalidArgument)
+		})
+	}
+}
+
+func TestGRPCWriteRejectsZeroByteDocument(t *testing.T) {
+	client := startTestServer(t)
+	ctx := context.Background()
+
+	err := writeDocumentWithMessages(ctx, client, []*scrapv1.WriteDocumentRequest{
+		{Part: &scrapv1.WriteDocumentRequest_Init{Init: &scrapv1.WriteDocumentInit{
+			TransactionId: "tx-empty",
+			DocumentName:  "empty.xml",
+			ContentType:   "text/xml",
+		}}},
+	})
+	assertStatusCode(t, err, codes.InvalidArgument)
+}
+
+func TestGRPCWriteRejectsOversizedChunk(t *testing.T) {
+	client := startTestServer(t)
+	ctx := context.Background()
+
+	err := writeDocumentWithMessages(ctx, client, []*scrapv1.WriteDocumentRequest{
+		{Part: &scrapv1.WriteDocumentRequest_Init{Init: &scrapv1.WriteDocumentInit{
+			TransactionId: "tx-large-chunk",
+			DocumentName:  "large.bin",
+			ContentType:   "application/octet-stream",
+		}}},
+		{Part: &scrapv1.WriteDocumentRequest_ChunkData{ChunkData: bytes.Repeat([]byte("x"), 1<<20+1)}},
+	})
+	assertStatusCode(t, err, codes.ResourceExhausted)
+}
+
+func TestGRPCReadRejectsInvalidIdentity(t *testing.T) {
+	client := startTestServer(t)
+	ctx := context.Background()
+
+	_, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
+		TransactionId: "tx-\n1",
+		DocumentName:  "doc.xml",
+	})
+	assertStatusCode(t, err, codes.InvalidArgument)
+
+	_, err = client.FindDocuments(ctx, &scrapv1.FindDocumentsRequest{
+		TransactionId: "tx-1",
+		TenantId:      string(bytes.Repeat([]byte("t"), 257)),
+	})
+	assertStatusCode(t, err, codes.InvalidArgument)
+}
+
 const writeChunkSize = 1024
 
 func writeDocument(ctx context.Context, t *testing.T, client scrapv1.DocumentServiceClient, txID, docName, contentType string, content []byte) *scrapv1.WriteDocumentResponse {
@@ -98,6 +200,34 @@ func writeDocument(ctx context.Context, t *testing.T, client scrapv1.DocumentSer
 		t.Fatalf("CloseAndRecv: %v", err)
 	}
 	return resp
+}
+
+func writeDocumentWithMessages(ctx context.Context, client scrapv1.DocumentServiceClient, messages []*scrapv1.WriteDocumentRequest) error {
+	stream, err := client.WriteDocument(ctx)
+	if err != nil {
+		return fmt.Errorf("WriteDocument: %w", err)
+	}
+	for _, msg := range messages {
+		if err := stream.Send(msg); err != nil {
+			return fmt.Errorf("send write document message: %w", err)
+		}
+	}
+	_, err = stream.CloseAndRecv()
+	if err != nil {
+		return fmt.Errorf("close write document stream: %w", err)
+	}
+	return nil
+}
+
+func assertStatusCode(t *testing.T, err error, want codes.Code) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("error = nil, want %s", want)
+	}
+	if got := status.Code(err); got != want {
+		t.Fatalf("status.Code = %s, want %s (err=%v)", got, want, err)
+	}
 }
 
 func verifyWriteResponse(t *testing.T, resp *scrapv1.WriteDocumentResponse, content []byte) {

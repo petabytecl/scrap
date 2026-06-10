@@ -109,7 +109,13 @@ spec:
       serviceAccountName: alloy
       containers:
         - name: alloy
-          image: grafana/alloy:v1.7.5
+          image: grafana/alloy:v1.7.5@sha256:b92703c13c32c20d629ffd89f40287ed385c12a335a7c9f31c720a5f912f9d6f
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           args:
             - run
             - /etc/alloy/config.alloy
@@ -128,7 +134,11 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/alloy
+            - name: alloy-tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: alloy-config
+        - name: alloy-tmp
+          emptyDir: {}

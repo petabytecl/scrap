@@ -100,6 +100,11 @@ reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "Nod
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
 reject 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$base_render" "security mode in base render"
 
+require 'kind:[[:space:]]*NetworkPolicy' "$base_render" "base NetworkPolicy"
+require 'name:[[:space:]]*scrapd-ingress' "$base_render" "base S.C.R.A.P. ingress NetworkPolicy"
+require 'port:[[:space:]]*9091' "$base_render" "peer ingress port"
+require 'kubernetes\.io/metadata\.name:[[:space:]]*monitoring' "$base_render" "monitoring-scoped admin ingress"
+
 require 'healthcheck' "$base_render" "in-container healthcheck probe"
 require 'scrap\.v1-readiness' "$base_render" "readiness healthcheck service"
 
@@ -141,6 +146,11 @@ reject 'name:[[:space:]]*otel-collector' "$evidence_render" "evidence stack in S
 require 'name:[[:space:]]*otel-collector' "$evidence_stack_render" "evidence stack collector"
 require 'name:[[:space:]]*kube-state-metrics' "$evidence_stack_render" "evidence stack kube-state-metrics"
 require 'registry\.k8s\.io/kube-state-metrics/kube-state-metrics:v2\.19\.0' "$evidence_stack_render" "pinned kube-state-metrics image"
+require '@sha256:' "$evidence_stack_render" "digest-pinned evidence stack images"
+require 'allowPrivilegeEscalation:[[:space:]]*false' "$evidence_stack_render" "evidence stack no privilege escalation"
+require 'readOnlyRootFilesystem:[[:space:]]*true' "$evidence_stack_render" "evidence stack read-only root filesystem"
+require 'drop:' "$evidence_stack_render" "evidence stack dropped capabilities"
+require 'ALL' "$evidence_stack_render" "evidence stack drops all capabilities"
 require 'nodes/proxy' "$evidence_stack_render" "collector node proxy scrape RBAC"
 require 'nodes/metrics' "$evidence_stack_render" "collector node metrics scrape RBAC"
 require 'job_name:[[:space:]]*kube-state-metrics' "$evidence_stack_render" "kube-state-metrics scrape job"

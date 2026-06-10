@@ -15,7 +15,13 @@ spec:
     spec:
       containers:
         - name: grafana
-          image: grafana/grafana:12.0.1
+          image: grafana/grafana:12.0.1@sha256:06dc8d60e184705e5dc00e051a6d92342a44010d7d5e538d0a36339e85abb9b7
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           env:
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "true"
@@ -35,6 +41,8 @@ spec:
               cpu: 500m
               memory: 256Mi
           volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
             - name: dashboard-providers
@@ -42,6 +50,8 @@ spec:
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
       volumes:
+        - name: grafana-data
+          emptyDir: {}
         - name: datasources
           configMap:
             name: grafana-evidence-datasources

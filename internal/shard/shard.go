@@ -340,6 +340,10 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	if err := s.requireLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
+	if err := storeapi.ValidateWriteMetadata(txID, docName, contentType, "", idempotencyKey); err != nil {
+		return storeapi.WriteResult{}, err
+	}
+	body = storeapi.NewDocumentBodyReader(body)
 
 	s.writeOrderMu.Lock()
 	defer s.writeOrderMu.Unlock()
@@ -391,6 +395,9 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	result, replicationData, envelope, err := s.appendDocumentPayload(ctx, txID, docName, contentType, body)
 	appendStage.End(err)
 	if err != nil {
+		if truncateErr := s.blockWriter.Truncate(startOffset); truncateErr != nil {
+			err = errors.Join(err, truncateErr)
+		}
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, mapEncryptionError(fmt.Errorf("shard: append document: %w", err))
 	}
@@ -456,6 +463,9 @@ func (s *Shard) HeadDocument(ctx context.Context, txID, docName string) (storeap
 	if err := s.requireLeaderRead(ctx); err != nil {
 		return storeapi.DocumentMeta{}, err
 	}
+	if err := storeapi.ValidateDocumentIdentity(txID, docName, ""); err != nil {
+		return storeapi.DocumentMeta{}, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -479,6 +489,9 @@ func (s *Shard) HeadDocument(ctx context.Context, txID, docName string) (storeap
 
 func (s *Shard) ReadDocument(ctx context.Context, txID, docName string) (io.ReadCloser, storeapi.DocumentMeta, error) {
 	if err := s.requireLeaderRead(ctx); err != nil {
+		return nil, storeapi.DocumentMeta{}, err
+	}
+	if err := storeapi.ValidateDocumentIdentity(txID, docName, ""); err != nil {
 		return nil, storeapi.DocumentMeta{}, err
 	}
 
@@ -564,6 +577,9 @@ func mapReadDocumentError(err error) error {
 
 func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.DocumentMeta, error) {
 	if err := s.requireLeaderRead(ctx); err != nil {
+		return nil, err
+	}
+	if err := storeapi.ValidateTransactionLookup(txID, ""); err != nil {
 		return nil, err
 	}
 

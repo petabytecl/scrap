@@ -2,6 +2,7 @@ package spike
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,7 +84,12 @@ func OpenWithConfig(dataDir string, cfg Config) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ string, body io.Reader) (storeapi.WriteResult, error) {
+func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, idempotencyKey string, body io.Reader) (storeapi.WriteResult, error) {
+	if err := storeapi.ValidateWriteMetadata(txID, docName, contentType, "", idempotencyKey); err != nil {
+		return storeapi.WriteResult{}, err
+	}
+	body = storeapi.NewDocumentBodyReader(body)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -99,9 +105,13 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 	}
 
 	now := time.Now()
+	startOffset := s.blockWriter.Offset()
 
 	result, err := s.blockWriter.AppendDocument(txID, docName, contentType, body)
 	if err != nil {
+		if truncateErr := s.blockWriter.Truncate(startOffset); truncateErr != nil {
+			err = errors.Join(err, truncateErr)
+		}
 		return storeapi.WriteResult{}, fmt.Errorf("spike: append document: %w", err)
 	}
 
@@ -152,6 +162,9 @@ func (s *Store) WriteDocument(_ context.Context, txID, docName, contentType, _ s
 }
 
 func (s *Store) HeadDocument(_ context.Context, txID, docName string) (storeapi.DocumentMeta, error) {
+	if err := storeapi.ValidateDocumentIdentity(txID, docName, ""); err != nil {
+		return storeapi.DocumentMeta{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -170,6 +183,9 @@ func (s *Store) HeadDocument(_ context.Context, txID, docName string) (storeapi.
 }
 
 func (s *Store) ReadDocument(_ context.Context, txID, docName string) (io.ReadCloser, storeapi.DocumentMeta, error) {
+	if err := storeapi.ValidateDocumentIdentity(txID, docName, ""); err != nil {
+		return nil, storeapi.DocumentMeta{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -196,6 +212,9 @@ func (s *Store) ReadDocument(_ context.Context, txID, docName string) (io.ReadCl
 }
 
 func (s *Store) FindDocuments(_ context.Context, txID string) ([]storeapi.DocumentMeta, error) {
+	if err := storeapi.ValidateTransactionLookup(txID, ""); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

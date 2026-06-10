@@ -249,7 +249,13 @@ spec:
       serviceAccountName: otel-collector
       containers:
         - name: collector
-          image: otel/opentelemetry-collector-contrib:0.122.1
+          image: otel/opentelemetry-collector-contrib:0.122.1@sha256:0076e6c250bef16968e29e8f94177b87b5a851c79ce14b270e657f5f655b9e04
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           args: ["--config=/etc/otel/config.yaml"]
           ports:
             - containerPort: 4317
@@ -294,7 +300,12 @@ spec:
           effect: NoSchedule
       containers:
         - name: agent
-          image: otel/opentelemetry-collector-contrib:0.122.1
+          image: otel/opentelemetry-collector-contrib:0.122.1@sha256:0076e6c250bef16968e29e8f94177b87b5a851c79ce14b270e657f5f655b9e04
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
           args: ["--config=/etc/otel/config.yaml"]
           resources:
             requests:

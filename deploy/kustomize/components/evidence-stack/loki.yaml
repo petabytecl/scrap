@@ -17,7 +17,13 @@ spec:
     spec:
       containers:
         - name: loki
-          image: grafana/loki:3.5.0
+          image: grafana/loki:3.5.0@sha256:4c431d2e6b9b38718694b31c5d56be7c80dc69c513215fde1aeb5b02cd4e2665
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           args:
             - -config.file=/etc/loki/config.yaml
             - -target=all

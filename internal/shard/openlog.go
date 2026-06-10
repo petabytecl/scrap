@@ -21,7 +21,7 @@ func (s *Shard) writePrepFile(writeID string, entry *scrapv1.OpenlogEntry) error
 		return err
 	}
 	path := s.prepPath(writeID)
-	f, err := os.Create(path) //nolint:gosec // path constructed from known openlogDir + ULID
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // path constructed from known openlogDir + ULID
 	if err != nil {
 		return err
 	}
@@ -94,6 +94,9 @@ func (s *Shard) recoverPrepFile(name string) error {
 	if err := truncateFile(blkPath, safeUint64ToInt64(entry.StartOffset)); err != nil {
 		return fmt.Errorf("shard: truncate block %d: %w", entry.BlockId, err)
 	}
+	if err := syncDir(filepath.Dir(blkPath)); err != nil {
+		return fmt.Errorf("shard: sync truncated block dir: %w", err)
+	}
 	_ = os.Remove(path) // best-effort cleanup after truncation
 	return nil
 }
@@ -107,6 +110,9 @@ func truncateFile(path string, size int64) error {
 		return err
 	}
 	truncErr := f.Truncate(size)
+	if truncErr == nil {
+		truncErr = f.Sync()
+	}
 	if closeErr := f.Close(); closeErr != nil && truncErr == nil {
 		return closeErr
 	}

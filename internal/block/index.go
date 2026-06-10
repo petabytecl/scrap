@@ -54,7 +54,7 @@ type IndexWriter struct {
 // NewIndexWriter creates a CRC-protected .idx file.
 // Header: magic(4)="SIDX" + version(2) + header_len(2) + header_crc32c(4)
 func NewIndexWriter(path string) (*IndexWriter, error) {
-	f, err := os.Create(path) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
 		return nil, fmt.Errorf("block: create index %s: %w", path, err)
 	}

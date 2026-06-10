@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -74,6 +75,12 @@ func WithRateLimiter(limiter *security.RateLimiter) ServerOption {
 	}
 }
 
+func WithLogger(logger *slog.Logger) ServerOption {
+	return func(s *Server) {
+		s.logger = logger
+	}
+}
+
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
 	blocksDir            string
@@ -85,6 +92,8 @@ type Server struct {
 	auditSink            audit.Sink
 	rateLimiter          *security.RateLimiter
 	raftRouter           atomic.Pointer[RaftRouter]
+	logger               *slog.Logger
+	malformedRaftMsgs    atomic.Uint64
 	mu                   sync.Mutex
 	writers              map[uint64]*blockState
 }
@@ -101,6 +110,7 @@ type blockState struct {
 func NewServer(blocksDir string, opts ...ServerOption) *Server {
 	s := &Server{
 		blocksDir: blocksDir,
+		logger:    slog.Default(),
 		writers:   make(map[uint64]*blockState),
 	}
 	for _, o := range opts {
@@ -271,6 +281,7 @@ func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftReques
 	}
 	var msg raftpb.Message
 	if err := msg.Unmarshal(req.Message); err != nil {
+		s.recordMalformedRaftMessage(ctx, audit.OperationForwardRaft, req.ShardId, err)
 		return nil, status.Errorf(codes.InvalidArgument, "unmarshal raft message: %v", err)
 	}
 	if err := (*router).RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
@@ -294,10 +305,43 @@ func (s *Server) ForwardRaftStream(stream grpc.BidiStreamingServer[scrapv1.Forwa
 		}
 		var msg raftpb.Message
 		if err := msg.Unmarshal(req.Message); err != nil {
+			s.recordMalformedRaftMessage(stream.Context(), audit.OperationForwardRaftStream, req.ShardId, err)
 			continue
 		}
-		_ = (*router).RouteRaftMessage(stream.Context(), req.ShardId, msg)
+		if err := (*router).RouteRaftMessage(stream.Context(), req.ShardId, msg); err != nil {
+			s.recordRaftRouteError(stream.Context(), audit.OperationForwardRaftStream, req.ShardId, err)
+		}
 	}
+}
+
+func (s *Server) recordMalformedRaftMessage(ctx context.Context, operation string, shardID uint64, err error) {
+	count := s.malformedRaftMsgs.Add(1)
+	if s.logger == nil || !shouldLogMalformedRaftCount(count) {
+		return
+	}
+	s.logger.WarnContext(ctx, "peer received malformed raft message",
+		"audit.surface", audit.SurfacePeer,
+		"audit.operation", operation,
+		"scrap.shard_id", shardID,
+		"malformed_raft_messages", count,
+		"err", err,
+	)
+}
+
+func (s *Server) recordRaftRouteError(ctx context.Context, operation string, shardID uint64, err error) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.WarnContext(ctx, "peer failed to route raft message",
+		"audit.surface", audit.SurfacePeer,
+		"audit.operation", operation,
+		"scrap.shard_id", shardID,
+		"err", err,
+	)
+}
+
+func shouldLogMalformedRaftCount(count uint64) bool {
+	return count == 1 || count&(count-1) == 0
 }
 
 func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestIndexRebuildRequest) (*scrapv1.RequestIndexRebuildResponse, error) {

@@ -3,6 +3,7 @@ package spike_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -75,6 +76,21 @@ func TestDuplicateWrite(t *testing.T) {
 	_, err = s.WriteDocument(ctx, "tx-dup", "a.xml", "text/xml", "", bytes.NewReader(content))
 	if err == nil {
 		t.Fatal("expected error on duplicate write")
+	}
+}
+
+func TestWriteRejectsInvalidMetadataAndZeroByteDocument(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	_, err := s.WriteDocument(ctx, "tx-\ninvalid", "a.xml", "text/xml", "", bytes.NewReader([]byte("payload")))
+	if !errors.Is(err, store.ErrInvalidArgument) {
+		t.Fatalf("invalid metadata error = %v, want ErrInvalidArgument", err)
+	}
+
+	_, err = s.WriteDocument(ctx, "tx-empty", "a.xml", "text/xml", "", bytes.NewReader(nil))
+	if !errors.Is(err, store.ErrInvalidArgument) {
+		t.Fatalf("empty document error = %v, want ErrInvalidArgument", err)
 	}
 }
 

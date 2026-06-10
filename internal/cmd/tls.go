@@ -192,22 +192,31 @@ func newPeerClient(cfg Config) (*peer.Client, error) {
 }
 
 func newPublicGRPCServerOptions(cfg Config, authorizer *security.Authorizer, auditSink audit.Sink, rateLimiter *security.RateLimiter) ([]grpc.ServerOption, error) {
+	limiter := newPublicRPCLimiter()
+	unaryInterceptors := []grpc.UnaryServerInterceptor{limiter.unary}
+	streamInterceptors := []grpc.StreamServerInterceptor{limiter.stream}
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
+	opts = append(opts, publicGRPCTransportOptions()...)
 	if !appSecurityControlsEnabled(cfg) {
-		return opts, nil
+		return append(opts,
+			grpc.ChainUnaryInterceptor(unaryInterceptors...),
+			grpc.ChainStreamInterceptor(streamInterceptors...),
+		), nil
 	}
 	serverTLS, err := security.BuildMTLSServerConfig("SCRAP_TLS_PUBLIC", cfg.ProductionGates.TLS.Public)
 	if err != nil {
 		return nil, fmt.Errorf("public gRPC TLS: %w", err)
 	}
+	unaryInterceptors = append(unaryInterceptors, security.PrincipalUnaryServerInterceptor(authorizer,
+		security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePublic, publicGRPCAuditInfo),
+	))
+	streamInterceptors = append(streamInterceptors, security.PrincipalStreamServerInterceptor(authorizer,
+		security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePublic, publicGRPCAuditInfo),
+	))
 	return append(opts,
 		grpc.Creds(credentials.NewTLS(serverTLS)),
-		grpc.ChainUnaryInterceptor(security.PrincipalUnaryServerInterceptor(authorizer,
-			security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePublic, publicGRPCAuditInfo),
-		)),
-		grpc.ChainStreamInterceptor(security.PrincipalStreamServerInterceptor(authorizer,
-			security.WithPrincipalAudit(auditSink, rateLimiter, security.RateLimitSurfacePublic, publicGRPCAuditInfo),
-		)),
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainStreamInterceptor(streamInterceptors...),
 	), nil
 }
 
