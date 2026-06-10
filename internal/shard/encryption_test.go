@@ -118,6 +118,23 @@ func TestEncryptedShardReadReportsDataLossOnCiphertextCorruption(t *testing.T) {
 	}
 }
 
+func TestEncryptedShardReadMapsInvalidTransitRequestToDataLoss(t *testing.T) {
+	transit := &mutableTransit{delegate: encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})}
+	s, _ := openEncryptedTestShard(t, transit)
+	if _, err := s.WriteDocument(context.Background(), "tx-invalid-transit", "doc.xml", "text/xml", "", bytes.NewReader([]byte("payload"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	transit.unwrapErr = fmt.Errorf("malformed transit ciphertext: %w", encryption.ErrInvalidRequest)
+	_, _, err := s.ReadDocument(context.Background(), "tx-invalid-transit", "doc.xml")
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
+	}
+	if errors.Is(err, rewrap.ErrInvalidRequest) {
+		t.Fatalf("ReadDocument error = %v, must not expose rewrap invalid request sentinel", err)
+	}
+}
+
 func TestEncryptedShardRewrapUpdatesEnvelopeWithoutRewritingBlock(t *testing.T) {
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	s, dataDir := openEncryptedTestShard(t, transit)

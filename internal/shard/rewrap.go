@@ -71,7 +71,7 @@ func (s *Shard) rewrapDocumentEnvelope(
 		KeyVersion: req.KeyVersion,
 	})
 	if err != nil {
-		return result, mapEncryptionError(err)
+		return result, mapRewrapEncryptionError(err)
 	}
 	if !rewrapped.Changed && (req.KeyVersion == 0 || rewrapped.Version == envelope.KeyVersion) {
 		result.Status = rewrap.StatusOK
@@ -277,7 +277,8 @@ func (s *Shard) replaceRewrapEnvelopeLocked(cmd *scrapv1.RewrapDocumentEnvelope,
 		return false, s.reopenCurrentIndexAfterRewrapErrorLocked(current, cmd.GetBlockId(), err)
 	}
 	if alreadyApplied {
-		return true, nil
+		reopenErr := s.reopenCurrentIndexAfterRewrapLocked(current, cmd.GetBlockId())
+		return true, reopenErr
 	}
 	_, changed, replaceErr := block.ReplaceDocumentEnvelope(
 		s.idxPath(cmd.GetBlockId()),
@@ -373,6 +374,13 @@ func mapRewrapIndexError(err error) error {
 	default:
 		return err
 	}
+}
+
+func mapRewrapEncryptionError(err error) error {
+	if errors.Is(err, encryption.ErrInvalidRequest) {
+		return fmt.Errorf("%w: %w", rewrap.ErrInvalidRequest, err)
+	}
+	return mapEncryptionError(err)
 }
 
 func (s *Shard) finishRewrap(result rewrap.Result, err error) (rewrap.Result, error) {

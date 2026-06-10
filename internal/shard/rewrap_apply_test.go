@@ -304,6 +304,53 @@ func TestApplyRewrapReopensCurrentIndexAfterStaleEnvelope(t *testing.T) {
 	}
 }
 
+func TestApplyRewrapReopensCurrentIndexAfterAlreadyAppliedEnvelope(t *testing.T) {
+	blocksDir := t.TempDir()
+	replacementEnvelope := rewrapApplyEnvelope(t, 2)
+	writeRewrapApplyIndex(t, blocksDir, replacementEnvelope)
+	blockWriter, err := block.NewWriter(block.FilePath(blocksDir, 1), 7, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = blockWriter.Close() })
+	idxWriter, err := block.OpenIndexWriter(block.IdxFilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("OpenIndexWriter: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir:   blocksDir,
+		blockWriter: blockWriter,
+		idxWriter:   idxWriter,
+		uploads:     newUploadController(nil, UploadConfig{}, 7, nil, nil, nil),
+	}
+	err = s.applyRewrapDocumentEnvelopeCommand(&scrapv1.RewrapDocumentEnvelope{
+		TransactionId:      "tx-rewrap",
+		DocumentName:       "doc.xml",
+		BlockId:            1,
+		EncryptionEnvelope: replacementEnvelope,
+		OldKeyVersion:      1,
+		NewKeyVersion:      2,
+		RewrappedAtUs:      1716700002000000,
+	}, 89)
+	if err != nil {
+		t.Fatalf("applyRewrapDocumentEnvelopeCommand: %v", err)
+	}
+	if s.idxWriter == nil {
+		t.Fatal("idxWriter was not reopened after already-applied rewrap")
+	}
+	t.Cleanup(func() { _ = s.idxWriter.Close() })
+	if err := s.idxWriter.Append(block.IndexEntry{
+		TransactionID: "tx-after-replay",
+		DocName:       "after.xml",
+		CreatedAt:     time.UnixMicro(1716700004000000),
+		FrameCount:    1,
+		SHA256:        [32]byte{2},
+	}); err != nil {
+		t.Fatalf("Append after already-applied rewrap: %v", err)
+	}
+}
+
 func TestProposeRewrapRejectsMissingHistoricalBlockBeforeConsensus(t *testing.T) {
 	s := &Shard{
 		blocksDir: t.TempDir(),
