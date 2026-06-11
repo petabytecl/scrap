@@ -38,6 +38,8 @@ type ResourceConfig struct {
 	MemberID string
 	// ShardID identifies the Shard hosted by this process.
 	ShardID uint64
+	// ShardIDLabel overrides ShardID when the process hosts an aggregate Shard set.
+	ShardIDLabel string
 	// RaftID identifies this member within the Shard's Raft group.
 	RaftID uint64
 	// SecurityMode is the bounded configured security mode.
@@ -79,7 +81,7 @@ func resourceAttributes(cfg ResourceConfig) []attribute.KeyValue {
 		attribute.String("scrap.cell_id", cfg.CellID),
 		attribute.String("scrap.member_slot_id", cfg.MemberSlotID),
 		attribute.String("scrap.member_id", cfg.MemberID),
-		attribute.String("scrap.shard_id", strconv.FormatUint(cfg.ShardID, 10)),
+		attribute.String("scrap.shard_id", shardIDLabel(cfg)),
 		attribute.String("scrap.raft_id", strconv.FormatUint(cfg.RaftID, 10)),
 	}
 
@@ -99,6 +101,13 @@ func resourceAttributes(cfg ResourceConfig) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String("scrap.production_readiness.reason", cfg.ProductionReadinessReason))
 	}
 	return attrs
+}
+
+func shardIDLabel(cfg ResourceConfig) string {
+	if cfg.ShardIDLabel != "" {
+		return cfg.ShardIDLabel
+	}
+	return strconv.FormatUint(cfg.ShardID, 10)
 }
 
 func serviceInstanceID(cfg ResourceConfig) string {

@@ -36,6 +36,10 @@ type ReplicationSink interface {
 	AppendReplicatedDocument(ctx context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) ([]byte, error)
 }
 
+type BlockDirResolver interface {
+	BlockDirForShard(shardID uint64) (string, bool)
+}
+
 type ServerOption func(*Server)
 
 func WithScrubCache(cache scrub.ResultCache) ServerOption {
@@ -53,6 +57,12 @@ func WithRebuildHandler(handler RebuildHandler) ServerOption {
 func WithReplicationSink(sink ReplicationSink) ServerOption {
 	return func(s *Server) {
 		s.replicationSink = sink
+	}
+}
+
+func WithBlockDirResolver(resolver BlockDirResolver) ServerOption {
+	return func(s *Server) {
+		s.blockDirResolver = resolver
 	}
 }
 
@@ -94,6 +104,7 @@ func WithLogger(logger *slog.Logger) ServerOption {
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
 	blocksDir            string
+	blockDirResolver     BlockDirResolver
 	scrubCache           scrub.ResultCache
 	rebuildHandler       RebuildHandler
 	replicationSink      ReplicationSink

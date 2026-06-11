@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 
-	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -16,6 +15,7 @@ import (
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
@@ -29,7 +29,7 @@ type App struct {
 	logger *slog.Logger
 
 	telemetry  *scrapdTelemetryRuntime
-	shard      *shard.Shard
+	shards     *shardSet
 	transport  *peer.SharedTransport
 	peerClient *peer.Client
 	peerSrv    *peer.Server
@@ -45,6 +45,8 @@ type App struct {
 	peers       map[uint64]string
 	raftID      uint64
 	uploadCfg   shard.UploadConfig
+	topology    startupTopology
+	publicStore storeapi.Store
 }
 
 // newApp constructs the full component graph. If any step fails, the components
@@ -54,6 +56,10 @@ type App struct {
 //nolint:cyclop // linear construction of all subsystems; complexity is inherent
 func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInfo) (*App, error) {
 	memberIdentity, err := validateStartupSecurityGates(cfg)
+	if err != nil {
+		return nil, err
+	}
+	topology, err := validateStartupTopology(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -83,16 +89,20 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	clientAddrs := resolveClientAddrs(cfg, peers)
 
-	telemetryRuntime, err := newScrapdTelemetryWithSecurity(context.Background(), memberIdentity.MemberHostname, memberIdentity.MemberID, raftID, appShardID, build, cfg.SecurityMode)
+	telemetryRuntime, err := newScrapdTelemetryWithSecurityLabel(
+		context.Background(),
+		memberIdentity.MemberHostname,
+		memberIdentity.MemberID,
+		raftID,
+		appShardID,
+		topologyTelemetryShardLabel(topology),
+		build,
+		cfg.SecurityMode,
+	)
 	if err != nil {
 		return fail(err)
 	}
 	cleanup = append(cleanup, func() { _ = telemetryRuntime.Shutdown(context.Background()) })
-
-	shardTel, err := telemetryRuntime.newShardTelemetry()
-	if err != nil {
-		return fail(fmt.Errorf("create shard telemetry: %w", err))
-	}
 
 	uploadCfg := shard.UploadConfig{
 		Enabled:     cfg.UploadEnabled,
@@ -100,7 +110,6 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		CellID:      cfg.CellID,
 		Concurrency: cfg.UploadConcurrency,
 		Pressure:    cfg.UploadPressure,
-		Metrics:     shardTel.uploadMetrics,
 	}
 
 	securityRuntime, err := newAppSecurityRuntimeForTelemetry(cfg, peers, logger, telemetryRuntime)
@@ -109,48 +118,28 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}
 	transport := securityRuntime.transport
 	cleanup = append(cleanup, transport.Close)
-	shardTransport := transport.ForShard(appShardID, peers)
 
 	peerClient := securityRuntime.peerClient
 	cleanup = append(cleanup, peerClient.Close)
 
-	s, err := shard.Open(shard.Config{
-		DataDir:            cfg.DataDir,
-		ShardID:            appShardID,
-		RaftID:             raftID,
-		Peers:              peers,
-		ClientAddrs:        clientAddrs,
-		BlockSealSize:      cfg.BlockSealSize,
-		Scrub:              cfg.Scrub,
-		Transport:          shardTransport,
-		Logger:             logger,
-		ConsistencyChecker: peer.NewClientConsistencyChecker(peerClient),
-		Metrics:            shardTel.scrubMetrics,
-		DeepMetrics:        shardTel.deepScrubMetrics,
-		Rebuilder:          peer.NewClientRebuilder(peerClient),
-		BlockTransferer:    peerClient,
-		Replicator:         peerClient,
-		PeerAddrs:          peerAddrsExceptSelf(peers, raftID),
-		Upload:             uploadCfg,
-		Eviction:           cfg.Eviction,
-		EvictionMetrics:    shardTel.evictionMetrics,
-		MemberHostname:     telemetryRuntime.resourceConfig.MemberSlotID,
-		MemberID:           telemetryRuntime.resourceConfig.MemberID,
-		WriteTelemetry:     shardTel.writeTelemetry,
-		IdentifierMode:     identifierMode,
-		Encryption:         appShardEncryptionConfig(cfg, securityRuntime.transit),
+	shards, err := openShardSet(shardSetOpenConfig{
+		cfg:              cfg,
+		topology:         topology,
+		raftID:           raftID,
+		peers:            peers,
+		clientAddrs:      clientAddrs,
+		transport:        transport,
+		peerClient:       peerClient,
+		upload:           uploadCfg,
+		telemetryRuntime: telemetryRuntime,
+		logger:           logger,
+		identifierMode:   identifierMode,
+		encryption:       appShardEncryptionConfig(cfg, securityRuntime.transit),
 	})
 	if err != nil {
-		return fail(fmt.Errorf("open shard: %w", err))
+		return fail(err)
 	}
-	cleanup = append(cleanup, func() { _ = s.Close() })
-
-	if err := telemetryRuntime.registerRaftMetrics(s); err != nil {
-		return fail(fmt.Errorf("register raft metrics: %w", err))
-	}
-	if err := telemetryRuntime.registerDiskMetrics(s); err != nil {
-		return fail(fmt.Errorf("register disk metrics: %w", err))
-	}
+	cleanup = append(cleanup, func() { _ = shards.Close() })
 
 	lc := net.ListenConfig{}
 
@@ -161,7 +150,8 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	cleanup = append(cleanup, func() { _ = clientLis.Close() })
 
 	clientGS := grpc.NewServer(securityRuntime.publicGRPCOptions...)
-	server.Register(clientGS, s,
+	publicStore := publicStoreForTopology(shards, topology)
+	server.Register(clientGS, publicStore,
 		server.WithTelemetry(telemetryRuntime.server),
 		server.WithIdentifierMode(identifierMode),
 		server.WithLogger(logger.With(telemetryRuntime.logIdentityAttrs()...)),
@@ -169,7 +159,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		server.WithAuditSink(securityRuntime.auditSink),
 		server.WithRateLimiter(securityRuntime.rateLimiter),
 	)
-	server.RegisterHealth(clientGS, s)
+	server.RegisterHealth(clientGS, shards)
 
 	peerLis, err := lc.Listen(ctx, "tcp", cfg.PeerAddr)
 	if err != nil {
@@ -178,27 +168,19 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	cleanup = append(cleanup, func() { _ = peerLis.Close() })
 
 	peerGS := grpc.NewServer(securityRuntime.peerGRPCOptions...)
-	peerSrv := newPeerServer(cfg, s, securityRuntime, memberIdentity)
-	peerSrv.SetRaftRouter(peer.RaftRouterFunc(func(ctx context.Context, _ uint64, msg raftpb.Message) error {
-		return s.RaftStep(ctx, msg)
-	}))
+	peerSrv := newPeerServer(cfg, shards, securityRuntime, memberIdentity)
+	peerSrv.SetRaftRouter(shardSetRaftRouter{shards: shards})
 	peer.RegisterServer(peerGS, peerSrv)
 
 	adminOpts := []admin.Option{
 		admin.WithLogger(logger),
 		admin.WithSecurityStatus(cfg.SecurityMode, security.ProductionReadinessForMode(cfg.SecurityMode)),
-		admin.WithUploadPressureProvider(s),
-		admin.WithEvictionPlanner(s),
-		admin.WithEvictionApplier(s),
-		admin.WithEvictionPlanStatusProvider(s),
-		admin.WithEvictionHealthProvider(s),
-		admin.WithRewrapService(s),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
 		admin.WithAuthorizer(securityRuntime.authorizer),
 		admin.WithAuditSink(securityRuntime.auditSink),
 		admin.WithRateLimiter(securityRuntime.rateLimiter),
 	}
-	adminOpts = appendTestHookAdminOptions(adminOpts, cfg, s, securityRuntime.transit)
+	adminOpts = appendShardAdminOptions(adminOpts, cfg, shards, securityRuntime.transit)
 	if cfg.PprofEnabled {
 		adminOpts = append(adminOpts, admin.WithPprof())
 	}
@@ -207,7 +189,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		cfg:         cfg,
 		logger:      logger,
 		telemetry:   telemetryRuntime,
-		shard:       s,
+		shards:      shards,
 		transport:   transport,
 		peerClient:  peerClient,
 		peerSrv:     peerSrv,
@@ -221,15 +203,33 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		peers:       peers,
 		raftID:      raftID,
 		uploadCfg:   uploadCfg,
+		topology:    topology,
+		publicStore: publicStore,
 	}, nil
 }
 
-func appendTestHookAdminOptions(opts []admin.Option, cfg Config, shard *shard.Shard, transit any) []admin.Option {
+func appendShardAdminOptions(opts []admin.Option, cfg Config, shards *shardSet, transit any) []admin.Option {
+	localShard, ok := shards.singleShard()
+	if !ok {
+		return opts
+	}
+	opts = append(opts,
+		admin.WithUploadPressureProvider(localShard),
+		admin.WithEvictionPlanner(localShard),
+		admin.WithEvictionApplier(localShard),
+		admin.WithEvictionPlanStatusProvider(localShard),
+		admin.WithEvictionHealthProvider(localShard),
+		admin.WithRewrapService(localShard),
+	)
+	return appendTestHookAdminOptions(opts, cfg, localShard, transit)
+}
+
+func appendTestHookAdminOptions(opts []admin.Option, cfg Config, localShard *shard.Shard, transit any) []admin.Option {
 	if !cfg.TestHooks {
 		return opts
 	}
-	opts = append(opts, admin.WithProjectionInjector(shard))
-	opts = append(opts, admin.WithLightScrubber(shard))
+	opts = append(opts, admin.WithProjectionInjector(localShard))
+	opts = append(opts, admin.WithLightScrubber(localShard))
 	if rotator, ok := transit.(interface{ Rotate() }); ok {
 		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
 	}
@@ -253,12 +253,17 @@ func newAppSecurityRuntimeForTelemetry(cfg Config, peers map[uint64]string, logg
 	return newAppSecurityRuntime(cfg, peers, logger.With(telemetryRuntime.logIdentityAttrs()...), rateLimitMetrics)
 }
 
-func newPeerServer(cfg Config, shard *shard.Shard, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
+func newPeerServer(cfg Config, shards *shardSet, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
 	peerOpts := []peer.ServerOption{
-		peer.WithScrubCache(shard),
-		peer.WithRebuildHandler(shard),
-		peer.WithReplicationSink(shard),
-		peer.WithAuthorizedShards(appShardID),
+		peer.WithReplicationSink(shardSetReplicationSink{shards: shards}),
+		peer.WithBlockDirResolver(shards),
+		peer.WithAuthorizedShards(shards.IDs()...),
+	}
+	if localShard, ok := shards.singleShard(); ok {
+		peerOpts = append(peerOpts,
+			peer.WithScrubCache(localShard),
+			peer.WithRebuildHandler(localShard),
+		)
 	}
 	if securityRuntime.authorizer != nil {
 		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{
@@ -404,8 +409,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 	a.clientGS.GracefulStop()
 
-	if err := a.shard.Close(); err != nil {
-		a.logger.ErrorContext(ctx, "shard close failed", "err", err)
+	if err := a.shards.Close(); err != nil {
+		a.logger.ErrorContext(ctx, "shard set close failed", "err", err)
 		errs = append(errs, err)
 	}
 
@@ -431,6 +436,9 @@ func (a *App) logStarting(ctx context.Context) {
 		"peers", len(a.peers),
 		"scrub_enabled", a.cfg.Scrub.Enabled,
 		"backend_type", a.backendType,
+		"route_map", a.topology.RouteMapSummary,
+		"local_shards", a.shards.IDs(),
+		"shard_status", a.shards.StartupStatus(a.topology),
 		"upload_enabled", a.uploadCfg.Enabled,
 		"upload_concurrency", a.uploadCfg.Concurrency,
 		"upload_budget_bytes", a.uploadCfg.Pressure.BudgetBytes,

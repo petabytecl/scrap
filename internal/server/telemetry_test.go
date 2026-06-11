@@ -107,7 +107,7 @@ func TestDocumentRPCRecordsOTelSpansWithHashedDocumentIdentity(t *testing.T) {
 	attrs := spanAttrMap(span.Attributes())
 	assertSpanAttr(t, attrs, "rpc.service", "scrap.v1.DocumentService")
 	assertSpanAttr(t, attrs, "rpc.method", "HeadDocument")
-	assertSpanAttrInt(t, attrs, "rpc.grpc.status_code", int64(codes.NotFound))
+	assertSpanStatusCode(t, attrs, int64(codes.NotFound))
 	assertSpanAttrNotContaining(t, attrs, "scrap.transaction.hash", "tx-123")
 	assertSpanAttrNotContaining(t, attrs, "scrap.document.hash", "invoice.xml")
 	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
@@ -139,7 +139,7 @@ func TestWriteDocumentRPCSpanUsesHashedDocumentIdentity(t *testing.T) {
 	attrs := spanAttrMap(span.Attributes())
 	assertSpanAttr(t, attrs, "rpc.service", "scrap.v1.DocumentService")
 	assertSpanAttr(t, attrs, "rpc.method", "WriteDocument")
-	assertSpanAttrInt(t, attrs, "rpc.grpc.status_code", int64(codes.OK))
+	assertSpanStatusCode(t, attrs, int64(codes.OK))
 	assertSpanAttrNotContaining(t, attrs, "scrap.transaction.hash", "tx-write-123")
 	assertSpanAttrNotContaining(t, attrs, "scrap.document.hash", "invoice.xml")
 	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
@@ -176,7 +176,7 @@ func TestWriteDocumentTelemetryRecordsInvalidArgumentWhenInitMissing(t *testing.
 
 	span := spanByName(t, spanRecorder.Ended(), "scrap.v1.DocumentService/WriteDocument")
 	attrs := spanAttrMap(span.Attributes())
-	assertSpanAttrInt(t, attrs, "rpc.grpc.status_code", int64(codes.InvalidArgument))
+	assertSpanStatusCode(t, attrs, int64(codes.InvalidArgument))
 	assertSpanAttrAbsent(t, attrs, "scrap.transaction_id")
 	assertSpanAttrAbsent(t, attrs, "scrap.document_name")
 }
@@ -374,8 +374,10 @@ func assertSpanAttr(t *testing.T, attrs map[attribute.Key]attribute.Value, key, 
 	}
 }
 
-func assertSpanAttrInt(t *testing.T, attrs map[attribute.Key]attribute.Value, key string, want int64) {
+func assertSpanStatusCode(t *testing.T, attrs map[attribute.Key]attribute.Value, want int64) {
 	t.Helper()
+
+	const key = "rpc.grpc.status_code"
 
 	got, ok := attrs[attribute.Key(key)]
 	if !ok {

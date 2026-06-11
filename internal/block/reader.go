@@ -9,9 +9,19 @@ import (
 	"os"
 )
 
-var ErrSHA256Mismatch = errors.New("block: SHA-256 mismatch")
+var (
+	ErrSHA256Mismatch = errors.New("block: SHA-256 mismatch")
+	ErrFrameSequence  = errors.New("block: frame sequence corrupt")
+)
 
 func ReadDocument(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
+	return ReadDocumentTwoPass(blkPath, entry)
+}
+
+func ReadDocumentFromBlock(blkPath string, shardID, blockID uint64, entry IndexEntry) (io.ReadCloser, error) {
+	if err := VerifyHeader(blkPath, shardID, blockID); err != nil {
+		return nil, err
+	}
 	return ReadDocumentTwoPass(blkPath, entry)
 }
 
@@ -20,6 +30,13 @@ func ReadDocumentTwoPass(blkPath string, entry IndexEntry) (io.ReadCloser, error
 		return nil, err
 	}
 	return streamPass(blkPath, entry)
+}
+
+func ReadDocumentFramesFromBlock(blkPath string, shardID, blockID uint64, entry IndexEntry) ([][]byte, error) {
+	if err := VerifyHeader(blkPath, shardID, blockID); err != nil {
+		return nil, err
+	}
+	return ReadDocumentFrames(blkPath, entry)
 }
 
 func ReadDocumentFrames(blkPath string, entry IndexEntry) ([][]byte, error) {
@@ -35,8 +52,11 @@ func ReadDocumentFrames(blkPath string, entry IndexEntry) ([][]byte, error) {
 
 	frames := make([][]byte, 0, entry.FrameCount)
 	for i := range int(entry.FrameCount) {
-		_, payload, err := ReadFrame(f)
+		hdr, payload, err := ReadFrame(f)
 		if err != nil {
+			return nil, fmt.Errorf("block: read stored frame %d: %w", i, err)
+		}
+		if err := validateReadFrameSequence(hdr, uint32(i)); err != nil {
 			return nil, fmt.Errorf("block: read stored frame %d: %w", i, err)
 		}
 		frames = append(frames, payload)
@@ -57,8 +77,11 @@ func verifyPass(blkPath string, entry IndexEntry) error {
 
 	hasher := sha256.New()
 	for i := range int(entry.FrameCount) {
-		_, payload, err := ReadFrame(f)
+		hdr, payload, err := ReadFrame(f)
 		if err != nil {
+			return fmt.Errorf("block: verify frame %d: %w", i, err)
+		}
+		if err := validateReadFrameSequence(hdr, uint32(i)); err != nil {
 			return fmt.Errorf("block: verify frame %d: %w", i, err)
 		}
 		hasher.Write(payload)
@@ -73,6 +96,13 @@ func verifyPass(blkPath string, entry IndexEntry) error {
 		}
 	}
 
+	return nil
+}
+
+func validateReadFrameSequence(hdr FrameHeader, frameSeq uint32) error {
+	if hdr.FrameSeq != frameSeq {
+		return fmt.Errorf("%w: frame_seq %d want %d", ErrFrameSequence, hdr.FrameSeq, frameSeq)
+	}
 	return nil
 }
 

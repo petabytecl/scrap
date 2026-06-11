@@ -71,6 +71,10 @@ func TestEncryptedShardWriteFailsClosedWhenTransitUnavailable(t *testing.T) {
 	assertCryptoUnavailableReason(t, err)
 
 	assertBlockOmitsPlaintext(t, dataDir, content)
+	_, err = s.HeadDocument(context.Background(), "tx-outage", "doc.xml")
+	if !isMissingDocumentOrTransaction(err) {
+		t.Fatalf("HeadDocument after failed write = %v, want not found", err)
+	}
 }
 
 func TestEncryptedShardReadFailsClosedWhenKeyMaterialUnavailable(t *testing.T) {

@@ -355,14 +355,20 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	s.mu.Lock()
 
 	key := txID + "\x00" + docName
-	exists, err := s.documentVisibleInProjection(txID, docName)
+	existing, exists, err := s.duplicateDocumentEntry(txID, docName)
 	if err != nil {
 		s.mu.Unlock()
+		_ = drainDuplicateDocumentBody(body)
 		return storeapi.WriteResult{}, err
 	}
 	if exists {
+		if err := s.ensureMetadataReadAllowed(existing.blockID); err != nil {
+			s.mu.Unlock()
+			_ = drainDuplicateDocumentBody(body)
+			return storeapi.WriteResult{}, err
+		}
 		s.mu.Unlock()
-		return storeapi.WriteResult{}, fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, txID, docName)
+		return classifyDuplicateDocumentWrite(contentType, body, existing)
 	}
 
 	if s.blockWriter.Offset() > block.HeaderSize && s.blockWriter.Offset() >= s.blockSealSize {
@@ -389,7 +395,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	}
 	defer attempt.cleanupOnAbort()
 
-	now := time.Now()
+	now := time.UnixMicro(time.Now().UnixMicro())
 
 	ctx, appendStage := s.writeTelemetry.StartStage(ctx, "block_append")
 	result, replicationData, envelope, err := s.appendDocumentPayload(ctx, txID, docName, contentType, body)
@@ -540,21 +546,21 @@ func (s *Shard) readDocumentFromProjection(
 	}
 	s.mu.Unlock()
 
-	rc, err := s.readDocumentBytes(ctx, blkPath, indexEntry)
+	rc, err := s.readDocumentBytes(ctx, blkPath, entry.blockID, indexEntry)
 	if err != nil {
 		return nil, storeapi.DocumentMeta{}, mapReadDocumentError(err)
 	}
 	return rc, meta, nil
 }
 
-func (s *Shard) readDocumentBytes(ctx context.Context, blkPath string, entry block.IndexEntry) (io.ReadCloser, error) {
+func (s *Shard) readDocumentBytes(ctx context.Context, blkPath string, blockID uint64, entry block.IndexEntry) (io.ReadCloser, error) {
 	if len(entry.EncryptionEnvelope) == 0 {
-		return block.ReadDocument(blkPath, entry)
+		return block.ReadDocumentFromBlock(blkPath, s.shardID, blockID, entry)
 	}
 	if !s.encryption.enabled() {
 		return nil, storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
 	}
-	frames, err := block.ReadDocumentFrames(blkPath, entry)
+	frames, err := block.ReadDocumentFramesFromBlock(blkPath, s.shardID, blockID, entry)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 	}

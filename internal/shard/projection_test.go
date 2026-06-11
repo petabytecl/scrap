@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func TestApplyCommitDocumentToleratesProjectionAheadOfBlockIndex(t *testing.T) {
@@ -155,7 +157,7 @@ func TestApplyCommitDocumentRequeuesHistoricalUploadWhenIndexEntryAlreadyPresent
 	idx := openProjectionTestIndex(t)
 	writeEmptyBlockAndIndex(t, dir, 7, 1)
 	writeProjectionIndexEntries(t, dir, 1,
-		block.IndexEntry{TransactionID: "tx-present", DocName: "doc.xml"},
+		block.IndexEntry{TransactionID: "tx-present", DocName: "doc.xml", ContentType: "text/xml", TotalBytes: 4},
 	)
 	if err := idx.Put("tx-present", 1, 0, false); err != nil {
 		t.Fatalf("Put projection entry: %v", err)
@@ -179,7 +181,7 @@ func TestApplyCommitDocumentRepairsProjectionAfterIndexAppendCrash(t *testing.T)
 	idx := openProjectionTestIndex(t)
 	writeProjectionIndexEntries(t, dir, 1,
 		block.IndexEntry{TransactionID: "tx-crash", DocName: "a.xml"},
-		block.IndexEntry{TransactionID: "tx-crash", DocName: "b.xml"},
+		block.IndexEntry{TransactionID: "tx-crash", DocName: "b.xml", ContentType: "text/xml", TotalBytes: 4},
 	)
 	if err := idx.Put("tx-crash", 1, 1, false); err != nil {
 		t.Fatalf("Put projection entry: %v", err)
@@ -477,7 +479,7 @@ func TestApplyCommitDocumentSkipsExistingHistoricalIndexEntry(t *testing.T) {
 	}
 }
 
-func TestApplyCommitDocumentRejectsExistingVisibleDocument(t *testing.T) {
+func TestApplyCommitDocumentNoopsExistingVisibleDocumentReplay(t *testing.T) {
 	dir := t.TempDir()
 	idx, err := index.Open(t.TempDir())
 	if err != nil {
@@ -489,7 +491,7 @@ func TestApplyCommitDocumentRejectsExistingVisibleDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIndexWriter: %v", err)
 	}
-	if err := iw.Append(block.IndexEntry{TransactionID: "tx-visible", DocName: "doc.xml"}); err != nil {
+	if err := iw.Append(block.IndexEntry{TransactionID: "tx-visible", DocName: "doc.xml", ContentType: "text/xml", TotalBytes: 4}); err != nil {
 		t.Fatalf("Append visible entry: %v", err)
 	}
 	if err := iw.Close(); err != nil {
@@ -507,12 +509,108 @@ func TestApplyCommitDocumentRejectsExistingVisibleDocument(t *testing.T) {
 	err = s.applyCommitDocument(&scrapv1.CommitDocument{
 		TransactionId: "tx-visible",
 		DocumentName:  "doc.xml",
+		ContentType:   "text/xml",
+		BlockId:       1,
+		TotalBytes:    4,
+		Sha256:        make([]byte, 32),
+		CreatedAtUs:   time.Now().UnixMicro(),
+	}, 0)
+	if err != nil {
+		t.Fatalf("applyCommitDocument: %v", err)
+	}
+	requireProjectionDocCount(t, idx, "tx-visible", 1)
+	requireProjectionDocs(t, s, "tx-visible", "doc.xml")
+}
+
+func TestApplyCommitDocumentRejectsConflictingVisibleDocument(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open index: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	iw, err := block.NewIndexWriter(block.IdxFilePath(dir, 1))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{TransactionID: "tx-visible", DocName: "doc.xml", ContentType: "text/xml"}); err != nil {
+		t.Fatalf("Append visible entry: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close visible index: %v", err)
+	}
+	if err := idx.Put("tx-visible", 1, 1, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: dir,
+		idx:       idx,
+	}
+
+	err = s.applyCommitDocument(&scrapv1.CommitDocument{
+		TransactionId: "tx-visible",
+		DocumentName:  "doc.xml",
+		ContentType:   "application/xml",
 		BlockId:       1,
 		Sha256:        make([]byte, 32),
 		CreatedAtUs:   time.Now().UnixMicro(),
 	}, 0)
-	if err == nil {
-		t.Fatal("expected duplicate visible document error")
+	if !errors.Is(err, storeapi.ErrAlreadyExists) {
+		t.Fatalf("applyCommitDocument error = %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestApplyCommitDocumentFailsClosedOnUncountedDuplicateInDifferentBlock(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeProjectionIndexEntries(t, dir, 1,
+		block.IndexEntry{TransactionID: "tx-uncounted-duplicate", DocName: "a.xml", ContentType: "text/xml", TotalBytes: 4},
+	)
+	writeProjectionIndexEntries(t, dir, 2,
+		block.IndexEntry{TransactionID: "tx-uncounted-duplicate", DocName: "doc.xml", ContentType: "text/xml", TotalBytes: 4},
+	)
+	if err := idx.Put("tx-uncounted-duplicate", 1, 1, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
+	}
+	if err := idx.AddBlockID("tx-uncounted-duplicate", 2); err != nil {
+		t.Fatalf("AddBlockID: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: dir,
+		idx:       idx,
+	}
+
+	doc := newProjectionCommit("tx-uncounted-duplicate", "doc.xml")
+	doc.BlockId = 3
+	err := s.applyCommitDocument(doc, 0)
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("applyCommitDocument error = %v, want ErrDataLoss", err)
+	}
+	requireProjectionDocCount(t, idx, "tx-uncounted-duplicate", 1)
+}
+
+func TestDuplicateDocumentEntryFailsClosedOnMultipleVisibleMatches(t *testing.T) {
+	dir := t.TempDir()
+	idx := openProjectionTestIndex(t)
+	writeProjectionIndexEntries(t, dir, 1,
+		block.IndexEntry{TransactionID: "tx-visible-duplicate", DocName: "doc.xml", ContentType: "text/xml", TotalBytes: 4},
+		block.IndexEntry{TransactionID: "tx-visible-duplicate", DocName: "doc.xml", ContentType: "text/xml", TotalBytes: 4},
+	)
+	if err := idx.Put("tx-visible-duplicate", 1, 2, false); err != nil {
+		t.Fatalf("Put projection entry: %v", err)
+	}
+
+	s := &Shard{
+		blocksDir: dir,
+		idx:       idx,
+	}
+
+	_, _, err := s.duplicateDocumentEntry("tx-visible-duplicate", "doc.xml")
+	if !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("duplicateDocumentEntry error = %v, want ErrDataLoss", err)
 	}
 }
 

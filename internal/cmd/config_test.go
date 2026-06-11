@@ -14,6 +14,7 @@ var configEnvKeys = []string{
 	"SCRAP_SECURITY_MODE",
 	"SCRAP_CELL_ID",
 	"SCRAP_HEADLESS_SERVICE",
+	"SCRAP_SHARD_PLACEMENT_FILE",
 	"POD_NAMESPACE",
 	"SCRAP_UPLOAD_ENABLED",
 	"SCRAP_TELEMETRY_RAW_IDS",
@@ -103,6 +104,7 @@ func TestLoadConfigValid(t *testing.T) {
 	t.Setenv("SCRAP_TEST_HOOKS", "true")
 	t.Setenv("SCRAP_PPROF_ENABLED", "1")
 	t.Setenv("SCRAP_CELL_ID", "cell-a")
+	t.Setenv("SCRAP_SHARD_PLACEMENT_FILE", "/tmp/scrap-placement.json")
 	t.Setenv("SCRAP_EVICTION_ENABLED", "true")
 	t.Setenv("SCRAP_EVICTION_HOT_RESIDENCY_WINDOW", "30m")
 
@@ -125,6 +127,7 @@ func TestLoadConfigValid(t *testing.T) {
 		{"TestHooks", c.TestHooks, true},
 		{"PprofEnabled", c.PprofEnabled, true},
 		{"CellID", c.CellID, "cell-a"},
+		{"ShardPlacementFile", c.ShardPlacementFile, "/tmp/scrap-placement.json"},
 		{"SecurityMode", c.SecurityMode, security.ModeTest},
 		{"EvictionEnabled", c.Eviction.Enabled, true},
 		{"EvictionHotResidencyWindow", c.Eviction.HotResidencyWindow.String(), "30m0s"},

@@ -32,17 +32,21 @@ func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.Se
 		return err
 	}
 
+	blocksDir, ok := s.blocksDirForShard(req.GetShardId())
+	if !ok {
+		return status.Error(codes.FailedPrecondition, "local Shard not configured")
+	}
 	blockID := req.GetBlockId()
-	blkPath := filepath.Join(s.blocksDir, fmt.Sprintf("%016x.blk", blockID))
-	idxPath := filepath.Join(s.blocksDir, fmt.Sprintf("%016x.idx", blockID))
+	blkPath := filepath.Join(blocksDir, fmt.Sprintf("%016x.blk", blockID))
+	idxPath := filepath.Join(blocksDir, fmt.Sprintf("%016x.idx", blockID))
 
 	blkInfo, err := os.Stat(blkPath)
 	if err != nil {
-		return s.transferBlockStatError(blockID, blkPath, idxPath, err)
+		return s.transferBlockStatError(blocksDir, blockID, blkPath, idxPath, err)
 	}
 	idxInfo, err := os.Stat(idxPath)
 	if err != nil {
-		return s.transferIndexStatError(blockID, blkPath, idxPath, err)
+		return s.transferIndexStatError(blocksDir, blockID, blkPath, idxPath, err)
 	}
 	if err := block.VerifyHeader(blkPath, req.GetShardId(), blockID); err != nil {
 		return status.Errorf(codes.DataLoss, "block header verification failed: %v", err)
@@ -71,7 +75,14 @@ func (s *Server) TransferBlock(req *scrapv1.TransferBlockRequest, stream grpc.Se
 	return nil
 }
 
-func (s *Server) transferBlockStatError(blockID uint64, blkPath, idxPath string, statErr error) error {
+func (s *Server) blocksDirForShard(shardID uint64) (string, bool) {
+	if s.blockDirResolver != nil {
+		return s.blockDirResolver.BlockDirForShard(shardID)
+	}
+	return s.blocksDir, true
+}
+
+func (s *Server) transferBlockStatError(blocksDir string, blockID uint64, blkPath, idxPath string, statErr error) error {
 	if !errors.Is(statErr, os.ErrNotExist) {
 		return status.Errorf(codes.Internal, "stat block %d: %v", blockID, statErr)
 	}
@@ -82,7 +93,7 @@ func (s *Server) transferBlockStatError(blockID uint64, blkPath, idxPath string,
 	if hasQuarantine(blkPath, idxPath) {
 		return status.Errorf(codes.DataLoss, "%s: block %d is quarantined", transferReasonQuarantined, blockID)
 	}
-	marker, hasMarker, err := readTransferEvictionMarker(s.blocksDir, blockID)
+	marker, hasMarker, err := readTransferEvictionMarker(blocksDir, blockID)
 	if err != nil {
 		return status.Errorf(codes.DataLoss, "%s: block %d eviction marker invalid: %v", transferReasonUnexpectedLoss, blockID, err)
 	}
@@ -98,14 +109,14 @@ func (s *Server) transferBlockStatError(blockID uint64, blkPath, idxPath string,
 	}
 }
 
-func (s *Server) transferIndexStatError(blockID uint64, blkPath, idxPath string, statErr error) error {
+func (s *Server) transferIndexStatError(blocksDir string, blockID uint64, blkPath, idxPath string, statErr error) error {
 	if !errors.Is(statErr, os.ErrNotExist) {
 		return status.Errorf(codes.Internal, "stat index for block %d: %v", blockID, statErr)
 	}
 	if hasQuarantine(blkPath, idxPath) {
 		return status.Errorf(codes.DataLoss, "%s: block %d is quarantined", transferReasonQuarantined, blockID)
 	}
-	if _, hasMarker, err := readTransferEvictionMarker(s.blocksDir, blockID); err != nil {
+	if _, hasMarker, err := readTransferEvictionMarker(blocksDir, blockID); err != nil {
 		return status.Errorf(codes.DataLoss, "%s: block %d eviction marker invalid: %v", transferReasonUnexpectedLoss, blockID, err)
 	} else if hasMarker {
 		return status.Errorf(codes.DataLoss, "%s: block %d evicted but index missing", transferReasonMetadataLoss, blockID)

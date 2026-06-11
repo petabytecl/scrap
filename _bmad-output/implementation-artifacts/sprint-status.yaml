@@ -1,5 +1,5 @@
-# generated: 2026-06-10T01:10:17-04:00
-# last_updated: 2026-06-10T16:37:05-04:00
+# generated: 2026-06-10T20:50:36-04:00
+# last_updated: 2026-06-11T13:31:19-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -21,7 +21,7 @@
 #   - ready-for-dev: Story file created in stories folder
 #   - in-progress: Developer actively working on implementation
 #   - review: Ready for code review (via Dev's code-review workflow)
-#   - done: Story completed
+#   - done: Completed
 #
 # Retrospective Status:
 #   - optional: Can be completed but not required
@@ -34,31 +34,62 @@
 # - Developer typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: "2026-06-10T01:10:17-04:00"
-last_updated: "2026-06-10T16:37:05-04:00"
+generated: "2026-06-10T20:50:36-04:00"
+last_updated: "2026-06-11T13:31:19-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
 story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: done
-  1-1-production-security-mode-startup-gates: done
-  1-2-per-surface-mtls-credential-loading: done
-  1-3-role-authorization-and-peer-identity-checks: done
-  1-4-bounded-audit-events-and-independent-rate-limits: done
+  epic-1: in-progress
+  1-1-durable-document-write-ack: done
+  1-2-immutable-replay-and-conflict-handling: done
+  1-3-verified-read-and-metadata-inspection: done
+  1-4-transaction-scoped-document-discovery: done
+  1-5-core-gateway-restart-and-rebuild-evidence: done
   epic-1-retrospective: optional
-  epic-2: done
-  2-1-openbao-transit-boundary-and-deterministic-fake: done
-  2-2-envelope-encrypted-document-write-and-read-path: done
-  2-3-durable-envelope-rewrap-workflow: done
+  epic-2: in-progress
+  2-1-shard-routing-boundary-and-placement-validation: done
+  2-2-multi-shard-cell-startup-composition: review
+  2-3-public-api-routes-by-transaction: backlog
+  2-4-peer-rpc-shard-scope-authorization: backlog
+  2-5-shard-aware-admin-and-scrapctl-diagnostics: backlog
+  2-6-multi-shard-evidence-closure: backlog
   epic-2-retrospective: optional
-  epic-3: done
-  3-1-phase-4-5-evidence-contract-and-closure-map: done
-  3-2-prod-like-security-and-encryption-gate-execution: done
+  epic-3: backlog
+  3-1-committed-backend-upload-confirmation: backlog
+  3-2-upload-pressure-and-safe-admission-evidence: backlog
+  3-3-policy-gated-local-block-eviction: backlog
+  3-4-restore-first-cold-read-path: backlog
+  3-5-restore-failure-and-corruption-semantics: backlog
+  3-6-encryption-compatible-restore-evidence: backlog
+  3-7-backend-durability-and-cold-read-closure-evidence: backlog
   epic-3-retrospective: optional
-  epic-4: done
-  4-1-upload-outbox-event-boundary-and-characterization-harness: done
-  4-2-replay-safe-upload-confirmation-and-backend-failure-handling: done
-  4-3-upload-pressure-pause-gate-and-scrub-coordination-ownership: done
+  epic-4: backlog
+  4-1-production-security-startup-gate: backlog
+  4-2-surface-authorization-audit-and-rate-limits: backlog
+  4-3-openbao-backed-encrypted-write-and-read: backlog
+  4-4-durable-envelope-rewrap-workflow: backlog
+  4-5-scrapctl-openbao-bootstrap-fresh-setup: backlog
+  4-6-scrapctl-openbao-bootstrap-idempotency-and-incompatible-state: backlog
+  4-7-production-security-rehearsal-evidence-closure: backlog
   epic-4-retrospective: optional
+  epic-5: backlog
+  5-1-content-scanner-engine-boundary-and-scheduling: backlog
+  5-2-scanner-watermarks-and-rescan-priority: backlog
+  5-3-quarantinedocument-raft-command-and-projection-state: backlog
+  5-4-quarantined-read-denial-and-metadata-reconciliation: backlog
+  5-5-admin-http-quarantine-operations: backlog
+  5-6-scrapctl-quarantine-operator-workflow: backlog
+  5-7-content-safety-closure-evidence: backlog
+  epic-5-retrospective: optional
+  epic-6: backlog
+  6-1-v2-release-evidence-matrix: backlog
+  6-2-operator-runbooks-for-v2-failure-domains: backlog
+  6-3-alert-and-query-references: backlog
+  6-4-scrapctl-release-evidence-bundle: backlog
+  6-5-tier-2-and-tier-3-release-evidence-gates: backlog
+  6-6-real-s3-iam-production-rehearsal-closure: backlog
+  6-7-v2-closure-policy-and-final-gate-decision: backlog
+  epic-6-retrospective: optional

@@ -119,23 +119,50 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
 	}
 
+	attempt, err := s.beginOpenlogWriteAttempt(openlogWriteAttemptConfig{
+		txID:        init.GetTransactionId(),
+		docName:     init.GetDocumentName(),
+		contentType: init.GetContentType(),
+		blockID:     init.GetBlockId(),
+		startOffset: wantOffset,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	result, err := s.appendReplicatedPayload(ctx, init, body)
 	if err != nil {
+		s.abortReplicatedWriteAttempt(attempt, wantOffset)
 		return nil, fmt.Errorf("shard: append replicated document: %w", err)
 	}
-	if result.FirstFrameOffset != wantOffset {
-		return nil, fmt.Errorf("shard: replicated first frame offset %d, want %d", result.FirstFrameOffset, init.GetStartOffset())
-	}
-	if result.FrameCount != init.GetFrameCount() {
-		return nil, fmt.Errorf("shard: replicated frame count %d, want %d", result.FrameCount, init.GetFrameCount())
-	}
-	if result.Size != init.GetTotalBytes() {
-		return nil, fmt.Errorf("shard: replicated size %d, want %d", result.Size, init.GetTotalBytes())
-	}
-	if !bytes.Equal(result.SHA256[:], init.GetSha256()) {
-		return nil, fmt.Errorf("shard: replicated SHA-256 %x, want %x", result.SHA256, init.GetSha256())
+	if err := validateReplicatedAppend(init, result, wantOffset); err != nil {
+		s.abortReplicatedWriteAttempt(attempt, wantOffset)
+		return nil, err
 	}
 	return result.SHA256[:], nil
+}
+
+func (s *Shard) abortReplicatedWriteAttempt(attempt *openlogWriteAttempt, startOffset int64) {
+	if s.blockWriter != nil {
+		_ = s.blockWriter.Truncate(startOffset)
+	}
+	attempt.cleanupOnAbort()
+}
+
+func validateReplicatedAppend(init *scrapv1.ReplicateDocumentInit, result block.AppendResult, wantOffset int64) error {
+	if result.FirstFrameOffset != wantOffset {
+		return fmt.Errorf("shard: replicated first frame offset %d, want %d", result.FirstFrameOffset, init.GetStartOffset())
+	}
+	if result.FrameCount != init.GetFrameCount() {
+		return fmt.Errorf("shard: replicated frame count %d, want %d", result.FrameCount, init.GetFrameCount())
+	}
+	if result.Size != init.GetTotalBytes() {
+		return fmt.Errorf("shard: replicated size %d, want %d", result.Size, init.GetTotalBytes())
+	}
+	if !bytes.Equal(result.SHA256[:], init.GetSha256()) {
+		return fmt.Errorf("shard: replicated SHA-256 %x, want %x", result.SHA256, init.GetSha256())
+	}
+	return nil
 }
 
 func (s *Shard) appendReplicatedPayload(ctx context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) (block.AppendResult, error) {

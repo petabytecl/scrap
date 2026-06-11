@@ -106,14 +106,19 @@ type scrapdTelemetryRuntime struct {
 	tracerProvider *sdktrace.TracerProvider
 	server         server.Telemetry
 	runtimeMetrics *scraptelemetry.RuntimeMetrics
-	raftMetrics    *scraptelemetry.RaftMetrics
-	diskMetrics    *scraptelemetry.DiskMetrics
+	raftMetrics    []*scraptelemetry.RaftMetrics
+	diskMetrics    []*scraptelemetry.DiskMetrics
 	metricsHandler http.Handler
 	resourceConfig scraptelemetry.ResourceConfig
 }
 
 func newScrapdTelemetryWithSecurity(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo, mode security.Mode) (*scrapdTelemetryRuntime, error) {
+	return newScrapdTelemetryWithSecurityLabel(ctx, memberSlotID, memberID, raftID, shardID, "", build, mode)
+}
+
+func newScrapdTelemetryWithSecurityLabel(ctx context.Context, memberSlotID, memberID string, raftID, shardID uint64, shardIDLabel string, build BuildInfo, mode security.Mode) (*scrapdTelemetryRuntime, error) {
 	resourceConfig := scrapdTelemetryResourceConfigWithSecurity(memberSlotID, memberID, raftID, shardID, build, mode)
+	resourceConfig.ShardIDLabel = shardIDLabel
 	otelResource, err := scraptelemetry.NewResource(ctx, resourceConfig)
 	if err != nil {
 		return nil, err
@@ -204,7 +209,7 @@ func telemetryResourceLogAttrs(cfg scraptelemetry.ResourceConfig) []any {
 		"scrap.cell_id", cfg.CellID,
 		"scrap.member_slot_id", cfg.MemberSlotID,
 		"scrap.member_id", cfg.MemberID,
-		"scrap.shard_id", strconv.FormatUint(cfg.ShardID, 10),
+		"scrap.shard_id", scraptelemetryShardIDLabel(cfg),
 		"scrap.raft_id", strconv.FormatUint(cfg.RaftID, 10),
 	}
 }
@@ -304,7 +309,7 @@ func (r *scrapdTelemetryRuntime) registerRaftMetrics(provider scraptelemetry.Raf
 	if err != nil {
 		return err
 	}
-	r.raftMetrics = rm
+	r.raftMetrics = append(r.raftMetrics, rm)
 	return nil
 }
 
@@ -314,7 +319,7 @@ func (r *scrapdTelemetryRuntime) registerDiskMetrics(provider scraptelemetry.Dis
 	if err != nil {
 		return err
 	}
-	r.diskMetrics = dm
+	r.diskMetrics = append(r.diskMetrics, dm)
 	return nil
 }
 
@@ -322,13 +327,15 @@ func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	return errors.Join(
-		r.runtimeMetrics.Unregister(),
-		r.raftMetrics.Unregister(),
-		r.diskMetrics.Unregister(),
-		r.meterProvider.Shutdown(ctx),
-		r.tracerProvider.Shutdown(ctx),
-	)
+	errs := []error{r.runtimeMetrics.Unregister()}
+	for _, metrics := range r.raftMetrics {
+		errs = append(errs, metrics.Unregister())
+	}
+	for _, metrics := range r.diskMetrics {
+		errs = append(errs, metrics.Unregister())
+	}
+	errs = append(errs, r.meterProvider.Shutdown(ctx), r.tracerProvider.Shutdown(ctx))
+	return errors.Join(errs...)
 }
 
 func scrapdTelemetryResourceConfig(memberSlotID, memberID string, raftID, shardID uint64, build BuildInfo) scraptelemetry.ResourceConfig {
@@ -365,6 +372,13 @@ func scrapdTelemetryResourceConfigWithSecurity(memberSlotID, memberID string, ra
 		cfg.ProductionReadinessReason = readiness.Reason
 	}
 	return cfg
+}
+
+func scraptelemetryShardIDLabel(cfg scraptelemetry.ResourceConfig) string {
+	if cfg.ShardIDLabel != "" {
+		return cfg.ShardIDLabel
+	}
+	return strconv.FormatUint(cfg.ShardID, 10)
 }
 
 func scrapdTelemetryInstanceID(memberSlotID, memberID string) string {

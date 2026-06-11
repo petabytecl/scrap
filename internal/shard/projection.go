@@ -40,8 +40,9 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint
 	if err != nil {
 		return err
 	}
-	if state.targetExists && state.targetCounted {
-		return fmt.Errorf("%w: %s/%s", storeapi.ErrAlreadyExists, doc.TransactionId, doc.DocumentName)
+	handled, err := s.handleExistingCommitProjection(doc, state)
+	if handled || err != nil {
+		return err
 	}
 
 	var sha [32]byte
@@ -67,13 +68,33 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint
 			return err
 		}
 	}
+	s.cleanupCommittedOpenlogPreps(doc)
 
 	return nil
 }
 
+func (s *Shard) handleExistingCommitProjection(doc *scrapv1.CommitDocument, state commitProjectionState) (bool, error) {
+	if !state.targetExists {
+		return false, nil
+	}
+	if state.targetCounted {
+		s.cleanupCommittedOpenlogPreps(doc)
+		if commitDocumentMatchesExisting(doc, state.existing) {
+			return true, nil
+		}
+		return true, duplicateDocumentConflictError()
+	}
+	if state.existingBlockID != doc.BlockId || !commitDocumentMatchesExisting(doc, state.existing) {
+		return true, corruptDuplicateMetadataError()
+	}
+	return false, nil
+}
+
 type commitProjectionState struct {
-	targetExists  bool
-	targetCounted bool
+	targetExists    bool
+	targetCounted   bool
+	existing        block.IndexEntry
+	existingBlockID uint64
 }
 
 func (s *Shard) inspectCommitProjectionState(doc *scrapv1.CommitDocument) (commitProjectionState, error) {
@@ -104,6 +125,7 @@ func (s *Shard) commitProjectionEntry(txID string) (index.Entry, bool, error) {
 func (s *Shard) inspectCommitProjectionEntry(doc *scrapv1.CommitDocument, entry index.Entry) (commitProjectionState, error) {
 	resolved := 0
 	targetBlockProjected := false
+	state := commitProjectionState{}
 	for _, blockID := range entry.BlockIDs {
 		if blockID == doc.BlockId {
 			targetBlockProjected = true
@@ -112,20 +134,44 @@ func (s *Shard) inspectCommitProjectionEntry(doc *scrapv1.CommitDocument, entry 
 		if err != nil {
 			return commitProjectionState{}, err
 		}
-		for _, blockDoc := range entries {
-			resolved++
-			if blockID == doc.BlockId && blockDoc.DocName == doc.DocumentName {
-				return commitProjectionState{
-					targetExists:  true,
-					targetCounted: resolved <= int(entry.DocCount),
-				}, nil
-			}
+		state, resolved, err = inspectCommitProjectionBlock(doc, entry.DocCount, blockID, resolved, state, entries)
+		if err != nil {
+			return commitProjectionState{}, err
 		}
 	}
 
+	if state.targetExists {
+		return state, nil
+	}
 	return commitProjectionState{
 		targetCounted: targetBlockProjected && int(entry.DocCount) > resolved,
 	}, nil
+}
+
+func inspectCommitProjectionBlock(
+	doc *scrapv1.CommitDocument,
+	docCount uint16,
+	blockID uint64,
+	resolved int,
+	state commitProjectionState,
+	entries []block.IndexEntry,
+) (commitProjectionState, int, error) {
+	for _, blockDoc := range entries {
+		resolved++
+		if blockDoc.DocName != doc.DocumentName {
+			continue
+		}
+		if state.targetExists {
+			return commitProjectionState{}, resolved, corruptDuplicateMetadataError()
+		}
+		state = commitProjectionState{
+			targetExists:    true,
+			targetCounted:   resolved <= int(docCount),
+			existing:        blockDoc,
+			existingBlockID: blockID,
+		}
+	}
+	return state, resolved, nil
 }
 
 func (s *Shard) blockIndexEntriesForApply(blockID uint64, txID string) ([]block.IndexEntry, error) {
@@ -284,14 +330,6 @@ func (s *Shard) idxWriterForBlock(blockID uint64) *block.IndexWriter {
 	return nil
 }
 
-func (s *Shard) documentVisibleInProjection(txID, docName string) (bool, error) {
-	exists, err := s.projectionResolver().ContainsDocument(txID, docName)
-	if err != nil {
-		return false, mapProjectionResolutionError(txID, docName, err)
-	}
-	return exists, nil
-}
-
 func (s *Shard) documentVisibleInProjectionLenient(txID, docName string) (bool, error) {
 	exists, err := s.projectionResolver().ContainsDocumentLenient(txID, docName)
 	if err != nil {
@@ -303,6 +341,25 @@ func (s *Shard) documentVisibleInProjectionLenient(txID, docName string) (bool, 
 type docWithBlock struct {
 	block.IndexEntry
 	blockID uint64
+}
+
+func (s *Shard) duplicateDocumentEntry(txID, docName string) (docWithBlock, bool, error) {
+	docs, err := s.projectionResolver().ListDocuments(txID)
+	if err != nil {
+		return docWithBlock{}, false, mapProjectionResolutionError(txID, docName, err)
+	}
+	var existing docWithBlock
+	found := false
+	for _, doc := range docs {
+		if doc.DocName == docName {
+			if found {
+				return docWithBlock{}, false, corruptDuplicateMetadataError()
+			}
+			existing = docWithBlock{IndexEntry: doc.IndexEntry, blockID: doc.BlockID}
+			found = true
+		}
+	}
+	return existing, found, nil
 }
 
 func (s *Shard) findDocEntry(txID, docName string) (docWithBlock, error) {

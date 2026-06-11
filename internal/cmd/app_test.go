@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -54,6 +56,37 @@ func TestAppRunCleanShutdown(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("Run did not return within 15s after context cancel")
+	}
+}
+
+func TestNewAppBuildsTwoShardTopology(t *testing.T) {
+	cfg := testAppConfig(t)
+	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t, 7, 9)
+
+	app, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+	if err != nil {
+		t.Fatalf("newApp: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	})
+
+	if got, want := app.shards.IDs(), []uint64{7, 9}; !uint64SlicesEqual(got, want) {
+		t.Fatalf("app.shards.IDs() = %v, want %v", got, want)
+	}
+	for _, shardID := range []uint64{7, 9} {
+		dataDir, ok := app.shards.DataDir(shardID)
+		if !ok {
+			t.Fatalf("missing data dir for Shard %d", shardID)
+		}
+		if dataDir != filepath.Join(cfg.DataDir, "shards", "shard-"+strconv.FormatUint(shardID, 10)) {
+			t.Fatalf("Shard %d data dir = %q, want per-Shard subdir", shardID, dataDir)
+		}
+	}
+	if app.publicStore == app.shards.singleShardStore() {
+		t.Fatal("multi-Shard public store used a single Shard; want fail-closed store until Story 2.3 routing")
 	}
 }
 

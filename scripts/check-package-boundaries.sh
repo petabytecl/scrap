@@ -25,6 +25,7 @@ check_no_direct_import() {
 storage_core_packages=(
 	./internal/block
 	./internal/index
+	./internal/routing
 	./internal/store
 )
 

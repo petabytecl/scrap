@@ -34,13 +34,14 @@ type Config struct {
 	PeersFlag     string
 
 	// Run-level environment.
-	CellID            string
-	UploadEnabled     bool
-	UploadConcurrency int
-	RawTelemetryIDs   bool
-	TestHooks         bool
-	PprofEnabled      bool
-	SecurityMode      security.Mode
+	CellID             string
+	ShardPlacementFile string
+	UploadEnabled      bool
+	UploadConcurrency  int
+	RawTelemetryIDs    bool
+	TestHooks          bool
+	PprofEnabled       bool
+	SecurityMode       security.Mode
 
 	// Peer-resolution environment.
 	Replicas        int
@@ -76,17 +77,18 @@ func loadConfig(args []string) (Config, error) {
 	}
 
 	cfg := Config{
-		DataDir:         *dataDir,
-		ListenAddr:      *listenAddr,
-		PeerAddr:        *peerAddr,
-		AdminAddr:       *adminAddr,
-		BlockSealSize:   *blockSealSize,
-		PeersFlag:       *peersFlag,
-		CellID:          os.Getenv("SCRAP_CELL_ID"),
-		HeadlessService: os.Getenv("SCRAP_HEADLESS_SERVICE"),
-		Namespace:       envString("POD_NAMESPACE", "default"),
-		Scrub:           scrub.ParseConfig(),
-		UploadPressure:  shard.ParseUploadPressureConfigFromEnv(),
+		DataDir:            *dataDir,
+		ListenAddr:         *listenAddr,
+		PeerAddr:           *peerAddr,
+		AdminAddr:          *adminAddr,
+		BlockSealSize:      *blockSealSize,
+		PeersFlag:          *peersFlag,
+		CellID:             os.Getenv("SCRAP_CELL_ID"),
+		ShardPlacementFile: os.Getenv("SCRAP_SHARD_PLACEMENT_FILE"),
+		HeadlessService:    os.Getenv("SCRAP_HEADLESS_SERVICE"),
+		Namespace:          envString("POD_NAMESPACE", "default"),
+		Scrub:              scrub.ParseConfig(),
+		UploadPressure:     shard.ParseUploadPressureConfigFromEnv(),
 	}
 
 	if err := loadCheckedEnv(&cfg); err != nil {

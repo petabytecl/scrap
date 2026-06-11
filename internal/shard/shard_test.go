@@ -396,7 +396,7 @@ func TestTriggerRebuild_PreservesCommittedProjection(t *testing.T) {
 
 	triggerRebuildAndWait(ctx, t, s)
 	assertHeadDocumentSize(ctx, t, s, "tx-rebuild", "doc.xml", int64(len(content)))
-	assertReadDocumentContent(ctx, t, s, "tx-rebuild", "doc.xml", content)
+	assertReadDocumentContent(ctx, t, s, "tx-rebuild", content)
 	assertFindDocumentCount(ctx, t, s, "tx-rebuild", 2)
 	assertDuplicateWriteRejected(ctx, t, s, "tx-rebuild", "doc.xml")
 }
@@ -434,9 +434,9 @@ func assertHeadDocumentSize(ctx context.Context, t *testing.T, s *shard.Shard, t
 	}
 }
 
-func assertReadDocumentContent(ctx context.Context, t *testing.T, s *shard.Shard, txID, docName string, want []byte) {
+func assertReadDocumentContent(ctx context.Context, t *testing.T, s *shard.Shard, txID string, want []byte) {
 	t.Helper()
-	rc, _, err := s.ReadDocument(ctx, txID, docName)
+	rc, _, err := s.ReadDocument(ctx, txID, "doc.xml")
 	if err != nil {
 		t.Fatalf("ReadDocument after rebuild: %v", err)
 	}

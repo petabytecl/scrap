@@ -101,6 +101,42 @@ func (s *Shard) recoverPrepFile(name string) error {
 	return nil
 }
 
+func (s *Shard) cleanupCommittedOpenlogPreps(doc *scrapv1.CommitDocument) {
+	entries, err := os.ReadDir(s.openlogDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".prep") {
+			continue
+		}
+		s.cleanupCommittedOpenlogPrep(entry.Name(), doc)
+	}
+}
+
+func (s *Shard) cleanupCommittedOpenlogPrep(name string, doc *scrapv1.CommitDocument) {
+	path := filepath.Join(s.openlogDir, name)
+	data, err := os.ReadFile(path) //nolint:gosec // path constructed from known openlogDir + directory listing
+	if err != nil {
+		return
+	}
+	entry := &scrapv1.OpenlogEntry{}
+	if err := proto.Unmarshal(data, entry); err != nil {
+		return
+	}
+	if !openlogPrepMatchesCommit(entry, doc) {
+		return
+	}
+	_ = os.Remove(path) // best-effort cleanup; recovery also handles completed prep files.
+}
+
+func openlogPrepMatchesCommit(entry *scrapv1.OpenlogEntry, doc *scrapv1.CommitDocument) bool {
+	return entry.GetTransactionId() == doc.GetTransactionId() &&
+		entry.GetDocumentName() == doc.GetDocumentName() &&
+		entry.GetBlockId() == doc.GetBlockId() &&
+		entry.GetStartOffset() == doc.GetFirstFrameOff()
+}
+
 func truncateFile(path string, size int64) error {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0o644) //nolint:gosec // path constructed from known blocksDir + block ID
 	if err != nil {

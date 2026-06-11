@@ -269,15 +269,40 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 		rpcCode = status.Code(mappedErr)
 		return mappedErr
 	}
+	if err := statusErrorFromContext(ctx); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
 
 	rc, meta, err := s.store.ReadDocument(ctx, req.GetTransactionId(), req.GetDocumentName())
 	if err != nil {
-		mappedErr := s.mapStoreError(ctx, "ReadDocument", err)
+		mappedErr := s.mapStoreStatusOrContextError(ctx, "ReadDocument", err)
 		rpcCode = status.Code(mappedErr)
 		return mappedErr
 	}
 	defer func() { _ = rc.Close() }()
 
+	if err := statusErrorFromContext(ctx); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
+
+	if err := sendReadMetadata(ctx, stream, meta); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
+	if err := streamReadChunks(ctx, stream, rc); err != nil {
+		rpcCode = status.Code(err)
+		return err
+	}
+
+	return nil
+}
+
+func sendReadMetadata(ctx context.Context, stream grpc.ServerStreamingServer[scrapv1.ReadDocumentResponse], meta storeapi.DocumentMeta) error {
+	if err := statusErrorFromContext(ctx); err != nil {
+		return err
+	}
 	if err := stream.Send(&scrapv1.ReadDocumentResponse{
 		Part: &scrapv1.ReadDocumentResponse_Meta{
 			Meta: &scrapv1.ReadDocumentMeta{
@@ -288,35 +313,119 @@ func (s *documentServer) ReadDocument(req *scrapv1.ReadDocumentRequest, stream g
 			},
 		},
 	}); err != nil {
-		rpcCode = codes.Internal
+		if mappedErr := statusErrorFromContextOrError(ctx, err); mappedErr != nil {
+			return mappedErr
+		}
 		return status.Errorf(codes.Internal, "send metadata: %v", err)
 	}
+	return nil
+}
 
+func streamReadChunks(ctx context.Context, stream grpc.ServerStreamingServer[scrapv1.ReadDocumentResponse], rc io.Reader) error {
 	buf := make([]byte, readBufSize)
 	for {
+		if err := statusErrorFromContext(ctx); err != nil {
+			return err
+		}
 		n, readErr := rc.Read(buf)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			_, err := handleReadChunkError(ctx, readErr)
+			return err
+		}
 		if n > 0 {
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			if err := stream.Send(&scrapv1.ReadDocumentResponse{
-				Part: &scrapv1.ReadDocumentResponse_ChunkData{
-					ChunkData: chunk,
-				},
-			}); err != nil {
-				rpcCode = codes.Internal
-				return status.Errorf(codes.Internal, "send chunk: %v", err)
+			if err := sendReadChunk(ctx, stream, buf[:n]); err != nil {
+				return err
 			}
 		}
-		if readErr == io.EOF {
-			break
+		done, err := handleReadChunkError(ctx, readErr)
+		if err != nil {
+			return err
 		}
-		if readErr != nil {
-			rpcCode = codes.Internal
-			return status.Errorf(codes.Internal, "read document: %v", readErr)
+		if done {
+			return nil
 		}
 	}
+}
 
+func handleReadChunkError(ctx context.Context, readErr error) (bool, error) {
+	if readErr == nil {
+		return false, nil
+	}
+	if errors.Is(readErr, io.EOF) {
+		return true, nil
+	}
+	if mappedErr := statusErrorFromContextOrError(ctx, readErr); mappedErr != nil {
+		return false, mappedErr
+	}
+	if storeErr := mapStoreErrorForRead(readErr); storeErr != nil {
+		return false, storeErr
+	}
+	return false, status.Errorf(codes.Internal, "read document: %v", readErr)
+}
+
+func sendReadChunk(ctx context.Context, stream grpc.ServerStreamingServer[scrapv1.ReadDocumentResponse], data []byte) error {
+	chunk := make([]byte, len(data))
+	copy(chunk, data)
+	if err := statusErrorFromContext(ctx); err != nil {
+		return err
+	}
+	if err := stream.Send(&scrapv1.ReadDocumentResponse{
+		Part: &scrapv1.ReadDocumentResponse_ChunkData{
+			ChunkData: chunk,
+		},
+	}); err != nil {
+		if mappedErr := statusErrorFromContextOrError(ctx, err); mappedErr != nil {
+			return mappedErr
+		}
+		return status.Errorf(codes.Internal, "send chunk: %v", err)
+	}
 	return nil
+}
+
+func statusErrorFromContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return status.FromContextError(err).Err()
+	}
+	return nil
+}
+
+func (s *documentServer) mapStoreStatusOrContextError(ctx context.Context, method string, err error) error {
+	if mappedErr := statusErrorFromContextOrError(ctx, err); mappedErr != nil {
+		return mappedErr
+	}
+	return s.mapStoreError(ctx, method, err)
+}
+
+func statusErrorFromContextOrError(ctx context.Context, err error) error {
+	if ctxErr := statusErrorFromContext(ctx); ctxErr != nil {
+		return ctxErr
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return status.FromContextError(context.Canceled).Err()
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.FromContextError(context.DeadlineExceeded).Err()
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Err()
+	}
+	return nil
+}
+
+func mapStoreErrorForRead(err error) error {
+	switch {
+	case errors.Is(err, storeapi.ErrAlreadyExists),
+		errors.Is(err, storeapi.ErrNotFound),
+		errors.Is(err, storeapi.ErrTxNotFound),
+		errors.Is(err, storeapi.ErrInvalidArgument),
+		errors.Is(err, storeapi.ErrResourceExhausted),
+		errors.Is(err, storeapi.ErrRebuilding),
+		errors.Is(err, storeapi.ErrUnavailable),
+		errors.Is(err, storeapi.ErrDataLoss):
+		return mapStoreError(err)
+	default:
+		return nil
+	}
 }
 
 func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDocumentsRequest) (*scrapv1.FindDocumentsResponse, error) {
@@ -338,12 +447,20 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 		rpcCode = status.Code(mappedErr)
 		return nil, mappedErr
 	}
+	if err := statusErrorFromContext(ctx); err != nil {
+		rpcCode = status.Code(err)
+		return nil, err
+	}
 
 	docs, err := s.store.FindDocuments(ctx, req.GetTransactionId())
 	if err != nil {
-		mappedErr := s.mapStoreError(ctx, "FindDocuments", err)
+		mappedErr := s.mapStoreStatusOrContextError(ctx, "FindDocuments", err)
 		rpcCode = status.Code(mappedErr)
 		return nil, mappedErr
+	}
+	if err := statusErrorFromContext(ctx); err != nil {
+		rpcCode = status.Code(err)
+		return nil, err
 	}
 
 	var pbDocs []*scrapv1.DocumentMeta
@@ -474,13 +591,23 @@ func mapStoreError(err error) error {
 		return status.Errorf(codes.InvalidArgument, "%v", err)
 	case errors.Is(err, storeapi.ErrResourceExhausted):
 		return resourceExhaustedStatus(err)
-	case errors.Is(err, storeapi.ErrUnavailable):
-		return unavailableStatus(err)
+	case errors.Is(err, storeapi.ErrUnavailable), errors.Is(err, storeapi.ErrRebuilding):
+		return availabilityStatus(err)
 	case errors.Is(err, storeapi.ErrDataLoss):
 		return status.Errorf(codes.DataLoss, "%v", err)
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
+}
+
+func availabilityStatus(err error) error {
+	if errors.Is(err, storeapi.ErrRebuilding) {
+		return unavailableStatus(storeapi.NewUnavailable(
+			storeapi.UnavailableReasonProjectionRebuild,
+			storeapi.ErrRebuilding.Error(),
+		))
+	}
+	return unavailableStatus(err)
 }
 
 func unavailableStatus(err error) error {
