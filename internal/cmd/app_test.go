@@ -15,6 +15,7 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/shard"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 // TestAppRunCleanShutdown is a startup/shutdown smoke test. It builds the full
@@ -89,8 +90,8 @@ func TestNewAppBuildsTwoShardTopology(t *testing.T) {
 			t.Fatalf("Shard %d data dir = %q, want per-Shard subdir", shardID, dataDir)
 		}
 	}
-	if app.publicStore == app.shards.singleShardStore() {
-		t.Fatal("multi-Shard public store used a single Shard; want fail-closed store until Story 2.3 routing")
+	if _, ok := app.publicStore.(*publicStoreRouter); !ok {
+		t.Fatalf("multi-Shard public store = %T, want publicStoreRouter", app.publicStore)
 	}
 }
 
@@ -128,6 +129,9 @@ func TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *t
 			t.Fatalf("%s %s status = %d, want 404", req.Method, req.URL.Path, rec.Code)
 		}
 	}
+
+	_, err = app.publicStore.HeadDocument(context.Background(), "tx-bravo", "doc-b")
+	assertUnavailableReason(t, err, storeapi.UnavailableReasonShardRouteUnavailable)
 }
 
 func TestAppLogStartingRedactsMultiShardEvidence(t *testing.T) {

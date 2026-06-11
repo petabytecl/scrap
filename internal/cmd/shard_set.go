@@ -257,6 +257,20 @@ func (s *shardSet) singleShardStore() storeapi.Store {
 	return localShard
 }
 
+func (s *shardSet) publicStoreTargets() map[uint64]storeapi.Store {
+	if s == nil {
+		return nil
+	}
+	targets := make(map[uint64]storeapi.Store, len(s.shards))
+	for shardID, localShard := range s.shards {
+		if localShard == nil {
+			continue
+		}
+		targets[shardID] = localShard
+	}
+	return targets
+}
+
 func (s *shardSet) singleShard() (*shard.Shard, bool) {
 	if s == nil || len(s.ids) != 1 {
 		return nil, false
@@ -518,5 +532,9 @@ func publicStoreForTopology(set *shardSet, topology startupTopology) storeapi.St
 	if topology.SingleShardFallback {
 		return set.singleShardStore()
 	}
-	return failClosedPublicStore{}
+	targets := set.publicStoreTargets()
+	if len(targets) == 0 {
+		return failClosedPublicStore{}
+	}
+	return newPublicStoreRouter(topology.Placement, targets)
 }

@@ -4,7 +4,7 @@ baseline_commit: 7c47d0f3ff0066873ee85669e3cbd55ae4b0b5c4
 
 # Story 2.3: Public API Routes by Transaction
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -30,31 +30,31 @@ so that write/read/head/find behavior works without hardcoded Shard ID assumptio
 
 ## Tasks / Subtasks
 
-- [ ] Add a Store-compatible public routing boundary. (AC: 1, 2, 3)
-  - [ ] Implement a narrow adapter, likely in `internal/cmd`, that satisfies `internal/store.Store`, owns a `routing.Router`, and delegates each Store method to the local Shard selected by `transaction_id`.
-  - [ ] Reuse `internal/routing.Router.Lookup`; do not duplicate hash, slot, placement, or route-summary logic.
-  - [ ] Keep `WriteDocument` streaming: select the target Store before delegation and pass the `io.Reader` through without buffering the full Document.
-  - [ ] Copy maps/slices passed into any long-lived router struct; do not retain mutable caller-owned collections.
-- [ ] Wire multi-Shard public serving through the router. (AC: 1, 2, 4)
-  - [ ] Replace `publicStoreForTopology`'s multi-Shard `failClosedPublicStore` path with the routing Store only after `validateStartupTopology` and `openShardSet` succeed.
-  - [ ] Preserve the existing single-Shard development/test fallback: missing placement outside production still serves through the lone Shard.
-  - [ ] Preserve fail-closed behavior when the Shard set is nil/empty, placement is absent, the route points to a non-local Shard, or composition did not complete.
-  - [ ] Keep public gRPC handlers in `internal/server` transport-only if possible; handlers should call the Store contract and should not import `internal/routing` or know Shard IDs unless a minimal transport test hook proves necessary.
-- [ ] Define bounded route failure semantics. (AC: 3, 4)
-  - [ ] Map route lookup or local-target failures to typed Store errors, not string matching. Use a bounded `UNAVAILABLE` reason such as the existing `shard_routing_pending` for not-configured routing, or add a narrow low-cardinality reason if route-unavailable needs to be distinguishable.
-  - [ ] Do not include raw `transaction_id`, `document_name`, `tenant_id`, peer addresses, Backend keys, local paths, request IDs, trace IDs, certificate material, secret values, or unbounded dependency errors in public errors, logs, metrics, spans, or evidence.
-  - [ ] Shard IDs, slot numbers, route outcomes, and low-cardinality failure reasons may be used in tests/evidence when bounded.
-- [ ] Keep scope to public Transaction routing only. (AC: 1-4)
-  - [ ] Do not change proto/wire contracts, generated files, storage identity, Block/Frame layout, Backend object identity, Raft command shape, peer authorization policy, admin diagnostics, `scrapctl`, Shard rebalancing, slot transfer, tenant routing, or release-closure evidence.
-  - [ ] Do not add `tenant_id` to route identity or storage identity; routing input is `transaction_id` only.
-  - [ ] Keep `FindDocuments` Transaction-scoped and routed to exactly one Shard.
-- [ ] Add focused tests and evidence. (AC: 1-4)
-  - [ ] Add router unit tests with two fake Store targets proving `WriteDocument`, `HeadDocument`, `ReadDocument`, and `FindDocuments` route known Transactions to different Shards.
-  - [ ] Add fail-closed tests for empty/invalid Transaction route lookup, non-local Shard target, nil/empty Shard set, and multi-Shard startup before successful composition.
-  - [ ] Add `internal/cmd` coverage proving `newApp` with a valid two-local-Shard placement registers a routing public Store instead of `failClosedPublicStore`, while a one-local-Shard Member fails safely for Transactions owned by remote Shards.
-  - [ ] Add or update public server tests only as needed to prove handlers continue to call Store methods without Shard constants.
-  - [ ] Add redaction tests using distinctive forbidden Transaction/Document fixtures and assert public errors, logs, spans, route telemetry records, and story evidence omit raw identifiers.
-  - [ ] Record verification in this story: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/server ./internal/routing`, `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`, and `env GOCACHE=/tmp/scrap-v2-go-build make check` before review.
+- [x] Add a Store-compatible public routing boundary. (AC: 1, 2, 3)
+  - [x] Implement a narrow adapter, likely in `internal/cmd`, that satisfies `internal/store.Store`, owns a `routing.Router`, and delegates each Store method to the local Shard selected by `transaction_id`.
+  - [x] Reuse `internal/routing.Router.Lookup`; do not duplicate hash, slot, placement, or route-summary logic.
+  - [x] Keep `WriteDocument` streaming: select the target Store before delegation and pass the `io.Reader` through without buffering the full Document.
+  - [x] Copy maps/slices passed into any long-lived router struct; do not retain mutable caller-owned collections.
+- [x] Wire multi-Shard public serving through the router. (AC: 1, 2, 4)
+  - [x] Replace `publicStoreForTopology`'s multi-Shard `failClosedPublicStore` path with the routing Store only after `validateStartupTopology` and `openShardSet` succeed.
+  - [x] Preserve the existing single-Shard development/test fallback: missing placement outside production still serves through the lone Shard.
+  - [x] Preserve fail-closed behavior when the Shard set is nil/empty, placement is absent, the route points to a non-local Shard, or composition did not complete.
+  - [x] Keep public gRPC handlers in `internal/server` transport-only if possible; handlers should call the Store contract and should not import `internal/routing` or know Shard IDs unless a minimal transport test hook proves necessary.
+- [x] Define bounded route failure semantics. (AC: 3, 4)
+  - [x] Map route lookup or local-target failures to typed Store errors, not string matching. Use a bounded `UNAVAILABLE` reason such as the existing `shard_routing_pending` for not-configured routing, or add a narrow low-cardinality reason if route-unavailable needs to be distinguishable.
+  - [x] Do not include raw `transaction_id`, `document_name`, `tenant_id`, peer addresses, Backend keys, local paths, request IDs, trace IDs, certificate material, secret values, or unbounded dependency errors in public errors, logs, metrics, spans, or evidence.
+  - [x] Shard IDs, slot numbers, route outcomes, and low-cardinality failure reasons may be used in tests/evidence when bounded.
+- [x] Keep scope to public Transaction routing only. (AC: 1-4)
+  - [x] Do not change proto/wire contracts, generated files, storage identity, Block/Frame layout, Backend object identity, Raft command shape, peer authorization policy, admin diagnostics, `scrapctl`, Shard rebalancing, slot transfer, tenant routing, or release-closure evidence.
+  - [x] Do not add `tenant_id` to route identity or storage identity; routing input is `transaction_id` only.
+  - [x] Keep `FindDocuments` Transaction-scoped and routed to exactly one Shard.
+- [x] Add focused tests and evidence. (AC: 1-4)
+  - [x] Add router unit tests with two fake Store targets proving `WriteDocument`, `HeadDocument`, `ReadDocument`, and `FindDocuments` route known Transactions to different Shards.
+  - [x] Add fail-closed tests for empty/invalid Transaction route lookup, non-local Shard target, nil/empty Shard set, and multi-Shard startup before successful composition.
+  - [x] Add `internal/cmd` coverage proving `newApp` with a valid two-local-Shard placement registers a routing public Store instead of `failClosedPublicStore`, while a one-local-Shard Member fails safely for Transactions owned by remote Shards.
+  - [x] Add or update public server tests only as needed to prove handlers continue to call Store methods without Shard constants.
+  - [x] Add redaction tests using distinctive forbidden Transaction/Document fixtures and assert public errors, logs, spans, route telemetry records, and story evidence omit raw identifiers.
+  - [x] Record verification in this story: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/server ./internal/routing`, `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`, and `env GOCACHE=/tmp/scrap-v2-go-build make check` before review.
 
 ## Dev Notes
 
@@ -140,8 +140,42 @@ GPT-5 Codex
 
 ### Debug Log References
 
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'TestPublicStoreRouter'` failed with undefined `newPublicStoreRouter` and `storeapi.UnavailableReasonShardRouteUnavailable`.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'TestPublicStoreRouter'` passed.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd` passed.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'TestNewAppBuildsTwoShardTopology|TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember'` failed because multi-Shard public serving still used `failClosedPublicStore`.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'TestNewAppBuildsTwoShardTopology|TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember'` passed.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'TestPublicStoreRouter'` passed after wiring.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd` passed after wiring.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run 'TestHeadDocumentRouteUnavailableReturnsBoundedErrorInfo'` passed.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/server` passed.
+- SCOPE: `git status --short` and `git diff -- proto gen internal/peer internal/admin internal/scrapctl internal/shard internal/backend` confirmed no proto/generated/peer/admin/scrapctl/shard/backend production changes.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/server ./internal/routing` passed.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
+- FORMAT: `env GOCACHE=/tmp/scrap-v2-go-build make check` initially failed at `fmt-check`; applied the formatter-required test signature/literal cleanup.
+- LINT: `env GOCACHE=/tmp/scrap-v2-go-build make check` then failed on test cyclomatic complexity and an unused router constructor parameter; split the test and removed the parameter.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after fixes.
+
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- Added a private Store-compatible public router in `internal/cmd` that selects local Shard Stores through `routing.Router.Lookup`, copies the Shard target map, streams write bodies through unchanged, and returns bounded typed Store errors for invalid or unavailable routes.
+- Wired multi-Shard `publicStoreForTopology` to build the Store router from successfully opened local Shards, while preserving the single-Shard fallback and fail-closed behavior for missing local targets.
+- Added `shard_route_unavailable` as a bounded Store unavailable reason and covered public gRPC mapping with `ErrorInfo` details that omit raw Transaction and Document identifiers.
+- Kept scope to public Transaction routing: no proto, generated code, storage identity, peer authorization, admin diagnostics, `scrapctl`, Shard authority, Backend identity, tenant routing, or release-closure behavior changed.
+- Added focused router, startup wiring, fail-closed, and public gRPC route-unavailable tests; final targeted package, package-boundary, and `make check` gates passed.
 
 ### File List
+
+- `_bmad-output/implementation-artifacts/2-3-public-api-routes-by-transaction.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/cmd/public_store_router.go`
+- `internal/cmd/public_store_router_test.go`
+- `internal/cmd/app_test.go`
+- `internal/cmd/shard_set.go`
+- `internal/server/route_unavailable_test.go`
+- `internal/store/errors.go`
+
+## Change Log
+
+- 2026-06-11: Implemented Story 2.3 public Transaction routing and moved status to review.

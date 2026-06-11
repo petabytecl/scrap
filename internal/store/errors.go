@@ -8,6 +8,7 @@ const (
 	UnavailableReasonBackendRestoreUnavailable = "backend_restore_unavailable"
 	UnavailableReasonCryptoUnavailable         = "crypto_unavailable"
 	UnavailableReasonProjectionRebuild         = "projection_rebuild_in_progress"
+	UnavailableReasonShardRouteUnavailable     = "shard_route_unavailable"
 	UnavailableReasonShardRoutingPending       = "shard_routing_pending"
 	UnavailableReasonUploadPending             = "upload_pending"
 )
