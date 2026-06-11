@@ -169,7 +169,8 @@ func openLocalShard(openCfg shardSetOpenConfig, shardID uint64, dataDir string) 
 		}
 		return openedLocalShard{}, fmt.Errorf("register raft metrics: %w", err)
 	}
-	if err := openCfg.telemetryRuntime.registerDiskMetrics(shardID, localShard); err != nil {
+	diskMetrics, err := openCfg.telemetryRuntime.registerDiskMetrics(shardID, localShard)
+	if err != nil {
 		if unregisterErr := openCfg.telemetryRuntime.unregisterRaftMetrics(raftMetrics); unregisterErr != nil {
 			err = errors.Join(err, unregisterErr)
 		}
@@ -178,7 +179,16 @@ func openLocalShard(openCfg shardSetOpenConfig, shardID uint64, dataDir string) 
 		}
 		return openedLocalShard{}, fmt.Errorf("register disk metrics: %w", err)
 	}
-	return openedLocalShard{shard: localShard, close: localShard.Close}, nil
+	return openedLocalShard{
+		shard: localShard,
+		close: func() error {
+			return errors.Join(
+				openCfg.telemetryRuntime.unregisterDiskMetrics(diskMetrics),
+				openCfg.telemetryRuntime.unregisterRaftMetrics(raftMetrics),
+				localShard.Close(),
+			)
+		},
+	}, nil
 }
 
 func localShardDataDirs(root string, topology startupTopology) (map[uint64]string, error) {

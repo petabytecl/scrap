@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -89,6 +91,42 @@ func TestNewAppBuildsTwoShardTopology(t *testing.T) {
 	}
 	if app.publicStore == app.shards.singleShardStore() {
 		t.Fatal("multi-Shard public store used a single Shard; want fail-closed store until Story 2.3 routing")
+	}
+}
+
+func TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *testing.T) {
+	cfg := testAppConfig(t)
+	cfg.TestHooks = true
+	cfg.ShardPlacementFile = writePlacementFile(t, `{
+		"slot_count": 1024,
+		"shards": [7, 9],
+		"local_shards": [7],
+		"ranges": [
+			{"shard_id": 7, "start_slot": 0, "end_slot": 511},
+			{"shard_id": 9, "start_slot": 512, "end_slot": 1023}
+		]
+	}`)
+
+	app, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+	if err != nil {
+		t.Fatalf("newApp: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	})
+
+	for _, req := range []*http.Request{
+		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/eviction/plans", strings.NewReader(`{}`)),
+		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/rewrap/document", strings.NewReader(`{}`)),
+		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test-hooks/projection-key", strings.NewReader(`{}`)),
+	} {
+		rec := httptest.NewRecorder()
+		app.adminSrv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want 404", req.Method, req.URL.Path, rec.Code)
+		}
 	}
 }
 

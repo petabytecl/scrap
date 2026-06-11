@@ -331,13 +331,30 @@ func (r *scrapdTelemetryRuntime) unregisterRaftMetrics(target *scraptelemetry.Ra
 	return nil
 }
 
-func (r *scrapdTelemetryRuntime) registerDiskMetrics(shardID uint64, provider scraptelemetry.DiskStatsProvider) error {
+func (r *scrapdTelemetryRuntime) registerDiskMetrics(shardID uint64, provider scraptelemetry.DiskStatsProvider) (*scraptelemetry.DiskMetrics, error) {
 	m := r.meterProvider.Meter(instrumentationScope)
 	dm, err := scraptelemetry.NewDiskMetrics(m, provider, shardMetricAttribute(shardID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	r.diskMetrics = append(r.diskMetrics, dm)
+	return dm, nil
+}
+
+func (r *scrapdTelemetryRuntime) unregisterDiskMetrics(target *scraptelemetry.DiskMetrics) error {
+	if r == nil || target == nil {
+		return nil
+	}
+	if err := target.Unregister(); err != nil {
+		return err
+	}
+	next := make([]*scraptelemetry.DiskMetrics, 0, len(r.diskMetrics))
+	for _, metrics := range r.diskMetrics {
+		if metrics != target {
+			next = append(next, metrics)
+		}
+	}
+	r.diskMetrics = next
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,15 +54,62 @@ func TestTransferBlockStreamsFileContents(t *testing.T) {
 	}
 }
 
+func TestTransferBlockUsesResolverForRequestShard(t *testing.T) {
+	root := t.TempDir()
+	shard7Dir := filepath.Join(root, "shard-7")
+	shard9Dir := filepath.Join(root, "shard-9")
+	for _, dir := range []string{shard7Dir, shard9Dir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+	}
+	seedTransferBlockForShard(t, shard7Dir, 7, bytes.Repeat([]byte("payload shard 7 "), 32))
+	seedTransferBlockForShard(t, shard9Dir, 9, bytes.Repeat([]byte("payload shard 9 "), 32))
+	addr := startPeerServer(t, filepath.Join(root, "unused"),
+		peer.WithBlockDirResolver(staticBlockDirResolver{
+			7: shard7Dir,
+			9: shard9Dir,
+		}),
+	)
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := scrapv1.NewPeerServiceClient(conn)
+	stream, err := client.TransferBlock(context.Background(), &scrapv1.TransferBlockRequest{
+		ShardId: 9,
+		BlockId: 1,
+	})
+	if err != nil {
+		t.Fatalf("TransferBlock: %v", err)
+	}
+	_ = recvAndVerifyMeta(t, stream)
+	received := recvAllChunks(t, stream)
+
+	if !bytes.Contains(received, []byte("payload shard 9")) {
+		t.Fatalf("TransferBlock did not stream Shard 9 payload")
+	}
+	if bytes.Contains(received, []byte("payload shard 7")) {
+		t.Fatalf("TransferBlock streamed payload from wrong Shard directory")
+	}
+}
+
 // seedTransferBlock creates a block file and index file in dir for block ID 1.
 func seedTransferBlock(t *testing.T, dir string) {
 	t.Helper()
+	seedTransferBlockForShard(t, dir, 0, bytes.Repeat([]byte("transfer test "), 100))
+}
 
-	bw, err := block.NewWriter(dir+"/0000000000000001.blk", 0, 1)
+func seedTransferBlockForShard(t *testing.T, dir string, shardID uint64, content []byte) {
+	t.Helper()
+
+	bw, err := block.NewWriter(dir+"/0000000000000001.blk", shardID, 1)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	content := bytes.Repeat([]byte("transfer test "), 100)
 	result, err := bw.AppendDocument("tx-transfer", "doc.xml", "text/xml", bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("AppendDocument: %v", err)
@@ -84,6 +132,13 @@ func seedTransferBlock(t *testing.T, dir string) {
 		t.Fatalf("iw.Append: %v", err)
 	}
 	_ = iw.Close()
+}
+
+type staticBlockDirResolver map[uint64]string
+
+func (r staticBlockDirResolver) BlockDirForShard(shardID uint64) (string, bool) {
+	dir, ok := r[shardID]
+	return dir, ok
 }
 
 func recvAndVerifyMeta(t *testing.T, stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse]) *scrapv1.TransferBlockMeta {

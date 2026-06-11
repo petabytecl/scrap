@@ -4,7 +4,7 @@ baseline_commit: d970de3d0bbec6b6ec260d94e3722774bc3995e4
 
 # Story 2.2: Multi-Shard Cell Startup Composition
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -76,6 +76,12 @@ so that one Cell can run the required V2 multi-Shard topology.
 - [x] [Review][Patch] Preserve high Shard IDs in per-Shard metric attributes without `int64` collapse [internal/cmd/telemetry.go]
 - [x] [Review][Patch] Reject broken symlinks that point multiple local Shards at the same target directory [internal/cmd/shard_set.go]
 - [x] [Review][Patch] Keep cleanup-failed Shards visible in startup status and preserve close/unregister rollback errors [internal/cmd/shard_set.go]
+- [x] [Review][Patch] Keep Shard-specific admin operations on the single-Shard fallback only [internal/cmd/app.go]
+- [x] [Review][Patch] Preserve generic startup rollback cleanup errors [internal/cmd/app.go]
+- [x] [Review][Patch] Unregister per-Shard metric callbacks before closing each Shard [internal/cmd/shard_set.go]
+- [x] [Review][Patch] Exercise `TransferBlock` Shard directory dispatch through the peer RPC handler [internal/peer/transfer_test.go]
+- [x] [Review][Defer] Peer replication sink buffers full replicated Documents before dispatch [internal/peer/server.go] — deferred, pre-existing
+- [x] [Review][Defer] Peer replication sink wraps status-bearing sink errors as `INTERNAL` [internal/peer/server.go] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -164,6 +170,7 @@ GPT-5 Codex
 - Research: Exa search confirmed the standard library `encoding/json.Decoder` + `DisallowUnknownFields` path was the right no-dependency fit for strict placement config parsing.
 - Review follow-up research: `gh search code 'ObserveInt64 WithAttributes language:Go' --limit 5` and Exa search for OpenTelemetry Go observable gauge attributes confirmed callback observations should attach bounded attributes with `metric.WithAttributes`.
 - Secondary review pass: blind and edge-case review layers identified metric Shard ID collapse, broken symlink target collisions, startup cleanup status gaps, and metric-registration rollback cleanup gaps; acceptance review found no AC/spec drift.
+- Final code review pass: blind and acceptance layers corroborated the admin single-Shard fallback boundary gap; edge-case review identified startup rollback and metric callback lifecycle hardening plus pre-existing peer replication sink concerns.
 - Red phase: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd` failed before implementation because `validateStartupTopology`, `app.shards`, and `app.publicStore` were absent.
 - Red phase: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/telemetry` failed on the unchecked review findings before patching: production one-local-Shard validation, symlink data-dir collision order, startup status failure categories, Shard metric attributes, and cleanup error preservation.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/routing ./internal/peer` passed.
@@ -176,6 +183,9 @@ GPT-5 Codex
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./...` passed after review fixes.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed after review fixes.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes, including lint, generated-code check, normal tests, race tests, integration-tag tests, and `scrapd`/`scrapctl` builds.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/peer ./internal/cmd ./internal/telemetry` passed after final review fixes.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/routing ./internal/peer ./internal/telemetry` passed after final review fixes.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after final review fixes.
 
 ### Completion Notes List
 
@@ -187,6 +197,7 @@ GPT-5 Codex
 - Health now checks the local Shard set instead of one arbitrary Shard. Process-level telemetry uses a bounded `scrap.shard_id=multi` label for multi-Shard composition rather than pretending Shard `0` represents the whole Cell.
 - Addressed review findings by redacting raw startup address/path fields, accepting one-local-Shard production Members in multi-Shard placements, validating real per-Shard data-dir collisions before Backend setup, preserving cleanup errors, exposing bounded failure categories in Shard startup status, and adding per-Shard OTel attributes to Raft/disk metrics.
 - Addressed secondary review hardening by preserving high Shard IDs as string metric attributes, catching broken symlink target collisions, marking cleanup-failed Shards in startup status, and keeping rollback close/unregister errors retryable and visible.
+- Addressed final code review findings by keeping Shard-specific admin routes on the single-Shard fallback only, joining generic startup rollback cleanup errors, unregistering per-Shard metric callbacks before Shard close, and testing `TransferBlock` Shard directory dispatch through the peer RPC handler.
 - Added tests for multi-Shard public Store fail-closed methods returning `shard_routing_pending`.
 - Redacted two-Shard status example:
   ```text
@@ -213,6 +224,7 @@ GPT-5 Codex
 - `internal/telemetry/raft_test.go`
 - `internal/peer/server.go`
 - `internal/peer/transfer.go`
+- `internal/peer/transfer_test.go`
 - `internal/shard/write_ack_test.go`
 - `internal/store/errors.go`
 - `internal/telemetry/resource.go`
@@ -222,3 +234,4 @@ GPT-5 Codex
 - 2026-06-11: Implemented multi-Shard startup composition and validation.
 - 2026-06-11: Addressed code review findings - 7 review patch items resolved.
 - 2026-06-11: Addressed secondary review cleanup and telemetry hardening findings.
+- 2026-06-11: Addressed final code review findings and moved Story 2.2 to done.

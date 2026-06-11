@@ -20,6 +20,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/security"
+	scraptelemetry "github.com/petabytecl/scrap/internal/telemetry"
 )
 
 type stubRaftState struct{}
@@ -28,6 +29,12 @@ func (stubRaftState) IsLeader() bool       { return false }
 func (stubRaftState) LeaderID() uint64     { return 0 }
 func (stubRaftState) AppliedIndex() uint64 { return 0 }
 func (stubRaftState) CommitIndex() uint64  { return 0 }
+
+type stubDiskStats struct{}
+
+func (stubDiskStats) DiskStats() scraptelemetry.DiskStats {
+	return scraptelemetry.DiskStats{}
+}
 
 func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
 	t.Setenv("SCRAP_CELL_ID", "cell-a")
@@ -259,6 +266,33 @@ func TestScrapdTelemetryUnregisterRaftMetricsRemovesCallback(t *testing.T) {
 	}
 	if got := len(rt.raftMetrics); got != 0 {
 		t.Fatalf("raftMetrics len = %d, want 0", got)
+	}
+}
+
+func TestScrapdTelemetryUnregisterDiskMetricsRemovesCallback(t *testing.T) {
+	stubScrapdTelemetryPipeline(t)
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := rt.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	})
+	metrics, err := rt.registerDiskMetrics(7, stubDiskStats{})
+	if err != nil {
+		t.Fatalf("registerDiskMetrics: %v", err)
+	}
+	if got := len(rt.diskMetrics); got != 1 {
+		t.Fatalf("diskMetrics len = %d, want 1", got)
+	}
+
+	if err := rt.unregisterDiskMetrics(metrics); err != nil {
+		t.Fatalf("unregisterDiskMetrics: %v", err)
+	}
+	if got := len(rt.diskMetrics); got != 0 {
+		t.Fatalf("diskMetrics len = %d, want 0", got)
 	}
 }
 

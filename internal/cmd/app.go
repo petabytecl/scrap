@@ -67,12 +67,9 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		return nil, err
 	}
 
-	var cleanup []func()
+	var cleanup []startupCleanup
 	fail := func(err error) (*App, error) {
-		for i := len(cleanup) - 1; i >= 0; i-- {
-			cleanup[i]()
-		}
-		return nil, err
+		return nil, rollbackStartup(err, cleanup)
 	}
 
 	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), cfg.DataDir, cfg.UploadEnabled)
@@ -105,7 +102,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return fail(err)
 	}
-	cleanup = append(cleanup, func() { _ = telemetryRuntime.Shutdown(context.Background()) })
+	cleanup = append(cleanup, func() error { return telemetryRuntime.Shutdown(context.Background()) })
 
 	uploadCfg := shard.UploadConfig{
 		Enabled:     cfg.UploadEnabled,
@@ -120,10 +117,16 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		return fail(err)
 	}
 	transport := securityRuntime.transport
-	cleanup = append(cleanup, transport.Close)
+	cleanup = append(cleanup, func() error {
+		transport.Close()
+		return nil
+	})
 
 	peerClient := securityRuntime.peerClient
-	cleanup = append(cleanup, peerClient.Close)
+	cleanup = append(cleanup, func() error {
+		peerClient.Close()
+		return nil
+	})
 
 	shards, err := openShardSet(shardSetOpenConfig{
 		cfg:              cfg,
@@ -142,7 +145,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return fail(err)
 	}
-	cleanup = append(cleanup, func() { _ = shards.Close() })
+	cleanup = append(cleanup, shards.Close)
 
 	lc := net.ListenConfig{}
 
@@ -150,7 +153,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return fail(fmt.Errorf("listen client %s: %w", cfg.ListenAddr, err))
 	}
-	cleanup = append(cleanup, func() { _ = clientLis.Close() })
+	cleanup = append(cleanup, clientLis.Close)
 
 	clientGS := grpc.NewServer(securityRuntime.publicGRPCOptions...)
 	publicStore := publicStoreForTopology(shards, topology)
@@ -168,7 +171,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return fail(fmt.Errorf("listen peer %s: %w", cfg.PeerAddr, err))
 	}
-	cleanup = append(cleanup, func() { _ = peerLis.Close() })
+	cleanup = append(cleanup, peerLis.Close)
 
 	peerGS := grpc.NewServer(securityRuntime.peerGRPCOptions...)
 	peerSrv := newPeerServer(cfg, shards, securityRuntime, memberIdentity)
@@ -183,7 +186,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithAuditSink(securityRuntime.auditSink),
 		admin.WithRateLimiter(securityRuntime.rateLimiter),
 	}
-	adminOpts = appendShardAdminOptions(adminOpts, cfg, shards, securityRuntime.transit)
+	adminOpts = appendShardAdminOptions(adminOpts, cfg, topology, shards, securityRuntime.transit)
 	if cfg.PprofEnabled {
 		adminOpts = append(adminOpts, admin.WithPprof())
 	}
@@ -211,7 +214,21 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	}, nil
 }
 
-func appendShardAdminOptions(opts []admin.Option, cfg Config, shards *shardSet, transit any) []admin.Option {
+type startupCleanup func() error
+
+func rollbackStartup(err error, cleanup []startupCleanup) error {
+	for i := len(cleanup) - 1; i >= 0; i-- {
+		if cleanupErr := cleanup[i](); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}
+	return err
+}
+
+func appendShardAdminOptions(opts []admin.Option, cfg Config, topology startupTopology, shards *shardSet, transit any) []admin.Option {
+	if !topology.SingleShardFallback {
+		return opts
+	}
 	localShard, ok := shards.singleShard()
 	if !ok {
 		return opts
