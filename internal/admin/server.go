@@ -68,6 +68,7 @@ type Server struct {
 	evictionApplier    EvictionApplier
 	evictionPlanStatus EvictionPlanStatusProvider
 	evictionHealth     EvictionHealthProvider
+	shardDiagnostics   ShardDiagnosticsProvider
 	rewrapService      RewrapService
 	securityMode       security.Mode
 	readiness          security.Readiness
@@ -104,6 +105,12 @@ func WithUploadPressureProvider(provider UploadPressureProvider) Option {
 func WithEvictionHealthProvider(provider EvictionHealthProvider) Option {
 	return func(s *Server) {
 		s.evictionHealth = provider
+	}
+}
+
+func WithShardDiagnosticsProvider(provider ShardDiagnosticsProvider) Option {
+	return func(s *Server) {
+		s.shardDiagnostics = provider
 	}
 }
 
@@ -540,38 +547,39 @@ func (s *Server) handleLightScrubHook(w http.ResponseWriter, r *http.Request) {
 }
 
 type healthResponse struct {
-	Status                  string         `json:"status"`
-	SecurityMode            string         `json:"security_mode,omitempty"`
-	ProductionReadyStatus   string         `json:"production_readiness_status,omitempty"`
-	ProductionReadyReason   string         `json:"production_readiness_reason,omitempty"`
-	AuthorizationStatus     string         `json:"authorization_status,omitempty"`
-	UploadPressure          string         `json:"upload_pressure"`
-	UploadPressureLevel     int            `json:"upload_pressure_level"`
-	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
-	UploadPendingBlocks     int            `json:"upload_pending_blocks"`
-	EvictionPressure        string         `json:"eviction_pressure"`
-	EvictedBlocks           int            `json:"evicted_blocks"`
-	EvictedBytes            int64          `json:"evicted_bytes"`
-	HotCleanupNeededBlocks  int            `json:"hot_cleanup_needed_blocks"`
-	MetadataLossBlocks      int            `json:"metadata_loss_blocks"`
-	UnexpectedLossBlocks    int            `json:"unexpected_loss_blocks"`
-	QuarantinedBlocks       int            `json:"quarantined_blocks"`
-	RestoreFailedBlocks     int            `json:"restore_failed_blocks"`
-	RestoreFailuresByReason map[string]int `json:"restore_failures_by_reason,omitempty"`
-	RewrapStatus            string         `json:"rewrap_status,omitempty"`
-	RewrapLastResult        string         `json:"rewrap_last_result,omitempty"`
-	RewrapLastReason        string         `json:"rewrap_last_reason,omitempty"`
-	RewrapLastTransitMount  string         `json:"rewrap_last_transit_mount,omitempty"`
-	RewrapLastTransitKey    string         `json:"rewrap_last_transit_key,omitempty"`
-	RewrapLastOldVersion    int            `json:"rewrap_last_old_version,omitempty"`
-	RewrapLastNewVersion    int            `json:"rewrap_last_new_version,omitempty"`
-	RewrapLastChanged       bool           `json:"rewrap_last_changed,omitempty"`
-	RewrapLastAt            time.Time      `json:"rewrap_last_at,omitempty"`
-	RewrapFailuresByReason  map[string]int `json:"rewrap_failures_by_reason,omitempty"`
+	Status                  string            `json:"status"`
+	SecurityMode            string            `json:"security_mode,omitempty"`
+	ProductionReadyStatus   string            `json:"production_readiness_status,omitempty"`
+	ProductionReadyReason   string            `json:"production_readiness_reason,omitempty"`
+	AuthorizationStatus     string            `json:"authorization_status,omitempty"`
+	UploadPressure          string            `json:"upload_pressure"`
+	UploadPressureLevel     int               `json:"upload_pressure_level"`
+	UploadPendingBytes      int64             `json:"upload_pending_bytes"`
+	UploadPendingBlocks     int               `json:"upload_pending_blocks"`
+	EvictionPressure        string            `json:"eviction_pressure"`
+	EvictedBlocks           int               `json:"evicted_blocks"`
+	EvictedBytes            int64             `json:"evicted_bytes"`
+	HotCleanupNeededBlocks  int               `json:"hot_cleanup_needed_blocks"`
+	MetadataLossBlocks      int               `json:"metadata_loss_blocks"`
+	UnexpectedLossBlocks    int               `json:"unexpected_loss_blocks"`
+	QuarantinedBlocks       int               `json:"quarantined_blocks"`
+	RestoreFailedBlocks     int               `json:"restore_failed_blocks"`
+	RestoreFailuresByReason map[string]int    `json:"restore_failures_by_reason,omitempty"`
+	ShardDiagnostics        *ShardDiagnostics `json:"shard_diagnostics,omitempty"`
+	RewrapStatus            string            `json:"rewrap_status,omitempty"`
+	RewrapLastResult        string            `json:"rewrap_last_result,omitempty"`
+	RewrapLastReason        string            `json:"rewrap_last_reason,omitempty"`
+	RewrapLastTransitMount  string            `json:"rewrap_last_transit_mount,omitempty"`
+	RewrapLastTransitKey    string            `json:"rewrap_last_transit_key,omitempty"`
+	RewrapLastOldVersion    int               `json:"rewrap_last_old_version,omitempty"`
+	RewrapLastNewVersion    int               `json:"rewrap_last_new_version,omitempty"`
+	RewrapLastChanged       bool              `json:"rewrap_last_changed,omitempty"`
+	RewrapLastAt            time.Time         `json:"rewrap_last_at,omitempty"`
+	RewrapFailuresByReason  map[string]int    `json:"rewrap_failures_by_reason,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r, security.RoleAdminReader) {
+	if !s.authorizeMethod(w, r, security.RoleAdminReader, http.MethodGet) {
 		return
 	}
 
@@ -588,12 +596,36 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.applySecurityHealth(&resp)
 	s.applyUploadPressure(&resp)
 	s.applyEvictionHealth(r.Context(), &resp)
+	s.applyShardDiagnostics(r.Context(), &resp)
 	s.applyRewrapHealth(&resp)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(w, "encode health response failed", http.StatusInternalServerError)
 		return
+	}
+}
+
+func (s *Server) applyShardDiagnostics(ctx context.Context, resp *healthResponse) {
+	if s.shardDiagnostics == nil {
+		return
+	}
+	snapshot, err := s.shardDiagnostics.ShardDiagnosticsSnapshot(ctx)
+	if err != nil {
+		resp.Status = "degraded"
+		resp.ShardDiagnostics = &ShardDiagnostics{
+			Status: ShardDiagnosticsStatusDegraded,
+			Reason: ShardDiagnosticsReasonSnapshotUnavailable,
+		}
+		return
+	}
+	snapshot = cloneShardDiagnostics(snapshot)
+	if snapshot.Status == "" {
+		snapshot.Status = ShardDiagnosticsStatusOK
+	}
+	resp.ShardDiagnostics = &snapshot
+	if snapshot.Status != ShardDiagnosticsStatusOK {
+		resp.Status = "degraded"
 	}
 }
 

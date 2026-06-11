@@ -18,23 +18,53 @@ const (
 )
 
 type Health struct {
-	Status                  string         `json:"status"`
-	SecurityMode            string         `json:"security_mode,omitempty"`
-	ProductionReadyStatus   string         `json:"production_readiness_status,omitempty"`
-	ProductionReadyReason   string         `json:"production_readiness_reason,omitempty"`
-	UploadPressure          string         `json:"upload_pressure"`
-	UploadPressureLevel     int            `json:"upload_pressure_level"`
-	UploadPendingBytes      int64          `json:"upload_pending_bytes"`
-	UploadPendingBlocks     int            `json:"upload_pending_blocks"`
-	EvictionPressure        string         `json:"eviction_pressure"`
-	EvictedBlocks           int            `json:"evicted_blocks"`
-	EvictedBytes            int64          `json:"evicted_bytes"`
-	HotCleanupNeededBlocks  int            `json:"hot_cleanup_needed_blocks"`
-	MetadataLossBlocks      int            `json:"metadata_loss_blocks"`
-	UnexpectedLossBlocks    int            `json:"unexpected_loss_blocks"`
-	QuarantinedBlocks       int            `json:"quarantined_blocks"`
-	RestoreFailedBlocks     int            `json:"restore_failed_blocks"`
-	RestoreFailuresByReason map[string]int `json:"restore_failures_by_reason,omitempty"`
+	Status                  string            `json:"status"`
+	SecurityMode            string            `json:"security_mode,omitempty"`
+	ProductionReadyStatus   string            `json:"production_readiness_status,omitempty"`
+	ProductionReadyReason   string            `json:"production_readiness_reason,omitempty"`
+	UploadPressure          string            `json:"upload_pressure"`
+	UploadPressureLevel     int               `json:"upload_pressure_level"`
+	UploadPendingBytes      int64             `json:"upload_pending_bytes"`
+	UploadPendingBlocks     int               `json:"upload_pending_blocks"`
+	EvictionPressure        string            `json:"eviction_pressure"`
+	EvictedBlocks           int               `json:"evicted_blocks"`
+	EvictedBytes            int64             `json:"evicted_bytes"`
+	HotCleanupNeededBlocks  int               `json:"hot_cleanup_needed_blocks"`
+	MetadataLossBlocks      int               `json:"metadata_loss_blocks"`
+	UnexpectedLossBlocks    int               `json:"unexpected_loss_blocks"`
+	QuarantinedBlocks       int               `json:"quarantined_blocks"`
+	RestoreFailedBlocks     int               `json:"restore_failed_blocks"`
+	RestoreFailuresByReason map[string]int    `json:"restore_failures_by_reason,omitempty"`
+	ShardDiagnostics        *ShardDiagnostics `json:"shard_diagnostics,omitempty"`
+}
+
+type ShardDiagnostics struct {
+	Status         string            `json:"status,omitempty"`
+	Reason         string            `json:"reason,omitempty"`
+	CellID         string            `json:"cell_id,omitempty"`
+	MemberHostname string            `json:"member_hostname,omitempty"`
+	MemberID       string            `json:"member_id,omitempty"`
+	Shards         []ShardDiagnostic `json:"shards,omitempty"`
+}
+
+type ShardDiagnostic struct {
+	ShardID             uint64   `json:"shard_id"`
+	Membership          string   `json:"membership,omitempty"`
+	Routes              []string `json:"routes,omitempty"`
+	State               string   `json:"state,omitempty"`
+	Health              string   `json:"health,omitempty"`
+	Readiness           string   `json:"readiness,omitempty"`
+	IsLeader            bool     `json:"is_leader"`
+	LeaderID            uint64   `json:"leader_id,omitempty"`
+	PeerCount           int      `json:"peer_count"`
+	PeerHealth          string   `json:"peer_health,omitempty"`
+	UploadPressure      string   `json:"upload_pressure,omitempty"`
+	UploadPressureLevel int      `json:"upload_pressure_level,omitempty"`
+	UploadPendingBytes  int64    `json:"upload_pending_bytes,omitempty"`
+	UploadPendingBlocks int      `json:"upload_pending_blocks,omitempty"`
+	EvictionPressure    string   `json:"eviction_pressure,omitempty"`
+	RestoreFailedBlocks int      `json:"restore_failed_blocks,omitempty"`
+	FailureReason       string   `json:"failure_reason,omitempty"`
 }
 
 type Peer struct {
@@ -263,6 +293,9 @@ func metricNameAndValue(line string) (string, string, bool) {
 func writeByFormat(stdout io.Writer, output string, value any) error {
 	if output == "json" {
 		return writeJSON(stdout, value)
+	}
+	if health, ok := value.(Health); ok {
+		return writeHealthText(stdout, health)
 	}
 	_, err := fmt.Fprintf(stdout, "%+v\n", value)
 	if err != nil {

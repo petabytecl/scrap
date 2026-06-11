@@ -184,6 +184,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		admin.WithLogger(logger),
 		admin.WithSecurityStatus(cfg.SecurityMode, security.ProductionReadinessForMode(cfg.SecurityMode)),
 		admin.WithMetrics(telemetryRuntime.metricsHandler),
+		admin.WithShardDiagnosticsProvider(newAppShardDiagnosticsProvider(cfg, memberIdentity, topology, shards, peers)),
 		admin.WithAuthorizer(securityRuntime.authorizer),
 		admin.WithAuditSink(securityRuntime.auditSink),
 		admin.WithRateLimiter(securityRuntime.rateLimiter),

@@ -4,7 +4,7 @@ baseline_commit: 1abc429d1c51d2ac18c3c4184f5fd2e2ca0ba66f
 
 # Story 2.5: Shard-Aware Admin and `scrapctl` Diagnostics
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -30,38 +30,38 @@ so that I can diagnose routing, leadership, peers, and health per Shard.
 
 ## Tasks / Subtasks
 
-- [ ] Add a read-only Shard diagnostics snapshot boundary. (AC: 1, 3)
-  - [ ] Prefer a narrow provider interface consumed by `internal/admin` and implemented in `internal/cmd` over importing `internal/shard` into `internal/admin` or `internal/scrapctl`.
-  - [ ] Include bounded Cell/Member fields (`cell_id`, `member_hostname`, `member_id`) and per-Shard entries with `shard_id`, local/remote membership, route ranges, health/readiness, leader state, leader ID, peer count or bounded peer health, upload pressure, eviction/restore health, and bounded failure reason fields where available.
-  - [ ] Reuse existing `startupTopology`, `routing.Placement.RouteMapSummary`, `shardSet.StartupStatus`, and Shard read-only methods (`CheckReadiness`, `IsLeader`, `LeaderID`, `UploadPressureSnapshot`, `EvictionHealthSnapshot`) where they fit; do not duplicate route-map or leadership logic.
-  - [ ] Keep the snapshot read-only against Shard authority: no Raft proposals, no public Store calls, no peer RPCs, no rebuild/scrub trigger, no eviction plan/apply call, no rewrap call, no Backend list/probe, and no local Block/openlog/Pebble writes.
-  - [ ] Sort Shard diagnostics by Shard ID and copy slices/maps before storing them in long-lived structs or returning them from providers.
-- [ ] Extend admin HTTP status without changing public or peer wire contracts. (AC: 1, 3, 4)
-  - [ ] Extend `/healthz` or add a clearly named read-only admin status endpoint only if `/healthz` becomes too broad. Prefer preserving `scrapctl status` compatibility by extending the existing JSON shape with optional Shard diagnostics.
-  - [ ] Protect new admin diagnostics with the existing admin `admin_reader` authorization, audit, and rate-limit path. Do not create an unauthenticated debug endpoint.
-  - [ ] In production/test security modes, prove missing client auth, missing `admin_reader`, missing TLS material, or HTTP URLs fail closed through the existing security/TLS path and do not fall back to development behavior.
-  - [ ] Make diagnostic provider failure bounded: mark the affected Shard or aggregate status degraded with a low-cardinality reason instead of returning raw dependency errors, local paths, peer addresses, or certificate details.
-- [ ] Update `scrapctl` diagnostics rendering. (AC: 2, 3, 4)
-  - [ ] Extend `internal/scrapctl.Health` or introduce a focused diagnostics type that mirrors the admin JSON and preserves existing `status`, `upload-pressure`, `leader`, and `peers` command behavior unless explicitly superseded by Shard-aware data.
-  - [ ] For `scrapctl status --output=json`, include Shard diagnostics in machine-readable form without renaming Cell, Member, Shard, Transaction, Document, Block, Backend, or peer terms.
-  - [ ] For text output, avoid the current `%+v` dump if it becomes unreadable; render stable line-oriented fields that include Cell, Member, Shard, route, leader, peer, health, and pressure labels.
-  - [ ] Keep `scrapctl` a client/operator path only. It must call admin HTTP or Kubernetes/metrics paths already owned by the CLI; it must not import `internal/shard`, read Shard data directories, inspect Backend keys, or become a storage authority.
-  - [ ] Preserve `scrapctlTLSRequired`: production mode must require HTTPS plus client TLS configuration for admin/public HTTP calls.
-- [ ] Add redaction and side-effect evidence. (AC: 1, 3)
-  - [ ] Capture admin JSON, CLI JSON, CLI text, audit denial output, and representative error strings with distinctive forbidden fixtures.
-  - [ ] Leak-scan outputs for raw `transaction_id`, `document_name`, idempotency keys, Backend keys, local filesystem paths, sensitive peer addresses, certificate/key material, Transit tokens, raw principal IDs, request IDs, trace IDs, and unbounded dependency errors.
-  - [ ] Add test doubles proving status requests do not call write-like methods, Raft proposal paths, rebuild/scrub triggers, eviction apply/plan operations, rewrap operations, Backend inventory/listing, or Block writer/file operations.
-  - [ ] Shard IDs, route ranges, bounded member labels, leader IDs, pressure levels, readiness states, and low-cardinality failure reasons are acceptable evidence fields.
-- [ ] Keep scope narrow and preserve current contracts. (AC: 1-4)
-  - [ ] Do not change `proto/`, `gen/`, public `DocumentService`, peer `PeerService`, storage format, Block/Frame layout, Backend object identity, Raft command shape, tenant identity, Shard rebalancing, slot transfer, upload/restore behavior, Content Quarantine, or release-closure evidence.
-  - [ ] Do not move routing ownership out of `internal/routing`; admin and CLI should consume route metadata from composition/snapshot boundaries.
-  - [ ] Do not broaden `internal/admin` or `internal/scrapctl` imports into Shard internals. `internal/cmd` remains the composition owner that can adapt Shards to narrow status interfaces.
-  - [ ] Do not treat metrics-only leader output as sufficient per-Shard status if admin can already supply an authoritative per-Shard snapshot.
-- [ ] Add focused tests and verification. (AC: 1-4)
-  - [ ] Add `internal/admin` tests for Shard diagnostics JSON, GET-only/read-only behavior, bounded degraded provider failures, redaction, and production auth/rate-limit/audit gating.
-  - [ ] Add `internal/scrapctl` tests for `status --output=json`, text rendering, terminology preservation, TLS production fail-closed behavior, and redaction.
-  - [ ] Add `internal/cmd` tests proving `newApp` wires Shard diagnostics for explicit multi-Shard topology and preserves existing single-Shard fallback behavior.
-  - [ ] Record verification in this story before review: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd`, `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`, `env GOCACHE=/tmp/scrap-v2-go-build make check`, and an explicit leak-scan command over captured evidence or changed files.
+- [x] Add a read-only Shard diagnostics snapshot boundary. (AC: 1, 3)
+  - [x] Prefer a narrow provider interface consumed by `internal/admin` and implemented in `internal/cmd` over importing `internal/shard` into `internal/admin` or `internal/scrapctl`.
+  - [x] Include bounded Cell/Member fields (`cell_id`, `member_hostname`, `member_id`) and per-Shard entries with `shard_id`, local/remote membership, route ranges, health/readiness, leader state, leader ID, peer count or bounded peer health, upload pressure, eviction/restore health, and bounded failure reason fields where available.
+  - [x] Reuse existing `startupTopology`, `routing.Placement.RouteMapSummary`, `shardSet.StartupStatus`, and Shard read-only methods (`CheckReadiness`, `IsLeader`, `LeaderID`, `UploadPressureSnapshot`, `EvictionHealthSnapshot`) where they fit; do not duplicate route-map or leadership logic.
+  - [x] Keep the snapshot read-only against Shard authority: no Raft proposals, no public Store calls, no peer RPCs, no rebuild/scrub trigger, no eviction plan/apply call, no rewrap call, no Backend list/probe, and no local Block/openlog/Pebble writes.
+  - [x] Sort Shard diagnostics by Shard ID and copy slices/maps before storing them in long-lived structs or returning them from providers.
+- [x] Extend admin HTTP status without changing public or peer wire contracts. (AC: 1, 3, 4)
+  - [x] Extend `/healthz` or add a clearly named read-only admin status endpoint only if `/healthz` becomes too broad. Prefer preserving `scrapctl status` compatibility by extending the existing JSON shape with optional Shard diagnostics.
+  - [x] Protect new admin diagnostics with the existing admin `admin_reader` authorization, audit, and rate-limit path. Do not create an unauthenticated debug endpoint.
+  - [x] In production/test security modes, prove missing client auth, missing `admin_reader`, missing TLS material, or HTTP URLs fail closed through the existing security/TLS path and do not fall back to development behavior.
+  - [x] Make diagnostic provider failure bounded: mark the affected Shard or aggregate status degraded with a low-cardinality reason instead of returning raw dependency errors, local paths, peer addresses, or certificate details.
+- [x] Update `scrapctl` diagnostics rendering. (AC: 2, 3, 4)
+  - [x] Extend `internal/scrapctl.Health` or introduce a focused diagnostics type that mirrors the admin JSON and preserves existing `status`, `upload-pressure`, `leader`, and `peers` command behavior unless explicitly superseded by Shard-aware data.
+  - [x] For `scrapctl status --output=json`, include Shard diagnostics in machine-readable form without renaming Cell, Member, Shard, Transaction, Document, Block, Backend, or peer terms.
+  - [x] For text output, avoid the current `%+v` dump if it becomes unreadable; render stable line-oriented fields that include Cell, Member, Shard, route, leader, peer, health, and pressure labels.
+  - [x] Keep `scrapctl` a client/operator path only. It must call admin HTTP or Kubernetes/metrics paths already owned by the CLI; it must not import `internal/shard`, read Shard data directories, inspect Backend keys, or become a storage authority.
+  - [x] Preserve `scrapctlTLSRequired`: production mode must require HTTPS plus client TLS configuration for admin/public HTTP calls.
+- [x] Add redaction and side-effect evidence. (AC: 1, 3)
+  - [x] Capture admin JSON, CLI JSON, CLI text, audit denial output, and representative error strings with distinctive forbidden fixtures.
+  - [x] Leak-scan outputs for raw `transaction_id`, `document_name`, idempotency keys, Backend keys, local filesystem paths, sensitive peer addresses, certificate/key material, Transit tokens, raw principal IDs, request IDs, trace IDs, and unbounded dependency errors.
+  - [x] Add test doubles proving status requests do not call write-like methods, Raft proposal paths, rebuild/scrub triggers, eviction apply/plan operations, rewrap operations, Backend inventory/listing, or Block writer/file operations.
+  - [x] Shard IDs, route ranges, bounded member labels, leader IDs, pressure levels, readiness states, and low-cardinality failure reasons are acceptable evidence fields.
+- [x] Keep scope narrow and preserve current contracts. (AC: 1-4)
+  - [x] Do not change `proto/`, `gen/`, public `DocumentService`, peer `PeerService`, storage format, Block/Frame layout, Backend object identity, Raft command shape, tenant identity, Shard rebalancing, slot transfer, upload/restore behavior, Content Quarantine, or release-closure evidence.
+  - [x] Do not move routing ownership out of `internal/routing`; admin and CLI should consume route metadata from composition/snapshot boundaries.
+  - [x] Do not broaden `internal/admin` or `internal/scrapctl` imports into Shard internals. `internal/cmd` remains the composition owner that can adapt Shards to narrow status interfaces.
+  - [x] Do not treat metrics-only leader output as sufficient per-Shard status if admin can already supply an authoritative per-Shard snapshot.
+- [x] Add focused tests and verification. (AC: 1-4)
+  - [x] Add `internal/admin` tests for Shard diagnostics JSON, GET-only/read-only behavior, bounded degraded provider failures, redaction, and production auth/rate-limit/audit gating.
+  - [x] Add `internal/scrapctl` tests for `status --output=json`, text rendering, terminology preservation, TLS production fail-closed behavior, and redaction.
+  - [x] Add `internal/cmd` tests proving `newApp` wires Shard diagnostics for explicit multi-Shard topology and preserves existing single-Shard fallback behavior.
+  - [x] Record verification in this story before review: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd`, `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`, `env GOCACHE=/tmp/scrap-v2-go-build make check`, and an explicit leak-scan command over captured evidence or changed files.
 
 ## Dev Notes
 
@@ -155,16 +155,40 @@ GPT-5 Codex
 - RESEARCH: `gh search code "shard status admin health language:Go" --limit 5` returned unrelated cluster/admin status implementations.
 - RESEARCH: `gh search code "scrapctl status language:Go" --limit 5` returned old `petabytecl/scrap` v1-era CLI code, not a V2 implementation to reuse.
 - RESEARCH: Exa official Go `net/http` docs lookup confirmed the existing context-bound `http.Client` pattern remains the right no-dependency fit.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd` failed with missing `admin.ShardDiagnostics`, `admin.WithShardDiagnosticsProvider`, dropped CLI `shard_diagnostics`, raw struct text output, and missing app-level `shard_diagnostics`.
+- GREEN: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd` passed after adding the admin provider, cmd adapter, and CLI rendering.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
+- LINT: `env GOCACHE=/tmp/scrap-v2-go-build make check` initially failed on test cyclomatic complexity and CLI text-renderer cognitive complexity; split helpers and reran.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd` passed after lint refactor.
+- PASS: `git diff --check` passed.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed, including lint, `go test ./...`, race tests, integration-tag tests, and `scrapd`/`scrapctl` builds.
+- PASS: Production-code leak scan had no matches for distinctive forbidden fixtures, local paths, Backend key markers, and private-key header markers.
+- PASS: Secret-pattern scan over changed story/source/test files had no matches.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- Added admin Shard diagnostics provider types and extended `/healthz` with optional `shard_diagnostics` while making the endpoint GET-only.
+- Added `internal/cmd` Shard diagnostics adapter that combines validated topology, Cell/Member identity, route ranges, local Shard readiness, leader state, peer count, upload pressure, and eviction/restore health without public Store calls, peer RPCs, Raft proposals, Backend probes, or storage writes.
+- Extended `scrapctl status` JSON and text output to preserve Cell, Member, and Shard terminology and render bounded Shard diagnostics.
+- Added admin, `scrapctl`, and app-level tests for JSON shape, text rendering, GET-only behavior, provider failure redaction, TLS production fail-closed coverage, app wiring, and address/path leak prevention.
+- Preserved scope: no proto/generated files, public/peer wire contracts, storage format, Backend identity, routing ownership, or Shard authority behavior changed.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-5-shard-aware-admin-and-scrapctl-diagnostics.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/admin/server.go`
+- `internal/admin/shard_diagnostics.go`
+- `internal/admin/shard_diagnostics_test.go`
+- `internal/cmd/app.go`
+- `internal/cmd/shard_diagnostics.go`
+- `internal/cmd/shard_diagnostics_test.go`
+- `internal/scrapctl/output.go`
+- `internal/scrapctl/status.go`
+- `internal/scrapctl/status_shard_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 2.5 Shard-aware admin and `scrapctl` diagnostics context and moved status to ready-for-dev.
+- 2026-06-11: Implemented Story 2.5 Shard-aware admin and `scrapctl` diagnostics and moved status to review.
