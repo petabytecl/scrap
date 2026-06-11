@@ -4,7 +4,7 @@ baseline_commit: d970de3d0bbec6b6ec260d94e3722774bc3995e4
 
 # Story 2.2: Multi-Shard Cell Startup Composition
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -63,6 +63,16 @@ so that one Cell can run the required V2 multi-Shard topology.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/routing ./internal/peer`.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before moving the story to review.
+
+### Review Findings
+
+- [ ] [Review][Patch] Remove raw addresses and `data_dir` from multi-Shard startup evidence/logs [internal/cmd/app.go:428]
+- [ ] [Review][Patch] Allow production Members that host one local Shard when the placement configures multiple Shards [internal/cmd/routing_config.go:85]
+- [ ] [Review][Patch] Move and strengthen local Shard data-directory collision validation before Backend setup, including symlink/real-path collisions [internal/cmd/shard_set.go:162]
+- [ ] [Review][Patch] Include bounded closed/failure categories in startup Shard status instead of only successful `open`/`not_local` states [internal/cmd/shard_set.go:76]
+- [ ] [Review][Patch] Add per-Shard metric attributes or an aggregate provider so multi-Shard metrics are not indistinguishable under `scrap.shard_id=multi` [internal/cmd/shard_set.go:151]
+- [ ] [Review][Patch] Preserve close errors when partial Shard startup cleanup fails [internal/cmd/shard_set.go:103]
+- [ ] [Review][Patch] Exercise fail-closed public Store methods in tests so `shard_routing_pending` behavior is proven [internal/cmd/app_test.go:88]
 
 ## Dev Notes
 
