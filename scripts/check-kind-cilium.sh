@@ -48,6 +48,8 @@ require_file "$PRODLIKE_OVERLAY/kustomization.yaml" "prod-like Kustomize overlay
 require_file "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like StatefulSet patch"
 require_file "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E Kustomize overlay"
 require_file "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "prod-like E2E StatefulSet patch"
+require_file "$PRODLIKE_E2E_OVERLAY/statefulset-shard-placement-patch.yaml" "prod-like E2E Shard placement StatefulSet patch"
+require_file "$PRODLIKE_E2E_OVERLAY/shard-placement.json" "prod-like E2E Shard placement file"
 require_file "$CILIUM_VALUES" "prod-like Cilium Helm values"
 require_file "$CILIUM_CHART_DIR/Chart.yaml" "vendored Cilium chart"
 require_file "$CILIUM_SCRIPT" "prod-like Cilium helper script"
@@ -78,6 +80,8 @@ require 'SCRAP_LIGHT_SCRUB_INTERVAL' "$PRODLIKE_OVERLAY/statefulset-prodlike-pat
 reject 'SCRAP_TEST_HOOKS' "$PRODLIKE_OVERLAY/statefulset-prodlike-patch.yaml" "prod-like test hooks"
 require '../prodlike' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E environment reuse"
 require 'SCRAP_TEST_HOOKS' "$PRODLIKE_E2E_OVERLAY/statefulset-test-hooks-patch.yaml" "prod-like E2E test hooks"
+require 'scrap-shard-placement' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E Shard placement generator"
+require 'SCRAP_SHARD_PLACEMENT_FILE' "$PRODLIKE_E2E_OVERLAY/statefulset-shard-placement-patch.yaml" "prod-like E2E Shard placement env"
 
 require '^kubeProxyReplacement:[[:space:]]*true' "$CILIUM_VALUES" "Cilium kube-proxy replacement"
 require 'mode:[[:space:]]*kubernetes' "$CILIUM_VALUES" "Kubernetes IPAM mode"

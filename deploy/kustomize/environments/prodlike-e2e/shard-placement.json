@@ -1,0 +1,17 @@
+{
+  "slot_count": 1024,
+  "shards": [7, 9],
+  "local_shards": [7, 9],
+  "ranges": [
+    {
+      "shard_id": 7,
+      "start_slot": 0,
+      "end_slot": 511
+    },
+    {
+      "shard_id": 9,
+      "start_slot": 512,
+      "end_slot": 1023
+    }
+  ]
+}

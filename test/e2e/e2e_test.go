@@ -162,7 +162,7 @@ func retryableE2EStatus(err error) bool {
 	case codes.ResourceExhausted:
 		return !isUploadPressureError(err)
 	case codes.DataLoss:
-		return transientProjectionCatchupError(err)
+		return transientProjectionCatchupError(err) || transientBlockCatchupError(err)
 	default:
 		return false
 	}
@@ -174,6 +174,12 @@ func transientProjectionCatchupError(err error) bool {
 		(strings.Contains(msg, "no such file or directory") ||
 			strings.Contains(msg, "not open") ||
 			strings.Contains(msg, "missing from block"))
+}
+
+func transientBlockCatchupError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "block: read stored frame") &&
+		strings.Contains(msg, "block: read frame header: EOF")
 }
 
 func waitBeforeRetry(ctx context.Context, attempt int) {
@@ -230,7 +236,7 @@ func TestE2ELeaderFailover(t *testing.T) {
 
 	leader := findLeaderPod(t, txID, "doc.xml")
 	deletePodAndWaitReady(t, leader)
-	waitForCellWriteQuorum(t)
+	waitForCellWriteQuorumForTransaction(t, txID)
 
 	headResp := headDocE2E(t, client, txID, "doc.xml")
 	if headResp.GetSize() != int64(len(content)) {
@@ -242,10 +248,20 @@ func TestE2ELeaderFailover(t *testing.T) {
 	}
 }
 
-func waitForCellWriteQuorum(t *testing.T) {
+func waitForCellWriteQuorumForTransaction(t *testing.T, txID string) {
+	t.Helper()
+	placement := e2eTwoShardPlacement(t)
+	route, err := placement.Lookup(txID)
+	if err != nil {
+		t.Fatalf("lookup quorum route: %v", err)
+	}
+	quorumTxID := e2eTransactionForShard(t, placement, "tx-e2e-quorum", route.ShardID)
+	waitForCellWriteQuorumWithTransaction(t, quorumTxID)
+}
+
+func waitForCellWriteQuorumWithTransaction(t *testing.T, txID string) {
 	t.Helper()
 	client := connect(t)
-	txID := uniqueName("tx-e2e-quorum")
 	if _, err := tryWriteDocE2E(t, client, txID, "ready.xml", "text/xml", []byte("ready")); err != nil {
 		t.Fatalf("cell did not accept canary write after leader replacement: %v", err)
 	}

@@ -12,6 +12,8 @@ import (
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/peer"
+	"github.com/petabytecl/scrap/internal/rewrap"
+	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
@@ -229,34 +231,161 @@ func rollbackStartup(err error, cleanup []startupCleanup) error {
 }
 
 func appendShardAdminOptions(opts []admin.Option, cfg Config, topology startupTopology, shards *shardSet, transit any) []admin.Option {
-	if !topology.SingleShardFallback {
-		return opts
+	adapter := appShardSetAdminAdapter{topology: topology, shards: shards}
+	if topology.SingleShardFallback {
+		if localShard, ok := shards.singleShard(); ok {
+			opts = append(opts,
+				admin.WithUploadPressureProvider(localShard),
+				admin.WithEvictionPlanner(localShard),
+				admin.WithEvictionApplier(localShard),
+				admin.WithEvictionPlanStatusProvider(localShard),
+				admin.WithEvictionHealthProvider(localShard),
+				admin.WithRewrapService(localShard),
+			)
+		}
+	} else {
+		opts = append(opts,
+			admin.WithUploadPressureProvider(adapter),
+			admin.WithRewrapService(adapter),
+		)
 	}
-	localShard, ok := shards.singleShard()
-	if !ok {
-		return opts
-	}
-	opts = append(opts,
-		admin.WithUploadPressureProvider(localShard),
-		admin.WithEvictionPlanner(localShard),
-		admin.WithEvictionApplier(localShard),
-		admin.WithEvictionPlanStatusProvider(localShard),
-		admin.WithEvictionHealthProvider(localShard),
-		admin.WithRewrapService(localShard),
-	)
-	return appendTestHookAdminOptions(opts, cfg, localShard, transit)
+	return appendTestHookAdminOptions(opts, cfg, adapter, transit)
 }
 
-func appendTestHookAdminOptions(opts []admin.Option, cfg Config, localShard *shard.Shard, transit any) []admin.Option {
+func appendTestHookAdminOptions(opts []admin.Option, cfg Config, adapter appShardSetAdminAdapter, transit any) []admin.Option {
 	if !cfg.TestHooks {
 		return opts
 	}
-	opts = append(opts, admin.WithProjectionInjector(localShard))
-	opts = append(opts, admin.WithLightScrubber(localShard))
+	opts = append(opts, admin.WithProjectionInjector(adapter))
+	opts = append(opts, admin.WithLightScrubber(adapter))
 	if rotator, ok := transit.(interface{ Rotate() }); ok {
 		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
 	}
 	return opts
+}
+
+type appShardSetAdminAdapter struct {
+	topology startupTopology
+	shards   *shardSet
+}
+
+func (a appShardSetAdminAdapter) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
+	levelName = shard.UploadPressureLevelOK.String()
+	for _, shardID := range a.shards.IDs() {
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			continue
+		}
+		shardLevel, shardLevelName, shardPendingBytes, shardPendingBlocks := localShard.UploadPressureSnapshot()
+		pendingBytes += shardPendingBytes
+		pendingBlocks += shardPendingBlocks
+		if shardLevel > level {
+			level = shardLevel
+			levelName = shardLevelName
+		}
+	}
+	return level, levelName, pendingBytes, pendingBlocks
+}
+
+func (a appShardSetAdminAdapter) RewrapDocument(ctx context.Context, req rewrap.Request) (rewrap.Result, error) {
+	result := rewrap.Result{
+		Status:        rewrap.StatusFailed,
+		Reason:        rewrap.ReasonInvalidRequest,
+		TransactionID: req.TransactionID,
+		DocumentName:  req.DocumentName,
+	}
+	if req.TransactionID == "" {
+		return result, fmt.Errorf("%w: transaction_id is required", rewrap.ErrInvalidRequest)
+	}
+	route, err := a.topology.Placement.Lookup(req.TransactionID)
+	if err != nil {
+		return result, fmt.Errorf("%w: route Transaction", rewrap.ErrInvalidRequest)
+	}
+	localShard, ok := a.localShard(route.ShardID)
+	if !ok {
+		result.Reason = rewrap.ReasonInternalError
+		return result, storeapi.NewUnavailable(storeapi.UnavailableReasonShardRouteUnavailable, "Shard route unavailable")
+	}
+	return localShard.RewrapDocument(ctx, req)
+}
+
+func (a appShardSetAdminAdapter) RewrapHealthSnapshot() rewrap.HealthSnapshot {
+	snapshot := rewrap.HealthSnapshot{Status: rewrap.StatusOK}
+	failures := map[string]int{}
+	for _, shardID := range a.shards.IDs() {
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			failures["shard_unavailable"]++
+			continue
+		}
+		snapshot = mergeRewrapHealthSnapshot(snapshot, localShard.RewrapHealthSnapshot(), failures)
+	}
+	if len(failures) > 0 {
+		snapshot.FailuresByReason = failures
+		if snapshot.Status == "" || snapshot.Status == rewrap.StatusOK {
+			snapshot.Status = rewrap.StatusDegraded
+		}
+	}
+	if snapshot.Status == "" {
+		snapshot.Status = rewrap.StatusOK
+	}
+	return snapshot
+}
+
+func mergeRewrapHealthSnapshot(current, next rewrap.HealthSnapshot, failures map[string]int) rewrap.HealthSnapshot {
+	for reason, count := range next.FailuresByReason {
+		failures[reason] += count
+	}
+	if next.Status != "" && next.Status != rewrap.StatusOK {
+		current.Status = next.Status
+	}
+	if current.LastAt.IsZero() || next.LastAt.After(current.LastAt) {
+		current.LastResult = next.LastResult
+		current.LastReason = next.LastReason
+		current.LastTransitMount = next.LastTransitMount
+		current.LastTransitKey = next.LastTransitKey
+		current.LastOldVersion = next.LastOldVersion
+		current.LastNewVersion = next.LastNewVersion
+		current.LastChanged = next.LastChanged
+		current.LastAt = next.LastAt
+	}
+	return current
+}
+
+func (a appShardSetAdminAdapter) InjectProjectionKey(ctx context.Context, txID string, blockID uint64, docCount uint16, completed bool) error {
+	route, err := a.topology.Placement.Lookup(txID)
+	if err != nil {
+		return fmt.Errorf("route test hook Transaction: %w", err)
+	}
+	localShard, ok := a.localShard(route.ShardID)
+	if !ok {
+		return fmt.Errorf("shard %d is not local", route.ShardID)
+	}
+	if err := localShard.InjectProjectionKey(ctx, txID, blockID, docCount, completed); err != nil {
+		return fmt.Errorf("shard %d projection injection: %w", route.ShardID, err)
+	}
+	return nil
+}
+
+func (a appShardSetAdminAdapter) RunLightScrub(ctx context.Context) error {
+	for _, shardID := range a.shards.IDs() {
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			return fmt.Errorf("shard %d is not local", shardID)
+		}
+		if err := localShard.RunLightScrub(ctx); err != nil {
+			return fmt.Errorf("shard %d light scrub: %w", shardID, err)
+		}
+	}
+	return nil
+}
+
+func (a appShardSetAdminAdapter) localShard(shardID uint64) (*shard.Shard, bool) {
+	if a.shards == nil {
+		return nil, false
+	}
+	localShard, ok := a.shards.shards[shardID]
+	return localShard, ok && localShard != nil
 }
 
 type appTransitRotator struct {
@@ -293,6 +422,8 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 				peer.WithRebuildHandler(localShard),
 			)
 		}
+	} else {
+		peerOpts = append(peerOpts, peer.WithScrubCache(appShardSetScrubCache{shards: shards}))
 	}
 	if securityRuntime.authorizer != nil {
 		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{
@@ -311,6 +442,24 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 		peerOpts = append(peerOpts, peer.WithAuthorizationObserver(securityRuntime.authorizationObserver))
 	}
 	return peer.NewServer(cfg.DataDir+"/blocks", peerOpts...)
+}
+
+type appShardSetScrubCache struct {
+	shards *shardSet
+}
+
+func (c appShardSetScrubCache) GetScrubResult(scrubID string) (scrub.Result, bool) {
+	for _, shardID := range c.shards.IDs() {
+		localShard, ok := c.shards.shards[shardID]
+		if !ok || localShard == nil {
+			continue
+		}
+		result, ok := localShard.GetScrubResult(scrubID)
+		if ok {
+			return result, true
+		}
+	}
+	return scrub.Result{}, false
 }
 
 func logIdentifierMode(ctx context.Context, logger *slog.Logger, cfg Config, identifierMode telemetry.IdentifierMode) {

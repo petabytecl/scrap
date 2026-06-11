@@ -159,6 +159,13 @@ func deletePodAndWaitReady(t *testing.T, pod string) {
 	runKubectl(t, 3*time.Minute, "-n", namespace(), "rollout", "status", "statefulset/scrapd", "--timeout=180s")
 }
 
+func rolloutRestartScrapdAndWaitReady(t *testing.T) {
+	t.Helper()
+	runKubectl(t, 3*time.Minute, "-n", namespace(), "rollout", "restart", "statefulset/scrapd")
+	runKubectl(t, 3*time.Minute, "-n", namespace(), "rollout", "status", "statefulset/scrapd", "--timeout=180s")
+	runKubectl(t, 2*time.Minute, "-n", namespace(), "wait", "--for=condition=Ready", "pod", "-l", "app=scrap", "--timeout=120s")
+}
+
 func waitForReplacementPodReady(t *testing.T, pod, oldUID string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

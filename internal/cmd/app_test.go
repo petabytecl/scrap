@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -101,7 +102,7 @@ func TestNewAppBuildsTwoShardTopology(t *testing.T) {
 	}
 }
 
-func TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *testing.T) {
+func TestNewAppLeavesSingleShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *testing.T) {
 	cfg := testAppConfig(t)
 	cfg.TestHooks = true
 	cfg.ShardPlacementFile = writePlacementFile(t, `{
@@ -126,8 +127,6 @@ func TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *t
 
 	for _, req := range []*http.Request{
 		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/eviction/plans", strings.NewReader(`{}`)),
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/rewrap/document", strings.NewReader(`{}`)),
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test-hooks/projection-key", strings.NewReader(`{}`)),
 	} {
 		rec := httptest.NewRecorder()
 		app.adminSrv.Handler().ServeHTTP(rec, req)
@@ -136,8 +135,69 @@ func TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *t
 		}
 	}
 
+	assertAdminPostStatus(t, app, "/admin/rewrap/document", `{}`, http.StatusBadRequest)
+	assertAdminPostStatus(t, app, "/test-hooks/projection-key", `{}`, http.StatusBadRequest)
+	assertAppHealthUploadPressure(t, app, "ok", 0)
+
 	_, err = app.publicStore.HeadDocument(context.Background(), "tx-bravo", "doc-b")
 	assertUnavailableReason(t, err, storeapi.UnavailableReasonShardRouteUnavailable)
+}
+
+func TestNewAppRegistersMultiShardTestHooks(t *testing.T) {
+	cfg := testAppConfig(t)
+	cfg.TestHooks = true
+	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t)
+
+	app, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+	if err != nil {
+		t.Fatalf("newApp: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	})
+
+	assertAdminPostStatus(t, app, "/test-hooks/light-scrub", `{}`, http.StatusNoContent)
+	assertAdminPostStatus(t, app, "/test-hooks/transit-rotate", `{}`, http.StatusNoContent)
+	assertAdminPostStatus(t, app, "/test-hooks/projection-key", `{
+		"transaction_id": "tx-multishard-hook",
+		"block_id": 1,
+		"doc_count": 1,
+		"completed": true
+	}`, http.StatusNoContent)
+	assertAdminPostStatus(t, app, "/admin/rewrap/document", `{}`, http.StatusBadRequest)
+	assertAppHealthUploadPressure(t, app, "ok", 0)
+}
+
+func assertAdminPostStatus(t *testing.T, app *App, path, body string, want int) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(body))
+	app.adminSrv.Handler().ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("POST %s status = %d, want %d", path, rec.Code, want)
+	}
+}
+
+func assertAppHealthUploadPressure(t *testing.T, app *App, wantPressure string, wantLevel int) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil)
+	app.adminSrv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /healthz status = %d, want 200", rec.Code)
+	}
+	var health struct {
+		UploadPressure      string `json:"upload_pressure"`
+		UploadPressureLevel int    `json:"upload_pressure_level"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&health); err != nil {
+		t.Fatalf("decode /healthz: %v", err)
+	}
+	if health.UploadPressure != wantPressure || health.UploadPressureLevel != wantLevel {
+		t.Fatalf("upload pressure = %q/%d, want %q/%d", health.UploadPressure, health.UploadPressureLevel, wantPressure, wantLevel)
+	}
 }
 
 func TestNewAppPeerServerAuthorizesOnlyValidatedLocalShards(t *testing.T) {
@@ -207,8 +267,8 @@ func assertAppPeerNoShardRPCsFailClosed(ctx context.Context, t *testing.T, app *
 	if _, err := app.peerSrv.RequestIndexRebuild(ctx, &scrapv1.RequestIndexRebuildRequest{}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("RequestIndexRebuild in multi-Shard placement = %v (%s), want failed precondition", err, status.Code(err))
 	}
-	if _, err := app.peerSrv.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{ScrubId: "scrub-secret"}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("ConsistencyCheck in multi-Shard placement = %v (%s), want failed precondition", err, status.Code(err))
+	if _, err := app.peerSrv.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{ScrubId: "scrub-secret"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("ConsistencyCheck in multi-Shard placement = %v (%s), want not found", err, status.Code(err))
 	}
 }
 

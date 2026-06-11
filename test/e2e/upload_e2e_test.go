@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/routing"
 )
 
 const (
@@ -98,11 +102,13 @@ func TestE2EBackendUploadAdmissionPressure(t *testing.T) {
 	t.Cleanup(func() { restoreLocalStack(t) })
 
 	client := connect(t)
+	const pressureShardID uint64 = 7
+	placement := e2eTwoShardPlacement(t)
 	lastTxID := ""
 	lastDocName := ""
 	rejected := false
 	for i := range 6 {
-		txID := uniqueName(fmt.Sprintf("tx-e2e-upload-pressure-%d", i))
+		txID := e2eTransactionForShard(t, placement, fmt.Sprintf("tx-e2e-upload-pressure-%d", i), pressureShardID)
 		docName, err := tryWriteUploadBlockE2E(t, client, txID, fmt.Sprintf("pressure-%d", i), byte('a'+i))
 		if isUploadPressureError(err) {
 			rejected = true
@@ -115,7 +121,8 @@ func TestE2EBackendUploadAdmissionPressure(t *testing.T) {
 		lastDocName = docName
 	}
 	if !rejected {
-		_, err := tryWriteDocE2E(t, client, uniqueName("tx-e2e-upload-pressure-probe"), "probe.bin", "application/octet-stream", []byte("probe"))
+		probeTxID := e2eTransactionForShard(t, placement, "tx-e2e-upload-pressure-probe", pressureShardID)
+		_, err := tryWriteDocE2E(t, client, probeTxID, "probe.bin", "application/octet-stream", []byte("probe"))
 		if !isUploadPressureError(err) {
 			t.Fatalf("pressure probe error = %v, want upload pressure rejection", err)
 		}
@@ -134,8 +141,43 @@ func TestE2EBackendUploadAdmissionPressure(t *testing.T) {
 	ensureE2ES3Bucket(t, newE2ES3Client(t, "http://"+endpoint))
 
 	waitUploadPendingBlocks(t, leader, 0, uploadE2ETimeout)
-	if _, err := tryWriteDocE2E(t, client, uniqueName("tx-e2e-upload-resumed"), "resume.bin", "application/octet-stream", []byte("resume")); err != nil {
+	resumedTxID := e2eTransactionForShard(t, placement, "tx-e2e-upload-resumed", pressureShardID)
+	if _, err := tryWriteDocE2E(t, client, resumedTxID, "resume.bin", "application/octet-stream", []byte("resume")); err != nil {
 		t.Fatalf("write after upload drain: %v", err)
+	}
+}
+
+func TestE2ETransactionForShardUsesRoutingPlacement(t *testing.T) {
+	placement := e2eTwoShardPlacement(t)
+
+	tx7 := e2eTransactionForShard(t, placement, "tx-e2e-route-seven", 7)
+	tx9 := e2eTransactionForShard(t, placement, "tx-e2e-route-nine", 9)
+
+	assertE2ETransactionRoutesToShard(t, placement, tx7, 7)
+	assertE2ETransactionRoutesToShard(t, placement, tx9, 9)
+	if tx7 == tx9 {
+		t.Fatal("Transaction selector returned duplicate Transaction IDs for distinct Shards")
+	}
+}
+
+func TestBackendPairsAcceptNonZeroShardPrefixes(t *testing.T) {
+	before := map[string]backendObject{
+		e2eBackendObjectKey(7, 1, "blk"): {key: e2eBackendObjectKey(7, 1, "blk"), size: 10, etag: `"old"`},
+	}
+	objects := map[string]backendObject{
+		e2eBackendObjectKey(7, 1, "blk"):                          {key: e2eBackendObjectKey(7, 1, "blk"), size: 10, etag: `"old"`},
+		e2eBackendObjectKey(7, 2, "blk"):                          {key: e2eBackendObjectKey(7, 2, "blk"), size: 20, etag: `"blk-seven"`},
+		e2eBackendObjectKey(7, 2, "idx"):                          {key: e2eBackendObjectKey(7, 2, "idx"), size: 5, etag: `"idx-seven"`},
+		e2eBackendObjectKey(9, 3, "blk"):                          {key: e2eBackendObjectKey(9, 3, "blk"), size: 21, etag: `"blk-nine"`},
+		e2eBackendObjectKey(9, 3, "idx"):                          {key: e2eBackendObjectKey(9, 3, "idx"), size: 6, etag: `"idx-nine"`},
+		"other-cell/shards/0000000000000007/0000000000000004.blk": {key: "other-cell/shards/0000000000000007/0000000000000004.blk", size: 99, etag: `"other"`},
+	}
+
+	pairs := collectBackendPairs(objects, before)
+	got := backendPairShardIDs(pairs)
+	want := []uint64{7, 9}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("backend pair Shard IDs = %v, want %v", got, want)
 	}
 }
 
@@ -283,7 +325,11 @@ func listBackendObjects(t *testing.T, client *awss3.Client) map[string]backendOb
 }
 
 func e2eS3ObjectPrefix() string {
-	return e2eCellID() + "/shards/0000000000000000/"
+	return e2eCellID() + "/shards/"
+}
+
+func e2eBackendObjectKey(shardID, blockID uint64, ext string) string {
+	return fmt.Sprintf("%s%016x/%016x.%s", e2eS3ObjectPrefix(), shardID, blockID, ext)
 }
 
 func waitNewBackendPair(t *testing.T, client *awss3.Client, before map[string]backendObject, timeout time.Duration) backendPair {
@@ -299,9 +345,35 @@ func waitNewBackendPair(t *testing.T, client *awss3.Client, before map[string]ba
 	return backendPair{}
 }
 
+func waitNewBackendPairForShard(t *testing.T, client *awss3.Client, before map[string]backendObject, shardID uint64, timeout time.Duration) backendPair {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if pair, ok := firstCompleteBackendPairForShard(listBackendObjects(t, client), before, shardID); ok {
+			return pair
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("timed out waiting for uploaded .blk/.idx backend pair for Shard %d", shardID)
+	return backendPair{}
+}
+
 func firstCompleteBackendPair(objects, before map[string]backendObject) (backendPair, bool) {
 	for _, pair := range collectBackendPairs(objects, before) {
 		if pair.blk.key != "" && pair.idx.key != "" {
+			return pair, true
+		}
+	}
+	return backendPair{}, false
+}
+
+func firstCompleteBackendPairForShard(objects, before map[string]backendObject, shardID uint64) (backendPair, bool) {
+	for _, pair := range collectBackendPairs(objects, before) {
+		if pair.blk.key == "" || pair.idx.key == "" {
+			continue
+		}
+		parsed, ok := parseBackendObjectKey(pair.blk.key)
+		if ok && parsed.shardID == shardID {
 			return pair, true
 		}
 	}
@@ -314,29 +386,140 @@ func collectBackendPairs(objects, before map[string]backendObject) map[string]ba
 		if _, existed := before[key]; existed {
 			continue
 		}
-		base, ext, ok := splitBackendObjectKey(key)
+		parsed, ok := parseBackendObjectKey(key)
 		if !ok || object.size <= 0 || strings.Trim(object.etag, `"`) == "" {
 			continue
 		}
-		pair := pairs[base]
-		if ext == "blk" {
+		pair := pairs[parsed.base]
+		if parsed.ext == "blk" {
 			pair.blk = object
 		} else {
 			pair.idx = object
 		}
-		pairs[base] = pair
+		pairs[parsed.base] = pair
 	}
 	return pairs
 }
 
-func splitBackendObjectKey(key string) (base, ext string, ok bool) {
+type parsedBackendObjectKey struct {
+	base    string
+	ext     string
+	shardID uint64
+}
+
+func parseBackendObjectKey(key string) (parsedBackendObjectKey, bool) {
+	prefix := e2eS3ObjectPrefix()
+	if !strings.HasPrefix(key, prefix) {
+		return parsedBackendObjectKey{}, false
+	}
+	remainder := strings.TrimPrefix(key, prefix)
+	parts := strings.Split(remainder, "/")
+	if len(parts) != 2 {
+		return parsedBackendObjectKey{}, false
+	}
+	shardID, ok := parseFixedHexUint64(parts[0])
+	if !ok {
+		return parsedBackendObjectKey{}, false
+	}
+	block, ext, ok := splitBackendObjectFilename(parts[1])
+	if !ok {
+		return parsedBackendObjectKey{}, false
+	}
+	return parsedBackendObjectKey{
+		base:    prefix + parts[0] + "/" + block,
+		ext:     ext,
+		shardID: shardID,
+	}, true
+}
+
+func parseFixedHexUint64(value string) (uint64, bool) {
+	if len(value) != 16 {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(value, 16, 64)
+	if err != nil {
+		return 0, false
+	}
+	if fmt.Sprintf("%016x", parsed) != value {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func splitBackendObjectFilename(name string) (base, ext string, ok bool) {
 	switch {
-	case strings.HasSuffix(key, ".blk"):
-		return strings.TrimSuffix(key, ".blk"), "blk", true
-	case strings.HasSuffix(key, ".idx"):
-		return strings.TrimSuffix(key, ".idx"), "idx", true
+	case strings.HasSuffix(name, ".blk"):
+		base = strings.TrimSuffix(name, ".blk")
+		ext = "blk"
+	case strings.HasSuffix(name, ".idx"):
+		base = strings.TrimSuffix(name, ".idx")
+		ext = "idx"
 	default:
 		return "", "", false
+	}
+	if _, ok := parseFixedHexUint64(base); !ok {
+		return "", "", false
+	}
+	return base, ext, true
+}
+
+func backendPairShardIDs(pairs map[string]backendPair) []uint64 {
+	ids := make([]uint64, 0, len(pairs))
+	for base, pair := range pairs {
+		if pair.blk.key == "" || pair.idx.key == "" {
+			continue
+		}
+		parsed, ok := parseBackendObjectKey(pair.blk.key)
+		if !ok || !strings.HasPrefix(pair.idx.key, base+".") {
+			continue
+		}
+		ids = append(ids, parsed.shardID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func e2eTwoShardPlacement(t *testing.T) routing.Placement {
+	t.Helper()
+	placement, err := routing.NewPlacement(routing.PlacementConfig{
+		SlotCount: routing.SlotCount,
+		Shards:    []uint64{7, 9},
+		Ranges: []routing.SlotRange{
+			{ShardID: 7, StartSlot: 0, EndSlot: 511},
+			{ShardID: 9, StartSlot: 512, EndSlot: 1023},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewPlacement: %v", err)
+	}
+	return placement
+}
+
+func e2eTransactionForShard(t *testing.T, placement routing.Placement, prefix string, shardID uint64) string {
+	t.Helper()
+	runPrefix := uniqueName(prefix)
+	for i := range routing.SlotCount * 2 {
+		txID := fmt.Sprintf("%s-%d", runPrefix, i)
+		route, err := placement.Lookup(txID)
+		if err != nil {
+			t.Fatalf("lookup candidate Transaction: %v", err)
+		}
+		if route.ShardID == shardID {
+			return txID
+		}
+	}
+	t.Fatalf("no Transaction candidate routed to Shard %d", shardID)
+	return ""
+}
+
+func assertE2ETransactionRoutesToShard(t *testing.T, placement routing.Placement, txID string, want uint64) {
+	t.Helper()
+	route, err := placement.Lookup(txID)
+	if err != nil {
+		t.Fatalf("Lookup %q: %v", txID, err)
+	}
+	if route.ShardID != want {
+		t.Fatalf("Transaction route ShardID = %d, want %d", route.ShardID, want)
 	}
 }
 

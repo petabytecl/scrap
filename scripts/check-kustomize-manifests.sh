@@ -4,6 +4,7 @@ set -eu
 KUSTOMIZE_CMD=${KUSTOMIZE_CMD:-"go tool -modfile=tools.go.mod kustomize"}
 LOCAL_KIND_OVERLAY=${LOCAL_KIND_OVERLAY:-deploy/kustomize/environments/local}
 PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
+PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodlike-e2e}
 PRODLIKE_OPENBAO_OVERLAY=${PRODLIKE_OPENBAO_OVERLAY:-deploy/kustomize/environments/prodlike-openbao}
 EVIDENCE_OVERLAY=${EVIDENCE_OVERLAY:-deploy/kustomize/environments/evidence}
 EVIDENCE_STACK=${EVIDENCE_STACK:-deploy/kustomize/components/evidence-stack}
@@ -12,11 +13,12 @@ OPENBAO_DEPLOYMENT_CONTRACT=${OPENBAO_DEPLOYMENT_CONTRACT:-docs/openbao-deployme
 base_render="$(mktemp)"
 local_kind_render="$(mktemp)"
 prodlike_render="$(mktemp)"
+prodlike_e2e_render="$(mktemp)"
 prodlike_openbao_render="$(mktemp)"
 evidence_render="$(mktemp)"
 evidence_stack_render="$(mktemp)"
 statefulset_render="$(mktemp)"
-trap 'rm -f "$base_render" "$local_kind_render" "$prodlike_render" "$prodlike_openbao_render" "$evidence_render" "$evidence_stack_render" "$statefulset_render"' EXIT
+trap 'rm -f "$base_render" "$local_kind_render" "$prodlike_render" "$prodlike_e2e_render" "$prodlike_openbao_render" "$evidence_render" "$evidence_stack_render" "$statefulset_render"' EXIT
 
 render() {
 	# KUSTOMIZE_CMD intentionally supports commands with arguments.
@@ -77,6 +79,7 @@ extract_first_kind() {
 render deploy/kustomize/base > "$base_render"
 render "$LOCAL_KIND_OVERLAY" > "$local_kind_render"
 render "$PRODLIKE_OVERLAY" > "$prodlike_render"
+render "$PRODLIKE_E2E_OVERLAY" > "$prodlike_e2e_render"
 render "$PRODLIKE_OPENBAO_OVERLAY" > "$prodlike_openbao_render"
 render "$EVIDENCE_OVERLAY" > "$evidence_render"
 render "$EVIDENCE_STACK" > "$evidence_stack_render"
@@ -84,6 +87,7 @@ render "$EVIDENCE_STACK" > "$evidence_stack_render"
 test -s "$base_render"
 test -s "$local_kind_render"
 test -s "$prodlike_render"
+test -s "$prodlike_e2e_render"
 test -s "$prodlike_openbao_render"
 test -s "$evidence_render"
 test -s "$evidence_stack_render"
@@ -131,6 +135,14 @@ require 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$prodlike_render" "explicit prod
 require 'value:[[:space:]]*development' "$prodlike_render" "prod-like development security mode"
 require 'NetworkPolicy' "$prodlike_render" "prod-like NetworkPolicy"
 reject 'SCRAP_TRANSIT_FAKE' "$prodlike_render" "fake Transit in prod-like render"
+require 'name:[[:space:]]*scrap-shard-placement' "$prodlike_e2e_render" "prod-like E2E Shard placement ConfigMap"
+require 'placement\.json:' "$prodlike_e2e_render" "prod-like E2E Shard placement file"
+require 'name:[[:space:]]*SCRAP_SHARD_PLACEMENT_FILE' "$prodlike_e2e_render" "prod-like E2E Shard placement env"
+require 'value:[[:space:]]*/etc/scrap/shard-placement/placement\.json' "$prodlike_e2e_render" "prod-like E2E Shard placement path"
+require 'name:[[:space:]]*scrap-shard-placement' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E Shard placement generator"
+require 'statefulset-shard-placement-patch\.yaml' "$PRODLIKE_E2E_OVERLAY/kustomization.yaml" "prod-like E2E Shard placement patch"
+require '"shards":[[:space:]]*\[[[:space:]]*7,[[:space:]]*9[[:space:]]*\]' "$prodlike_e2e_render" "prod-like E2E non-zero Shard IDs"
+require '"local_shards":[[:space:]]*\[[[:space:]]*7,[[:space:]]*9[[:space:]]*\]' "$prodlike_e2e_render" "prod-like E2E local Shard IDs"
 require 'name:[[:space:]]*scrap-openbao-transit-config' "$prodlike_openbao_render" "OpenBao Transit ConfigMap"
 require 'key:[[:space:]]*address' "$prodlike_openbao_render" "OpenBao Transit address key"
 require 'name:[[:space:]]*SCRAP_TRANSIT_ADDR' "$prodlike_openbao_render" "OpenBao Transit address env"

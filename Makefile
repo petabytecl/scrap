@@ -203,7 +203,7 @@ PRODLIKE_SECURITY_ASSET_DIR ?= artifacts/prodlike-security
 TIER2_SECURITY_EVIDENCE_REPORT ?= $(PRODLIKE_SECURITY_ASSET_DIR)/security-evidence.json
 E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
 SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
-TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|LightScrub|ProdlikeSecurityEncryptionEvidence)
+TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|MultiShardRestartDeterminism|MultiShardBackendUploadUsesNonZeroShard|LightScrub|ProdlikeSecurityEncryptionEvidence)
 
 ##@ Stress Variables
 
