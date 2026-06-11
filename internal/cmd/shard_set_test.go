@@ -12,10 +12,12 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func TestOpenShardSetClosesEarlierShardWhenLaterOpenFails(t *testing.T) {
 	var closed []uint64
+	closeErr := errors.New("close failure")
 	openCfg := shardSetOpenConfig{
 		cfg: Config{DataDir: t.TempDir()},
 		topology: startupTopology{
@@ -31,7 +33,7 @@ func TestOpenShardSetClosesEarlierShardWhenLaterOpenFails(t *testing.T) {
 		return openedLocalShard{
 			close: func() error {
 				closed = append(closed, id)
-				return nil
+				return closeErr
 			},
 		}, nil
 	})
@@ -43,6 +45,58 @@ func TestOpenShardSetClosesEarlierShardWhenLaterOpenFails(t *testing.T) {
 	}
 	if got, want := closed, []uint64{7}; !uint64SlicesEqual(got, want) {
 		t.Fatalf("closed Shards = %v, want %v", got, want)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("openShardSetWithOpener error = %v, want close failure preserved", err)
+	}
+}
+
+func TestOpenShardSetFailureIncludesBoundedStartupStatus(t *testing.T) {
+	closeErr := errors.New("cleanup path /tmp/secret/shard-7")
+	topology, err := validateStartupTopology(Config{
+		SecurityMode:       "test",
+		ShardPlacementFile: writeTwoShardPlacementFile(t),
+	})
+	if err != nil {
+		t.Fatalf("validateStartupTopology: %v", err)
+	}
+	openCfg := shardSetOpenConfig{
+		cfg:      Config{DataDir: t.TempDir()},
+		topology: topology,
+	}
+
+	_, err = openShardSetWithOpener(openCfg, func(_ shardSetOpenConfig, shardID uint64, _ string) (openedLocalShard, error) {
+		if shardID == 9 {
+			return openedLocalShard{}, errors.New("injected path /tmp/secret/shard-9")
+		}
+		return openedLocalShard{close: func() error { return closeErr }}, nil
+	})
+	if err == nil {
+		t.Fatal("openShardSetWithOpener succeeded, want Shard open failure")
+	}
+	var statusErr interface {
+		StartupStatus() []startupShardStatus
+	}
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error %T does not expose startup status", err)
+	}
+	statuses := statusErr.StartupStatus()
+	failed := startupStatusForShard(t, statuses, 9)
+	if failed.State != "closed" {
+		t.Fatalf("failed Shard state = %q, want closed", failed.State)
+	}
+	if failed.FailureCategory != "open_failed_cleanup_failed" {
+		t.Fatalf("failure category = %q, want open_failed_cleanup_failed", failed.FailureCategory)
+	}
+	if strings.Contains(failed.FailureCategory, "secret") {
+		t.Fatalf("failure category leaked raw error detail: %q", failed.FailureCategory)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("error = %v, want cleanup failure preserved", err)
+	}
+	cleanupFailed := startupStatusForShard(t, statuses, 7)
+	if cleanupFailed.FailureCategory != "cleanup_failed" {
+		t.Fatalf("cleanup failure category = %q, want cleanup_failed", cleanupFailed.FailureCategory)
 	}
 }
 
@@ -102,6 +156,24 @@ func TestShardSetRaftRouterDispatchesByShardID(t *testing.T) {
 	}
 }
 
+func TestPublicStoreForMultiShardTopologyFailsClosed(t *testing.T) {
+	publicStore := publicStoreForTopology(&shardSet{ids: []uint64{7, 9}}, startupTopology{})
+	_, err := publicStore.WriteDocument(context.Background(), "tenant-a", "tx-a", "doc-a", "application/xml", strings.NewReader("<x/>"))
+	assertShardRoutingPending(t, err)
+	_, err = publicStore.HeadDocument(context.Background(), "tx-a", "doc-a")
+	assertShardRoutingPending(t, err)
+
+	body, _, err := publicStore.ReadDocument(context.Background(), "tx-a", "doc-a")
+	if body != nil {
+		_ = body.Close()
+		t.Fatal("ReadDocument body is non-nil, want nil on fail-closed response")
+	}
+	assertShardRoutingPending(t, err)
+
+	_, err = publicStore.FindDocuments(context.Background(), "tx-a")
+	assertShardRoutingPending(t, err)
+}
+
 func TestShardSetBlockDirResolverDispatchesByShardID(t *testing.T) {
 	set := &shardSet{
 		ids:       []uint64{7, 9},
@@ -116,6 +188,25 @@ func TestShardSetBlockDirResolverDispatchesByShardID(t *testing.T) {
 	}
 	if got, ok := set.BlockDirForShard(11); ok || got != "" {
 		t.Fatalf("BlockDirForShard(11) = %q/%v, want missing", got, ok)
+	}
+}
+
+func startupStatusForShard(t *testing.T, statuses []startupShardStatus, shardID uint64) startupShardStatus {
+	t.Helper()
+	for _, status := range statuses {
+		if status.ShardID == shardID {
+			return status
+		}
+	}
+	t.Fatalf("missing startup status for Shard %d: %v", shardID, statuses)
+	return startupShardStatus{}
+}
+
+func assertShardRoutingPending(t *testing.T, err error) {
+	t.Helper()
+	reason, ok := storeapi.UnavailableReason(err)
+	if !ok || reason != storeapi.UnavailableReasonShardRoutingPending {
+		t.Fatalf("UnavailableReason = %q/%v, err=%v; want %q", reason, ok, err, storeapi.UnavailableReasonShardRoutingPending)
 	}
 }
 

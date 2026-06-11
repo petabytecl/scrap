@@ -82,7 +82,10 @@ func validateStartupTopology(cfg Config) (startupTopology, error) {
 	if err != nil {
 		return startupTopology{}, fmt.Errorf("SCRAP_SHARD_PLACEMENT_FILE: %w", err)
 	}
-	localShardIDs, err := validateLocalShardIDs(placement, fileCfg.LocalShards, cfg.SecurityMode == security.ModeProduction)
+	if cfg.SecurityMode == security.ModeProduction && len(placementShardSet(placement)) < 2 {
+		return startupTopology{}, placementConfigError("production placement must configure at least two Shards")
+	}
+	localShardIDs, err := validateLocalShardIDs(placement, fileCfg.LocalShards)
 	if err != nil {
 		return startupTopology{}, err
 	}
@@ -146,7 +149,7 @@ func (c placementFileConfig) routingPlacementConfig() routing.PlacementConfig {
 	}
 }
 
-func validateLocalShardIDs(placement routing.Placement, localShardIDs []uint64, requireMultiShard bool) ([]uint64, error) {
+func validateLocalShardIDs(placement routing.Placement, localShardIDs []uint64) ([]uint64, error) {
 	if len(localShardIDs) == 0 {
 		return nil, placementConfigError("local_shards must be present and non-empty")
 	}
@@ -166,9 +169,6 @@ func validateLocalShardIDs(placement routing.Placement, localShardIDs []uint64, 
 	sort.Slice(ids, func(i, j int) bool {
 		return ids[i] < ids[j]
 	})
-	if requireMultiShard && len(ids) < 2 {
-		return nil, placementConfigError("production local_shards must include at least two Shards")
-	}
 	return ids, nil
 }
 

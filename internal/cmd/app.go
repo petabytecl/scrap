@@ -63,6 +63,9 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return nil, err
 	}
+	if _, err := localShardDataDirs(cfg.DataDir, topology); err != nil {
+		return nil, err
+	}
 
 	var cleanup []func()
 	fail := func(err error) (*App, error) {
@@ -427,10 +430,6 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 func (a *App) logStarting(ctx context.Context) {
 	a.logger.InfoContext(ctx, "scrapd starting",
-		"client_addr", a.cfg.ListenAddr,
-		"peer_addr", a.cfg.PeerAddr,
-		"admin_addr", a.cfg.AdminAddr,
-		"data_dir", a.cfg.DataDir,
 		"raft_id", a.raftID,
 		"cell_id", a.cfg.CellID,
 		"peers", len(a.peers),

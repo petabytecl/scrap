@@ -3,6 +3,7 @@ package telemetry_test
 import (
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/petabytecl/scrap/internal/telemetry"
@@ -50,6 +51,23 @@ func TestDiskMetrics_ObservesStats(t *testing.T) {
 	}
 }
 
+func TestDiskMetrics_ObservesShardAttribute(t *testing.T) {
+	provider, reader := newTestMeter(t)
+	dm, err := telemetry.NewDiskMetrics(provider.Meter("test"), stubDiskStats{stats: telemetry.DiskStats{
+		UsedBytes:       1024,
+		FreeBytes:       2048,
+		ProjectionBytes: 512,
+	}}, attribute.Int64("scrap.shard_id", 9))
+	if err != nil {
+		t.Fatalf("new disk metrics: %v", err)
+	}
+	defer func() { _ = dm.Unregister() }()
+
+	metrics := collectMetrics(t, reader)
+
+	assertInt64GaugeAttribute(t, metrics, "scrap.disk.used_bytes", "scrap.shard_id", int64(9))
+}
+
 func TestDiskMetrics_NilUnregister(t *testing.T) {
 	var dm *telemetry.DiskMetrics
 	if err := dm.Unregister(); err != nil {
@@ -70,4 +88,23 @@ func assertInt64Gauge(t *testing.T, metrics metricdata.ResourceMetrics, name str
 	if len(g.DataPoints) == 0 || g.DataPoints[0].Value != want {
 		t.Fatalf("%s = %v, want %d", name, g.DataPoints, want)
 	}
+}
+
+func assertInt64GaugeAttribute(t *testing.T, metrics metricdata.ResourceMetrics, name, key string, want int64) {
+	t.Helper()
+	m := findMetric(metrics, name)
+	if m == nil {
+		t.Fatalf("%s not found", name)
+	}
+	g, ok := m.Data.(metricdata.Gauge[int64])
+	if !ok {
+		t.Fatalf("%s: expected Gauge[int64], got %T", name, m.Data)
+	}
+	for _, point := range g.DataPoints {
+		got, ok := point.Attributes.Value(attribute.Key(key))
+		if ok && got.AsInt64() == want {
+			return
+		}
+	}
+	t.Fatalf("%s has no data point with %s=%d: %v", name, key, want, g.DataPoints)
 }

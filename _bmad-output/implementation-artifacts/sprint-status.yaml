@@ -1,5 +1,5 @@
 # generated: 2026-06-10T20:50:36-04:00
-# last_updated: 2026-06-11T14:35:35-04:00
+# last_updated: 2026-06-11T15:13:21-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-11T14:35:35-04:00"
+last_updated: "2026-06-11T15:13:21-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -51,7 +51,7 @@ development_status:
   epic-1-retrospective: optional
   epic-2: in-progress
   2-1-shard-routing-boundary-and-placement-validation: done
-  2-2-multi-shard-cell-startup-composition: in-progress
+  2-2-multi-shard-cell-startup-composition: review
   2-3-public-api-routes-by-transaction: backlog
   2-4-peer-rpc-shard-scope-authorization: backlog
   2-5-shard-aware-admin-and-scrapctl-diagnostics: backlog

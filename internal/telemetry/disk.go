@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -29,13 +30,14 @@ type DiskMetrics struct {
 // NewDiskMetrics registers scrap.disk.used_bytes, scrap.disk.free_bytes, and
 // scrap.pebble.disk_bytes. Names already carry the _bytes suffix and set no unit, so
 // the OTel->Prometheus exporter does not append a second suffix.
-func NewDiskMetrics(meter metric.Meter, provider DiskStatsProvider) (*DiskMetrics, error) {
+func NewDiskMetrics(meter metric.Meter, provider DiskStatsProvider, attrs ...attribute.KeyValue) (*DiskMetrics, error) {
 	if meter == nil {
 		return nil, errors.New("meter is required")
 	}
 	if provider == nil {
 		return nil, errors.New("disk stats provider is required")
 	}
+	attrs = append([]attribute.KeyValue(nil), attrs...)
 
 	used, err := meter.Int64ObservableGauge("scrap.disk.used_bytes",
 		metric.WithDescription("Used bytes on the local data volume."),
@@ -61,9 +63,10 @@ func NewDiskMetrics(meter metric.Meter, provider DiskStatsProvider) (*DiskMetric
 	reg, err := meter.RegisterCallback(
 		func(_ context.Context, o metric.Observer) error {
 			stats := provider.DiskStats()
-			o.ObserveInt64(used, stats.UsedBytes)
-			o.ObserveInt64(free, stats.FreeBytes)
-			o.ObserveInt64(projection, stats.ProjectionBytes)
+			opts := observeOptions(attrs)
+			o.ObserveInt64(used, stats.UsedBytes, opts...)
+			o.ObserveInt64(free, stats.FreeBytes, opts...)
+			o.ObserveInt64(projection, stats.ProjectionBytes, opts...)
 			return nil
 		},
 		used, free, projection,

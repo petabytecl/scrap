@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,6 +21,13 @@ import (
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/security"
 )
+
+type stubRaftState struct{}
+
+func (stubRaftState) IsLeader() bool       { return false }
+func (stubRaftState) LeaderID() uint64     { return 0 }
+func (stubRaftState) AppliedIndex() uint64 { return 0 }
+func (stubRaftState) CommitIndex() uint64  { return 0 }
 
 func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
 	t.Setenv("SCRAP_CELL_ID", "cell-a")
@@ -215,6 +223,42 @@ func TestNewScrapdTelemetryInitializesRuntime(t *testing.T) {
 	}
 	if err := rt.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestShardMetricAttributePreservesHighShardID(t *testing.T) {
+	const shardID = uint64(1<<63 + 12)
+
+	attr := shardMetricAttribute(shardID)
+
+	assertString(t, string(attr.Key), string(attr.Key), "scrap.shard_id")
+	assertString(t, "scrap.shard_id", attr.Value.AsString(), strconv.FormatUint(shardID, 10))
+}
+
+func TestScrapdTelemetryUnregisterRaftMetricsRemovesCallback(t *testing.T) {
+	stubScrapdTelemetryPipeline(t)
+	rt, err := newScrapdTelemetryWithSecurity(context.Background(), "scrapd-0", "member-123", 1, 0, BuildInfo{}, "")
+	if err != nil {
+		t.Fatalf("newScrapdTelemetry: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := rt.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	})
+	metrics, err := rt.registerRaftMetrics(7, &stubRaftState{})
+	if err != nil {
+		t.Fatalf("registerRaftMetrics: %v", err)
+	}
+	if got := len(rt.raftMetrics); got != 1 {
+		t.Fatalf("raftMetrics len = %d, want 1", got)
+	}
+
+	if err := rt.unregisterRaftMetrics(metrics); err != nil {
+		t.Fatalf("unregisterRaftMetrics: %v", err)
+	}
+	if got := len(rt.raftMetrics); got != 0 {
+		t.Fatalf("raftMetrics len = %d, want 0", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -20,13 +21,14 @@ type RaftMetrics struct {
 	registration metric.Registration
 }
 
-func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider) (*RaftMetrics, error) {
+func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider, attrs ...attribute.KeyValue) (*RaftMetrics, error) {
 	if meter == nil {
 		return nil, errors.New("meter is required")
 	}
 	if provider == nil {
 		return nil, errors.New("raft state provider is required")
 	}
+	attrs = append([]attribute.KeyValue(nil), attrs...)
 
 	isLeader, err := meter.Int64ObservableGauge("scrap.raft.is_leader",
 		metric.WithDescription("Whether this member is the Raft leader (1) or follower (0)."),
@@ -62,10 +64,11 @@ func NewRaftMetrics(meter metric.Meter, provider RaftStateProvider) (*RaftMetric
 			if provider.IsLeader() {
 				leader = 1
 			}
-			o.ObserveInt64(isLeader, leader)
-			o.ObserveInt64(leaderID, clampUint64(provider.LeaderID()))
-			o.ObserveInt64(appliedIndex, clampUint64(provider.AppliedIndex()))
-			o.ObserveInt64(commitIndex, clampUint64(provider.CommitIndex()))
+			opts := observeOptions(attrs)
+			o.ObserveInt64(isLeader, leader, opts...)
+			o.ObserveInt64(leaderID, clampUint64(provider.LeaderID()), opts...)
+			o.ObserveInt64(appliedIndex, clampUint64(provider.AppliedIndex()), opts...)
+			o.ObserveInt64(commitIndex, clampUint64(provider.CommitIndex()), opts...)
 			return nil
 		},
 		isLeader, leaderID, appliedIndex, commitIndex,

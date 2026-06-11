@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,7 +63,7 @@ func TestAppRunCleanShutdown(t *testing.T) {
 
 func TestNewAppBuildsTwoShardTopology(t *testing.T) {
 	cfg := testAppConfig(t)
-	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t, 7, 9)
+	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t)
 
 	app, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
 	if err != nil {
@@ -87,6 +89,46 @@ func TestNewAppBuildsTwoShardTopology(t *testing.T) {
 	}
 	if app.publicStore == app.shards.singleShardStore() {
 		t.Fatal("multi-Shard public store used a single Shard; want fail-closed store until Story 2.3 routing")
+	}
+}
+
+func TestAppLogStartingRedactsMultiShardEvidence(t *testing.T) {
+	var log bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&log, nil))
+	cfg := testAppConfig(t)
+	cfg.DataDir = filepath.Join(t.TempDir(), "secret-data")
+	cfg.ListenAddr = "10.1.2.3:7777"
+	cfg.PeerAddr = "10.1.2.4:7778"
+	cfg.AdminAddr = "10.1.2.5:7779"
+	topology, err := validateStartupTopology(Config{
+		SecurityMode:       security.ModeTest,
+		ShardPlacementFile: writeTwoShardPlacementFile(t),
+	})
+	if err != nil {
+		t.Fatalf("validateStartupTopology: %v", err)
+	}
+	app := &App{
+		cfg:         cfg,
+		logger:      logger,
+		shards:      &shardSet{ids: []uint64{7, 9}},
+		backendType: "fs",
+		peers:       map[uint64]string{1: "10.1.2.4:7778"},
+		raftID:      1,
+		topology:    topology,
+	}
+
+	app.logStarting(context.Background())
+
+	got := log.String()
+	for _, forbidden := range []string{cfg.DataDir, cfg.ListenAddr, cfg.PeerAddr, cfg.AdminAddr} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("startup log leaked %q: %s", forbidden, got)
+		}
+	}
+	for _, required := range []string{"route_map", "local_shards", "shard_status"} {
+		if !strings.Contains(got, required) {
+			t.Fatalf("startup log missing %q: %s", required, got)
+		}
 	}
 }
 

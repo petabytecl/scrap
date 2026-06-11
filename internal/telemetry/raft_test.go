@@ -3,6 +3,8 @@ package telemetry_test
 import (
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
@@ -54,6 +56,21 @@ func TestRaftMetrics_ObservesState(t *testing.T) {
 	assertInt64Gauge(t, metrics, "scrap.raft.leader_id", 3)
 	assertInt64Gauge(t, metrics, "scrap.raft.applied_index", 42)
 	assertInt64Gauge(t, metrics, "scrap.raft.commit_index", 50)
+}
+
+func TestRaftMetrics_ObservesShardAttribute(t *testing.T) {
+	provider, reader := newTestMeter(t)
+	state := &stubRaftState{leaderID: 3, appliedIndex: 42, commitIndex: 50}
+
+	rm, err := telemetry.NewRaftMetrics(provider.Meter("test"), state, attribute.Int64("scrap.shard_id", 7))
+	if err != nil {
+		t.Fatalf("new raft metrics: %v", err)
+	}
+	defer func() { _ = rm.Unregister() }()
+
+	metrics := collectMetrics(t, reader)
+
+	assertInt64GaugeAttribute(t, metrics, "scrap.raft.commit_index", "scrap.shard_id", int64(7))
 }
 
 func TestRaftMetrics_NilUnregister(t *testing.T) {

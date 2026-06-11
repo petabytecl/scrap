@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
@@ -303,24 +304,45 @@ func (r *scrapdTelemetryRuntime) newRateLimitMetrics() (*security.RateLimitOTelM
 	return security.NewRateLimitOTelMetrics(m)
 }
 
-func (r *scrapdTelemetryRuntime) registerRaftMetrics(provider scraptelemetry.RaftStateProvider) error {
+func (r *scrapdTelemetryRuntime) registerRaftMetrics(shardID uint64, provider scraptelemetry.RaftStateProvider) (*scraptelemetry.RaftMetrics, error) {
 	m := r.meterProvider.Meter(instrumentationScope)
-	rm, err := scraptelemetry.NewRaftMetrics(m, provider)
+	rm, err := scraptelemetry.NewRaftMetrics(m, provider, shardMetricAttribute(shardID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	r.raftMetrics = append(r.raftMetrics, rm)
+	return rm, nil
+}
+
+func (r *scrapdTelemetryRuntime) unregisterRaftMetrics(target *scraptelemetry.RaftMetrics) error {
+	if r == nil || target == nil {
+		return nil
+	}
+	if err := target.Unregister(); err != nil {
+		return err
+	}
+	next := make([]*scraptelemetry.RaftMetrics, 0, len(r.raftMetrics))
+	for _, metrics := range r.raftMetrics {
+		if metrics != target {
+			next = append(next, metrics)
+		}
+	}
+	r.raftMetrics = next
 	return nil
 }
 
-func (r *scrapdTelemetryRuntime) registerDiskMetrics(provider scraptelemetry.DiskStatsProvider) error {
+func (r *scrapdTelemetryRuntime) registerDiskMetrics(shardID uint64, provider scraptelemetry.DiskStatsProvider) error {
 	m := r.meterProvider.Meter(instrumentationScope)
-	dm, err := scraptelemetry.NewDiskMetrics(m, provider)
+	dm, err := scraptelemetry.NewDiskMetrics(m, provider, shardMetricAttribute(shardID))
 	if err != nil {
 		return err
 	}
 	r.diskMetrics = append(r.diskMetrics, dm)
 	return nil
+}
+
+func shardMetricAttribute(shardID uint64) attribute.KeyValue {
+	return attribute.String("scrap.shard_id", strconv.FormatUint(shardID, 10))
 }
 
 func (r *scrapdTelemetryRuntime) Shutdown(ctx context.Context) error {

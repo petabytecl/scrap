@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -74,10 +76,11 @@ type openedLocalShard struct {
 type localShardOpener func(shardSetOpenConfig, uint64, string) (openedLocalShard, error)
 
 type startupShardStatus struct {
-	ShardID    uint64   `json:"shard_id"`
-	Membership string   `json:"membership"`
-	Routes     []string `json:"routes"`
-	State      string   `json:"state"`
+	ShardID         uint64   `json:"shard_id"`
+	Membership      string   `json:"membership"`
+	Routes          []string `json:"routes"`
+	State           string   `json:"state"`
+	FailureCategory string   `json:"failure_category,omitempty"`
 }
 
 func openShardSet(openCfg shardSetOpenConfig) (*shardSet, error) {
@@ -100,8 +103,19 @@ func openShardSetWithOpener(openCfg shardSetOpenConfig, openShard localShardOpen
 	for _, shardID := range set.ids {
 		localShard, err := openShard(openCfg, shardID, dataDirs[shardID])
 		if err != nil {
-			_ = set.Close()
-			return nil, fmt.Errorf("open Shard %d: %w", shardID, err)
+			closeErr := set.Close()
+			joinedErr := err
+			failureCategory := "open_failed"
+			var cleanupFailed []uint64
+			if closeErr != nil {
+				joinedErr = errors.Join(err, closeErr)
+				failureCategory = "open_failed_cleanup_failed"
+				var shardCloseErr *shardSetCloseError
+				if errors.As(closeErr, &shardCloseErr) {
+					cleanupFailed = shardCloseErr.FailedShardIDs()
+				}
+			}
+			return nil, newShardSetOpenError(openCfg.topology, nil, shardID, failureCategory, cleanupFailed, joinedErr)
 		}
 		set.shards[shardID] = localShard.shard
 		set.closers[shardID] = localShard.close
@@ -148,12 +162,20 @@ func openLocalShard(openCfg shardSetOpenConfig, shardID uint64, dataDir string) 
 	if err != nil {
 		return openedLocalShard{}, err
 	}
-	if err := openCfg.telemetryRuntime.registerRaftMetrics(localShard); err != nil {
-		_ = localShard.Close()
+	raftMetrics, err := openCfg.telemetryRuntime.registerRaftMetrics(shardID, localShard)
+	if err != nil {
+		if closeErr := localShard.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
 		return openedLocalShard{}, fmt.Errorf("register raft metrics: %w", err)
 	}
-	if err := openCfg.telemetryRuntime.registerDiskMetrics(localShard); err != nil {
-		_ = localShard.Close()
+	if err := openCfg.telemetryRuntime.registerDiskMetrics(shardID, localShard); err != nil {
+		if unregisterErr := openCfg.telemetryRuntime.unregisterRaftMetrics(raftMetrics); unregisterErr != nil {
+			err = errors.Join(err, unregisterErr)
+		}
+		if closeErr := localShard.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
 		return openedLocalShard{}, fmt.Errorf("register disk metrics: %w", err)
 	}
 	return openedLocalShard{shard: localShard, close: localShard.Close}, nil
@@ -164,7 +186,7 @@ func localShardDataDirs(root string, topology startupTopology) (map[uint64]strin
 	seen := make(map[string]uint64, len(topology.LocalShardIDs))
 	for _, shardID := range topology.LocalShardIDs {
 		dir := shardDataDir(root, topology, shardID)
-		cleanDir := filepath.Clean(dir)
+		cleanDir := canonicalShardDataDir(dir)
 		if other, ok := seen[cleanDir]; ok {
 			return nil, placementConfigError("local_shards %d and %d derive the same Shard data directory", other, shardID)
 		}
@@ -172,6 +194,19 @@ func localShardDataDirs(root string, topology startupTopology) (map[uint64]strin
 		dirs[shardID] = dir
 	}
 	return dirs, nil
+}
+
+func canonicalShardDataDir(dir string) string {
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Clean(realDir)
+	}
+	if linkTarget, err := os.Readlink(dir); err == nil {
+		if filepath.IsAbs(linkTarget) {
+			return filepath.Clean(linkTarget)
+		}
+		return filepath.Clean(filepath.Join(filepath.Dir(dir), linkTarget))
+	}
+	return filepath.Clean(dir)
 }
 
 func shardDataDir(root string, topology startupTopology, shardID uint64) string {
@@ -236,7 +271,8 @@ func (s *shardSet) Close() error {
 	if s == nil {
 		return nil
 	}
-	var firstErr error
+	var errs []error
+	var failedShardIDs []uint64
 	for i := len(s.ids) - 1; i >= 0; i-- {
 		shardID := s.ids[i]
 		closeShard := s.closers[shardID]
@@ -246,11 +282,35 @@ func (s *shardSet) Close() error {
 		if closeShard == nil {
 			continue
 		}
-		if err := closeShard(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := closeShard(); err != nil {
+			errs = append(errs, err)
+			failedShardIDs = append(failedShardIDs, shardID)
 		}
 	}
-	return firstErr
+	if len(errs) == 0 {
+		return nil
+	}
+	return &shardSetCloseError{
+		err:            errors.Join(errs...),
+		failedShardIDs: failedShardIDs,
+	}
+}
+
+type shardSetCloseError struct {
+	err            error
+	failedShardIDs []uint64
+}
+
+func (e *shardSetCloseError) Error() string {
+	return "close Shards failed"
+}
+
+func (e *shardSetCloseError) Unwrap() error {
+	return e.err
+}
+
+func (e *shardSetCloseError) FailedShardIDs() []uint64 {
+	return append([]uint64(nil), e.failedShardIDs...)
 }
 
 func (s *shardSet) replicationTarget(shardID uint64) (replicationTarget, bool) {
@@ -302,6 +362,15 @@ func (s *shardSet) RouteRaftMessage(ctx context.Context, shardID uint64, msg raf
 }
 
 func (s *shardSet) StartupStatus(topology startupTopology) []startupShardStatus {
+	return startupStatus(topology, shardIDSet(s.IDs()), nil)
+}
+
+type startupStatusOverride struct {
+	state           string
+	failureCategory string
+}
+
+func startupStatus(topology startupTopology, openLocal map[uint64]struct{}, overrides map[uint64]startupStatusOverride) []startupShardStatus {
 	byShard := routeRangesByShard(topology.Placement.RouteMapSummary())
 	statuses := make([]startupShardStatus, 0, len(byShard))
 	shardIDs := make([]uint64, 0, len(byShard))
@@ -311,20 +380,78 @@ func (s *shardSet) StartupStatus(topology startupTopology) []startupShardStatus 
 	sort.Slice(shardIDs, func(i, j int) bool {
 		return shardIDs[i] < shardIDs[j]
 	})
-	local := shardIDSet(s.IDs())
+	local := shardIDSet(topology.LocalShardIDs)
 	for _, shardID := range shardIDs {
 		membership := "remote"
 		state := "not_local"
 		if _, ok := local[shardID]; ok {
 			membership = "local"
-			state = "open"
+			state = "closed"
+			if _, open := openLocal[shardID]; open {
+				state = "open"
+			}
+		}
+		failureCategory := ""
+		if override, ok := overrides[shardID]; ok {
+			if override.state != "" {
+				state = override.state
+			}
+			failureCategory = override.failureCategory
 		}
 		statuses = append(statuses, startupShardStatus{
-			ShardID:    shardID,
-			Membership: membership,
-			Routes:     byShard[shardID],
-			State:      state,
+			ShardID:         shardID,
+			Membership:      membership,
+			Routes:          byShard[shardID],
+			State:           state,
+			FailureCategory: failureCategory,
 		})
+	}
+	return statuses
+}
+
+type shardSetOpenError struct {
+	shardID         uint64
+	failureCategory string
+	err             error
+	status          []startupShardStatus
+}
+
+func newShardSetOpenError(topology startupTopology, openedLocalIDs []uint64, failedShardID uint64, failureCategory string, cleanupFailedShardIDs []uint64, err error) *shardSetOpenError {
+	overrides := map[uint64]startupStatusOverride{
+		failedShardID: {state: "closed", failureCategory: failureCategory},
+	}
+	for _, shardID := range cleanupFailedShardIDs {
+		if shardID == failedShardID {
+			continue
+		}
+		overrides[shardID] = startupStatusOverride{state: "closed", failureCategory: "cleanup_failed"}
+	}
+	status := startupStatus(
+		topology,
+		shardIDSet(openedLocalIDs),
+		overrides,
+	)
+	return &shardSetOpenError{
+		shardID:         failedShardID,
+		failureCategory: failureCategory,
+		err:             err,
+		status:          status,
+	}
+}
+
+func (e *shardSetOpenError) Error() string {
+	return fmt.Sprintf("open Shard %d failed: %s", e.shardID, e.failureCategory)
+}
+
+func (e *shardSetOpenError) Unwrap() error {
+	return e.err
+}
+
+func (e *shardSetOpenError) StartupStatus() []startupShardStatus {
+	statuses := make([]startupShardStatus, len(e.status))
+	for i, status := range e.status {
+		status.Routes = append([]string(nil), status.Routes...)
+		statuses[i] = status
 	}
 	return statuses
 }

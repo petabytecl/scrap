@@ -143,18 +143,6 @@ func TestValidateStartupTopologyRejectsInvalidLocalMembership(t *testing.T) {
 			}`,
 		},
 		{
-			name: "one local Shard in production",
-			body: `{
-				"slot_count": 1024,
-				"shards": [7, 9],
-				"local_shards": [7],
-				"ranges": [
-					{"shard_id": 7, "start_slot": 0, "end_slot": 511},
-					{"shard_id": 9, "start_slot": 512, "end_slot": 1023}
-				]
-			}`,
-		},
-		{
 			name: "unknown field",
 			body: `{
 				"slot_count": 1024,
@@ -189,6 +177,51 @@ func TestValidateStartupTopologyRejectsInvalidLocalMembership(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateStartupTopologyAcceptsSingleLocalShardInProductionMultiShardPlacement(t *testing.T) {
+	placementFile := writePlacementFile(t, `{
+		"slot_count": 1024,
+		"shards": [7, 9],
+		"local_shards": [7],
+		"ranges": [
+			{"shard_id": 7, "start_slot": 0, "end_slot": 511},
+			{"shard_id": 9, "start_slot": 512, "end_slot": 1023}
+		]
+	}`)
+
+	topology, err := validateStartupTopology(Config{
+		SecurityMode:       security.ModeProduction,
+		ShardPlacementFile: placementFile,
+	})
+	if err != nil {
+		t.Fatalf("validateStartupTopology: %v", err)
+	}
+	if got, want := topology.LocalShardIDs, []uint64{7}; !uint64SlicesEqual(got, want) {
+		t.Fatalf("LocalShardIDs = %v, want %v", got, want)
+	}
+	if got := topology.RouteMapSummary; got != "0-511:shard=7,512-1023:shard=9" {
+		t.Fatalf("RouteMapSummary = %q, want two-Shard placement summary", got)
+	}
+}
+
+func TestValidateStartupTopologyRejectsSingleShardProductionPlacement(t *testing.T) {
+	placementFile := writePlacementFile(t, `{
+		"slot_count": 1024,
+		"shards": [7],
+		"local_shards": [7],
+		"ranges": [
+			{"shard_id": 7, "start_slot": 0, "end_slot": 1023}
+		]
+	}`)
+
+	_, err := validateStartupTopology(Config{
+		SecurityMode:       security.ModeProduction,
+		ShardPlacementFile: placementFile,
+	})
+	if !errors.Is(err, routing.ErrInvalidPlacement) {
+		t.Fatalf("validateStartupTopology error = %v, want ErrInvalidPlacement", err)
 	}
 }
 
@@ -280,8 +313,62 @@ func TestNewAppRejectsInvalidPlacementBeforeListeners(t *testing.T) {
 	}
 }
 
+func TestNewAppRejectsShardDataDirSymlinkCollisionBeforeBackendSetup(t *testing.T) {
+	t.Setenv("SCRAP_BACKEND_TYPE", "unsupported-backend")
+	cfg := testAppConfig(t)
+	cfg.UploadEnabled = true
+	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t)
+
+	target := filepath.Join(cfg.DataDir, "shared-shard")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("MkdirAll target: %v", err)
+	}
+	shardsDir := filepath.Join(cfg.DataDir, "shards")
+	if err := os.MkdirAll(shardsDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll shards dir: %v", err)
+	}
+	for _, name := range []string{"shard-7", "shard-9"} {
+		if err := os.Symlink(target, filepath.Join(shardsDir, name)); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+
+	_, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+	if !errors.Is(err, routing.ErrInvalidPlacement) {
+		t.Fatalf("newApp error = %v, want ErrInvalidPlacement before Backend setup", err)
+	}
+	if strings.Contains(err.Error(), "unsupported-backend") {
+		t.Fatalf("newApp reached Backend setup before Shard data-dir validation: %v", err)
+	}
+}
+
+func TestLocalShardDataDirsRejectsBrokenSymlinksToSameTarget(t *testing.T) {
+	cfg := testAppConfig(t)
+	topology, err := validateStartupTopology(Config{
+		SecurityMode:       security.ModeTest,
+		ShardPlacementFile: writeTwoShardPlacementFile(t),
+	})
+	if err != nil {
+		t.Fatalf("validateStartupTopology: %v", err)
+	}
+	shardsDir := filepath.Join(cfg.DataDir, "shards")
+	if err := os.MkdirAll(shardsDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll shards dir: %v", err)
+	}
+	for _, name := range []string{"shard-7", "shard-9"} {
+		if err := os.Symlink("future-shared-target", filepath.Join(shardsDir, name)); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+
+	_, err = localShardDataDirs(cfg.DataDir, topology)
+	if !errors.Is(err, routing.ErrInvalidPlacement) {
+		t.Fatalf("localShardDataDirs error = %v, want ErrInvalidPlacement", err)
+	}
+}
+
 func TestNewAppAcceptsMultiShardPlacementBeforeListeners(t *testing.T) {
-	placementFile := writeTwoShardPlacementFile(t, 7, 9)
+	placementFile := writeTwoShardPlacementFile(t)
 	cfg := testAppConfig(t)
 	cfg.ShardPlacementFile = placementFile
 	cfg.ListenAddr = "bad-listen-address"
@@ -412,8 +499,10 @@ func writePlacementFile(t *testing.T, contents string) string {
 	return path
 }
 
-func writeTwoShardPlacementFile(t *testing.T, firstShardID, secondShardID uint64) string {
+func writeTwoShardPlacementFile(t *testing.T) string {
 	t.Helper()
+	const firstShardID uint64 = 7
+	const secondShardID uint64 = 9
 	return writePlacementFile(t, `{
 		"slot_count": 1024,
 		"shards": [`+strconv.FormatUint(firstShardID, 10)+`, `+strconv.FormatUint(secondShardID, 10)+`],

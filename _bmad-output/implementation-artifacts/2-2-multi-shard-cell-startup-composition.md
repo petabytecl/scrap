@@ -4,7 +4,7 @@ baseline_commit: d970de3d0bbec6b6ec260d94e3722774bc3995e4
 
 # Story 2.2: Multi-Shard Cell Startup Composition
 
-Status: in-progress
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -66,13 +66,16 @@ so that one Cell can run the required V2 multi-Shard topology.
 
 ### Review Findings
 
-- [ ] [Review][Patch] Remove raw addresses and `data_dir` from multi-Shard startup evidence/logs [internal/cmd/app.go:428]
-- [ ] [Review][Patch] Allow production Members that host one local Shard when the placement configures multiple Shards [internal/cmd/routing_config.go:85]
-- [ ] [Review][Patch] Move and strengthen local Shard data-directory collision validation before Backend setup, including symlink/real-path collisions [internal/cmd/shard_set.go:162]
-- [ ] [Review][Patch] Include bounded closed/failure categories in startup Shard status instead of only successful `open`/`not_local` states [internal/cmd/shard_set.go:76]
-- [ ] [Review][Patch] Add per-Shard metric attributes or an aggregate provider so multi-Shard metrics are not indistinguishable under `scrap.shard_id=multi` [internal/cmd/shard_set.go:151]
-- [ ] [Review][Patch] Preserve close errors when partial Shard startup cleanup fails [internal/cmd/shard_set.go:103]
-- [ ] [Review][Patch] Exercise fail-closed public Store methods in tests so `shard_routing_pending` behavior is proven [internal/cmd/app_test.go:88]
+- [x] [Review][Patch] Remove raw addresses and `data_dir` from multi-Shard startup evidence/logs [internal/cmd/app.go:428]
+- [x] [Review][Patch] Allow production Members that host one local Shard when the placement configures multiple Shards [internal/cmd/routing_config.go:85]
+- [x] [Review][Patch] Move and strengthen local Shard data-directory collision validation before Backend setup, including symlink/real-path collisions [internal/cmd/shard_set.go:162]
+- [x] [Review][Patch] Include bounded closed/failure categories in startup Shard status instead of only successful `open`/`not_local` states [internal/cmd/shard_set.go:76]
+- [x] [Review][Patch] Add per-Shard metric attributes or an aggregate provider so multi-Shard metrics are not indistinguishable under `scrap.shard_id=multi` [internal/cmd/shard_set.go:151]
+- [x] [Review][Patch] Preserve close errors when partial Shard startup cleanup fails [internal/cmd/shard_set.go:103]
+- [x] [Review][Patch] Exercise fail-closed public Store methods in tests so `shard_routing_pending` behavior is proven [internal/cmd/app_test.go:88]
+- [x] [Review][Patch] Preserve high Shard IDs in per-Shard metric attributes without `int64` collapse [internal/cmd/telemetry.go]
+- [x] [Review][Patch] Reject broken symlinks that point multiple local Shards at the same target directory [internal/cmd/shard_set.go]
+- [x] [Review][Patch] Keep cleanup-failed Shards visible in startup status and preserve close/unregister rollback errors [internal/cmd/shard_set.go]
 
 ## Dev Notes
 
@@ -159,12 +162,20 @@ GPT-5 Codex
 
 - Research: `gh search repos "multi shard startup go raft shard set" --limit 5` and `gh search code "local_shards DisallowUnknownFields shard placement" --language go --limit 5` returned no reusable implementation to adopt.
 - Research: Exa search confirmed the standard library `encoding/json.Decoder` + `DisallowUnknownFields` path was the right no-dependency fit for strict placement config parsing.
+- Review follow-up research: `gh search code 'ObserveInt64 WithAttributes language:Go' --limit 5` and Exa search for OpenTelemetry Go observable gauge attributes confirmed callback observations should attach bounded attributes with `metric.WithAttributes`.
+- Secondary review pass: blind and edge-case review layers identified metric Shard ID collapse, broken symlink target collisions, startup cleanup status gaps, and metric-registration rollback cleanup gaps; acceptance review found no AC/spec drift.
 - Red phase: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd` failed before implementation because `validateStartupTopology`, `app.shards`, and `app.publicStore` were absent.
+- Red phase: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/telemetry` failed on the unchecked review findings before patching: production one-local-Shard validation, symlink data-dir collision order, startup status failure categories, Shard metric attributes, and cleanup error preservation.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/routing ./internal/peer` passed.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./...` passed.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run TestWriteDocumentPeerDurabilityQuorumAllowsOnePeerFailure -count=1 -v` passed after observing a race-suite timing failure in that pre-existing helper.
 - Verification: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/telemetry` passed after review fixes.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/routing ./internal/peer ./internal/telemetry` passed after review fixes.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build go test ./...` passed after review fixes.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed after review fixes.
+- Verification: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes, including lint, generated-code check, normal tests, race tests, integration-tag tests, and `scrapd`/`scrapctl` builds.
 
 ### Completion Notes List
 
@@ -174,6 +185,9 @@ GPT-5 Codex
 - Added narrow peer dispatch adapters for Raft, replicated document append, and `TransferBlock` block-dir resolution by request Shard ID. Unknown local Shards fail closed with bounded `FAILED_PRECONDITION` errors.
 - Public Document serving fails closed in multi-Shard mode until Story 2.3 adds Store-compatible Transaction routing. Existing admin upload/eviction/rewrap/test-hook surfaces remain on the single-Shard fallback only; Story 2.5 still owns operator-facing Shard-aware diagnostics.
 - Health now checks the local Shard set instead of one arbitrary Shard. Process-level telemetry uses a bounded `scrap.shard_id=multi` label for multi-Shard composition rather than pretending Shard `0` represents the whole Cell.
+- Addressed review findings by redacting raw startup address/path fields, accepting one-local-Shard production Members in multi-Shard placements, validating real per-Shard data-dir collisions before Backend setup, preserving cleanup errors, exposing bounded failure categories in Shard startup status, and adding per-Shard OTel attributes to Raft/disk metrics.
+- Addressed secondary review hardening by preserving high Shard IDs as string metric attributes, catching broken symlink target collisions, marking cleanup-failed Shards in startup status, and keeping rollback close/unregister errors retryable and visible.
+- Added tests for multi-Shard public Store fail-closed methods returning `shard_routing_pending`.
 - Redacted two-Shard status example:
   ```text
   shard_status=[{shard_id:7 membership:local routes:[0-511] state:open} {shard_id:9 membership:local routes:[512-1023] state:open}]
@@ -191,6 +205,12 @@ GPT-5 Codex
 - `internal/cmd/shard_set.go`
 - `internal/cmd/shard_set_test.go`
 - `internal/cmd/telemetry.go`
+- `internal/cmd/telemetry_test.go`
+- `internal/telemetry/attributes.go`
+- `internal/telemetry/disk.go`
+- `internal/telemetry/disk_test.go`
+- `internal/telemetry/raft.go`
+- `internal/telemetry/raft_test.go`
 - `internal/peer/server.go`
 - `internal/peer/transfer.go`
 - `internal/shard/write_ack_test.go`
@@ -200,3 +220,5 @@ GPT-5 Codex
 ## Change Log
 
 - 2026-06-11: Implemented multi-Shard startup composition and validation.
+- 2026-06-11: Addressed code review findings - 7 review patch items resolved.
+- 2026-06-11: Addressed secondary review cleanup and telemetry hardening findings.
