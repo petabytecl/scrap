@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/shard"
@@ -134,6 +140,62 @@ func TestNewAppLeavesShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *t
 	assertUnavailableReason(t, err, storeapi.UnavailableReasonShardRouteUnavailable)
 }
 
+func TestNewPeerServerAuthorizesOnlyValidatedLocalShards(t *testing.T) {
+	cfg := testAppConfig(t)
+	cfg.CellID = "cell-a"
+	cfg.ShardPlacementFile = writePlacementFile(t, `{
+		"slot_count": 1024,
+		"shards": [7, 9],
+		"local_shards": [7],
+		"ranges": [
+			{"shard_id": 7, "start_slot": 0, "end_slot": 511},
+			{"shard_id": 9, "start_slot": 512, "end_slot": 1023}
+		]
+	}`)
+	topology, err := validateStartupTopology(cfg)
+	if err != nil {
+		t.Fatalf("validateStartupTopology: %v", err)
+	}
+	shards := &shardSet{ids: append([]uint64(nil), topology.LocalShardIDs...)}
+	memberIdentity := scrapdMemberIdentity{MemberHostname: "scrapd-0", MemberID: "member-a"}
+	peerSrv := newPeerServer(cfg, shards, appSecurityRuntime{authorizer: security.NewStaticAuthorizer()}, memberIdentity)
+	t.Cleanup(func() {
+		if err := peerSrv.Close(); err != nil {
+			t.Fatalf("peer close: %v", err)
+		}
+	})
+	router := &recordingAppPeerRaftRouter{}
+	peerSrv.SetRaftRouter(router)
+	ctx := appPeerAuthContext(security.PeerIdentityConfig{
+		CellID:         "cell-a",
+		MemberHostname: "scrapd-1",
+		MemberID:       "member-b",
+	})
+
+	if _, err := peerSrv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{ShardId: 7, Message: appPeerRaftMessage(t)}); err != nil {
+		t.Fatalf("ForwardRaft local Shard: %v", err)
+	}
+	if got, want := router.shardIDs, []uint64{7}; !uint64SlicesEqual(got, want) {
+		t.Fatalf("routed Shards = %v, want %v", got, want)
+	}
+
+	shards.ids[0] = 9
+	_, err = peerSrv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{ShardId: 9, Message: appPeerRaftMessage(t)})
+	if !errors.Is(err, security.ErrPermissionDenied) || status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ForwardRaft remote Shard = %v (%s), want permission denied", err, status.Code(err))
+	}
+	if got, want := router.shardIDs, []uint64{7}; !uint64SlicesEqual(got, want) {
+		t.Fatalf("routed Shards after remote Shard = %v, want %v", got, want)
+	}
+
+	if _, err := peerSrv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{ShardId: 7, Message: appPeerRaftMessage(t)}); err != nil {
+		t.Fatalf("ForwardRaft local Shard after shardSet mutation: %v", err)
+	}
+	if got, want := router.shardIDs, []uint64{7, 7}; !uint64SlicesEqual(got, want) {
+		t.Fatalf("routed Shards after shardSet mutation = %v, want %v", got, want)
+	}
+}
+
 func TestAppLogStartingRedactsMultiShardEvidence(t *testing.T) {
 	var log bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&log, nil))
@@ -172,6 +234,32 @@ func TestAppLogStartingRedactsMultiShardEvidence(t *testing.T) {
 			t.Fatalf("startup log missing %q: %s", required, got)
 		}
 	}
+}
+
+type recordingAppPeerRaftRouter struct {
+	shardIDs []uint64
+}
+
+func (r *recordingAppPeerRaftRouter) RouteRaftMessage(_ context.Context, shardID uint64, _ raftpb.Message) error {
+	r.shardIDs = append(r.shardIDs, shardID)
+	return nil
+}
+
+func appPeerAuthContext(identity security.PeerIdentityConfig) context.Context {
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    security.PeerIdentityPrincipalID(identity),
+		Roles: security.NewRoleSet(security.RolePeerMember),
+	})
+	return security.ContextWithPeerIdentity(ctx, identity)
+}
+
+func appPeerRaftMessage(t *testing.T) []byte {
+	t.Helper()
+	data, err := (&raftpb.Message{}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal raft message: %v", err)
+	}
+	return data
 }
 
 func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {

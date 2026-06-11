@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 
 	"go.etcd.io/raft/v3/raftpb"
@@ -260,7 +261,8 @@ func TestPeerServerDeniesUnauthorizedBeforeBlockTransfer(t *testing.T) {
 func TestPeerServerDeniesUnauthorizedShardBeforeBlockTransfer(t *testing.T) {
 	expected := peerAuthExpectedIdentity()
 	authz := security.NewStaticAuthorizer()
-	srv := NewServer(t.TempDir(), WithAuthorizer(authz, expected), WithAuthorizedShards(7))
+	resolver := &recordingBlockDirResolver{}
+	srv := NewServer(t.TempDir(), WithAuthorizer(authz, expected), WithAuthorizedShards(7), WithBlockDirResolver(resolver))
 	defer func() { _ = srv.Close() }()
 
 	stream := &transferBlockStream{
@@ -276,6 +278,36 @@ func TestPeerServerDeniesUnauthorizedShardBeforeBlockTransfer(t *testing.T) {
 	}
 	if stream.sends != 0 {
 		t.Fatalf("transfer sends after wrong Shard = %d, want 0", stream.sends)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("block dir resolver calls after wrong Shard = %d, want 0", resolver.calls)
+	}
+}
+
+func TestPeerServerAllowsMultipleAuthorizedShards(t *testing.T) {
+	expected := peerAuthExpectedIdentity()
+	authz := security.NewStaticAuthorizer()
+	srv := NewServer(t.TempDir(), WithAuthorizer(authz, expected), WithAuthorizedShards(7, 9))
+	defer func() { _ = srv.Close() }()
+
+	router := &recordingRaftRouter{}
+	srv.SetRaftRouter(router)
+	ctx := peerAuthContext(security.NewRoleSet(security.RolePeerMember), security.PeerIdentityConfig{
+		CellID:         "cell-a",
+		MemberHostname: "scrapd-1",
+		MemberID:       "member-b",
+	})
+
+	for _, shardID := range []uint64{7, 9} {
+		if _, err := srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{
+			ShardId: shardID,
+			Message: marshalRaftMessage(t),
+		}); err != nil {
+			t.Fatalf("ForwardRaft Shard %d: %v", shardID, err)
+		}
+	}
+	if got, want := router.shardIDs, []uint64{7, 9}; !slices.Equal(got, want) {
+		t.Fatalf("routed Shards = %v, want %v", got, want)
 	}
 }
 
@@ -305,12 +337,23 @@ func marshalRaftMessage(t *testing.T) []byte {
 }
 
 type recordingRaftRouter struct {
+	calls    int
+	shardIDs []uint64
+}
+
+func (r *recordingRaftRouter) RouteRaftMessage(_ context.Context, shardID uint64, _ raftpb.Message) error {
+	r.calls++
+	r.shardIDs = append(r.shardIDs, shardID)
+	return nil
+}
+
+type recordingBlockDirResolver struct {
 	calls int
 }
 
-func (r *recordingRaftRouter) RouteRaftMessage(context.Context, uint64, raftpb.Message) error {
+func (r *recordingBlockDirResolver) BlockDirForShard(uint64) (string, bool) {
 	r.calls++
-	return nil
+	return "", false
 }
 
 type recordingReplicationSink struct {

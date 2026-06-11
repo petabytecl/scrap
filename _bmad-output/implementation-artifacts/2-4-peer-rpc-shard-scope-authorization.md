@@ -4,7 +4,7 @@ baseline_commit: 461e53622a399b66e34842f4a9d2ea3a2150cad0
 
 # Story 2.4: Peer RPC Shard-Scope Authorization
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -30,36 +30,36 @@ so that one peer cannot mutate or read Shard state it is not authorized for.
 
 ## Tasks / Subtasks
 
-- [ ] Lock app-level authorized-Shard derivation from placement membership. (AC: 1, 4)
-  - [ ] Add or update an `internal/cmd` test that starts from validated multi-Shard placement/local membership, builds the peer server path through `newPeerServer`, and proves `peer.WithAuthorizedShards(shards.IDs()...)` reflects only local Shards.
-  - [ ] Prove a local Shard request may reach the normal handler path by replacing the Raft router or replication sink with a recording test double after construction.
-  - [ ] Prove a remote/non-local Shard request is denied before the same recording double is called.
-  - [ ] Preserve `shardSet.IDs()` copy semantics; do not retain mutable caller-owned slices/maps in new long-lived peer authorization state.
-- [ ] Complete wrong-Shard side-effect coverage for Shard-carrying peer RPCs. (AC: 2, 4)
-  - [ ] Cover `ForwardRaft`, `ForwardRaftStream`, `ReplicateDocument`, and `TransferBlock` with wrong-Shard denial assertions.
-  - [ ] Assert no side effects occur: no Raft route call, no replication sink call, no Block transfer send, and no local Block writer/file operation when a recording boundary exists.
-  - [ ] Include at least one allowed-path check for two local Shards so the tests prove allow/deny behavior is Shard-set based, not a hardcoded Shard `0` or first configured Shard.
-  - [ ] Treat `ConsistencyCheck` and `RequestIndexRebuild` carefully: their current proto requests do not carry `shard_id`. In multi-Shard mode, `newPeerServer` currently does not wire scrub/rebuild handlers because there is no unambiguous Shard target. Preserve this fail-closed behavior unless an ADR-backed wire-contract change is explicitly added.
-- [ ] Verify stale membership and missing auth context fail closed. (AC: 2, 4)
-  - [ ] Add tests where the caller has peer role and same Cell identity but requests a Shard outside the configured authorized set.
-  - [ ] Add tests where peer identity or principal context is missing and assert denial happens before Shard-scope handlers.
-  - [ ] Add tests where role exists but expected Cell/Member binding does not match, and assert no side effects.
-  - [ ] Use typed errors/status codes (`security.ErrPermissionDenied`, `security.ErrUnauthenticated`, `codes.PermissionDenied`, `codes.Unauthenticated`) instead of string matching.
-- [ ] Prove bounded audit/log/metric evidence for denials. (AC: 3)
-  - [ ] Extend `internal/peer` audit tests to cover wrong-Shard denial for every Shard-carrying RPC family or a table that classifies each family.
-  - [ ] Capture audit/log/status/metric evidence with distinctive forbidden values and assert leak scans omit raw principal IDs, peer addresses, cert material, Transaction IDs, Document names, local paths, and Backend keys.
-  - [ ] Keep labels and audit fields low-cardinality: surface, operation, target, result, reason, authorization status, and bounded Shard ID are acceptable; raw request identifiers are not.
-  - [ ] If new metrics are added, use OpenTelemetry and update tests so `make check` proves bounded attributes. Prefer existing rate-limit and audit evidence if it satisfies AC-2.4.3 without new instruments.
-- [ ] Keep scope narrow and preserve wire/storage contracts. (AC: 1-4)
-  - [ ] Do not change `proto/`, `gen/`, storage format, Backend object identity, Raft command shape, public API routing, admin diagnostics, `scrapctl`, tenant identity, or Shard rebalancing unless the story proves a required gap and adds the required ADR first.
-  - [ ] Do not infer authorized Shards from hostnames, peer addresses, certificates alone, Backend keys, local Block files, cached peer maps, or public routing output.
-  - [ ] Do not add `tenant_id` to peer authorization or storage identity.
-  - [ ] Do not broaden `internal/peer` imports into `internal/shard`; keep narrow interfaces (`ReplicationSink`, `BlockDirResolver`, `RaftRouter`, scrub/rebuild handlers).
-- [ ] Record verification in this story before review. (AC: 1-4)
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/peer ./internal/cmd ./internal/security`.
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`.
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make check`.
-  - [ ] A leak-scan command over captured evidence/log/status strings or changed files, recorded with PASS/FAIL.
+- [x] Lock app-level authorized-Shard derivation from placement membership. (AC: 1, 4)
+  - [x] Add or update an `internal/cmd` test that starts from validated multi-Shard placement/local membership, builds the peer server path through `newPeerServer`, and proves `peer.WithAuthorizedShards(shards.IDs()...)` reflects only local Shards.
+  - [x] Prove a local Shard request may reach the normal handler path by replacing the Raft router or replication sink with a recording test double after construction.
+  - [x] Prove a remote/non-local Shard request is denied before the same recording double is called.
+  - [x] Preserve `shardSet.IDs()` copy semantics; do not retain mutable caller-owned slices/maps in new long-lived peer authorization state.
+- [x] Complete wrong-Shard side-effect coverage for Shard-carrying peer RPCs. (AC: 2, 4)
+  - [x] Cover `ForwardRaft`, `ForwardRaftStream`, `ReplicateDocument`, and `TransferBlock` with wrong-Shard denial assertions.
+  - [x] Assert no side effects occur: no Raft route call, no replication sink call, no Block transfer send, and no local Block writer/file operation when a recording boundary exists.
+  - [x] Include at least one allowed-path check for two local Shards so the tests prove allow/deny behavior is Shard-set based, not a hardcoded Shard `0` or first configured Shard.
+  - [x] Treat `ConsistencyCheck` and `RequestIndexRebuild` carefully: their current proto requests do not carry `shard_id`. In multi-Shard mode, `newPeerServer` currently does not wire scrub/rebuild handlers because there is no unambiguous Shard target. Preserve this fail-closed behavior unless an ADR-backed wire-contract change is explicitly added.
+- [x] Verify stale membership and missing auth context fail closed. (AC: 2, 4)
+  - [x] Add tests where the caller has peer role and same Cell identity but requests a Shard outside the configured authorized set.
+  - [x] Add tests where peer identity or principal context is missing and assert denial happens before Shard-scope handlers.
+  - [x] Add tests where role exists but expected Cell/Member binding does not match, and assert no side effects.
+  - [x] Use typed errors/status codes (`security.ErrPermissionDenied`, `security.ErrUnauthenticated`, `codes.PermissionDenied`, `codes.Unauthenticated`) instead of string matching.
+- [x] Prove bounded audit/log/metric evidence for denials. (AC: 3)
+  - [x] Extend `internal/peer` audit tests to cover wrong-Shard denial for every Shard-carrying RPC family or a table that classifies each family.
+  - [x] Capture audit/log/status/metric evidence with distinctive forbidden values and assert leak scans omit raw principal IDs, peer addresses, cert material, Transaction IDs, Document names, local paths, and Backend keys.
+  - [x] Keep labels and audit fields low-cardinality: surface, operation, target, result, reason, authorization status, and bounded Shard ID are acceptable; raw request identifiers are not.
+  - [x] If new metrics are added, use OpenTelemetry and update tests so `make check` proves bounded attributes. Prefer existing rate-limit and audit evidence if it satisfies AC-2.4.3 without new instruments.
+- [x] Keep scope narrow and preserve wire/storage contracts. (AC: 1-4)
+  - [x] Do not change `proto/`, `gen/`, storage format, Backend object identity, Raft command shape, public API routing, admin diagnostics, `scrapctl`, tenant identity, or Shard rebalancing unless the story proves a required gap and adds the required ADR first.
+  - [x] Do not infer authorized Shards from hostnames, peer addresses, certificates alone, Backend keys, local Block files, cached peer maps, or public routing output.
+  - [x] Do not add `tenant_id` to peer authorization or storage identity.
+  - [x] Do not broaden `internal/peer` imports into `internal/shard`; keep narrow interfaces (`ReplicationSink`, `BlockDirResolver`, `RaftRouter`, scrub/rebuild handlers).
+- [x] Record verification in this story before review. (AC: 1-4)
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/peer ./internal/cmd ./internal/security`.
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`.
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+  - [x] A leak-scan command over captured evidence/log/status strings or changed files, recorded with PASS/FAIL.
 
 ## Dev Notes
 
@@ -154,12 +154,31 @@ GPT-5 Codex
 
 ### Debug Log References
 
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/peer ./internal/security` initially failed because the new audit table used `context.Context` without importing `context`.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/peer ./internal/security` passed after adding the missing import.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
+- LINT: `env GOCACHE=/tmp/scrap-v2-go-build make check` failed on `gocognit` for the new wrong-Shard audit test; split case setup and assertions into helpers.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/peer ./internal/security` passed after the lint refactor.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after the lint refactor.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/peer -run TestPeerServerAuditsWrongShardDenialsWithoutRawIdentifierLeaks -count=1` passed as the explicit leak-scan evidence command.
+
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- Added app-level proof that `newPeerServer` derives authorized peer Shards from validated local placement membership and copies that set before serving.
+- Added peer tests proving multiple local Shards are allowed while wrong-Shard `TransferBlock` denial happens before Block directory resolution or stream sends.
+- Added bounded audit/status evidence for wrong-Shard denials across `ForwardRaft`, `ForwardRaftStream`, `ReplicateDocument`, and `TransferBlock` with raw identifier leak checks.
+- Kept scope to tests and story evidence only: no proto, generated files, storage identity, peer wire contract, public API routing, admin, `scrapctl`, Backend, or Shard production behavior changed.
 
 ### File List
+
+- `_bmad-output/implementation-artifacts/2-4-peer-rpc-shard-scope-authorization.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/cmd/app_test.go`
+- `internal/peer/audit_ratelimit_test.go`
+- `internal/peer/authorization_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 2.4 peer RPC Shard-scope authorization context and moved status to ready-for-dev.
+- 2026-06-11: Implemented Story 2.4 peer Shard-scope authorization evidence and moved status to review.
