@@ -304,6 +304,11 @@ func (r *scrapdTelemetryRuntime) newRateLimitMetrics() (*security.RateLimitOTelM
 	return security.NewRateLimitOTelMetrics(m)
 }
 
+func (r *scrapdTelemetryRuntime) newAuthorizationMetrics() (*security.AuthorizationOTelMetrics, error) {
+	m := r.meterProvider.Meter(instrumentationScope)
+	return security.NewAuthorizationOTelMetrics(m)
+}
+
 func (r *scrapdTelemetryRuntime) registerRaftMetrics(shardID uint64, provider scraptelemetry.RaftStateProvider) (*scraptelemetry.RaftMetrics, error) {
 	m := r.meterProvider.Meter(instrumentationScope)
 	rm, err := scraptelemetry.NewRaftMetrics(m, provider, shardMetricAttribute(shardID))

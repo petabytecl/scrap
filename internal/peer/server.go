@@ -89,6 +89,12 @@ func WithAuditSink(sink audit.Sink) ServerOption {
 	}
 }
 
+func WithAuthorizationObserver(observer security.AuthorizationObserver) ServerOption {
+	return func(s *Server) {
+		s.authorizationObserver = observer
+	}
+}
+
 func WithRateLimiter(limiter *security.RateLimiter) ServerOption {
 	return func(s *Server) {
 		s.rateLimiter = limiter
@@ -103,21 +109,22 @@ func WithLogger(logger *slog.Logger) ServerOption {
 
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
-	blocksDir            string
-	blockDirResolver     BlockDirResolver
-	scrubCache           scrub.ResultCache
-	rebuildHandler       RebuildHandler
-	replicationSink      ReplicationSink
-	authorizer           *security.Authorizer
-	expectedPeerIdentity security.PeerIdentityConfig
-	authorizedShardIDs   map[uint64]struct{}
-	auditSink            audit.Sink
-	rateLimiter          *security.RateLimiter
-	raftRouter           atomic.Pointer[RaftRouter]
-	logger               *slog.Logger
-	malformedRaftMsgs    atomic.Uint64
-	mu                   sync.Mutex
-	writers              map[uint64]*blockState
+	blocksDir             string
+	blockDirResolver      BlockDirResolver
+	scrubCache            scrub.ResultCache
+	rebuildHandler        RebuildHandler
+	replicationSink       ReplicationSink
+	authorizer            *security.Authorizer
+	expectedPeerIdentity  security.PeerIdentityConfig
+	authorizedShardIDs    map[uint64]struct{}
+	authorizationObserver security.AuthorizationObserver
+	auditSink             audit.Sink
+	rateLimiter           *security.RateLimiter
+	raftRouter            atomic.Pointer[RaftRouter]
+	logger                *slog.Logger
+	malformedRaftMsgs     atomic.Uint64
+	mu                    sync.Mutex
+	writers               map[uint64]*blockState
 }
 
 func (s *Server) SetRaftRouter(router RaftRouter) {
@@ -423,7 +430,7 @@ func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyC
 		return nil, err
 	}
 	if s.scrubCache == nil {
-		return nil, status.Error(codes.NotFound, "scrub cache not configured")
+		return nil, status.Error(codes.FailedPrecondition, "scrub cache not configured")
 	}
 	result, ok := s.scrubCache.GetScrubResult(req.ScrubId)
 	if !ok {
@@ -452,9 +459,11 @@ func (s *Server) authorizePeerWithChecks(ctx context.Context, operation, target 
 	}
 	for _, check := range checks {
 		if err := check(); err != nil {
-			if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+			reason := s.auditReasonForError(err)
+			if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, reason); auditErr != nil {
 				return status.Error(codes.Internal, "audit event failed")
 			}
+			s.recordAuthorizationDenied(ctx, operation, reason, err)
 			return err
 		}
 	}
@@ -469,9 +478,11 @@ func (s *Server) checkPeerAuthorization(ctx context.Context, operation, target s
 		return security.RateLimitedError()
 	}
 	if err := s.authorizePeerIdentity(ctx); err != nil {
-		if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+		reason := s.auditReasonForError(err)
+		if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, reason); auditErr != nil {
 			return status.Error(codes.Internal, "audit event failed")
 		}
+		s.recordAuthorizationDenied(ctx, operation, reason, err)
 		return err
 	}
 	return nil
@@ -507,9 +518,11 @@ func (s *Server) authorizePeerIdentity(ctx context.Context) error {
 
 func (s *Server) authorizePeerShardScope(ctx context.Context, operation, target string, shardID uint64) error {
 	if err := s.authorizeShard(shardID); err != nil {
-		if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
+		reason := s.auditReasonForError(err)
+		if auditErr := s.recordAudit(ctx, operation, target, audit.ResultDenied, reason); auditErr != nil {
 			return status.Error(codes.Internal, "audit event failed")
 		}
+		s.recordAuthorizationDenied(ctx, operation, reason, err)
 		return err
 	}
 	return nil
@@ -547,6 +560,18 @@ func (s *Server) checkRateLimit(ctx context.Context, operation string) security.
 		return security.RateLimitDecision{}
 	}
 	return s.rateLimiter.Allow(ctx, security.RateLimitSurfacePeer, peerPrincipalID(ctx), operation)
+}
+
+func (s *Server) recordAuthorizationDenied(ctx context.Context, operation, reason string, err error) {
+	if s.authorizationObserver == nil {
+		return
+	}
+	s.authorizationObserver.AuthorizationDenied(ctx, security.AuthorizationDecision{
+		Surface:   security.RateLimitSurfacePeer,
+		Operation: operation,
+		Reason:    reason,
+		Status:    security.AuthorizationStatusForError(err),
+	})
 }
 
 func (s *Server) recordAudit(ctx context.Context, operation, target, result, reason string) error {

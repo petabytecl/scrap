@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"testing"
 
@@ -208,6 +209,53 @@ func TestPeerServerDeniesUnauthorizedShardBeforeReplicationSink(t *testing.T) {
 	}
 }
 
+func TestPeerServerDeniesUnauthorizedShardBeforeLocalReplicationFiles(t *testing.T) {
+	expected := peerAuthExpectedIdentity()
+	authz := security.NewStaticAuthorizer()
+	dir := t.TempDir()
+	srv := NewServer(dir, WithAuthorizer(authz, expected), WithAuthorizedShards(7))
+	defer func() { _ = srv.Close() }()
+
+	stream := &replicateDocumentStream{
+		ctx: peerAuthContext(security.NewRoleSet(security.RolePeerMember), security.PeerIdentityConfig{
+			CellID:         "cell-a",
+			MemberHostname: "scrapd-1",
+			MemberID:       "member-b",
+		}),
+		requests: []*scrapv1.ReplicateDocumentRequest{{
+			Part: &scrapv1.ReplicateDocumentRequest_Init{
+				Init: &scrapv1.ReplicateDocumentInit{
+					ShardId:      8,
+					BlockId:      1,
+					TotalBytes:   6,
+					FrameCount:   1,
+					DocumentName: "invoice.xml",
+				},
+			},
+		}, {
+			Part: &scrapv1.ReplicateDocumentRequest_ChunkData{
+				ChunkData: []byte("secret"),
+			},
+		}},
+	}
+	err := srv.ReplicateDocument(stream)
+	if !errors.Is(err, security.ErrPermissionDenied) || status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ReplicateDocument wrong Shard = %v (%s), want permission denied", err, status.Code(err))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read block dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("local block dir entries after wrong Shard = %v, want none", entries)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.writers) != 0 {
+		t.Fatalf("local block writers after wrong Shard = %d, want 0", len(srv.writers))
+	}
+}
+
 func TestPeerServerDeniesUnauthorizedBeforeRebuildAndScrub(t *testing.T) {
 	expected := peerAuthExpectedIdentity()
 	authz := security.NewStaticAuthorizer()
@@ -287,17 +335,33 @@ func TestPeerServerDeniesUnauthorizedShardBeforeBlockTransfer(t *testing.T) {
 func TestPeerServerAllowsMultipleAuthorizedShards(t *testing.T) {
 	expected := peerAuthExpectedIdentity()
 	authz := security.NewStaticAuthorizer()
-	srv := NewServer(t.TempDir(), WithAuthorizer(authz, expected), WithAuthorizedShards(7, 9))
+	sink := &recordingReplicationSink{}
+	resolver := &recordingBlockDirResolver{}
+	srv := NewServer(
+		t.TempDir(),
+		WithAuthorizer(authz, expected),
+		WithReplicationSink(sink),
+		WithBlockDirResolver(resolver),
+		WithAuthorizedShards(7, 9),
+	)
 	defer func() { _ = srv.Close() }()
 
-	router := &recordingRaftRouter{}
-	srv.SetRaftRouter(router)
 	ctx := peerAuthContext(security.NewRoleSet(security.RolePeerMember), security.PeerIdentityConfig{
 		CellID:         "cell-a",
 		MemberHostname: "scrapd-1",
 		MemberID:       "member-b",
 	})
 
+	assertMultipleShardForwardRaftAllowed(ctx, t, srv)
+	assertMultipleShardForwardRaftStreamAllowed(ctx, t, srv)
+	assertMultipleShardReplicationAllowed(ctx, t, srv, sink)
+	assertMultipleShardTransferBlockReachesResolver(ctx, t, srv, resolver)
+}
+
+func assertMultipleShardForwardRaftAllowed(ctx context.Context, t *testing.T, srv *Server) {
+	t.Helper()
+	router := &recordingRaftRouter{}
+	srv.SetRaftRouter(router)
 	for _, shardID := range []uint64{7, 9} {
 		if _, err := srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{
 			ShardId: shardID,
@@ -308,6 +372,62 @@ func TestPeerServerAllowsMultipleAuthorizedShards(t *testing.T) {
 	}
 	if got, want := router.shardIDs, []uint64{7, 9}; !slices.Equal(got, want) {
 		t.Fatalf("routed Shards = %v, want %v", got, want)
+	}
+}
+
+func assertMultipleShardForwardRaftStreamAllowed(ctx context.Context, t *testing.T, srv *Server) {
+	t.Helper()
+	router := &recordingRaftRouter{}
+	srv.SetRaftRouter(router)
+	err := srv.ForwardRaftStream(&forwardRaftStream{
+		ctx: ctx,
+		requests: []*scrapv1.ForwardRaftStreamRequest{{
+			ShardId: 9,
+			Message: marshalRaftMessage(t),
+		}},
+	})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("ForwardRaftStream allowed Shard = %v, want EOF after routing", err)
+	}
+	if got, want := router.shardIDs, []uint64{9}; !slices.Equal(got, want) {
+		t.Fatalf("stream routed Shards = %v, want %v", got, want)
+	}
+}
+
+func assertMultipleShardReplicationAllowed(ctx context.Context, t *testing.T, srv *Server, sink *recordingReplicationSink) {
+	t.Helper()
+	for _, shardID := range []uint64{7, 9} {
+		err := srv.ReplicateDocument(&replicateDocumentStream{
+			ctx: ctx,
+			requests: []*scrapv1.ReplicateDocumentRequest{{
+				Part: &scrapv1.ReplicateDocumentRequest_Init{
+					Init: &scrapv1.ReplicateDocumentInit{ShardId: shardID, BlockId: shardID},
+				},
+			}},
+		})
+		if err != nil {
+			t.Fatalf("ReplicateDocument allowed Shard %d: %v", shardID, err)
+		}
+	}
+	if got, want := sink.shardIDs, []uint64{7, 9}; !slices.Equal(got, want) {
+		t.Fatalf("replicated Shards = %v, want %v", got, want)
+	}
+}
+
+func assertMultipleShardTransferBlockReachesResolver(ctx context.Context, t *testing.T, srv *Server, resolver *recordingBlockDirResolver) {
+	t.Helper()
+	for _, shardID := range []uint64{7, 9} {
+		stream := &transferBlockStream{ctx: ctx}
+		err := srv.TransferBlock(&scrapv1.TransferBlockRequest{ShardId: shardID, BlockId: 1}, stream)
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("TransferBlock allowed Shard %d = %v (%s), want failed precondition after resolver", shardID, err, status.Code(err))
+		}
+		if stream.sends != 0 {
+			t.Fatalf("TransferBlock allowed Shard %d sends = %d, want 0 before local data", shardID, stream.sends)
+		}
+	}
+	if got, want := resolver.shardIDs, []uint64{7, 9}; !slices.Equal(got, want) {
+		t.Fatalf("resolved block Shards = %v, want %v", got, want)
 	}
 }
 
@@ -348,21 +468,28 @@ func (r *recordingRaftRouter) RouteRaftMessage(_ context.Context, shardID uint64
 }
 
 type recordingBlockDirResolver struct {
-	calls int
+	calls    int
+	shardIDs []uint64
+	dir      string
+	ok       bool
 }
 
-func (r *recordingBlockDirResolver) BlockDirForShard(uint64) (string, bool) {
+func (r *recordingBlockDirResolver) BlockDirForShard(shardID uint64) (string, bool) {
 	r.calls++
-	return "", false
+	r.shardIDs = append(r.shardIDs, shardID)
+	return r.dir, r.ok
 }
 
 type recordingReplicationSink struct {
-	calls int
+	calls    int
+	shardIDs []uint64
+	err      error
 }
 
-func (s *recordingReplicationSink) AppendReplicatedDocument(context.Context, *scrapv1.ReplicateDocumentInit, io.Reader) ([]byte, error) {
+func (s *recordingReplicationSink) AppendReplicatedDocument(_ context.Context, init *scrapv1.ReplicateDocumentInit, _ io.Reader) ([]byte, error) {
 	s.calls++
-	return nil, nil
+	s.shardIDs = append(s.shardIDs, init.GetShardId())
+	return nil, s.err
 }
 
 type recordingRebuildHandler struct {

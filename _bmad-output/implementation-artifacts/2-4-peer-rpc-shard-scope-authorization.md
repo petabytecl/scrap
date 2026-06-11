@@ -4,7 +4,7 @@ baseline_commit: 461e53622a399b66e34842f4a9d2ea3a2150cad0
 
 # Story 2.4: Peer RPC Shard-Scope Authorization
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -61,6 +61,17 @@ so that one peer cannot mutate or read Shard state it is not authorized for.
   - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`.
   - [x] A leak-scan command over captured evidence/log/status strings or changed files, recorded with PASS/FAIL.
 
+### Review Findings
+
+- [x] [Review][Patch] Full app peer composition did not prove validated local Shard authorization source [internal/cmd/app_test.go] — fixed by moving the app-level proof through `newApp` with explicit multi-Shard placement and a single local Shard.
+- [x] [Review][Patch] Multi-Shard no-Shard peer RPC fail-closed behavior was under-tested [internal/cmd/app_test.go] — fixed by asserting `RequestIndexRebuild` and `ConsistencyCheck` fail closed in explicit multi-Shard placement, and by wiring no-Shard peer scrub/rebuild handlers only for the single-Shard fallback topology.
+- [x] [Review][Patch] Wrong-Shard audit table lacked side-effect assertions [internal/peer/audit_ratelimit_test.go] — fixed by asserting no Raft route, replication sink, Block directory resolver, or stream send occurs for the wrong-Shard denial matrix.
+- [x] [Review][Patch] Wrong-Shard denial evidence did not render logs or metrics [internal/peer/audit_ratelimit_test.go] — fixed by rendering audit log output and bounded OTel authorization-denial metric attributes into the leak scan evidence.
+- [x] [Review][Patch] Leak scan fixtures omitted peer address, certificate material, local path, Backend key, and dependency detail inputs [internal/peer/audit_ratelimit_test.go] — fixed by injecting those distinctive fixtures through context metadata, peer address, and side-effect test doubles before scanning evidence output.
+- [x] [Review][Patch] ReplicateDocument wrong-Shard denial did not prove local Block writer/file side effects were prevented [internal/peer/authorization_test.go] — fixed by exercising the no-sink local writer path and asserting no Block files or writer state are created.
+- [x] [Review][Patch] Multiple-authorized-Shard allow evidence covered only `ForwardRaft` [internal/peer/authorization_test.go] — fixed by extending allowed-path evidence to `ForwardRaftStream`, `ReplicateDocument`, and `TransferBlock` boundary progression.
+- [x] [Review][Patch] `shardSet.IDs()` copy semantics were not directly asserted [internal/cmd/app_test.go] — fixed by mutating a caller-owned `IDs()` result and proving app Shard membership remains unchanged.
+
 ## Dev Notes
 
 ### Current State
@@ -70,7 +81,7 @@ so that one peer cannot mutate or read Shard state it is not authorized for.
 - `internal/cmd/newPeerServer` already passes `peer.WithAuthorizedShards(shards.IDs()...)`. Story 2.4 should lock this with app-level tests that prove the set comes from validated local Shard membership.
 - `shardSet.IDs()` returns a copy. `peer.WithAuthorizedShards` also copies into `authorizedShardIDs`. Preserve these immutability properties.
 - `shardSetReplicationSink`, `shardSetRaftRouter`, and `shardSet.BlockDirForShard` already dispatch by explicit request Shard ID and fail closed when the target is not local.
-- `ConsistencyCheckRequest` and `RequestIndexRebuildRequest` currently do not include `shard_id`. `newPeerServer` wires scrub/rebuild handlers only when `shards.singleShard()` succeeds. In multi-Shard mode these RPCs have no Shard target and should stay fail-closed until an ADR-backed peer wire change adds a target.
+- `ConsistencyCheckRequest` and `RequestIndexRebuildRequest` currently do not include `shard_id`. `newPeerServer` wires scrub/rebuild handlers only for the single-Shard fallback topology. In explicit multi-Shard placement these RPCs have no Shard target and stay fail-closed until an ADR-backed peer wire change adds a target.
 - `internal/audit.NewEvent` hashes raw principal IDs into bounded `sha256:` handles. `internal/security.RateLimitOTelMetrics` emits bounded surface/operation/reason attributes and does not export the principal key.
 - `internal/cmd/newPeerGRPCServerOptions` already applies peer principal and peer identity interceptors for unary and streaming RPCs when production/test security controls are enabled.
 
@@ -161,6 +172,12 @@ GPT-5 Codex
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/peer ./internal/security` passed after the lint refactor.
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after the lint refactor.
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/peer -run TestPeerServerAuditsWrongShardDenialsWithoutRawIdentifierLeaks -count=1` passed as the explicit leak-scan evidence command.
+- REVIEW: BMad code-review launched Blind Hunter, Edge Case Hunter, and Acceptance Auditor layers against `461e53622a399b66e34842f4a9d2ea3a2150cad0..HEAD`; findings were patch-only with no decision-needed or deferred items.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/security ./internal/peer ./internal/cmd` passed after review patches.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed after review patches.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/peer -run TestPeerServerAuditsWrongShardDenialsWithoutRawIdentifierLeaks -count=1` passed after audit/log/status/metric leak evidence was expanded.
+- LINT: `env GOCACHE=/tmp/scrap-v2-go-build make check` initially failed on formatter/cyclop/context-argument lints in new review tests; ran `make fmt`, split assertions, and moved `context.Context` to first helper parameter.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review lint fixes.
 
 ### Completion Notes List
 
@@ -168,17 +185,26 @@ GPT-5 Codex
 - Added app-level proof that `newPeerServer` derives authorized peer Shards from validated local placement membership and copies that set before serving.
 - Added peer tests proving multiple local Shards are allowed while wrong-Shard `TransferBlock` denial happens before Block directory resolution or stream sends.
 - Added bounded audit/status evidence for wrong-Shard denials across `ForwardRaft`, `ForwardRaftStream`, `ReplicateDocument`, and `TransferBlock` with raw identifier leak checks.
-- Kept scope to tests and story evidence only: no proto, generated files, storage identity, peer wire contract, public API routing, admin, `scrapctl`, Backend, or Shard production behavior changed.
+- Added bounded OTel authorization-denial metrics for peer authorization failures and wired them through app composition.
+- Tightened explicit multi-Shard placement so no-Shard scrub/rebuild peer RPC handlers are not wired without an ADR-backed Shard target.
+- Kept scope out of proto, generated files, storage identity, peer wire contract, public API routing, admin, `scrapctl`, Backend, and Shard internals.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-4-peer-rpc-shard-scope-authorization.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/cmd/app.go`
 - `internal/cmd/app_test.go`
+- `internal/cmd/authorization_test.go`
+- `internal/cmd/telemetry.go`
+- `internal/cmd/tls.go`
 - `internal/peer/audit_ratelimit_test.go`
 - `internal/peer/authorization_test.go`
+- `internal/peer/server.go`
+- `internal/security/authorization_metrics.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 2.4 peer RPC Shard-scope authorization context and moved status to ready-for-dev.
 - 2026-06-11: Implemented Story 2.4 peer Shard-scope authorization evidence and moved status to review.
+- 2026-06-11: Addressed code-review findings, added bounded authorization-denial metrics, preserved multi-Shard no-Shard RPC fail-closed behavior, and moved status to done.

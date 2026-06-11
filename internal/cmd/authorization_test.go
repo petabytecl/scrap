@@ -41,7 +41,7 @@ func TestAppSecurityRuntimeLoadsProductionAuthorizer(t *testing.T) {
 	}
 	t.Setenv("OPENBAO_TOKEN", "test-token")
 
-	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil)
+	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil, nil)
 	if err != nil {
 		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestAppSecurityRuntimeLoadsProductionAuthorizer(t *testing.T) {
 }
 
 func TestAppSecurityRuntimeLeavesDevelopmentAuthorizerUnset(t *testing.T) {
-	runtime, err := newAppSecurityRuntimeOptions(Config{SecurityMode: security.ModeDevelopment}, slog.Default(), nil)
+	runtime, err := newAppSecurityRuntimeOptions(Config{SecurityMode: security.ModeDevelopment}, slog.Default(), nil, nil)
 	if err != nil {
 		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestAppSecurityRuntimeEnforcesExplicitTestControls(t *testing.T) {
 		},
 	}
 
-	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil)
+	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil, nil)
 	if err != nil {
 		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
 	}

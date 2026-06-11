@@ -19,15 +19,16 @@ import (
 )
 
 type appSecurityRuntime struct {
-	transport         *peer.SharedTransport
-	peerClient        *peer.Client
-	publicGRPCOptions []grpc.ServerOption
-	peerGRPCOptions   []grpc.ServerOption
-	adminTLS          adminTLSConfig
-	authorizer        *security.Authorizer
-	auditSink         audit.Sink
-	rateLimiter       *security.RateLimiter
-	transit           encryption.Transit
+	transport             *peer.SharedTransport
+	peerClient            *peer.Client
+	publicGRPCOptions     []grpc.ServerOption
+	peerGRPCOptions       []grpc.ServerOption
+	adminTLS              adminTLSConfig
+	authorizer            *security.Authorizer
+	auditSink             audit.Sink
+	rateLimiter           *security.RateLimiter
+	authorizationObserver security.AuthorizationObserver
+	transit               encryption.Transit
 }
 
 type adminTLSConfig struct {
@@ -39,7 +40,7 @@ type appAuthorizerConfig struct {
 	authorizer *security.Authorizer
 }
 
-func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Logger, rateObserver security.RateLimitObserver) (appSecurityRuntime, error) {
+func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Logger, rateObserver security.RateLimitObserver, authorizationObserver security.AuthorizationObserver) (appSecurityRuntime, error) {
 	transport, err := newSharedTransport(cfg, peers)
 	if err != nil {
 		return appSecurityRuntime{}, err
@@ -51,7 +52,7 @@ func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Log
 		return appSecurityRuntime{}, err
 	}
 
-	runtime, err := newAppSecurityRuntimeOptions(cfg, logger, rateObserver)
+	runtime, err := newAppSecurityRuntimeOptions(cfg, logger, rateObserver, authorizationObserver)
 	if err != nil {
 		peerClient.Close()
 		transport.Close()
@@ -62,7 +63,7 @@ func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Log
 	return runtime, nil
 }
 
-func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver security.RateLimitObserver) (appSecurityRuntime, error) {
+func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver security.RateLimitObserver, authorizationObserver security.AuthorizationObserver) (appSecurityRuntime, error) {
 	authorizerCfg, err := newAppAuthorizer(cfg)
 	if err != nil {
 		return appSecurityRuntime{}, err
@@ -93,13 +94,14 @@ func newAppSecurityRuntimeOptions(cfg Config, logger *slog.Logger, rateObserver 
 		return appSecurityRuntime{}, err
 	}
 	return appSecurityRuntime{
-		publicGRPCOptions: publicGRPCOptions,
-		peerGRPCOptions:   peerGRPCOptions,
-		adminTLS:          adminTLS,
-		authorizer:        authorizer,
-		auditSink:         auditSink,
-		rateLimiter:       rateLimiter,
-		transit:           transit,
+		publicGRPCOptions:     publicGRPCOptions,
+		peerGRPCOptions:       peerGRPCOptions,
+		adminTLS:              adminTLS,
+		authorizer:            authorizer,
+		auditSink:             auditSink,
+		rateLimiter:           rateLimiter,
+		authorizationObserver: authorizationObserver,
+		transit:               transit,
 	}, nil
 }
 

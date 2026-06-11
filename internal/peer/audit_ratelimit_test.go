@@ -1,20 +1,37 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"go.etcd.io/raft/v3/raftpb"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/security"
+)
+
+const (
+	wrongShardPeerAddressFixture     = "203.0.113.42:9443"
+	wrongShardCertMaterialFixture    = "-----BEGIN CERTIFICATE-----secret-cert-material-----END CERTIFICATE-----"
+	wrongShardTransactionFixture     = "tx-secret-route"
+	wrongShardDocumentFixture        = "invoice-secret.xml"
+	wrongShardLocalPathFixture       = "/tmp/secret-local-path"
+	wrongShardBackendKeyFixture      = "backend-key-secret"
+	wrongShardDependencyErrorFixture = "dependency detail secret"
 )
 
 func TestPeerServerAuditsAndRateLimitsPeerOperations(t *testing.T) {
@@ -144,42 +161,77 @@ func TestPeerServerAuditsWrongShardDenialsWithoutRawIdentifierLeaks(t *testing.T
 	for _, tt := range wrongShardAuditCases(t) {
 		t.Run(tt.name, func(t *testing.T) {
 			authz := security.NewStaticAuthorizer()
-			sink := audit.NewMemorySink()
-			srv := NewServer(t.TempDir(), WithAuthorizer(authz, expected), WithAuditSink(sink), WithAuthorizedShards(7))
+			var log bytes.Buffer
+			sink := newRecordingAuditLogSink(&log)
+			reader := metric.NewManualReader()
+			meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
+			t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+			authMetrics, err := security.NewAuthorizationOTelMetrics(meterProvider.Meter("test"))
+			if err != nil {
+				t.Fatalf("NewAuthorizationOTelMetrics: %v", err)
+			}
+			srv := NewServer(
+				t.TempDir(),
+				WithAuthorizer(authz, expected),
+				WithAuditSink(sink),
+				WithAuthorizationObserver(authMetrics),
+				WithAuthorizedShards(7),
+			)
 			defer func() { _ = srv.Close() }()
 			if tt.configure != nil {
 				tt.configure(srv)
 			}
 
-			err := tt.call(srv, peerAuthContext(security.NewRoleSet(security.RolePeerMember), caller))
-			assertWrongShardAuditDenial(t, tt, sink.Events(), err, caller)
+			err = tt.call(srv, wrongShardEvidenceContext(caller))
+			metricEvidence := authorizationDeniedMetricEvidence(t, reader, tt.operation)
+			assertWrongShardAuditDenial(t, tt, sink.Events(), err, caller, log.String(), metricEvidence)
+			if tt.assertNoSideEffects != nil {
+				tt.assertNoSideEffects(t)
+			}
 		})
 	}
 }
 
 type wrongShardAuditCase struct {
-	name      string
-	operation string
-	configure func(*Server)
-	call      func(*Server, context.Context) error
+	name                string
+	operation           string
+	target              string
+	configure           func(*Server)
+	call                func(*Server, context.Context) error
+	assertNoSideEffects func(*testing.T)
 }
 
 func wrongShardAuditCases(t *testing.T) []wrongShardAuditCase {
 	t.Helper()
+	forwardRouter := &recordingRaftRouter{}
+	streamRouter := &recordingRaftRouter{}
+	replicationSink := &recordingReplicationSink{
+		err: errors.New(wrongShardBackendKeyFixture + ": " + wrongShardDependencyErrorFixture),
+	}
+	blockResolver := &recordingBlockDirResolver{dir: wrongShardLocalPathFixture, ok: true}
+	blockStream := &transferBlockStream{}
 	return []wrongShardAuditCase{
 		{
 			name:      "ForwardRaft",
 			operation: audit.OperationForwardRaft,
-			configure: func(s *Server) { s.SetRaftRouter(&recordingRaftRouter{}) },
+			target:    audit.TargetPeer,
+			configure: func(s *Server) { s.SetRaftRouter(forwardRouter) },
 			call: func(s *Server, ctx context.Context) error {
 				_, err := s.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{ShardId: 8, Message: marshalRaftMessage(t)})
 				return err
+			},
+			assertNoSideEffects: func(t *testing.T) {
+				t.Helper()
+				if forwardRouter.calls != 0 {
+					t.Fatalf("ForwardRaft routed wrong Shard %d time(s), want 0", forwardRouter.calls)
+				}
 			},
 		},
 		{
 			name:      "ForwardRaftStream",
 			operation: audit.OperationForwardRaftStream,
-			configure: func(s *Server) { s.SetRaftRouter(&recordingRaftRouter{}) },
+			target:    audit.TargetPeer,
+			configure: func(s *Server) { s.SetRaftRouter(streamRouter) },
 			call: func(s *Server, ctx context.Context) error {
 				return s.ForwardRaftStream(&forwardRaftStream{
 					ctx: ctx,
@@ -189,11 +241,18 @@ func wrongShardAuditCases(t *testing.T) []wrongShardAuditCase {
 					}},
 				})
 			},
+			assertNoSideEffects: func(t *testing.T) {
+				t.Helper()
+				if streamRouter.calls != 0 {
+					t.Fatalf("ForwardRaftStream routed wrong Shard %d time(s), want 0", streamRouter.calls)
+				}
+			},
 		},
 		{
 			name:      "ReplicateDocument",
 			operation: audit.OperationReplicateDocument,
-			configure: func(s *Server) { s.replicationSink = &recordingReplicationSink{} },
+			target:    audit.TargetDocument,
+			configure: func(s *Server) { s.replicationSink = replicationSink },
 			call: func(s *Server, ctx context.Context) error {
 				return s.ReplicateDocument(&replicateDocumentStream{
 					ctx: ctx,
@@ -202,36 +261,67 @@ func wrongShardAuditCases(t *testing.T) []wrongShardAuditCase {
 							Init: &scrapv1.ReplicateDocumentInit{
 								ShardId:       8,
 								BlockId:       1,
-								TransactionId: "tx-secret-route",
-								DocumentName:  "invoice-secret.xml",
+								TransactionId: wrongShardTransactionFixture,
+								DocumentName:  wrongShardDocumentFixture,
 							},
 						},
 					}},
 				})
 			},
+			assertNoSideEffects: func(t *testing.T) {
+				t.Helper()
+				if replicationSink.calls != 0 {
+					t.Fatalf("ReplicateDocument called sink for wrong Shard %d time(s), want 0", replicationSink.calls)
+				}
+			},
 		},
 		{
 			name:      "TransferBlock",
 			operation: audit.OperationTransferBlock,
+			target:    audit.TargetBlock,
+			configure: func(s *Server) { s.blockDirResolver = blockResolver },
 			call: func(s *Server, ctx context.Context) error {
-				return s.TransferBlock(&scrapv1.TransferBlockRequest{ShardId: 8, BlockId: 1}, &transferBlockStream{ctx: ctx})
+				blockStream.ctx = ctx
+				return s.TransferBlock(&scrapv1.TransferBlockRequest{ShardId: 8, BlockId: 1}, blockStream)
+			},
+			assertNoSideEffects: func(t *testing.T) {
+				t.Helper()
+				if blockResolver.calls != 0 {
+					t.Fatalf("TransferBlock resolved wrong Shard block dir %d time(s), want 0", blockResolver.calls)
+				}
+				if blockStream.sends != 0 {
+					t.Fatalf("TransferBlock sent wrong Shard response %d time(s), want 0", blockStream.sends)
+				}
 			},
 		},
 	}
 }
 
-func assertWrongShardAuditDenial(t *testing.T, tt wrongShardAuditCase, events []audit.Event, err error, caller security.PeerIdentityConfig) {
+func assertWrongShardAuditDenial(t *testing.T, tt wrongShardAuditCase, events []audit.Event, err error, caller security.PeerIdentityConfig, logEvidence, metricEvidence string) {
 	t.Helper()
 	if !errors.Is(err, security.ErrPermissionDenied) || status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("%s wrong Shard = %v (%s), want permission denied", tt.name, err, status.Code(err))
 	}
+	assertWrongShardAuditEvent(t, tt, events)
+	assertWrongShardEvidenceNoLeaks(t, tt, events[0], err, caller, logEvidence, metricEvidence)
+}
+
+func assertWrongShardAuditEvent(t *testing.T, tt wrongShardAuditCase, events []audit.Event) {
+	t.Helper()
 	if len(events) != 1 {
 		t.Fatalf("audit events = %d, want 1: %+v", len(events), events)
 	}
-	if events[0].Operation != tt.operation || events[0].Result != audit.ResultDenied || events[0].Reason != audit.ReasonPermissionDenied {
+	if events[0].Surface != audit.SurfacePeer || events[0].Operation != tt.operation || events[0].Target != tt.target {
+		t.Fatalf("unexpected audit classification: %+v", events[0])
+	}
+	if events[0].Result != audit.ResultDenied || events[0].Reason != audit.ReasonPermissionDenied {
 		t.Fatalf("unexpected audit event: %+v", events[0])
 	}
-	rendered := fmt.Sprintf("%+v %v", events[0], err)
+}
+
+func assertWrongShardEvidenceNoLeaks(t *testing.T, tt wrongShardAuditCase, event audit.Event, err error, caller security.PeerIdentityConfig, logEvidence, metricEvidence string) {
+	t.Helper()
+	rendered := fmt.Sprintf("%+v %v %s %s", event, err, logEvidence, metricEvidence)
 	for _, forbidden := range wrongShardAuditForbiddenValues(caller) {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("%s denial evidence leaked %q in %q", tt.name, forbidden, rendered)
@@ -244,11 +334,122 @@ func wrongShardAuditForbiddenValues(caller security.PeerIdentityConfig) []string
 		caller.MemberHostname,
 		caller.MemberID,
 		security.PeerIdentityPrincipalID(caller),
-		"tx-secret-route",
-		"invoice-secret.xml",
-		"/tmp/secret",
-		"backend-key-secret",
+		wrongShardPeerAddressFixture,
+		wrongShardCertMaterialFixture,
+		wrongShardTransactionFixture,
+		wrongShardDocumentFixture,
+		wrongShardLocalPathFixture,
+		wrongShardBackendKeyFixture,
+		wrongShardDependencyErrorFixture,
 	}
+}
+
+func wrongShardEvidenceContext(caller security.PeerIdentityConfig) context.Context {
+	ctx := peerAuthContext(security.NewRoleSet(security.RolePeerMember), caller)
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-peer-certificate", wrongShardCertMaterialFixture))
+	return grpcpeer.NewContext(ctx, &grpcpeer.Peer{Addr: staticAddr(wrongShardPeerAddressFixture)})
+}
+
+type staticAddr string
+
+func (a staticAddr) Network() string {
+	return "tcp"
+}
+
+func (a staticAddr) String() string {
+	return string(a)
+}
+
+var _ net.Addr = staticAddr("")
+
+type recordingAuditLogSink struct {
+	memory *audit.MemorySink
+	logger audit.Sink
+}
+
+func newRecordingAuditLogSink(log *bytes.Buffer) *recordingAuditLogSink {
+	return &recordingAuditLogSink{
+		memory: audit.NewMemorySink(),
+		logger: audit.NewLoggerSink(slog.New(slog.NewJSONHandler(log, nil))),
+	}
+}
+
+func (s *recordingAuditLogSink) Record(ctx context.Context, event audit.Event) error {
+	if err := s.memory.Record(ctx, event); err != nil {
+		return err
+	}
+	return s.logger.Record(ctx, event)
+}
+
+func (s *recordingAuditLogSink) Events() []audit.Event {
+	return s.memory.Events()
+}
+
+func authorizationDeniedMetricEvidence(t *testing.T, reader *metric.ManualReader, operation string) string {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect authorization metrics: %v", err)
+	}
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != "scrap.security.authorization.denials" {
+				continue
+			}
+			return authorizationDeniedMetricDataPoint(t, m, operation)
+		}
+	}
+	t.Fatal("scrap.security.authorization.denials not found")
+	return ""
+}
+
+func authorizationDeniedMetricDataPoint(t *testing.T, m metricdata.Metrics, operation string) string {
+	t.Helper()
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("authorization denials metric data = %T, want Sum[int64]", m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		if !metricDataPointHasAttribute(dp, "scrap.operation", operation) {
+			continue
+		}
+		assertMetricDataPointAttribute(t, dp, "scrap.surface", string(security.RateLimitSurfacePeer))
+		assertMetricDataPointAttribute(t, dp, "scrap.reason", audit.ReasonPermissionDenied)
+		assertMetricDataPointAttribute(t, dp, "scrap.authorization_status", security.AuthorizationStatusDenied)
+		if dp.Value != 1 {
+			t.Fatalf("authorization denial metric value = %d, want 1", dp.Value)
+		}
+		return renderMetricDataPoint(dp)
+	}
+	t.Fatalf("authorization denial metric missing operation %q", operation)
+	return ""
+}
+
+func assertMetricDataPointAttribute(t *testing.T, dp metricdata.DataPoint[int64], key, want string) {
+	t.Helper()
+	if !metricDataPointHasAttribute(dp, key, want) {
+		t.Fatalf("authorization metric attrs = %s, want %s=%s", renderMetricDataPoint(dp), key, want)
+	}
+}
+
+func metricDataPointHasAttribute(dp metricdata.DataPoint[int64], key, want string) bool {
+	for _, attr := range dp.Attributes.ToSlice() {
+		if string(attr.Key) == key && attr.Value.AsString() == want {
+			return true
+		}
+	}
+	return false
+}
+
+func renderMetricDataPoint(dp metricdata.DataPoint[int64]) string {
+	var b strings.Builder
+	for _, attr := range dp.Attributes.ToSlice() {
+		if b.Len() > 0 {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(&b, "%s=%s", attr.Key, attr.Value.AsString())
+	}
+	return b.String()
 }
 
 func mustMarshalRaftForRateLimit(t *testing.T) []byte {

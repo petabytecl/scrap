@@ -176,7 +176,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	cleanup = append(cleanup, peerLis.Close)
 
 	peerGS := grpc.NewServer(securityRuntime.peerGRPCOptions...)
-	peerSrv := newPeerServer(cfg, shards, securityRuntime, memberIdentity)
+	peerSrv := newPeerServer(cfg, topology, shards, securityRuntime, memberIdentity)
 	peerSrv.SetRaftRouter(shardSetRaftRouter{shards: shards})
 	peer.RegisterServer(peerGS, peerSrv)
 
@@ -272,20 +272,26 @@ func newAppSecurityRuntimeForTelemetry(cfg Config, peers map[uint64]string, logg
 	if err != nil {
 		return appSecurityRuntime{}, fmt.Errorf("create rate-limit metrics: %w", err)
 	}
-	return newAppSecurityRuntime(cfg, peers, logger.With(telemetryRuntime.logIdentityAttrs()...), rateLimitMetrics)
+	authorizationMetrics, err := telemetryRuntime.newAuthorizationMetrics()
+	if err != nil {
+		return appSecurityRuntime{}, fmt.Errorf("create authorization metrics: %w", err)
+	}
+	return newAppSecurityRuntime(cfg, peers, logger.With(telemetryRuntime.logIdentityAttrs()...), rateLimitMetrics, authorizationMetrics)
 }
 
-func newPeerServer(cfg Config, shards *shardSet, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
+func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
 	peerOpts := []peer.ServerOption{
 		peer.WithReplicationSink(shardSetReplicationSink{shards: shards}),
 		peer.WithBlockDirResolver(shards),
 		peer.WithAuthorizedShards(shards.IDs()...),
 	}
-	if localShard, ok := shards.singleShard(); ok {
-		peerOpts = append(peerOpts,
-			peer.WithScrubCache(localShard),
-			peer.WithRebuildHandler(localShard),
-		)
+	if topology.SingleShardFallback {
+		if localShard, ok := shards.singleShard(); ok {
+			peerOpts = append(peerOpts,
+				peer.WithScrubCache(localShard),
+				peer.WithRebuildHandler(localShard),
+			)
+		}
 	}
 	if securityRuntime.authorizer != nil {
 		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{
@@ -299,6 +305,9 @@ func newPeerServer(cfg Config, shards *shardSet, securityRuntime appSecurityRunt
 	}
 	if securityRuntime.rateLimiter != nil {
 		peerOpts = append(peerOpts, peer.WithRateLimiter(securityRuntime.rateLimiter))
+	}
+	if securityRuntime.authorizationObserver != nil {
+		peerOpts = append(peerOpts, peer.WithAuthorizationObserver(securityRuntime.authorizationObserver))
 	}
 	return peer.NewServer(cfg.DataDir+"/blocks", peerOpts...)
 }
