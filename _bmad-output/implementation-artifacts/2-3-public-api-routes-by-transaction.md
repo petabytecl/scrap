@@ -4,7 +4,7 @@ baseline_commit: 7c47d0f3ff0066873ee85669e3cbd55ae4b0b5c4
 
 # Story 2.3: Public API Routes by Transaction
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -55,6 +55,12 @@ so that write/read/head/find behavior works without hardcoded Shard ID assumptio
   - [x] Add or update public server tests only as needed to prove handlers continue to call Store methods without Shard constants.
   - [x] Add redaction tests using distinctive forbidden Transaction/Document fixtures and assert public errors, logs, spans, route telemetry records, and story evidence omit raw identifiers.
   - [x] Record verification in this story: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/server ./internal/routing`, `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`, and `env GOCACHE=/tmp/scrap-v2-go-build make check` before review.
+
+### Review Findings
+
+- [x] [Review][Patch] Public route lookup telemetry is not wired [internal/cmd/public_store_router.go:20].
+- [x] [Review][Patch] Two-Shard method coverage is asymmetric [internal/cmd/public_store_router_test.go:16].
+- [x] [Review][Patch] Route-unavailable server coverage only exercised `HeadDocument` [internal/server/route_unavailable_test.go:43].
 
 ## Dev Notes
 
@@ -155,6 +161,9 @@ GPT-5 Codex
 - FORMAT: `env GOCACHE=/tmp/scrap-v2-go-build make check` initially failed at `fmt-check`; applied the formatter-required test signature/literal cleanup.
 - LINT: `env GOCACHE=/tmp/scrap-v2-go-build make check` then failed on test cyclomatic complexity and an unused router constructor parameter; split the test and removed the parameter.
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after fixes.
+- REVIEW: Blind Hunter and Acceptance Auditor identified 3 patch findings; Edge Case Hunter found no issues; 2 Blind Hunter findings were dismissed as non-issues after code inspection.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd ./internal/server ./internal/routing` passed after review patches.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review patches.
 
 ### Completion Notes List
 
@@ -164,18 +173,22 @@ GPT-5 Codex
 - Added `shard_route_unavailable` as a bounded Store unavailable reason and covered public gRPC mapping with `ErrorInfo` details that omit raw Transaction and Document identifiers.
 - Kept scope to public Transaction routing: no proto, generated code, storage identity, peer authorization, admin diagnostics, `scrapctl`, Shard authority, Backend identity, tenant routing, or release-closure behavior changed.
 - Added focused router, startup wiring, fail-closed, and public gRPC route-unavailable tests; final targeted package, package-boundary, and `make check` gates passed.
+- Resolved code review findings by threading bounded route lookup telemetry through the public router, expanding two-Shard method coverage, and table-testing route-unavailable mapping for all public RPCs.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-3-public-api-routes-by-transaction.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/cmd/app.go`
 - `internal/cmd/public_store_router.go`
 - `internal/cmd/public_store_router_test.go`
 - `internal/cmd/app_test.go`
 - `internal/cmd/shard_set.go`
+- `internal/cmd/shard_set_test.go`
 - `internal/server/route_unavailable_test.go`
 - `internal/store/errors.go`
 
 ## Change Log
 
 - 2026-06-11: Implemented Story 2.3 public Transaction routing and moved status to review.
+- 2026-06-11: Addressed code review findings for Story 2.3 public routing and moved status to done.

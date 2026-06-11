@@ -157,7 +157,7 @@ func TestShardSetRaftRouterDispatchesByShardID(t *testing.T) {
 }
 
 func TestPublicStoreForMultiShardTopologyFailsClosed(t *testing.T) {
-	publicStore := publicStoreForTopology(&shardSet{ids: []uint64{7, 9}}, startupTopology{})
+	publicStore := publicStoreForTopology(&shardSet{ids: []uint64{7, 9}}, startupTopology{}, nil)
 	_, err := publicStore.WriteDocument(context.Background(), "tenant-a", "tx-a", "doc-a", "application/xml", strings.NewReader("<x/>"))
 	assertShardRoutingPending(t, err)
 	_, err = publicStore.HeadDocument(context.Background(), "tx-a", "doc-a")

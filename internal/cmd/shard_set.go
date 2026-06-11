@@ -528,7 +528,7 @@ func topologyTelemetryShardLabel(topology startupTopology) string {
 	return multiShardTelemetryLabel
 }
 
-func publicStoreForTopology(set *shardSet, topology startupTopology) storeapi.Store {
+func publicStoreForTopology(set *shardSet, topology startupTopology, recorder routing.LookupRecorder) storeapi.Store {
 	if topology.SingleShardFallback {
 		return set.singleShardStore()
 	}
@@ -536,5 +536,5 @@ func publicStoreForTopology(set *shardSet, topology startupTopology) storeapi.St
 	if len(targets) == 0 {
 		return failClosedPublicStore{}
 	}
-	return newPublicStoreRouter(topology.Placement, targets)
+	return newPublicStoreRouter(topology.Placement, targets, recorder)
 }

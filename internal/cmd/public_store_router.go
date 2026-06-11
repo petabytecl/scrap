@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"strconv"
 
 	"github.com/petabytecl/scrap/internal/routing"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -15,7 +17,7 @@ type publicStoreRouter struct {
 	stores map[uint64]storeapi.Store
 }
 
-func newPublicStoreRouter(placement routing.Placement, stores map[uint64]storeapi.Store) storeapi.Store {
+func newPublicStoreRouter(placement routing.Placement, stores map[uint64]storeapi.Store, recorder routing.LookupRecorder) storeapi.Store {
 	copied := make(map[uint64]storeapi.Store, len(stores))
 	for shardID, store := range stores {
 		if store == nil {
@@ -24,7 +26,7 @@ func newPublicStoreRouter(placement routing.Placement, stores map[uint64]storeap
 		copied[shardID] = store
 	}
 	return &publicStoreRouter{
-		router: routing.NewRouter(placement),
+		router: routing.NewRouter(placement, routing.WithLookupRecorder(recorder)),
 		stores: copied,
 	}
 }
@@ -88,4 +90,22 @@ func publicRouteUnavailable() error {
 		storeapi.UnavailableReasonShardRouteUnavailable,
 		"Shard route unavailable",
 	)
+}
+
+type publicRouteLookupLogger struct {
+	logger *slog.Logger
+}
+
+func (r publicRouteLookupLogger) RecordRoutingLookup(ctx context.Context, record routing.LookupRecord) {
+	if r.logger == nil {
+		return
+	}
+	attrs := []any{
+		"scrap.route.outcome", string(record.Outcome),
+		"scrap.route.reason", string(record.Reason),
+	}
+	if record.ShardIDValid {
+		attrs = append(attrs, "scrap.route.shard_id", strconv.FormatUint(record.ShardID, 10))
+	}
+	r.logger.DebugContext(ctx, "public route lookup", attrs...)
 }

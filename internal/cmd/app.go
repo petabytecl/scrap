@@ -156,7 +156,9 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	cleanup = append(cleanup, clientLis.Close)
 
 	clientGS := grpc.NewServer(securityRuntime.publicGRPCOptions...)
-	publicStore := publicStoreForTopology(shards, topology)
+	publicStore := publicStoreForTopology(shards, topology, publicRouteLookupLogger{
+		logger: logger.With(telemetryRuntime.logIdentityAttrs()...),
+	})
 	server.Register(clientGS, publicStore,
 		server.WithTelemetry(telemetryRuntime.server),
 		server.WithIdentifierMode(identifierMode),
