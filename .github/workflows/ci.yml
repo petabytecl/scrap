@@ -19,7 +19,7 @@ on:
 
 jobs:
   static:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     steps:
       - uses: actions/checkout@v6
         with:
@@ -64,7 +64,7 @@ jobs:
         run: make BUF=buf proto-check
 
   test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     permissions:
       contents: read
       id-token: write
@@ -112,7 +112,7 @@ jobs:
         run: exit 1
 
   race:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     steps:
       - uses: actions/checkout@v6
 
@@ -128,7 +128,7 @@ jobs:
         run: make test-race
 
   integration:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     steps:
       - uses: actions/checkout@v6
 
@@ -144,7 +144,7 @@ jobs:
         run: make integration
 
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     steps:
       - uses: actions/checkout@v6
 
@@ -160,7 +160,7 @@ jobs:
         run: make build
 
   vulnerability:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     steps:
       - uses: actions/checkout@v6
 
@@ -175,7 +175,7 @@ jobs:
       - run: make vuln
 
   e2e:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest # old self-host
     if: contains(github.event.pull_request.labels.*.name, 'e2e') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
