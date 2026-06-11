@@ -1,8 +1,14 @@
 package admin
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 const (
+	shardDiagnosticLabelMaxBytes = 128
+	shardDiagnosticRedacted      = "redacted"
+
 	// ShardDiagnosticsStatusOK means Shard diagnostics were collected successfully.
 	ShardDiagnosticsStatusOK = "ok"
 	// ShardDiagnosticsStatusDegraded means Shard diagnostics are present but incomplete.
@@ -34,6 +40,7 @@ type ShardDiagnostic struct {
 	State               string   `json:"state,omitempty"`
 	Health              string   `json:"health,omitempty"`
 	Readiness           string   `json:"readiness,omitempty"`
+	LeaderState         string   `json:"leader_state,omitempty"`
 	IsLeader            bool     `json:"is_leader"`
 	LeaderID            uint64   `json:"leader_id,omitempty"`
 	PeerCount           int      `json:"peer_count"`
@@ -49,10 +56,78 @@ type ShardDiagnostic struct {
 
 func cloneShardDiagnostics(in ShardDiagnostics) ShardDiagnostics {
 	out := in
+	out.Status = boundedShardDiagnosticsStatus(out.Status)
+	out.Reason = boundedShardDiagnosticLabel(out.Reason)
+	out.CellID = boundedShardDiagnosticLabel(out.CellID)
+	out.MemberHostname = boundedShardDiagnosticLabel(out.MemberHostname)
+	out.MemberID = boundedShardDiagnosticLabel(out.MemberID)
 	out.Shards = make([]ShardDiagnostic, len(in.Shards))
 	for i, shard := range in.Shards {
-		shard.Routes = append([]string(nil), shard.Routes...)
+		shard.Membership = boundedShardDiagnosticLabel(shard.Membership)
+		shard.Routes = boundedShardDiagnosticLabels(shard.Routes)
+		shard.State = boundedShardDiagnosticLabel(shard.State)
+		shard.Health = boundedShardDiagnosticLabel(shard.Health)
+		shard.Readiness = boundedShardDiagnosticLabel(shard.Readiness)
+		shard.LeaderState = boundedShardDiagnosticLabel(shard.LeaderState)
+		shard.PeerHealth = boundedShardDiagnosticLabel(shard.PeerHealth)
+		shard.UploadPressure = boundedShardDiagnosticLabel(shard.UploadPressure)
+		shard.EvictionPressure = boundedShardDiagnosticLabel(shard.EvictionPressure)
+		shard.FailureReason = boundedShardDiagnosticLabel(shard.FailureReason)
 		out.Shards[i] = shard
 	}
 	return out
+}
+
+func boundedShardDiagnosticsStatus(status string) string {
+	switch status {
+	case "", ShardDiagnosticsStatusOK, ShardDiagnosticsStatusDegraded:
+		return status
+	default:
+		return ShardDiagnosticsStatusDegraded
+	}
+}
+
+func boundedShardDiagnosticLabels(values []string) []string {
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = boundedShardDiagnosticLabel(value)
+	}
+	return out
+}
+
+func boundedShardDiagnosticLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if shardDiagnosticLabelLooksSensitive(value) {
+		return shardDiagnosticRedacted
+	}
+	if len(value) > shardDiagnosticLabelMaxBytes {
+		return shardDiagnosticRedacted
+	}
+	for _, r := range value {
+		if shardDiagnosticLabelRuneAllowed(r) {
+			continue
+		}
+		return shardDiagnosticRedacted
+	}
+	return value
+}
+
+func shardDiagnosticLabelLooksSensitive(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"secret", "private", "token", "password", "key"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shardDiagnosticLabelRuneAllowed(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		strings.ContainsRune("_.-", r)
 }

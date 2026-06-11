@@ -6,6 +6,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -15,6 +16,9 @@ const (
 	shardDiagnosticsHealthDegraded    = "degraded"
 	shardDiagnosticsReadinessReady    = "ready"
 	shardDiagnosticsReadinessNotReady = "not_ready"
+	shardDiagnosticsLeaderLeader      = "leader"
+	shardDiagnosticsLeaderFollower    = "follower"
+	shardDiagnosticsLeaderUnknown     = "unknown"
 	shardDiagnosticsPeerConfigured    = "configured"
 	shardDiagnosticsReasonRebuilding  = "rebuilding"
 	shardDiagnosticsReasonNoLeader    = "no_leader"
@@ -33,11 +37,16 @@ type shardDiagnosticsTarget interface {
 	EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error)
 }
 
+type shardDiagnosticsSource interface {
+	StartupStatus(startupTopology) []startupShardStatus
+	diagnosticsTarget(shardID uint64) (shardDiagnosticsTarget, bool)
+}
+
 type appShardDiagnosticsProvider struct {
 	cellID    string
 	member    scrapdMemberIdentity
 	topology  startupTopology
-	shards    *shardSet
+	shards    shardDiagnosticsSource
 	peerCount int
 }
 
@@ -48,11 +57,15 @@ func newAppShardDiagnosticsProvider(
 	shards *shardSet,
 	peers map[uint64]string,
 ) admin.ShardDiagnosticsProvider {
+	var source shardDiagnosticsSource
+	if shards != nil {
+		source = shards
+	}
 	return appShardDiagnosticsProvider{
 		cellID:    cfg.CellID,
 		member:    member,
 		topology:  topology,
-		shards:    shards,
+		shards:    source,
 		peerCount: len(peers),
 	}
 }
@@ -69,14 +82,15 @@ func (p appShardDiagnosticsProvider) ShardDiagnosticsSnapshot(ctx context.Contex
 	}
 	for _, status := range p.shards.StartupStatus(p.topology) {
 		shardDiag := admin.ShardDiagnostic{
-			ShardID:    status.ShardID,
-			Membership: status.Membership,
-			Routes:     append([]string(nil), status.Routes...),
-			State:      status.State,
-			Health:     shardDiagnosticsStateNotLocal,
-			Readiness:  shardDiagnosticsStateNotLocal,
-			PeerCount:  p.peerCount,
-			PeerHealth: shardDiagnosticsPeerConfigured,
+			ShardID:     status.ShardID,
+			Membership:  status.Membership,
+			Routes:      append([]string(nil), status.Routes...),
+			State:       status.State,
+			Health:      shardDiagnosticsStateNotLocal,
+			Readiness:   shardDiagnosticsStateNotLocal,
+			LeaderState: shardDiagnosticsStateNotLocal,
+			PeerCount:   p.peerCount,
+			PeerHealth:  shardDiagnosticsPeerConfigured,
 		}
 		if status.FailureCategory != "" {
 			shardDiag.FailureReason = status.FailureCategory
@@ -84,12 +98,16 @@ func (p appShardDiagnosticsProvider) ShardDiagnosticsSnapshot(ctx context.Contex
 		if target, ok := p.shards.diagnosticsTarget(status.ShardID); ok {
 			applyLiveShardDiagnostics(ctx, target, &shardDiag)
 		}
-		if shardDiag.Health != shardDiagnosticsHealthOK {
+		if shardDiagnosticDegradesAggregate(shardDiag) {
 			diagnostics.Status = admin.ShardDiagnosticsStatusDegraded
 		}
 		diagnostics.Shards = append(diagnostics.Shards, shardDiag)
 	}
 	return diagnostics, nil
+}
+
+func shardDiagnosticDegradesAggregate(diag admin.ShardDiagnostic) bool {
+	return diag.Membership == "local" && diag.Health != shardDiagnosticsHealthOK
 }
 
 func (s *shardSet) diagnosticsTarget(shardID uint64) (shardDiagnosticsTarget, bool) {
@@ -104,10 +122,19 @@ func applyLiveShardDiagnostics(ctx context.Context, target shardDiagnosticsTarge
 	diag.Health = shardDiagnosticsHealthOK
 	diag.Readiness = shardDiagnosticsReadinessReady
 	if err := target.CheckReadiness(ctx); err != nil {
-		markShardDiagnosticDegraded(diag, readinessFailureReason(err))
+		markShardDiagnosticNotReady(diag, readinessFailureReason(err))
 	}
 	diag.IsLeader = target.IsLeader()
 	diag.LeaderID = target.LeaderID()
+	switch {
+	case diag.IsLeader:
+		diag.LeaderState = shardDiagnosticsLeaderLeader
+	case diag.LeaderID != 0:
+		diag.LeaderState = shardDiagnosticsLeaderFollower
+	default:
+		diag.LeaderState = shardDiagnosticsLeaderUnknown
+		markShardDiagnosticDegraded(diag, shardDiagnosticsReasonNoLeader)
+	}
 	level, levelName, pendingBytes, pendingBlocks := target.UploadPressureSnapshot()
 	diag.UploadPressureLevel = level
 	diag.UploadPressure = levelName
@@ -116,7 +143,7 @@ func applyLiveShardDiagnostics(ctx context.Context, target shardDiagnosticsTarge
 	if diag.UploadPressure == "" {
 		diag.UploadPressure = shardDiagnosticsHealthOK
 	}
-	if diag.UploadPressure != shardDiagnosticsHealthOK {
+	if level >= int(shard.UploadPressureLevelPressure) {
 		markShardDiagnosticDegraded(diag, diag.UploadPressure)
 	}
 	evictionHealth, err := target.EvictionHealthSnapshot(ctx)
@@ -137,10 +164,14 @@ func applyLiveShardDiagnostics(ctx context.Context, target shardDiagnosticsTarge
 
 func markShardDiagnosticDegraded(diag *admin.ShardDiagnostic, reason string) {
 	diag.Health = shardDiagnosticsHealthDegraded
-	diag.Readiness = shardDiagnosticsReadinessNotReady
 	if diag.FailureReason == "" {
 		diag.FailureReason = reason
 	}
+}
+
+func markShardDiagnosticNotReady(diag *admin.ShardDiagnostic, reason string) {
+	markShardDiagnosticDegraded(diag, reason)
+	diag.Readiness = shardDiagnosticsReadinessNotReady
 }
 
 func readinessFailureReason(err error) string {

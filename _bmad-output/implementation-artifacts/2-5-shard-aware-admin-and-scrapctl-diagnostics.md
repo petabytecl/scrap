@@ -4,7 +4,7 @@ baseline_commit: 1abc429d1c51d2ac18c3c4184f5fd2e2ca0ba66f
 
 # Story 2.5: Shard-Aware Admin and `scrapctl` Diagnostics
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -62,6 +62,17 @@ so that I can diagnose routing, leadership, peers, and health per Shard.
   - [x] Add `internal/scrapctl` tests for `status --output=json`, text rendering, terminology preservation, TLS production fail-closed behavior, and redaction.
   - [x] Add `internal/cmd` tests proving `newApp` wires Shard diagnostics for explicit multi-Shard topology and preserves existing single-Shard fallback behavior.
   - [x] Record verification in this story before review: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd`, `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`, `env GOCACHE=/tmp/scrap-v2-go-build make check`, and an explicit leak-scan command over captured evidence or changed files.
+
+### Review Findings
+
+- [x] [Review][Patch] Remote Shards degraded a healthy local Member [internal/cmd/shard_diagnostics.go] - fixed by degrading the aggregate only for local Shards whose health is not `ok`; remote Shards remain visible as `not_local`.
+- [x] [Review][Patch] Remote Shard leadership was ambiguous [internal/cmd/shard_diagnostics.go] - fixed by adding bounded `leader_state` values (`leader`, `follower`, `unknown`, `not_local`) to admin JSON and `scrapctl` text/JSON.
+- [x] [Review][Patch] Upload/eviction pressure changed readiness to `not_ready` [internal/cmd/shard_diagnostics.go] - fixed by separating health degradation from readiness degradation; readiness only changes on readiness failures.
+- [x] [Review][Patch] Successful diagnostics could echo unbounded labels [internal/admin/shard_diagnostics.go, internal/scrapctl/output.go] - fixed by bounding successful admin snapshots and CLI text fields, including path/address/secret-marker redaction.
+- [x] [Review][Patch] Default `scrapctl status` text dropped existing eviction/restore health fields [internal/scrapctl/output.go] - fixed by rendering eviction pressure, lifecycle counts, restore failures, and Shard diagnostics together.
+- [x] [Review][Patch] Production fail-closed evidence was too generic [internal/admin/shard_diagnostics_test.go, internal/scrapctl/status_shard_test.go] - fixed with diagnostics-specific admin role/rate-limit tests and a production TLS-before-HTTP `scrapctl status` test.
+- [x] [Review][Patch] Read-only side-effect evidence was incomplete [internal/cmd/shard_diagnostics_test.go] - fixed with a fake diagnostics source/target that proves only read-only snapshot methods are reachable and remote Shards do not invoke local Shard methods.
+- [x] [Review][Patch] Required diagnostic evidence was under-recorded [this story] - fixed by recording captured output/evidence summaries and the changed-boundary list below.
 
 ## Dev Notes
 
@@ -164,6 +175,12 @@ GPT-5 Codex
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed, including lint, `go test ./...`, race tests, integration-tag tests, and `scrapd`/`scrapctl` builds.
 - PASS: Production-code leak scan had no matches for distinctive forbidden fixtures, local paths, Backend key markers, and private-key header markers.
 - PASS: Secret-pattern scan over changed story/source/test files had no matches.
+- REVIEW: `bmad-code-review` ran Blind Hunter, Edge Case Hunter, and Acceptance Auditor layers against the Story 2.5 diff from baseline `1abc429d1c51d2ac18c3c4184f5fd2e2ca0ba66f`.
+- REVIEW-FIX: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/scrapctl ./internal/cmd` passed after fixing review findings for remote Shards, leader state, bounded labels, production fail-closed coverage, and text output preservation.
+- REVIEW-FIX: `git diff --check` passed.
+- REVIEW-FIX: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
+- REVIEW-FIX: Post-review leak scans over changed story/source/test files had no matches.
+- REVIEW-FIX: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes, including lint, full tests, race tests, integration-tag tests, and `scrapd`/`scrapctl` builds.
 
 ### Completion Notes List
 
@@ -173,6 +190,11 @@ GPT-5 Codex
 - Extended `scrapctl status` JSON and text output to preserve Cell, Member, and Shard terminology and render bounded Shard diagnostics.
 - Added admin, `scrapctl`, and app-level tests for JSON shape, text rendering, GET-only behavior, provider failure redaction, TLS production fail-closed coverage, app wiring, and address/path leak prevention.
 - Preserved scope: no proto/generated files, public/peer wire contracts, storage format, Backend identity, routing ownership, or Shard authority behavior changed.
+- Review fixes added explicit `leader_state` diagnostics so remote Shards report `not_local`, local followers report `follower`, local leaders report `leader`, and no-leader bootstrap windows report bounded `unknown`/`no_leader` evidence.
+- Captured diagnostic examples in tests: admin JSON includes `shard_diagnostics` with Cell/Member/Shard fields; CLI JSON preserves `leader_state`, route, membership, and Shard terms; CLI text includes `Cell:`, `Member:`, `Shard N:`, `EvictionPressure:`, and `RestoreFailuresByReason:`.
+- Redaction evidence covers successful and failure paths: `/tmp/secret`, `10.1.2.3:9091`, `backend-key`, `private-key-material`, oversized labels, raw provider errors, and private-key header markers do not appear in admin or CLI text output.
+- Production fail-closed evidence covers diagnostics-specific admin missing-role denial (`403` before provider call), admin rate limiting (`429` before provider call), and `scrapctl status` production TLS validation before any HTTP request.
+- Changed-boundary list: `internal/admin` adds optional `/healthz` JSON fields only; `internal/cmd` adapts composition-owned Shard snapshots; `internal/scrapctl` decodes/renders admin HTTP diagnostics. No `proto/`, `gen/`, public gRPC, peer gRPC, storage format, Backend identity, Raft command, Shard rebalancing, upload/restore, or Content Quarantine boundary changed.
 
 ### File List
 
@@ -192,3 +214,4 @@ GPT-5 Codex
 
 - 2026-06-11: Created Story 2.5 Shard-aware admin and `scrapctl` diagnostics context and moved status to ready-for-dev.
 - 2026-06-11: Implemented Story 2.5 Shard-aware admin and `scrapctl` diagnostics and moved status to review.
+- 2026-06-11: Fixed Story 2.5 code-review findings and moved status to done.

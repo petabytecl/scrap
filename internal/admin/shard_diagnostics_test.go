@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 type shardDiagnosticsProviderStub struct {
@@ -37,6 +39,7 @@ func TestServerHealthReportsShardDiagnostics(t *testing.T) {
 				State:               "open",
 				Health:              "ok",
 				Readiness:           "ready",
+				LeaderState:         "leader",
 				IsLeader:            true,
 				LeaderID:            1,
 				PeerCount:           3,
@@ -93,6 +96,7 @@ func TestServerHealthReportsShardDiagnostics(t *testing.T) {
 	assertShardDiagnosticField(t, shard, "state", "open")
 	assertShardDiagnosticField(t, shard, "health", "ok")
 	assertShardDiagnosticField(t, shard, "readiness", "ready")
+	assertShardDiagnosticField(t, shard, "leader_state", "leader")
 	assertShardDiagnosticField(t, shard, "is_leader", true)
 	assertShardDiagnosticField(t, shard, "leader_id", float64(1))
 	assertShardDiagnosticField(t, shard, "peer_count", float64(3))
@@ -112,6 +116,52 @@ func TestServerHealthRejectsNonGETBeforeShardDiagnostics(t *testing.T) {
 	}
 	if provider.calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+}
+
+func TestServerHealthRequiresAdminReaderBeforeShardDiagnostics(t *testing.T) {
+	provider := &shardDiagnosticsProviderStub{}
+	authz := security.NewStaticAuthorizer()
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithShardDiagnosticsProvider(provider))
+
+	req := httptest.NewRequestWithContext(adminAuthContext(security.RoleAdminOperator), http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", resp.Code, resp.Body.String())
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+}
+
+func TestServerHealthRateLimitsBeforeShardDiagnostics(t *testing.T) {
+	provider := &shardDiagnosticsProviderStub{}
+	authz := security.NewStaticAuthorizer()
+	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+		Surfaces: []security.RateLimitSurfacePolicy{
+			{Surface: security.RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
+		},
+	})
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithRateLimiter(limiter), admin.WithShardDiagnosticsProvider(provider))
+
+	ctx := adminAuthContext(security.RoleAdminReader)
+	first := httptest.NewRequestWithContext(ctx, http.MethodGet, "/healthz", nil)
+	firstResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(firstResp, first)
+	if firstResp.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200: %s", firstResp.Code, firstResp.Body.String())
+	}
+
+	second := httptest.NewRequestWithContext(ctx, http.MethodGet, "/healthz", nil)
+	secondResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(secondResp, second)
+	if secondResp.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429: %s", secondResp.Code, secondResp.Body.String())
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
 }
 
@@ -140,6 +190,48 @@ func TestServerHealthBoundsShardDiagnosticsProviderFailure(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("health response missing %s: %s", want, body)
 		}
+	}
+}
+
+func TestServerHealthBoundsSuccessfulShardDiagnostics(t *testing.T) {
+	provider := &shardDiagnosticsProviderStub{
+		snapshot: admin.ShardDiagnostics{
+			Status:         "surprising-status",
+			Reason:         "/tmp/secret/backend-key",
+			CellID:         "/tmp/secret",
+			MemberHostname: "10.1.2.3:9091",
+			MemberID:       strings.Repeat("m", 129),
+			Shards: []admin.ShardDiagnostic{{
+				ShardID:          7,
+				Membership:       "local",
+				Routes:           []string{"0-511", "/tmp/secret"},
+				State:            "open",
+				Health:           "ok",
+				Readiness:        "ready",
+				PeerHealth:       "10.1.2.3:9091",
+				UploadPressure:   "ok",
+				EvictionPressure: "ok",
+				FailureReason:    "private-key-material",
+			}},
+		},
+	}
+	srv := admin.New(admin.WithShardDiagnosticsProvider(provider))
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"/tmp/secret", "10.1.2.3:9091", "backend-key", "private-key-material", strings.Repeat("m", 129)} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("health response leaked %q: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, `"redacted"`) || !strings.Contains(body, `"shard_diagnostics":{"status":"degraded"`) {
+		t.Fatalf("health response missing bounded diagnostics: %s", body)
 	}
 }
 

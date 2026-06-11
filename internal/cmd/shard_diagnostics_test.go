@@ -9,6 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/shard"
 )
 
 func TestNewAppWiresShardDiagnosticsForTwoShardTopology(t *testing.T) {
@@ -25,6 +29,108 @@ func TestNewAppWiresShardDiagnosticsForTwoShardTopology(t *testing.T) {
 	shards := appShardDiagnosticsEntries(t, diag)
 	assertAppShardDiagnostic(t, shards[0], 7, "0-511")
 	assertAppShardDiagnostic(t, shards[1], 9, "512-1023")
+}
+
+func TestShardDiagnosticsRemoteShardsDoNotDegradeSnapshot(t *testing.T) {
+	localTarget := readyShardDiagnosticsTarget()
+	source := &fakeShardDiagnosticsSource{
+		statuses: []startupShardStatus{
+			{ShardID: 7, Membership: "local", Routes: []string{"0-511"}, State: "open"},
+			{ShardID: 9, Membership: "remote", Routes: []string{"512-1023"}, State: "not_local"},
+		},
+		targets: map[uint64]*fakeShardDiagnosticsTarget{7: localTarget},
+	}
+	provider := appShardDiagnosticsProvider{
+		cellID:    "cell-a",
+		member:    scrapdMemberIdentity{MemberHostname: "scrapd-0", MemberID: "member-a"},
+		shards:    source,
+		peerCount: 3,
+	}
+
+	got, err := provider.ShardDiagnosticsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("ShardDiagnosticsSnapshot: %v", err)
+	}
+	if got.Status != admin.ShardDiagnosticsStatusOK {
+		t.Fatalf("status = %s, want ok: %#v", got.Status, got)
+	}
+	remote := shardDiagnosticByID(t, got.Shards, 9)
+	if remote.Health != shardDiagnosticsStateNotLocal || remote.Readiness != shardDiagnosticsStateNotLocal {
+		t.Fatalf("remote health/readiness = %s/%s, want not_local/not_local", remote.Health, remote.Readiness)
+	}
+	if remote.LeaderState != shardDiagnosticsStateNotLocal {
+		t.Fatalf("remote leader state = %s, want not_local", remote.LeaderState)
+	}
+	if localTarget.readinessCalls != 1 || localTarget.uploadCalls != 1 || localTarget.evictionCalls != 1 {
+		t.Fatalf("local read-only calls = readiness:%d upload:%d eviction:%d, want 1 each", localTarget.readinessCalls, localTarget.uploadCalls, localTarget.evictionCalls)
+	}
+}
+
+func TestShardDiagnosticsPressureDoesNotOverrideReadiness(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		level      shard.UploadPressureLevel
+		levelName  string
+		wantStatus string
+		wantHealth string
+		wantReason string
+	}{
+		{
+			name:       "warn",
+			level:      shard.UploadPressureLevelWarn,
+			levelName:  "warn",
+			wantStatus: admin.ShardDiagnosticsStatusOK,
+			wantHealth: shardDiagnosticsHealthOK,
+		},
+		{
+			name:       "pressure",
+			level:      shard.UploadPressureLevelPressure,
+			levelName:  "pressure",
+			wantStatus: admin.ShardDiagnosticsStatusDegraded,
+			wantHealth: shardDiagnosticsHealthDegraded,
+			wantReason: "pressure",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			target := readyShardDiagnosticsTarget()
+			target.uploadLevel = int(tt.level)
+			target.uploadName = tt.levelName
+			got := snapshotFromFakeTarget(t, target)
+			if got.Status != tt.wantStatus {
+				t.Fatalf("status = %s, want %s", got.Status, tt.wantStatus)
+			}
+			shardDiag := shardDiagnosticByID(t, got.Shards, 7)
+			if shardDiag.Health != tt.wantHealth {
+				t.Fatalf("health = %s, want %s", shardDiag.Health, tt.wantHealth)
+			}
+			if shardDiag.Readiness != shardDiagnosticsReadinessReady {
+				t.Fatalf("readiness = %s, want ready", shardDiag.Readiness)
+			}
+			if shardDiag.FailureReason != tt.wantReason {
+				t.Fatalf("failure reason = %s, want %s", shardDiag.FailureReason, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestShardDiagnosticsNoLeaderReportsBoundedFailure(t *testing.T) {
+	target := readyShardDiagnosticsTarget()
+	target.leaderID = 0
+
+	got := snapshotFromFakeTarget(t, target)
+	if got.Status != admin.ShardDiagnosticsStatusDegraded {
+		t.Fatalf("status = %s, want degraded", got.Status)
+	}
+	shardDiag := shardDiagnosticByID(t, got.Shards, 7)
+	if shardDiag.FailureReason != shardDiagnosticsReasonNoLeader {
+		t.Fatalf("failure reason = %s, want no_leader", shardDiag.FailureReason)
+	}
+	if shardDiag.LeaderState != shardDiagnosticsLeaderUnknown {
+		t.Fatalf("leader state = %s, want unknown", shardDiag.LeaderState)
+	}
+	if shardDiag.Readiness != shardDiagnosticsReadinessReady {
+		t.Fatalf("readiness = %s, want ready", shardDiag.Readiness)
+	}
 }
 
 func newStartedTestApp(t *testing.T, cfg Config) *App {
@@ -133,4 +239,97 @@ func assertAppShardDiagnosticHealth(t *testing.T, shard map[string]any) {
 	if shard["peer_count"] == nil || shard["peer_health"] == "" {
 		t.Fatalf("peer diagnostics missing: %#v", shard)
 	}
+}
+
+func snapshotFromFakeTarget(t *testing.T, target *fakeShardDiagnosticsTarget) admin.ShardDiagnostics {
+	t.Helper()
+	source := &fakeShardDiagnosticsSource{
+		statuses: []startupShardStatus{{ShardID: 7, Membership: "local", Routes: []string{"0-1023"}, State: "open"}},
+		targets:  map[uint64]*fakeShardDiagnosticsTarget{7: target},
+	}
+	provider := appShardDiagnosticsProvider{shards: source, peerCount: 1}
+	got, err := provider.ShardDiagnosticsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("ShardDiagnosticsSnapshot: %v", err)
+	}
+	return got
+}
+
+func readyShardDiagnosticsTarget() *fakeShardDiagnosticsTarget {
+	return &fakeShardDiagnosticsTarget{
+		leaderID:   1,
+		uploadName: shardDiagnosticsHealthOK,
+		eviction:   eviction.HealthSnapshot{Pressure: eviction.HealthPressureOK},
+	}
+}
+
+func shardDiagnosticByID(t *testing.T, shards []admin.ShardDiagnostic, shardID uint64) admin.ShardDiagnostic {
+	t.Helper()
+	for _, shard := range shards {
+		if shard.ShardID == shardID {
+			return shard
+		}
+	}
+	t.Fatalf("missing Shard %d in %#v", shardID, shards)
+	return admin.ShardDiagnostic{}
+}
+
+type fakeShardDiagnosticsSource struct {
+	statuses []startupShardStatus
+	targets  map[uint64]*fakeShardDiagnosticsTarget
+}
+
+func (s *fakeShardDiagnosticsSource) StartupStatus(startupTopology) []startupShardStatus {
+	out := make([]startupShardStatus, len(s.statuses))
+	for i, status := range s.statuses {
+		status.Routes = append([]string(nil), status.Routes...)
+		out[i] = status
+	}
+	return out
+}
+
+func (s *fakeShardDiagnosticsSource) diagnosticsTarget(shardID uint64) (shardDiagnosticsTarget, bool) {
+	target, ok := s.targets[shardID]
+	return target, ok
+}
+
+type fakeShardDiagnosticsTarget struct {
+	readinessErr error
+	leader       bool
+	leaderID     uint64
+	uploadLevel  int
+	uploadName   string
+	eviction     eviction.HealthSnapshot
+	evictionErr  error
+
+	readinessCalls int
+	leaderCalls    int
+	leaderIDCalls  int
+	uploadCalls    int
+	evictionCalls  int
+}
+
+func (t *fakeShardDiagnosticsTarget) CheckReadiness(context.Context) error {
+	t.readinessCalls++
+	return t.readinessErr
+}
+
+func (t *fakeShardDiagnosticsTarget) IsLeader() bool {
+	t.leaderCalls++
+	return t.leader
+}
+
+func (t *fakeShardDiagnosticsTarget) LeaderID() uint64 {
+	t.leaderIDCalls++
+	return t.leaderID
+}
+
+func (t *fakeShardDiagnosticsTarget) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
+	t.uploadCalls++
+	return t.uploadLevel, t.uploadName, 0, 0
+}
+
+func (t *fakeShardDiagnosticsTarget) EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error) {
+	t.evictionCalls++
+	return t.eviction, t.evictionErr
 }

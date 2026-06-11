@@ -54,6 +54,7 @@ type ShardDiagnostic struct {
 	State               string   `json:"state,omitempty"`
 	Health              string   `json:"health,omitempty"`
 	Readiness           string   `json:"readiness,omitempty"`
+	LeaderState         string   `json:"leader_state,omitempty"`
 	IsLeader            bool     `json:"is_leader"`
 	LeaderID            uint64   `json:"leader_id,omitempty"`
 	PeerCount           int      `json:"peer_count"`
