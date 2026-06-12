@@ -1,7 +1,9 @@
 package eviction
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,6 +92,26 @@ func TestBuildPlanUsesRestoreTimeForHotResidency(t *testing.T) {
 	}
 	if plan.Skipped[0].EligibleAtUs != restoredAt.Add(time.Hour).UnixMicro() {
 		t.Fatalf("eligible_at_us = %d, want %d", plan.Skipped[0].EligibleAtUs, restoredAt.Add(time.Hour).UnixMicro())
+	}
+}
+
+func TestPlanJSONOmitsBackendKeys(t *testing.T) {
+	plan := Plan{
+		PlanID: "plan-redaction",
+		Selected: []PlanBlock{{
+			BlockID:    1,
+			ShardID:    7,
+			BackendKey: "cell/shards/7/sensitive-block.blk",
+		}},
+	}
+
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("Marshal plan: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "backend_key") || strings.Contains(got, "sensitive-block.blk") {
+		t.Fatalf("plan JSON leaked backend key: %s", got)
 	}
 }
 

@@ -106,7 +106,7 @@ type PlanBlock struct {
 	BlockID                   uint64 `json:"block_id"`
 	ShardID                   uint64 `json:"shard_id"`
 	SizeBytes                 int64  `json:"size_bytes"`
-	BackendKey                string `json:"backend_key,omitempty"`
+	BackendKey                string `json:"-"`
 	ConfirmedAtUs             int64  `json:"confirmed_at_us,omitempty"`
 	RestoredAtUs              int64  `json:"restored_at_us,omitempty"`
 	EligibleAtUs              int64  `json:"eligible_at_us,omitempty"`

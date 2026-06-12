@@ -488,7 +488,7 @@ func writeEvictionBlocks(w io.Writer, label string, blocks []eviction.PlanBlock)
 	for _, block := range blocks {
 		if _, err := fmt.Fprintf(
 			w,
-			"  block_id=%d shard_id=%d size_bytes=%d confirmed_at_us=%d restored_at_us=%d eligible_at_us=%d hot_residency_window_seconds=%d local_state=%s open_readers=%d repair_state=%s backend_key=%s",
+			"  block_id=%d shard_id=%d size_bytes=%d confirmed_at_us=%d restored_at_us=%d eligible_at_us=%d hot_residency_window_seconds=%d local_state=%s open_readers=%d repair_state=%s",
 			block.BlockID,
 			block.ShardID,
 			block.SizeBytes,
@@ -499,7 +499,6 @@ func writeEvictionBlocks(w io.Writer, label string, blocks []eviction.PlanBlock)
 			block.LocalState,
 			block.OpenReaders,
 			block.RepairState,
-			block.BackendKey,
 		); err != nil {
 			return fmt.Errorf("write %s block: %w", label, err)
 		}

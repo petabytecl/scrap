@@ -110,6 +110,7 @@ func TestEvictionPlanPostsRequestAndPrintsEvidence(t *testing.T) {
 		"skipped_candidates:",
 		"reason=hot_residency_window",
 	)
+	assertTextNotContains(t, out.String(), "backend_key", "cell/shards/7/1.blk")
 }
 
 func assertTextContains(t *testing.T, got string, wants ...string) {
@@ -118,6 +119,16 @@ func assertTextContains(t *testing.T, got string, wants ...string) {
 	for _, want := range wants {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func assertTextNotContains(t *testing.T, got string, rejects ...string) {
+	t.Helper()
+
+	for _, reject := range rejects {
+		if strings.Contains(got, reject) {
+			t.Fatalf("output leaked %q:\n%s", reject, got)
 		}
 	}
 }
@@ -460,6 +471,7 @@ func TestEvictionStatusPrintsFinalCampaignEvidence(t *testing.T) {
 		"validations:",
 		"block_id=3 shard_id=7 status=failed error=\"Backend restore failed\"",
 	)
+	assertTextNotContains(t, out.String(), "backend_key", "cell/shards/7/3.blk")
 }
 
 func TestEvictionApplyReportsHTTPError(t *testing.T) {

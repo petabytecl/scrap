@@ -5,7 +5,7 @@ created: 2026-06-11T21:36:36-04:00
 
 # Story 3.3: Policy-Gated Local Block Eviction
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -32,37 +32,37 @@ so that local disk can be reclaimed without losing authority or metadata.
 
 ## Tasks / Subtasks
 
-- [ ] Build the Story 3.3 evidence checklist before code changes. (AC: 1-3)
-  - [ ] Create or update `_bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md` with AC rows, commands, results, and remaining runtime evidence gaps.
-  - [ ] Record the current authority path: committed `ConfirmUpload` -> Confirmed Upload Catalog / committed marker -> candidate dry-run -> in-memory plan token -> apply revalidation -> local eviction marker -> `.blk` unlink.
-  - [ ] Record changed boundaries and non-goals: no Raft command changes, no Pebble key-prefix changes, no Backend inventory authority, no API-visible Document semantics change.
-- [ ] Prove dry-run reports eligible Blocks without mutating local state. (AC: 1)
-  - [ ] Add or strengthen a focused test around `Shard.CreateEvictionPlan` showing dry-run reads committed Confirmed Upload Catalog state and local lifecycle state, returns selected/skipped candidates, and does not create an eviction marker, remove `.blk`, remove `.idx`, or alter Document visibility.
-  - [ ] Verify dry-run plan output includes bounded plan ID, member identity, Shard ID, Block IDs, bytes, eligibility timestamps, active config, and skip counts.
-  - [ ] Verify dry-run excludes pending replacement uploads and skips leader-local hot copies in Phase 4.
-- [ ] Prove eviction apply mutates only Local Block Lifecycle state and preserves metadata-only reads. (AC: 2)
-  - [ ] Add or strengthen a Shard-level test that applies a stored plan to an eligible follower-local Block with validation sampling disabled or bounded so the Block remains evicted after apply.
-  - [ ] Assert the eviction marker exists, `.blk` is absent, `.idx` remains present, and `localblock.Classify` reports `evicted`.
-  - [ ] Assert `HeadDocument` and `FindDocuments` remain served from retained `.idx` / Projection Resolution without restoring `.blk`.
-  - [ ] Assert Raft metadata, Pebble visibility, Upload Outbox, and Confirmed Upload Catalog authority are unchanged by local eviction.
-  - [ ] If validation sampling is exercised, prove it restores through the existing full-Block restore path and records validation separately from apply success.
-- [ ] Prove fail-closed behavior for ineligible or stale eviction. (AC: 3)
-  - [ ] Cover at least these cases with focused tests or existing-test evidence: missing committed `ConfirmUpload`, pending replacement upload, disabled apply, current leader hot-copy requirement, hot residency window not elapsed, stale member identity, expired/unknown plan, foreign Shard selection, malformed marker, missing `.idx`, unexpected local loss, and Backend restore unavailable for sampled validation.
-  - [ ] Verify apply revalidates selected Blocks and reports per-Block skip/failure reasons instead of silently recomputing a new candidate set.
-  - [ ] Verify admin HTTP maps precondition failures to `412`, in-progress apply to `409`, transient restore/backend unavailability to `503`, and invalid requests to `400`.
-- [ ] Prove operator output and evidence are redacted. (AC: 3)
-  - [ ] Review `internal/scrapctl/eviction.go` and `internal/admin/eviction.go` for raw Backend object keys, validation tokens, raw Document identifiers, filesystem paths, auth claims, peer addresses, or dependency error strings in operator-facing text, JSON, errors, and evidence.
-  - [ ] If current output exposes `backend_key` or validation-token data, patch the operator-facing output or replace it with bounded metadata such as counts, sizes, and Block IDs. Do not weaken the internal marker expectation needed for restore authority.
-  - [ ] Add or update tests proving failure output is actionable but does not leak Backend keys, validation tokens, raw `transaction_id`, raw `document_name`, idempotency keys, file paths, request IDs, trace IDs, certificates, or auth claims.
-  - [ ] Add rerunnable leak-scan commands to the evidence artifact with an explicit allowlist for story prose and local test fixtures only.
-- [ ] Preserve package and architecture boundaries. (AC: 1-3)
-  - [ ] Keep campaign lifecycle logic in `internal/eviction`, marker/classification transitions in `internal/localblock`, Shard authority and side effects in `internal/shard`, HTTP operator plumbing in `internal/admin`, and human workflow rendering in `internal/scrapctl`.
-  - [ ] Do not create `common`, `shared`, `util`, a new eviction package, a new Backend wrapper, new assertion libraries, or new mocking frameworks.
-  - [ ] Do not change Block/Frame layout, Backend object key format, public/peer/admin proto contracts, Raft command shape, Confirmed Upload Catalog schema, Pebble key prefixes, or storage identity.
-- [ ] Run focused and regression verification. (AC: 1-3)
-  - [ ] Run focused package tests for eviction, local lifecycle, Shard apply/restore, admin HTTP, and `scrapctl`.
-  - [ ] Run a focused race gate for Shard eviction apply/restore singleflight or lifecycle mutation behavior if any shared state changes.
-  - [ ] Run `make check` before BMAD code-review handoff unless a narrower blocker is documented in the story.
+- [x] Build the Story 3.3 evidence checklist before code changes. (AC: 1-3)
+  - [x] Create or update `_bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md` with AC rows, commands, results, and remaining runtime evidence gaps.
+  - [x] Record the current authority path: committed `ConfirmUpload` -> Confirmed Upload Catalog / committed marker -> candidate dry-run -> in-memory plan token -> apply revalidation -> local eviction marker -> `.blk` unlink.
+  - [x] Record changed boundaries and non-goals: no Raft command changes, no Pebble key-prefix changes, no Backend inventory authority, no API-visible Document semantics change.
+- [x] Prove dry-run reports eligible Blocks without mutating local state. (AC: 1)
+  - [x] Add or strengthen a focused test around `Shard.CreateEvictionPlan` showing dry-run reads committed Confirmed Upload Catalog state and local lifecycle state, returns selected/skipped candidates, and does not create an eviction marker, remove `.blk`, remove `.idx`, or alter Document visibility.
+  - [x] Verify dry-run plan output includes bounded plan ID, member identity, Shard ID, Block IDs, bytes, eligibility timestamps, active config, and skip counts.
+  - [x] Verify dry-run excludes pending replacement uploads and skips leader-local hot copies in Phase 4.
+- [x] Prove eviction apply mutates only Local Block Lifecycle state and preserves metadata-only reads. (AC: 2)
+  - [x] Add or strengthen a Shard-level test that applies a stored plan to an eligible follower-local Block with validation sampling disabled or bounded so the Block remains evicted after apply.
+  - [x] Assert the eviction marker exists, `.blk` is absent, `.idx` remains present, and `localblock.Classify` reports `evicted`.
+  - [x] Assert `HeadDocument` and `FindDocuments` remain served from retained `.idx` / Projection Resolution without restoring `.blk`.
+  - [x] Assert Raft metadata, Pebble visibility, Upload Outbox, and Confirmed Upload Catalog authority are unchanged by local eviction.
+  - [x] If validation sampling is exercised, prove it restores through the existing full-Block restore path and records validation separately from apply success.
+- [x] Prove fail-closed behavior for ineligible or stale eviction. (AC: 3)
+  - [x] Cover at least these cases with focused tests or existing-test evidence: missing committed `ConfirmUpload`, pending replacement upload, disabled apply, current leader hot-copy requirement, hot residency window not elapsed, stale member identity, expired/unknown plan, foreign Shard selection, malformed marker, missing `.idx`, unexpected local loss, and Backend restore unavailable for sampled validation.
+  - [x] Verify apply revalidates selected Blocks and reports per-Block skip/failure reasons instead of silently recomputing a new candidate set.
+  - [x] Verify admin HTTP maps precondition failures to `412`, in-progress apply to `409`, transient restore/backend unavailability to `503`, and invalid requests to `400`.
+- [x] Prove operator output and evidence are redacted. (AC: 3)
+  - [x] Review `internal/scrapctl/eviction.go` and `internal/admin/eviction.go` for raw Backend object keys, validation tokens, raw Document identifiers, filesystem paths, auth claims, peer addresses, or dependency error strings in operator-facing text, JSON, errors, and evidence.
+  - [x] If current output exposes `backend_key` or validation-token data, patch the operator-facing output or replace it with bounded metadata such as counts, sizes, and Block IDs. Do not weaken the internal marker expectation needed for restore authority.
+  - [x] Add or update tests proving failure output is actionable but does not leak Backend keys, validation tokens, raw `transaction_id`, raw `document_name`, idempotency keys, file paths, request IDs, trace IDs, certificates, or auth claims.
+  - [x] Add rerunnable leak-scan commands to the evidence artifact with an explicit allowlist for story prose and local test fixtures only.
+- [x] Preserve package and architecture boundaries. (AC: 1-3)
+  - [x] Keep campaign lifecycle logic in `internal/eviction`, marker/classification transitions in `internal/localblock`, Shard authority and side effects in `internal/shard`, HTTP operator plumbing in `internal/admin`, and human workflow rendering in `internal/scrapctl`.
+  - [x] Do not create `common`, `shared`, `util`, a new eviction package, a new Backend wrapper, new assertion libraries, or new mocking frameworks.
+  - [x] Do not change Block/Frame layout, Backend object key format, public/peer/admin proto contracts, Raft command shape, Confirmed Upload Catalog schema, Pebble key prefixes, or storage identity.
+- [x] Run focused and regression verification. (AC: 1-3)
+  - [x] Run focused package tests for eviction, local lifecycle, Shard apply/restore, admin HTTP, and `scrapctl`.
+  - [x] Run a focused race gate for Shard eviction apply/restore singleflight or lifecycle mutation behavior if any shared state changes.
+  - [x] Run `make check` before BMAD code-review handoff unless a narrower blocker is documented in the story.
 
 ## Dev Notes
 
@@ -224,6 +224,37 @@ TBD by dev-story.
 - RESEARCH: `gh search code '"Confirmed Upload Catalog" "eviction" language:Go' --limit 5 --json repository,path,url` returned no reusable implementation candidates.
 - RESEARCH: `go list -m google.golang.org/grpc go.opentelemetry.io/otel go.opentelemetry.io/otel/sdk/metric github.com/cockroachdb/pebble go.etcd.io/raft/v3` confirmed current pinned module versions.
 - RESEARCH: External AWS Storage Gateway docs reviewed only for general cache/upload-buffer prior art; no AWS-specific product semantics adopted.
+- DEV-STORY: Started implementation from clean `v2...origin/v2` after pushing story creation commit `14513092a4f87513b1460a97f8148092ce38b51f`; preserved story baseline commit `39efc4565bb56f52d50d2d6222c6a5ee2567c2d2`.
+- DEV-STORY: Created `_bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md` before behavior changes with authority path, changed-boundary list, AC coverage gaps, planned commands, leak-scan allowlist, and pending evidence rows.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestCreateEvictionPlanDoesNotMutateLocalBlockState -count=1 -v` failed to compile because the new test treated `stageHotConfirmedBlockForEvictionApply` as returning a value.
+- GREEN: Fixed the test to read committed upload state from the existing index, then `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestCreateEvictionPlanDoesNotMutateLocalBlockState -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestCreateEvictionPlan|TestEvictionCandidatesExcludePendingReplacementUploads' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction -run 'TestBuildPlan' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestShardCreateEvictionPlanStoresTokenAndSkipsLeaderBlocks -count=1 -v` passed.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestApplyEvictionPlanPreservesIndexMetadataReads -count=1 -v` failed to compile because the new test used the helper overload that does not accept a validation sample count.
+- GREEN: Switched to `storeEvictionApplyPlanForConfirmedUploads` with `MaxValidateSamples=0`, then `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestApplyEvictionPlanPreservesIndexMetadataReads -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestApplyEvictionPlanPreservesIndexMetadataReads|TestMetadataReadsStayLocalForEvictedBlock|TestFindDocumentsDoesNotRestoreEvictedConfirmedBlock|TestApplyEvictionPlanValidatesEvidenceRunSample' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/localblock -run 'TestUnlinkBlockDataRemovesOnlyBlockFile|TestClassifyLifecycle|TestPublishRestoredBlockRecordsLifecycleTransition' -count=1 -v` passed.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction -run TestPlanJSONOmitsBackendKeys -count=1 -v` failed because `PlanBlock` JSON exposed `backend_key`.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'TestEvictionPlanPostsRequestAndPrintsEvidence|TestEvictionStatusPrintsFinalCampaignEvidence' -count=1 -v` failed because `scrapctl` text rendered `backend_key`.
+- GREEN: Changed `eviction.PlanBlock.BackendKey` to `json:"-"` and removed `backend_key` from `scrapctl` text block rendering.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction -run TestPlanJSONOmitsBackendKeys -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'TestEvictionPlanPostsRequestAndPrintsEvidence|TestEvictionStatusPrintsFinalCampaignEvidence' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestApplyEvictionPlanRequiresCommittedAuthorityBeforeUnlink|TestApplyEvictionPlanRejectsMissingRestoreBackend|TestApplyEvictionPlanStopsWhenDisabled|TestApplyEvictionPlanSkipsFreshlyRestoredBlock|TestApplyEvictionPlanRejectsInvalidPlanState|TestApplyEvictionPlanRejectsRebuildInProgress|TestApplyEvictionPlanFailsBlockWhenConfirmationDrifts|TestApplyEvictionPlanReportsCompletedWithSkipsForDrift|TestEvictionHealthRebuildFailsClosedForMalformedMarker|TestApplyEvictionPlanDoesNotRecordHealthForUnconfirmedSelectedBlock|TestApplyEvictionPlanDoesNotRecordHealthForForeignShardSelectedBlock' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'TestServer_CreateEvictionPlanTargetMismatchReturnsPreconditionFailed|TestServer_CreateEvictionPlanRejectsInvalidJSON|TestServer_ApplyEvictionPlanNotFoundReturnsPreconditionFailed|TestServer_ApplyEvictionPlanMapsErrors|TestServer_ApplyEvictionPlanRejectsInvalidRequest' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'TestEvictionPlanPostsRequestAndPrintsEvidence|TestEvictionApplyPrintsSkipAndFailureDetails|TestEvictionApplyReturnsErrorForFailedResult|TestEvictionApplyReportsHTTPError|TestEvictionStatusPrintsFinalCampaignEvidence|TestEvictionApplyRequiresConfirm|TestEvictionApplyRequiresPlanID' -count=1 -v` passed.
+- SECURITY: Focused credential and raw-identifier scans over changed files found only story/evidence prose and internal test fixture metadata covered by the allowlist; operator-facing JSON/text redaction is enforced by tests.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction ./internal/localblock -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'Test.*Eviction|Test.*Restore' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'TestServer_.*Eviction' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'TestEviction' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction ./internal/localblock ./internal/shard ./internal/admin ./internal/scrapctl -count=1` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run 'Test.*Eviction|Test.*Restore' -count=1 -v` passed.
+- LINT-FIX: Initial `env GOCACHE=/tmp/scrap-v2-go-build make check` failed on cyclomatic complexity and context argument order in the two new Shard tests; extracted focused assertion helpers without changing behavior.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestApplyEvictionPlanPreservesIndexMetadataReads|TestCreateEvictionPlanDoesNotMutateLocalBlockState' -count=1 -v` passed after the helper extraction.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after the test-only helper extraction, covering format, package boundaries, proto generation diff, lint, `go test ./...`, `go test -race ./...`, integration tests, and command builds.
+- SECURITY: `git diff --check` passed.
+- SECURITY: Corrected credential and raw-identifier scans over changed files passed with only allowlisted story/tracker prose and internal test fixture metadata; the broader attempted scan was discarded because the shell expanded an empty pattern before `rg`.
 
 ### Completion Notes List
 
@@ -232,12 +263,31 @@ TBD by dev-story.
 - Identified existing implementation modules to reuse rather than recreate: `internal/eviction`, `internal/localblock`, Shard eviction/restore adapters, admin HTTP, and `scrapctl eviction`.
 - Explicitly excluded all-local-copy eviction, restore-first cold reads, restore failure/corruption semantics closure, encryption, production security closure, and final release evidence.
 - Flagged likely redaction review area around `backend_key` in operator-facing eviction output.
+- Created the Story 3.3 local eviction evidence artifact before code changes, including authority path, changed boundaries, AC coverage map, planned verification commands, and leak-scan allowlist.
+- Added `TestCreateEvictionPlanDoesNotMutateLocalBlockState` to prove dry-run plan creation selects eligible follower-local Blocks from committed upload state without writing an eviction marker, removing `.blk`, or mutating `.idx`.
+- Verified existing planner coverage for bounded selection, restore-time hot residency, cap rejection, pending replacement upload exclusion, and leader-local hot-copy skips.
+- Added `TestApplyEvictionPlanPreservesIndexMetadataReads` to prove apply-driven local eviction writes the lifecycle marker, unlinks only `.blk`, leaves `.idx`, retains committed Confirmed Upload authority, leaves Upload Outbox empty, and preserves `HeadDocument`/`FindDocuments` without restore.
+- Verified existing metadata-read and validation-sample coverage for manually evicted confirmed Blocks, no Backend discovery on `FindDocuments`, and full-Block restore validation behavior.
+- Added `TestPlanJSONOmitsBackendKeys` and strengthened `scrapctl eviction plan/status` tests so operator JSON/text cannot expose raw Backend keys.
+- Patched `PlanBlock.BackendKey` to remain in-process only and removed `backend_key` from `scrapctl` text rendering.
+- Verified existing fail-closed coverage for disabled apply, missing committed authority, missing restore Backend, hot residency, stale/expired/running plans, rebuild in progress, malformed markers, drifted confirmation, unconfirmed selections, foreign Shard selections, admin HTTP status mapping, and CLI failure output.
+- Preserved package boundaries: campaign logic stayed in `internal/eviction`, lifecycle transitions in `internal/localblock`, authority and side effects in `internal/shard`, admin HTTP in `internal/admin`, and operator rendering in `internal/scrapctl`.
+- Completed focused, package, Shard race, broad `make check`, whitespace, and corrected leak-scan verification for Story 3.3.
+- Moved Story 3.3 to review with all tasks and subtasks complete.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-3-policy-gated-local-block-eviction.md`
+- `_bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/eviction/planner_test.go`
+- `internal/eviction/types.go`
+- `internal/shard/eviction_apply_test.go`
+- `internal/scrapctl/eviction.go`
+- `internal/scrapctl/eviction_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 3.3 Policy-Gated Local Block Eviction context and moved status to ready-for-dev.
+- 2026-06-11: Started Story 3.3 implementation and moved status to in-progress.
+- 2026-06-11: Completed Story 3.3 implementation, evidence, and verification; moved status to review.

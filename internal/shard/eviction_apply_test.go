@@ -47,6 +47,176 @@ func TestApplyEvictionPlanWritesMarkerBeforeRemovingBlock(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionPlanPreservesIndexMetadataReads(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	s := shardForEvictionApplyTest(t, true)
+	raft := &evictionApplyRaftStub{leader: false}
+	s.raft = raft
+	s.rebuilder = newProjectionRebuilder(&projectionRebuildCoreStub{}, t.TempDir(), s.blocksDir, s.shardID, UploadConfig{}, nil)
+	content := bytes.Repeat([]byte("metadata after eviction "), 3)
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, content)
+	plan := storeEvictionApplyPlanForConfirmedUploads(t, s, eviction.ReasonEvidenceRun, 0, confirmed)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	assertEvictionApplyPreservedMetadataResult(t, result, confirmed.BlockObject.SizeBytes)
+	assertBlockEvictedForApply(t, s, confirmed.BlockID)
+	assertEvictionApplyPreservedUploadAuthority(t, s, confirmed.BlockID)
+	assertEvictionApplyPreservedMetadataReads(ctx, t, s, raft, confirmed.BlockID, content)
+}
+
+func assertEvictionApplyPreservedMetadataResult(t *testing.T, result eviction.ApplyResult, wantBytesFreed int64) {
+	t.Helper()
+
+	if result.Status != eviction.ApplyStatusCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if result.EvictedBlocks != 1 {
+		t.Fatalf("evicted_blocks = %d, want 1", result.EvictedBlocks)
+	}
+	if result.ValidatedBlocks != 0 {
+		t.Fatalf("validated_blocks = %d, want 0", result.ValidatedBlocks)
+	}
+	if result.BytesFreed != wantBytesFreed {
+		t.Fatalf("bytes_freed = %d, want %d", result.BytesFreed, wantBytesFreed)
+	}
+}
+
+func assertEvictionApplyPreservedUploadAuthority(t *testing.T, s *Shard, blockID uint64) {
+	t.Helper()
+
+	if _, err := s.idx.GetConfirmedUpload(blockID); err != nil {
+		t.Fatalf("GetConfirmedUpload after apply: %v", err)
+	}
+	if _, err := s.idx.GetPendingUpload(blockID); !errors.Is(err, index.ErrPendingUploadNotFound) {
+		t.Fatalf("GetPendingUpload after apply error = %v, want ErrPendingUploadNotFound", err)
+	}
+}
+
+func assertEvictionApplyPreservedMetadataReads(
+	ctx context.Context,
+	t *testing.T,
+	s *Shard,
+	raft *evictionApplyRaftStub,
+	blockID uint64,
+	content []byte,
+) {
+	t.Helper()
+
+	raft.leader = true
+	meta, err := s.HeadDocument(ctx, evictionApplyTxID(blockID), "doc-1.bin")
+	if err != nil {
+		t.Fatalf("HeadDocument after eviction apply: %v", err)
+	}
+	if meta.Size != int64(len(content)) {
+		t.Fatalf("HeadDocument size = %d, want %d", meta.Size, len(content))
+	}
+	docs, err := s.FindDocuments(ctx, evictionApplyTxID(blockID))
+	if err != nil {
+		t.Fatalf("FindDocuments after eviction apply: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("FindDocuments after eviction apply = %+v, want one Document", docs)
+	}
+	if docs[0].Name != "doc-1.bin" {
+		t.Fatalf("FindDocuments name = %q, want doc-1.bin", docs[0].Name)
+	}
+	if _, err := os.Stat(block.FilePath(s.blocksDir, blockID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Block stat after metadata reads = %v, want not exist", err)
+	}
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, blockID)); err != nil {
+		t.Fatalf("eviction marker after metadata reads: %v", err)
+	}
+}
+
+func TestCreateEvictionPlanDoesNotMutateLocalBlockState(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	s.raft = &evictionApplyRaftStub{leader: false}
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	confirmed, err := s.idx.GetConfirmedUpload(1)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	blockPath := block.FilePath(s.blocksDir, 1)
+	indexPath := block.IdxFilePath(s.blocksDir, 1)
+	beforeBlock := readEvictionApplyFile(t, blockPath)
+	beforeIndex := readEvictionApplyFile(t, indexPath)
+
+	plan, err := s.CreateEvictionPlan(ctx, eviction.PlanRequest{
+		MemberHostname: "scrapd-2",
+		Reason:         eviction.ReasonEvidenceRun,
+	})
+	if err != nil {
+		t.Fatalf("CreateEvictionPlan: %v", err)
+	}
+
+	assertDryRunSelectedConfirmedBlock(t, plan, confirmed)
+	assertDryRunPreservedLocalBlockFiles(t, s, confirmed.BlockID, blockPath, indexPath, beforeBlock, beforeIndex)
+}
+
+func assertDryRunSelectedConfirmedBlock(t *testing.T, plan eviction.Plan, confirmed index.ConfirmedUpload) {
+	t.Helper()
+
+	if len(plan.Selected) != 1 {
+		t.Fatalf("selected Blocks = %+v, want one eligible Block", plan.Selected)
+	}
+	selected := plan.Selected[0]
+	if selected.BlockID != confirmed.BlockID {
+		t.Fatalf("selected Block ID = %d, want %d", selected.BlockID, confirmed.BlockID)
+	}
+	if selected.ShardID != confirmed.ShardID {
+		t.Fatalf("selected Shard ID = %d, want %d", selected.ShardID, confirmed.ShardID)
+	}
+	if selected.SizeBytes != confirmed.SealedSizeBytes {
+		t.Fatalf("selected size = %d, want %d", selected.SizeBytes, confirmed.SealedSizeBytes)
+	}
+	if selected.LocalState != string(LocalBlockStateHot) {
+		t.Fatalf("selected local state = %q, want hot", selected.LocalState)
+	}
+	assertDryRunSelectedTiming(t, selected)
+}
+
+func assertDryRunSelectedTiming(t *testing.T, selected eviction.PlanBlock) {
+	t.Helper()
+
+	if selected.ConfirmedAtUs == 0 {
+		t.Fatalf("selected confirmed_at_us = 0, want evidence timestamp")
+	}
+	if selected.EligibleAtUs == 0 {
+		t.Fatalf("selected eligible_at_us = 0, want evidence timestamp")
+	}
+	if selected.HotResidencyWindowSeconds != 0 {
+		t.Fatalf("hot residency window = %d, want 0", selected.HotResidencyWindowSeconds)
+	}
+}
+
+func assertDryRunPreservedLocalBlockFiles(
+	t *testing.T,
+	s *Shard,
+	blockID uint64,
+	blockPath string,
+	indexPath string,
+	beforeBlock []byte,
+	beforeIndex []byte,
+) {
+	t.Helper()
+
+	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, blockID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("eviction marker stat error = %v, want not exist after dry-run", err)
+	}
+	if got := readEvictionApplyFile(t, blockPath); !bytes.Equal(got, beforeBlock) {
+		t.Fatal("dry-run mutated Block data")
+	}
+	if got := readEvictionApplyFile(t, indexPath); !bytes.Equal(got, beforeIndex) {
+		t.Fatal("dry-run mutated Block index")
+	}
+}
+
 func TestApplyEvictionPlanReportsCompletedWithSkipsForDrift(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
@@ -1545,6 +1715,16 @@ func statFileSize(t *testing.T, path string) int64 {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return info.Size()
+}
+
+func readEvictionApplyFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // test path is generated from temp dir and Block ID
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
 }
 
 func putEvictionApplyBackendObject(
