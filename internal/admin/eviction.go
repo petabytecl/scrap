@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -60,6 +61,9 @@ func (s *Server) handleEvictionPlans(w http.ResponseWriter, r *http.Request) {
 
 	plan, err := s.evictionPlanner.CreateEvictionPlan(r.Context(), req)
 	if err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminOperator, audit.OperationEvictionPlanCreate, audit.TargetBlock) {
+			return
+		}
 		writeEvictionPlanError(w, err)
 		return
 	}
@@ -105,6 +109,9 @@ func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request,
 
 	result, err := s.evictionApplier.ApplyEvictionPlan(r.Context(), eviction.ApplyRequest{PlanID: planID})
 	if err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminOperator, audit.OperationEvictionApply, audit.TargetBlock) {
+			return
+		}
 		writeEvictionApplyError(w, err)
 		return
 	}

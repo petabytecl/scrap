@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,6 +58,66 @@ func TestAdminAuditsDangerousOperationAndRateLimitDenial(t *testing.T) {
 	}
 	if events[1].Result != audit.ResultRateLimited || events[1].Reason != audit.ReasonRateLimited {
 		t.Fatalf("second audit event = %+v", events[1])
+	}
+}
+
+func TestAdminAuditsDangerousOperationFailure(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	applier := &failingEvictionApplier{err: eviction.ErrApplyDisabled}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithEvictionApplier(applier))
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminOperator),
+	})
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/eviction/plans/plan-1/apply", bytes.NewReader([]byte(`{}`)))
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", resp.Code, resp.Body.String())
+	}
+	if applier.calls != 1 {
+		t.Fatalf("applier calls = %d, want 1", applier.calls)
+	}
+	events := sink.Events()
+	if len(events) != 2 {
+		t.Fatalf("audit events = %d, want allowed and failed: %+v", len(events), events)
+	}
+	if events[0].Operation != audit.OperationEvictionApply || events[0].Result != audit.ResultAllowed {
+		t.Fatalf("first audit event = %+v, want eviction_apply allowed", events[0])
+	}
+	if events[1].Operation != audit.OperationEvictionApply ||
+		events[1].Target != audit.TargetBlock ||
+		events[1].Result != audit.ResultFailed ||
+		events[1].Reason != audit.ReasonInternalError {
+		t.Fatalf("second audit event = %+v, want eviction_apply/block failed internal_error", events[1])
+	}
+}
+
+func TestAdminDangerousOperationFailsClosedWhenFailureAuditRejected(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := &failAfterFirstAuditSink{memory: audit.NewMemorySink(), err: errors.New("audit sink unavailable")}
+	applier := &failingEvictionApplier{err: eviction.ErrApplyDisabled}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithEvictionApplier(applier))
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminOperator),
+	})
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/eviction/plans/plan-1/apply", bytes.NewReader([]byte(`{}`)))
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", resp.Code, resp.Body.String())
+	}
+	if applier.calls != 1 {
+		t.Fatalf("applier calls = %d, want 1", applier.calls)
+	}
+	if got := sink.memory.Events(); len(got) != 1 || got[0].Result != audit.ResultAllowed {
+		t.Fatalf("recorded audit events = %+v, want only allowed before failed audit rejection", got)
 	}
 }
 
@@ -269,6 +330,30 @@ type successfulEvictionApplier struct {
 func (a *successfulEvictionApplier) ApplyEvictionPlan(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
 	a.calls++
 	return eviction.ApplyResult{PlanID: "plan-1"}, nil
+}
+
+type failingEvictionApplier struct {
+	calls int
+	err   error
+}
+
+func (a *failingEvictionApplier) ApplyEvictionPlan(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
+	a.calls++
+	return eviction.ApplyResult{}, a.err
+}
+
+type failAfterFirstAuditSink struct {
+	memory *audit.MemorySink
+	err    error
+	calls  int
+}
+
+func (s *failAfterFirstAuditSink) Record(ctx context.Context, event audit.Event) error {
+	s.calls++
+	if s.calls > 1 {
+		return s.err
+	}
+	return s.memory.Record(ctx, event)
 }
 
 func adminAuthorizerForPrincipal(t *testing.T, principal string, role security.Role) *security.Authorizer {

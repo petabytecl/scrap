@@ -361,6 +361,14 @@ func (s *Server) recordAudit(ctx context.Context, role security.Role, operation,
 	return s.auditSink.Record(ctx, event)
 }
 
+func (s *Server) recordFailedOperation(w http.ResponseWriter, r *http.Request, role security.Role, operation, target string) bool {
+	if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultFailed, audit.ReasonInternalError); err != nil {
+		http.Error(w, "audit event failed", http.StatusInternalServerError)
+		return false
+	}
+	return true
+}
+
 func (s *Server) auditReasonForError(err error) string {
 	switch {
 	case errors.Is(err, security.ErrUnauthenticated):
@@ -518,6 +526,9 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := s.projectionInjector.InjectProjectionKey(r.Context(), req.TransactionID, req.BlockID, req.DocCount, req.Completed); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationProjectionKeyHook, audit.TargetEvidence) {
+			return
+		}
 		http.Error(w, "projection injection failed", http.StatusInternalServerError)
 		return
 	}
@@ -529,6 +540,9 @@ func (s *Server) handleTransitRotateHook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.transitRotator.RotateTransitKey(r.Context()); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationTransitRotateHook, audit.TargetEvidence) {
+			return
+		}
 		http.Error(w, "transit rotate failed", http.StatusInternalServerError)
 		return
 	}
@@ -540,6 +554,9 @@ func (s *Server) handleLightScrubHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.lightScrubber.RunLightScrub(r.Context()); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationLightScrubHook, audit.TargetEvidence) {
+			return
+		}
 		http.Error(w, "light scrub failed", http.StatusInternalServerError)
 		return
 	}

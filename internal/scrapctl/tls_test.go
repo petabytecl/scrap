@@ -70,6 +70,34 @@ func TestStatusInProductionRequiresScrapctlTLS(t *testing.T) {
 	}
 }
 
+func TestStatusAdminDenialsReturnBoundedErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{name: "authorization denied", status: http.StatusForbidden},
+		{name: "rate limited", status: http.StatusTooManyRequests},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := Run([]string{"status", "--admin-url", "http://admin.local"}, &out, io.Discard, Deps{
+				HTTPClient: statusHTTPClient(tc.status, "secret-token tx-secret-raw invoice-secret.pdf"),
+			})
+			if err == nil {
+				t.Fatal("expected status error")
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("GET healthz status: %d", tc.status)) {
+				t.Fatalf("error = %q, want bounded status", err)
+			}
+			for _, forbidden := range []string{"secret-token", "tx-secret-raw", "invoice-secret.pdf"} {
+				if strings.Contains(err.Error(), forbidden) || strings.Contains(out.String(), forbidden) {
+					t.Fatalf("scrapctl denial leaked %q in err=%q out=%q", forbidden, err, out.String())
+				}
+			}
+		})
+	}
+}
+
 func TestStatusWithTLSRejectsPlainHTTPURL(t *testing.T) {
 	bundle := securityfixture.WriteCertBundle(t, t.TempDir(), securityfixture.CertOptions{
 		ServerName: "admin.scrap.local",
@@ -89,4 +117,15 @@ func TestStatusWithTLSRejectsPlainHTTPURL(t *testing.T) {
 	if !strings.Contains(err.Error(), "requires https") {
 		t.Fatalf("error = %q, want HTTPS requirement", err)
 	}
+}
+
+func statusHTTPClient(status int, body string) *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
 }

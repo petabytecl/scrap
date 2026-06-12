@@ -5,7 +5,7 @@ created: 2026-06-12T01:07:25-04:00
 
 # Story 4.2: Surface Authorization, Audit, and Rate Limits
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,74 +33,74 @@ so that production surfaces fail closed before side effects.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 4.2 evidence artifact before behavior changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md`.
-  - [ ] Record baseline commit, timestamp, owner, exact files reviewed, current coverage, gaps, commands, expected results, actual results, and redaction proof.
-  - [ ] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases.
-  - [ ] If existing code already satisfies a row, prove it with current tests or source evidence. Do not mark a row pass from intent, architecture, or Story 4.1 startup evidence alone.
+- [x] Create the Story 4.2 evidence artifact before behavior changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md`.
+  - [x] Record baseline commit, timestamp, owner, exact files reviewed, current coverage, gaps, commands, expected results, actual results, and redaction proof.
+  - [x] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases.
+  - [x] If existing code already satisfies a row, prove it with current tests or source evidence. Do not mark a row pass from intent, architecture, or Story 4.1 startup evidence alone.
 
-- [ ] Audit and reuse existing security primitives. (AC: 1-4)
-  - [ ] Read and preserve `internal/security/authorization.go`, `internal/security/grpc_authorization.go`, `internal/security/grpc_identity.go`, `internal/security/ratelimit.go`, `internal/security/authorization_metrics.go`, and `internal/audit/audit.go`.
-  - [ ] Reuse `security.Authorizer`, `security.Principal*Interceptor`, `security.PeerIdentity*Interceptor`, `security.RateLimiter`, `audit.Event`, `audit.Sink`, and existing OTel observer helpers before adding any new abstraction.
-  - [ ] Confirm `internal/cmd/tls.go` wires production public gRPC, peer gRPC, admin HTTP, audit sink, and rate limiter through existing options from Story 4.1.
-  - [ ] Do not introduce new libraries, package-level globals, sleeps in limiter tests, new telemetry label shapes, or a parallel role/audit model.
+- [x] Audit and reuse existing security primitives. (AC: 1-4)
+  - [x] Read and preserve `internal/security/authorization.go`, `internal/security/grpc_authorization.go`, `internal/security/grpc_identity.go`, `internal/security/ratelimit.go`, `internal/security/authorization_metrics.go`, and `internal/audit/audit.go`.
+  - [x] Reuse `security.Authorizer`, `security.Principal*Interceptor`, `security.PeerIdentity*Interceptor`, `security.RateLimiter`, `audit.Event`, `audit.Sink`, and existing OTel observer helpers before adding any new abstraction.
+  - [x] Confirm `internal/cmd/tls.go` wires production public gRPC, peer gRPC, admin HTTP, audit sink, and rate limiter through existing options from Story 4.1.
+  - [x] Do not introduce new libraries, package-level globals, sleeps in limiter tests, new telemetry label shapes, or a parallel role/audit model.
 
-- [ ] Close the public gRPC denial and audit/rate-limit matrix. (AC: 1, 2, 4)
-  - [ ] Cover `WriteDocument`, `ReadDocument`, `HeadDocument`, and `FindDocuments` with missing principal and wrong-role cases.
-  - [ ] Assert unauthorized public requests fail before `internal/store` calls, Shard routing, Backend access, Local Block Lifecycle changes, decrypt/rewrap attempts, or Document-byte reads/writes.
-  - [ ] Assert typed gRPC denials: unauthenticated, permission denied, and rate limited as applicable.
-  - [ ] Assert denied and rate-limited paths emit bounded audit where configured, and no audit/log/metric output includes raw Transaction IDs, Document names, request metadata, cert material, tokens, raw paths, or dependency error text.
+- [x] Close the public gRPC denial and audit/rate-limit matrix. (AC: 1, 2, 4)
+  - [x] Cover `WriteDocument`, `ReadDocument`, `HeadDocument`, and `FindDocuments` with missing principal and wrong-role cases.
+  - [x] Assert unauthorized public requests fail before `internal/store` calls, Shard routing, Backend access, Local Block Lifecycle changes, decrypt/rewrap attempts, or Document-byte reads/writes.
+  - [x] Assert typed gRPC denials: unauthenticated, permission denied, and rate limited as applicable.
+  - [x] Assert denied and rate-limited paths emit bounded audit where configured, and no audit/log/metric output includes raw Transaction IDs, Document names, request metadata, cert material, tokens, raw paths, or dependency error text.
 
-- [ ] Close the peer RPC denial and Shard-scope matrix. (AC: 1, 2, 4)
-  - [ ] Cover wrong role, missing principal, wrong Cell, wrong Member, and unauthorized Shard scope for `ForwardRaft`, `ForwardRaftStream`, `ReplicateDocument`, `RequestIndexRebuild`, `ConsistencyCheck`, and `TransferBlock` where each operation exists.
-  - [ ] Assert peer denials happen before Raft routing, byte replication sinks, local replication files, rebuild/scrub work, Block transfer file access, Backend access, decrypt/rewrap attempts, or Local Block Lifecycle mutation.
-  - [ ] Preserve ADR 0024 Shard-scope behavior: a valid peer certificate and `peer_member` role are not enough when the Shard is outside the authorized set.
-  - [ ] Assert peer rate-limit denials use `codes.ResourceExhausted`, do not starve public/admin budgets, and emit bounded audit/metrics.
+- [x] Close the peer RPC denial and Shard-scope matrix. (AC: 1, 2, 4)
+  - [x] Cover wrong role, missing principal, wrong Cell, wrong Member, and unauthorized Shard scope for `ForwardRaft`, `ForwardRaftStream`, `ReplicateDocument`, `RequestIndexRebuild`, `ConsistencyCheck`, and `TransferBlock` where each operation exists.
+  - [x] Assert peer denials happen before Raft routing, byte replication sinks, local replication files, rebuild/scrub work, Block transfer file access, Backend access, decrypt/rewrap attempts, or Local Block Lifecycle mutation.
+  - [x] Preserve ADR 0024 Shard-scope behavior: a valid peer certificate and `peer_member` role are not enough when the Shard is outside the authorized set.
+  - [x] Assert peer rate-limit denials use `codes.ResourceExhausted`, do not starve public/admin budgets, and emit bounded audit/metrics.
 
-- [ ] Close the admin HTTP and dangerous-operation matrix. (AC: 1-4)
-  - [ ] Cover admin read paths, operator paths, break-glass/test-hook paths, pprof profile capture, eviction plan/apply/status, rewrap route, light scrub, metrics, and shard diagnostics where currently registered.
-  - [ ] Assert wrong-role and unauthenticated admin requests fail before handler side effects, provider/service calls, Raft mutations, Backend mutations, Local Block Lifecycle changes, decrypt/rewrap attempts, or dangerous hook execution.
-  - [ ] Prove authorized dangerous operations emit bounded audit events on success and failure. If audit sink failure for dangerous operations is not fail-closed, add the narrowest fix and tests.
-  - [ ] Assert admin rate-limit denials return HTTP 429, do not call protected handlers, and remain independent from public and peer limiter budgets.
+- [x] Close the admin HTTP and dangerous-operation matrix. (AC: 1-4)
+  - [x] Cover admin read paths, operator paths, break-glass/test-hook paths, pprof profile capture, eviction plan/apply/status, rewrap route, light scrub, metrics, and shard diagnostics where currently registered.
+  - [x] Assert wrong-role and unauthenticated admin requests fail before handler side effects, provider/service calls, Raft mutations, Backend mutations, Local Block Lifecycle changes, decrypt/rewrap attempts, or dangerous hook execution.
+  - [x] Prove authorized dangerous operations emit bounded audit events on success and failure. If audit sink failure for dangerous operations is not fail-closed, add the narrowest fix and tests.
+  - [x] Assert admin rate-limit denials return HTTP 429, do not call protected handlers, and remain independent from public and peer limiter budgets.
 
-- [ ] Close the `scrapctl`-initiated admin path evidence. (AC: 2, 4)
-  - [ ] Test `scrapctl` as a client/operator path only; do not move server-side enforcement into the CLI.
-  - [ ] Prove production `scrapctl` requires its client TLS material before making admin HTTP calls.
-  - [ ] Add or reuse a test that drives a `scrapctl` admin command against an admin server returning auth/rate-limit denial and verifies safe operator-facing output, no client-side storage bypass, and no raw secret or identifier leak.
-  - [ ] Keep `scrapctl` evidence display aligned with server truth: pass/fail, affected surface, reason, and next action where the existing output supports it.
+- [x] Close the `scrapctl`-initiated admin path evidence. (AC: 2, 4)
+  - [x] Test `scrapctl` as a client/operator path only; do not move server-side enforcement into the CLI.
+  - [x] Prove production `scrapctl` requires its client TLS material before making admin HTTP calls.
+  - [x] Add or reuse a test that drives a `scrapctl` admin command against an admin server returning auth/rate-limit denial and verifies safe operator-facing output, no client-side storage bypass, and no raw secret or identifier leak.
+  - [x] Keep `scrapctl` evidence display aligned with server truth: pass/fail, affected surface, reason, and next action where the existing output supports it.
 
-- [ ] Prove audit field bounds and redaction. (AC: 2, 3, 4)
-  - [ ] Verify audit records include only bounded principal handle, role, operation, surface, target, result, reason, correlation/security context where implemented.
-  - [ ] Verify audit records do not include Document bytes, raw Transaction IDs, raw Document names, plaintext data keys, wrapped-key ciphertext, Transit tokens, cert/key material, raw Backend keys, raw paths, unbounded notes, raw request headers, or dependency error strings.
-  - [ ] Verify audit labels are low-cardinality and from the existing enums in `internal/audit`, not arbitrary request values.
-  - [ ] Verify denied/rate-limited requests emit bounded audit where policy requires it, without marking the denied operation allowed.
+- [x] Prove audit field bounds and redaction. (AC: 2, 3, 4)
+  - [x] Verify audit records include only bounded principal handle, role, operation, surface, target, result, reason, correlation/security context where implemented.
+  - [x] Verify audit records do not include Document bytes, raw Transaction IDs, raw Document names, plaintext data keys, wrapped-key ciphertext, Transit tokens, cert/key material, raw Backend keys, raw paths, unbounded notes, raw request headers, or dependency error strings.
+  - [x] Verify audit labels are low-cardinality and from the existing enums in `internal/audit`, not arbitrary request values.
+  - [x] Verify denied/rate-limited requests emit bounded audit where policy requires it, without marking the denied operation allowed.
 
-- [ ] Prove per-surface rate-limit isolation with deterministic clocks. (AC: 4)
-  - [ ] Use `security.WithRateLimitNow` and explicit principal/bucket identities. Do not use sleeps.
-  - [ ] Prove public saturation does not consume peer/admin budgets.
-  - [ ] Prove peer saturation does not starve admin evidence or repair-control access.
-  - [ ] Prove admin or dangerous-operation saturation does not consume public/peer budgets.
-  - [ ] Assert limiter metrics/log/audit output expose bounded surface, operation, and reason only.
+- [x] Prove per-surface rate-limit isolation with deterministic clocks. (AC: 4)
+  - [x] Use `security.WithRateLimitNow` and explicit principal/bucket identities. Do not use sleeps.
+  - [x] Prove public saturation does not consume peer/admin budgets.
+  - [x] Prove peer saturation does not starve admin evidence or repair-control access.
+  - [x] Prove admin or dangerous-operation saturation does not consume public/peer budgets.
+  - [x] Assert limiter metrics/log/audit output expose bounded surface, operation, and reason only.
 
-- [ ] Preserve package, authority, and scope boundaries. (AC: 1-4)
-  - [ ] Keep reusable primitives in `internal/security` and `internal/audit`.
-  - [ ] Keep public gRPC enforcement in `internal/server`, peer enforcement in `internal/peer`, admin enforcement in `internal/admin`, app wiring in `internal/cmd`, and client UX/evidence display in `internal/scrapctl`.
-  - [ ] Do not change storage identity, Shard authority, Raft command shape, Block/Frame layout, Backend object keys, Pebble Projection authority, envelope encryption, OpenBao bootstrap, or protobuf wire contracts for this story.
-  - [ ] Do not edit generated `gen/` files directly. If a proto contract change becomes unavoidable, stop and justify the ADR/proto impact before proceeding.
+- [x] Preserve package, authority, and scope boundaries. (AC: 1-4)
+  - [x] Keep reusable primitives in `internal/security` and `internal/audit`.
+  - [x] Keep public gRPC enforcement in `internal/server`, peer enforcement in `internal/peer`, admin enforcement in `internal/admin`, app wiring in `internal/cmd`, and client UX/evidence display in `internal/scrapctl`.
+  - [x] Do not change storage identity, Shard authority, Raft command shape, Block/Frame layout, Backend object keys, Pebble Projection authority, envelope encryption, OpenBao bootstrap, or protobuf wire contracts for this story.
+  - [x] Do not edit generated `gen/` files directly. If a proto contract change becomes unavoidable, stop and justify the ADR/proto impact before proceeding.
 
-- [ ] Update evidence and tracker artifacts. (AC: 1-4)
-  - [ ] Update this story with debug logs, completion notes, review findings, and file list.
-  - [ ] Update `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md` with the final surface matrix and command evidence.
-  - [ ] If `internal/scrapctl/evidencebundle` needs a current signal field or gate text for this story's local evidence, keep the update narrow and do not claim Story 4.7 production rehearsal closure.
-  - [ ] Move `sprint-status.yaml` to `review` only when implementation and local verification are complete.
+- [x] Update evidence and tracker artifacts. (AC: 1-4)
+  - [x] Update this story with debug logs, completion notes, review findings, and file list.
+  - [x] Update `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md` with the final surface matrix and command evidence.
+  - [x] If `internal/scrapctl/evidencebundle` needs a current signal field or gate text for this story's local evidence, keep the update narrow and do not claim Story 4.7 production rehearsal closure.
+  - [x] Move `sprint-status.yaml` to `review` only when implementation and local verification are complete.
 
-- [ ] Run verification and leak scans. (AC: 1-4)
-  - [ ] Run focused unit and package tests listed below.
-  - [ ] Run affected package regression listed below.
-  - [ ] Run `git diff --check`.
-  - [ ] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes security boundary behavior or evidence.
-  - [ ] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
-  - [ ] If `make production-rehearsal-security` is not run, record it as skipped with closure impact. Do not claim production rehearsal readiness from package tests.
+- [x] Run verification and leak scans. (AC: 1-4)
+  - [x] Run focused unit and package tests listed below.
+  - [x] Run affected package regression listed below.
+  - [x] Run `git diff --check`.
+  - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes security boundary behavior or evidence.
+  - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
+  - [x] If `make production-rehearsal-security` is not run, record it as skipped with closure impact. Do not claim production rehearsal readiness from package tests.
 
 ## Dev Notes
 
@@ -267,6 +267,34 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 
 ### Debug Log References
 
+- 2026-06-12T01:12:07-04:00 - Marked Story 4.2 in progress after committing and pushing the ready-for-dev story artifact.
+- 2026-06-12T01:15:26-04:00 - Added red admin dangerous-operation failure audit tests; they failed because only the pre-operation allowed audit existed and failure-audit rejection did not fail closed.
+- 2026-06-12T01:16:00-04:00 - Added `recordFailedOperation` and wired dangerous admin failure paths for eviction, rewrap, projection-key hook, Transit rotate hook, and light scrub hook.
+- 2026-06-12T01:17:00-04:00 - Added public gRPC denied audit/redaction test and `scrapctl` bounded admin-denial tests.
+- 2026-06-12T01:21:39-04:00 - Completed focused tests, affected regression, leak scans, `git diff --check`, and `make check`.
+
 ### Completion Notes List
 
+- Created `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md` with source review list, research/reuse record, red/green log, final surface matrix, leak-scan classification, and production rehearsal boundary.
+- Added public gRPC audit/redaction coverage for denied `WriteDocument`, `ReadDocument`, `HeadDocument`, and `FindDocuments` before Store side effects.
+- Added `scrapctl status` denial tests for admin HTTP 403 and 429 responses, proving bounded errors do not copy raw response bodies.
+- Added dangerous admin operation failure audit tests, including fail-closed behavior when the failed audit event cannot be recorded.
+- Implemented bounded failed-operation audit events for admin eviction plan creation/apply, rewrap, projection-key hook, Transit rotate hook, and light scrub hook failure paths.
+- No `internal/scrapctl/evidencebundle` code update was needed; existing security report signals are sufficient for this local Story 4.2 evidence.
+- Verification passed: focused primitive/surface/app/CLI tests, affected package regression, `git diff --check`, strict token scan, broader leak-scan classification, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/4-2-surface-authorization-audit-and-rate-limits.md`
+- `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/admin/audit_ratelimit_test.go`
+- `internal/admin/eviction.go`
+- `internal/admin/rewrap.go`
+- `internal/admin/server.go`
+- `internal/scrapctl/tls_test.go`
+- `internal/server/audit_ratelimit_test.go`
+
+### Change Log
+
+- 2026-06-12 - Closed Story 4.2 surface authorization, audit, and rate-limit evidence gaps; added failed dangerous-operation audit behavior and local verification evidence.

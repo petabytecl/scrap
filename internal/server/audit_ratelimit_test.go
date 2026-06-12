@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,5 +58,122 @@ func TestDocumentServerAuditsAndRateLimitsPublicReads(t *testing.T) {
 	}
 	if events[0].Target != audit.TargetDocument || events[1].Reason != audit.ReasonRateLimited {
 		t.Fatalf("unexpected audit events: %+v", events)
+	}
+}
+
+func TestDocumentServerAuditsDeniedPublicOperationsWithoutRawIdentifierLeaks(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	store := &recordingStore{}
+	srv := &documentServer{
+		store:      store,
+		telemetry:  noopTelemetry{},
+		logger:     slog.New(slog.DiscardHandler),
+		authorizer: authz,
+		auditSink:  sink,
+	}
+	writerCtx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-writer",
+		Roles: security.NewRoleSet(security.RoleDocumentWriter),
+	})
+	readerCtx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-reader",
+		Roles: security.NewRoleSet(security.RoleDocumentReader),
+	})
+
+	cases := publicDeniedAuditCases(writerCtx, readerCtx, srv)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil || status.Code(err) != tc.code {
+				t.Fatalf("call error = %v (%s), want %s", err, status.Code(err), tc.code)
+			}
+		})
+	}
+	if store.calls != 0 {
+		t.Fatalf("store calls = %d, want 0", store.calls)
+	}
+	events := sink.Events()
+	assertPublicDeniedAuditEvents(t, events, cases)
+	assertPublicDeniedAuditNoLeaks(t, events)
+}
+
+type publicDeniedAuditCase struct {
+	name      string
+	call      func() error
+	operation string
+	reason    string
+	code      codes.Code
+}
+
+func publicDeniedAuditCases(writerCtx, readerCtx context.Context, srv *documentServer) []publicDeniedAuditCase {
+	const rawTx = "tx-secret-raw"
+	const rawDoc = "invoice-secret.pdf"
+	return []publicDeniedAuditCase{
+		{
+			name: "HeadDocument missing principal",
+			call: func() error {
+				_, err := srv.HeadDocument(context.Background(), &scrapv1.HeadDocumentRequest{TransactionId: rawTx, DocumentName: rawDoc})
+				return err
+			},
+			operation: audit.OperationHeadDocument,
+			reason:    audit.ReasonUnauthenticated,
+			code:      codes.Unauthenticated,
+		},
+		{
+			name: "FindDocuments wrong role",
+			call: func() error {
+				_, err := srv.FindDocuments(writerCtx, &scrapv1.FindDocumentsRequest{TransactionId: rawTx})
+				return err
+			},
+			operation: audit.OperationFindDocuments,
+			reason:    audit.ReasonMissingRole,
+			code:      codes.PermissionDenied,
+		},
+		{
+			name: "ReadDocument wrong role",
+			call: func() error {
+				return srv.ReadDocument(&scrapv1.ReadDocumentRequest{TransactionId: rawTx, DocumentName: rawDoc}, &readDocumentStream{ctx: writerCtx})
+			},
+			operation: audit.OperationReadDocument,
+			reason:    audit.ReasonMissingRole,
+			code:      codes.PermissionDenied,
+		},
+		{
+			name: "WriteDocument wrong role",
+			call: func() error {
+				return srv.WriteDocument(&writeDocumentStream{ctx: readerCtx})
+			},
+			operation: audit.OperationWriteDocument,
+			reason:    audit.ReasonMissingRole,
+			code:      codes.PermissionDenied,
+		},
+	}
+}
+
+func assertPublicDeniedAuditEvents(t *testing.T, events []audit.Event, cases []publicDeniedAuditCase) {
+	t.Helper()
+	if len(events) != len(cases) {
+		t.Fatalf("audit events = %d, want %d: %+v", len(events), len(cases), events)
+	}
+	for i, tc := range cases {
+		event := events[i]
+		if event.Surface != audit.SurfacePublic ||
+			event.Operation != tc.operation ||
+			event.Target != audit.TargetDocument ||
+			event.Result != audit.ResultDenied ||
+			event.Reason != tc.reason {
+			t.Fatalf("event %d = %+v, want %s denied %s", i, event, tc.operation, tc.reason)
+		}
+	}
+}
+
+func assertPublicDeniedAuditNoLeaks(t *testing.T, events []audit.Event) {
+	t.Helper()
+	rendered := fmt.Sprintf("%+v", events)
+	for _, forbidden := range []string{"tx-secret-raw", "invoice-secret.pdf", "member-writer", "member-reader"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("public denial audit leaked %q in %+v", forbidden, events)
+		}
 	}
 }

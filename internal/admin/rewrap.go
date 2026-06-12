@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -39,6 +40,9 @@ func (s *Server) handleRewrapDocument(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.rewrapService.RewrapDocument(r.Context(), req)
 	if err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminOperator, audit.OperationRewrapDocument, audit.TargetDocument) {
+			return
+		}
 		writeRewrapError(w, result, err)
 		return
 	}
