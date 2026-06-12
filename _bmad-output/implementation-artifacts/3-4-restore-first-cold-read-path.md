@@ -5,7 +5,7 @@ created: 2026-06-11T22:21:02-04:00
 
 # Story 3.4: Restore-First Cold Read Path
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -68,6 +68,11 @@ evicted.
   - [x] Run focused public error mapping, Local Block Lifecycle, and restore metric tests.
   - [x] Run a focused Shard race gate for restore singleflight / lifecycle mutation behavior.
   - [x] Run `make check` before BMAD code-review handoff unless a narrower blocker is documented in the story.
+
+### Review Findings
+
+- [x] [Review][Patch] Bound fake-Backend waits and release cleanup [internal/shard/restore_test.go:382]
+- [x] [Review][Patch] Demote unrun production-profile restore and scoped backpressure evidence from broad PASS wording [_bmad-output/implementation-artifacts/epic-3-restore-first-cold-read-evidence.md:67]
 
 ## Dev Notes
 
@@ -245,6 +250,11 @@ GPT-5 Codex.
 - DEV-STORY: Final focused restore/read lifecycle, Local Block Lifecycle, server/store, restore metric, package regression, and Shard race gates passed.
 - DEV-STORY: `make check` passed after lint cleanup; full gate included lint, `go test ./...`, `go test -race ./...`, integration tests with LocalStack/OpenBao Testcontainers, and `go build` for `cmd/scrapd` and `cmd/scrapctl`.
 - DEV-STORY: Credential and identifier leak scans matched only allowlisted story/evidence prose, test fixture names, environment variable names, generated paths, source identifiers, and tests asserting redaction; no real secret material or new deployed public/log/metric identifier leak was found.
+- CODE-REVIEW: BMAD Blind Hunter, Edge Case Hunter, and Acceptance Auditor review layers ran on `e28ec3c..HEAD`; two patch findings were accepted and one global restore-limiter objection was dismissed for this story because Story 3.4 explicitly records the current per-Block scope instead of adding a cross-Block limiter.
+- CODE-REVIEW: Patched restore concurrency tests so fake-Backend start/result waits are bounded and fake-Backend release is once-guarded for failure-path cleanup.
+- CODE-REVIEW: Tightened evidence wording so AC-3.4.3 is PASS only for same-Block scope with SCOPED CONCERNS, and AC-3.4.4 is SUPPORTING PASS / CONCERNS until deployed production-profile restore evidence exists.
+- CODE-REVIEW: Focused restore concurrency command passed after review fixes: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestReadDocumentJoinsConcurrentBlockRestore|TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation|TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore|TestReadDocumentRestoreLeaderDeadlineFailsClosed|TestReadDocumentRestoreDoesNotBlockMetadataReadsWhileDownloading' -count=1 -v`.
+- CODE-REVIEW: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes; included lint, generated diff check, `go test ./...`, `go test -race ./...`, integration tests with LocalStack/OpenBao Testcontainers, and `go build` for `cmd/scrapd` and `cmd/scrapctl`.
 
 ### Completion Notes List
 
@@ -255,10 +265,11 @@ GPT-5 Codex.
 - Created the Story 3.4 restore-first cold-read evidence artifact before production-code changes, including authority path, changed boundaries, AC coverage map, planned verification commands, and leak-scan allowlist.
 - Proved AC-3.4.1 in single-Member Shard tests: restore starts from an evicted local Block state, uses committed Confirmed Upload Catalog metadata plus matching eviction marker, avoids Backend discovery/HEAD/list authority, and fails closed on missing committed upload or stale marker. The evidence artifact explicitly does not claim deployed multi-Member all-copy eviction proof.
 - Proved AC-3.4.2 in focused Shard and Local Block Lifecycle tests: restored bytes are verified before publish/return; failed restore returns nil reader and zero metadata, keeps eviction state, leaves no restore marker or staging file, and successful restore publishes a verified hot Block before normal local reading. The encrypted restore test uses fake Transit only and does not close Story 3.6 production encryption evidence.
-- Proved AC-3.4.3 in focused Shard tests: same-Block reads coalesce to one Backend GET, canceled/deadline waiters return no reader or metadata without canceling a shared restore, leader deadline fails closed, and metadata reads are not blocked while Backend download is blocked. Evidence records current backpressure scope as per-Block coalescing plus caller deadlines, without claiming a global cross-Block restore limiter.
-- Proved AC-3.4.4 with focused local tests: missing restore Backend fails closed as `backend_restore_unavailable`; public server/store mapping preserves the unavailable reason; production startup/security gates reject missing TLS, role policy, peer identity policy, Transit, audit, rate-limit policy, test hooks, pprof, and fake Transit. Deployed production-profile restore remains CONCERNS because it was not run.
+- Proved the same-Block AC-3.4.3 scope in focused Shard tests: same-Block reads coalesce to one Backend GET, canceled/deadline waiters return no reader or metadata without canceling a shared restore, leader deadline fails closed, and metadata reads are not blocked while Backend download is blocked. Evidence records current backpressure scope as per-Block coalescing plus caller deadlines, without claiming a global cross-Block restore limiter.
+- Recorded supporting AC-3.4.4 evidence with focused local tests: missing restore Backend fails closed as `backend_restore_unavailable`; public server/store mapping preserves the unavailable reason; production startup/security gates reject missing TLS, role policy, peer identity policy, Transit, audit, rate-limit policy, test hooks, pprof, and fake Transit. Deployed production-profile restore remains CONCERNS because it was not run.
 - Preserved architecture boundaries: changes are test/evidence/story-only; no second read path, new runtime dependency, new production package, wire/layout/schema change, or security policy change was introduced.
 - Completed Story 3.4 verification gates, leak scans, and `make check`; moved the story to review for BMAD code review.
+- Applied BMAD code-review fixes, reran focused verification, and moved Story 3.4 to done.
 
 ### File List
 
@@ -273,3 +284,4 @@ GPT-5 Codex.
 - 2026-06-11: Created Story 3.4 Restore-First Cold Read Path context and moved status to ready-for-dev.
 - 2026-06-11: Started Story 3.4 implementation and moved status to in-progress.
 - 2026-06-11: Completed restore-first cold-read evidence, verification gates, and moved status to review.
+- 2026-06-11: Applied code-review fixes and moved status to done.

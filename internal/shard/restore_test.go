@@ -340,6 +340,8 @@ func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
 	countingBackend.started = make(chan struct{})
 	countingBackend.release = make(chan struct{})
+	releaseBackend := releaseBackendOnce(countingBackend.release)
+	defer releaseBackend()
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
 		Backend:     countingBackend,
@@ -379,12 +381,12 @@ func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
 	}
 	ready.Wait()
 	close(start)
-	<-countingBackend.started
+	waitRestoreBackendStarted(t, countingBackend.started)
 	time.Sleep(25 * time.Millisecond)
-	close(countingBackend.release)
+	releaseBackend()
 
 	for range readers {
-		if err := <-errs; err != nil {
+		if err := waitErrorResult(t, errs, "concurrent ReadDocument"); err != nil {
 			t.Fatalf("concurrent ReadDocument: %v", err)
 		}
 	}
@@ -398,6 +400,8 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
 	countingBackend.started = make(chan struct{})
 	countingBackend.release = make(chan struct{})
+	releaseBackend := releaseBackendOnce(countingBackend.release)
+	defer releaseBackend()
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
 		Backend:     countingBackend,
@@ -418,7 +422,7 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 		leaderResult <- readResult{meta: meta, err: err, readerReturned: rc != nil}
 	}()
 
-	<-countingBackend.started
+	waitRestoreBackendStarted(t, countingBackend.started)
 	followerErr := make(chan error, 1)
 	go func() {
 		rc, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
@@ -441,9 +445,9 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 
 	time.Sleep(25 * time.Millisecond)
 	cancelLeader()
-	close(countingBackend.release)
+	releaseBackend()
 
-	leader := <-leaderResult
+	leader := waitReadResult(t, leaderResult, "leader ReadDocument cancellation")
 	if !errors.Is(leader.err, context.Canceled) {
 		t.Fatalf("leader ReadDocument error = %v, want context.Canceled", leader.err)
 	}
@@ -453,7 +457,7 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 	if leader.meta != (storeapi.DocumentMeta{}) {
 		t.Fatalf("leader ReadDocument metadata = %+v, want zero value after cancellation", leader.meta)
 	}
-	if err := <-followerErr; err != nil {
+	if err := waitErrorResult(t, followerErr, "follower ReadDocument"); err != nil {
 		t.Fatalf("follower ReadDocument: %v", err)
 	}
 	if got := countingBackend.getCalls.Load(); got != 1 {
@@ -466,6 +470,8 @@ func TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore(t *testing.
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
 	countingBackend.started = make(chan struct{})
 	countingBackend.release = make(chan struct{})
+	releaseBackend := releaseBackendOnce(countingBackend.release)
+	defer releaseBackend()
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
 		Backend:     countingBackend,
@@ -496,7 +502,7 @@ func TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore(t *testing.
 		leaderResult <- nil
 	}()
 
-	<-countingBackend.started
+	waitRestoreBackendStarted(t, countingBackend.started)
 	waiterCtx, cancelWaiter := context.WithTimeout(ctx, 25*time.Millisecond)
 	defer cancelWaiter()
 	rc, meta, err := s.ReadDocument(waiterCtx, "tx-restore", "doc-1.bin")
@@ -511,8 +517,8 @@ func TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore(t *testing.
 		t.Fatalf("waiter ReadDocument metadata = %+v, want zero value after deadline", meta)
 	}
 
-	close(countingBackend.release)
-	if err := <-leaderResult; err != nil {
+	releaseBackend()
+	if err := waitErrorResult(t, leaderResult, "leader ReadDocument after waiter deadline"); err != nil {
 		t.Fatalf("leader ReadDocument after waiter deadline: %v", err)
 	}
 	if got := countingBackend.getCalls.Load(); got != 1 {
@@ -526,6 +532,8 @@ func TestReadDocumentRestoreLeaderDeadlineFailsClosed(t *testing.T) {
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
 	countingBackend.started = make(chan struct{})
 	countingBackend.release = make(chan struct{})
+	releaseBackend := releaseBackendOnce(countingBackend.release)
+	defer releaseBackend()
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
 		Backend:     countingBackend,
@@ -547,8 +555,8 @@ func TestReadDocumentRestoreLeaderDeadlineFailsClosed(t *testing.T) {
 		leaderResult <- readResult{meta: meta, err: err, readerReturned: rc != nil}
 	}()
 
-	<-countingBackend.started
-	leader := <-leaderResult
+	waitRestoreBackendStarted(t, countingBackend.started)
+	leader := waitReadResult(t, leaderResult, "leader ReadDocument deadline")
 	if !errors.Is(leader.err, context.DeadlineExceeded) {
 		t.Fatalf("leader ReadDocument error = %v, want context deadline", leader.err)
 	}
@@ -569,6 +577,8 @@ func TestReadDocumentRestoreDoesNotBlockMetadataReadsWhileDownloading(t *testing
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
 	countingBackend.started = make(chan struct{})
 	countingBackend.release = make(chan struct{})
+	releaseBackend := releaseBackendOnce(countingBackend.release)
+	defer releaseBackend()
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
 		Backend:     countingBackend,
@@ -591,7 +601,7 @@ func TestReadDocumentRestoreDoesNotBlockMetadataReadsWhileDownloading(t *testing
 		restoreResult <- err
 	}()
 
-	<-countingBackend.started
+	waitRestoreBackendStarted(t, countingBackend.started)
 	headResult := make(chan error, 1)
 	go func() {
 		meta, err := s.HeadDocument(ctx, "tx-restore", "doc-1.bin")
@@ -606,17 +616,12 @@ func TestReadDocumentRestoreDoesNotBlockMetadataReadsWhileDownloading(t *testing
 		headResult <- nil
 	}()
 
-	select {
-	case err := <-headResult:
-		if err != nil {
-			t.Fatalf("HeadDocument while restore download is blocked: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("HeadDocument blocked while restore download was in progress")
+	if err := waitErrorResult(t, headResult, "HeadDocument while restore download is blocked"); err != nil {
+		t.Fatalf("HeadDocument while restore download is blocked: %v", err)
 	}
 
-	close(countingBackend.release)
-	if err := <-restoreResult; err != nil {
+	releaseBackend()
+	if err := waitErrorResult(t, restoreResult, "ReadDocument restore"); err != nil {
 		t.Fatalf("ReadDocument restore: %v", err)
 	}
 }
@@ -1041,6 +1046,49 @@ type readResult struct {
 	meta           storeapi.DocumentMeta
 	err            error
 	readerReturned bool
+}
+
+func releaseBackendOnce(release chan struct{}) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(release)
+		})
+	}
+}
+
+func waitRestoreBackendStarted(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for restore Backend GetObject")
+	}
+}
+
+func waitReadResult(t *testing.T, results <-chan readResult, label string) readResult {
+	t.Helper()
+
+	select {
+	case result := <-results:
+		return result
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return readResult{}
+	}
+}
+
+func waitErrorResult(t *testing.T, results <-chan error, label string) error {
+	t.Helper()
+
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return nil
+	}
 }
 
 func newCountingGetBackend(base backend.Backend) *countingGetBackend {
