@@ -5,7 +5,7 @@ created: 2026-06-12T00:08:42-04:00
 
 # Story 3.7: Backend Durability and Cold-Read Closure Evidence
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -39,40 +39,40 @@ so that Epic 3 cannot close from a happy-path restore demo.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Epic 3 closure artifact before behavior changes. (AC: 1-3)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`.
-  - [ ] Record a closure decision using exactly one of `PASS`, `CONCERNS`, or `FAIL`.
-  - [ ] State that the story can complete with a `FAIL` closure decision if all evidence is linked and the missing P0 evidence is explicit. Do not mark Epic 3 itself as done from a failed closure result.
-  - [ ] Include the baseline commit, evaluation timestamp, story status inputs, and exact files reviewed.
-- [ ] Build the evidence inventory matrix. (AC: 1)
-  - [ ] For each required evidence item, record owning story, artifact path, current artifact status, proof command or test name, result, and concern/gap.
-  - [ ] Required rows: upload confirmation, upload pressure, policy-gated eviction, all-local-copy restore, concurrent restore/singleflight, restore failure mapping, encryption interaction, cancellation/deadline cleanup, redaction/leak scans, and no Backend inventory authority.
-  - [ ] Link all Story 3.1 through 3.6 evidence artifacts and do not summarize a PASS without naming the proof that supports it.
-  - [ ] Separate local/package proof, Tier 2/E2E proof, production OpenBao proof, and real S3/IAM proof. Do not blur these evidence classes.
-- [ ] Define and apply the P0 closure matrix. (AC: 3)
-  - [ ] Mark P0 cold-read items explicitly. At minimum: all-local-copy restore, restore-on-read from committed Confirmed Upload Catalog metadata, full-Block verification before return, concurrent same-Block restore singleflight, transient Backend failure, missing/corrupt Backend failure, cancellation/deadline behavior, encryption-compatible restore, and redaction/no raw identifier or Backend key leaks.
-  - [ ] If any P0 row lacks current evidence, set the closure decision to `FAIL` and name the owning missing evidence. Do not downgrade a P0 miss to `CONCERNS`.
-  - [ ] Use `CONCERNS` only for non-P0 limitations or scoped proof that is acceptable for Epic 3 but not final V2 release, such as skipped deployed E2E targets, real S3/IAM rehearsal, or production OpenBao proof.
-  - [ ] Use `PASS` only if every Epic 3 P0 row has current evidence and all remaining concerns are either not Epic 3 scope or explicitly accepted by the source documents.
-- [ ] Prove Backend inventory and discovery boundaries. (AC: 2)
-  - [ ] Reuse existing tests where possible: `TestReadDocumentRestoresEvictedBlockFromBackend`, `TestReadDocumentRestoreRequiresCommittedConfirmUpload`, `TestReadDocumentRestoreRequiresMatchingEvictionMarker`, `TestMetadataReadsStayLocalForEvictedBlock`, `TestFindDocumentsDoesNotRestoreEvictedConfirmedBlock`, and `TestEncryptedReadDocumentRestoresThenUsesEnvelopePath`.
-  - [ ] Record that restore uses one full-object `GetObject` to the committed Backend key and does not use Backend HEAD/LIST/listing/inventory as restore authority.
-  - [ ] Record that Backend PUT/HEAD/list/object existence evidence may verify upload/diagnostics but does not decide public read/write routing, Document visibility, durable upload authority, Shard membership, or Local Block Lifecycle state.
-  - [ ] Run a focused source scan for Backend discovery terms across hot read/write paths and classify any matches as allowed provider/evidence/test code or a closure blocker.
-- [ ] Update executable closure support only if needed. (AC: 3)
-  - [ ] Inspect `internal/scrapctl/evidencebundle` before changing it. Current `Gate` fields are Tier 3/security gate fields, not an Epic 3 closure schema.
-  - [ ] If the closure artifact is intentionally document-only, record that decision in the story debug log and do not change code.
-  - [ ] If an executable Epic 3 closure helper is added, keep it separate from the existing security gate naming, add tests for missing P0 => FAIL, scoped non-P0 concerns => CONCERNS, and complete P0 evidence => PASS, and avoid changing the existing Tier 3/security `Gate` behavior unless tests prove the shared contract should change.
-- [ ] Preserve architecture, package, and evidence boundaries. (AC: 1-3)
-  - [ ] Keep restore orchestration in `internal/shard`, local lifecycle in `internal/localblock`, Backend object operations behind `internal/backend`, evidence bundle logic in `internal/scrapctl/evidencebundle`, and public status mapping in `internal/server`.
-  - [ ] Do not add direct Backend streaming, range reads, per-Frame remote reads, Backend inventory authority, or local-file authority.
-  - [ ] Do not introduce new runtime dependencies, assertion libraries, package-level globals, new production background workers, new public status details, or new telemetry labels for this closure story.
-  - [ ] Do not claim production OpenBao proof or real S3/IAM proof. Those remain Epic 4 and Story 6.6 unless another accepted story explicitly changes scope.
-- [ ] Run focused verification and record exact results. (AC: 1-3)
-  - [ ] Run focused Story 3.7 closure checks, including artifact validation, authority scans, and any evidencebundle tests if code is touched.
-  - [ ] Run the P0 evidence test suite listed in Testing Requirements or record any skipped command with an explicit closure impact.
-  - [ ] Run credential and identifier leak scans over the new closure artifact, this story, and any touched code.
-  - [ ] Run `git diff --check` and the narrowest relevant Go package tests. Run `make check` before review if production code, executable evidence-gate code, or broad closure claims changed.
+- [x] Create the Epic 3 closure artifact before behavior changes. (AC: 1-3)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`.
+  - [x] Record a closure decision using exactly one of `PASS`, `CONCERNS`, or `FAIL`.
+  - [x] State that the story can complete with a `FAIL` closure decision if all evidence is linked and the missing P0 evidence is explicit. Do not mark Epic 3 itself as done from a failed closure result.
+  - [x] Include the baseline commit, evaluation timestamp, story status inputs, and exact files reviewed.
+- [x] Build the evidence inventory matrix. (AC: 1)
+  - [x] For each required evidence item, record owning story, artifact path, current artifact status, proof command or test name, result, and concern/gap.
+  - [x] Required rows: upload confirmation, upload pressure, policy-gated eviction, all-local-copy restore, concurrent restore/singleflight, restore failure mapping, encryption interaction, cancellation/deadline cleanup, redaction/leak scans, and no Backend inventory authority.
+  - [x] Link all Story 3.1 through 3.6 evidence artifacts and do not summarize a PASS without naming the proof that supports it.
+  - [x] Separate local/package proof, Tier 2/E2E proof, production OpenBao proof, and real S3/IAM proof. Do not blur these evidence classes.
+- [x] Define and apply the P0 closure matrix. (AC: 3)
+  - [x] Mark P0 cold-read items explicitly. At minimum: all-local-copy restore, restore-on-read from committed Confirmed Upload Catalog metadata, full-Block verification before return, concurrent same-Block restore singleflight, transient Backend failure, missing/corrupt Backend failure, cancellation/deadline behavior, encryption-compatible restore, and redaction/no raw identifier or Backend key leaks.
+  - [x] If any P0 row lacks current evidence, set the closure decision to `FAIL` and name the owning missing evidence. Do not downgrade a P0 miss to `CONCERNS`.
+  - [x] Use `CONCERNS` only for non-P0 limitations or scoped proof that is acceptable for Epic 3 but not final V2 release, such as skipped deployed E2E targets, real S3/IAM rehearsal, or production OpenBao proof.
+  - [x] Use `PASS` only if every Epic 3 P0 row has current evidence and all remaining concerns are either not Epic 3 scope or explicitly accepted by the source documents.
+- [x] Prove Backend inventory and discovery boundaries. (AC: 2)
+  - [x] Reuse existing tests where possible: `TestReadDocumentRestoresEvictedBlockFromBackend`, `TestReadDocumentRestoreRequiresCommittedConfirmUpload`, `TestReadDocumentRestoreRequiresMatchingEvictionMarker`, `TestMetadataReadsStayLocalForEvictedBlock`, `TestFindDocumentsDoesNotRestoreEvictedConfirmedBlock`, and `TestEncryptedReadDocumentRestoresThenUsesEnvelopePath`.
+  - [x] Record that restore uses one full-object `GetObject` to the committed Backend key and does not use Backend HEAD/LIST/listing/inventory as restore authority.
+  - [x] Record that Backend PUT/HEAD/list/object existence evidence may verify upload/diagnostics but does not decide public read/write routing, Document visibility, durable upload authority, Shard membership, or Local Block Lifecycle state.
+  - [x] Run a focused source scan for Backend discovery terms across hot read/write paths and classify any matches as allowed provider/evidence/test code or a closure blocker.
+- [x] Update executable closure support only if needed. (AC: 3)
+  - [x] Inspect `internal/scrapctl/evidencebundle` before changing it. Current `Gate` fields are Tier 3/security gate fields, not an Epic 3 closure schema.
+  - [x] If the closure artifact is intentionally document-only, record that decision in the story debug log and do not change code.
+  - [x] If an executable Epic 3 closure helper is added, keep it separate from the existing security gate naming, add tests for missing P0 => FAIL, scoped non-P0 concerns => CONCERNS, and complete P0 evidence => PASS, and avoid changing the existing Tier 3/security `Gate` behavior unless tests prove the shared contract should change.
+- [x] Preserve architecture, package, and evidence boundaries. (AC: 1-3)
+  - [x] Keep restore orchestration in `internal/shard`, local lifecycle in `internal/localblock`, Backend object operations behind `internal/backend`, evidence bundle logic in `internal/scrapctl/evidencebundle`, and public status mapping in `internal/server`.
+  - [x] Do not add direct Backend streaming, range reads, per-Frame remote reads, Backend inventory authority, or local-file authority.
+  - [x] Do not introduce new runtime dependencies, assertion libraries, package-level globals, new production background workers, new public status details, or new telemetry labels for this closure story.
+  - [x] Do not claim production OpenBao proof or real S3/IAM proof. Those remain Epic 4 and Story 6.6 unless another accepted story explicitly changes scope.
+- [x] Run focused verification and record exact results. (AC: 1-3)
+  - [x] Run focused Story 3.7 closure checks, including artifact validation, authority scans, and any evidencebundle tests if code is touched.
+  - [x] Run the P0 evidence test suite listed in Testing Requirements or record any skipped command with an explicit closure impact.
+  - [x] Run credential and identifier leak scans over the new closure artifact, this story, and any touched code.
+  - [x] Run `git diff --check` and the narrowest relevant Go package tests. Run `make check` before review if production code, executable evidence-gate code, or broad closure claims changed.
 
 ## Dev Notes
 
@@ -218,6 +218,15 @@ GPT-5 Codex.
 - CREATE-STORY: Loaded BMAD create-story workflow, customization block, `CONTEXT.md`, `_bmad-output/project-context.md`, sprint status, Epic 3, Story 3.7 ACs, FR-6, FR-7, FR-8, DG-3, ADR 0027, Story 3.6, current evidence artifacts, `internal/scrapctl/evidencebundle`, and recent git history.
 - CREATE-STORY: No external research was needed because Story 3.7 must reuse local evidence and accepted ADRs and should not add dependencies.
 - CREATE-STORY: Current baseline commit is `688b2095bc9554549f212d0e6ed7c52e00d76fa6`.
+- DEV-STORY: Started implementation from clean `v2...origin/v2` after pushing story creation commit `b7aab530638d96cc5cf23903dfcc4deece8395b9`; preserved story baseline commit `688b2095bc9554549f212d0e6ed7c52e00d76fa6`.
+- DEV-STORY: Created `_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md` with closure decision `CONCERNS`, evidence inventory, P0 cold-read matrix, Backend authority review, executable-closure decision, verification log, leak-scan allowlist, and remaining scope.
+- DEV-STORY: Determined Story 3.7 is document-only for executable closure support; `internal/scrapctl/evidencebundle` remains unchanged because the existing Tier 3/security gate schema should not be reused as an Epic 3 closure schema.
+- DEV-STORY: Focused P0 restore authority, concurrency/cancellation, restore failure, and encrypted restore test commands passed.
+- DEV-STORY: Affected package regression passed for `internal/shard`, `internal/localblock`, `internal/server`, `internal/store`, `internal/eviction`, `internal/backend`, `internal/encryption`, and `internal/scrapctl/evidencebundle`.
+- DEV-STORY: Backend authority scans found no non-test `internal/server` or `internal/store` Backend discovery matches; Shard matches were committed ConfirmUpload authority, upload verification, or restore full-object GET from committed metadata.
+- DEV-STORY: Credential and identifier leak scans over touched Story 3.7 artifacts passed with allowlisted BMAD prose, story keys, local command paths, sprint tracker paths, and source/test identifiers only.
+- DEV-STORY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed, including format diff, package-boundary checks, buf lint/generate diff, golangci-lint, all Go tests, race tests, integration-tagged LocalStack/OpenBao tests, and `scrapd`/`scrapctl` builds.
+- DEV-STORY: Moved Story 3.7 and sprint status to `review` after all tasks, ACs, File List, and verification gates were complete.
 
 ### Completion Notes List
 
@@ -225,7 +234,20 @@ GPT-5 Codex.
 - Scoped Story 3.7 to Epic 3 evidence inventory, Backend authority proof, P0 cold-read closure classification, and explicit PASS/CONCERNS/FAIL gate language.
 - Preserved non-goals for direct Backend streaming, production OpenBao proof, real S3/IAM production rehearsal, final V2 release readiness, and public/storage format changes.
 - Identified current risk areas for implementation: scoped single-Member cold-read proof, skipped E2E targets without `SCRAP_E2E=1`, and current `internal/scrapctl/evidencebundle` gate naming not being an Epic 3 closure schema.
+- Created Epic 3 closure evidence with decision `CONCERNS`: no missing P0 cold-read proof at the current Epic 3 local/package scope, but not enough deployed/production evidence to call the closure a PASS or V2 release-ready.
+- Linked Story 3.1 through Story 3.6 evidence artifacts and separated local/package proof from Tier 2/E2E, production OpenBao, and real S3/IAM release evidence.
+- Proved Backend inventory is not hot-path authority through current tests and source scans; restore remains a full-object GET from committed Confirmed Upload Catalog metadata.
+- Left executable closure support document-only; no code change was needed and no `internal/scrapctl/evidencebundle` gate behavior changed.
+- Completed focused P0 evidence tests, affected-package regression, Backend authority scans, leak scans, `git diff --check`, and full `make check`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-7-backend-durability-and-cold-read-closure-evidence.md`
+- `_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+## Change Log
+
+- 2026-06-12: Created Story 3.7 Backend Durability and Cold-Read Closure Evidence context and moved status to ready-for-dev.
+- 2026-06-12: Started Story 3.7 implementation and moved status to in-progress.
+- 2026-06-12: Completed Story 3.7 implementation with closure decision `CONCERNS` and moved status to review.
