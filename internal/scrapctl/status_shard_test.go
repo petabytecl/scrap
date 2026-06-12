@@ -52,7 +52,8 @@ const shardDiagnosticsHealthBody = `{
 			"scanner_in_flight_blocks":1,
 			"scanner_last_reason":"none",
 			"scanner_scanned_blocks":3,
-			"scanner_failed_blocks":0
+			"scanner_failed_blocks":0,
+			"scanner_last_updated_unix":1770000000
 		}]
 	}
 }`
@@ -79,6 +80,7 @@ func TestStatusPrintsShardDiagnosticsJSON(t *testing.T) {
 		`"scanner_lag_blocks":2`,
 		`"scanner_in_flight_blocks":1`,
 		`"scanner_last_reason":"none"`,
+		`"scanner_last_updated_unix":1770000000`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s in output:\n%s", want, got)
@@ -111,6 +113,7 @@ func TestStatusTextOutputIncludesCellMemberShardTerms(t *testing.T) {
 		"scanner_lag_blocks=2",
 		"scanner_in_flight_blocks=1",
 		"scanner_reason=none",
+		"scanner_updated_unix=1770000000",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in output:\n%s", want, got)

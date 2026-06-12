@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -23,11 +24,13 @@ type Config struct {
 type Scheduler struct {
 	cfg Config
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	done     chan struct{}
-	notify   chan struct{}
-	snapshot Snapshot
+	runMu     sync.Mutex
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	done      chan struct{}
+	notify    chan struct{}
+	completed map[uint64]struct{}
+	snapshot  Snapshot
 }
 
 type realTickerFactory struct{}
@@ -55,14 +58,20 @@ func NewScheduler(cfg Config) *Scheduler {
 	if cfg.TickerFactory == nil {
 		cfg.TickerFactory = realTickerFactory{}
 	}
+	snapshot := Snapshot{
+		Status:      StatusIdle,
+		LastReason:  ReasonNone,
+		LastUpdated: time.Now(),
+	}
+	if cfg.Engine == nil {
+		snapshot.Status = StatusDegraded
+		snapshot.LastReason = ReasonEngineUnavailable
+	}
 	return &Scheduler{
-		cfg:    cfg,
-		notify: make(chan struct{}, 1),
-		snapshot: Snapshot{
-			Status:      StatusIdle,
-			LastReason:  ReasonNone,
-			LastUpdated: time.Now(),
-		},
+		cfg:       cfg,
+		notify:    make(chan struct{}, 1),
+		completed: make(map[uint64]struct{}),
+		snapshot:  snapshot,
 	}
 }
 
@@ -122,16 +131,27 @@ func (s *Scheduler) Snapshot() Snapshot {
 	return s.snapshot
 }
 
-func (s *Scheduler) RunOnce(ctx context.Context) error {
+func (s *Scheduler) RunOnce(ctx context.Context) (err error) {
 	if s == nil {
 		return nil
 	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
 	start := time.Now()
 	status := StatusIdle
 	reason := ReasonNone
 	var runErr error
 	defer func() {
 		s.recordRun(status, reason, time.Since(start))
+	}()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			status = StatusDegraded
+			reason = ReasonScanPanic
+			s.recordFailure(reason, s.lagFromSnapshot())
+			err = ErrScanPanic
+		}
 	}()
 
 	if s.cfg.LeaderChecker != nil && !s.cfg.LeaderChecker.IsLeader() {
@@ -147,6 +167,12 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 	}
 	if s.cfg.BlockLister == nil {
 		return nil
+	}
+	if s.cfg.Engine == nil {
+		status = StatusDegraded
+		reason = ReasonEngineUnavailable
+		s.recordFailure(reason, s.lagFromSnapshot())
+		return ErrEngineUnavailable
 	}
 
 	blocks, err := s.cfg.BlockLister.ListSealedBlocks(ctx)
@@ -167,7 +193,6 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 		status = StatusDegraded
 		return runErr
 	}
-	s.setLag(0)
 	s.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.Status = StatusIdle
 		snapshot.LastReason = ReasonNone
@@ -178,31 +203,73 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 }
 
 func (s *Scheduler) scanBlocks(ctx context.Context, blocks []Block) (Reason, error) {
+	var firstReason Reason
+	var firstErr error
+	remaining := len(blocks)
 	for _, block := range blocks {
-		if err := ctx.Err(); err != nil {
-			reason := ReasonCanceled
-			s.recordFailure(reason, len(blocks))
-			return reason, err
-		}
-		if err := s.waitPause(ctx); err != nil {
-			reason := reasonForWaitError(err, ReasonPaused)
-			s.recordFailure(reason, len(blocks))
-			return reason, err
-		}
-		if err := s.waitBudget(ctx, block); err != nil {
-			reason := reasonForWaitError(err, ReasonIOBudget)
-			s.recordFailure(reason, len(blocks))
+		if reason, err := s.waitBeforeScan(ctx, block, remaining); err != nil {
 			return reason, err
 		}
 		if err := s.scanOne(ctx, block); err != nil {
-			return reasonForScanError(err), err
+			reason := reasonForScanError(err)
+			s.updateLag(remaining)
+			if firstErr == nil {
+				firstReason = reason
+				firstErr = err
+			}
+			if fatalScanReason(reason) {
+				return firstReason, firstErr
+			}
+			continue
 		}
+		remaining--
+		s.updateLag(remaining)
+	}
+	return s.finishScanBlocks(firstReason, firstErr)
+}
+
+func (s *Scheduler) waitBeforeScan(ctx context.Context, block Block, remaining int) (Reason, error) {
+	if err := ctx.Err(); err != nil {
+		reason := ReasonCanceled
+		s.recordFailure(reason, remaining)
+		return reason, err
+	}
+	if err := s.waitPause(ctx); err != nil {
+		reason := reasonForWaitError(err, ReasonPaused)
+		s.recordFailure(reason, remaining)
+		return reason, err
+	}
+	if err := s.waitBudget(ctx, block); err != nil {
+		reason := reasonForWaitError(err, ReasonIOBudget)
+		s.recordFailure(reason, remaining)
+		return reason, err
 	}
 	return ReasonNone, nil
 }
 
+func (s *Scheduler) finishScanBlocks(firstReason Reason, firstErr error) (Reason, error) {
+	if firstErr == nil {
+		return ReasonNone, nil
+	}
+	s.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.Status = StatusDegraded
+		snapshot.LastReason = firstReason
+		snapshot.InFlightBlocks = 0
+	})
+	return firstReason, firstErr
+}
+
+func fatalScanReason(reason Reason) bool {
+	return reason == ReasonCanceled || reason == ReasonEngineUnavailable
+}
+
 func (s *Scheduler) loop(ctx context.Context, done chan struct{}) {
-	defer close(done)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.recordFailure(ReasonScanPanic, s.lagFromSnapshot())
+		}
+		close(done)
+	}()
 
 	ticker := s.cfg.TickerFactory.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
@@ -220,13 +287,17 @@ func (s *Scheduler) loop(ctx context.Context, done chan struct{}) {
 }
 
 func (s *Scheduler) eligibleBlocks(blocks []Block) []Block {
-	s.mu.Lock()
-	lastScanned := s.snapshot.LastScannedBlockID
-	s.mu.Unlock()
+	ordered := append([]Block(nil), blocks...)
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].BlockID < ordered[j].BlockID
+	})
 
-	out := make([]Block, 0, len(blocks))
-	for _, block := range blocks {
-		if block.BlockID <= lastScanned {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]Block, 0, len(ordered))
+	for _, block := range ordered {
+		if _, ok := s.completed[block.BlockID]; ok {
 			s.recordDuplicate()
 			continue
 		}
@@ -275,9 +346,12 @@ func (s *Scheduler) scanOne(ctx context.Context, block Block) error {
 	}
 	s.recordBlock(string(result.Status), ReasonNone)
 	s.updateSnapshot(func(snapshot *Snapshot) {
-		snapshot.LastScannedBlockID = block.BlockID
+		if block.BlockID > snapshot.LastScannedBlockID {
+			snapshot.LastScannedBlockID = block.BlockID
+		}
 		snapshot.ScannedBlocks++
 		snapshot.InFlightBlocks = 0
+		s.completed[block.BlockID] = struct{}{}
 	})
 	return nil
 }
@@ -318,39 +392,56 @@ func (s *Scheduler) lagFromSnapshot() int {
 }
 
 func (s *Scheduler) recordRun(status Status, reason Reason, duration time.Duration) {
-	if s.cfg.Metrics != nil {
-		s.cfg.Metrics.RecordRun(s.cfg.ShardID, string(status), string(reason), duration)
-	}
+	s.withMetrics(func(metrics Metrics) {
+		metrics.RecordRun(s.cfg.ShardID, string(status), string(reason), duration)
+	})
 }
 
 func (s *Scheduler) recordBlock(status string, reason Reason) {
-	if s.cfg.Metrics != nil {
-		s.cfg.Metrics.RecordBlock(s.cfg.ShardID, status, string(reason))
-	}
+	s.withMetrics(func(metrics Metrics) {
+		metrics.RecordBlock(s.cfg.ShardID, status, string(reason))
+	})
 }
 
 func (s *Scheduler) recordMetricsFailure(reason Reason) {
-	if s.cfg.Metrics != nil {
-		s.cfg.Metrics.RecordFailure(s.cfg.ShardID, string(reason))
-	}
+	s.withMetrics(func(metrics Metrics) {
+		metrics.RecordFailure(s.cfg.ShardID, string(reason))
+	})
 }
 
 func (s *Scheduler) setLag(blocks int) {
-	if s.cfg.Metrics != nil {
-		s.cfg.Metrics.SetLag(s.cfg.ShardID, blocks)
-	}
+	s.withMetrics(func(metrics Metrics) {
+		metrics.SetLag(s.cfg.ShardID, blocks)
+	})
 }
 
 func (s *Scheduler) setInFlight(blocks int) {
-	if s.cfg.Metrics != nil {
-		s.cfg.Metrics.SetInFlight(s.cfg.ShardID, blocks)
-	}
+	s.withMetrics(func(metrics Metrics) {
+		metrics.SetInFlight(s.cfg.ShardID, blocks)
+	})
 }
 
 func (s *Scheduler) recordDuplicate() {
-	if s.cfg.Metrics != nil {
-		s.cfg.Metrics.RecordDuplicate(s.cfg.ShardID)
+	s.withMetrics(func(metrics Metrics) {
+		metrics.RecordDuplicate(s.cfg.ShardID)
+	})
+}
+
+func (s *Scheduler) updateLag(blocks int) {
+	s.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.LagBlocks = blocks
+	})
+	s.setLag(blocks)
+}
+
+func (s *Scheduler) withMetrics(record func(Metrics)) {
+	if s.cfg.Metrics == nil {
+		return
 	}
+	defer func() {
+		_ = recover()
+	}()
+	record(s.cfg.Metrics)
 }
 
 func reasonForWaitError(err error, fallback Reason) Reason {

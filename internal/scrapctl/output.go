@@ -198,13 +198,14 @@ func writeShardDiagnosticText(w io.Writer, shard ShardDiagnostic) error {
 	if shard.ScannerStatus != "" {
 		if _, err := fmt.Fprintf(
 			w,
-			" scanner_status=%s scanner_lag_blocks=%d scanner_in_flight_blocks=%d scanner_reason=%s scanner_scanned_blocks=%d scanner_failed_blocks=%d",
+			" scanner_status=%s scanner_lag_blocks=%d scanner_in_flight_blocks=%d scanner_reason=%s scanner_scanned_blocks=%d scanner_failed_blocks=%d scanner_updated_unix=%d",
 			diagnosticTextValue(shard.ScannerStatus),
 			shard.ScannerLagBlocks,
 			shard.ScannerInFlightBlocks,
 			diagnosticTextValue(shard.ScannerLastReason),
 			shard.ScannerScannedBlocks,
 			shard.ScannerFailedBlocks,
+			shard.ScannerLastUpdatedUnix,
 		); err != nil {
 			return fmt.Errorf("write Shard scanner status: %w", err)
 		}

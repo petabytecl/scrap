@@ -3,6 +3,7 @@ package avscan
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -13,6 +14,7 @@ const (
 var (
 	ErrEngineUnavailable = errors.New("avscan: engine unavailable")
 	ErrScanPanic         = errors.New("avscan: scan panic")
+	ErrBlockSource       = errors.New("avscan: Block source unavailable")
 )
 
 type Status string
@@ -46,9 +48,15 @@ const (
 
 type Block struct {
 	BlockID   uint64
-	BlkPath   string
-	IdxPath   string
 	SizeBytes int64
+	Open      func(context.Context) (io.ReadCloser, error)
+}
+
+func (b Block) OpenBytes(ctx context.Context) (io.ReadCloser, error) {
+	if b.Open == nil {
+		return nil, ErrBlockSource
+	}
+	return b.Open(ctx)
 }
 
 type Result struct {

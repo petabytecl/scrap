@@ -3,6 +3,7 @@ package shard
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -19,7 +20,7 @@ type ScannerConfig struct {
 }
 
 func (c ScannerConfig) enabled() bool {
-	return c.Engine != nil
+	return c.Engine != nil || c.Metrics != nil
 }
 
 func (c ScannerConfig) ioRate() int64 {
@@ -89,7 +90,10 @@ func (c *scannerCoordinator) Snapshot() avscan.Snapshot {
 	return c.scheduler.Snapshot()
 }
 
-func (c *scannerCoordinator) ListSealedBlocks(_ context.Context) ([]avscan.Block, error) {
+func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Block, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	openBlockID := c.core.currentOpenBlockID()
 	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID)
 	if err != nil {
@@ -97,18 +101,33 @@ func (c *scannerCoordinator) ListSealedBlocks(_ context.Context) ([]avscan.Block
 	}
 	out := make([]avscan.Block, 0, len(blocks))
 	for _, info := range blocks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		size, err := blockSize(info.BlkPath)
 		if err != nil {
 			return nil, fmt.Errorf("shard: stat scanner Block %d: %w", info.BlockID, err)
 		}
 		out = append(out, avscan.Block{
 			BlockID:   info.BlockID,
-			BlkPath:   info.BlkPath,
-			IdxPath:   info.IdxPath,
 			SizeBytes: size,
+			Open:      scannerBlockOpener(info.BlockID, info.BlkPath),
 		})
 	}
 	return out, nil
+}
+
+func scannerBlockOpener(blockID uint64, path string) func(context.Context) (io.ReadCloser, error) {
+	return func(ctx context.Context) (io.ReadCloser, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		file, err := os.Open(path) //nolint:gosec // path comes from Shard-owned sealed Block discovery under blocksDir.
+		if err != nil {
+			return nil, fmt.Errorf("shard: open scanner Block %d: %w", blockID, avscan.ErrBlockSource)
+		}
+		return file, nil
+	}
 }
 
 func blockSize(path string) (int64, error) {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/avscan"
@@ -30,6 +31,33 @@ func TestNewAppWiresShardDiagnosticsForTwoShardTopology(t *testing.T) {
 	shards := appShardDiagnosticsEntries(t, diag)
 	assertAppShardDiagnostic(t, shards[0], 7, "0-511")
 	assertAppShardDiagnostic(t, shards[1], 9, "512-1023")
+}
+
+func TestNewAppReportsScannerEngineUnavailableWhenUnconfigured(t *testing.T) {
+	cfg := testAppConfig(t)
+	cfg.CellID = "cell-a"
+
+	app := newStartedTestApp(t, cfg)
+	resp := requestAppHealth(t, app)
+	body := resp.Body.String()
+	var health map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &health); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if health["status"] != "degraded" {
+		t.Fatalf("health status = %v, want degraded: %s", health["status"], body)
+	}
+	diag := decodeShardDiagnostics(t, []byte(body), body)
+	if diag["status"] != "degraded" {
+		t.Fatalf("shard diagnostics status = %v, want degraded: %s", diag["status"], body)
+	}
+	shardDiag := firstAppShardDiagnostic(t, diag)
+	assertJSONFields(t, body, "shard", shardDiag, map[string]any{
+		"health":              "degraded",
+		"scanner_status":      string(avscan.StatusDegraded),
+		"scanner_last_reason": string(avscan.ReasonEngineUnavailable),
+	})
+	assertPositiveJSONNumber(t, body, shardDiag, "scanner_last_updated_unix")
 }
 
 func TestShardDiagnosticsRemoteShardsDoNotDegradeSnapshot(t *testing.T) {
@@ -143,6 +171,7 @@ func TestShardDiagnosticsScannerDegradesSnapshot(t *testing.T) {
 		InFlightBlocks: 1,
 		ScannedBlocks:  2,
 		FailedBlocks:   1,
+		LastUpdated:    time.Unix(1770000000, 0),
 	}
 
 	got := snapshotFromFakeTarget(t, target)
@@ -164,6 +193,9 @@ func TestShardDiagnosticsScannerDegradesSnapshot(t *testing.T) {
 	}
 	if shardDiag.ScannerScannedBlocks != 2 || shardDiag.ScannerFailedBlocks != 1 {
 		t.Fatalf("scanner scanned/failed = %d/%d, want 2/1", shardDiag.ScannerScannedBlocks, shardDiag.ScannerFailedBlocks)
+	}
+	if shardDiag.ScannerLastUpdatedUnix != 1770000000 {
+		t.Fatalf("scanner last updated = %d, want 1770000000", shardDiag.ScannerLastUpdatedUnix)
 	}
 }
 
@@ -231,6 +263,36 @@ func appShardDiagnosticsEntries(t *testing.T, diag map[string]any) []any {
 		t.Fatalf("shards = %#v, want two Shards", diag["shards"])
 	}
 	return shards
+}
+
+func firstAppShardDiagnostic(t *testing.T, diag map[string]any) map[string]any {
+	t.Helper()
+	shards, ok := diag["shards"].([]any)
+	if !ok || len(shards) == 0 {
+		t.Fatalf("shards = %#v, want at least one Shard", diag["shards"])
+	}
+	shard, ok := shards[0].(map[string]any)
+	if !ok {
+		t.Fatalf("shard diagnostic = %T, want object", shards[0])
+	}
+	return shard
+}
+
+func assertJSONFields(t *testing.T, body, prefix string, object, want map[string]any) {
+	t.Helper()
+	for key, value := range want {
+		if object[key] != value {
+			t.Fatalf("%s.%s = %v, want %v in %s", prefix, key, object[key], value, body)
+		}
+	}
+}
+
+func assertPositiveJSONNumber(t *testing.T, body string, object map[string]any, key string) {
+	t.Helper()
+	got, ok := object[key].(float64)
+	if !ok || got <= 0 {
+		t.Fatalf("%s = %v, want positive number in %s", key, object[key], body)
+	}
 }
 
 func assertAppShardDiagnostic(t *testing.T, raw any, shardID int, route string) {

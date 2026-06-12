@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -28,8 +29,16 @@ func TestShardScannerScansSealedBlocksAfterWriteAck(t *testing.T) {
 	if scanned.BlockID != 1 {
 		t.Fatalf("scanned BlockID = %d, want sealed Block 1", scanned.BlockID)
 	}
-	if scanned.BlkPath == "" || scanned.IdxPath == "" || scanned.SizeBytes == 0 {
-		t.Fatalf("scanned Block missing source metadata: %+v", scanned)
+	if scanned.SizeBytes == 0 {
+		t.Fatalf("scanned Block size = 0, want nonzero")
+	}
+	reader, err := scanned.OpenBytes(ctx)
+	if err != nil {
+		t.Fatalf("open scanned Block stream: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if payload, err := io.ReadAll(io.LimitReader(reader, 1)); err != nil || len(payload) != 1 {
+		t.Fatalf("read scanned Block stream = %d bytes, %v; want one byte", len(payload), err)
 	}
 }
 

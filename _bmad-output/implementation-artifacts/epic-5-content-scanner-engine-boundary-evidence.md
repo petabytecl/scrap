@@ -1,11 +1,11 @@
 # Epic 5 Content Scanner Engine Boundary Evidence
 
-Status: review
+Status: done
 Story: 5.1 - Content Scanner Engine Boundary and Scheduling
 Story frontmatter baseline commit: `b085bac4f9dd76491166033382ee5f7692cb6b8f`
 Implementation start commit after Story 5.1 creation checkpoint: `cfe32e3b5f2f06726a6b9866762898fbe30e6bf0`
 Started: 2026-06-12T12:07:25-04:00
-Last updated: 2026-06-12T12:36:48-04:00
+Last updated: 2026-06-12T13:03:19-04:00
 
 ## Scope
 
@@ -53,9 +53,9 @@ Out of scope:
 | AC | Evidence required | Current proof command or artifact | Decision | Gap |
 | --- | --- | --- | --- | --- |
 | AC-5.1.1 | Scanner scheduling is post-ACK and outside write durability/visibility; Deep Scrub remains separate. | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1`; `TestShardScannerScansSealedBlocksAfterWriteAck`; `TestSchedulerSkipsWhenNotLeader`; `env GOCACHE=/tmp/scrap-v2-go-build make check`. | `PASS` | None for Story 5.1. |
-| AC-5.1.2 | Scanner outage/lag is operator-visible while writes continue. | `TestShardScannerUnavailableDoesNotBlockWritesAndIsObservable`; `TestShardDiagnosticsScannerDegradesSnapshot`; `TestStatusTextOutputIncludesCellMemberShardTerms`; `env GOCACHE=/tmp/scrap-v2-go-build make check`. | `PASS` | None for Story 5.1. |
+| AC-5.1.2 | Scanner outage/lag is operator-visible while writes continue. | `TestShardScannerUnavailableDoesNotBlockWritesAndIsObservable`; `TestShardDiagnosticsScannerDegradesSnapshot`; `TestNewAppReportsScannerEngineUnavailableWhenUnconfigured`; `TestStatusTextOutputIncludesCellMemberShardTerms`; `env GOCACHE=/tmp/scrap-v2-go-build make check`. | `PASS` | None for Story 5.1. |
 | AC-5.1.3 | Scanner telemetry/evidence is bounded and redacted. | `TestOTelMetricsInstrumentsAndBoundedAttributes`; `TestServerHealthBoundsSuccessfulShardDiagnostics`; `TestStatusTextOutputBoundsShardDiagnosticFields`; scanner-sensitive scan over exact Story 5.1 touched files; `env GOCACHE=/tmp/scrap-v2-go-build make check`. | `PASS` | Generic credential regex false positives are documented below; no scanner-sensitive matches remain. |
-| AC-5.1.4 | Crash, poison fixture, and duplicate scheduling are bounded and retry-safe. | `TestSchedulerPanicRecoveryRecordsBoundedStatus`; `TestSchedulerDuplicateSchedulingIsIdempotent`; `TestSchedulerStopCancelsAndWaitsForWorker`; `TestSchedulerRunsOnInjectedTick`; `env GOCACHE=/tmp/scrap-v2-go-build make check`. | `PASS` | None for Story 5.1. |
+| AC-5.1.4 | Crash, poison fixture, and duplicate scheduling are bounded and retry-safe. | `TestSchedulerPanicRecoveryRecordsBoundedStatus`; `TestSchedulerRecoversBlockListerPanic`; `TestSchedulerMetricsPanicsDoNotEscape`; `TestSchedulerRunOnceSerializesConcurrentCalls`; `TestSchedulerContinuesAfterPoisonBlock`; `TestSchedulerDuplicateSchedulingIsIdempotent`; `TestSchedulerStopCancelsAndWaitsForWorker`; `TestSchedulerRunsOnInjectedTick`; `env GOCACHE=/tmp/scrap-v2-go-build make check`. | `PASS` | None for Story 5.1. |
 
 ## Changed Boundaries
 
@@ -136,6 +136,29 @@ Focused red/green evidence:
     `go test -race ./...`, tagged integration tests, and `scrapd`/`scrapctl`
     builds.
 
+Code review fix evidence:
+
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1`
+  - PASS after replacing path handoff with stream openers, surfacing missing
+    scanner engines in app diagnostics, moving seal notifications after seal
+    proposal work, adding scheduler run serialization, continuing after
+    recoverable Block failures, tracking completed Blocks, guarding scheduler
+    and metrics panics, honoring listing cancellation, and rendering scanner
+    last-updated timestamps.
+- `git diff --check`
+  - PASS after code review fixes.
+- `scripts/check-e2e-gates.sh`
+  - PASS after code review fixes.
+- Shaped secret scan over exact Story 5.1 touched files
+  - PASS with no matches after code review fixes.
+- Scanner-sensitive pattern scan over exact Story 5.1 touched files
+  - PASS with no matches after code review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check`
+  - PASS after code review fixes; covered formatter diff, package boundaries,
+    buf lint/generate, generated diff check, golangci-lint, `go test ./...`,
+    `go test -race ./...`, tagged integration tests with LocalStack/OpenBao
+    containers, and `scrapd`/`scrapctl` builds.
+
 Telemetry instruments added:
 
 - `scrap.avscan.runs`
@@ -167,7 +190,8 @@ Current state:
 - Scanner OTel attributes are bounded to `scrap.shard_id`, `status`, and
   `reason`; unknown status/reason values collapse to `unknown`.
 
-Review handoff:
+Review result:
 
-- Story 5.1 local verification is complete and the story is in `review`.
-- `bmad-code-review` still needs to run before the story can be marked `done`.
+- BMAD code review patch findings have been addressed in the story and code.
+- Story 5.1 is `done` after broad gates and leak scans. Commit and push are
+  recorded in git history.

@@ -5,7 +5,7 @@ created: 2026-06-12T12:02:09-04:00
 
 # Story 5.1: Content Scanner Engine Boundary and Scheduling
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -73,10 +73,22 @@ so that unsafe content detection does not block billing writes.
   - [x] `internal/admin`, `internal/cmd`, and `internal/scrapctl` tests prove scanner health/lag fields are bounded and redacted.
   - [x] Do not use sleeps as synchronization. Use fake clocks, manual ticks, channels, contexts, and bounded polling with clear failure messages.
 
-- [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
+- [x] Update story, evidence, and sprint artifacts. (AC: 1-4)
   - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
   - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
-  - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
+  - [x] Run `bmad-code-review`; address critical/high findings before marking `done`.
+
+### Review Findings
+
+- [x] [Review][Patch] Replace scanner engine path handoff with stream-based Block opener boundary [internal/avscan/types.go:49]
+- [x] [Review][Patch] Surface missing scanner engine in app diagnostics instead of silently disabling scanner status [internal/shard/scanner.go:22]
+- [x] [Review][Patch] Wake scanner after the seal proposal path instead of before seal bookkeeping completes [internal/shard/blockfiles.go:48]
+- [x] [Review][Patch] Continue scanning later eligible Blocks after recoverable Block scan failures and keep failed Blocks in lag [internal/avscan/scheduler.go:205]
+- [x] [Review][Patch] Sort eligible Blocks and track completed Blocks instead of relying on a scalar watermark [internal/avscan/scheduler.go:280]
+- [x] [Review][Patch] Serialize concurrent `RunOnce` calls to avoid duplicate concurrent scans [internal/avscan/scheduler.go:134]
+- [x] [Review][Patch] Respect cancellation during Shard sealed-Block listing [internal/shard/scanner.go:93]
+- [x] [Review][Patch] Recover scheduler loop, lister, and metrics panics into bounded scanner status [internal/avscan/scheduler.go:134]
+- [x] [Review][Patch] Add scanner last-updated diagnostics to admin and `scrapctl` output [internal/admin/shard_diagnostics.go:54]
 
 ## Dev Notes
 
@@ -212,16 +224,24 @@ GPT-5 Codex for story creation and implementation.
 - `git diff --check` - PASS after implementation and artifact updates.
 - `scripts/check-e2e-gates.sh` - PASS after implementation and artifact updates.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after implementation; covered formatter diff, package boundaries, buf lint/generate, generated diff check, golangci-lint, `go test ./...`, `go test -race ./...`, tagged integration tests, and `scrapd`/`scrapctl` builds.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1` - PASS after code review fixes for stream-based Block openers, scheduler hardening, app composition visibility, scanner timestamp diagnostics, and `scrapctl` output.
+- `git diff --check` - PASS after code review fixes.
+- `scripts/check-e2e-gates.sh` - PASS after code review fixes.
+- Shaped secret scan over exact Story 5.1 touched files - PASS with no matches after code review fixes.
+- Scanner-sensitive pattern scan over exact Story 5.1 touched files - PASS with no matches after code review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after code review fixes; covered formatter diff, package boundaries, buf lint/generate, generated diff check, golangci-lint, `go test ./...`, `go test -race ./...`, tagged integration tests with LocalStack/OpenBao containers, and `scrapd`/`scrapctl` builds.
 
 ### Completion Notes List
 
 - Story context created with Epic 5 scope boundaries, current code reuse points, external scanner research, and testing/redaction requirements.
 - Created the Story 5.1 evidence artifact before production code changes and kept all acceptance rows explicitly failing until implementation evidence exists.
 - Added `internal/avscan` scheduler boundary with leader-only RunOnce behavior, context-driven Start/Stop, non-blocking Notify, bounded status snapshots, duplicate-schedule skipping, panic recovery, pause and I/O budget hooks, and fake-engine tests.
-- Wired Shard-owned scanner lifecycle using sealed-Block discovery, current-open-Block exclusion, best-effort non-blocking seal notifications, shared Deep Scrub pause/I/O budget concepts, and write-path outage tests.
+- Wired Shard-owned scanner lifecycle using sealed-Block discovery, current-open-Block exclusion, stream-based Block source openers, best-effort non-blocking seal notifications, shared Deep Scrub pause/I/O budget concepts, and write-path outage tests.
 - Added bounded scanner status, lag, in-flight, reason, scanned, and failed counts to admin Shard diagnostics and `scrapctl status` JSON/text output.
 - Added OpenTelemetry scanner metrics for runs, run duration, Block outcomes, bounded failures, engine-unavailable count, lag, in-flight Blocks, and duplicate schedule skips, with bounded low-cardinality attributes.
-- Local verification is complete and Story 5.1 is ready for BMAD code review; persisted watermarks, Raft quarantine authority, read denial, quarantine admin operations, and Epic 5 closure remain explicitly out of scope.
+- Addressed BMAD code review patch findings by streaming Block bytes across the engine boundary, exposing missing scanner engines in app diagnostics, moving scanner wake-up after seal proposal work, serializing scheduler runs, continuing after recoverable scan failures, tracking completed Blocks, guarding scheduler/metrics panics, honoring listing cancellation, and adding scanner last-updated status.
+- BMAD code review patch findings have been addressed; persisted watermarks, Raft quarantine authority, read denial, quarantine admin operations, and Epic 5 closure remain explicitly out of scope.
+- Story 5.1 is done after review fixes, broad gates, leak scans, and tracker sync.
 
 ### Change Log
 
@@ -230,6 +250,9 @@ GPT-5 Codex for story creation and implementation.
 - 2026-06-12: Wired scanner lifecycle through Shard startup/seal/close and added bounded operator diagnostics.
 - 2026-06-12: Added scanner OpenTelemetry metrics and Shard telemetry bundle wiring.
 - 2026-06-12: Completed local Story 5.1 verification and moved story to review.
+- 2026-06-12: Replaced scanner engine path handoff with stream-based Block opener boundary.
+- 2026-06-12: Addressed BMAD code review findings for scheduler retry/idempotency, missing-engine visibility, scanner wake-up ordering, cancellation, panic isolation, and last-updated diagnostics.
+- 2026-06-12: Completed post-review verification and moved Story 5.1 to done.
 
 ### File List
 

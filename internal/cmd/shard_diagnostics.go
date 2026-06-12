@@ -178,6 +178,9 @@ func applyScannerDiagnostics(snapshot avscan.Snapshot, diag *admin.ShardDiagnost
 	diag.ScannerLastReason = string(snapshot.LastReason)
 	diag.ScannerScannedBlocks = snapshot.ScannedBlocks
 	diag.ScannerFailedBlocks = snapshot.FailedBlocks
+	if !snapshot.LastUpdated.IsZero() {
+		diag.ScannerLastUpdatedUnix = snapshot.LastUpdated.Unix()
+	}
 	if snapshot.Status != avscan.StatusDegraded {
 		return
 	}
