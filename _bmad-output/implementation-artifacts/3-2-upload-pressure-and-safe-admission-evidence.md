@@ -5,7 +5,7 @@ created: 2026-06-11T21:01:00-04:00
 
 # Story 3.2: Upload Pressure and Safe Admission Evidence
 
-Status: review
+Status: done
 
 ## Story
 
@@ -49,6 +49,15 @@ so that the Cell degrades before durability is compromised.
   - [x] Run focused tests first, then package/race gates needed for concurrency and pressure state.
   - [x] Run `make check` before code-review handoff unless a narrower failure clearly blocks and is documented.
   - [x] If deployed evidence is claimed, run the E2E target with `SCRAP_E2E=1`; a skipped E2E run must be recorded as CONCERNS, not PASS.
+
+### Review Findings
+
+- [x] [Review][Patch] Lock upload metric status values to bounded enums [internal/shard/upload_metrics_otel.go:106]
+- [x] [Review][Patch] Assert all collected `scrap.upload.*` metrics have bounded attribute keys and values [internal/shard/upload_metrics_otel_test.go:153]
+- [x] [Review][Patch] Cover pressure rejection inside an existing Transaction so `FindDocuments` must preserve accepted Documents while excluding the rejected Document [internal/shard/upload_pressure_test.go:96]
+- [x] [Review][Patch] Scope the Openlog cleanup assertion to `.prep` files only [internal/shard/upload_pressure_test.go:304]
+- [x] [Review][Patch] Prove pressure rejection leaves the active Block header-only before the next accepted write [internal/shard/upload_pressure_test.go:319]
+- [x] [Review][Patch] Clarify evidence status, review baseline, implementation baseline, verification results, and leak-scan allowlist [_bmad-output/implementation-artifacts/epic-3-upload-pressure-evidence.md:3]
 
 ## Dev Notes
 
@@ -182,12 +191,14 @@ TBD by dev-story.
 - Strengthened `TestSealTriggeredUploadPressureRejectsCurrentWrite` so a pressure-rejected write is not visible through head/read/find, leaves no Openlog prep file, and the active Block remains reusable after pressure drains.
 - Added `TestUploadOTelMetricsUsesBoundedAttributes` to lock upload metrics to bounded `scrap.shard_id` and `status` attributes.
 - Updated the Epic 3 upload-pressure evidence artifact with PASS rows for focused, race, package, and broad local gates; recorded the Tier 2 E2E target as CONCERNS because it was skipped without `SCRAP_E2E=1`.
+- Addressed BMAD code-review findings by bounding upload metric status values at the OTel metrics boundary, asserting all collected upload metrics have explicit bounded expectations, exercising pressure rejection in an existing Transaction, scoping Openlog checks to prep files, and proving the current active Block stays header-only after rejection.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-2-upload-pressure-and-safe-admission-evidence.md`
 - `_bmad-output/implementation-artifacts/epic-3-upload-pressure-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/shard/upload_metrics_otel.go`
 - `internal/shard/upload_metrics_otel_test.go`
 - `internal/shard/upload_outbox_boundary_test.go`
 - `internal/shard/upload_pressure_test.go`
@@ -195,3 +206,4 @@ TBD by dev-story.
 ### Change Log
 
 - 2026-06-11: Added focused upload-pressure evidence tests, completed Story 3.2 evidence artifact, and verified focused/race/package/broad local gates.
+- 2026-06-11: Fixed BMAD code-review findings, reran focused gates and `make check`, and moved Story 3.2 to done.

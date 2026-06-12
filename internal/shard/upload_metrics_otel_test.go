@@ -1,9 +1,11 @@
 package shard_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -52,8 +54,8 @@ func TestUploadOTelMetrics_RecordUpload(t *testing.T) {
 		t.Fatalf("new upload otel metrics: %v", err)
 	}
 
-	m.RecordUpload(1, "ok", 150*time.Millisecond)
-	m.RecordUpload(1, "error", 200*time.Millisecond)
+	m.RecordUpload(1, "success", 150*time.Millisecond)
+	m.RecordUpload(1, "transient", 200*time.Millisecond)
 
 	rm := collectMetrics(t, reader)
 	total := findMetric(rm, "scrap.upload.total")
@@ -122,8 +124,8 @@ func TestUploadOTelMetrics_VerifyTotal(t *testing.T) {
 		t.Fatalf("new upload otel metrics: %v", err)
 	}
 
-	m.RecordVerify(1, "ok")
-	m.RecordVerify(1, "mismatch")
+	m.RecordVerify(1, "pass")
+	m.RecordVerify(1, "fail")
 
 	rm := collectMetrics(t, reader)
 	verify := findMetric(rm, "scrap.upload.verify_total")
@@ -141,20 +143,25 @@ func TestUploadOTelMetricsUsesBoundedAttributes(t *testing.T) {
 
 	m.SetPending(7, 4096, 2)
 	m.RecordUpload(7, "success", time.Second)
+	m.RecordUpload(7, "transient", time.Second)
+	m.RecordUpload(7, "tx-raw-status", time.Second)
 	m.RecordVerify(7, "pass")
+	m.RecordVerify(7, "doc-raw-status")
 	m.SetPressureLevel(7, shard.UploadPressureLevelPressure)
 	m.SetConcurrency(7, 4)
 	m.SetAuthPaused(7, false)
 
 	rm := collectMetrics(t, reader)
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.pending_bytes"), "scrap.shard_id")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.pending_blocks"), "scrap.shard_id")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.total"), "scrap.shard_id", "status")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.duration"), "scrap.shard_id")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.verify_total"), "scrap.shard_id", "status")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.pressure_level"), "scrap.shard_id")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.concurrency"), "scrap.shard_id")
-	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.auth_paused"), "scrap.shard_id")
+	assertUploadMetricsBounded(t, rm, map[string]uploadMetricExpectation{
+		"scrap.upload.pending_bytes":  {keys: []string{"scrap.shard_id"}},
+		"scrap.upload.pending_blocks": {keys: []string{"scrap.shard_id"}},
+		"scrap.upload.total":          {keys: []string{"scrap.shard_id", "status"}, allowedValues: map[string]map[string]struct{}{"status": stringSet("success", "throttled", "transient", "auth", "not_found", "conflict", "corrupt", "permanent", "unknown")}},
+		"scrap.upload.duration":       {keys: []string{"scrap.shard_id"}},
+		"scrap.upload.verify_total":   {keys: []string{"scrap.shard_id", "status"}, allowedValues: map[string]map[string]struct{}{"status": stringSet("pass", "fail", "unknown")}},
+		"scrap.upload.pressure_level": {keys: []string{"scrap.shard_id"}},
+		"scrap.upload.concurrency":    {keys: []string{"scrap.shard_id"}},
+		"scrap.upload.auth_paused":    {keys: []string{"scrap.shard_id"}},
+	})
 }
 
 func TestUploadOTelMetrics_ImplementsInterface(t *testing.T) {
@@ -167,32 +174,87 @@ func TestUploadOTelMetrics_ImplementsInterface(t *testing.T) {
 	var _ shard.UploadMetrics = m
 }
 
-func assertUploadMetricAttributeKeys(t *testing.T, metric *metricdata.Metrics, want ...string) {
+type uploadMetricExpectation struct {
+	keys          []string
+	allowedValues map[string]map[string]struct{}
+}
+
+func assertUploadMetricsBounded(t *testing.T, rm metricdata.ResourceMetrics, expectations map[string]uploadMetricExpectation) {
 	t.Helper()
-	if metric == nil {
-		t.Fatal("metric not found")
+	found := make(map[string]struct{}, len(expectations))
+	for _, sm := range rm.ScopeMetrics {
+		for i := range sm.Metrics {
+			metric := &sm.Metrics[i]
+			if !strings.HasPrefix(metric.Name, "scrap.upload.") {
+				continue
+			}
+			expectation, ok := expectations[metric.Name]
+			if !ok {
+				t.Fatalf("metric %s is missing bounded attribute expectations", metric.Name)
+			}
+			found[metric.Name] = struct{}{}
+			assertUploadMetricAttributes(t, metric, expectation)
+		}
 	}
-	wantSet := make(map[string]struct{}, len(want))
-	for _, key := range want {
-		wantSet[key] = struct{}{}
+	for name := range expectations {
+		if _, ok := found[name]; !ok {
+			t.Fatalf("metric %s not found", name)
+		}
 	}
+}
+
+func assertUploadMetricAttributes(t *testing.T, metric *metricdata.Metrics, expectation uploadMetricExpectation) {
+	t.Helper()
 	sets := metricAttributeSets(metric)
 	if len(sets) == 0 {
 		t.Fatalf("metric %s has no attribute sets", metric.Name)
 	}
 	for _, attrs := range sets {
-		gotSet := make(map[string]struct{}, len(attrs))
-		for _, attr := range attrs {
-			key := string(attr.Key)
-			gotSet[key] = struct{}{}
-			if _, ok := wantSet[key]; !ok {
-				t.Fatalf("metric %s attribute key %q is not bounded; want only %v", metric.Name, key, want)
-			}
+		assertUploadMetricAttributeSet(t, metric.Name, attrs, expectation)
+	}
+}
+
+func assertUploadMetricAttributeSet(t *testing.T, metricName string, attrs []attribute.KeyValue, expectation uploadMetricExpectation) {
+	t.Helper()
+	wantSet := stringSet(expectation.keys...)
+	gotSet := make(map[string]struct{}, len(attrs))
+	for _, attr := range attrs {
+		key := string(attr.Key)
+		gotSet[key] = struct{}{}
+		if _, ok := wantSet[key]; !ok {
+			t.Fatalf("metric %s attribute key %q is not bounded; want only %v", metricName, key, expectation.keys)
 		}
-		for key := range wantSet {
-			if _, ok := gotSet[key]; !ok {
-				t.Fatalf("metric %s missing attribute key %q", metric.Name, key)
-			}
+		assertUploadMetricAttributeValue(t, metricName, attr, expectation)
+	}
+	assertUploadMetricRequiredKeys(t, metricName, gotSet, wantSet)
+}
+
+func assertUploadMetricAttributeValue(t *testing.T, metricName string, attr attribute.KeyValue, expectation uploadMetricExpectation) {
+	t.Helper()
+	key := string(attr.Key)
+	allowed, ok := expectation.allowedValues[key]
+	if !ok {
+		return
+	}
+	value := attr.Value.AsString()
+	if _, ok := allowed[value]; !ok {
+		t.Fatalf("metric %s attribute %q value %q is not bounded", metricName, key, value)
+	}
+}
+
+func assertUploadMetricRequiredKeys(t *testing.T, metricName string, gotSet, wantSet map[string]struct{}) {
+	t.Helper()
+	for key := range wantSet {
+		if _, ok := gotSet[key]; !ok {
+			t.Fatalf("metric %s missing attribute key %q", metricName, key)
 		}
 	}
+}
+
+func stringSet(values ...string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		out[value] = struct{}{}
+	}
+	return out
 }

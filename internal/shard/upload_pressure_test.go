@@ -6,9 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -91,16 +93,18 @@ func TestSealTriggeredUploadPressureRejectsCurrentWrite(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	writeUploadPressureDoc(t, s, "tx-seal-pressure-1", bytes.Repeat([]byte("a"), 64))
-	rejectedTxID := "tx-seal-pressure-2"
-	rejectedDocName := "doc.bin"
+	rejectedTxID := "tx-seal-pressure"
+	acceptedDocName := "accepted.bin"
+	rejectedDocName := "rejected.bin"
+	writeUploadPressureDocName(t, s, rejectedTxID, acceptedDocName, bytes.Repeat([]byte("a"), 64))
 	_, err := s.WriteDocument(ctx, rejectedTxID, rejectedDocName, "application/octet-stream", "", bytes.NewReader([]byte("rejected")))
 	assertUploadPressureError(t, err)
 
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelCritical)
 	pending := waitPendingUploads(t, s, 1)[0]
-	assertRejectedPressureWriteInvisible(t, s, rejectedTxID, rejectedDocName)
+	assertRejectedPressureWriteInvisible(t, s, rejectedTxID, rejectedDocName, acceptedDocName)
 	assertNoOpenlogPrepFiles(t, dir)
+	assertCurrentBlockHeaderOnly(t, s, dir)
 
 	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(pending.SealedSizeBytes)); err != nil {
 		t.Fatalf("ConfirmUploadForTest: %v", err)
@@ -108,7 +112,7 @@ func TestSealTriggeredUploadPressureRejectsCurrentWrite(t *testing.T) {
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelOK)
 	waitPendingUploads(t, s, 0)
 
-	writeUploadPressureDoc(t, s, "tx-seal-pressure-3", []byte("accepted"))
+	writeUploadPressureDocName(t, s, rejectedTxID, "after-pressure.bin", []byte("accepted"))
 }
 
 func TestUploadPressureWarnRaisesConcurrencyAndClears(t *testing.T) {
@@ -235,9 +239,14 @@ func TestParseUploadPressureConfigFromEnv_WholePercentagesResetToDefaults(t *tes
 
 func writeUploadPressureDoc(t *testing.T, s *shard.Shard, txID string, payload []byte) {
 	t.Helper()
+	writeUploadPressureDocName(t, s, txID, "doc.bin", payload)
+}
 
-	if _, err := s.WriteDocument(context.Background(), txID, "doc.bin", "application/octet-stream", "", bytes.NewReader(payload)); err != nil {
-		t.Fatalf("WriteDocument %s: %v", txID, err)
+func writeUploadPressureDocName(t *testing.T, s *shard.Shard, txID, docName string, payload []byte) {
+	t.Helper()
+
+	if _, err := s.WriteDocument(context.Background(), txID, docName, "application/octet-stream", "", bytes.NewReader(payload)); err != nil {
+		t.Fatalf("WriteDocument %s/%s: %v", txID, docName, err)
 	}
 }
 
@@ -256,7 +265,7 @@ func assertUploadPressureError(t *testing.T, err error) {
 	}
 }
 
-func assertRejectedPressureWriteInvisible(t *testing.T, s *shard.Shard, txID, docName string) {
+func assertRejectedPressureWriteInvisible(t *testing.T, s *shard.Shard, txID, docName string, visibleDocNames ...string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -274,8 +283,21 @@ func assertRejectedPressureWriteInvisible(t *testing.T, s *shard.Shard, txID, do
 	if err != nil {
 		t.Fatalf("FindDocuments rejected Transaction: %v", err)
 	}
-	if len(docs) != 0 {
-		t.Fatalf("FindDocuments rejected Transaction returned %d Documents, want none: %+v", len(docs), docs)
+	got := make(map[string]struct{}, len(docs))
+	for _, doc := range docs {
+		got[doc.Name] = struct{}{}
+	}
+	if _, ok := got[docName]; ok {
+		t.Fatalf("FindDocuments exposed rejected Document %q: %+v", docName, docs)
+	}
+	want := stringSet(visibleDocNames...)
+	for name := range want {
+		if _, ok := got[name]; !ok {
+			t.Fatalf("FindDocuments missing previously accepted Document %q: %+v", name, docs)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("FindDocuments returned Documents = %+v, want only %v", docs, visibleDocNames)
 	}
 }
 
@@ -287,10 +309,26 @@ func assertNoOpenlogPrepFiles(t *testing.T, dataDir string) {
 		t.Fatalf("ReadDir openlog: %v", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".prep") {
 			continue
 		}
 		t.Fatalf("openlog prep file remained after pressure rejection: %s", entry.Name())
+	}
+}
+
+func assertCurrentBlockHeaderOnly(t *testing.T, s *shard.Shard, dataDir string) {
+	t.Helper()
+
+	blockID := s.CurrentBlockIDForTest()
+	if blockID == 0 {
+		t.Fatal("current Block ID is unset")
+	}
+	info, err := os.Stat(block.FilePath(filepath.Join(dataDir, "blocks"), blockID))
+	if err != nil {
+		t.Fatalf("Stat current Block %d: %v", blockID, err)
+	}
+	if info.Size() != block.HeaderSize {
+		t.Fatalf("current Block size after pressure rejection = %d, want header-only %d", info.Size(), block.HeaderSize)
 	}
 }
 

@@ -104,12 +104,14 @@ func (m *UploadOTelMetrics) SetPending(shardID uint64, pendingBytes int64, pendi
 }
 
 func (m *UploadOTelMetrics) RecordUpload(shardID uint64, status string, duration time.Duration) {
+	status = boundedUploadMetricStatus(status)
 	attrs := metric.WithAttributes(shardAttribute(shardID), attribute.String("status", status))
 	m.uploadsTotal.Add(context.Background(), 1, attrs)
 	m.duration.Record(context.Background(), duration.Seconds(), metric.WithAttributes(shardAttribute(shardID)))
 }
 
 func (m *UploadOTelMetrics) RecordVerify(shardID uint64, status string) {
+	status = boundedVerifyMetricStatus(status)
 	attrs := metric.WithAttributes(shardAttribute(shardID), attribute.String("status", status))
 	m.verifyTotal.Add(context.Background(), 1, attrs)
 }
@@ -136,4 +138,22 @@ func shardAttribute(shardID uint64) attribute.KeyValue {
 		v = int64(shardID)
 	}
 	return attribute.Int64("scrap.shard_id", v)
+}
+
+func boundedUploadMetricStatus(status string) string {
+	switch status {
+	case "success", "throttled", "transient", "auth", "not_found", "conflict", "corrupt", "permanent", "unknown":
+		return status
+	default:
+		return "unknown"
+	}
+}
+
+func boundedVerifyMetricStatus(status string) string {
+	switch status {
+	case "pass", "fail", "unknown":
+		return status
+	default:
+		return "unknown"
+	}
 }
