@@ -4,7 +4,7 @@ baseline_commit: 1e368285db815bc32c75e8d131018883bade0d5d
 
 # Story 6.1: V2 Release Evidence Matrix
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -23,42 +23,42 @@ so that V2 readiness can be audited from current linked evidence.
 
 ## Tasks / Subtasks
 
-- [ ] Create the V2 release evidence matrix artifact. (AC: 1, 2, 5)
-  - [ ] Add `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`.
-  - [ ] Record baseline commit, branch, generation timestamp, source inputs, live GitHub issue queries, and final matrix status.
-  - [ ] State that Story 6.1 is evidence aggregation only and does not implement missing feature, runbook, alert, Tier 2/Tier 3, or S3/IAM evidence.
-- [ ] Define and apply the matrix schema. (AC: 2, 3)
-  - [ ] Include columns for requirement type, requirement ID, source document, owning epic/story, GitHub issue/PR, evidence command, artifact path, environment, owner, timestamp, commit/ref, expected result, actual result, redaction proof, freshness decision, release status, and mitigation/next owner.
-  - [ ] Use only `PASS`, `CONCERNS`, and `FAIL` as release status values.
-  - [ ] Require `PASS` rows to have current linked evidence, not only story status, commit history, local notes, or merged PRs.
-- [ ] Populate all V2 FR rows. (AC: 1, 3, 4)
-  - [ ] Enumerate FR-1 through FR-16 from the master PRD.
-  - [ ] Link implementation/evidence artifacts for Epics 1 through 5 where they exist.
-  - [ ] Mark known release-only or not-yet-final gates as `CONCERNS` or `FAIL` with owner and mitigation, including Tier 2, Tier 3, production security rehearsal, real S3/IAM, runbooks, alert/query references, and final closure policy.
-- [ ] Populate accepted ADR gate rows. (AC: 1, 3, 4)
-  - [ ] Include every accepted ADR under `docs/adr/`.
-  - [ ] Give ADR 0025, ADR 0026, and ADR 0027 dedicated rows because they define late release-scope gates for Content Quarantine admin surface, multi-Shard release boundary, and restore-first cold reads.
-  - [ ] Do not claim an ADR gate is implemented from the ADR alone; link story/evidence artifacts or mark the gap.
-- [ ] Reconcile GitHub issue state. (AC: 1, 3, 4)
-  - [ ] Query the `storage-gateway-v2` milestone with `gh issue list --repo petabytecl/scrap --milestone storage-gateway-v2 --state all --json number,title,state,labels,milestone,url,updatedAt --limit 200`.
-  - [ ] Query issue `#429` directly because it is a required real S3/IAM gate and may not appear in milestone-only results.
-  - [ ] Record that live issue `#429` is open and currently has no milestone unless the issue tracker is updated before implementation.
-- [ ] Classify freshness and scope honestly. (AC: 3, 4, 5)
-  - [ ] Mark LocalStack/test endpoints as interim evidence only.
-  - [ ] Mark local-only evidence as local unless policy accepts local proof for that claim.
-  - [ ] Mark missing GitHub Actions/Tier evidence as `CONCERNS` or `FAIL` according to `docs/prd-closure-policy.md`.
-  - [ ] Do not create substitute feature evidence in Epic 6; route missing behavior to the owning story/gate.
-- [ ] Leak-scan the release matrix and referenced public-output snippets. (AC: 2, 3)
-  - [ ] Scan for shaped credentials, private-key blocks, raw Document identifiers, Backend keys, trace/request IDs, file paths, auth claims, raw logs, token values, generated certificate material, OpenBao initialization data, Document payloads, and raw Backend object keys.
-  - [ ] Use variables or bracket-split patterns so copied commands do not self-match.
-  - [ ] Add a false-positive location table for any matches that remain safe.
-- [ ] Run verification gates and update BMAD tracking. (AC: 1-5)
-  - [ ] `git diff --check`
-  - [ ] `make proto-check`
-  - [ ] `scripts/check-e2e-gates.sh`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make check`
-  - [ ] Update this story's Dev Agent Record with debug logs, completion notes, and file list.
-  - [ ] Move Story 6.1 and `sprint-status.yaml` to `review` for BMAD dev completion; leave final `done` to BMAD code review.
+- [x] Create the V2 release evidence matrix artifact. (AC: 1, 2, 5)
+  - [x] Add `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`.
+  - [x] Record baseline commit, branch, generation timestamp, source inputs, live GitHub issue queries, and final matrix status.
+  - [x] State that Story 6.1 is evidence aggregation only and does not implement missing feature, runbook, alert, Tier 2/Tier 3, or S3/IAM evidence.
+- [x] Define and apply the matrix schema. (AC: 2, 3)
+  - [x] Include columns for requirement type, requirement ID, source document, owning epic/story, GitHub issue/PR, evidence command, artifact path, environment, owner, timestamp, commit/ref, expected result, actual result, redaction proof, freshness decision, release status, and mitigation/next owner.
+  - [x] Use only `PASS`, `CONCERNS`, and `FAIL` as release status values.
+  - [x] Require `PASS` rows to have current linked evidence, not only story status, commit history, local notes, or merged PRs.
+- [x] Populate all V2 FR rows. (AC: 1, 3, 4)
+  - [x] Enumerate FR-1 through FR-16 from the master PRD.
+  - [x] Link implementation/evidence artifacts for Epics 1 through 5 where they exist.
+  - [x] Mark known release-only or not-yet-final gates as `CONCERNS` or `FAIL` with owner and mitigation, including Tier 2, Tier 3, production security rehearsal, real S3/IAM, runbooks, alert/query references, and final closure policy.
+- [x] Populate accepted ADR gate rows. (AC: 1, 3, 4)
+  - [x] Include every accepted ADR under `docs/adr/`.
+  - [x] Give ADR 0025, ADR 0026, and ADR 0027 dedicated rows because they define late release-scope gates for Content Quarantine admin surface, multi-Shard release boundary, and restore-first cold reads.
+  - [x] Do not claim an ADR gate is implemented from the ADR alone; link story/evidence artifacts or mark the gap.
+- [x] Reconcile GitHub issue state. (AC: 1, 3, 4)
+  - [x] Query the `storage-gateway-v2` milestone with `gh issue list --repo petabytecl/scrap --milestone storage-gateway-v2 --state all --json number,title,state,labels,milestone,url,updatedAt --limit 200`.
+  - [x] Query issue `#429` directly because it is a required real S3/IAM gate and may not appear in milestone-only results.
+  - [x] Record that live issue `#429` is open and currently has no milestone unless the issue tracker is updated before implementation.
+- [x] Classify freshness and scope honestly. (AC: 3, 4, 5)
+  - [x] Mark LocalStack/test endpoints as interim evidence only.
+  - [x] Mark local-only evidence as local unless policy accepts local proof for that claim.
+  - [x] Mark missing GitHub Actions/Tier evidence as `CONCERNS` or `FAIL` according to `docs/prd-closure-policy.md`.
+  - [x] Do not create substitute feature evidence in Epic 6; route missing behavior to the owning story/gate.
+- [x] Leak-scan the release matrix and referenced public-output snippets. (AC: 2, 3)
+  - [x] Scan for shaped credentials, private-key blocks, raw Document identifiers, Backend keys, trace/request IDs, file paths, auth claims, raw logs, token values, generated certificate material, OpenBao initialization data, Document payloads, and raw Backend object keys.
+  - [x] Use variables or bracket-split patterns so copied commands do not self-match.
+  - [x] Add a false-positive location table for any matches that remain safe.
+- [x] Run verification gates and update BMAD tracking. (AC: 1-5)
+  - [x] `git diff --check`
+  - [x] `make proto-check`
+  - [x] `scripts/check-e2e-gates.sh`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
+  - [x] Update this story's Dev Agent Record with debug logs, completion notes, and file list.
+  - [x] Move Story 6.1 and `sprint-status.yaml` to `review` for BMAD dev completion; leave final `done` to BMAD code review.
 
 ## Dev Notes
 
@@ -175,21 +175,29 @@ If only BMAD artifacts change, the broad local gate is still required because th
 
 ### Agent Model Used
 
-TBD during dev-story
+Codex (GPT-5)
 
 ### Debug Log References
 
 - 2026-06-12T17:43:08-04:00 - Story context created from Epic 6, FR-16, DG-5, ADR 0025, ADR 0026, ADR 0027, PRD closure policy, production rehearsal docs, live issue `#429`, Story 5.7 review lessons, and recent git history.
+- 2026-06-12T17:46:51-04:00 - Dev-story started from baseline commit `1e368285db815bc32c75e8d131018883bade0d5d`; Story 6.1 and sprint status moved to `in-progress`.
+- 2026-06-12T17:51:16-04:00 - Created `v2-release-evidence-matrix.md`, reconciled live GitHub issue state, classified FR/ADR/story gates, and passed `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, leak scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- Created `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` with FR-1 through FR-16 rows, ADR 0001 through ADR 0027 rows, story status rollup, live GitHub issue snapshot, verification rows, and release-sensitive scan classification.
+- Current V2 release gate is intentionally `FAIL` because Epic 6 final documentation/evidence gates are incomplete and issue `#429` remains open; this is recorded as visible release evidence, not a Story 6.1 failure.
+- No production code changed; Story 6.1 stayed aggregation-only.
+- Verification passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, release scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-1-v2-release-evidence-matrix.md`
+- `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-06-12 - Created Story 6.1 context for V2 release evidence matrix.
+- 2026-06-12 - Implemented the V2 release evidence matrix and moved Story 6.1 to review.
