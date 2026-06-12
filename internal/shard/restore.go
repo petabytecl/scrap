@@ -23,6 +23,7 @@ const (
 
 	defaultRestoreMaxAttempts = 3
 	defaultRestoreRetryBase   = 100 * time.Millisecond
+	restoreMaxAttemptsLimit   = 5
 	maxRestoreRetryBackoff    = time.Second
 )
 
@@ -503,17 +504,20 @@ func (s *Shard) downloadRestoreObject(ctx context.Context, input restoreInput, o
 }
 
 func (s *Shard) restoreMaxAttempts() int {
-	if s.upload.RestoreMaxAttempts > 0 {
-		return s.upload.RestoreMaxAttempts
+	if s.upload.RestoreMaxAttempts <= 0 {
+		return defaultRestoreMaxAttempts
 	}
-	return defaultRestoreMaxAttempts
+	if s.upload.RestoreMaxAttempts > restoreMaxAttemptsLimit {
+		return restoreMaxAttemptsLimit
+	}
+	return s.upload.RestoreMaxAttempts
 }
 
 func (s *Shard) restoreRetryBaseDelay() time.Duration {
-	if s.upload.RestoreRetryBaseDelay > 0 {
-		return s.upload.RestoreRetryBaseDelay
+	if s.upload.RestoreRetryBaseDelay <= 0 {
+		return defaultRestoreRetryBase
 	}
-	return defaultRestoreRetryBase
+	return minDuration(s.upload.RestoreRetryBaseDelay, maxRestoreRetryBackoff)
 }
 
 func isRetryableRestoreError(err error) bool {

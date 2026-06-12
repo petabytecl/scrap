@@ -640,14 +640,26 @@ func resourceExhaustedStatus(err error) error {
 
 func dataLossStatus(err error) error {
 	reason, ok := storeapi.DataLossReason(err)
-	if !ok {
-		return status.Errorf(codes.DataLoss, "%v", err)
+	if !ok || !publicDataLossReason(reason) {
+		return status.Error(codes.DataLoss, storeapi.ErrDataLoss.Error())
 	}
 
-	st, detailErr := status.New(codes.DataLoss, fmt.Sprintf("%v", err)).
+	st, detailErr := status.New(codes.DataLoss, storeapi.ErrDataLoss.Error()).
 		WithDetails(&errdetails.ErrorInfo{Reason: reason})
 	if detailErr != nil {
-		return status.Errorf(codes.DataLoss, "%v", err)
+		return status.Error(codes.DataLoss, storeapi.ErrDataLoss.Error())
 	}
 	return st.Err()
+}
+
+func publicDataLossReason(reason string) bool {
+	switch reason {
+	case storeapi.DataLossReasonBackendRestoreCorrupt,
+		storeapi.DataLossReasonBackendRestoreChecksumMismatch,
+		storeapi.DataLossReasonBackendRestoreMetadataMismatch,
+		storeapi.DataLossReasonBackendRestoreMissing:
+		return true
+	default:
+		return false
+	}
 }

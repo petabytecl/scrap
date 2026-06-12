@@ -114,6 +114,36 @@ func TestReadDocumentRestoreRetriesTransientBackendFailures(t *testing.T) {
 	}
 }
 
+func TestReadDocumentRestoreRetriesTransientBackendReadFailure(t *testing.T) {
+	ctx := context.Background()
+	backendStore := &transientReadGetBackend{
+		Backend: backend.NewFS(t.TempDir()),
+	}
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:               true,
+		Backend:               backendStore,
+		CellID:                testCellID,
+		Concurrency:           1,
+		RestoreMaxAttempts:    2,
+		RestoreRetryBaseDelay: time.Nanosecond,
+	})
+
+	content := bytes.Repeat([]byte("retry read restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if err != nil {
+		t.Fatalf("ReadDocument after read retry: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	assertRestoredDocument(t, rc, meta, content)
+	assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
+	if got := backendStore.calls.Load(); got != 2 {
+		t.Fatalf("Backend GetObject calls = %d, want 2", got)
+	}
+}
+
 func TestReadDocumentRestoreRetryBudgetExhaustedFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	backendStore := &retryingGetBackend{
@@ -139,6 +169,38 @@ func TestReadDocumentRestoreRetryBudgetExhaustedFailsClosed(t *testing.T) {
 	}
 	if got := backendStore.calls.Load(); got != 2 {
 		t.Fatalf("Backend GetObject calls = %d, want 2", got)
+	}
+}
+
+func TestReadDocumentRestoreRetryBudgetCapsExplicitAttempts(t *testing.T) {
+	ctx := context.Background()
+	errs := make([]error, 10)
+	for i := range errs {
+		errs[i] = backend.ErrTransient
+	}
+	backendStore := &retryingGetBackend{
+		Backend: backend.NewFS(t.TempDir()),
+		errs:    errs,
+	}
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:               true,
+		Backend:               backendStore,
+		CellID:                testCellID,
+		Concurrency:           1,
+		RestoreMaxAttempts:    99,
+		RestoreRetryBaseDelay: time.Nanosecond,
+	})
+
+	content := bytes.Repeat([]byte("capped retry restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrUnavailable)
+	reason, ok := storeapi.UnavailableReason(err)
+	if !ok || reason != storeapi.UnavailableReasonBackendRestoreUnavailable {
+		t.Fatalf("unavailable reason = %q/%v, want backend_restore_unavailable", reason, ok)
+	}
+	if got := backendStore.calls.Load(); got != 5 {
+		t.Fatalf("Backend GetObject calls = %d, want capped attempt count 5", got)
 	}
 }
 
@@ -1281,6 +1343,39 @@ func (b *retryingGetBackend) GetObject(ctx context.Context, key string, opts bac
 		return nil, backend.ObjectMeta{}, b.errs[call]
 	}
 	return b.Backend.GetObject(ctx, key, opts)
+}
+
+type transientReadGetBackend struct {
+	backend.Backend
+	calls atomic.Int32
+}
+
+func (b *transientReadGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	rc, meta, err := b.Backend.GetObject(ctx, key, opts)
+	if err != nil {
+		return nil, backend.ObjectMeta{}, err
+	}
+	if b.calls.Add(1) == 1 {
+		return &transientReadCloser{ReadCloser: rc}, meta, nil
+	}
+	return rc, meta, nil
+}
+
+type transientReadCloser struct {
+	io.ReadCloser
+	failed bool
+}
+
+func (r *transientReadCloser) Read(p []byte) (int, error) {
+	if !r.failed {
+		r.failed = true
+		if len(p) > 8 {
+			p = p[:8]
+		}
+		n, _ := r.ReadCloser.Read(p)
+		return n, backend.ErrTransient
+	}
+	return r.ReadCloser.Read(p)
 }
 
 type corruptingGetBackend struct {

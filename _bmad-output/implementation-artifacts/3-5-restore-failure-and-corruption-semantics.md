@@ -5,7 +5,7 @@ created: 2026-06-11T23:02:12-04:00
 
 # Story 3.5: Restore Failure and Corruption Semantics
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -73,6 +73,14 @@ so that operators can distinguish transient dependency failures from data loss.
   - [x] Run restore metric and eviction health tests.
   - [x] Run race coverage for restore cancellation/singleflight if production code changes concurrency or retry behavior.
   - [x] Run `make check` before BMAD code review unless a concrete blocker is recorded in the story.
+
+### Review Findings
+
+- [x] [Review][Patch] Sanitize public `DATA_LOSS` status messages and publish only allowlisted restore reasons [internal/server/server.go:641]
+- [x] [Review][Patch] Prove real restore-path public `DATA_LOSS` details without leaking Backend keys, validation tokens, paths, or dependency detail strings [internal/server/restore_unavailable_test.go:132]
+- [x] [Review][Patch] Prove transient Backend stream-read failures retry through the restore budget [internal/shard/restore_test.go:117]
+- [x] [Review][Patch] Cap explicit restore retry attempts and first retry delay to a small bounded budget [internal/shard/restore.go:506]
+- [x] [Review][Patch] Clarify evidence baseline and restore data-loss observability scope [_bmad-output/implementation-artifacts/epic-3-restore-failure-evidence.md:4]
 
 ## Dev Notes
 
@@ -225,6 +233,12 @@ GPT-5 Codex.
 - DEV-STORY: Added bounded restore retry attempts around full restore-object download attempts; retries only `backend_restore_unavailable` outcomes and never retries missing/corrupt/permanent/conflict/metadata/checksum failures.
 - DEV-STORY: Focused Story 3.5 Shard, Store, server, metric/health, package regression, Shard race, and `make check` gates passed.
 - DEV-STORY: `git diff --check` passed; credential and identifier scans matched only allowlisted prose, fixtures, source identifiers, environment/cache paths, and redaction tests.
+- CODE-REVIEW: BMAD Blind Hunter, Edge Case Hunter, and Acceptance Auditor review layers ran on `ff329492f4f198a949c5485e2dedb91cbfdda12c..HEAD`; five patch findings were accepted and the rest were dismissed as existing coverage, explicit story scope, or speculative out-of-scope repair-path concerns.
+- CODE-REVIEW: Sanitized public `DATA_LOSS` status messages to the stable Store sentinel text and allowlisted restore-specific `ErrorInfo.Reason` values.
+- CODE-REVIEW: Added real Shard-backed gRPC restore data-loss proof for a missing confirmed Backend object, including sanitized public message and `backend_restore_missing` ErrorInfo.
+- CODE-REVIEW: Added Shard restore retry proof for transient stream-read errors and capped explicit restore retry attempts/delays.
+- CODE-REVIEW: Focused review-fix commands passed for server restore status mapping, Shard restore retry/read failures, and `git diff --check`.
+- CODE-REVIEW: Expanded focused Story 3.5 Shard/server/store/metric gates, package regression, Shard race slice, and `make check` passed after review fixes.
 
 ### Completion Notes List
 
@@ -238,6 +252,8 @@ GPT-5 Codex.
 - Implemented bounded Shard-visible restore retry budget for transient Backend restore failures and proved retry exhaustion fails closed with no partial publish.
 - Proved transient, missing, corrupt, metadata mismatch, checksum mismatch, cancellation, timeout/deadline, retry, metric, and health evidence with focused tests and `make check`.
 - Completed final whitespace and security/redaction checks; no real secrets or new deployed raw-identifier leaks were found.
+- Applied BMAD code-review fixes for public error sanitization, real restore-path public `DATA_LOSS` evidence, transient stream-read retry proof, capped retry config, and evidence wording.
+- Moved Story 3.5 to done after BMAD code-review fixes and broad verification passed.
 
 ### File List
 
@@ -257,3 +273,4 @@ GPT-5 Codex.
 - 2026-06-11: Created Story 3.5 Restore Failure and Corruption Semantics context and moved status to ready-for-dev.
 - 2026-06-11: Started Story 3.5 implementation and created restore failure evidence artifact.
 - 2026-06-11: Completed restore failure semantics, verification gates, and moved status to review.
+- 2026-06-11: Applied code-review fixes, reran focused/broad gates, and moved status to done.

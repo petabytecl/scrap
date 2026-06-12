@@ -2,7 +2,8 @@
 
 Status: complete
 Story: 3.5 - Restore Failure and Corruption Semantics
-Baseline commit: ec6feedc39f2d24890d65dab55e062375959030a
+Review baseline commit: ff329492f4f198a949c5485e2dedb91cbfdda12c
+Story creation commit: ec6feedc39f2d24890d65dab55e062375959030a
 Created: 2026-06-11T23:06:06-04:00
 
 ## Scope
@@ -30,16 +31,17 @@ marker without matching committed upload metadata is not restore authority.
 
 | AC | Status | Evidence |
 | --- | --- | --- |
-| AC-3.5.1 transient Backend failure maps `UNAVAILABLE` and returns no partial bytes | pass | Focused Shard tests cover throttled/transient/auth classes, missing Backend config, nil reader/zero metadata, no publish, no restore marker, staging cleanup, and retained eviction marker. Public gRPC test covers `codes.Unavailable` plus `ErrorInfo.Reason == backend_restore_unavailable`. |
-| AC-3.5.2 confirmed missing/corrupt Backend object maps `DATA_LOSS` and publishes no partial local Block | pass | Focused Shard tests cover not-found, corrupt/permanent/conflict Backend classes, metadata mismatch, validation-token mismatch, corrupt payload/header/Frame/Document checksum failures, restore-specific data-loss reasons, and no partial publish. Public gRPC test covers `codes.DataLoss` plus restore-specific `ErrorInfo`. |
+| AC-3.5.1 transient Backend failure maps `UNAVAILABLE` and returns no partial bytes | pass | Focused Shard tests cover throttled/transient/auth classes, transient stream-read failures, missing Backend config, nil reader/zero metadata, no publish, no restore marker, staging cleanup, and retained eviction marker. Public gRPC test covers `codes.Unavailable` plus `ErrorInfo.Reason == backend_restore_unavailable`. |
+| AC-3.5.2 confirmed missing/corrupt Backend object maps `DATA_LOSS` and publishes no partial local Block | pass | Focused Shard tests cover not-found, corrupt/permanent/conflict Backend classes, metadata mismatch, validation-token mismatch, corrupt payload/header/Frame/Document checksum failures, restore-specific data-loss reasons, and no partial publish. Public gRPC tests cover `codes.DataLoss`, a sanitized status message, an allowlisted restore-specific `ErrorInfo.Reason`, unknown reason suppression, and a real Shard-backed missing confirmed Backend object. |
 | AC-3.5.3 client cancellation returns no partial bytes and restore lifecycle remains bounded/observable | pass | Focused Shard tests cover leader cancellation, waiter deadline, leader deadline, bounded waits, no reader/metadata on cancellation, retained eviction state, and restore metrics/health bounded failure reasons. Public server cancellation tests preserve `CANCELED`. |
-| AC-3.5.4 timeout, 404, corrupt payload, checksum mismatch, and retry exhaustion map to documented typed outcomes | pass | Focused Shard tests cover leader timeout/deadline, Backend 404/not-found, corrupt payload/checksum mismatch, and restore retry budget exhaustion with no partial publish. |
+| AC-3.5.4 timeout, 404, corrupt payload, checksum mismatch, and retry exhaustion map to documented typed outcomes | pass | Focused Shard tests cover leader timeout/deadline, Backend 404/not-found, corrupt payload/checksum mismatch, transient stream-read retry, retry budget exhaustion, and capped explicit retry config with no partial publish. |
 
 ## Failure Taxonomy
 
 | Failure | Expected public outcome | Expected reason | Publish behavior | Evidence status |
 | --- | --- | --- | --- | --- |
 | Backend throttled/transient/auth during restore | `UNAVAILABLE` | `backend_restore_unavailable` | no reader, zero metadata, no `.blk`, no restore marker, eviction marker remains | pass |
+| Backend stream read returns transient failure mid-object | `UNAVAILABLE` until retry succeeds or budget exhausts | `backend_restore_unavailable` | failed attempt staging removed; success publishes only verified full Block | pass |
 | Backend not-found for confirmed object | `DATA_LOSS` | `backend_restore_missing` | no published `.blk`, staging removed, eviction marker remains | pass |
 | Backend corrupt/permanent/conflict class after committed upload | `DATA_LOSS` | `backend_restore_corrupt` | no published `.blk`, staging removed, eviction marker remains | pass |
 | Backend metadata size mismatch | `DATA_LOSS` | `backend_restore_metadata_mismatch` | no published `.blk`, staging removed, eviction marker remains | pass |
@@ -48,6 +50,17 @@ marker without matching committed upload metadata is not restore authority.
 | Waiting client cancellation | `CANCELED` | context status, no restore-specific public reason required | no reader or metadata for canceled client; shared restore may continue | pass |
 | Restore leader deadline | `DEADLINE_EXCEEDED` | context status, no restore-specific public reason required | no published `.blk`, staging removed, eviction marker remains | pass |
 | Retry budget exhausted after retryable Backend classes | `UNAVAILABLE` | `backend_restore_unavailable` | no published `.blk`, staging removed, eviction marker remains | pass |
+
+## Retry and Observability Scope
+
+The Shard-visible retry budget is scoped to each restore object download attempt.
+`ReadDocument` restore downloads the committed full Block object only. Repair
+restore may also download the retained Backend index object, and each object
+download is bounded by the same small capped attempt/delay policy. Health and
+metrics intentionally record bounded categories such as `data_loss` instead of
+the finer public `DATA_LOSS` ErrorInfo reasons, so operator-facing metrics stay
+low-cardinality while public gRPC details distinguish missing, corrupt,
+metadata-mismatch, and checksum-mismatch outcomes.
 
 ## Changed Boundary Watchlist
 
@@ -91,3 +104,14 @@ public/log/metric surface that exposes raw identifiers or Backend object keys.
 - 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build make check`; included formatting diff check, package-boundary check, buf lint/generate diff check, golangci-lint, `go test ./...`, `go test -race ./...`, integration-tagged LocalStack/OpenBao Testcontainers tests, and `go build` for `cmd/scrapd` and `cmd/scrapctl`.
 - 2026-06-11: PASS - `git diff --check`.
 - 2026-06-11: PASS with allowlisted matches - credential and identifier scans over touched BMAD artifacts plus `internal/shard`, `internal/store`, and `internal/server` found only story/evidence prose, existing fixtures, source identifiers, environment/cache paths, and redaction tests; no real secret material or new deployed public/log/metric identifier leak was found.
+- 2026-06-11: CODE-REVIEW PASS - BMAD Blind Hunter, Edge Case Hunter, and Acceptance Auditor review layers ran on `ff329492f4f198a949c5485e2dedb91cbfdda12c..HEAD`; accepted patch findings were fixed for public data-loss sanitization, real restore-path public data-loss proof, transient stream-read retry, retry config caps, and evidence wording.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run 'TestReadDocumentRestore(DataLoss|MissingBackendObject|Unavailable)|TestReadDocumentDataLossWithUnknownReason' -count=1 -v`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestReadDocumentRestoreRetriesTransientBackendReadFailure|TestReadDocumentRestoreRetryBudgetCapsExplicitAttempts|TestReadDocumentRestoreRetriesTransientBackendFailures|TestReadDocumentRestoreRetryBudgetExhaustedFailsClosed' -count=1 -v`.
+- 2026-06-11: PASS - `git diff --check` after code-review fixes.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestReadDocumentRestoreBackendTransientReturnsUnavailable|TestReadDocumentRestoreMissingBackendConfigReturnsUnavailable|TestReadDocumentRestoreRetriesTransientBackendFailures|TestReadDocumentRestoreRetriesTransientBackendReadFailure|TestReadDocumentRestoreRetryBudgetExhaustedFailsClosed|TestReadDocumentRestoreRetryBudgetCapsExplicitAttempts|TestReadDocumentRestoreMissingBackendObjectReturnsDataLoss|TestReadDocumentRestoreBackendInvariantFailuresReturnDataLoss|TestReadDocumentRestoreSizeMismatchReturnsDataLoss|TestReadDocumentRestoreValidationTokenMismatchReturnsDataLoss|TestReadDocumentRestoreCorruptBackendObjectReturnsDataLoss|TestReadDocumentRestoreCorruptHeaderReturnsDataLoss|TestReadDocumentRestoreCorruptFrameHeaderReturnsDataLoss|TestReadDocumentRestoreCorruptDocumentSHAReturnsDataLoss|TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation|TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore|TestReadDocumentRestoreLeaderDeadlineFailsClosed' -count=1 -v`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run 'TestReadDocumentRestoreUnavailableReturnsErrorInfoDetail|TestReadDocumentRestoreDataLossReturnsErrorInfoDetail|TestReadDocumentDataLossWithUnknownReasonOmitsErrorInfoDetail|TestReadDocumentRestoreMissingBackendObjectReturnsSanitizedDataLossDetail|TestReadDocument.*Canceled|TestReadDocument.*Deadline|TestReadDocumentReaderPartialDataLossSendsNoPartialBytes' -count=1 -v`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store -run 'TestUnavailable|TestDataLoss|TestResourceExhausted' -count=1 -v`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestEvictionOTelMetrics_RecordApplyAndRestore|TestEvictionHealthSnapshot.*Restore|Test.*RestoreFailure' -count=1 -v`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard ./internal/localblock ./internal/server ./internal/store ./internal/eviction ./internal/backend -count=1`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run 'TestReadDocument.*Restore|Test.*RestoreFailure|Test.*Retry' -count=1 -v`.
+- 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build make check`; included formatting diff check, package-boundary check, buf lint/generate diff check, golangci-lint, `go test ./...`, `go test -race ./...`, integration-tagged LocalStack/OpenBao Testcontainers tests, and `go build` for `cmd/scrapd` and `cmd/scrapctl`.
