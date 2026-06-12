@@ -5,7 +5,7 @@ created: 2026-06-11T22:21:02-04:00
 
 # Story 3.4: Restore-First Cold Read Path
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -34,40 +34,40 @@ evicted.
 
 ## Tasks / Subtasks
 
-- [ ] Build the Story 3.4 evidence checklist before code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-3-restore-first-cold-read-evidence.md` with AC rows, authority path, changed-boundary list, exact commands, results, and remaining runtime evidence gaps.
-  - [ ] Record the restore authority path: `ReadDocument` -> Pebble Projection / `.idx` resolution -> Local Block Lifecycle `evicted` state -> committed Confirmed Upload Catalog -> Backend `GetObject` -> staged `.blk` -> verification -> atomic local publish -> normal local Block reader.
-  - [ ] Record changed boundaries and non-goals: no direct Backend streaming, no Backend list/HEAD authority, no Block/Frame format change, no public/peer/admin proto contract change, no encryption closure, no production release closure.
-- [ ] Prove restore-first read from an all-local-cold Block. (AC: 1)
-  - [ ] Strengthen or reuse `TestReadDocumentRestoresEvictedBlockFromBackend` so the fixture represents the serving Member with no local `.blk` copy and a retained `.idx` plus eviction marker.
-  - [ ] Assert restore reads only the committed `ConfirmedUpload` metadata and matching local eviction marker; stale or missing committed authority must fail closed.
-  - [ ] Assert restore does not use Backend `ListObjects`, Backend inventory, object discovery, local file presence, hostname, peer address, or Local Block Lifecycle marker alone as authority.
-  - [ ] If current tests only cover a single-Member simulation, say so in the evidence artifact and do not overclaim multi-Member deployed all-copy evidence.
-- [ ] Prove restored bytes are verified before publication and return. (AC: 2)
-  - [ ] Use or strengthen existing restore tests for size mismatch, validation-token mismatch, Block header corruption, Frame CRC corruption, corrupt Document SHA-256, and missing Backend object.
-  - [ ] Assert failed restore leaves no published `.blk`, leaves the eviction marker in place, removes staging files, and returns no reader / no partial bytes.
-  - [ ] Assert successful restore writes a restore marker with source `backend` and reason `read`, removes the eviction marker, classifies the Block as hot/serving-allowed, and then serves through the normal local Block reader.
-  - [ ] Preserve encryption hooks: encrypted Blocks still read through the existing envelope path after restore; do not add a direct ciphertext streaming path.
-- [ ] Prove per-Block coalescing, timeout, cancellation, and backpressure behavior. (AC: 3)
-  - [ ] Strengthen `TestReadDocumentJoinsConcurrentBlockRestore` to prove concurrent reads for the same Block make one Backend `GetObject` call and all waiters receive verified bytes.
-  - [ ] Strengthen `TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation` to prove the first waiting client can cancel without canceling a restore that later satisfies another reader.
-  - [ ] Add timeout/deadline evidence for a waiter and for the restore leader if current coverage does not prove both cases.
-  - [ ] Review restore concurrency/backpressure configuration. If current behavior is only per-Block coalescing with caller deadlines, document that scope explicitly; add minimal bounded restore settings only if required to satisfy AC-3.4.3 without broadening package boundaries.
-  - [ ] Ensure restore never holds `Shard.mu` while downloading from Backend and never buffers full Blocks or Documents in memory beyond existing bounded copy/read contracts.
-- [ ] Prove production-profile fail-closed behavior. (AC: 4)
-  - [ ] Cover missing Backend restore configuration as `UNAVAILABLE` with reason `backend_restore_unavailable`; no local/debug Backend fallback is allowed.
-  - [ ] Cover production security gate failure through existing `internal/security` / `internal/cmd` startup-gate tests or add a focused test if the restore story touches production-mode config.
-  - [ ] Verify `SCRAP_TEST_HOOKS`, pprof, fake Transit, missing TLS, missing role policy, missing peer identity policy, and missing audit/rate-limit policy remain startup-gate failures in production mode; do not claim production readiness from development-mode fixtures.
-  - [ ] If deployed production-profile restore evidence is not run, mark it CONCERNS in the evidence artifact rather than PASS.
-- [ ] Preserve package and architecture boundaries. (AC: 1-4)
-  - [ ] Keep restore orchestration in `internal/shard`, lifecycle markers/transitions in `internal/localblock`, Backend object access in `internal/backend`, public error mapping in `internal/server` / `internal/store`, and operator evidence outside the public read path.
-  - [ ] Do not create `internal/coldread`, `common`, `shared`, a second read implementation, a new Backend wrapper, new assertion libraries, or a new mocking framework unless an ADR-level decision changes the package map.
-  - [ ] Do not change Block/Frame layout, Backend object key format, public/peer/admin proto contracts, Pebble key prefixes, Confirmed Upload Catalog schema, storage identity, or production security policy.
-- [ ] Run focused and regression verification. (AC: 1-4)
-  - [ ] Run focused Shard restore/read lifecycle tests.
-  - [ ] Run focused public error mapping, Local Block Lifecycle, and restore metric tests.
-  - [ ] Run a focused Shard race gate for restore singleflight / lifecycle mutation behavior.
-  - [ ] Run `make check` before BMAD code-review handoff unless a narrower blocker is documented in the story.
+- [x] Build the Story 3.4 evidence checklist before code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-3-restore-first-cold-read-evidence.md` with AC rows, authority path, changed-boundary list, exact commands, results, and remaining runtime evidence gaps.
+  - [x] Record the restore authority path: `ReadDocument` -> Pebble Projection / `.idx` resolution -> Local Block Lifecycle `evicted` state -> committed Confirmed Upload Catalog -> Backend `GetObject` -> staged `.blk` -> verification -> atomic local publish -> normal local Block reader.
+  - [x] Record changed boundaries and non-goals: no direct Backend streaming, no Backend list/HEAD authority, no Block/Frame format change, no public/peer/admin proto contract change, no encryption closure, no production release closure.
+- [x] Prove restore-first read from an all-local-cold Block. (AC: 1)
+  - [x] Strengthen or reuse `TestReadDocumentRestoresEvictedBlockFromBackend` so the fixture represents the serving Member with no local `.blk` copy and a retained `.idx` plus eviction marker.
+  - [x] Assert restore reads only the committed `ConfirmedUpload` metadata and matching local eviction marker; stale or missing committed authority must fail closed.
+  - [x] Assert restore does not use Backend `ListObjects`, Backend inventory, object discovery, local file presence, hostname, peer address, or Local Block Lifecycle marker alone as authority.
+  - [x] If current tests only cover a single-Member simulation, say so in the evidence artifact and do not overclaim multi-Member deployed all-copy evidence.
+- [x] Prove restored bytes are verified before publication and return. (AC: 2)
+  - [x] Use or strengthen existing restore tests for size mismatch, validation-token mismatch, Block header corruption, Frame CRC corruption, corrupt Document SHA-256, and missing Backend object.
+  - [x] Assert failed restore leaves no published `.blk`, leaves the eviction marker in place, removes staging files, and returns no reader / no partial bytes.
+  - [x] Assert successful restore writes a restore marker with source `backend` and reason `read`, removes the eviction marker, classifies the Block as hot/serving-allowed, and then serves through the normal local Block reader.
+  - [x] Preserve encryption hooks: encrypted Blocks still read through the existing envelope path after restore; do not add a direct ciphertext streaming path.
+- [x] Prove per-Block coalescing, timeout, cancellation, and backpressure behavior. (AC: 3)
+  - [x] Strengthen `TestReadDocumentJoinsConcurrentBlockRestore` to prove concurrent reads for the same Block make one Backend `GetObject` call and all waiters receive verified bytes.
+  - [x] Strengthen `TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation` to prove the first waiting client can cancel without canceling a restore that later satisfies another reader.
+  - [x] Add timeout/deadline evidence for a waiter and for the restore leader if current coverage does not prove both cases.
+  - [x] Review restore concurrency/backpressure configuration. If current behavior is only per-Block coalescing with caller deadlines, document that scope explicitly; add minimal bounded restore settings only if required to satisfy AC-3.4.3 without broadening package boundaries.
+  - [x] Ensure restore never holds `Shard.mu` while downloading from Backend and never buffers full Blocks or Documents in memory beyond existing bounded copy/read contracts.
+- [x] Prove production-profile fail-closed behavior. (AC: 4)
+  - [x] Cover missing Backend restore configuration as `UNAVAILABLE` with reason `backend_restore_unavailable`; no local/debug Backend fallback is allowed.
+  - [x] Cover production security gate failure through existing `internal/security` / `internal/cmd` startup-gate tests or add a focused test if the restore story touches production-mode config.
+  - [x] Verify `SCRAP_TEST_HOOKS`, pprof, fake Transit, missing TLS, missing role policy, missing peer identity policy, and missing audit/rate-limit policy remain startup-gate failures in production mode; do not claim production readiness from development-mode fixtures.
+  - [x] If deployed production-profile restore evidence is not run, mark it CONCERNS in the evidence artifact rather than PASS.
+- [x] Preserve package and architecture boundaries. (AC: 1-4)
+  - [x] Keep restore orchestration in `internal/shard`, lifecycle markers/transitions in `internal/localblock`, Backend object access in `internal/backend`, public error mapping in `internal/server` / `internal/store`, and operator evidence outside the public read path.
+  - [x] Do not create `internal/coldread`, `common`, `shared`, a second read implementation, a new Backend wrapper, new assertion libraries, or a new mocking framework unless an ADR-level decision changes the package map.
+  - [x] Do not change Block/Frame layout, Backend object key format, public/peer/admin proto contracts, Pebble key prefixes, Confirmed Upload Catalog schema, storage identity, or production security policy.
+- [x] Run focused and regression verification. (AC: 1-4)
+  - [x] Run focused Shard restore/read lifecycle tests.
+  - [x] Run focused public error mapping, Local Block Lifecycle, and restore metric tests.
+  - [x] Run a focused Shard race gate for restore singleflight / lifecycle mutation behavior.
+  - [x] Run `make check` before BMAD code-review handoff unless a narrower blocker is documented in the story.
 
 ## Dev Notes
 
@@ -219,7 +219,7 @@ Runtime evidence is not required to create the story. If deployed restore eviden
 
 ### Agent Model Used
 
-TBD by dev-story.
+GPT-5 Codex.
 
 ### Debug Log References
 
@@ -228,6 +228,23 @@ TBD by dev-story.
 - CREATE-STORY: GitHub repo and code searches found no reusable restore-first cold-read implementation candidate.
 - CREATE-STORY: Exa research was used only for timeout/singleflight prior-art context; repo-local restore architecture remains authoritative.
 - CREATE-STORY: Current baseline commit is `e28ec3cb7208c06338f40e36c51903dcd0bd8fef`.
+- DEV-STORY: Started implementation from clean `v2...origin/v2` after pushing story creation commit `d006582dddb110f9741b5f4bfd175f9fa2f935e16`; preserved story baseline commit `e28ec3cb7208c06338f40e36c51903dcd0bd8fef`.
+- DEV-STORY: Created `_bmad-output/implementation-artifacts/epic-3-restore-first-cold-read-evidence.md` before production-code changes with authority path, changed boundaries, AC coverage gaps, planned commands, leak-scan allowlist, and pending evidence rows.
+- DEV-STORY: Strengthened `TestReadDocumentRestoresEvictedBlockFromBackend` to prove the serving Member starts with no local `.blk`, retained `.idx`, matching eviction marker, one full-object Backend `GetObject` to committed Confirmed Upload Catalog metadata, and zero Backend `HeadObject`/`ListObjects`; added `TestReadDocumentRestoreRequiresMatchingEvictionMarker` to prove stale marker authority fails closed before Backend GET.
+- DEV-STORY: AC-3.4.1 focused command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestReadDocumentRestoresEvictedBlockFromBackend|TestReadDocumentRestoreRequiresCommittedConfirmUpload|TestReadDocumentRestoreRequiresMatchingEvictionMarker|TestMetadataReadsStayLocalForEvictedBlock|TestFindDocumentsDoesNotRestoreEvictedConfirmedBlock' -count=1 -v`.
+- DEV-STORY: Strengthened restore verification tests with Backend size mismatch, validation-token mismatch, nil-reader/zero-metadata failure assertions, restore-marker absence on failed restore, published Block verification after successful restore, and `TestEncryptedReadDocumentRestoresThenUsesEnvelopePath` for fake-Transit envelope-path preservation.
+- DEV-STORY: AC-3.4.2 focused Shard command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestReadDocumentRestoreBackendTransientReturnsUnavailable|TestReadDocumentRestoreMissingBackendObjectReturnsDataLoss|TestReadDocumentRestoreSizeMismatchReturnsDataLoss|TestReadDocumentRestoreValidationTokenMismatchReturnsDataLoss|TestReadDocumentRestoreCorruptBackendObjectReturnsDataLoss|TestReadDocumentRestoreCorruptHeaderReturnsDataLoss|TestReadDocumentRestoreCorruptFrameHeaderReturnsDataLoss|TestReadDocumentRestoreCorruptDocumentSHAReturnsDataLoss|TestEncryptedReadDocumentRestoresThenUsesEnvelopePath|TestReadDocumentCorruptBlockPayloadFailsClosedWithoutReader|TestReadDocumentCorruptBlockHeaderFailsClosedWithoutReader|TestHeadAndReadDocumentCorruptIndexFailClosed' -count=1 -v`.
+- DEV-STORY: AC-3.4.2 Local Block Lifecycle command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/localblock -run 'TestPublishRestoredBlockRecordsLifecycleTransition|TestClassifyLifecycle|TestMalformedMarkersFailClosed' -count=1 -v`.
+- DEV-STORY: Strengthened restore concurrency tests for cancellation/deadline no-reader/no-metadata behavior, waiter deadline survival, restore leader deadline fail-closed behavior, and metadata-read progress while Backend GET is blocked.
+- DEV-STORY: AC-3.4.3 focused command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestReadDocumentJoinsConcurrentBlockRestore|TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation|TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore|TestReadDocumentRestoreLeaderDeadlineFailsClosed|TestReadDocumentRestoreDoesNotBlockMetadataReadsWhileDownloading' -count=1 -v`.
+- DEV-STORY: Added `TestReadDocumentRestoreMissingBackendConfigReturnsUnavailable` to prove a committed, locally evicted Block with no restore Backend fails closed as `backend_restore_unavailable`, with no local/debug fallback or published Block.
+- DEV-STORY: AC-3.4.4 focused missing-Backend command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestReadDocumentRestoreMissingBackendConfigReturnsUnavailable -count=1 -v`.
+- DEV-STORY: AC-3.4.4 public/server/store commands passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run TestReadDocumentRestoreUnavailableReturnsErrorInfoDetail -count=1 -v` and `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store -run TestUnavailable -count=1 -v`.
+- DEV-STORY: AC-3.4.4 production gate command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/security ./internal/cmd -run 'Test.*Production|Test.*Startup|TestLoadConfig|TestValidateStartupGates' -count=1 -v`; deployed production-profile restore evidence was not run and is recorded as CONCERNS.
+- DEV-STORY: Boundary review passed: changed-file set is limited to BMAD artifacts, `internal/shard/restore_test.go`, and `internal/shard/find_documents_test.go`; no production restore implementation, proto, Block/Frame layout, Backend object key, Pebble schema, storage identity, or security policy changed.
+- DEV-STORY: Final focused restore/read lifecycle, Local Block Lifecycle, server/store, restore metric, package regression, and Shard race gates passed.
+- DEV-STORY: `make check` passed after lint cleanup; full gate included lint, `go test ./...`, `go test -race ./...`, integration tests with LocalStack/OpenBao Testcontainers, and `go build` for `cmd/scrapd` and `cmd/scrapctl`.
+- DEV-STORY: Credential and identifier leak scans matched only allowlisted story/evidence prose, test fixture names, environment variable names, generated paths, source identifiers, and tests asserting redaction; no real secret material or new deployed public/log/metric identifier leak was found.
 
 ### Completion Notes List
 
@@ -235,12 +252,24 @@ TBD by dev-story.
 - Scoped Story 3.4 to restore-first `ReadDocument` evidence and hardening, with detailed failure taxonomy, encryption-compatible restore, final Epic 3 closure, and production release evidence left to later stories.
 - Identified existing implementation to reuse: `internal/shard/restore.go`, `internal/shard/shard.go`, `internal/localblock`, Store/server error mapping, restore metrics, and production startup gates.
 - Flagged likely evidence gaps around all-local-copy wording in a single-Member fixture, explicit timeout/deadline proof, restore backpressure scope, and production-profile fail-closed proof.
+- Created the Story 3.4 restore-first cold-read evidence artifact before production-code changes, including authority path, changed boundaries, AC coverage map, planned verification commands, and leak-scan allowlist.
+- Proved AC-3.4.1 in single-Member Shard tests: restore starts from an evicted local Block state, uses committed Confirmed Upload Catalog metadata plus matching eviction marker, avoids Backend discovery/HEAD/list authority, and fails closed on missing committed upload or stale marker. The evidence artifact explicitly does not claim deployed multi-Member all-copy eviction proof.
+- Proved AC-3.4.2 in focused Shard and Local Block Lifecycle tests: restored bytes are verified before publish/return; failed restore returns nil reader and zero metadata, keeps eviction state, leaves no restore marker or staging file, and successful restore publishes a verified hot Block before normal local reading. The encrypted restore test uses fake Transit only and does not close Story 3.6 production encryption evidence.
+- Proved AC-3.4.3 in focused Shard tests: same-Block reads coalesce to one Backend GET, canceled/deadline waiters return no reader or metadata without canceling a shared restore, leader deadline fails closed, and metadata reads are not blocked while Backend download is blocked. Evidence records current backpressure scope as per-Block coalescing plus caller deadlines, without claiming a global cross-Block restore limiter.
+- Proved AC-3.4.4 with focused local tests: missing restore Backend fails closed as `backend_restore_unavailable`; public server/store mapping preserves the unavailable reason; production startup/security gates reject missing TLS, role policy, peer identity policy, Transit, audit, rate-limit policy, test hooks, pprof, and fake Transit. Deployed production-profile restore remains CONCERNS because it was not run.
+- Preserved architecture boundaries: changes are test/evidence/story-only; no second read path, new runtime dependency, new production package, wire/layout/schema change, or security policy change was introduced.
+- Completed Story 3.4 verification gates, leak scans, and `make check`; moved the story to review for BMAD code review.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-4-restore-first-cold-read-path.md`
+- `_bmad-output/implementation-artifacts/epic-3-restore-first-cold-read-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/shard/find_documents_test.go`
+- `internal/shard/restore_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 3.4 Restore-First Cold Read Path context and moved status to ready-for-dev.
+- 2026-06-11: Started Story 3.4 implementation and moved status to in-progress.
+- 2026-06-11: Completed restore-first cold-read evidence, verification gates, and moved status to review.

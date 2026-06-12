@@ -132,7 +132,7 @@ func (b *countingDiscoveryBackend) ListObjects(ctx context.Context, prefix strin
 }
 
 func (b *countingDiscoveryBackend) resetCalls() {
-	b.getCalls.Store(0)
+	b.resetGetCalls()
 	b.headCalls.Store(0)
 	b.listCalls.Store(0)
 }

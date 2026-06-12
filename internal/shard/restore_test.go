@@ -14,6 +14,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/backend"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -21,7 +22,7 @@ import (
 
 func TestReadDocumentRestoresEvictedBlockFromBackend(t *testing.T) {
 	ctx := context.Background()
-	backendStore := backend.NewFS(t.TempDir())
+	backendStore := newCountingDiscoveryBackend(backend.NewFS(t.TempDir()))
 	s := openUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
 		Backend:     backendStore,
@@ -30,7 +31,10 @@ func TestReadDocumentRestoresEvictedBlockFromBackend(t *testing.T) {
 	})
 
 	content := bytes.Repeat([]byte("restore me "), 8)
-	stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
+	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore.countingGetBackend.Backend, content)
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	assertReadRestoreStartsFromEvictedConfirmedBlock(t, blocksDir, confirmed)
+	backendStore.resetCalls()
 
 	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
 	if err != nil {
@@ -39,8 +43,8 @@ func TestReadDocumentRestoresEvictedBlockFromBackend(t *testing.T) {
 	defer func() { _ = rc.Close() }()
 
 	assertRestoredDocument(t, rc, meta, content)
-	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	assertRestorePublishedHotBlock(t, blocksDir)
+	assertRestoreUsedCommittedBackendObjectOnly(t, backendStore, confirmed)
 }
 
 func TestReadDocumentRestoreBackendTransientReturnsUnavailable(t *testing.T) {
@@ -59,15 +63,48 @@ func TestReadDocumentRestoreBackendTransientReturnsUnavailable(t *testing.T) {
 	content := bytes.Repeat([]byte("transient restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrUnavailable) {
-		t.Fatalf("ReadDocument error = %v, want ErrUnavailable", err)
-	}
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrUnavailable)
 	reason, ok := storeapi.UnavailableReason(err)
 	if !ok || reason != storeapi.UnavailableReasonBackendRestoreUnavailable {
 		t.Fatalf("unavailable reason = %q/%v, want backend_restore_unavailable", reason, ok)
 	}
-	assertRestoreFailureLeftEvicted(t, s)
+}
+
+func TestReadDocumentRestoreMissingBackendConfigReturnsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("missing backend restore "), 4)
+	if _, err := s.WriteDocument(ctx, "tx-restore", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-restore-next", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	pending := waitPendingUploads(t, s, 1)[0]
+	confirmed := confirmedUploadForTest(pending.SealedSizeBytes)
+	confirmed.UploadGeneration = pending.UploadGeneration
+	if err := s.ConfirmUploadForTest(ctx, confirmed); err != nil {
+		t.Fatalf("ConfirmUploadForTest: %v", err)
+	}
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := shard.WriteEvictionMarker(blocksDir, evictionMarkerFromConfirmed(confirmed)); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	if err := os.Remove(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("remove local Block: %v", err)
+	}
+
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrUnavailable)
+	reason, ok := storeapi.UnavailableReason(err)
+	if !ok || reason != storeapi.UnavailableReasonBackendRestoreUnavailable {
+		t.Fatalf("unavailable reason = %q/%v, want backend_restore_unavailable", reason, ok)
+	}
 }
 
 func TestReadDocumentRestoreMissingBackendObjectReturnsDataLoss(t *testing.T) {
@@ -86,11 +123,51 @@ func TestReadDocumentRestoreMissingBackendObjectReturnsDataLoss(t *testing.T) {
 		t.Fatalf("DeleteObject: %v", err)
 	}
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+}
+
+func TestReadDocumentRestoreSizeMismatchReturnsDataLoss(t *testing.T) {
+	ctx := context.Background()
+	backendStore := &metaMutatingGetBackend{
+		Backend: backend.NewFS(t.TempDir()),
+		mutate: func(meta backend.ObjectMeta) backend.ObjectMeta {
+			meta.Size++
+			return meta
+		},
 	}
-	assertRestoreFailureLeftEvicted(t, s)
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("size mismatch restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+}
+
+func TestReadDocumentRestoreValidationTokenMismatchReturnsDataLoss(t *testing.T) {
+	ctx := context.Background()
+	backendStore := &metaMutatingGetBackend{
+		Backend: backend.NewFS(t.TempDir()),
+		mutate: func(meta backend.ObjectMeta) backend.ObjectMeta {
+			meta.ETag = "mismatched-validation"
+			return meta
+		},
+	}
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("validation mismatch restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
 }
 
 func TestReadDocumentRestoreCorruptBackendObjectReturnsDataLoss(t *testing.T) {
@@ -106,11 +183,7 @@ func TestReadDocumentRestoreCorruptBackendObjectReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("corrupt restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
-	}
-	assertRestoreFailureLeftEvicted(t, s)
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
 }
 
 func TestReadDocumentRestoreCorruptHeaderReturnsDataLoss(t *testing.T) {
@@ -131,11 +204,7 @@ func TestReadDocumentRestoreCorruptHeaderReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("header restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
-	}
-	assertRestoreFailureLeftEvicted(t, s)
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
 }
 
 func TestReadDocumentRestoreCorruptFrameHeaderReturnsDataLoss(t *testing.T) {
@@ -158,11 +227,7 @@ func TestReadDocumentRestoreCorruptFrameHeaderReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("frame header restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
-	}
-	assertRestoreFailureLeftEvicted(t, s)
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
 }
 
 func TestReadDocumentRestoreCorruptDocumentSHAReturnsDataLoss(t *testing.T) {
@@ -184,11 +249,7 @@ func TestReadDocumentRestoreCorruptDocumentSHAReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("sha restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
-	}
-	assertRestoreFailureLeftEvicted(t, s)
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
 }
 
 func TestReadDocumentRestoreRequiresCommittedConfirmUpload(t *testing.T) {
@@ -216,10 +277,62 @@ func TestReadDocumentRestoreRequiresCommittedConfirmUpload(t *testing.T) {
 		t.Fatalf("remove local Block: %v", err)
 	}
 
-	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+}
+
+func TestReadDocumentRestoreRequiresMatchingEvictionMarker(t *testing.T) {
+	ctx := context.Background()
+	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     countingBackend,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("stale marker restore "), 4)
+	confirmed := stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	staleMarker := evictionMarkerFromConfirmed(confirmed)
+	staleMarker.ValidationToken = "stale-" + confirmed.BlockObject.ValidationToken
+	if err := shard.WriteEvictionMarker(blocksDir, staleMarker); err != nil {
+		t.Fatalf("WriteEvictionMarker stale: %v", err)
 	}
+	countingBackend.resetGetCalls()
+
+	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	if got := countingBackend.getCalls.Load(); got != 0 {
+		t.Fatalf("Backend GetObject calls = %d, want 0", got)
+	}
+}
+
+func TestEncryptedReadDocumentRestoresThenUsesEnvelopePath(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	s := openEncryptedUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	}, transit)
+
+	content := bytes.Repeat([]byte("encrypted restore plaintext:"), 64)
+	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	assertReadRestoreStartsFromEvictedConfirmedBlock(t, blocksDir, confirmed)
+
+	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if err != nil {
+		t.Fatalf("ReadDocument encrypted restore: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	assertRestoredDocument(t, rc, meta, content)
+	assertRestorePublishedHotBlock(t, blocksDir)
+	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+	entry := readOnlyIndexEntry(t, s.DataDirForTest(), "tx-restore", "doc-1.bin")
+	assertEnvelopeMetadata(t, entry, len(content))
 }
 
 func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
@@ -296,13 +409,13 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 	stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
 
 	leaderCtx, cancelLeader := context.WithCancel(ctx)
-	leaderErr := make(chan error, 1)
+	leaderResult := make(chan readResult, 1)
 	go func() {
-		rc, _, err := s.ReadDocument(leaderCtx, "tx-restore", "doc-1.bin")
+		rc, meta, err := s.ReadDocument(leaderCtx, "tx-restore", "doc-1.bin")
 		if rc != nil {
 			_ = rc.Close()
 		}
-		leaderErr <- err
+		leaderResult <- readResult{meta: meta, err: err, readerReturned: rc != nil}
 	}()
 
 	<-countingBackend.started
@@ -330,14 +443,181 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 	cancelLeader()
 	close(countingBackend.release)
 
-	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
-		t.Fatalf("leader ReadDocument error = %v, want context.Canceled", err)
+	leader := <-leaderResult
+	if !errors.Is(leader.err, context.Canceled) {
+		t.Fatalf("leader ReadDocument error = %v, want context.Canceled", leader.err)
+	}
+	if leader.readerReturned {
+		t.Fatal("leader ReadDocument returned reader after cancellation")
+	}
+	if leader.meta != (storeapi.DocumentMeta{}) {
+		t.Fatalf("leader ReadDocument metadata = %+v, want zero value after cancellation", leader.meta)
 	}
 	if err := <-followerErr; err != nil {
 		t.Fatalf("follower ReadDocument: %v", err)
 	}
 	if got := countingBackend.getCalls.Load(); got != 1 {
 		t.Fatalf("Backend GetObject calls = %d, want 1", got)
+	}
+}
+
+func TestReadDocumentRestoreWaiterDeadlineDoesNotCancelSharedRestore(t *testing.T) {
+	ctx := context.Background()
+	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
+	countingBackend.started = make(chan struct{})
+	countingBackend.release = make(chan struct{})
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     countingBackend,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("waiter timeout restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
+
+	leaderResult := make(chan error, 1)
+	go func() {
+		rc, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+		if err != nil {
+			leaderResult <- err
+			return
+		}
+		defer func() { _ = rc.Close() }()
+		got, err := io.ReadAll(rc)
+		if err != nil {
+			leaderResult <- err
+			return
+		}
+		if !bytes.Equal(got, content) {
+			leaderResult <- errors.New("content mismatch")
+			return
+		}
+		leaderResult <- nil
+	}()
+
+	<-countingBackend.started
+	waiterCtx, cancelWaiter := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancelWaiter()
+	rc, meta, err := s.ReadDocument(waiterCtx, "tx-restore", "doc-1.bin")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiter ReadDocument error = %v, want context deadline", err)
+	}
+	if rc != nil {
+		_ = rc.Close()
+		t.Fatal("waiter ReadDocument returned reader after deadline")
+	}
+	if meta != (storeapi.DocumentMeta{}) {
+		t.Fatalf("waiter ReadDocument metadata = %+v, want zero value after deadline", meta)
+	}
+
+	close(countingBackend.release)
+	if err := <-leaderResult; err != nil {
+		t.Fatalf("leader ReadDocument after waiter deadline: %v", err)
+	}
+	if got := countingBackend.getCalls.Load(); got != 1 {
+		t.Fatalf("Backend GetObject calls = %d, want 1", got)
+	}
+	assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
+}
+
+func TestReadDocumentRestoreLeaderDeadlineFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
+	countingBackend.started = make(chan struct{})
+	countingBackend.release = make(chan struct{})
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     countingBackend,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("leader deadline restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
+
+	leaderCtx, cancelLeader := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancelLeader()
+	leaderResult := make(chan readResult, 1)
+	go func() {
+		rc, meta, err := s.ReadDocument(leaderCtx, "tx-restore", "doc-1.bin")
+		if rc != nil {
+			_ = rc.Close()
+		}
+		leaderResult <- readResult{meta: meta, err: err, readerReturned: rc != nil}
+	}()
+
+	<-countingBackend.started
+	leader := <-leaderResult
+	if !errors.Is(leader.err, context.DeadlineExceeded) {
+		t.Fatalf("leader ReadDocument error = %v, want context deadline", leader.err)
+	}
+	if leader.readerReturned {
+		t.Fatal("leader ReadDocument returned reader after deadline")
+	}
+	if leader.meta != (storeapi.DocumentMeta{}) {
+		t.Fatalf("leader ReadDocument metadata = %+v, want zero value after deadline", leader.meta)
+	}
+	assertRestoreFailureLeftEvicted(t, s)
+	if got := countingBackend.getCalls.Load(); got != 1 {
+		t.Fatalf("Backend GetObject calls = %d, want 1", got)
+	}
+}
+
+func TestReadDocumentRestoreDoesNotBlockMetadataReadsWhileDownloading(t *testing.T) {
+	ctx := context.Background()
+	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))
+	countingBackend.started = make(chan struct{})
+	countingBackend.release = make(chan struct{})
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     countingBackend,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("metadata during restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
+
+	restoreResult := make(chan error, 1)
+	go func() {
+		rc, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+		if err != nil {
+			restoreResult <- err
+			return
+		}
+		defer func() { _ = rc.Close() }()
+		_, err = io.ReadAll(rc)
+		restoreResult <- err
+	}()
+
+	<-countingBackend.started
+	headResult := make(chan error, 1)
+	go func() {
+		meta, err := s.HeadDocument(ctx, "tx-restore", "doc-1.bin")
+		if err != nil {
+			headResult <- err
+			return
+		}
+		if meta.Size != int64(len(content)) {
+			headResult <- errors.New("metadata size mismatch")
+			return
+		}
+		headResult <- nil
+	}()
+
+	select {
+	case err := <-headResult:
+		if err != nil {
+			t.Fatalf("HeadDocument while restore download is blocked: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HeadDocument blocked while restore download was in progress")
+	}
+
+	close(countingBackend.release)
+	if err := <-restoreResult; err != nil {
+		t.Fatalf("ReadDocument restore: %v", err)
 	}
 }
 
@@ -467,12 +747,80 @@ func assertRestoredDocument(t *testing.T, rc io.Reader, meta storeapi.DocumentMe
 	}
 }
 
+func assertReadRestoreStartsFromEvictedConfirmedBlock(t *testing.T, blocksDir string, confirmed index.ConfirmedUpload) {
+	t.Helper()
+
+	if _, err := os.Stat(block.FilePath(blocksDir, confirmed.BlockID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("evicted Block stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(block.IdxFilePath(blocksDir, confirmed.BlockID)); err != nil {
+		t.Fatalf("retained index should exist before restore: %v", err)
+	}
+	marker, err := shard.ReadEvictionMarker(blocksDir, confirmed.BlockID)
+	if err != nil {
+		t.Fatalf("ReadEvictionMarker: %v", err)
+	}
+	if marker.BackendKey != confirmed.BlockObject.Key {
+		t.Fatalf("eviction marker Backend key = %q, want committed key %q", marker.BackendKey, confirmed.BlockObject.Key)
+	}
+	if marker.SizeBytes != confirmed.BlockObject.SizeBytes {
+		t.Fatalf("eviction marker size = %d, want committed size %d", marker.SizeBytes, confirmed.BlockObject.SizeBytes)
+	}
+	if marker.ValidationToken != confirmed.BlockObject.ValidationToken {
+		t.Fatalf("eviction marker validation token mismatch")
+	}
+}
+
+func assertReadDocumentRestoreFailsClosed(ctx context.Context, t *testing.T, s *shard.Shard, want error) error {
+	t.Helper()
+
+	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if !errors.Is(err, want) {
+		t.Fatalf("ReadDocument error = %v, want %v", err, want)
+	}
+	if rc != nil {
+		_ = rc.Close()
+		t.Fatal("ReadDocument returned reader after failed restore")
+	}
+	if meta != (storeapi.DocumentMeta{}) {
+		t.Fatalf("ReadDocument metadata = %+v, want zero value after failed restore", meta)
+	}
+	assertRestoreFailureLeftEvicted(t, s)
+	return err
+}
+
 func assertRestorePublishedHotBlock(t *testing.T, blocksDir string) {
+	t.Helper()
+
+	assertRestoredBlockVerified(t, blocksDir)
+	assertRestoreMarkersPublished(t, blocksDir)
+	lifecycle, err := shard.ClassifyLocalBlock(blocksDir, 1)
+	if err != nil {
+		t.Fatalf("ClassifyLocalBlock: %v", err)
+	}
+	if lifecycle.State != shard.LocalBlockStateHot || !lifecycle.ServingAllowed {
+		t.Fatalf("lifecycle = %+v, want hot serving-allowed", lifecycle)
+	}
+}
+
+func assertRestoredBlockVerified(t *testing.T, blocksDir string) {
 	t.Helper()
 
 	if _, err := os.Stat(block.FilePath(blocksDir, 1)); err != nil {
 		t.Fatalf("restored Block not published: %v", err)
 	}
+	result, err := block.VerifyBlock(block.FilePath(blocksDir, 1), block.IdxFilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("VerifyBlock restored Block: %v", err)
+	}
+	if len(result.CorruptFrames) != 0 {
+		t.Fatalf("restored Block has corrupt frames: %+v", result.CorruptFrames)
+	}
+}
+
+func assertRestoreMarkersPublished(t *testing.T, blocksDir string) {
+	t.Helper()
+
 	if _, err := os.Stat(shard.EvictionMarkerPath(blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("eviction marker stat error = %v, want not exist", err)
 	}
@@ -483,12 +831,33 @@ func assertRestorePublishedHotBlock(t *testing.T, blocksDir string) {
 	if restore.Source != shard.RestoreSourceBackend || restore.Reason != shard.RestoreReasonRead {
 		t.Fatalf("restore marker = %+v, want backend/read", restore)
 	}
-	lifecycle, err := shard.ClassifyLocalBlock(blocksDir, 1)
-	if err != nil {
-		t.Fatalf("ClassifyLocalBlock: %v", err)
+}
+
+func assertRestoreUsedCommittedBackendObjectOnly(t *testing.T, backendStore *countingDiscoveryBackend, confirmed index.ConfirmedUpload) {
+	t.Helper()
+
+	if got := backendStore.getCalls.Load(); got != 1 {
+		t.Fatalf("Backend GetObject calls = %d, want 1", got)
 	}
-	if lifecycle.State != shard.LocalBlockStateHot || !lifecycle.ServingAllowed {
-		t.Fatalf("lifecycle = %+v, want hot serving-allowed", lifecycle)
+	keys := backendStore.objectGetKeys()
+	if len(keys) != 1 {
+		t.Fatalf("Backend GetObject keys = %v, want one committed key", keys)
+	}
+	if keys[0] != confirmed.BlockObject.Key {
+		t.Fatalf("Backend GetObject key = %q, want committed key %q", keys[0], confirmed.BlockObject.Key)
+	}
+	opts := backendStore.objectGetOpts()
+	if len(opts) != 1 {
+		t.Fatalf("Backend GetObject opts = %v, want one full-object read", opts)
+	}
+	if opts[0].Range.Enabled {
+		t.Fatalf("Backend GetObject range = %+v, want full Block object", opts[0].Range)
+	}
+	if got := backendStore.headCalls.Load(); got != 0 {
+		t.Fatalf("Backend HeadObject calls = %d, want 0", got)
+	}
+	if got := backendStore.listCalls.Load(); got != 0 {
+		t.Fatalf("Backend ListObjects calls = %d, want 0", got)
 	}
 }
 
@@ -611,6 +980,9 @@ func assertRestoreFailureLeftEvicted(t *testing.T, s *shard.Shard) {
 	if _, err := os.Stat(shard.EvictionMarkerPath(blocksDir, 1)); err != nil {
 		t.Fatalf("eviction marker should remain: %v", err)
 	}
+	if _, err := os.Stat(shard.RestoreMarkerPath(blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore marker stat error = %v, want not exist", err)
+	}
 	matches, err := filepath.Glob(filepath.Join(blocksDir, ".0000000000000001.blk.restore-*"))
 	if err != nil {
 		t.Fatalf("glob restore staging: %v", err)
@@ -620,12 +992,55 @@ func assertRestoreFailureLeftEvicted(t *testing.T, s *shard.Shard) {
 	}
 }
 
+func openEncryptedUploadTestShard(t *testing.T, upload shard.UploadConfig, transit encryption.Transit) *shard.Shard {
+	t.Helper()
+
+	s, err := shard.Open(shard.Config{
+		DataDir:        t.TempDir(),
+		ShardID:        testShardID,
+		RaftID:         1,
+		Peers:          map[uint64]string{1: "localhost:9091"},
+		BlockSealSize:  41,
+		TickInterval:   10 * time.Millisecond,
+		BootstrapGrace: time.Second,
+		Upload:         upload,
+		Encryption: shard.EncryptionConfig{
+			Transit:      transit,
+			TransitMount: testTransitMount,
+			TransitKey:   testTransitKey,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.IsLeader() {
+			return s
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("shard did not become leader")
+	return nil
+}
+
 type countingGetBackend struct {
 	backend.Backend
 	getCalls atomic.Int32
+	mu       sync.Mutex
+	getKeys  []string
+	getOpts  []backend.GetOpts
 	once     sync.Once
 	started  chan struct{}
 	release  chan struct{}
+}
+
+type readResult struct {
+	meta           storeapi.DocumentMeta
+	err            error
+	readerReturned bool
 }
 
 func newCountingGetBackend(base backend.Backend) *countingGetBackend {
@@ -634,6 +1049,10 @@ func newCountingGetBackend(base backend.Backend) *countingGetBackend {
 
 func (b *countingGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
 	b.getCalls.Add(1)
+	b.mu.Lock()
+	b.getKeys = append(b.getKeys, key)
+	b.getOpts = append(b.getOpts, opts)
+	b.mu.Unlock()
 	if b.started != nil {
 		b.once.Do(func() { close(b.started) })
 	}
@@ -645,6 +1064,28 @@ func (b *countingGetBackend) GetObject(ctx context.Context, key string, opts bac
 		}
 	}
 	return b.Backend.GetObject(ctx, key, opts)
+}
+
+func (b *countingGetBackend) resetGetCalls() {
+	b.getCalls.Store(0)
+	b.mu.Lock()
+	b.getKeys = nil
+	b.getOpts = nil
+	b.mu.Unlock()
+}
+
+func (b *countingGetBackend) objectGetKeys() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]string(nil), b.getKeys...)
+}
+
+func (b *countingGetBackend) objectGetOpts() []backend.GetOpts {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]backend.GetOpts(nil), b.getOpts...)
 }
 
 type failingGetBackend struct {
@@ -675,6 +1116,22 @@ type mutatingGetBackend struct {
 
 func (b *mutatingGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
 	return mutateGetObject(ctx, b.Backend, key, opts, b.mutate)
+}
+
+type metaMutatingGetBackend struct {
+	backend.Backend
+	mutate func(backend.ObjectMeta) backend.ObjectMeta
+}
+
+func (b *metaMutatingGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	rc, meta, err := b.Backend.GetObject(ctx, key, opts)
+	if err != nil {
+		return nil, backend.ObjectMeta{}, err
+	}
+	if b.mutate != nil {
+		meta = b.mutate(meta)
+	}
+	return rc, meta, nil
 }
 
 func mutateGetObject(

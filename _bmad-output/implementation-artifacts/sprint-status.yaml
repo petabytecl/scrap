@@ -1,5 +1,5 @@
 # generated: 2026-06-10T20:50:36-04:00
-# last_updated: 2026-06-11T22:21:02-04:00
+# last_updated: 2026-06-11T22:44:44-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-11T22:21:02-04:00"
+last_updated: "2026-06-11T22:44:44-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -61,7 +61,7 @@ development_status:
   3-1-committed-backend-upload-confirmation: done
   3-2-upload-pressure-and-safe-admission-evidence: done
   3-3-policy-gated-local-block-eviction: done
-  3-4-restore-first-cold-read-path: ready-for-dev
+  3-4-restore-first-cold-read-path: review
   3-5-restore-failure-and-corruption-semantics: backlog
   3-6-encryption-compatible-restore-evidence: backlog
   3-7-backend-durability-and-cold-read-closure-evidence: backlog
