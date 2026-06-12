@@ -109,13 +109,25 @@ func TestEncryptedShardReadFailsClosedWhenShardEncryptionDisabled(t *testing.T) 
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	dataDir := t.TempDir()
 	encrypted := openEncryptedTestShardInDir(t, dataDir, transit)
+	encryptedClosed := false
+	defer func() {
+		if !encryptedClosed {
+			_ = encrypted.Close()
+		}
+	}()
+
 	content := []byte("disabled encryption must not return plaintext")
 	if _, err := encrypted.WriteDocument(context.Background(), "tx-disabled-encryption", "doc.xml", "text/xml", "", bytes.NewReader(content)); err != nil {
 		t.Fatalf("WriteDocument: %v", err)
 	}
+	entry := readOnlyIndexEntry(t, dataDir, "tx-disabled-encryption", "doc.xml")
+	assertEnvelopeMetadata(t, entry, len(content))
+
 	if err := encrypted.Close(); err != nil {
+		encryptedClosed = true
 		t.Fatalf("Close encrypted shard: %v", err)
 	}
+	encryptedClosed = true
 
 	plain := openPlainTestShardInDir(t, dataDir)
 	defer func() { _ = plain.Close() }()
@@ -417,7 +429,14 @@ func openEncryptedTestShardInDir(t *testing.T, dir string, transit encryption.Tr
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	returnAfterLeader := false
+	defer func() {
+		if !returnAfterLeader {
+			_ = s.Close()
+		}
+	}()
 	waitForLeader(t, s)
+	returnAfterLeader = true
 	return s
 }
 
@@ -433,7 +452,14 @@ func openPlainTestShardInDir(t *testing.T, dir string) *shard.Shard {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	returnAfterLeader := false
+	defer func() {
+		if !returnAfterLeader {
+			_ = s.Close()
+		}
+	}()
 	waitForLeader(t, s)
+	returnAfterLeader = true
 	return s
 }
 

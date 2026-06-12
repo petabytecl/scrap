@@ -5,7 +5,7 @@ created: 2026-06-12T01:46:31-04:00
 
 # Story 4.3: OpenBao-Backed Encrypted Write and Read
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -83,6 +83,14 @@ so that plaintext is never stored as the production default.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes or closes encryption/security evidence.
   - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
   - [x] If a command is skipped, record the skip reason and closure impact in the evidence artifact. Do not mark an AC as pass from intent alone.
+
+### Review Findings
+
+- [x] [Review][Patch] Close Shard opened by the disabled-encryption test on early failures [internal/shard/encryption_test.go:108]
+- [x] [Review][Patch] Close helper-opened Shards if leader election wait fails [internal/shard/encryption_test.go:403]
+- [x] [Review][Patch] Assert encrypted index envelope exists before reopening without Shard encryption [internal/shard/encryption_test.go:108]
+- [x] [Review][Patch] Replace globbed evidence with exact files and reproducible leak-scan commands [_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md:23]
+- [x] [Review][Patch] Clarify Story 4.7 production rehearsal scope is out of Story 4.3, not remaining 4.3 evidence [_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md:64]
 
 ## Dev Notes
 
@@ -252,6 +260,10 @@ GPT-5 Codex
 - `git diff --check` - PASS.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS.
 - Story 4.3 leak scans - PASS, with final counts recorded in `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
+- BMAD code review: Blind Hunter and Edge Case Hunter reported five patch findings; Acceptance Auditor reported no findings. All patch findings resolved.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestEncryptedShardReadFailsClosedWhenShardEncryptionDisabled -count=1 -v` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after review fixes.
+- Post-review leak scans - PASS, with 0 strict shaped-value matches; final broad counts recorded in `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
 
 ### Implementation Plan
 
@@ -265,6 +277,7 @@ GPT-5 Codex
 - Added a focused Shard test that proves an encrypted Document cannot be read after reopening the same Shard data without Shard encryption; the read returns `crypto_unavailable`, no reader, zero metadata, and the Block still omits plaintext.
 - Reused the existing ADR 0020 Transit/envelope path without adding a new crypto abstraction, dependency, envelope format, Backend decrypt path, or production-code behavior change.
 - Closed Story 4.3 through current package, integration-adapter, leak-scan, and broad `make check` evidence while leaving production outage rehearsal explicitly in Story 4.7 scope.
+- Addressed BMAD code-review findings by making Shard test cleanup fail-safe, asserting the encrypted envelope before disabled-encryption reopen, and strengthening evidence reproducibility.
 
 ### File List
 
@@ -276,3 +289,4 @@ GPT-5 Codex
 ### Change Log
 
 - 2026-06-12: Added disabled Shard encryption read fail-closed coverage and finalized Story 4.3 encrypted write/read evidence for review.
+- 2026-06-12: Addressed Story 4.3 BMAD code-review findings and moved story to done.
