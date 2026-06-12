@@ -5,7 +5,7 @@ created: 2026-06-12T02:18:53-04:00
 
 # Story 4.4: Durable Envelope Rewrap Workflow
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,64 +33,64 @@ so that key rotation converges without rewriting Block payload bytes.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 4.4 evidence artifact before behavior changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md`.
-  - [ ] Record baseline commit, timestamp, owner, exact files reviewed, current coverage, gaps, commands, expected results, actual results, redaction proof, and remaining Story 4.7 production-rehearsal scope.
-  - [ ] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases.
-  - [ ] If existing code already satisfies a row, prove it with current tests or source evidence. Do not mark any row pass from intent, ADRs, architecture, or old story notes alone.
+- [x] Create the Story 4.4 evidence artifact before behavior changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md`.
+  - [x] Record baseline commit, timestamp, owner, exact files reviewed, current coverage, gaps, commands, expected results, actual results, redaction proof, and remaining Story 4.7 production-rehearsal scope.
+  - [x] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases.
+  - [x] If existing code already satisfies a row, prove it with current tests or source evidence. Do not mark any row pass from intent, ADRs, architecture, or old story notes alone.
 
-- [ ] Audit and reuse the existing durable rewrap implementation. (AC: 1-4)
-  - [ ] Read and preserve `internal/shard/rewrap.go`, `internal/rewrap/types.go`, `proto/scrap/v1/raft.proto`, `internal/encryption/transit.go`, `internal/encryption/fake.go`, `internal/encryption/openbao.go`, and relevant tests before editing.
-  - [ ] Reuse `Shard.RewrapDocument`, `RewrapDocumentEnvelope`, `rewrap.Result`, `rewrap.HealthSnapshot`, `encryption.Transit.RewrapDataKey`, `block.ReplaceDocumentEnvelope`, and generation-aware Upload Outbox logic before adding any new abstraction.
-  - [ ] Confirm admin exposure goes through `internal/admin` with authorization, audit, rate-limit behavior, and redacted responses already established by Story 4.2.
-  - [ ] Do not add a new crypto library, Transit wrapper, background scan, local marker state, Projection-only state, Backend index-only update, direct Backend rewrite, alternate envelope format, or duplicate admin route unless the evidence proves the current boundary cannot satisfy an AC.
+- [x] Audit and reuse the existing durable rewrap implementation. (AC: 1-4)
+  - [x] Read and preserve `internal/shard/rewrap.go`, `internal/rewrap/types.go`, `proto/scrap/v1/raft.proto`, `internal/encryption/transit.go`, `internal/encryption/fake.go`, `internal/encryption/openbao.go`, and relevant tests before editing.
+  - [x] Reuse `Shard.RewrapDocument`, `RewrapDocumentEnvelope`, `rewrap.Result`, `rewrap.HealthSnapshot`, `encryption.Transit.RewrapDataKey`, `block.ReplaceDocumentEnvelope`, and generation-aware Upload Outbox logic before adding any new abstraction.
+  - [x] Confirm admin exposure goes through `internal/admin` with authorization, audit, rate-limit behavior, and redacted responses already established by Story 4.2.
+  - [x] Do not add a new crypto library, Transit wrapper, background scan, local marker state, Projection-only state, Backend index-only update, direct Backend rewrite, alternate envelope format, or duplicate admin route unless the evidence proves the current boundary cannot satisfy an AC.
 
-- [ ] Close Raft authority and convergence evidence. (AC: 1)
-  - [ ] Prove authorized `RewrapDocument` creates a committed `RewrapDocumentEnvelope` Raft command and waits for apply before reporting success.
-  - [ ] Prove Raft apply replaces `.idx` envelope metadata, keeps Pebble Projection derived, and does not use local operator state as completion authority.
-  - [ ] Prove `proposal_id` correlates only the leader waiter and does not change replay identity.
-  - [ ] Prove followers/replay apply the command deterministically. Use the narrowest reliable existing fixture; if a true multi-Member fixture exists, include it, otherwise record package-level apply/replay evidence and leave production multi-Member rehearsal to Story 4.7.
+- [x] Close Raft authority and convergence evidence. (AC: 1)
+  - [x] Prove authorized `RewrapDocument` creates a committed `RewrapDocumentEnvelope` Raft command and waits for apply before reporting success.
+  - [x] Prove Raft apply replaces `.idx` envelope metadata, keeps Pebble Projection derived, and does not use local operator state as completion authority.
+  - [x] Prove `proposal_id` correlates only the leader waiter and does not change replay identity.
+  - [x] Prove followers/replay apply the command deterministically. Use the narrowest reliable existing fixture; if a true multi-Member fixture exists, include it, otherwise record package-level apply/replay evidence and leave production multi-Member rehearsal to Story 4.7.
 
-- [ ] Close retry, resume, and interruption evidence. (AC: 2, 4)
-  - [ ] Prove retrying a request for an already-current key version is idempotent and does not rewrite metadata or Block payload bytes.
-  - [ ] Prove stale rewrap commands cannot downgrade a newer envelope and do not close or break the current index writer.
-  - [ ] Prove overlapping proposals are isolated by proposal ID and cannot notify the wrong waiter.
-  - [ ] Prove old and new envelope metadata in flight cannot orphan the old envelope or create ambiguous decrypt behavior; stale old-version commands must be ignored safely and resumed state must remain readable.
-  - [ ] Prove Transit unavailable, auth denied, missing key, minimum-version rejection, invalid request, and not-encrypted cases return bounded reasons and preserve the existing readable Document.
+- [x] Close retry, resume, and interruption evidence. (AC: 2, 4)
+  - [x] Prove retrying a request for an already-current key version is idempotent and does not rewrite metadata or Block payload bytes.
+  - [x] Prove stale rewrap commands cannot downgrade a newer envelope and do not close or break the current index writer.
+  - [x] Prove overlapping proposals are isolated by proposal ID and cannot notify the wrong waiter.
+  - [x] Prove old and new envelope metadata in flight cannot orphan the old envelope or create ambiguous decrypt behavior; stale old-version commands must be ignored safely and resumed state must remain readable.
+  - [x] Prove Transit unavailable, auth denied, missing key, minimum-version rejection, invalid request, and not-encrypted cases return bounded reasons and preserve the existing readable Document.
 
-- [ ] Close no-Block-rewrite and read verification evidence. (AC: 3, 4)
-  - [ ] Prove rewrap changes only envelope metadata and never rewrites `.blk` Frame payload bytes.
-  - [ ] Prove encrypted reads after rewrap still decrypt through the normal Shard path and verify plaintext SHA-256 before returning data.
-  - [ ] Prove rewrapped encrypted restore uses the new envelope metadata while restored Block bytes still omit plaintext and remain byte-equivalent to the pre-rewrap Block.
-  - [ ] Prove sealed historical Blocks with upload enabled requeue replacement upload obligations by non-zero upload generation and that stale pre-rewrap confirmations cannot clear the replacement obligation.
-  - [ ] Prove non-zero upload generation appears in replacement Backend object keys and stale in-flight upload writers cannot overwrite replacement `.idx` objects.
+- [x] Close no-Block-rewrite and read verification evidence. (AC: 3, 4)
+  - [x] Prove rewrap changes only envelope metadata and never rewrites `.blk` Frame payload bytes.
+  - [x] Prove encrypted reads after rewrap still decrypt through the normal Shard path and verify plaintext SHA-256 before returning data.
+  - [x] Prove rewrapped encrypted restore uses the new envelope metadata while restored Block bytes still omit plaintext and remain byte-equivalent to the pre-rewrap Block.
+  - [x] Prove sealed historical Blocks with upload enabled requeue replacement upload obligations by non-zero upload generation and that stale pre-rewrap confirmations cannot clear the replacement obligation.
+  - [x] Prove non-zero upload generation appears in replacement Backend object keys and stale in-flight upload writers cannot overwrite replacement `.idx` objects.
 
-- [ ] Close admin health, audit, and redaction evidence. (AC: 1-4)
-  - [ ] Prove `/admin/rewrap/document` requires `admin_operator` authorization and denies before side effects for weaker roles.
-  - [ ] Prove the route is audited as a Document operation and bounded failure reasons are recorded.
-  - [ ] Prove `/healthz` exposes bounded rewrap status and failures by reason without `transaction_id`, `document_name`, wrapped-key ciphertext, plaintext, data keys, raw paths, provider bodies, or tokens.
-  - [ ] Prove returned errors and evidence artifacts classify broad secret/identifier matches and have zero strict shaped-value leaks.
+- [x] Close admin health, audit, and redaction evidence. (AC: 1-4)
+  - [x] Prove `/admin/rewrap/document` requires `admin_operator` authorization and denies before side effects for weaker roles.
+  - [x] Prove the route is audited as a Document operation and bounded failure reasons are recorded.
+  - [x] Prove `/healthz` exposes bounded rewrap status and failures by reason without `transaction_id`, `document_name`, wrapped-key ciphertext, plaintext, data keys, raw paths, provider bodies, or tokens.
+  - [x] Prove returned errors and evidence artifacts classify broad secret/identifier matches and have zero strict shaped-value leaks.
 
-- [ ] Preserve package, authority, and storage boundaries. (AC: 1-4)
-  - [ ] Keep Transit and envelope operations in `internal/encryption`; rewrap contracts in `internal/rewrap`; Shard orchestration and Raft apply in `internal/shard`; admin HTTP mapping in `internal/admin`; Block index mutation in `internal/block`; Backend bytes opaque in `internal/backend`.
-  - [ ] Do not move rewrap authority into `internal/backend`, `internal/server`, `internal/peer`, `internal/index`, `internal/scrapctl`, evidence tooling, or local filesystem markers.
-  - [ ] Do not change storage identity, Shard membership authority, public/peer/admin wire contracts, Backend object identity, or Pebble Projection authority for this story.
-  - [ ] Do not edit generated `gen/` files directly. If proto/storage/envelope contract changes become unavoidable, update `proto/`, run generation/check gates, and justify ADR impact before proceeding.
+- [x] Preserve package, authority, and storage boundaries. (AC: 1-4)
+  - [x] Keep Transit and envelope operations in `internal/encryption`; rewrap contracts in `internal/rewrap`; Shard orchestration and Raft apply in `internal/shard`; admin HTTP mapping in `internal/admin`; Block index mutation in `internal/block`; Backend bytes opaque in `internal/backend`.
+  - [x] Do not move rewrap authority into `internal/backend`, `internal/server`, `internal/peer`, `internal/index`, `internal/scrapctl`, evidence tooling, or local filesystem markers.
+  - [x] Do not change storage identity, Shard membership authority, public/peer/admin wire contracts, Backend object identity, or Pebble Projection authority for this story.
+  - [x] Do not edit generated `gen/` files directly. If proto/storage/envelope contract changes become unavoidable, update `proto/`, run generation/check gates, and justify ADR impact before proceeding.
 
-- [ ] Update story, evidence, and tracker artifacts. (AC: 1-4)
-  - [ ] Update this story with debug logs, completion notes, review findings, and file list.
-  - [ ] Update `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md` with final AC matrix rows and command evidence.
-  - [ ] Move `_bmad-output/implementation-artifacts/sprint-status.yaml` to `review` only when implementation and local verification are complete.
-  - [ ] Do not mark Story 4.7 production rehearsal or evidence-bundle closure complete from Story 4.4 package tests.
+- [x] Update story, evidence, and tracker artifacts. (AC: 1-4)
+  - [x] Update this story with debug logs, completion notes, review findings, and file list.
+  - [x] Update `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md` with final AC matrix rows and command evidence.
+  - [x] Move `_bmad-output/implementation-artifacts/sprint-status.yaml` to `review` only when implementation and local verification are complete.
+  - [x] Do not mark Story 4.7 production rehearsal or evidence-bundle closure complete from Story 4.4 package tests.
 
-- [ ] Run verification and leak scans. (AC: 1-4)
-  - [ ] Run focused unit/package tests listed below.
-  - [ ] Run affected package regression listed below.
-  - [ ] Run OpenBao adapter integration when Docker/Testcontainers are available.
-  - [ ] Run `git diff --check`.
-  - [ ] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story closes security/encryption lifecycle behavior.
-  - [ ] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
-  - [ ] If a command is skipped, record the skip reason and closure impact in the evidence artifact. Do not mark an AC as pass from intent alone.
+- [x] Run verification and leak scans. (AC: 1-4)
+  - [x] Run focused unit/package tests listed below.
+  - [x] Run affected package regression listed below.
+  - [x] Run OpenBao adapter integration when Docker/Testcontainers are available.
+  - [x] Run `git diff --check`.
+  - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story closes security/encryption lifecycle behavior.
+  - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
+  - [x] If a command is skipped, record the skip reason and closure impact in the evidence artifact. Do not mark an AC as pass from intent alone.
 
 ## Dev Notes
 
@@ -264,10 +264,35 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+GPT-5 Codex
 
 ### Debug Log References
 
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestEncryptedShardRewrapConvergesAcrossMembersWithoutRewritingBlocks -count=1 -v` - PASS after the focused test was added and cleanup corrected.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'Rewrap|rewrap|UploadGeneration|ConfirmUpload|BackendKeyPrefix|RestoreUsesRewrappedEnvelope|EncryptedShardRewrap' -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'Rewrap|AuthorizationDeniesRewrap|AuditsRewrap|HealthEndpointReportsBoundedRewrapStatus' -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/encryption -run 'Rewrap|FakeTransit|OpenBao' -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store -run 'RewrapDocumentEnvelope|ConfirmUpload' -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/encryption ./internal/block ./internal/shard ./internal/store ./internal/admin ./internal/cmd ./internal/server -count=1` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test -tags integration ./test/integration -run TestIntegrationOpenBaoTransitContainerRoundTrip -count=1 -v` - PASS with Docker server `29.5.2` and `openbao/openbao:2.5.4`.
+- `git diff --check` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after tightening the helper that `unparam` flagged.
+- Final credential, identifier, and strict shaped-value leak scans over the story, evidence artifact, and touched code - PASS with zero forbidden strict shaped-value leaks.
+
 ### Completion Notes List
 
+- Added a three-Member encrypted Shard rewrap convergence test that writes through the leader, rotates Transit, rewraps through Raft, verifies every Member converges on key version 2, proves every local Block payload stays byte-identical, and confirms reads before and after leader loss.
+- Closed the Story 4.4 evidence artifact with PASS rows for Raft authority, idempotent retry/interruption, no Block rewrite, old/new metadata safety, upload-generation protection, admin health/audit, and redaction.
+- Preserved the existing production boundaries and contracts; implementation changes are limited to focused test coverage and BMAD evidence/tracker artifacts.
+- Fixed the initial `make check` lint failure by removing the constant `doc.xml` parameter from the local test helper.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/4-4-durable-envelope-rewrap-workflow.md`
+- `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/shard/encryption_test.go`
+
+### Change Log
+
+- 2026-06-12: Added multi-Member encrypted rewrap convergence evidence, closed the Story 4.4 AC matrix, updated tracker status to review, and ran focused plus broad verification gates.

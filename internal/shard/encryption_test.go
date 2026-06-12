@@ -210,8 +210,49 @@ func TestEncryptedShardRewrapUpdatesEnvelopeWithoutRewritingBlock(t *testing.T) 
 	}
 	assertBlockPayloadUnchanged(t, dataDir, beforeBlock)
 	assertIndexEnvelopeVersion(t, dataDir, "tx-rewrap", "doc.xml", 2)
-	assertRewrappedDocumentReadable(t, s, "tx-rewrap", "doc.xml", content)
+	assertRewrappedDocumentReadable(t, s, "tx-rewrap", content)
 	assertRewrapIsIdempotent(t, s, "tx-rewrap", "doc.xml", 2)
+}
+
+func TestEncryptedShardRewrapConvergesAcrossMembersWithoutRewritingBlocks(t *testing.T) {
+	ctx := context.Background()
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	replicator := newWriteAckReplicator()
+	cluster := openEncryptedWriteAckCluster(t, transit, replicator)
+	leader := cluster.waitForLeader(t)
+
+	content := bytes.Repeat([]byte("cluster rewrap plaintext:"), 32)
+	if _, err := leader.WriteDocument(ctx, "tx-rewrap-cluster", "doc.xml", "text/xml", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	beforeBlocks := readClusterBlockFiles(t, cluster)
+
+	transit.Rotate()
+	result, err := leader.RewrapDocument(ctx, rewrap.Request{
+		TransactionID: "tx-rewrap-cluster",
+		DocumentName:  "doc.xml",
+		KeyVersion:    2,
+		Reason:        "test",
+	})
+	if err != nil {
+		t.Fatalf("RewrapDocument: %v", err)
+	}
+	if !result.Changed || result.OldKeyVersion != 1 || result.NewKeyVersion != 2 {
+		t.Fatalf("RewrapDocument result = %+v, want changed 1->2", result)
+	}
+
+	for i, member := range cluster.shards {
+		waitForMemberEnvelopeVersion(t, member, "tx-rewrap-cluster", "doc.xml", 2)
+		assertBlockPayloadUnchanged(t, member.DataDirForTest(), beforeBlocks[i])
+	}
+	assertRewrappedDocumentReadable(t, leader, "tx-rewrap-cluster", content)
+
+	if err := leader.Close(); err != nil {
+		t.Fatalf("Close original leader: %v", err)
+	}
+	cluster.removeMemberForTest(leader)
+	replacement := cluster.waitForLeader(t)
+	assertRewrappedDocumentReadable(t, replacement, "tx-rewrap-cluster", content)
 }
 
 func TestEncryptedShardRewrapFailureRecordsHealthAndPreservesRead(t *testing.T) {
@@ -246,7 +287,7 @@ func TestEncryptedShardRewrapFailureRecordsHealthAndPreservesRead(t *testing.T) 
 	if snapshot.FailuresByReason[rewrap.ReasonCryptoUnavailable] != 1 {
 		t.Fatalf("crypto unavailable failures = %d, want 1", snapshot.FailuresByReason[rewrap.ReasonCryptoUnavailable])
 	}
-	assertRewrappedDocumentReadable(t, s, "tx-rewrap-fail", "doc.xml", content)
+	assertRewrappedDocumentReadable(t, s, "tx-rewrap-fail", content)
 }
 
 func TestShardRewrapRejectsInvalidAndUnavailableRequests(t *testing.T) {
@@ -315,10 +356,10 @@ func assertIndexEnvelopeVersion(t *testing.T, dataDir, txID, docName string, wan
 	}
 }
 
-func assertRewrappedDocumentReadable(t *testing.T, s *shard.Shard, txID, docName string, want []byte) {
+func assertRewrappedDocumentReadable(t *testing.T, s *shard.Shard, txID string, want []byte) {
 	t.Helper()
 
-	rc, _, err := s.ReadDocument(context.Background(), txID, docName)
+	rc, _, err := s.ReadDocument(context.Background(), txID, "doc.xml")
 	if err != nil {
 		t.Fatalf("ReadDocument after rewrap: %v", err)
 	}
@@ -440,6 +481,47 @@ func openEncryptedTestShardInDir(t *testing.T, dir string, transit encryption.Tr
 	return s
 }
 
+func openEncryptedWriteAckCluster(t *testing.T, transit encryption.Transit, replicator *writeAckReplicator) *shardCluster {
+	t.Helper()
+
+	transport := newShardTransport()
+	peers := map[uint64]string{
+		1: "localhost:9091",
+		2: "localhost:9092",
+		3: "localhost:9093",
+	}
+	cluster := &shardCluster{transport: transport}
+	for i := range 3 {
+		id := uint64(i + 1)
+		s, err := shard.Open(shard.Config{
+			DataDir:      t.TempDir(),
+			ShardID:      0,
+			RaftID:       id,
+			Peers:        peers,
+			TickInterval: 10 * time.Millisecond,
+			Transport:    transport,
+			Replicator:   replicator,
+			Encryption: shard.EncryptionConfig{
+				Transit:      transit,
+				TransitMount: testTransitMount,
+				TransitKey:   testTransitKey,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Open shard %d: %v", id, err)
+		}
+		cluster.shards = append(cluster.shards, s)
+		transport.Register(id, s)
+		replicator.Register(peers[id], s)
+	}
+	t.Cleanup(func() {
+		for _, s := range cluster.shards {
+			_ = s.Close()
+		}
+	})
+	return cluster
+}
+
 func openPlainTestShardInDir(t *testing.T, dir string) *shard.Shard {
 	t.Helper()
 	s, err := shard.Open(shard.Config{
@@ -461,6 +543,66 @@ func openPlainTestShardInDir(t *testing.T, dir string) *shard.Shard {
 	waitForLeader(t, s)
 	returnAfterLeader = true
 	return s
+}
+
+func readClusterBlockFiles(t *testing.T, cluster *shardCluster) [][]byte {
+	t.Helper()
+
+	blocks := make([][]byte, 0, len(cluster.shards))
+	for _, member := range cluster.shards {
+		blocks = append(blocks, readTestBlockFile(t, member.DataDirForTest()))
+	}
+	return blocks
+}
+
+func (sc *shardCluster) removeMemberForTest(member *shard.Shard) {
+	remaining := sc.shards[:0]
+	for _, s := range sc.shards {
+		if s != member {
+			remaining = append(remaining, s)
+		}
+	}
+	sc.shards = remaining
+}
+
+func waitForMemberEnvelopeVersion(t *testing.T, s *shard.Shard, txID, docName string, wantKeyVersion int) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		version, err := readEnvelopeVersion(s.DataDirForTest(), txID, docName)
+		if err != nil {
+			lastErr = err
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		if version != wantKeyVersion {
+			lastErr = fmt.Errorf("envelope key version = %d, want %d", version, wantKeyVersion)
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		return
+	}
+	t.Fatalf("timed out waiting for rewrapped member envelope: %v", lastErr)
+}
+
+func readEnvelopeVersion(dataDir, txID, docName string) (int, error) {
+	ir, err := block.OpenIndexReader(block.IdxFilePath(filepath.Join(dataDir, "blocks"), 1))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = ir.Close() }()
+
+	entry, err := ir.Find(txID, docName)
+	if err != nil {
+		return 0, err
+	}
+	envelope, err := encryption.ParseEnvelope(entry.EncryptionEnvelope)
+	if err != nil {
+		return 0, err
+	}
+	return envelope.KeyVersion, nil
 }
 
 func readOnlyIndexEntry(t *testing.T, dataDir, txID, docName string) block.IndexEntry {
