@@ -254,6 +254,45 @@ func TestEvictionApplyPrintsSkipAndFailureDetails(t *testing.T) {
 	)
 }
 
+func TestEvictionApplyRedactsSensitiveFailureOutput(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		result := eviction.ApplyResult{
+			PlanID:       "plan-123",
+			Status:       eviction.ApplyStatusFailed,
+			FailedBlocks: 1,
+			Blocks: []eviction.ApplyBlock{{
+				BlockID: 1,
+				ShardID: 7,
+				Status:  eviction.ApplyBlockStatusFailed,
+				Error:   "backend_key=cell/shards/7/1.blk validation_token=secret transaction_id=tx-1 document_name=doc.xml",
+			}},
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "eviction apply failed") {
+		t.Fatalf("error = %v, want eviction apply failed", err)
+	}
+	assertTextContains(t, out.String(), "error=\"sensitive detail redacted\"")
+	assertTextNotContains(t, out.String(), "backend_key", "cell/shards/7/1.blk", "validation_token", "transaction_id", "document_name", "tx-1", "doc.xml")
+}
+
 func TestEvictionApplyReturnsErrorForFailedResult(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		result := eviction.ApplyResult{
@@ -373,6 +412,45 @@ func TestEvictionApplySupportsJSONOutput(t *testing.T) {
 	assertTextContains(t, out.String(), `"plan_id":"plan-123"`, `"status":"no_effect"`)
 }
 
+func TestEvictionApplyJSONRedactsSensitiveFailureOutput(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		data, err := json.Marshal(eviction.ApplyResult{
+			PlanID:       "plan-123",
+			Status:       eviction.ApplyStatusFailed,
+			FailedBlocks: 1,
+			Validations: []eviction.ValidationBlock{{
+				BlockID: 1,
+				ShardID: 7,
+				Status:  eviction.ValidationStatusFailed,
+				Error:   "request_id=req-1 trace_id=trace-1 auth claims /tmp/private.idx",
+			}},
+		})
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "apply",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+		"--confirm",
+		"--output=json",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "eviction apply failed") {
+		t.Fatalf("error = %v, want eviction apply failed", err)
+	}
+	assertTextContains(t, out.String(), `"error":"sensitive detail redacted"`)
+	assertTextNotContains(t, out.String(), "request_id", "trace_id", "auth claims", "/tmp/private.idx")
+}
+
 func TestEvictionStatusPrintsFinalCampaignEvidence(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodGet {
@@ -474,11 +552,52 @@ func TestEvictionStatusPrintsFinalCampaignEvidence(t *testing.T) {
 	assertTextNotContains(t, out.String(), "backend_key", "cell/shards/7/3.blk")
 }
 
+func TestEvictionStatusRedactsSensitiveFailureOutput(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		status := eviction.PlanStatus{
+			PlanID: "plan-123",
+			Status: eviction.ApplyStatusEvictedWithValidationFailure,
+			ApplyResult: &eviction.ApplyResult{
+				PlanID: "plan-123",
+				Status: eviction.ApplyStatusEvictedWithValidationFailure,
+				Validations: []eviction.ValidationBlock{{
+					BlockID: 3,
+					ShardID: 7,
+					Status:  eviction.ValidationStatusFailed,
+					Error:   "peer address 10.0.0.1 certificate /home/scrap/cert.pem",
+				}},
+			},
+		}
+		data, err := json.Marshal(status)
+		if err != nil {
+			t.Fatalf("marshal status: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	var out bytes.Buffer
+	err := Run([]string{
+		"eviction", "status",
+		"--admin-url=http://admin.local",
+		"--plan-id=plan-123",
+	}, &out, io.Discard, Deps{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("eviction status: %v", err)
+	}
+	assertTextContains(t, out.String(), "error=\"sensitive detail redacted\"")
+	assertTextNotContains(t, out.String(), "peer address", "10.0.0.1", "certificate", "/home/scrap/cert.pem")
+}
+
 func TestEvictionApplyReportsHTTPError(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusPreconditionFailed,
-			Body:       io.NopCloser(strings.NewReader("eviction: plan not found\n")),
+			Body:       io.NopCloser(strings.NewReader("eviction: backend_key=cell/shards/7/1.blk request_id=req-1\n")),
 			Header:     make(http.Header),
 			Request:    req,
 		}, nil
@@ -493,6 +612,8 @@ func TestEvictionApplyReportsHTTPError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "POST eviction apply status: 412") {
 		t.Fatalf("error = %v, want HTTP status error", err)
 	}
+	assertTextContains(t, err.Error(), "sensitive detail redacted")
+	assertTextNotContains(t, err.Error(), "backend_key", "cell/shards/7/1.blk", "request_id", "req-1")
 }
 
 func TestEvictionApplyRequiresConfirm(t *testing.T) {

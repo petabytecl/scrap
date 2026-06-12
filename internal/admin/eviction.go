@@ -110,7 +110,7 @@ func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	if err := json.NewEncoder(w).Encode(eviction.OperatorSafeApplyResult(result)); err != nil {
 		http.Error(w, "encode eviction apply response failed", http.StatusInternalServerError)
 		return
 	}
@@ -131,7 +131,7 @@ func (s *Server) handleEvictionPlanStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(status); err != nil {
+	if err := json.NewEncoder(w).Encode(eviction.OperatorSafePlanStatus(status)); err != nil {
 		http.Error(w, "encode eviction plan status response failed", http.StatusInternalServerError)
 		return
 	}

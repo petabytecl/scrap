@@ -5,7 +5,7 @@ created: 2026-06-11T21:36:36-04:00
 
 # Story 3.3: Policy-Gated Local Block Eviction
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -63,6 +63,11 @@ so that local disk can be reclaimed without losing authority or metadata.
   - [x] Run focused package tests for eviction, local lifecycle, Shard apply/restore, admin HTTP, and `scrapctl`.
   - [x] Run a focused race gate for Shard eviction apply/restore singleflight or lifecycle mutation behavior if any shared state changes.
   - [x] Run `make check` before BMAD code-review handoff unless a narrower blocker is documented in the story.
+
+### Review Findings
+
+- [x] [Review][Patch] Dry-run proof misses Document visibility [`internal/shard/eviction_apply_test.go:155`]
+- [x] [Review][Patch] Failure-output redaction proof is narrower than the AC [`internal/scrapctl/eviction.go:102`]
 
 ## Dev Notes
 
@@ -255,6 +260,17 @@ TBD by dev-story.
 - VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after the test-only helper extraction, covering format, package boundaries, proto generation diff, lint, `go test ./...`, `go test -race ./...`, integration tests, and command builds.
 - SECURITY: `git diff --check` passed.
 - SECURITY: Corrected credential and raw-identifier scans over changed files passed with only allowlisted story/tracker prose and internal test fixture metadata; the broader attempted scan was discarded because the shell expanded an empty pattern before `rg`.
+- CODE-REVIEW: Blind Hunter and Acceptance Auditor found two patch-level gaps: dry-run no-mutation proof needed Document visibility evidence, and failure-output redaction needed apply/status/HTTP error coverage beyond plan output.
+- REVIEW-FIX: Added dry-run metadata visibility and Backend-unused assertions for `CreateEvictionPlan`, plus operator-safe apply/status/error redaction across admin HTTP and `scrapctl`.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction -run 'TestPlanJSONOmitsBackendKeys|TestOperatorSafe' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'TestServer_.*Eviction' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'TestEviction' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestApplyEvictionPlanPreservesIndexMetadataReads|TestCreateEvictionPlanDoesNotMutateLocalBlockState' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/eviction ./internal/localblock ./internal/shard ./internal/admin ./internal/scrapctl -count=1` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run 'Test.*Eviction|Test.*Restore' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes, covering format, package boundaries, proto generation diff, lint, `go test ./...`, `go test -race ./...`, integration tests, and command builds.
+- SECURITY: Final `git diff --check` passed.
+- SECURITY: Final credential and raw-identifier scans over changed files reported only allowlisted story/evidence prose and test-only sensitive fixtures that are asserted absent from operator output.
 
 ### Completion Notes List
 
@@ -274,13 +290,19 @@ TBD by dev-story.
 - Preserved package boundaries: campaign logic stayed in `internal/eviction`, lifecycle transitions in `internal/localblock`, authority and side effects in `internal/shard`, admin HTTP in `internal/admin`, and operator rendering in `internal/scrapctl`.
 - Completed focused, package, Shard race, broad `make check`, whitespace, and corrected leak-scan verification for Story 3.3.
 - Moved Story 3.3 to review with all tasks and subtasks complete.
+- Addressed code-review findings by proving dry-run preserves Document visibility without Backend access and by redacting sensitive apply/status/HTTP error details before operator-facing output.
+- Re-ran focused affected-package tests, combined affected-package tests, focused Shard race coverage, and full `make check`; moved Story 3.3 to done.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-3-policy-gated-local-block-eviction.md`
 - `_bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/admin/eviction.go`
+- `internal/admin/eviction_test.go`
 - `internal/eviction/planner_test.go`
+- `internal/eviction/redaction.go`
+- `internal/eviction/redaction_test.go`
 - `internal/eviction/types.go`
 - `internal/shard/eviction_apply_test.go`
 - `internal/scrapctl/eviction.go`
@@ -291,3 +313,4 @@ TBD by dev-story.
 - 2026-06-11: Created Story 3.3 Policy-Gated Local Block Eviction context and moved status to ready-for-dev.
 - 2026-06-11: Started Story 3.3 implementation and moved status to in-progress.
 - 2026-06-11: Completed Story 3.3 implementation, evidence, and verification; moved status to review.
+- 2026-06-11: Addressed code-review findings, refreshed evidence, and moved status to done.

@@ -4,7 +4,7 @@ Status: complete
 
 Story: 3.3 - Policy-Gated Local Block Eviction
 
-Story status: review
+Story status: done
 
 Implementation baseline: `14513092a4f87513b1460a97f8148092ce38b51f`
 
@@ -58,7 +58,7 @@ authority, or public read/write routing authority.
 | --- | --- | --- | --- |
 | AC-3.3.1 | Dry-run reports eligible/skipped Blocks from committed upload and local lifecycle state without marker/unlink/index mutation. | `internal/eviction/planner_test.go`; `internal/shard/eviction_planner_test.go`; `internal/shard/eviction_planner_internal_test.go`; `internal/shard/eviction_apply_test.go`; `internal/scrapctl/eviction_test.go`. | Closed by `TestCreateEvictionPlanDoesNotMutateLocalBlockState` plus existing planner, leader-skip, and pending replacement upload coverage. |
 | AC-3.3.2 | Apply writes lifecycle marker, unlinks only `.blk`, keeps `.idx`, and leaves metadata-only reads available without restoring bytes. | `internal/localblock/transitions_test.go`; `internal/shard/eviction_apply_test.go`; `internal/shard/read_lifecycle_test.go`; `internal/shard/find_documents_test.go`; `internal/shard/restore_test.go`. | Closed by `TestApplyEvictionPlanPreservesIndexMetadataReads` plus existing metadata-read, no-restore, and validation-sample coverage. |
-| AC-3.3.3 | Ineligible or stale eviction fails closed with actionable non-sensitive admin/CLI output. | `internal/shard/eviction_apply_test.go`; `internal/admin/eviction_test.go`; `internal/scrapctl/eviction_test.go`; `internal/eviction/planner_test.go`; `internal/shard/eviction_metrics_otel_test.go`. | Closed by fail-closed Shard/admin/CLI coverage and Backend key redaction tests for JSON/text output. |
+| AC-3.3.3 | Ineligible or stale eviction fails closed with actionable non-sensitive admin/CLI output. | `internal/shard/eviction_apply_test.go`; `internal/admin/eviction_test.go`; `internal/scrapctl/eviction_test.go`; `internal/eviction/planner_test.go`; `internal/eviction/redaction.go`; `internal/shard/eviction_metrics_otel_test.go`. | Closed by fail-closed Shard/admin/CLI coverage, Backend key redaction tests for JSON/text output, and apply/status/HTTP error redaction tests. |
 
 ## Planned Verification
 
@@ -103,7 +103,7 @@ Command G:
 
 ```bash
 cred_pattern='(?i)(api[_-]?[k]ey|[s]ecret|[p]assword|[t]oken|[b]earer|[a]uthorization|aws_access_key_[i]d|aws_[s]ecret_access_[k]ey|private [k]ey|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9_]{36,}|xox[baprs]-)'
-scan_paths='_bmad-output/implementation-artifacts/3-3-policy-gated-local-block-eviction.md _bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md _bmad-output/implementation-artifacts/sprint-status.yaml internal/eviction/planner_test.go internal/eviction/types.go internal/scrapctl/eviction.go internal/scrapctl/eviction_test.go internal/shard/eviction_apply_test.go'
+scan_paths='_bmad-output/implementation-artifacts/3-3-policy-gated-local-block-eviction.md _bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md _bmad-output/implementation-artifacts/sprint-status.yaml internal/admin/eviction.go internal/admin/eviction_test.go internal/eviction/planner_test.go internal/eviction/redaction.go internal/eviction/redaction_test.go internal/eviction/types.go internal/scrapctl/eviction.go internal/scrapctl/eviction_test.go internal/shard/eviction_apply_test.go'
 rg -n --pcre2 "$cred_pattern" $scan_paths
 ```
 
@@ -111,7 +111,7 @@ Command H:
 
 ```bash
 identifier_pattern='([t]ransaction_id|[d]ocument_name|[i]dempotency|Backend [k]ey|Backend object [k]ey|validation [t]oken|trace [I]D|request [I]D|gRPC [m]etadata|auth [c]laims|peer [a]ddress|[c]ertificate|/shards/|/tmp/|/home/)'
-scan_paths='_bmad-output/implementation-artifacts/3-3-policy-gated-local-block-eviction.md _bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md _bmad-output/implementation-artifacts/sprint-status.yaml internal/eviction/planner_test.go internal/eviction/types.go internal/scrapctl/eviction.go internal/scrapctl/eviction_test.go internal/shard/eviction_apply_test.go'
+scan_paths='_bmad-output/implementation-artifacts/3-3-policy-gated-local-block-eviction.md _bmad-output/implementation-artifacts/epic-3-local-eviction-evidence.md _bmad-output/implementation-artifacts/sprint-status.yaml internal/admin/eviction.go internal/admin/eviction_test.go internal/eviction/planner_test.go internal/eviction/redaction.go internal/eviction/redaction_test.go internal/eviction/types.go internal/scrapctl/eviction.go internal/scrapctl/eviction_test.go internal/shard/eviction_apply_test.go'
 rg -n --pcre2 "$identifier_pattern" $scan_paths
 ```
 
@@ -139,6 +139,11 @@ rg -n --pcre2 "$identifier_pattern" $scan_paths
 | AC-3.3.3 admin mapping | 2026-06-11T21:49:33-04:00 | 0 | PASS | Focused admin command passed precondition, conflict, unavailable, invalid request, and unexpected error HTTP mappings. |
 | AC-3.3.3 CLI failure output | 2026-06-11T21:49:33-04:00 | 0 | PASS | Focused `scrapctl` command passed plan/status redaction, skip/failure details, failed-result exit behavior, HTTP error reporting, and required confirmation/plan ID checks. |
 | AC-3.3.3 focused leak scan | 2026-06-11T21:49:33-04:00 | 0 | PASS | Focused credential and raw-identifier scans over changed paths matched only story/evidence prose and internal test fixture metadata covered by the allowlist. |
+| Review dry-run visibility | 2026-06-11T22:12:37-04:00 | 0 | PASS | `go test ./internal/shard -run 'TestApplyEvictionPlanPreservesIndexMetadataReads\|TestCreateEvictionPlanDoesNotMutateLocalBlockState' -count=1 -v` passed after adding dry-run Document visibility and Backend-unused assertions. |
+| Review redaction coverage | 2026-06-11T22:12:37-04:00 | 0 | PASS | Focused `internal/eviction`, `internal/admin`, and `internal/scrapctl` commands passed new operator-safe apply/status/HTTP error redaction tests. |
+| Review regression | 2026-06-11T22:12:52-04:00 | 0 | PASS | Combined affected-package test and focused Shard race gate passed after review fixes. |
+| Review full gate | 2026-06-11T22:14:53-04:00 | 0 | PASS | `make check` passed after review fixes, covering format, package boundaries, proto generation diff, lint, `go test ./...`, `go test -race ./...`, integration tests, and command builds. |
+| Review leak scan | 2026-06-11T22:15:08-04:00 | 0 | PASS | `git diff --check` passed. Credential scan reported 35 allowlisted matches, and raw-identifier scan reported 103 allowlisted matches: story/evidence prose, sprint paths, redaction fragment tables, and test-only sensitive fixtures asserted absent from operator output. |
 
 ## Leak Scan Allowlist
 
@@ -158,7 +163,7 @@ rg -n --pcre2 "$identifier_pattern" $scan_paths
 | --- | --- | --- | --- | --- | --- | --- |
 | AC-3.3.1 | Dry-run reports eligibility without local state mutation. | AC-3.3.1 shard dry-run, AC-3.3.1 planner, AC-3.3.1 leader skip | `internal/shard/eviction_apply_test.go`; `internal/shard/eviction_planner_test.go`; `internal/shard/eviction_planner_internal_test.go`; `internal/eviction/planner_test.go` | Story 3.3 working tree | PASS | New Shard test proves dry-run selected the eligible follower-local Block and left `.blk`, `.idx`, and eviction marker unchanged. Existing planner tests prove bounded selection, cap rejection, hot residency, pending replacement exclusion, and leader hot-copy skip. |
 | AC-3.3.2 | Apply preserves `.idx` metadata and Local Block Lifecycle remains per-Member filesystem evidence only. | AC-3.3.2 apply metadata, AC-3.3.2 shard metadata bundle, AC-3.3.2 local lifecycle | `internal/shard/eviction_apply_test.go`; `internal/shard/read_lifecycle_test.go`; `internal/shard/find_documents_test.go`; `internal/localblock/transitions_test.go`; `internal/localblock/lifecycle_test.go` | Story 3.3 working tree | PASS | New Shard test proves apply with validation sampling disabled writes the eviction marker, unlinks `.blk`, keeps `.idx`, preserves committed Confirmed Upload authority and empty pending upload state, and allows `HeadDocument`/`FindDocuments` while the Block remains evicted. Existing tests prove metadata reads do not call Backend discovery and validation sampling restores through the normal path when enabled. |
-| AC-3.3.3 | Ineligible eviction fails closed and operator output is non-sensitive. | AC-3.3.3 JSON redaction, AC-3.3.3 scrapctl redaction, AC-3.3.3 shard fail-closed, AC-3.3.3 admin mapping, AC-3.3.3 CLI failure output, AC-3.3.3 focused leak scan | `internal/eviction/types.go`; `internal/eviction/planner_test.go`; `internal/scrapctl/eviction.go`; `internal/scrapctl/eviction_test.go`; `internal/shard/eviction_apply_test.go`; `internal/admin/eviction_test.go` | Story 3.3 working tree | PASS | `BackendKey` remains available in process but is omitted from JSON and human output. Fail-closed cases return bounded skip/failure reasons or mapped HTTP status codes. Focused scans found no deployed operator-output leak. |
+| AC-3.3.3 | Ineligible eviction fails closed and operator output is non-sensitive. | AC-3.3.3 JSON redaction, AC-3.3.3 scrapctl redaction, AC-3.3.3 shard fail-closed, AC-3.3.3 admin mapping, AC-3.3.3 CLI failure output, AC-3.3.3 focused leak scan, Review redaction coverage | `internal/eviction/types.go`; `internal/eviction/planner_test.go`; `internal/eviction/redaction.go`; `internal/eviction/redaction_test.go`; `internal/scrapctl/eviction.go`; `internal/scrapctl/eviction_test.go`; `internal/shard/eviction_apply_test.go`; `internal/admin/eviction.go`; `internal/admin/eviction_test.go` | Story 3.3 working tree | PASS | `BackendKey` remains available in process but is omitted from JSON and human output. Fail-closed cases return bounded skip/failure reasons or mapped HTTP status codes, and sensitive apply/status/HTTP error details are redacted before operator-facing output. Focused scans found no deployed operator-output leak. |
 
 ## Pending Evidence
 

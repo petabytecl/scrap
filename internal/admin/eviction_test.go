@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/admin"
@@ -33,6 +35,11 @@ func (s *evictionPlannerStub) CreateEvictionPlan(_ context.Context, req eviction
 			MaxBlocks: 2,
 			MaxBytes:  4096,
 		},
+		Selected: []eviction.PlanBlock{{
+			BlockID:    1,
+			ShardID:    7,
+			BackendKey: "cell/shards/7/1.blk",
+		}},
 	}, nil
 }
 
@@ -55,20 +62,76 @@ func TestServer_CreateEvictionPlan(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	assertCreateEvictionPlanRequest(t, planner.req)
+	assertCreateEvictionPlanResponse(t, resp)
+}
+
+func assertCreateEvictionPlanRequest(t *testing.T, req eviction.PlanRequest) {
+	t.Helper()
+
+	if req.MemberHostname != "scrapd-1" || req.MaxBlocks == nil || *req.MaxBlocks != 2 {
+		t.Fatalf("planner request mismatch: %+v", req)
+	}
+}
+
+func assertCreateEvictionPlanResponse(t *testing.T, resp *http.Response) {
+	t.Helper()
+
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status: got %d, want 201", resp.StatusCode)
 	}
-	if planner.req.MemberHostname != "scrapd-1" || planner.req.MaxBlocks == nil || *planner.req.MaxBlocks != 2 {
-		t.Fatalf("planner request mismatch: %+v", planner.req)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
 	}
-
+	assertAdminBodyNotContains(t, string(data), "backend_key", "cell/shards/7/1.blk")
 	var got eviction.Plan
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if got.PlanID != "plan-123" || got.MemberID != "member-a" {
 		t.Fatalf("plan response mismatch: %+v", got)
 	}
+}
+
+func TestServer_ApplyEvictionPlanRedactsSensitiveErrors(t *testing.T) {
+	applier := evictionApplierFunc(func(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
+		return eviction.ApplyResult{
+			PlanID: "plan-123",
+			Status: eviction.ApplyStatusEvictedWithValidationFailure,
+			Blocks: []eviction.ApplyBlock{{
+				BlockID: 1,
+				ShardID: 7,
+				Status:  eviction.ApplyBlockStatusFailed,
+				Error:   "backend_key=cell/shards/7/1.blk validation_token=secret",
+			}},
+			Validations: []eviction.ValidationBlock{{
+				BlockID: 1,
+				ShardID: 7,
+				Status:  eviction.ValidationStatusFailed,
+				Error:   "transaction_id=tx-1 document_name=doc.xml request_id=req-1 /tmp/block.idx",
+			}},
+		}, nil
+	})
+	srv := admin.New(admin.WithEvictionApplier(applier))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := postEvictionApplyForAdminTest(ts.URL, "plan-123", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("POST apply: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	body := string(data)
+	assertAdminBodyContains(t, body, "sensitive detail redacted")
+	assertAdminBodyNotContains(t, body, "backend_key", "cell/shards/7/1.blk", "validation_token", "transaction_id", "document_name", "request_id", "/tmp/block.idx")
 }
 
 func TestServer_CreateEvictionPlanTargetMismatchReturnsPreconditionFailed(t *testing.T) {
@@ -202,6 +265,48 @@ func TestServer_GetEvictionPlanStatus(t *testing.T) {
 	if got.PlanID != "plan-123" || got.Status != eviction.PlanStatusRunning {
 		t.Fatalf("status response = %+v, want running plan-123", got)
 	}
+}
+
+func TestServer_GetEvictionPlanStatusRedactsSensitiveErrors(t *testing.T) {
+	statusProvider := evictionPlanStatusFunc(func(_ context.Context, planID string) (eviction.PlanStatus, error) {
+		return eviction.PlanStatus{
+			PlanID: planID,
+			Status: eviction.ApplyStatusEvictedWithValidationFailure,
+			ApplyResult: &eviction.ApplyResult{
+				PlanID: planID,
+				Status: eviction.ApplyStatusEvictedWithValidationFailure,
+				Validations: []eviction.ValidationBlock{{
+					BlockID: 1,
+					ShardID: 7,
+					Status:  eviction.ValidationStatusFailed,
+					Error:   "peer address 10.0.0.1 certificate /home/scrap/cert.pem",
+				}},
+			},
+		}, nil
+	})
+	srv := admin.New(admin.WithEvictionPlanStatusProvider(statusProvider))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/admin/eviction/plans/plan-123", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/eviction/plans/plan-123: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	body := string(data)
+	assertAdminBodyContains(t, body, "sensitive detail redacted")
+	assertAdminBodyNotContains(t, body, "peer address", "10.0.0.1", "certificate", "/home/scrap/cert.pem")
 }
 
 func TestServer_GetEvictionPlanStatusNotFoundReturnsPreconditionFailed(t *testing.T) {
@@ -365,4 +470,24 @@ func postEvictionApplyForAdminTest(baseURL, planID string, body []byte) (*http.R
 		return nil, fmt.Errorf("do apply request: %w", err)
 	}
 	return resp, nil
+}
+
+func assertAdminBodyContains(t *testing.T, body string, wants ...string) {
+	t.Helper()
+
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func assertAdminBodyNotContains(t *testing.T, body string, rejects ...string) {
+	t.Helper()
+
+	for _, reject := range rejects {
+		if strings.Contains(body, reject) {
+			t.Fatalf("response leaked %q:\n%s", reject, body)
+		}
+	}
 }

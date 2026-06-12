@@ -56,6 +56,9 @@ func TestApplyEvictionPlanPreservesIndexMetadataReads(t *testing.T) {
 	s.rebuilder = newProjectionRebuilder(&projectionRebuildCoreStub{}, t.TempDir(), s.blocksDir, s.shardID, UploadConfig{}, nil)
 	content := bytes.Repeat([]byte("metadata after eviction "), 3)
 	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, content)
+	confirmedBefore := confirmedUploadForAssertion(t, s, confirmed.BlockID)
+	backendProbe := &recordingEvictionApplyBackend{delegate: backendStore}
+	s.upload.Backend = backendProbe
 	plan := storeEvictionApplyPlanForConfirmedUploads(t, s, eviction.ReasonEvidenceRun, 0, confirmed)
 
 	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
@@ -65,8 +68,9 @@ func TestApplyEvictionPlanPreservesIndexMetadataReads(t *testing.T) {
 
 	assertEvictionApplyPreservedMetadataResult(t, result, confirmed.BlockObject.SizeBytes)
 	assertBlockEvictedForApply(t, s, confirmed.BlockID)
-	assertEvictionApplyPreservedUploadAuthority(t, s, confirmed.BlockID)
+	assertEvictionApplyPreservedUploadAuthority(t, s, confirmedBefore)
 	assertEvictionApplyPreservedMetadataReads(ctx, t, s, raft, confirmed.BlockID, content)
+	assertEvictionApplyBackendUnused(t, backendProbe)
 }
 
 func assertEvictionApplyPreservedMetadataResult(t *testing.T, result eviction.ApplyResult, wantBytesFreed int64) {
@@ -86,13 +90,17 @@ func assertEvictionApplyPreservedMetadataResult(t *testing.T, result eviction.Ap
 	}
 }
 
-func assertEvictionApplyPreservedUploadAuthority(t *testing.T, s *Shard, blockID uint64) {
+func assertEvictionApplyPreservedUploadAuthority(t *testing.T, s *Shard, want index.ConfirmedUpload) {
 	t.Helper()
 
-	if _, err := s.idx.GetConfirmedUpload(blockID); err != nil {
+	got, err := s.idx.GetConfirmedUpload(want.BlockID)
+	if err != nil {
 		t.Fatalf("GetConfirmedUpload after apply: %v", err)
 	}
-	if _, err := s.idx.GetPendingUpload(blockID); !errors.Is(err, index.ErrPendingUploadNotFound) {
+	if got != want {
+		t.Fatalf("confirmed upload after apply = %+v, want unchanged %+v", got, want)
+	}
+	if _, err := s.idx.GetPendingUpload(want.BlockID); !errors.Is(err, index.ErrPendingUploadNotFound) {
 		t.Fatalf("GetPendingUpload after apply error = %v, want ErrPendingUploadNotFound", err)
 	}
 }
@@ -128,25 +136,39 @@ func assertEvictionApplyPreservedMetadataReads(
 	if _, err := os.Stat(block.FilePath(s.blocksDir, blockID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Block stat after metadata reads = %v, want not exist", err)
 	}
+	if _, err := os.Stat(block.IdxFilePath(s.blocksDir, blockID)); err != nil {
+		t.Fatalf("Block index after metadata reads: %v", err)
+	}
 	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, blockID)); err != nil {
 		t.Fatalf("eviction marker after metadata reads: %v", err)
 	}
 }
 
+func assertEvictionApplyBackendUnused(t *testing.T, backendProbe *recordingEvictionApplyBackend) {
+	t.Helper()
+
+	if backendProbe.heads != 0 || backendProbe.gets != 0 || backendProbe.lists != 0 {
+		t.Fatalf("metadata reads touched Backend: heads=%d gets=%d lists=%d", backendProbe.heads, backendProbe.gets, backendProbe.lists)
+	}
+}
+
 func TestCreateEvictionPlanDoesNotMutateLocalBlockState(t *testing.T) {
 	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
 	s := shardForEvictionApplyTest(t, true)
-	s.raft = &evictionApplyRaftStub{leader: false}
-	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
-	confirmed, err := s.idx.GetConfirmedUpload(1)
-	if err != nil {
-		t.Fatalf("GetConfirmedUpload: %v", err)
-	}
-	blockPath := block.FilePath(s.blocksDir, 1)
-	indexPath := block.IdxFilePath(s.blocksDir, 1)
+	raft := &evictionApplyRaftStub{leader: true}
+	s.raft = raft
+	s.rebuilder = newProjectionRebuilder(&projectionRebuildCoreStub{}, t.TempDir(), s.blocksDir, s.shardID, UploadConfig{}, nil)
+	content := bytes.Repeat([]byte("metadata visible after dry-run "), 2)
+	confirmed := stageReadableHotConfirmedBlockForEvictionApply(ctx, t, s, backendStore, 1, content)
+	confirmedBefore := confirmedUploadForAssertion(t, s, confirmed.BlockID)
+	blockPath := block.FilePath(s.blocksDir, confirmed.BlockID)
+	indexPath := block.IdxFilePath(s.blocksDir, confirmed.BlockID)
 	beforeBlock := readEvictionApplyFile(t, blockPath)
 	beforeIndex := readEvictionApplyFile(t, indexPath)
+	assertEvictionApplyMetadataVisible(ctx, t, s, confirmed.BlockID, content)
 
+	raft.leader = false
 	plan, err := s.CreateEvictionPlan(ctx, eviction.PlanRequest{
 		MemberHostname: "scrapd-2",
 		Reason:         eviction.ReasonEvidenceRun,
@@ -156,7 +178,11 @@ func TestCreateEvictionPlanDoesNotMutateLocalBlockState(t *testing.T) {
 	}
 
 	assertDryRunSelectedConfirmedBlock(t, plan, confirmed)
+	assertDryRunPlanEvidence(t, plan)
 	assertDryRunPreservedLocalBlockFiles(t, s, confirmed.BlockID, blockPath, indexPath, beforeBlock, beforeIndex)
+	assertEvictionApplyPreservedUploadAuthority(t, s, confirmedBefore)
+	raft.leader = true
+	assertEvictionApplyMetadataVisible(ctx, t, s, confirmed.BlockID, content)
 }
 
 func assertDryRunSelectedConfirmedBlock(t *testing.T, plan eviction.Plan, confirmed index.ConfirmedUpload) {
@@ -179,6 +205,75 @@ func assertDryRunSelectedConfirmedBlock(t *testing.T, plan eviction.Plan, confir
 		t.Fatalf("selected local state = %q, want hot", selected.LocalState)
 	}
 	assertDryRunSelectedTiming(t, selected)
+}
+
+func assertDryRunPlanEvidence(t *testing.T, plan eviction.Plan) {
+	t.Helper()
+
+	assertDryRunPlanIdentityEvidence(t, plan)
+	assertDryRunPlanConfigEvidence(t, plan)
+	assertDryRunPlanSelectionEvidence(t, plan)
+	assertDryRunPlanSkipEvidence(t, plan)
+}
+
+func assertDryRunPlanIdentityEvidence(t *testing.T, plan eviction.Plan) {
+	t.Helper()
+
+	if plan.PlanID == "" {
+		t.Fatal("plan ID is empty")
+	}
+	if plan.MemberHostname != "scrapd-2" || plan.MemberID != "member-b" {
+		t.Fatalf("plan member identity = %s/%s, want scrapd-2/member-b", plan.MemberHostname, plan.MemberID)
+	}
+}
+
+func assertDryRunPlanConfigEvidence(t *testing.T, plan eviction.Plan) {
+	t.Helper()
+
+	if plan.Config.PlanTTLSeconds == 0 || plan.Config.RecommendedMaxBlocks == 0 {
+		t.Fatalf("plan config evidence = %+v, want active config snapshot", plan.Config)
+	}
+}
+
+func assertDryRunPlanSelectionEvidence(t *testing.T, plan eviction.Plan) {
+	t.Helper()
+
+	if plan.CandidateBlocks != 1 || plan.EligibleBlocks != 1 || plan.SelectedBytes == 0 {
+		t.Fatalf("plan candidate evidence = %+v, want one selected eligible Block", plan)
+	}
+}
+
+func assertDryRunPlanSkipEvidence(t *testing.T, plan eviction.Plan) {
+	t.Helper()
+
+	if len(plan.Skipped) != 0 || len(plan.SkipCountsByReason) != 0 {
+		t.Fatalf("plan skip evidence = skipped %+v counts %+v, want no skips", plan.Skipped, plan.SkipCountsByReason)
+	}
+}
+
+func assertEvictionApplyMetadataVisible(
+	ctx context.Context,
+	t *testing.T,
+	s *Shard,
+	blockID uint64,
+	content []byte,
+) {
+	t.Helper()
+
+	meta, err := s.HeadDocument(ctx, evictionApplyTxID(blockID), "doc-1.bin")
+	if err != nil {
+		t.Fatalf("HeadDocument: %v", err)
+	}
+	if meta.Size != int64(len(content)) {
+		t.Fatalf("HeadDocument size = %d, want %d", meta.Size, len(content))
+	}
+	docs, err := s.FindDocuments(ctx, evictionApplyTxID(blockID))
+	if err != nil {
+		t.Fatalf("FindDocuments: %v", err)
+	}
+	if len(docs) != 1 || docs[0].Name != "doc-1.bin" {
+		t.Fatalf("FindDocuments = %+v, want doc-1.bin", docs)
+	}
 }
 
 func assertDryRunSelectedTiming(t *testing.T, selected eviction.PlanBlock) {
@@ -1472,6 +1567,36 @@ func shardForEvictionApplyTest(t *testing.T, enabled bool) *Shard {
 	}
 }
 
+type recordingEvictionApplyBackend struct {
+	delegate backend.Backend
+	heads    int
+	gets     int
+	lists    int
+}
+
+func (b *recordingEvictionApplyBackend) PutObject(ctx context.Context, key string, body io.Reader, size int64, opts backend.PutOpts) (backend.PutResult, error) {
+	return b.delegate.PutObject(ctx, key, body, size, opts)
+}
+
+func (b *recordingEvictionApplyBackend) HeadObject(ctx context.Context, key string) (backend.ObjectMeta, error) {
+	b.heads++
+	return b.delegate.HeadObject(ctx, key)
+}
+
+func (b *recordingEvictionApplyBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	b.gets++
+	return b.delegate.GetObject(ctx, key, opts)
+}
+
+func (b *recordingEvictionApplyBackend) DeleteObject(ctx context.Context, key string) error {
+	return b.delegate.DeleteObject(ctx, key)
+}
+
+func (b *recordingEvictionApplyBackend) ListObjects(ctx context.Context, prefix string, opts backend.ListOpts) (backend.ObjectIterator, error) {
+	b.lists++
+	return b.delegate.ListObjects(ctx, prefix, opts)
+}
+
 type recordingEvictionMetrics struct {
 	applySkipCounts map[string]int
 }
@@ -1610,6 +1735,16 @@ func storeEvictionApplyPlanForConfirmedUploads(
 	}
 	storeEvictionPlanForTest(s, plan)
 	return plan
+}
+
+func confirmedUploadForAssertion(t *testing.T, s *Shard, blockID uint64) index.ConfirmedUpload {
+	t.Helper()
+
+	confirmed, err := s.idx.GetConfirmedUpload(blockID)
+	if err != nil {
+		t.Fatalf("GetConfirmedUpload: %v", err)
+	}
+	return confirmed
 }
 
 func evictionApplyPlanBlockForConfirmed(confirmed index.ConfirmedUpload) eviction.PlanBlock {

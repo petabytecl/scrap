@@ -99,6 +99,7 @@ func runEvictionApply(args []string, stdout io.Writer, deps Deps) error {
 	if err != nil {
 		return err
 	}
+	result = eviction.OperatorSafeApplyResult(result)
 	if opts.common.output == "json" {
 		if err := writeJSON(stdout, result); err != nil {
 			return err
@@ -123,6 +124,7 @@ func runEvictionStatus(args []string, stdout io.Writer, deps Deps) error {
 	if err != nil {
 		return err
 	}
+	status = eviction.OperatorSafePlanStatus(status)
 	if opts.common.output == "json" {
 		return writeJSON(stdout, status)
 	}
@@ -222,7 +224,7 @@ func postEvictionPlan(ctx context.Context, opts commonOptions, deps Deps, planRe
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
-		return eviction.Plan{}, fmt.Errorf("POST eviction plan status: %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return eviction.Plan{}, fmt.Errorf("POST eviction plan status: %d: %s", resp.StatusCode, eviction.OperatorSafeErrorText(strings.TrimSpace(string(data))))
 	}
 
 	var plan eviction.Plan
@@ -251,7 +253,7 @@ func postEvictionApply(ctx context.Context, opts commonOptions, deps Deps, planI
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
-		return eviction.ApplyResult{}, fmt.Errorf("POST eviction apply status: %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return eviction.ApplyResult{}, fmt.Errorf("POST eviction apply status: %d: %s", resp.StatusCode, eviction.OperatorSafeErrorText(strings.TrimSpace(string(data))))
 	}
 
 	var result eviction.ApplyResult
@@ -279,7 +281,7 @@ func getEvictionStatus(ctx context.Context, opts commonOptions, deps Deps, planI
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
-		return eviction.PlanStatus{}, fmt.Errorf("GET eviction status: %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return eviction.PlanStatus{}, fmt.Errorf("GET eviction status: %d: %s", resp.StatusCode, eviction.OperatorSafeErrorText(strings.TrimSpace(string(data))))
 	}
 
 	var status eviction.PlanStatus
