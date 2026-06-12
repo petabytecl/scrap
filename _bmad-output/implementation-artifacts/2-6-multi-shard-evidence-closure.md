@@ -4,7 +4,7 @@ baseline_commit: 18a90cd4f14dd6483e081eb5a203b754abfdf86c
 
 # Story 2.6: Multi-Shard Evidence Closure
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -69,6 +69,15 @@ so that Epic 2 cannot close from a happy-path startup demo.
   - [x] Run targeted tests first, then `make manifests-check`, `make package-boundaries`, and `make check`.
   - [x] For runtime evidence, run `make tier2-e2e-up` or the narrowest documented prodlike E2E target that exercises the two-Shard overlay and Backend upload evidence.
   - [x] Record exact commands, results, and artifact paths in this story before review.
+
+### Review Findings
+
+- [x] [Review][Patch] Disable multi-Shard peer scrub cache until peer consistency/rebuild RPCs carry Shard ID [internal/cmd/app.go:426]
+- [x] [Review][Patch] Make non-zero Shard Backend evidence wait for the written Document's backend index and assert Shard ID [test/e2e/multishard_evidence_e2e_test.go:81]
+- [x] [Review][Patch] Capture restart diagnostics after writes and assert health/readiness/leader fields [test/e2e/multishard_evidence_e2e_test.go:38]
+- [x] [Review][Patch] Prove public read/head before and after Backend observation [test/e2e/multishard_evidence_e2e_test.go:81]
+- [x] [Review][Patch] Make encrypted restore CONCERNS explicit and fail real restore regressions [test/e2e/security_evidence_e2e_test.go:85]
+- [x] [Review][Defer] CI runner migration is outside Story 2.6 scope [.github/workflows/ci.yml:21] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -192,7 +201,10 @@ GPT-5 Codex
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/routing ./internal/cmd ./internal/peer ./internal/admin ./internal/scrapctl ./test/e2e -count=1` passed.
 - FAIL/PASS: Initial full `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` exposed `replica block ... is not open` from an extra post-restart canary write; `env GOCACHE=/tmp/scrap-v2-go-build TIER2_E2E_TEST_RUN='TestE2EMultiShardRestartDeterminism' make tier2-e2e` passed after narrowing the test to route/read/diagnostic determinism.
 - FAIL/PASS: Follow-up full `make tier2-e2e-up` exposed security evidence selecting the wrong new Backend pair; `env GOCACHE=/tmp/scrap-v2-go-build TIER2_E2E_TEST_RUN='TestE2EProdlikeSecurityEncryptionEvidence' make tier2-e2e` passed after making Backend index selection Document-aware.
-- PASS: Final `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` passed all Tier 2 prodlike E2E tests, including restart determinism, non-zero Shard Backend upload, light scrub, security evidence, and upload pressure.
+- REVIEW: BMAD code review found 5 patch findings and 1 deferred pre-existing CI runner finding; all patch findings were fixed and checked off in Review Findings.
+- PASS: Review-fix targeted checks passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'TestNewAppRegistersMultiShardTestHooks|TestNewAppPeerServerAuthorizesOnlyValidatedLocalShards' -count=1` and `env GOCACHE=/tmp/scrap-v2-go-build go test ./test/e2e -run 'TestE2ETransactionForShardUsesRoutingPlacement|TestBackendPairsAcceptNonZeroShardPrefixes' -count=1 -v`.
+- FAIL/PASS: Review-fix `env GOCACHE=/tmp/scrap-v2-go-build make check` first failed on `unparam` for a now-constant Backend wait timeout, then passed after removing that parameter.
+- FAIL/PASS: Review-fix `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` first failed because diagnostics health was asserted as `ok` even when bounded Shard health was `degraded` from eviction pressure; final full rerun passed with `TIER2_E2E_STATUS=passed`.
 - PASS: Authority scan `rg -n "BackendKey|ListObjects|HeadObject|GetObject|/shards/|S3|backend object" internal/cmd/public_store_router.go internal/server internal/cmd/app.go internal/cmd/public_store_router_test.go` returned no matches.
 - PASS: Changed-file redaction scan found only expected non-secret matches: env var names, Kubernetes Secret references, and bounded fixture strings.
 - PASS: `git diff --check` passed.
@@ -210,15 +222,17 @@ GPT-5 Codex
 - Extended manifest, E2E gate, and Kind/Cilium checks so the two-Shard placement file and StatefulSet mount are verified by existing gates.
 - Added routing-based E2E helpers for Shard-targeted Transaction selection and dynamic Backend object pair parsing under `{cell_id}/shards/{shard_id}/`.
 - Added deployed multi-Shard restart determinism and non-zero Shard Backend upload evidence, including public read/head proof after restart and Backend observation.
-- Added multi-Shard admin composition adapters for aggregate upload pressure, routed rewrap, routed projection test hook injection, all-local light scrub, and peer scrub-cache lookup.
+- Added multi-Shard admin composition adapters for aggregate upload pressure, routed rewrap, and routed projection test hook injection; peer scrub/rebuild remains fail-closed until the peer wire contract carries Shard ID.
 - Added `_bmad-output/implementation-artifacts/epic-2-multi-shard-evidence.md` with PASS/CONCERNS evidence rows and explicit non-closure of final V2 release readiness.
 - Recorded true multi-Shard rebuild command evidence and restore-first cold-read evidence as CONCERNS instead of claiming PASS; linked follow-up scope to Shard-scoped rebuild work and Epic 3 Stories 3.4/3.7.
-- Verified final local and runtime gates: full Tier 2 prodlike E2E and `make check` both pass.
+- Code review fixed all 5 patch findings and deferred the pre-existing CI runner migration item.
+- Verified final local and runtime gates: full Tier 2 prodlike E2E and `make check` both pass. Tier 2 skips multi-Shard light scrub until peer scrub/rebuild RPCs carry Shard ID.
 
 ### File List
 
 - `Makefile`
 - `_bmad-output/implementation-artifacts/2-6-multi-shard-evidence-closure.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md`
 - `_bmad-output/implementation-artifacts/epic-2-multi-shard-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 - `deploy/kustomize/environments/prodlike-e2e/kustomization.yaml`
@@ -242,3 +256,4 @@ GPT-5 Codex
 - 2026-06-11: Added prodlike-e2e two-Shard placement manifest and gate checks.
 - 2026-06-11: Added multi-Shard E2E helpers, restart determinism evidence, non-zero Shard Backend upload evidence, and admin composition adapters.
 - 2026-06-11: Added Epic 2 evidence closure artifact with PASS/CONCERNS rows and completed final Tier 2 plus local verification gates.
+- 2026-06-11: Addressed code-review findings, kept multi-Shard scrub/rebuild fail-closed, and moved story to done.

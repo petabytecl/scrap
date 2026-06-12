@@ -27,8 +27,6 @@ import (
 	"github.com/petabytecl/scrap/internal/security"
 )
 
-const securityEvidenceTimeout = 2 * time.Minute
-
 type securityEvidenceReport struct {
 	SecurityMode              string `json:"security_mode"`
 	ProductionReadinessStatus string `json:"production_readiness_status"`
@@ -74,7 +72,7 @@ func TestE2EProdlikeSecurityEncryptionEvidence(t *testing.T) {
 	content := bytes.Repeat([]byte{'e'}, uploadBlockPayloadLen)
 	readBack := readDocE2E(t, client, txID, docName)
 
-	pair := waitNewBackendPairForDocument(t, s3Client, before, txID, docName, securityEvidenceTimeout)
+	pair := waitNewBackendPairForDocument(t, s3Client, before, txID, docName)
 	verifyS3ObjectMD5(t, s3Client, pair.blk)
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
 	backendUploadOK := encryptedBackendUploadOK(t, s3Client, pair, txID, docName, content)
@@ -82,9 +80,9 @@ func TestE2EProdlikeSecurityEncryptionEvidence(t *testing.T) {
 	leader := findLeaderPod(t, txID, docName)
 	postTransitRotate(t, leader)
 	rewrapResult := postRewrapDocument(t, leader, txID, docName, 2)
-	restoreOK := encryptedRestoreOK(t, leader, pair.blk.key, txID, docName, content)
+	restoreOK, restoreConcern := encryptedRestoreEvidence(t, leader, pair.blk.key, txID, docName, content)
 
-	report := buildSecurityEvidenceReport(t, health, leader, backendUploadOK, readBack, content, restoreOK, rewrapResult)
+	report := buildSecurityEvidenceReport(t, health, leader, backendUploadOK, readBack, content, restoreOK, restoreConcern, rewrapResult)
 	writeSecurityEvidenceReport(t, report)
 	assertSecurityEvidenceReportComplete(t, report, rewrapResult)
 }
@@ -109,6 +107,7 @@ func buildSecurityEvidenceReport(
 	readBack []byte,
 	content []byte,
 	restoreOK bool,
+	restoreConcern string,
 	rewrapResult rewrap.Result,
 ) securityEvidenceReport {
 	t.Helper()
@@ -124,7 +123,7 @@ func buildSecurityEvidenceReport(
 		EncryptedWriteReadOK:      bytes.Equal(readBack, content),
 		EncryptedBackendUploadOK:  backendUploadOK,
 		EncryptedRestoreOK:        restoreOK,
-		EncryptedRestoreConcern:   encryptedRestoreConcern(restoreOK),
+		EncryptedRestoreConcern:   restoreConcern,
 		RewrapOK:                  securityRewrapChanged(rewrapResult),
 		Phase5EntryBlocked:        health.ProductionReadinessStatus != string(security.ReadinessStatusReady),
 	}
@@ -178,10 +177,9 @@ func waitNewBackendPairForDocument(
 	before map[string]backendObject,
 	txID string,
 	docName string,
-	timeout time.Duration,
 ) backendPair {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(uploadE2ETimeout)
 	for time.Now().Before(deadline) {
 		for _, pair := range collectBackendPairs(listBackendObjects(t, client), before) {
 			if pair.blk.key == "" || pair.idx.key == "" {
@@ -414,29 +412,37 @@ func postRewrapDocument(t *testing.T, pod, txID, docName string, keyVersion int)
 	return result
 }
 
-func encryptedRestoreOK(t *testing.T, leaderPod, freshBackendKey, txID, docName string, want []byte) bool {
+func encryptedRestoreEvidence(t *testing.T, leaderPod, freshBackendKey, txID, docName string, want []byte) (bool, string) {
 	t.Helper()
+	unsupported := false
 	for _, pod := range podNames(t) {
 		if pod == leaderPod {
 			continue
 		}
-		plan, selectedFreshBlock := postSecurityEvictionPlan(t, pod, freshBackendKey)
+		plan, selectedFreshBlock, unsupportedPlan := postSecurityEvictionPlan(t, pod, freshBackendKey)
+		if unsupportedPlan {
+			unsupported = true
+			continue
+		}
 		if !selectedFreshBlock {
 			continue
 		}
 		result := postSecurityEvictionApply(t, pod, plan.PlanID)
 		if result.EvictedBlocks == 0 || result.FailedBlocks != 0 || result.ValidatedBlocks == 0 || result.ValidationFailedBlocks != 0 {
-			return false
+			t.Fatalf("restore apply result = %+v, want successful validation and eviction", result)
 		}
 		addr, stop := startPodPortForward(t, pod, 9090)
 		readBack := readDocE2E(t, newDocumentClientAt(t, addr), txID, docName)
 		stop()
-		return bytes.Equal(readBack, want)
+		if !bytes.Equal(readBack, want) {
+			t.Fatalf("restored Document %s/%s bytes = %d, want %d", txID, docName, len(readBack), len(want))
+		}
+		return true, ""
 	}
-	return false
+	return false, encryptedRestoreConcern(unsupported)
 }
 
-func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (eviction.Plan, bool) {
+func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (eviction.Plan, bool, bool) {
 	t.Helper()
 	addr, stop := startPodPortForward(t, pod, 9100)
 	defer stop()
@@ -466,7 +472,7 @@ func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (evicti
 		t.Fatalf("read eviction plan response: %v", err)
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return eviction.Plan{}, false
+		return eviction.Plan{}, false, true
 	}
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("eviction plan status: got %d, want 201: %s", resp.StatusCode, string(data))
@@ -475,14 +481,14 @@ func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (evicti
 	if err := json.Unmarshal(data, &plan); err != nil {
 		t.Fatalf("decode eviction plan response: %v\n%s", err, data)
 	}
-	return plan, planSelectsBackendKey(plan, freshBackendKey)
+	return plan, planSelectsBackendKey(plan, freshBackendKey), false
 }
 
-func encryptedRestoreConcern(restoreOK bool) string {
-	if restoreOK {
-		return ""
+func encryptedRestoreConcern(unsupported bool) string {
+	if unsupported {
+		return "CONCERNS: restore evidence deferred to Epic 3 Stories 3.4 and 3.7; multi-Shard eviction admin route is not registered in Story 2.6"
 	}
-	return "CONCERNS: restore evidence deferred to Epic 3 Stories 3.4 and 3.7"
+	return "CONCERNS: restore evidence deferred to Epic 3 Stories 3.4 and 3.7; no non-leader selected the fresh Backend Block"
 }
 
 func planSelectsBackendKey(plan eviction.Plan, backendKey string) bool {

@@ -27,6 +27,7 @@ type e2eShardDiagnostic struct {
 	ShardID     uint64   `json:"shard_id"`
 	Membership  string   `json:"membership"`
 	Routes      []string `json:"routes"`
+	State       string   `json:"state"`
 	Health      string   `json:"health"`
 	Readiness   string   `json:"readiness"`
 	LeaderState string   `json:"leader_state"`
@@ -36,9 +37,6 @@ func TestE2EMultiShardRestartDeterminism(t *testing.T) {
 	requireE2E(t)
 
 	placement := e2eTwoShardPlacement(t)
-	beforeDiag := fetchAnyShardDiagnostics(t)
-	assertE2EDiagnosticsCoverTwoShards(t, beforeDiag)
-
 	client := connect(t)
 	tx7 := e2eTransactionForShard(t, placement, "tx-e2e-multishard-seven", 7)
 	tx9 := e2eTransactionForShard(t, placement, "tx-e2e-multishard-nine", 9)
@@ -51,6 +49,8 @@ func TestE2EMultiShardRestartDeterminism(t *testing.T) {
 	writeDocE2E(t, client, tx9, doc9, "text/xml", body9)
 	assertE2ETransactionRoutesToShard(t, placement, tx7, 7)
 	assertE2ETransactionRoutesToShard(t, placement, tx9, 9)
+	beforeDiag := fetchAnyShardDiagnostics(t)
+	assertE2EDiagnosticsCoverTwoShards(t, beforeDiag)
 
 	rolloutRestartScrapdAndWaitReady(t)
 	client = connect(t)
@@ -60,6 +60,7 @@ func TestE2EMultiShardRestartDeterminism(t *testing.T) {
 	assertReadDocumentE2E(t, client, tx7, doc7, body7)
 	assertReadDocumentE2E(t, client, tx9, doc9, body9)
 	afterDiag := fetchAnyShardDiagnostics(t)
+	assertE2EDiagnosticsCoverTwoShards(t, afterDiag)
 	assertShardDiagnosticsStable(t, beforeDiag, afterDiag)
 }
 
@@ -77,12 +78,17 @@ func TestE2EMultiShardBackendUploadUsesNonZeroShard(t *testing.T) {
 	before := listBackendObjects(t, s3Client)
 
 	client := connect(t)
+	payload := bytes.Repeat([]byte{'s'}, uploadBlockPayloadLen)
 	docName := writeUploadBlockE2E(t, client, txID, "upload-seven", 's')
-	pair := waitNewBackendPairForShard(t, s3Client, before, 7, uploadE2ETimeout)
+	assertE2ETransactionRoutesToShard(t, placement, txID, 7)
+	assertReadDocumentE2E(t, client, txID, docName, payload)
+
+	pair := waitNewBackendPairForDocument(t, s3Client, before, txID, docName)
+	assertBackendPairShard(t, pair, 7)
 	verifyS3ObjectMD5(t, s3Client, pair.blk)
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
 	assertE2ETransactionRoutesToShard(t, placement, txID, 7)
-	assertReadDocumentE2E(t, client, txID, docName, bytes.Repeat([]byte{'s'}, uploadBlockPayloadLen))
+	assertReadDocumentE2E(t, client, txID, docName, payload)
 	assertShardDiagnosticsIncludeShard(t, fetchAnyShardDiagnostics(t), 7)
 }
 
@@ -143,6 +149,7 @@ func fetchShardDiagnosticsFromPod(t *testing.T, pod string) (e2eShardDiagnostics
 
 func assertE2EDiagnosticsCoverTwoShards(t *testing.T, diag e2eShardDiagnostics) {
 	t.Helper()
+	assertBoundedShardDiagnosticsStatus(t, diag.Status)
 	got := diagnosticShardIDs(diag)
 	want := []uint64{7, 9}
 	if !reflect.DeepEqual(got, want) {
@@ -155,6 +162,7 @@ func assertE2EDiagnosticsCoverTwoShards(t *testing.T, diag e2eShardDiagnostics) 
 		if len(shard.Routes) == 0 {
 			t.Fatalf("Shard %d routes are empty", shard.ShardID)
 		}
+		assertShardDiagnosticBounded(t, shard)
 	}
 }
 
@@ -168,10 +176,40 @@ func assertShardDiagnosticsIncludeShard(t *testing.T, diag e2eShardDiagnostics, 
 			if len(shard.Routes) == 0 {
 				t.Fatalf("Shard %d routes are empty", shardID)
 			}
+			assertShardDiagnosticBounded(t, shard)
 			return
 		}
 	}
 	t.Fatalf("missing Shard %d in diagnostics: %v", shardID, diagnosticShardIDs(diag))
+}
+
+func assertBoundedShardDiagnosticsStatus(t *testing.T, status string) {
+	t.Helper()
+	switch status {
+	case "ok", "degraded":
+	default:
+		t.Fatalf("shard diagnostics status = %q, want ok or degraded", status)
+	}
+}
+
+func assertShardDiagnosticBounded(t *testing.T, shard e2eShardDiagnostic) {
+	t.Helper()
+	if shard.State != "open" {
+		t.Fatalf("Shard %d state = %q, want open", shard.ShardID, shard.State)
+	}
+	switch shard.Health {
+	case "ok", "degraded":
+	default:
+		t.Fatalf("Shard %d health = %q, want ok or degraded", shard.ShardID, shard.Health)
+	}
+	if shard.Readiness != "ready" {
+		t.Fatalf("Shard %d readiness = %q, want ready", shard.ShardID, shard.Readiness)
+	}
+	switch shard.LeaderState {
+	case "leader", "follower":
+	default:
+		t.Fatalf("Shard %d leader_state = %q, want leader or follower", shard.ShardID, shard.LeaderState)
+	}
 }
 
 func assertShardDiagnosticsStable(t *testing.T, before, after e2eShardDiagnostics) {

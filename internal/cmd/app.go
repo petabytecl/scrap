@@ -13,7 +13,6 @@ import (
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/rewrap"
-	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
@@ -257,7 +256,11 @@ func appendTestHookAdminOptions(opts []admin.Option, cfg Config, adapter appShar
 		return opts
 	}
 	opts = append(opts, admin.WithProjectionInjector(adapter))
-	opts = append(opts, admin.WithLightScrubber(adapter))
+	// Peer scrub/rebuild RPCs do not carry Shard ID yet, so light scrub is
+	// exposed only where the single local Shard is unambiguous.
+	if adapter.topology.SingleShardFallback {
+		opts = append(opts, admin.WithLightScrubber(adapter))
+	}
 	if rotator, ok := transit.(interface{ Rotate() }); ok {
 		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
 	}
@@ -415,6 +418,8 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 		peer.WithBlockDirResolver(shards),
 		peer.WithAuthorizedShards(shards.IDs()...),
 	}
+	// Consistency and rebuild RPCs do not carry Shard ID yet, so they are
+	// fail-closed for multi-Shard placements.
 	if topology.SingleShardFallback {
 		if localShard, ok := shards.singleShard(); ok {
 			peerOpts = append(peerOpts,
@@ -422,8 +427,6 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 				peer.WithRebuildHandler(localShard),
 			)
 		}
-	} else {
-		peerOpts = append(peerOpts, peer.WithScrubCache(appShardSetScrubCache{shards: shards}))
 	}
 	if securityRuntime.authorizer != nil {
 		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{
@@ -442,24 +445,6 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 		peerOpts = append(peerOpts, peer.WithAuthorizationObserver(securityRuntime.authorizationObserver))
 	}
 	return peer.NewServer(cfg.DataDir+"/blocks", peerOpts...)
-}
-
-type appShardSetScrubCache struct {
-	shards *shardSet
-}
-
-func (c appShardSetScrubCache) GetScrubResult(scrubID string) (scrub.Result, bool) {
-	for _, shardID := range c.shards.IDs() {
-		localShard, ok := c.shards.shards[shardID]
-		if !ok || localShard == nil {
-			continue
-		}
-		result, ok := localShard.GetScrubResult(scrubID)
-		if ok {
-			return result, true
-		}
-	}
-	return scrub.Result{}, false
 }
 
 func logIdentifierMode(ctx context.Context, logger *slog.Logger, cfg Config, identifierMode telemetry.IdentifierMode) {

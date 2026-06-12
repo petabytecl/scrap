@@ -51,7 +51,7 @@ func TestE2EBackendUploadHappyPath(t *testing.T) {
 	txID := uniqueName("tx-e2e-upload-happy")
 	docName := writeUploadBlockE2E(t, client, txID, "happy", 'h')
 
-	pair := waitNewBackendPair(t, s3Client, before, uploadE2ETimeout)
+	pair := waitNewBackendPairForDocument(t, s3Client, before, txID, docName)
 	verifyS3ObjectMD5(t, s3Client, pair.blk)
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
 
@@ -87,7 +87,7 @@ func TestE2EBackendUploadLeaderChange(t *testing.T) {
 	s3Client = newE2ES3Client(t, "http://"+endpoint)
 	ensureE2ES3Bucket(t, s3Client)
 
-	pair := waitNewBackendPair(t, s3Client, before, uploadE2ETimeout)
+	pair := waitNewBackendPairForDocument(t, s3Client, before, txID, docName)
 	verifyS3ObjectMD5(t, s3Client, pair.blk)
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
 
@@ -332,54 +332,6 @@ func e2eBackendObjectKey(shardID, blockID uint64, ext string) string {
 	return fmt.Sprintf("%s%016x/%016x.%s", e2eS3ObjectPrefix(), shardID, blockID, ext)
 }
 
-func waitNewBackendPair(t *testing.T, client *awss3.Client, before map[string]backendObject, timeout time.Duration) backendPair {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if pair, ok := firstCompleteBackendPair(listBackendObjects(t, client), before); ok {
-			return pair
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatal("timed out waiting for uploaded .blk/.idx backend pair")
-	return backendPair{}
-}
-
-func waitNewBackendPairForShard(t *testing.T, client *awss3.Client, before map[string]backendObject, shardID uint64, timeout time.Duration) backendPair {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if pair, ok := firstCompleteBackendPairForShard(listBackendObjects(t, client), before, shardID); ok {
-			return pair
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("timed out waiting for uploaded .blk/.idx backend pair for Shard %d", shardID)
-	return backendPair{}
-}
-
-func firstCompleteBackendPair(objects, before map[string]backendObject) (backendPair, bool) {
-	for _, pair := range collectBackendPairs(objects, before) {
-		if pair.blk.key != "" && pair.idx.key != "" {
-			return pair, true
-		}
-	}
-	return backendPair{}, false
-}
-
-func firstCompleteBackendPairForShard(objects, before map[string]backendObject, shardID uint64) (backendPair, bool) {
-	for _, pair := range collectBackendPairs(objects, before) {
-		if pair.blk.key == "" || pair.idx.key == "" {
-			continue
-		}
-		parsed, ok := parseBackendObjectKey(pair.blk.key)
-		if ok && parsed.shardID == shardID {
-			return pair, true
-		}
-	}
-	return backendPair{}, false
-}
-
 func collectBackendPairs(objects, before map[string]backendObject) map[string]backendPair {
 	pairs := make(map[string]backendPair)
 	for key, object := range objects {
@@ -477,6 +429,24 @@ func backendPairShardIDs(pairs map[string]backendPair) []uint64 {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
+}
+
+func assertBackendPairShard(t *testing.T, pair backendPair, want uint64) {
+	t.Helper()
+	parsedBlock, ok := parseBackendObjectKey(pair.blk.key)
+	if !ok {
+		t.Fatalf("backend Block key %q is not an ADR 0009 key", pair.blk.key)
+	}
+	parsedIndex, ok := parseBackendObjectKey(pair.idx.key)
+	if !ok {
+		t.Fatalf("backend index key %q is not an ADR 0009 key", pair.idx.key)
+	}
+	if parsedBlock.shardID != want || parsedIndex.shardID != want {
+		t.Fatalf("backend pair Shard IDs = %d/%d, want %d", parsedBlock.shardID, parsedIndex.shardID, want)
+	}
+	if parsedBlock.base != parsedIndex.base {
+		t.Fatalf("backend pair base = %q/%q, want matching Block and index", parsedBlock.base, parsedIndex.base)
+	}
 }
 
 func e2eTwoShardPlacement(t *testing.T) routing.Placement {

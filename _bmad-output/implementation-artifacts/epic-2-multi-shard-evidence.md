@@ -12,7 +12,7 @@ Result: `CONCERNS`
 
 Epic 2 has current passing evidence for deterministic routing, invalid startup failure, wrong-Shard peer denial, Shard-aware diagnostics, restart behavior, non-zero Shard Backend upload, and redaction/authority-boundary checks. The remaining concerns are intentionally outside this story's implementation scope:
 
-- True multi-Shard rebuild command evidence is still missing because peer `RequestIndexRebuild` has no Shard-scoped request identity. Restart determinism and light-scrub mismatch evidence pass.
+- True multi-Shard rebuild command evidence is still missing because peer scrub/rebuild RPCs have no Shard-scoped request identity. Restart determinism passes; multi-Shard light scrub is intentionally disabled until that wire contract is Shard-scoped.
 - Restore-first cold reads remain Epic 3 scope. Current security evidence records this as an encrypted restore concern instead of a false PASS.
 
 ## Evidence Matrix
@@ -21,7 +21,7 @@ Epic 2 has current passing evidence for deterministic routing, invalid startup f
 | --- | --- | --- | --- | --- | --- | --- |
 | AC-2.6.1 | 2.1, 2.3, 2.6 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./test/e2e -run 'TestE2ETransactionForShardUsesRoutingPlacement|TestBackendPairsAcceptNonZeroShardPrefixes' -count=1` | `test/e2e/upload_e2e_test.go` | this change set | `PASS` | None. |
 | AC-2.6.1 | 2.6 | `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` | `test/e2e/multishard_evidence_e2e_test.go` (`TestE2EMultiShardRestartDeterminism`) | this change set | `PASS` | None for restart determinism. |
-| AC-2.6.1, AC-2.6.3 | 2.6 | `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` | `test/e2e/scrub_e2e_test.go` (`TestE2ELightScrubDetectsProjectionDivergence`), `internal/cmd/app_test.go` (`TestNewAppPeerServerAuthorizesOnlyValidatedLocalShards`) | this change set | `CONCERNS` | Add Shard-scoped rebuild request/command before claiming true multi-Shard rebuild PASS. |
+| AC-2.6.1, AC-2.6.3 | 2.6 | `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` | `test/e2e/scrub_e2e_test.go` (`TestE2ELightScrubDetectsProjectionDivergence` skips in multi-Shard), `internal/cmd/app_test.go` (`TestNewAppPeerServerAuthorizesOnlyValidatedLocalShards`) | this change set | `CONCERNS` | Add Shard-scoped scrub/rebuild requests before claiming true multi-Shard rebuild PASS. |
 | AC-2.6.2 | 2.6 | `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` | `test/e2e/multishard_evidence_e2e_test.go` (`TestE2EMultiShardBackendUploadUsesNonZeroShard`) | this change set | `PASS` | None. |
 | AC-2.6.2 | 2.6 | `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` | `test/e2e/security_evidence_e2e_test.go`, `artifacts/prodlike-security/security-evidence.json` | this change set | `CONCERNS` | Complete Epic 3 Stories 3.4 and 3.7 before restore-first cold-read PASS. |
 | AC-2.6.3 | 2.1, 2.2 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/routing ./internal/cmd -count=1` | `internal/routing`, `internal/cmd/routing_config_test.go`, `internal/cmd/app_test.go` | this change set | `PASS` | None. |
@@ -45,6 +45,6 @@ Public API calls still route by Transaction through `internal/routing` and the c
 ## Closure Notes
 
 - `TestE2EMultiShardRestartDeterminism` writes Documents for Shards `7` and `9`, restarts the `scrapd` StatefulSet, then verifies both Transactions still route to their owning Shards and remain readable.
-- `TestE2EMultiShardBackendUploadUsesNonZeroShard` writes and uploads a sealed Block on Shard `7`, verifies the uploaded `.blk` and `.idx` pair, and reads through the public API without parsing Backend keys for routing.
-- `TestE2EProdlikeSecurityEncryptionEvidence` now waits for the Backend index pair containing the encrypted Document under test and records restore as `CONCERNS` when restore-first cold read evidence is unavailable.
-- Multi-Shard admin composition now exposes aggregate upload pressure and routed rewrap/test-hook operations. Eviction plan/apply routes remain single-Shard-only until Shard-scoped operator workflows exist.
+- `TestE2EMultiShardBackendUploadUsesNonZeroShard` writes and uploads a sealed Block on Shard `7`, verifies the uploaded `.blk` and `.idx` pair containing the written Document, and reads through the public API before and after Backend observation without parsing Backend keys for routing.
+- `TestE2EProdlikeSecurityEncryptionEvidence` now waits for the Backend index pair containing the encrypted Document under test and records restore as `CONCERNS` only for explicit out-of-scope restore evidence; selected restore regressions fail the test.
+- Multi-Shard admin composition now exposes aggregate upload pressure and routed rewrap/projection test-hook operations. Light scrub, rebuild, and eviction plan/apply routes remain single-Shard-only until Shard-scoped operator workflows exist.

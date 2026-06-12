@@ -158,7 +158,7 @@ func TestNewAppRegistersMultiShardTestHooks(t *testing.T) {
 		}
 	})
 
-	assertAdminPostStatus(t, app, "/test-hooks/light-scrub", `{}`, http.StatusNoContent)
+	assertAdminPostStatus(t, app, "/test-hooks/light-scrub", `{}`, http.StatusNotFound)
 	assertAdminPostStatus(t, app, "/test-hooks/transit-rotate", `{}`, http.StatusNoContent)
 	assertAdminPostStatus(t, app, "/test-hooks/projection-key", `{
 		"transaction_id": "tx-multishard-hook",
@@ -267,8 +267,8 @@ func assertAppPeerNoShardRPCsFailClosed(ctx context.Context, t *testing.T, app *
 	if _, err := app.peerSrv.RequestIndexRebuild(ctx, &scrapv1.RequestIndexRebuildRequest{}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("RequestIndexRebuild in multi-Shard placement = %v (%s), want failed precondition", err, status.Code(err))
 	}
-	if _, err := app.peerSrv.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{ScrubId: "scrub-secret"}); status.Code(err) != codes.NotFound {
-		t.Fatalf("ConsistencyCheck in multi-Shard placement = %v (%s), want not found", err, status.Code(err))
+	if _, err := app.peerSrv.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{ScrubId: "scrub-secret"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ConsistencyCheck in multi-Shard placement = %v (%s), want failed precondition", err, status.Code(err))
 	}
 }
 
