@@ -20,15 +20,16 @@ failure domain from Epics 1 and 2. FR-3 and FR-16 apply.
 
 ```sh
 scrapctl status --admin-url <admin-url> --output=json
-scrapctl evidence bundle pressure --admin-url <admin-url> \
-  --bundle-dir evidence/runbooks/block-quarantine
+scrapctl evidence bundle --admin-url <admin-url> \
+  --bundle-dir evidence/runbooks/block-quarantine pressure
 ```
 
-For controlled non-production exercises only:
+For controlled non-production or prod-like rehearsal Cells only:
 
 ```sh
-scrapctl fault block corrupt --context <kube-context> \
-  --environment prodlike --confirm <cell-id>
+scrapctl fault block corrupt --namespace scrap --context <kube-context> \
+  --cell-id <cell-id> --environment prodlike --confirm <cell-id> \
+  --pod <pod>
 ```
 
 ## Failure Path

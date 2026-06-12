@@ -21,8 +21,8 @@ FR-16 covers current linked evidence, runbooks, final gate status, and issue
 ## Normal Path
 
 ```sh
-scrapctl evidence bundle throughput --admin-url <admin-url> \
-  --bundle-dir evidence/runbooks/release
+scrapctl evidence bundle --admin-url <admin-url> \
+  --bundle-dir evidence/runbooks/release throughput
 make tier2-e2e-up
 make tier3-evidence-up STRESS_SCENARIO=throughput
 make production-rehearsal-security
@@ -46,9 +46,11 @@ make production-rehearsal
 
 ## Rollback or Escalation
 
-Evidence collection should not mutate production storage state. Roll back only
-the evidence environment or rehearsal deployment. Escalate missing required
-release evidence to the release owner.
+Passive `scrapctl evidence bundle` collection should not mutate production
+storage state. Tier 2, Tier 3, and production rehearsal targets create or
+exercise dedicated evidence environments; after a failed run, clean up that
+environment or rehearsal deployment and preserve the failing artifact summary.
+Escalate missing required release evidence to the release owner.
 
 ## Expected Outputs
 
@@ -67,8 +69,9 @@ owner.
 ## Redaction Requirements
 
 Do not paste credential values, private key material, generated certificates,
-Document payloads, Backend object names, raw dependency output, trace IDs,
-request IDs, auth claims, or runtime logs into public issues or pull requests.
+Document payloads, Backend object names, unredacted dependency output, trace
+IDs, request IDs, auth claims, or unredacted logs into public issues or pull
+requests.
 
 ## Authority Boundary
 

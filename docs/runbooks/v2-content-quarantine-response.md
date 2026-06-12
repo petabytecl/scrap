@@ -38,6 +38,11 @@ scrapctl quarantine confirm --admin-url <admin-url> \
 
 Release a false positive only with the required break-glass authorization:
 
+1. Record the private break-glass approval reference and authorized admin role.
+2. Re-run `inspect` and confirm the redacted Transaction and Document
+   placeholders match the approval.
+3. Run release only if the approval, admin role, and inspected target match.
+
 ```sh
 scrapctl quarantine release --admin-url <admin-url> \
   --transaction-id <redacted-transaction> \
@@ -69,7 +74,9 @@ admin failures to the content-safety owner.
 ## Evidence Collection
 
 Record command lines with placeholders, evidence artifact path, commit/ref,
-environment, expected and actual outcomes, admin role used, and redaction proof.
+environment, expected and actual outcomes, admin role used, private approval
+reference, and redaction proof. Do not paste authorization claims or approval
+contents into public artifacts.
 
 ## Redaction Requirements
 

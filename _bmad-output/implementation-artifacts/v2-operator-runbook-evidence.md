@@ -44,13 +44,13 @@ requirements, authority-boundary note, and references.
 | `docs/runbooks/v2-startup-security-readiness.md` | Epic 4, FR-9, FR-16 | `scrapctl doctor`, `scrapctl status`, `make production-rehearsal-security` are implemented | Does not treat readiness as storage authority | Placeholder-only examples | Runnable from `scrapctl` and make targets | PASS |
 | `docs/runbooks/v2-mtls-certificate-rotation.md` | Epic 4, production rehearsal docs | `kubectl rollout status`, `scrapctl status`, `make production-rehearsal-security` are implemented surfaces | Certificate validity is not Shard/storage authority | No credential values or cert material | Restart/roll rotation only; hot reload out of scope | PASS |
 | `docs/runbooks/v2-openbao-transit-dependency.md` | Epic 4, FR-10, FR-14 | `scrapctl openbao bootstrap`, `make production-rehearsal-security` are implemented | OpenBao owns dependency proof, not storage authority | Credential placeholders only | Local/prod-like bootstrap and fail-closed production dependency are documented | PASS |
-| `docs/runbooks/v2-backend-upload-pressure.md` | Epic 3, FR-6 | `scrapctl upload-pressure`, `status`, `evidence bundle`, `fault backend break|restore` are implemented | Does not use Backend listings as upload authority | No object names or dependency output | Pressure diagnosis and controlled non-production fault exercise documented | PASS |
-| `docs/runbooks/v2-restore-failures.md` | Epic 3, FR-7, FR-8, ADR 0027 | `scrapctl status`, `upload-pressure`, `evidence bundle`, `fault backend break|restore`, `make e2e-up` are implemented surfaces | Restore follows committed metadata and full-Block verification | No Document or Backend object names | Cold-read and Backend restore workflow documented with scoped proof caveat | PASS |
+| `docs/runbooks/v2-backend-upload-pressure.md` | Epic 3, FR-6 | `scrapctl upload-pressure`, `status`, `evidence bundle`, and `fault backend break|restore` examples match implemented parser contracts | Does not use Backend listings as upload authority | No object names or dependency output | Pressure diagnosis and controlled non-production fault exercise documented | PASS |
+| `docs/runbooks/v2-restore-failures.md` | Epic 3, FR-7, FR-8, ADR 0027 | `scrapctl status`, `upload-pressure`, `evidence bundle`, `fault backend break|restore`, and `make e2e-up` are implemented surfaces | Restore follows committed metadata and full-Block verification | No Document or Backend object names | Cold-read and Backend restore workflow documented with scoped proof caveat | PASS |
 | `docs/runbooks/v2-eviction-campaigns.md` | Epic 3, FR-7 | `scrapctl eviction plan|apply|status` are implemented | Local Block Lifecycle remains scoped filesystem evidence | Plan placeholders only | Plan, apply, status, and post-eviction restore escalation documented | PASS |
-| `docs/runbooks/v2-block-quarantine-repair.md` | Epics 1-2, FR-3 | `scrapctl status`, `evidence bundle`, `fault block corrupt` are implemented surfaces | Block Quarantine remains filesystem-level isolation, not Content Quarantine | No file paths or object names | Repair response is automatic/peer-transfer oriented with escalation if not converging | PASS |
+| `docs/runbooks/v2-block-quarantine-repair.md` | Epics 1-2, FR-3 | `scrapctl status`, `evidence bundle`, and `fault block corrupt` examples match implemented parser contracts | Block Quarantine remains filesystem-level isolation, not Content Quarantine | No file paths or object names | Repair response is automatic/peer-transfer oriented with escalation if not converging | PASS |
 | `docs/runbooks/v2-content-quarantine-response.md` | Epic 5, FR-11, FR-12, ADR 0025 | `scrapctl quarantine list|inspect|confirm|release|evidence` are implemented | Content Quarantine is metadata-level Document gate | Redacted identity placeholders | Admin and `scrapctl` workflow independently runnable | PASS |
 | `docs/runbooks/v2-multi-shard-routing-health.md` | Epic 2, FR-5, ADR 0026 | `scrapctl status`, `peers`, `leader`, `doctor`, `make tier2-e2e-up` are implemented surfaces | Shard ownership is not inferred from local/network/cert presence | No sensitive peer addresses | Multi-Shard health and non-zero Shard proof path documented | PASS |
-| `docs/runbooks/v2-evidence-collection.md` | Epic 6, FR-15, FR-16 | `scrapctl evidence bundle`, `make tier2-e2e-up`, `make tier3-evidence-up`, production rehearsal targets are implemented | Evidence is explicitly not storage authority | Public tracker redaction rules included | Release evidence collection runnable while final closure remains out of scope | PASS |
+| `docs/runbooks/v2-evidence-collection.md` | Epic 6, FR-15, FR-16 | `scrapctl evidence bundle`, `make tier2-e2e-up`, `make tier3-evidence-up`, and production rehearsal target examples match implemented parser/target contracts | Evidence is explicitly not storage authority | Public tracker redaction rules included | Release evidence collection runnable while final closure remains out of scope | PASS |
 
 ## Command Validation
 
@@ -61,9 +61,12 @@ requirements, authority-boundary note, and references.
 | `internal/scrapctl/openbao.go` | PASS | Implements `openbao bootstrap` and redacted evidence output |
 | `internal/scrapctl/quarantine.go` | PASS | Implements `list`, `inspect`, `confirm`, `release`, `evidence` |
 | `internal/scrapctl/eviction.go` | PASS | Implements `plan`, `apply`, `status` |
-| `internal/scrapctl/evidence.go` | PASS | Implements `bundle`, `log-probe`, `pprof` |
-| `internal/scrapctl/fault.go` | PASS | Implements `backend break|restore`, `leader delete`, `projection inject`, `block corrupt` |
+| `internal/scrapctl/evidence.go` | PASS | Implements `bundle`, `log-probe`, `pprof`; `bundle` parses flags before the optional scenario |
+| `internal/scrapctl/fault.go` | PASS | Implements `backend break|restore`, `leader delete`, `projection inject`, `block corrupt`; fault commands require explicit target and safety flags |
 | `Makefile` | PASS | Contains production rehearsal, Tier 2, Tier 3, evidence, prod-like, and local-dev targets referenced by runbooks |
+| `Makefile` `e2e-up` target | PASS | `rg -n "^e2e-up:" Makefile` confirms the restore runbook target exists |
+| Documented `scrapctl evidence bundle` examples | PASS | Every runbook example puts flags before the optional scenario argument |
+| Documented `scrapctl fault` examples | PASS | Backend examples include `--namespace`, explicit context, `--cell-id`, matching `--confirm`, and environment; Block corruption also includes `--pod` |
 
 ## Authority-Boundary Review
 
@@ -81,7 +84,7 @@ requirements, authority-boundary note, and references.
 | --- | --- |
 | Runbook command examples | PASS: placeholder values only |
 | Evidence artifact | PASS: no credential values, private key material, generated cert material, Document payloads, Backend object names, unredacted dependency output, request IDs, trace IDs, or auth claims |
-| Runtime artifacts | PASS: docs instruct operators to keep runtime reports under ignored `artifacts/` or `evidence/` paths and attach sanitized summaries |
+| Runtime artifacts | PASS: docs distinguish safe repo-relative artifact paths from forbidden host-absolute paths, raw contents, logs, credentials, generated key/cert material, and unredacted dependency output |
 
 False-positive scan classification:
 
@@ -97,6 +100,9 @@ False-positive scan classification:
 | `go run ./cmd/scrapctl --help` | local checkout, branch `v2`, baseline `cb5bfbf` | PASS | Validated top-level command list before writing runbooks |
 | `rg -n "usage:|case \"" internal/scrapctl` | local checkout | PASS | Validated documented subcommands against source |
 | `rg -n "production-rehearsal|tier2-e2e-up|tier3-evidence-up|evidence-bundle|local-dev-status" Makefile docs scripts` | local checkout | PASS | Validated referenced make targets and docs |
+| `rg -n "^e2e-up:" Makefile` | local checkout | PASS | Validated the restore runbook `make e2e-up` target |
+| Source review of `internal/scrapctl/evidence.go` with runbook examples | local checkout | PASS | Documented `scrapctl evidence bundle` examples place scenario after flags |
+| Source review of `internal/scrapctl/fault.go` with runbook examples | local checkout | PASS | Documented fault examples include required target and safety flags |
 | `git diff --check` | local checkout | PASS | No whitespace errors |
 | `make proto-check` | local checkout | PASS | Buf lint/generate left `gen/` clean |
 | `scripts/check-e2e-gates.sh` | local checkout | PASS | E2E gate wiring checks passed |

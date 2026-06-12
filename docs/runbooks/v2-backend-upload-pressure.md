@@ -21,17 +21,18 @@ Upload Catalog behavior. FR-6 and FR-16 cover evidence requirements.
 ```sh
 scrapctl upload-pressure --admin-url <admin-url> --output=json
 scrapctl status --admin-url <admin-url> --output=json
-scrapctl evidence bundle pressure --admin-url <admin-url> \
-  --bundle-dir evidence/runbooks/upload-pressure
+scrapctl evidence bundle --admin-url <admin-url> \
+  --bundle-dir evidence/runbooks/upload-pressure pressure
 ```
 
-If running a controlled rehearsal, use the implemented fault surface:
+For controlled non-production or prod-like rehearsal Cells only, use the
+implemented fault surface with explicit target and Cell confirmation:
 
 ```sh
-scrapctl fault backend break --context <kube-context> \
-  --environment prodlike --confirm <cell-id>
-scrapctl fault backend restore --context <kube-context> \
-  --environment prodlike --confirm <cell-id>
+scrapctl fault backend break --namespace scrap --context <kube-context> \
+  --cell-id <cell-id> --environment prodlike --confirm <cell-id>
+scrapctl fault backend restore --namespace scrap --context <kube-context> \
+  --cell-id <cell-id> --environment prodlike --confirm <cell-id>
 ```
 
 ## Failure Path
@@ -64,8 +65,9 @@ proof.
 ## Redaction Requirements
 
 Do not paste credential values, Backend object names, Document payloads,
-unredacted log output, trace IDs, request IDs, auth claims, or local runtime
-paths.
+unredacted log output, trace IDs, request IDs, auth claims, or host-absolute
+paths from local machines. Sanitized repo-relative artifact paths such as
+`evidence/runbooks/upload-pressure` are allowed as evidence references.
 
 ## Authority Boundary
 

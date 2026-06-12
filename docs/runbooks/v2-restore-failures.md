@@ -22,18 +22,18 @@ compatible restore evidence. FR-7, FR-8, ADR 0027, and FR-16 apply.
 ```sh
 scrapctl status --admin-url <admin-url> --output=json
 scrapctl upload-pressure --admin-url <admin-url> --output=json
-scrapctl evidence bundle pressure --admin-url <admin-url> \
-  --bundle-dir evidence/runbooks/restore
+scrapctl evidence bundle --admin-url <admin-url> \
+  --bundle-dir evidence/runbooks/restore pressure
 make e2e-up
 ```
 
-For controlled non-production exercises only:
+For controlled non-production or prod-like rehearsal Cells only:
 
 ```sh
-scrapctl fault backend break --context <kube-context> \
-  --environment prodlike --confirm <cell-id>
-scrapctl fault backend restore --context <kube-context> \
-  --environment prodlike --confirm <cell-id>
+scrapctl fault backend break --namespace scrap --context <kube-context> \
+  --cell-id <cell-id> --environment prodlike --confirm <cell-id>
+scrapctl fault backend restore --namespace scrap --context <kube-context> \
+  --cell-id <cell-id> --environment prodlike --confirm <cell-id>
 ```
 
 ## Failure Path
@@ -67,8 +67,9 @@ Link Epic 3 closure artifacts when using existing package/local proof.
 ## Redaction Requirements
 
 Do not paste Document payloads, Document names, Backend object names, credential
-values, raw dependency output, trace IDs, request IDs, auth claims, or local
-runtime paths.
+values, unredacted dependency output, trace IDs, request IDs, auth claims, or
+host-absolute paths from local machines. Sanitized repo-relative artifact paths
+such as `evidence/runbooks/restore` are allowed as evidence references.
 
 ## Authority Boundary
 

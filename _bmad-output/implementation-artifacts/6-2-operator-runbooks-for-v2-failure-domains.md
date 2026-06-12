@@ -4,7 +4,7 @@ baseline_commit: 12fe6d7e498e406ef0a5aabc7d9125310a2d664a
 
 # Story 6.2: Operator Runbooks for V2 Failure Domains
 
-Status: review
+Status: done
 
 ## Story
 
@@ -74,6 +74,17 @@ from source code.
   - [x] Run command-surface validation for all documented commands and record it in `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md`.
   - [x] Run redaction and authority-boundary scans over `docs/runbooks/`, this story, and the evidence artifact.
   - [x] Update this story's Dev Agent Record and move the story to `review`; leave `done` for BMAD code review.
+
+### Review Findings
+
+- [x] [Review][Patch] Evidence artifact overclaimed command validation; exact documented `scrapctl evidence bundle` and fault examples now match implemented parsers.
+- [x] [Review][Patch] `make e2e-up` was referenced without target-specific validation; evidence now records the target check.
+- [x] [Review][Patch] Controlled Backend fault commands were not clearly scoped to non-production/prod-like rehearsal Cells; runbooks now state the scope and required target confirmation.
+- [x] [Review][Patch] Redaction rules blurred safe repo-relative artifact paths with forbidden host runtime paths; README and affected runbooks now distinguish them.
+- [x] [Review][Patch] Evidence collection mixed passive bundle collection with environment-mutating gates; rollback text now separates passive collection from Tier/rehearsal environment cleanup.
+- [x] [Review][Patch] Content Quarantine release lacked an explicit break-glass authorization pre-check; the runbook now requires approval reference, admin role, and target match before release.
+- [x] [Review][Patch] Fault command examples omitted required `--namespace`, `--cell-id`, matching `--confirm`, and Block `--pod`; examples now include required parser flags.
+- [x] [Review][Patch] Evidence-bundle examples placed the scenario before flags; examples now place the scenario after flags.
 
 ## Dev Notes
 
@@ -219,6 +230,7 @@ Classify every match as either a required warning, a safe placeholder, or a bug 
 - 2026-06-12T18:20:00-04:00 - Story context created from Epic 6, FR-16, DG-5, Story 6.1 review lessons, closure policy, production rehearsal docs, OpenBao deployment contract, implemented `scrapctl` command surfaces, Makefile gates, repo context, and quick external runbook research.
 - 2026-06-12T18:25:26-04:00 - Dev-story started from implementation baseline `cb5bfbf075e2b8de22217098ce7c7844677b09a3`; Story 6.2 and sprint status moved to in-progress.
 - 2026-06-12T18:30:43-04:00 - Created `docs/runbooks/` with ten V2 operator runbooks plus index, created `v2-operator-runbook-evidence.md`, validated commands, classified redaction/authority scan matches, and passed all required gates.
+- 2026-06-12T18:43:03-04:00 - Addressed BMAD code-review findings for exact evidence/fault command syntax, `make e2e-up` validation, non-production fault scope, redaction path distinctions, passive-vs-mutating evidence gates, and break-glass Content Quarantine release checks.
 
 ### Completion Notes List
 
@@ -226,6 +238,7 @@ Classify every match as either a required warning, a safe placeholder, or a bug 
 - Added `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md` with per-runbook checklist coverage, command validation, authority review, redaction review, false-positive classification, and remaining release scope.
 - Story 6.2 stayed documentation/evidence scoped: no production code, protobuf, deployment manifest, ADR, alert/query, release bundle, Tier gate, S3/IAM, or closure-policy behavior changed.
 - Verification passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, command-surface validation, redaction/authority scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- BMAD code-review findings were resolved in the runbooks and evidence artifact; Story 6.2 is complete and remains scoped to documentation/evidence corrections only.
 
 ### File List
 
@@ -249,3 +262,4 @@ Classify every match as either a required warning, a safe placeholder, or a bug 
 - 2026-06-12 - Created Story 6.2 context for V2 operator runbooks.
 - 2026-06-12 - Started Story 6.2 implementation.
 - 2026-06-12 - Implemented V2 operator runbooks and moved Story 6.2 to review.
+- 2026-06-12 - Addressed Story 6.2 BMAD code-review findings and moved Story 6.2 to done.

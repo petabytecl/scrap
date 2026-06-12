@@ -9,6 +9,11 @@ object listings, local member files, audit records, or telemetry as storage
 authority. Storage behavior follows committed Shard state and the documented
 feature-specific authority path.
 
+Repo-relative artifact paths such as `evidence/runbooks/...` are safe to cite
+after redaction review. Do not paste host-absolute paths from local machines,
+raw artifact contents, logs, credentials, generated key or certificate material,
+or unredacted dependency output.
+
 | Runbook | Owning source | Primary commands |
 | --- | --- | --- |
 | [Startup/security readiness](v2-startup-security-readiness.md) | Epic 4, FR-9, FR-16 | `scrapctl doctor`, `scrapctl status`, `make production-rehearsal-security` |

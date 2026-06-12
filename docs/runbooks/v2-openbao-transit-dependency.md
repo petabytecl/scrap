@@ -65,8 +65,9 @@ commit/ref, environment, expected and actual outcomes, and redaction status.
 ## Redaction Requirements
 
 Do not paste OpenBao credentials, unseal material, private key material,
-generated certificates, wrapped-key ciphertext, raw dependency output, Document
-payloads, Backend object names, trace IDs, request IDs, or auth claims.
+generated certificates, wrapped-key ciphertext, unredacted dependency output,
+Document payloads, Backend object names, trace IDs, request IDs, or auth
+claims.
 
 ## Authority Boundary
 
