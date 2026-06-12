@@ -5,7 +5,7 @@ created: 2026-06-12T00:08:42-04:00
 
 # Story 3.7: Backend Durability and Cold-Read Closure Evidence
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -73,6 +73,14 @@ so that Epic 3 cannot close from a happy-path restore demo.
   - [x] Run the P0 evidence test suite listed in Testing Requirements or record any skipped command with an explicit closure impact.
   - [x] Run credential and identifier leak scans over the new closure artifact, this story, and any touched code.
   - [x] Run `git diff --check` and the narrowest relevant Go package tests. Run `make check` before review if production code, executable evidence-gate code, or broad closure claims changed.
+
+### Review Findings
+
+- [x] [Review][Patch] Evidence inventory omitted current artifact status and used vague proof buckets [`_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`] — Added artifact status, exact proof commands/test names, and concern/gap fields to every evidence inventory row.
+- [x] [Review][Patch] Evidence rows used hybrid status language [`_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`] — Replaced mixed gate wording with a single `PASS` or `CONCERNS` decision plus a separate concern/gap column.
+- [x] [Review][Patch] Backend authority scan lacked auditable broad-scan classification [`_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`] — Added no-match exit semantics, current broad-scan count, category counts, file groups, and highest-volume files.
+- [x] [Review][Patch] Leak scans lacked match counts and command-output classification [`_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`] — Added leak-scan evidence counts and file-distribution summaries for the credential and identifier scans.
+- [x] [Review][Patch] Story baseline and closure evaluation baseline were ambiguous [`_bmad-output/implementation-artifacts/epic-3-backend-durability-cold-read-closure-evidence.md`] — Added explicit closure baseline scope and preserved the story-creation baseline commit.
 
 ## Dev Notes
 
@@ -227,6 +235,10 @@ GPT-5 Codex.
 - DEV-STORY: Credential and identifier leak scans over touched Story 3.7 artifacts passed with allowlisted BMAD prose, story keys, local command paths, sprint tracker paths, and source/test identifiers only.
 - DEV-STORY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed, including format diff, package-boundary checks, buf lint/generate diff, golangci-lint, all Go tests, race tests, integration-tagged LocalStack/OpenBao tests, and `scrapd`/`scrapctl` builds.
 - DEV-STORY: Moved Story 3.7 and sprint status to `review` after all tasks, ACs, File List, and verification gates were complete.
+- CODE-REVIEW: BMAD review layers reported 5 patch findings, 0 decision-needed, 0 deferred, and 0 dismissed findings. Edge Case Hunter returned no material findings.
+- CODE-REVIEW: Patched Story 3.7 evidence to add source artifact status, exact proof commands/test names, strict decision columns, Backend authority scan classification, leak scan match counts, and explicit baseline scope.
+- CODE-REVIEW: Review-fix verification passed: `git diff --check`, final credential scan count 171, final identifier scan count 167, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- CODE-REVIEW: Moved Story 3.7 and sprint status to `done` after all patch findings were resolved.
 
 ### Completion Notes List
 
@@ -239,6 +251,7 @@ GPT-5 Codex.
 - Proved Backend inventory is not hot-path authority through current tests and source scans; restore remains a full-object GET from committed Confirmed Upload Catalog metadata.
 - Left executable closure support document-only; no code change was needed and no `internal/scrapctl/evidencebundle` gate behavior changed.
 - Completed focused P0 evidence tests, affected-package regression, Backend authority scans, leak scans, `git diff --check`, and full `make check`.
+- Resolved all BMAD code-review patch findings for evidence auditability; no runtime code changes were required.
 
 ### File List
 
@@ -251,3 +264,4 @@ GPT-5 Codex.
 - 2026-06-12: Created Story 3.7 Backend Durability and Cold-Read Closure Evidence context and moved status to ready-for-dev.
 - 2026-06-12: Started Story 3.7 implementation and moved status to in-progress.
 - 2026-06-12: Completed Story 3.7 implementation with closure decision `CONCERNS` and moved status to review.
+- 2026-06-12: Resolved code-review evidence auditability findings and moved status to done.
