@@ -17,7 +17,7 @@ import (
 
 const (
 	kubectlGlobalFlagCapacity = 4
-	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction|openbao>"
+	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction|quarantine|openbao>"
 
 	defaultNamespace      = "scrap"
 	defaultCluster        = "scrap-prodlike"
@@ -67,10 +67,14 @@ func Run(args []string, stdout, stderr io.Writer, deps Deps) error {
 }
 
 func runCommand(name string, args []string, stdout, stderr io.Writer, deps Deps) error {
-	if name == "openbao" {
+	switch name {
+	case "openbao":
 		return runOpenBao(args, stdout, stderr, deps)
+	case "quarantine":
+		return runQuarantine(args, stdout, stderr, deps)
+	default:
+		return runBuiltInCommand(name, args, stdout, stderr, deps)
 	}
-	return runBuiltInCommand(name, args, stdout, stderr, deps)
 }
 
 func runBuiltInCommand(name string, args []string, stdout, stderr io.Writer, deps Deps) error {

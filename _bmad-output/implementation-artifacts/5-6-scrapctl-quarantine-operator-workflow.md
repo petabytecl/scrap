@@ -1,6 +1,10 @@
+---
+baseline_commit: 29ec066ae79f0d7692d82f4737d07432f5eb0e79
+---
+
 # Story 5.6: `scrapctl` Quarantine Operator Workflow
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -16,54 +20,54 @@ so that operators can inspect, confirm, release, and collect evidence without ra
 
 ## Tasks / Subtasks
 
-- [ ] Create Story 5.6 evidence artifact before code changes. (AC: 1-3)
-  - [ ] Use `_bmad-output/implementation-artifacts/epic-5-scrapctl-quarantine-operator-workflow-evidence.md`.
-  - [ ] Record baseline commit `c8ac14e8a803ff08c4deb4af7596d1e91ead97d5`, changed boundaries, CLI command contract, admin HTTP routing proof, redaction checks, and final `PASS`/`CONCERNS`/`FAIL` rows.
-  - [ ] Keep closure scoped to Story 5.6. Do not claim scanner runtime closure or Epic 5 closure; Story 5.7 owns content-safety closure evidence.
+- [x] Create Story 5.6 evidence artifact before code changes. (AC: 1-3)
+  - [x] Use `_bmad-output/implementation-artifacts/epic-5-scrapctl-quarantine-operator-workflow-evidence.md`.
+  - [x] Record baseline commit `c8ac14e8a803ff08c4deb4af7596d1e91ead97d5`, changed boundaries, CLI command contract, admin HTTP routing proof, redaction checks, and final `PASS`/`CONCERNS`/`FAIL` rows.
+  - [x] Keep closure scoped to Story 5.6. Do not claim scanner runtime closure or Epic 5 closure; Story 5.7 owns content-safety closure evidence.
 
-- [ ] Add `scrapctl quarantine` command group using existing CLI patterns. (AC: 1-3)
-  - [ ] Register `quarantine` in `scrapctlUsage` and `runBuiltInCommand` in `internal/scrapctl/run.go`.
-  - [ ] Add a focused `internal/scrapctl/quarantine.go`; add `internal/scrapctl/quarantine_test.go`.
-  - [ ] Implement subcommands:
+- [x] Add `scrapctl quarantine` command group using existing CLI patterns. (AC: 1-3)
+  - [x] Register `quarantine` in `scrapctlUsage` and `runBuiltInCommand` in `internal/scrapctl/run.go`.
+  - [x] Add a focused `internal/scrapctl/quarantine.go`; add `internal/scrapctl/quarantine_test.go`.
+  - [x] Implement subcommands:
     - `scrapctl quarantine list`
     - `scrapctl quarantine inspect`
     - `scrapctl quarantine confirm`
     - `scrapctl quarantine release`
     - `scrapctl quarantine evidence`
-  - [ ] Reuse `parseCommon`, `newFlagSet`, `commandContext`, `withHTTPClientTLS`, `writeJSON`, and existing text-output style. Do not introduce Cobra, pflag, or another CLI framework.
+  - [x] Reuse `parseCommon`, `newFlagSet`, `commandContext`, `withHTTPClientTLS`, `writeJSON`, and existing text-output style. Do not introduce Cobra, pflag, or another CLI framework.
 
-- [ ] Implement admin HTTP client calls only. (AC: 2)
-  - [ ] `list` sends `GET /admin/quarantine/documents` with optional `transaction_id` and `limit` query values.
-  - [ ] `inspect` sends `GET /admin/quarantine/document` with required `transaction_id` and `document_name` query values.
-  - [ ] `confirm` sends `POST /admin/quarantine/confirm` with JSON body `{ "transaction_id": "...", "document_name": "..." }`.
-  - [ ] `release` sends `POST /admin/quarantine/release` with the same JSON body.
-  - [ ] Route all calls through `--admin-url` and existing TLS flags. Do not import `internal/shard`, `internal/index`, or scanner packages from `internal/scrapctl`.
-  - [ ] Decode `internal/quarantine` DTOs (`Record`, `Result`, `ListFilter`, `Identity`) or local wire-compatible DTOs. Keep authority in admin HTTP, Shard, Raft, and Projection.
+- [x] Implement admin HTTP client calls only. (AC: 2)
+  - [x] `list` sends `GET /admin/quarantine/documents` with optional `transaction_id` and `limit` query values.
+  - [x] `inspect` sends `GET /admin/quarantine/document` with required `transaction_id` and `document_name` query values.
+  - [x] `confirm` sends `POST /admin/quarantine/confirm` with JSON body `{ "transaction_id": "...", "document_name": "..." }`.
+  - [x] `release` sends `POST /admin/quarantine/release` with the same JSON body.
+  - [x] Route all calls through `--admin-url` and existing TLS flags. Do not import `internal/shard`, `internal/index`, or scanner packages from `internal/scrapctl`.
+  - [x] Decode `internal/quarantine` DTOs (`Record`, `Result`, `ListFilter`, `Identity`) or local wire-compatible DTOs. Keep authority in admin HTTP, Shard, Raft, and Projection.
 
-- [ ] Add default-redacted operator output. (AC: 1-3)
-  - [ ] Default text and JSON output must not print raw `transaction_id` or `document_name`; render stable redacted identifiers instead, such as bounded digests and explicit labels `Transaction` and `Document`.
-  - [ ] Preserve operator usefulness by printing bounded fields: `Shard`, `Block`, lifecycle, scan type, reason, detected/confirmed timestamps, changed flag, and typed status/reason.
-  - [ ] If a raw-output escape hatch is added, make it opt-in, clearly named, excluded from evidence defaults, and covered by tests. Prefer no raw-output option unless implementation proves it is needed.
-  - [ ] Never render Document bytes, scanner signatures, YARA rule text, raw dependency logs, trace IDs, request IDs, auth claims, operator notes, local file paths, Backend object identifiers, or credential material.
+- [x] Add default-redacted operator output. (AC: 1-3)
+  - [x] Default text and JSON output must not print raw `transaction_id` or `document_name`; render stable redacted identifiers instead, such as bounded digests and explicit labels `Transaction` and `Document`.
+  - [x] Preserve operator usefulness by printing bounded fields: `Shard`, `Block`, lifecycle, scan type, reason, detected/confirmed timestamps, changed flag, and typed status/reason.
+  - [x] If a raw-output escape hatch is added, make it opt-in, clearly named, excluded from evidence defaults, and covered by tests. Prefer no raw-output option unless implementation proves it is needed.
+  - [x] Never render Document bytes, scanner signatures, YARA rule text, raw dependency logs, trace IDs, request IDs, auth claims, operator notes, local file paths, Backend object identifiers, or credential material.
 
-- [ ] Report committed outcomes and typed failures. (AC: 2)
-  - [ ] A successful confirm/release must display the `quarantine.Result` status, reason, changed flag, lifecycle, and bounded Document identity proof returned by admin HTTP.
-  - [ ] A failed HTTP response must surface a typed bounded failure using the response `reason` when present; sanitize fallback body text before returning an error.
-  - [ ] Map expected admin reasons without leaking implementation detail: `invalid_request`, `not_found`, `permission_denied`, `rate_limited`, `method_not_allowed`, `not_leader`, `unavailable`, `failed_precondition`, `data_loss`, `audit_failed`, and `internal_error`.
-  - [ ] For failed `quarantine.Result` responses, return a non-nil command error after writing bounded output, matching the eviction apply pattern.
+- [x] Report committed outcomes and typed failures. (AC: 2)
+  - [x] A successful confirm/release must display the `quarantine.Result` status, reason, changed flag, lifecycle, and bounded Document identity proof returned by admin HTTP.
+  - [x] A failed HTTP response must surface a typed bounded failure using the response `reason` when present; sanitize fallback body text before returning an error.
+  - [x] Map expected admin reasons without leaking implementation detail: `invalid_request`, `not_found`, `permission_denied`, `rate_limited`, `method_not_allowed`, `not_leader`, `unavailable`, `failed_precondition`, `data_loss`, `audit_failed`, and `internal_error`.
+  - [x] For failed `quarantine.Result` responses, return a non-nil command error after writing bounded output, matching the eviction apply pattern.
 
-- [ ] Implement quarantine evidence rendering. (AC: 3)
-  - [ ] Add `--evidence-path` to `scrapctl quarantine evidence`.
-  - [ ] Evidence report must include command, sanitized args, admin URL label, result summary, artifact path, changed boundaries, stdout/stderr redaction checks, report redaction check, and route proof that operations used admin HTTP endpoints.
-  - [ ] Write JSON evidence with explicit file permissions, create parent directories safely, and sync file/directory following the OpenBao evidence pattern.
-  - [ ] Evidence defaults must use redacted output and pass leak checks over stdout, stderr, and report content.
+- [x] Implement quarantine evidence rendering. (AC: 3)
+  - [x] Add `--evidence-path` to `scrapctl quarantine evidence`.
+  - [x] Evidence report must include command, sanitized args, admin URL label, result summary, artifact path, changed boundaries, stdout/stderr redaction checks, report redaction check, and route proof that operations used admin HTTP endpoints.
+  - [x] Write JSON evidence with explicit file permissions, create parent directories safely, and sync file/directory following the OpenBao evidence pattern.
+  - [x] Evidence defaults must use redacted output and pass leak checks over stdout, stderr, and report content.
 
-- [ ] Add tests before implementation and keep them narrow. (AC: 1-3)
-  - [ ] Add tests that prove `list` and `inspect` call the exact admin paths/methods and do not leak raw identifiers in text or JSON output.
-  - [ ] Add tests that prove `confirm` and `release` POST the expected JSON identity body, route through admin HTTP, and report committed lifecycle outcomes.
-  - [ ] Add tests that prove typed failures return non-zero command errors without leaking raw response bodies or dependency strings.
-  - [ ] Add tests for evidence report creation, file mode, sanitized args, stdout/stderr/report redaction checks, and route proof.
-  - [ ] Add parse/validation tests for missing identity, invalid limit, unsupported subcommand, unsupported output, and missing evidence path.
+- [x] Add tests before implementation and keep them narrow. (AC: 1-3)
+  - [x] Add tests that prove `list` and `inspect` call the exact admin paths/methods and do not leak raw identifiers in text or JSON output.
+  - [x] Add tests that prove `confirm` and `release` POST the expected JSON identity body, route through admin HTTP, and report committed lifecycle outcomes.
+  - [x] Add tests that prove typed failures return non-zero command errors without leaking raw response bodies or dependency strings.
+  - [x] Add tests for evidence report creation, file mode, sanitized args, stdout/stderr/report redaction checks, and route proof.
+  - [x] Add parse/validation tests for missing identity, invalid limit, unsupported subcommand, unsupported output, and missing evidence path.
 
 ## Dev Notes
 
@@ -196,12 +200,36 @@ GPT-5 Codex
 ### Debug Log References
 
 - 2026-06-12T16:33:23-04:00 - Story created from sprint backlog after Story 5.5 commit `c8ac14e8a803ff08c4deb4af7596d1e91ead97d5`.
+- 2026-06-12T16:37:15-04:00 - Story moved to in-progress with baseline commit `29ec066ae79f0d7692d82f4737d07432f5eb0e79`.
+- 2026-06-12T16:40:00-04:00 - RED phase confirmed: focused quarantine tests failed because `scrapctl quarantine` was not registered.
+- 2026-06-12T16:46:57-04:00 - Final `make check` passed after formatter/lint fixes.
+
+### Implementation Plan
+
+- Add a focused `internal/scrapctl/quarantine.go` using existing stdlib `flag`, admin HTTP, TLS, JSON, text-output, and evidence-report patterns.
+- Keep `scrapctl` as an operator client only; do not import Shard, Projection, Raft, scanner, or admin internals.
+- Redact admin-returned Document identity fields before any text, JSON, or evidence output.
+- Prove list/inspect/confirm/release/evidence behavior with local HTTP round-tripper tests.
 
 ### Completion Notes List
 
-- Ready for dev-story implementation.
+- Implemented `scrapctl quarantine list|inspect|confirm|release|evidence`.
+- CLI calls the Story 5.5 admin HTTP endpoints and decodes `internal/quarantine` DTOs without adding a new dependency or authority path.
+- Default text, JSON, error, and evidence output use bounded redacted Document identity values.
+- Evidence command writes a JSON report with artifact path, route proof, sanitized args, changed boundaries, and stdout/stderr/report redaction checks.
+- Full local verification passed, including `make check`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-6-scrapctl-quarantine-operator-workflow.md`
 - `_bmad-output/implementation-artifacts/epic-5-scrapctl-quarantine-operator-workflow-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `cmd/scrapctl/main_test.go`
+- `internal/scrapctl/doctor_test.go`
+- `internal/scrapctl/run.go`
+- `internal/scrapctl/quarantine.go`
+- `internal/scrapctl/quarantine_test.go`
+
+### Change Log
+
+- 2026-06-12 - Added `scrapctl quarantine` operator workflow with redacted output, admin HTTP routing, evidence report generation, tests, and BMAD evidence updates.
