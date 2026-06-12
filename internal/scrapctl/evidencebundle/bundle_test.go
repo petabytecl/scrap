@@ -308,6 +308,25 @@ func TestGenerateFailsWhenPrivacyScanFindsSensitiveOutput(t *testing.T) {
 	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
 }
 
+func TestGenerateFailsWhenManifestContainsSensitiveEnvironment(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{leakKubeContext: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "privacy_scan_passed", false)
+	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
+}
+
+func TestManifestBroadRowsFailWhenSubEvidenceIsMissing(t *testing.T) {
+	profileResult := generateTestBundle(t, fakeSignals{missingHeapProfile: true})
+	assertManifestEvidenceStatus(t, profileResult.BundlePath, "profiles", "FAIL")
+
+	securityResult := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
+	assertManifestEvidenceStatus(t, securityResult.BundlePath, "security", "FAIL")
+	assertManifestEvidenceStatus(t, securityResult.BundlePath, "openbao_readiness", "FAIL")
+}
+
 func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 	t.Helper()
 
@@ -327,6 +346,7 @@ func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 			BundleDir:          bundleDir,
 			GrafanaURL:         "http://grafana.local",
 			AdminURL:           "http://admin.local",
+			KubeContext:        testKubeContext(signals),
 			MimirProxy:         "http://grafana.local/mimir",
 			TempoProxy:         "http://grafana.local/tempo",
 			LokiProxy:          "http://grafana.local/loki",
@@ -385,8 +405,16 @@ type fakeSignals struct {
 	missingSecurityRestore              bool
 	adminProbeFailed                    bool
 	leakStressStderr                    bool
+	leakKubeContext                     bool
 	evictionPlanID                      string
 	requireEvictionHealthBeforeMetrics  bool
+}
+
+func testKubeContext(signals fakeSignals) string {
+	if signals.leakKubeContext {
+		return "/tmp/leaked-context"
+	}
+	return ""
 }
 
 func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
@@ -624,12 +652,20 @@ func assertBundlePrivacyScan(t *testing.T, root, want string) {
 	t.Helper()
 
 	var report struct {
-		Status        string `json:"status"`
-		FindingsCount int    `json:"findings_count"`
+		Status           string   `json:"status"`
+		ArtifactCount    int      `json:"artifact_count"`
+		FindingsCount    int      `json:"findings_count"`
+		SkippedArtifacts []string `json:"skipped_artifacts"`
 	}
 	readBundleJSON(t, root, "privacy-scan.json", &report)
 	if report.Status != want {
 		t.Fatalf("privacy scan status = %q, want %q", report.Status, want)
+	}
+	if report.ArtifactCount == 0 {
+		t.Fatal("privacy scan artifact_count = 0, want scanned artifacts")
+	}
+	if !stringSliceContains(report.SkippedArtifacts, "privacy-scan.json") {
+		t.Fatalf("privacy scan skipped artifacts = %+v, want privacy-scan.json skipped", report.SkippedArtifacts)
 	}
 	if want == "PASS" && report.FindingsCount != 0 {
 		t.Fatalf("privacy scan findings = %d, want 0", report.FindingsCount)
@@ -645,17 +681,35 @@ func assertBundleManifest(t *testing.T, root string) {
 	var manifest testBundleManifest
 	readBundleJSON(t, root, "manifest.json", &manifest)
 	assertBundleManifestSummary(t, manifest)
+	assertBundleManifestRunParameters(t, manifest.RunParameters)
+	assertBundleManifestCommands(t, manifest.Commands)
 	assertBundleManifestArtifacts(t, manifest.Artifacts)
 	assertBundleManifestEvidence(t, manifest.Evidence)
 }
 
 type testBundleManifest struct {
-	SchemaVersion string                 `json:"schema_version"`
-	BundleName    string                 `json:"bundle_name"`
-	Scenario      string                 `json:"scenario"`
-	PrivacyStatus string                 `json:"privacy_status"`
-	Artifacts     []testManifestArtifact `json:"artifacts"`
-	Evidence      []testManifestEvidence `json:"evidence"`
+	SchemaVersion string                    `json:"schema_version"`
+	BundleName    string                    `json:"bundle_name"`
+	Scenario      string                    `json:"scenario"`
+	PrivacyStatus string                    `json:"privacy_status"`
+	RunParameters testManifestRunParameters `json:"run_parameters"`
+	Commands      []testManifestCommand     `json:"commands"`
+	Artifacts     []testManifestArtifact    `json:"artifacts"`
+	Evidence      []testManifestEvidence    `json:"evidence"`
+}
+
+type testManifestRunParameters struct {
+	Workers                  int    `json:"workers"`
+	Duration                 string `json:"duration"`
+	DocSizeBytes             int    `json:"doc_size_bytes"`
+	StressAddr               string `json:"stress_addr"`
+	SecurityReportConfigured bool   `json:"security_report_configured"`
+	SecurityReportPresent    bool   `json:"security_report_present"`
+}
+
+type testManifestCommand struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
 }
 
 type testManifestArtifact struct {
@@ -680,6 +734,32 @@ func assertBundleManifestSummary(t *testing.T, manifest testBundleManifest) {
 	}
 }
 
+func assertBundleManifestRunParameters(t *testing.T, params testManifestRunParameters) {
+	t.Helper()
+
+	if params.Workers != 8 || params.Duration != "60s" || params.DocSizeBytes != 16384 || params.StressAddr != "127.0.0.1:18090" {
+		t.Fatalf("manifest run parameters = %+v, want configured stress parameters", params)
+	}
+	if !params.SecurityReportConfigured || !params.SecurityReportPresent {
+		t.Fatalf("manifest security report flags = %+v, want configured and present", params)
+	}
+}
+
+func assertBundleManifestCommands(t *testing.T, commands []testManifestCommand) {
+	t.Helper()
+
+	for _, command := range commands {
+		if command.Name != "stress" {
+			continue
+		}
+		if !strings.Contains(command.Command, "-workers=8") || !strings.Contains(command.Command, "-duration=60s") || !strings.Contains(command.Command, "-doc-size=16384") {
+			t.Fatalf("stress manifest command = %q, want configured parameters", command.Command)
+		}
+		return
+	}
+	t.Fatalf("stress manifest command missing from %+v", commands)
+}
+
 func assertBundleManifestArtifacts(t *testing.T, artifacts []testManifestArtifact) {
 	t.Helper()
 
@@ -702,4 +782,29 @@ func assertBundleManifestEvidence(t *testing.T, evidence []testManifestEvidence)
 	if len(evidence) == 0 {
 		t.Fatal("manifest evidence status rows empty")
 	}
+}
+
+func assertManifestEvidenceStatus(t *testing.T, root, area, want string) {
+	t.Helper()
+
+	var manifest testBundleManifest
+	readBundleJSON(t, root, "manifest.json", &manifest)
+	for _, evidence := range manifest.Evidence {
+		if evidence.Area == area {
+			if evidence.Status != want {
+				t.Fatalf("manifest evidence %s status = %q, want %q", area, evidence.Status, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("manifest evidence %s missing from %+v", area, manifest.Evidence)
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

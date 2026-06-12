@@ -4,7 +4,7 @@ baseline_commit: 4f20fd4f9a4f1ae08c76251882463e35b8dcc6c5
 
 # Story 6.4: `scrapctl` Release Evidence Bundle
 
-Status: review
+Status: done
 
 ## Story
 
@@ -54,6 +54,13 @@ so that V2 closure can be reviewed from reproducible operator output.
   - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
   - [x] Release-sensitive scans over the story, bundle evidence artifact, updated runbook/matrix, and generated manifest/privacy examples.
   - [x] Move this story to `review`; leave `done` for BMAD code review.
+
+### Review Findings
+
+- [x] [Review][Patch] Final metadata artifacts are not privacy-scanned [internal/scrapctl/evidencebundle/bundle.go:119]
+- [x] [Review][Patch] Manifest evidence rows can overstate broad domains from weak or file-only proof [internal/scrapctl/evidencebundle/manifest.go:195]
+- [x] [Review][Patch] Manifest omits required run parameters and security report presence [internal/scrapctl/evidencebundle/manifest.go:21]
+- [x] [Review][Patch] Manifest command descriptors do not reflect configured run parameters [internal/scrapctl/evidencebundle/manifest.go:174]
 
 ## Dev Notes
 
@@ -183,6 +190,7 @@ GPT-5 Codex
 - 2026-06-12T19:24:00-04:00 - Story marked in-progress after creation commit `d711efd`.
 - 2026-06-12T19:26:00-04:00 - Red focused tests failed as expected: missing `manifest.json`, missing `privacy-scan.json`, and sensitive stderr did not fail the gate.
 - 2026-06-12T19:35:59-04:00 - Verification passed: `git diff --check`, `go test ./internal/scrapctl ./internal/scrapctl/evidencebundle ./scripts`, `make proto-check`, `scripts/check-e2e-gates.sh`, release-sensitive scans with classified safe matches, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T19:53:35-04:00 - BMAD code review patches resolved: final manifest/gates metadata is privacy-scanned, manifest broad rows require all underlying gate proof, run/security-report parameters are recorded, and configured command descriptors are redacted. Verification passed: `git diff --check`, `go test ./internal/scrapctl ./internal/scrapctl/evidencebundle ./scripts`, `make proto-check`, `scripts/check-e2e-gates.sh`, release-sensitive scans with classified safe matches, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
@@ -193,6 +201,7 @@ GPT-5 Codex
 - Added scanner, security, scrub, and quarantine-related metric snapshots to the release bundle.
 - Updated release evidence docs, Story 6.4 matrix rows, and evidence collection runbook while keeping Stories 6.5-6.7 and issue `#429` open for final release closure.
 - Release-sensitive scans matched only negative guidance, pattern definitions, token-handling variable names, and fake test fixtures used to prove redaction.
+- Addressed BMAD code review findings by rerunning privacy validation after `gates.json` and `manifest.json` exist, tightening manifest evidence status semantics, and adding manifest run-parameter/security-report provenance.
 
 ### File List
 
@@ -216,3 +225,4 @@ GPT-5 Codex
 - 2026-06-12 - Created Story 6.4 context for `scrapctl` release evidence bundle.
 - 2026-06-12 - Started Story 6.4 implementation.
 - 2026-06-12 - Implemented Story 6.4 release evidence manifest, privacy scan, and bundle evidence updates.
+- 2026-06-12 - Addressed Story 6.4 BMAD code review findings and marked story done.

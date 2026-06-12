@@ -71,7 +71,7 @@ func scanBundlePrivacy(root string) (privacyScanReport, error) {
 			return fmt.Errorf("rel privacy scan path %s: %w", path, err)
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == "manifest.json" || rel == "privacy-scan.json" {
+		if rel == "privacy-scan.json" {
 			report.SkippedArtifacts = append(report.SkippedArtifacts, rel)
 			return nil
 		}
@@ -114,7 +114,7 @@ func bundlePrivacyPatterns() []privacyScanPattern {
 		newPrivacyPattern("credential_shape", "credential, bearer token, private key, JWT, or cloud access key shape", `(?i)(access[_-]?key|password|token|Bearer[[:space:]]+|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]+\.|PRIVATE KEY|BEGIN [A-Z ]*KEY)`),
 		newPrivacyPattern("raw_identifier_shape", "raw Document, Transaction, trace, or request identifier field", `(?i)(transaction[_-]?id|transactionId|document[_-]?name|documentName|trace[_-]?id|traceID|request[_-]?id|requestID|x-request-id)[[:space:]":=]+`),
 		newPrivacyPattern("backend_key_shape", "raw Backend object key or auth claim marker", `(?i)(backend[_ -]?key|object[_ -]?key|auth claim|Authorization:)`),
-		newPrivacyPattern("host_path_shape", "host-absolute path intended for public evidence", `(?i)(^|[[:space:]":])(/(home|Users|var|opt|private|tmp)/|[A-Za-z]:\\|host-absolute)`),
+		newPrivacyPattern("host_path_shape", "host-absolute path intended for public evidence", `(?i)(^|[[:space:]":=])(/(home|Users|var|opt|private|tmp)/|[A-Za-z]:\\|host-absolute)`),
 		newPrivacyPattern("payload_or_key_material", "Document payload, data key, wrapped key, or ciphertext marker", `(?i)(document payload|data[_ -]?key|wrapped[_ -]?key|ciphertext|<\?xml|<Invoice)`),
 	}
 }

@@ -77,6 +77,22 @@ Manifest schema example:
     "namespace": "scrap",
     "cluster": "kind-scrap-evidence"
   },
+  "run_parameters": {
+    "workers": 8,
+    "duration": "60s",
+    "doc_size_bytes": 16384,
+    "stress_addr": "127.0.0.1:18090",
+    "security_report_configured": true,
+    "security_report_present": true
+  },
+  "commands": [
+    {
+      "name": "stress",
+      "command": "go run ./test/stress -addr=127.0.0.1:18090 -scenario=throughput -workers=8 -duration=60s -doc-size=16384",
+      "artifact": "stress-results.json",
+      "passive": true
+    }
+  ],
   "artifacts": [
     {
       "path": "gates.json",
@@ -113,12 +129,12 @@ link or quote only bundle-relative paths and sanitized artifact names.
 
 ## Redaction Proof
 
-The privacy scan covers generated bundle artifacts before `gates.json` and
-`manifest.json` are finalized. It scans for shaped credentials, private-key
-markers, raw Document/Transaction/trace/request identifier fields, Backend key
-markers, auth-claim markers, host-absolute paths intended for public evidence,
-Document payload markers, data-key markers, wrapped-key markers, and ciphertext
-markers.
+The privacy scan covers generated bundle artifacts and reruns after
+`gates.json` and `manifest.json` are written so final review metadata is also
+validated. It scans for shaped credentials, private-key markers, raw
+Document/Transaction/trace/request identifier fields, Backend key markers,
+auth-claim markers, host-absolute paths intended for public evidence, Document
+payload markers, data-key markers, wrapped-key markers, and ciphertext markers.
 
 Trace evidence is stored as:
 

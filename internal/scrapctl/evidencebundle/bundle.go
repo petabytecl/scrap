@@ -43,18 +43,20 @@ type runWindow struct {
 }
 
 type runConfig struct {
-	Scenario       string `json:"scenario"`
-	Timestamp      string `json:"timestamp"`
-	GitSHA         string `json:"git_sha"`
-	GitSHAShort    string `json:"git_sha_short"`
-	GitDirty       bool   `json:"git_dirty"`
-	Image          string `json:"image"`
-	Replicas       int    `json:"replicas"`
-	Workers        int    `json:"workers"`
-	Duration       string `json:"duration"`
-	DocSizeBytes   int    `json:"doc_size_bytes"`
-	EvictionPlanID string `json:"eviction_plan_id,omitempty"`
-	Cluster        string `json:"cluster"`
+	Scenario                 string `json:"scenario"`
+	Timestamp                string `json:"timestamp"`
+	GitSHA                   string `json:"git_sha"`
+	GitSHAShort              string `json:"git_sha_short"`
+	GitDirty                 bool   `json:"git_dirty"`
+	Image                    string `json:"image"`
+	Replicas                 int    `json:"replicas"`
+	Workers                  int    `json:"workers"`
+	Duration                 string `json:"duration"`
+	DocSizeBytes             int    `json:"doc_size_bytes"`
+	StressAddr               string `json:"stress_addr"`
+	EvictionPlanID           string `json:"eviction_plan_id,omitempty"`
+	SecurityReportConfigured bool   `json:"security_report_configured"`
+	Cluster                  string `json:"cluster"`
 }
 
 type signalResults struct {
@@ -116,20 +118,45 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 	if err := captureTelemetryEvidence(ctx, cfg, opts, &state); err != nil {
 		return Result{}, err
 	}
-	privacyReport, err := writePrivacyScan(state.paths.root)
+	gate, err := finalizeBundle(ctx, cfg, opts, &state)
 	if err != nil {
-		return Result{}, err
-	}
-	state.signals.privacyScanOK = privacyReport.Status == privacyStatusPass
-	state.signals.privacyScanReason = privacyGateReason(privacyReport)
-	gate, err := writeGate(ctx, opts, state)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := writeManifest(cfg, state, gate, privacyReport); err != nil {
 		return Result{}, err
 	}
 	return Result{BundlePath: state.paths.root, Gate: gate}, nil
+}
+
+func finalizeBundle(ctx context.Context, cfg Config, opts Options, state *generationState) (Gate, error) {
+	privacyReport, err := writePrivacyScan(state.paths.root)
+	if err != nil {
+		return Gate{}, err
+	}
+	applyPrivacySignals(state, privacyReport)
+	gate, err := writeGate(ctx, opts, *state)
+	if err != nil {
+		return Gate{}, err
+	}
+	if err := writeManifest(cfg, *state, gate, privacyReport); err != nil {
+		return Gate{}, err
+	}
+
+	finalPrivacyReport, err := writePrivacyScan(state.paths.root)
+	if err != nil {
+		return Gate{}, err
+	}
+	applyPrivacySignals(state, finalPrivacyReport)
+	finalGate, err := writeGate(ctx, opts, *state)
+	if err != nil {
+		return Gate{}, err
+	}
+	if err := writeManifest(cfg, *state, finalGate, finalPrivacyReport); err != nil {
+		return Gate{}, err
+	}
+	return finalGate, nil
+}
+
+func applyPrivacySignals(state *generationState, report privacyScanReport) {
+	state.signals.privacyScanOK = report.Status == privacyStatusPass
+	state.signals.privacyScanReason = privacyGateReason(report)
 }
 
 func initializeBundle(ctx context.Context, cfg Config, opts Options) (generationState, error) {
@@ -359,18 +386,20 @@ func writeRunConfig(ctx context.Context, cfg Config, runner CommandRunner, times
 		replicas = 0
 	}
 	report := runConfig{
-		Scenario:       cfg.Scenario,
-		Timestamp:      timestamp.Format(timestampFormat),
-		GitSHA:         fullSHA,
-		GitSHAShort:    shortSHA,
-		GitDirty:       gitDirty(ctx, runner, cfg.RepoRoot),
-		Image:          image,
-		Replicas:       replicas,
-		Workers:        cfg.Workers,
-		Duration:       cfg.Duration,
-		DocSizeBytes:   cfg.DocSizeBytes,
-		EvictionPlanID: cfg.EvictionPlanID,
-		Cluster:        cluster,
+		Scenario:                 cfg.Scenario,
+		Timestamp:                timestamp.Format(timestampFormat),
+		GitSHA:                   fullSHA,
+		GitSHAShort:              shortSHA,
+		GitDirty:                 gitDirty(ctx, runner, cfg.RepoRoot),
+		Image:                    image,
+		Replicas:                 replicas,
+		Workers:                  cfg.Workers,
+		Duration:                 cfg.Duration,
+		DocSizeBytes:             cfg.DocSizeBytes,
+		StressAddr:               cfg.StressAddr,
+		EvictionPlanID:           cfg.EvictionPlanID,
+		SecurityReportConfigured: strings.TrimSpace(cfg.SecurityReportPath) != "",
+		Cluster:                  cluster,
 	}
 	return writeJSONFile(filepath.Join(root, "config.json"), report)
 }
