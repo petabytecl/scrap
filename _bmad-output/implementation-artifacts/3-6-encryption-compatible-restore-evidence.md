@@ -5,7 +5,7 @@ created: 2026-06-11T23:37:59-04:00
 
 # Story 3.6: Encryption-Compatible Restore Evidence
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -65,6 +65,12 @@ so that cold reads do not bypass OpenBao, checksum, or plaintext verification be
   - [x] Run Shard race coverage for encrypted restore and rewrap paths if production concurrency or restore code changes.
   - [x] Run `make check` before BMAD code review unless a concrete blocker is recorded in the story.
   - [x] Run credential/identifier leak scans over touched story/evidence files and changed code.
+
+### Review Findings
+
+- [x] [Review][Patch] Public unavailable reasons need allowlisting [internal/server/server.go:613] — Fixed by publishing `ErrorInfo` only for known low-cardinality unavailable reasons and adding unknown-reason public sanitization coverage.
+- [x] [Review][Patch] Plaintext leak assertions need marker-level coverage [internal/shard/restore_test.go:488] — Fixed by checking both full repeated payloads and stable plaintext markers in Backend/restored Block/error assertions.
+- [x] [Review][Patch] Evidence leak policy overstates local command path handling [_bmad-output/implementation-artifacts/epic-3-encryption-restore-evidence.md:72] — Fixed by narrowing the path exception to exact local verification commands and deployed/non-command evidence outputs.
 
 ## Dev Notes
 
@@ -215,6 +221,10 @@ GPT-5 Codex.
 - DEV-STORY: Touched-file credential and identifier leak scans passed with only allowlisted BMAD prose, test-fixture, and source-identifier matches; no real secrets or deployed raw identifier leaks were found.
 - DEV-STORY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed, including formatting diff, package boundaries, buf/proto checks, golangci-lint, all Go tests, all race tests, integration-tagged tests with LocalStack/OpenBao containers, and `scrapd`/`scrapctl` builds.
 - DEV-STORY: Moved Story 3.6 and sprint status to `review` after all tasks, ACs, File List, and verification gates were complete.
+- CODE-REVIEW: BMAD review layers completed: Edge Case Hunter raised one patch finding, Blind Hunter raised two patch findings, Acceptance Auditor found no AC violations.
+- CODE-REVIEW: Fixed all three patch findings with unavailable-reason allowlisting, marker-level plaintext assertions, and evidence leak-policy wording.
+- CODE-REVIEW: Focused server and Shard verification passed after fixes; moved Story 3.6 and sprint status to `done`.
+- CODE-REVIEW: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes.
 
 ### Completion Notes List
 
@@ -228,6 +238,7 @@ GPT-5 Codex.
 - Proved rewrapped envelope metadata converges through restore without rewriting Block payload bytes and restored reads verify the original plaintext.
 - Preserved package boundaries, public wire contracts, storage formats, dependency set, and fixture boundary; no production OpenBao proof is claimed.
 - Completed focused, package, race, evidence-bundle, leak-scan, and full `make check` verification for Story 3.6.
+- Addressed BMAD code-review findings for public unavailable reason allowlisting, marker-level plaintext leak assertions, and local command path evidence wording.
 
 ### File List
 
@@ -243,3 +254,4 @@ GPT-5 Codex.
 - 2026-06-11: Created Story 3.6 Encryption-Compatible Restore Evidence context and moved status to ready-for-dev.
 - 2026-06-11: Started Story 3.6 implementation and moved status to in-progress.
 - 2026-06-11: Completed Story 3.6 implementation and moved status to review.
+- 2026-06-12: Addressed Story 3.6 code review findings and moved status to done.

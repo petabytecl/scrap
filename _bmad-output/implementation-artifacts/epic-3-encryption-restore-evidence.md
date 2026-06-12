@@ -1,7 +1,7 @@
 # Epic 3 Encryption-Compatible Restore Evidence
 
 Story: 3.6 - Encryption-Compatible Restore Evidence
-Status: review
+Status: done
 
 Baseline commit: d5e36e12ec1e7065db9a0b45fce0d696d89cf7b6
 Story creation commit: 32ca0c9479cd92dc685b91a6645bc0d5cd4c9f7b
@@ -72,9 +72,10 @@ Expected scan matches are limited to:
 - Test-only fixture strings used to prove plaintext is not stored or returned.
 - Source identifiers such as `EncryptionEnvelope`, `WrappedKey`, `TransitKey`,
   and bounded reason constants.
-- Environment paths in exact verification commands.
+- Local environment paths only in exact verification commands, where they are
+  developer-machine evidence and not deployed/public output.
 
-Any deployed public error, log, metric, trace, evidence output, or screenshot
+Any deployed public error, log, metric, trace, non-command evidence output, or screenshot
 that includes plaintext, wrapped-key ciphertext, data keys, Transit tokens,
 Backend object keys, raw Transaction IDs, raw Document names, filesystem paths,
 or dependency error detail is a failure.
@@ -99,6 +100,10 @@ or dependency error detail is a failure.
 - 2026-06-11: PASS - Touched-file credential scan found only allowlisted BMAD prose, test-fixture, and source-identifier matches; no real secrets were found.
 - 2026-06-11: PASS - Touched-file identifier scan found only allowlisted BMAD prose, command paths, test-fixture strings, and existing source identifiers; no deployed raw identifier leaks were found.
 - 2026-06-11: PASS - `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12: PASS - BMAD code-review patch findings were fixed for unavailable-reason allowlisting, marker-level plaintext assertions, and local command path evidence wording.
+- 2026-06-12: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run 'TestReadDocument.*Unavailable|TestDocumentRouteUnavailableReturnsBoundedErrorInfo|TestDocumentServiceMapsRebuildingStoreErrorsToUnavailable' -count=1 -v`.
+- 2026-06-12: PASS - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestEncryptedReadDocumentRestoresThenUsesEnvelopePath|TestReadDocumentEncryptedRestoreFailsClosedWhenKeyMaterialUnavailable|TestReadDocumentEncryptedRestoreFailsClosedWhenKeyVersionRejected|TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope' -count=1 -v`.
+- 2026-06-12: PASS - `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ## Remaining Scope
 

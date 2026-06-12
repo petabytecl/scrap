@@ -612,8 +612,8 @@ func availabilityStatus(err error) error {
 
 func unavailableStatus(err error) error {
 	reason, ok := storeapi.UnavailableReason(err)
-	if !ok {
-		return status.Errorf(codes.Unavailable, "%v", err)
+	if !ok || !publicUnavailableReason(reason) {
+		return status.Error(codes.Unavailable, storeapi.ErrUnavailable.Error())
 	}
 
 	message := unavailableStatusMessage(reason, err)
@@ -630,6 +630,20 @@ func unavailableStatusMessage(reason string, err error) string {
 		return storeapi.ErrUnavailable.Error()
 	}
 	return fmt.Sprintf("%v", err)
+}
+
+func publicUnavailableReason(reason string) bool {
+	switch reason {
+	case storeapi.UnavailableReasonBackendRestoreUnavailable,
+		storeapi.UnavailableReasonCryptoUnavailable,
+		storeapi.UnavailableReasonProjectionRebuild,
+		storeapi.UnavailableReasonShardRouteUnavailable,
+		storeapi.UnavailableReasonShardRoutingPending,
+		storeapi.UnavailableReasonUploadPending:
+		return true
+	default:
+		return false
+	}
 }
 
 func resourceExhaustedStatus(err error) error {

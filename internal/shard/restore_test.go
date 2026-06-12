@@ -496,11 +496,12 @@ func TestEncryptedReadDocumentRestoresThenUsesEnvelopePath(t *testing.T) {
 		Concurrency: 1,
 	}, transit)
 
-	content := bytes.Repeat([]byte("encrypted restore plaintext:"), 64)
+	plaintextMarker := []byte("encrypted restore plaintext:")
+	content := bytes.Repeat(plaintextMarker, 64)
 	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore.countingGetBackend.Backend, content)
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	assertReadRestoreStartsFromEvictedConfirmedBlock(t, blocksDir, confirmed)
-	assertBackendObjectOmitsPlaintext(ctx, t, backendStore.countingGetBackend.Backend, confirmed.BlockObject.Key, content)
+	assertBackendObjectOmitsPlaintext(ctx, t, backendStore.countingGetBackend.Backend, confirmed.BlockObject.Key, content, plaintextMarker)
 	backendStore.resetCalls()
 
 	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
@@ -512,6 +513,7 @@ func TestEncryptedReadDocumentRestoresThenUsesEnvelopePath(t *testing.T) {
 	assertRestoredDocument(t, rc, meta, content)
 	assertRestorePublishedHotBlock(t, blocksDir)
 	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+	assertBlockOmitsPlaintext(t, s.DataDirForTest(), plaintextMarker)
 	assertRestoreUsedCommittedBackendObjectOnly(t, backendStore, confirmed)
 	entry := readOnlyIndexEntry(t, s.DataDirForTest(), "tx-restore", "doc-1.bin")
 	assertEnvelopeMetadata(t, entry, len(content))
@@ -539,14 +541,16 @@ func TestReadDocumentEncryptedRestoreFailsClosedWhenKeyMaterialUnavailable(t *te
 				Concurrency: 1,
 			}, transit)
 
-			content := bytes.Repeat([]byte("encrypted unavailable restore plaintext:"), 32)
+			plaintextMarker := []byte("encrypted unavailable restore plaintext:")
+			content := bytes.Repeat(plaintextMarker, 32)
 			confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
 			transit.unwrapErr = tt.unwrapErr
 
 			err := assertEncryptedRestoreCryptoUnavailable(ctx, t, s)
-			assertCryptoRestoreErrorSanitized(t, err, content, confirmed.BlockObject.Key)
+			assertCryptoRestoreErrorSanitized(t, err, confirmed.BlockObject.Key, content, plaintextMarker)
 			assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
 			assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+			assertBlockOmitsPlaintext(t, s.DataDirForTest(), plaintextMarker)
 		})
 	}
 }
@@ -562,14 +566,16 @@ func TestReadDocumentEncryptedRestoreFailsClosedWhenKeyVersionRejected(t *testin
 		Concurrency: 1,
 	}, transit)
 
-	content := bytes.Repeat([]byte("encrypted wrong version restore plaintext:"), 32)
+	plaintextMarker := []byte("encrypted wrong version restore plaintext:")
+	content := bytes.Repeat(plaintextMarker, 32)
 	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
 	transit.RequireMinimumVersion(2)
 
 	err := assertEncryptedRestoreCryptoUnavailable(ctx, t, s)
-	assertCryptoRestoreErrorSanitized(t, err, content, confirmed.BlockObject.Key)
+	assertCryptoRestoreErrorSanitized(t, err, confirmed.BlockObject.Key, content, plaintextMarker)
 	assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
 	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+	assertBlockOmitsPlaintext(t, s.DataDirForTest(), plaintextMarker)
 }
 
 func TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope(t *testing.T) {
@@ -583,7 +589,8 @@ func TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope(t *testing.T) {
 		Concurrency: 1,
 	}, transit)
 
-	content := bytes.Repeat([]byte("encrypted rewrap restore plaintext:"), 48)
+	plaintextMarker := []byte("encrypted rewrap restore plaintext:")
+	content := bytes.Repeat(plaintextMarker, 48)
 	if _, err := s.WriteDocument(ctx, "tx-restore", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
 		t.Fatalf("WriteDocument doc-1: %v", err)
 	}
@@ -634,6 +641,7 @@ func TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope(t *testing.T) {
 	assertBlockPayloadUnchanged(t, s.DataDirForTest(), beforeBlock)
 	assertIndexEnvelopeVersion(t, s.DataDirForTest(), "tx-restore", "doc-1.bin", 2)
 	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+	assertBlockOmitsPlaintext(t, s.DataDirForTest(), plaintextMarker)
 }
 
 func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
@@ -1181,7 +1189,7 @@ func assertBackendObjectOmitsPlaintext(
 	t *testing.T,
 	backendStore backend.Backend,
 	key string,
-	plaintext []byte,
+	plaintextNeedles ...[]byte,
 ) {
 	t.Helper()
 
@@ -1195,8 +1203,10 @@ func assertBackendObjectOmitsPlaintext(
 	if err != nil {
 		t.Fatalf("ReadAll Backend object: %v", err)
 	}
-	if bytes.Contains(data, plaintext) {
-		t.Fatal("Backend object contains plaintext Document bytes")
+	for _, plaintext := range plaintextNeedles {
+		if len(plaintext) != 0 && bytes.Contains(data, plaintext) {
+			t.Fatalf("Backend object contains plaintext Document bytes %q", plaintext)
+		}
 	}
 }
 
@@ -1226,12 +1236,11 @@ func assertEncryptedRestoreCryptoUnavailable(ctx context.Context, t *testing.T, 
 	return err
 }
 
-func assertCryptoRestoreErrorSanitized(t *testing.T, err error, plaintext []byte, backendKey string) {
+func assertCryptoRestoreErrorSanitized(t *testing.T, err error, backendKey string, plaintextNeedles ...[]byte) {
 	t.Helper()
 
 	message := err.Error()
-	for _, forbidden := range []string{
-		string(plaintext),
+	forbidden := []string{
 		backendKey,
 		"fake-transit:",
 		"transit unavailable",
@@ -1241,7 +1250,11 @@ func assertCryptoRestoreErrorSanitized(t *testing.T, err error, plaintext []byte
 		"/tmp",
 		"tx-restore",
 		"doc-1.bin",
-	} {
+	}
+	for _, plaintext := range plaintextNeedles {
+		forbidden = append(forbidden, string(plaintext))
+	}
+	for _, forbidden := range forbidden {
 		if forbidden != "" && strings.Contains(message, forbidden) {
 			t.Fatalf("crypto restore error %q contains forbidden detail %q", message, forbidden)
 		}

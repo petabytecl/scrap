@@ -144,6 +144,41 @@ func TestReadDocumentCryptoUnavailableReturnsSanitizedErrorInfoDetail(t *testing
 	}
 }
 
+func TestReadDocumentUnavailableWithUnknownReasonOmitsErrorInfoDetail(t *testing.T) {
+	client := startRestoreServer(t, restoreUnavailableStore{
+		reason:  "backend_key_/tmp/validation-token",
+		message: "leaky Backend key /tmp/internal validation-token",
+	})
+	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
+		TransactionId: "tx-restore",
+		DocumentName:  "doc.bin",
+	})
+	if err != nil {
+		t.Fatalf("ReadDocument: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected unavailable error")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("code = %s, want UNAVAILABLE", st.Code())
+	}
+	if st.Message() != storeapi.ErrUnavailable.Error() {
+		t.Fatalf("message = %q, want sanitized unavailable message", st.Message())
+	}
+	if forbidden := []string{"Backend key", "validation-token", "/tmp", "tx-restore", "doc.bin"}; statusMessageContainsAny(st.Message(), forbidden) {
+		t.Fatalf("message = %q, contains unavailable internals", st.Message())
+	}
+	if info := errorInfoDetail(st); info != nil {
+		t.Fatalf("unexpected ErrorInfo detail for unknown reason: %+v", info)
+	}
+}
+
 func TestReadDocumentRestoreDataLossReturnsErrorInfoDetail(t *testing.T) {
 	client := startRestoreServer(t, restoreDataLossStore{
 		reason:  storeapi.DataLossReasonBackendRestoreCorrupt,
