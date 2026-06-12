@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const schedulerTestSignatureVersion = "daily-2026.06.12:1"
+
 func TestSchedulerRunOnceScansLeaderSealedBlocks(t *testing.T) {
 	engine := &recordingEngine{}
 	metrics := &recordingMetrics{}
@@ -178,6 +180,198 @@ func TestSchedulerDuplicateSchedulingIsIdempotent(t *testing.T) {
 	if metrics.duplicates != 2 {
 		t.Fatalf("duplicates = %d, want 2", metrics.duplicates)
 	}
+}
+
+func TestSchedulerResumesFromPersistedProgressAfterReconstruction(t *testing.T) {
+	store := &memoryProgressStore{}
+	firstEngine := &recordingEngine{}
+	first := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   firstEngine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := first.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce: %v", err)
+	}
+	if got, want := firstEngine.blockIDs(), []uint64{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first scanned Blocks = %v, want %v", got, want)
+	}
+	assertSavedProgress(t, store.lastSaved(), 2)
+
+	secondEngine := &recordingEngine{}
+	second := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}, {BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   secondEngine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := second.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
+	}
+	if got, want := secondEngine.blockIDs(), []uint64{3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second scanned Blocks = %v, want %v", got, want)
+	}
+	assertSavedProgress(t, store.lastSaved(), 3)
+}
+
+func TestSchedulerDoesNotPersistFrontierPastFailedLowerBlock(t *testing.T) {
+	store := &memoryProgressStore{}
+	engine := engineFunc(func(_ context.Context, block Block) (Result, error) {
+		if block.BlockID == 2 {
+			return Result{}, errors.New("scan failed")
+		}
+		return Result{Status: ResultClean, ScannedDocuments: 1}, nil
+	})
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}, {BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded despite failed lower Block")
+	}
+	assertSavedProgress(t, store.lastSaved(), 1)
+
+	retryEngine := &recordingEngine{}
+	retry := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}, {BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   retryEngine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+	if err := retry.RunOnce(context.Background()); err != nil {
+		t.Fatalf("retry RunOnce: %v", err)
+	}
+	if got, want := retryEngine.blockIDs(), []uint64{2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("retry scanned Blocks = %v, want %v", got, want)
+	}
+}
+
+func TestSchedulerSignatureVersionChangeResetsProgressFromBeginning(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          3,
+			LastSignatureVersionScanned: "daily-2026.06.11:1",
+		},
+	}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}, {BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got, want := engine.blockIDs(), []uint64{1, 2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks after signature update = %v, want %v", got, want)
+	}
+	if len(store.saves) == 0 {
+		t.Fatal("no progress saves recorded")
+	}
+	assertSavedProgress(t, store.saves[0], 0)
+	assertSavedProgress(t, store.lastSaved(), 3)
+}
+
+func TestSchedulerMissingProgressActsAsZeroProgress(t *testing.T) {
+	store := &memoryProgressStore{loadErr: ErrProgressNotFound}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got, want := engine.blockIDs(), []uint64{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
+	assertSavedProgress(t, store.lastSaved(), 2)
+}
+
+func TestSchedulerProgressSaveFailureIsObservable(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{LastSignatureVersionScanned: schedulerTestSignatureVersion},
+		saveErr:  errors.New("projection unavailable"),
+	}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded despite progress save failure")
+	}
+	if got, want := engine.blockIDs(), []uint64{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
+	snapshot := scheduler.Snapshot()
+	if snapshot.LastReason != ReasonProgressFailed {
+		t.Fatalf("last reason = %q, want %q", snapshot.LastReason, ReasonProgressFailed)
+	}
+}
+
+func TestSchedulerHigherPersistedFrontierSkipsKnownBlocks(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          99,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got := engine.blockIDs(); len(got) != 0 {
+		t.Fatalf("scanned Blocks = %v, want none", got)
+	}
+	assertSavedProgress(t, store.lastSaved(), 99)
 }
 
 func TestSchedulerContinuesAfterPoisonBlock(t *testing.T) {
@@ -511,4 +705,52 @@ func (t *manualTicker) C() <-chan time.Time {
 
 func (t *manualTicker) Stop() {
 	t.stopped = true
+}
+
+type memoryProgressStore struct {
+	progress Progress
+	loadErr  error
+	saveErr  error
+	saves    []Progress
+}
+
+func (s *memoryProgressStore) LoadScannerProgress(context.Context) (Progress, error) {
+	if s.loadErr != nil {
+		return Progress{}, s.loadErr
+	}
+	return s.progress, nil
+}
+
+func (s *memoryProgressStore) SaveScannerProgress(_ context.Context, progress Progress) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	s.progress = progress
+	s.saves = append(s.saves, progress)
+	return nil
+}
+
+func (s *memoryProgressStore) lastSaved() Progress {
+	if len(s.saves) == 0 {
+		return s.progress
+	}
+	return s.saves[len(s.saves)-1]
+}
+
+type staticSignatureVersion string
+
+func (v staticSignatureVersion) SignatureVersion(context.Context) (string, error) {
+	return string(v), nil
+}
+
+func assertSavedProgress(t *testing.T, got Progress, blockID uint64) {
+	t.Helper()
+
+	want := Progress{
+		LastScannedBlockID:          blockID,
+		LastSignatureVersionScanned: schedulerTestSignatureVersion,
+	}
+	if got != want {
+		t.Fatalf("progress = %+v, want %+v", got, want)
+	}
 }

@@ -5,7 +5,7 @@ created: 2026-06-12T13:07:03-04:00
 
 # Story 5.2: Scanner Watermarks and Rescan Priority
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,50 +33,50 @@ so that rescans are deterministic and restart-safe.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 5.2 evidence artifact before code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-5-scanner-watermarks-rescan-evidence.md`.
-  - [ ] Record baseline commit, changed-boundary list, persisted key names, restart/rescan/rollback commands, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
-  - [ ] Keep closure scoped to Story 5.2. Do not claim `QuarantineDocument`, read denial, metadata scan status, admin quarantine operations, or Epic 5 closure.
+- [x] Create the Story 5.2 evidence artifact before code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-5-scanner-watermarks-rescan-evidence.md`.
+  - [x] Record baseline commit, changed-boundary list, persisted key names, restart/rescan/rollback commands, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
+  - [x] Keep closure scoped to Story 5.2. Do not claim `QuarantineDocument`, read denial, metadata scan status, admin quarantine operations, or Epic 5 closure.
 
-- [ ] Add scanner watermark storage to the Pebble Projection boundary. (AC: 1, 2, 4)
-  - [ ] Add a focused `internal/index` scanner watermark file instead of mixing this state into transaction entries, pending uploads, or confirmed uploads.
-  - [ ] Store one per-Shard Projection-local watermark record because each Shard owns its own Pebble Projection.
-  - [ ] Include `LastScannedBlockID uint64` and `LastSignatureVersionScanned string` in the stored value.
-  - [ ] Use a dedicated bounded key prefix such as `"\x00scanner-watermark\x00"` with explicit lower/upper bounds if iteration is needed.
-  - [ ] Use existing Pebble patterns: `idx.db.Set(..., pebble.Sync)`, `idx.db.Get`, decode validation, sentinel `Err...NotFound`, and package-local encoding helpers.
-  - [ ] Add index tests for missing watermark, put/get, corrupt/truncated/unknown-version value, invalid signature version, and streaming hash determinism with watermark keys included.
+- [x] Add scanner watermark storage to the Pebble Projection boundary. (AC: 1, 2, 4)
+  - [x] Add a focused `internal/index` scanner watermark file instead of mixing this state into transaction entries, pending uploads, or confirmed uploads.
+  - [x] Store one per-Shard Projection-local watermark record because each Shard owns its own Pebble Projection.
+  - [x] Include `LastScannedBlockID uint64` and `LastSignatureVersionScanned string` in the stored value.
+  - [x] Use a dedicated bounded key prefix such as `"\x00scanner-watermark\x00"` with explicit lower/upper bounds if iteration is needed.
+  - [x] Use existing Pebble patterns: `idx.db.Set(..., pebble.Sync)`, `idx.db.Get`, decode validation, sentinel `Err...NotFound`, and package-local encoding helpers.
+  - [x] Add index tests for missing watermark, put/get, corrupt/truncated/unknown-version value, invalid signature version, and streaming hash determinism with watermark keys included.
 
-- [ ] Add a scanner progress boundary to `internal/avscan` without importing `internal/index`. (AC: 1-4)
-  - [ ] Define small consumer-side interfaces in `internal/avscan`, for example `ProgressStore` and `SignatureVersionProvider`; keep them to the methods the scheduler consumes.
-  - [ ] Treat a missing progress record as zero progress with a bounded reason, not as data loss.
-  - [ ] Persist progress only after scan work for a Block completes successfully.
-  - [ ] Persist `last_scanned_block_id` as a contiguous frontier. Do not advance it past a lower Block that failed in the same run, even if later Blocks were scanned successfully.
-  - [ ] Keep the Story 5.1 in-memory `completed` map as process-local duplicate suppression only. It must not become persistent authority and must not replace the persisted watermark.
+- [x] Add a scanner progress boundary to `internal/avscan` without importing `internal/index`. (AC: 1-4)
+  - [x] Define small consumer-side interfaces in `internal/avscan`, for example `ProgressStore` and `SignatureVersionProvider`; keep them to the methods the scheduler consumes.
+  - [x] Treat a missing progress record as zero progress with a bounded reason, not as data loss.
+  - [x] Persist progress only after scan work for a Block completes successfully.
+  - [x] Persist `last_scanned_block_id` as a contiguous frontier. Do not advance it past a lower Block that failed in the same run, even if later Blocks were scanned successfully.
+  - [x] Keep the Story 5.1 in-memory `completed` map as process-local duplicate suppression only. It must not become persistent authority and must not replace the persisted watermark.
 
-- [ ] Implement deterministic rescan priority from signature-version changes. (AC: 3, 4)
-  - [ ] Compare current bounded signature version from an injected provider with `LastSignatureVersionScanned`.
-  - [ ] When the signature version changes, reset scan priority to the sealed Block frontier from the beginning of the Shard and persist the active signature version with a reset Block frontier.
-  - [ ] Do not add per-Document scan state in this story. ADR 0008 explicitly chooses dual watermarks.
-  - [ ] Do not change Document identity, transaction entries, or read visibility while rescanning.
-  - [ ] Ensure rollback/conflict cases rescan safely rather than skipping work or corrupting visibility state.
+- [x] Implement deterministic rescan priority from signature-version changes. (AC: 3, 4)
+  - [x] Compare current bounded signature version from an injected provider with `LastSignatureVersionScanned`.
+  - [x] When the signature version changes, reset scan priority to the sealed Block frontier from the beginning of the Shard and persist the active signature version with a reset Block frontier.
+  - [x] Do not add per-Document scan state in this story. ADR 0008 explicitly chooses dual watermarks.
+  - [x] Do not change Document identity, transaction entries, or read visibility while rescanning.
+  - [x] Ensure rollback/conflict cases rescan safely rather than skipping work or corrupting visibility state.
 
-- [ ] Wire persisted scanner progress through `internal/shard`. (AC: 1-4)
-  - [ ] Implement a Shard-local adapter that satisfies the `avscan` progress interfaces using `*index.Index`.
-  - [ ] Pass the adapter into `avscan.Config` from `newScannerCoordinator`; do not make `internal/avscan` import `internal/index`.
-  - [ ] Preserve Story 5.1 behavior: scanner work is leader-only, post-ACK, context-driven, non-blocking for writes, stream-based over `Block.OpenBytes`, and shares Deep Scrub pause/I/O budget.
-  - [ ] Rebuild paths must preserve scanner progress only if it is intentionally part of Projection state. If rebuild cannot preserve it safely, document and test the restart-safe fallback to rescan from zero progress.
+- [x] Wire persisted scanner progress through `internal/shard`. (AC: 1-4)
+  - [x] Implement a Shard-local adapter that satisfies the `avscan` progress interfaces using `*index.Index`.
+  - [x] Pass the adapter into `avscan.Config` from `newScannerCoordinator`; do not make `internal/avscan` import `internal/index`.
+  - [x] Preserve Story 5.1 behavior: scanner work is leader-only, post-ACK, context-driven, non-blocking for writes, stream-based over `Block.OpenBytes`, and shares Deep Scrub pause/I/O budget.
+  - [x] Rebuild paths must preserve scanner progress only if it is intentionally part of Projection state. If rebuild cannot preserve it safely, document and test the restart-safe fallback to rescan from zero progress.
 
-- [ ] Add focused restart, rescan, rollback, and redaction tests before broad gates. (AC: 1-4)
-  - [ ] `internal/index` tests prove watermark encoding, validation, missing/corrupt values, and hash determinism.
-  - [ ] `internal/avscan` tests prove persisted progress skips already scanned Blocks after scheduler reconstruction, only advances a contiguous frontier, and survives nil/missing progress store behavior.
-  - [ ] `internal/avscan` tests prove signature-version change causes a rescan from the Shard beginning without changing Block or Document identity inputs.
-  - [ ] `internal/shard` tests prove close/reopen or scheduler reconstruction resumes from persisted progress while writes and reads remain unaffected.
-  - [ ] Add rollback/conflict tests where persisted progress is lower, higher than known sealed Blocks, or paired with an old signature version; duplicate scanning is allowed, skipped unsafe work is not.
-  - [ ] Do not use sleeps as synchronization. Use fake stores, manual ticks, channels, contexts, and bounded polling with clear failure messages.
+- [x] Add focused restart, rescan, rollback, and redaction tests before broad gates. (AC: 1-4)
+  - [x] `internal/index` tests prove watermark encoding, validation, missing/corrupt values, and hash determinism.
+  - [x] `internal/avscan` tests prove persisted progress skips already scanned Blocks after scheduler reconstruction, only advances a contiguous frontier, and survives nil/missing progress store behavior.
+  - [x] `internal/avscan` tests prove signature-version change causes a rescan from the Shard beginning without changing Block or Document identity inputs.
+  - [x] `internal/shard` tests prove close/reopen or scheduler reconstruction resumes from persisted progress while writes and reads remain unaffected.
+  - [x] Add rollback/conflict tests where persisted progress is lower, higher than known sealed Blocks, or paired with an old signature version; duplicate scanning is allowed, skipped unsafe work is not.
+  - [x] Do not use sleeps as synchronization. Use fake stores, manual ticks, channels, contexts, and bounded polling with clear failure messages.
 
 - [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
-  - [ ] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
-  - [ ] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
+  - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
+  - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
   - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
 
 ## Dev Notes
@@ -204,12 +204,39 @@ GPT-5 Codex for story creation.
 ### Debug Log References
 
 - 2026-06-12T13:07:03-04:00 - Story 5.2 created from sprint status after Story 5.1 implementation, code review, review fixes, commit, and push completed.
+- 2026-06-12T13:13:21-04:00 - Dev-story workflow started. Story and sprint status moved to in-progress from baseline `ccc2844bdcf07da30530706efaab34ad75274c0f`.
+- 2026-06-12T13:14:00-04:00 - Created Story 5.2 evidence artifact before production code changes.
+- 2026-06-12T13:16:11-04:00 - Added Projection-local scanner watermark storage and focused RED/GREEN tests. Verified with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index -run ScannerWatermark -count=1`.
+- 2026-06-12T13:20:18-04:00 - Added avscan progress store and signature-version scheduler flow. Verified with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -count=1`.
+- 2026-06-12T13:22:44-04:00 - Wired Shard scanner progress adapter through the Projection-backed coordinator. Verified with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run Scanner -count=1`.
+- 2026-06-12T13:23:51-04:00 - Targeted Story 5.2 package gate passed with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1`.
+- 2026-06-12T13:30:33-04:00 - Final implementation gates passed: `git diff --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
 - Story 5.2 is ready for dev-story implementation.
+- Created scoped evidence artifact with baseline commit, changed boundaries, persisted key names, verification commands, redaction plan, and explicit out-of-scope quarantine/read-path closure.
+- Added `internal/index` scanner watermark persistence using a dedicated Projection key, compact versioned encoding, bounded signature-version validation, not-found sentinel behavior, and streaming-hash participation tests.
+- Added `internal/avscan` progress and signature-version interfaces, restart resume from persisted frontier, contiguous-frontier persistence, signature-version reset priority, and duplicate-safe rollback/conflict tests without importing `internal/index`.
+- Added Shard-local scanner progress adapter from `*index.Index` to `avscan.ProgressStore`, plus coordinator reconstruction coverage proving persisted progress survives scheduler reconstruction without exposing Block paths to scanner engines.
+- Local implementation verification passed and the story is ready for the BMAD code-review workflow.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-2-scanner-watermarks-and-rescan-priority.md`
+- `_bmad-output/implementation-artifacts/epic-5-scanner-watermarks-rescan-evidence.md`
+- `internal/avscan/metrics_otel.go`
+- `internal/avscan/scheduler.go`
+- `internal/avscan/scheduler_test.go`
+- `internal/avscan/types.go`
+- `internal/index/scanner_watermark.go`
+- `internal/index/scanner_watermark_test.go`
+- `internal/shard/scanner.go`
+- `internal/shard/scanner_progress.go`
+- `internal/shard/scanner_progress_test.go`
+- `internal/shard/shard.go`
+
+### Change Log
+
+- 2026-06-12 - Implemented Story 5.2 scanner watermarks and deterministic rescan priority; moved story to review after local gates passed.

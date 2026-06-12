@@ -175,7 +175,8 @@ func boundedReason(reason string) string {
 		string(ReasonScanPanic),
 		string(ReasonCanceled),
 		string(ReasonIOBudget),
-		string(ReasonPaused):
+		string(ReasonPaused),
+		string(ReasonProgressFailed):
 		return reason
 	default:
 		return "unknown"

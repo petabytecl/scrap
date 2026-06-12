@@ -15,6 +15,7 @@ var (
 	ErrEngineUnavailable = errors.New("avscan: engine unavailable")
 	ErrScanPanic         = errors.New("avscan: scan panic")
 	ErrBlockSource       = errors.New("avscan: Block source unavailable")
+	ErrProgressNotFound  = errors.New("avscan: scanner progress not found")
 )
 
 type Status string
@@ -37,6 +38,7 @@ const (
 	ReasonCanceled          Reason = "canceled"
 	ReasonIOBudget          Reason = "io_budget"
 	ReasonPaused            Reason = "paused"
+	ReasonProgressFailed    Reason = "progress_failed"
 )
 
 type ResultStatus string
@@ -75,6 +77,11 @@ type Snapshot struct {
 	LastUpdated        time.Time
 }
 
+type Progress struct {
+	LastScannedBlockID          uint64
+	LastSignatureVersionScanned string
+}
+
 type BlockLister interface {
 	ListSealedBlocks(context.Context) ([]Block, error)
 }
@@ -85,6 +92,15 @@ type LeaderChecker interface {
 
 type Engine interface {
 	Scan(context.Context, Block) (Result, error)
+}
+
+type ProgressStore interface {
+	LoadScannerProgress(context.Context) (Progress, error)
+	SaveScannerProgress(context.Context, Progress) error
+}
+
+type SignatureVersionProvider interface {
+	SignatureVersion(context.Context) (string, error)
 }
 
 type IOBudget interface {

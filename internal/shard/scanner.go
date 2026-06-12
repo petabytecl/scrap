@@ -9,14 +9,16 @@ import (
 
 	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
 type ScannerConfig struct {
-	Engine   avscan.Engine
-	Metrics  avscan.Metrics
-	Interval time.Duration
-	IORate   int64
+	Engine                   avscan.Engine
+	SignatureVersionProvider avscan.SignatureVersionProvider
+	Metrics                  avscan.Metrics
+	Interval                 time.Duration
+	IORate                   int64
 }
 
 func (c ScannerConfig) enabled() bool {
@@ -41,7 +43,14 @@ type scannerCoordinator struct {
 	scheduler *avscan.Scheduler
 }
 
-func newScannerCoordinator(core scannerCore, blocksDir string, shardID uint64, cfg ScannerConfig, pauseController scrub.PauseController) *scannerCoordinator {
+func newScannerCoordinator(
+	core scannerCore,
+	blocksDir string,
+	idx *index.Index,
+	shardID uint64,
+	cfg ScannerConfig,
+	pauseController scrub.PauseController,
+) *scannerCoordinator {
 	c := &scannerCoordinator{
 		core:      core,
 		blocksDir: blocksDir,
@@ -50,14 +59,16 @@ func newScannerCoordinator(core scannerCore, blocksDir string, shardID uint64, c
 		return c
 	}
 	c.scheduler = avscan.NewScheduler(avscan.Config{
-		ShardID:         shardID,
-		BlockLister:     c,
-		LeaderChecker:   core,
-		Engine:          cfg.Engine,
-		Metrics:         cfg.Metrics,
-		PauseController: pauseController,
-		IOBudget:        scrub.NewTokenBucket(cfg.ioRate()),
-		Interval:        cfg.Interval,
+		ShardID:                  shardID,
+		BlockLister:              c,
+		LeaderChecker:            core,
+		Engine:                   cfg.Engine,
+		ProgressStore:            scannerProgressStore{idx: idx},
+		SignatureVersionProvider: cfg.SignatureVersionProvider,
+		Metrics:                  cfg.Metrics,
+		PauseController:          pauseController,
+		IOBudget:                 scrub.NewTokenBucket(cfg.ioRate()),
+		Interval:                 cfg.Interval,
 	})
 	return c
 }

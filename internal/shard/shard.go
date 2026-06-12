@@ -255,7 +255,7 @@ func Open(cfg Config) (*Shard, error) {
 		bootstrapGrace:       cfg.BootstrapGrace,
 	}
 	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressure.ScrubPauseController())
-	s.scanner = newScannerCoordinator(s, blocksDir, cfg.ShardID, cfg.Scanner, s.uploadPressure.ScrubPauseController())
+	s.scanner = newScannerCoordinator(s, blocksDir, idx, cfg.ShardID, cfg.Scanner, s.uploadPressure.ScrubPauseController())
 	s.rebuilder = newProjectionRebuilder(s, cfg.DataDir, blocksDir, cfg.ShardID, cfg.Upload, logger)
 	// Raft Open starts its run loop before returning and can replay committed upload
 	// commands immediately. The apply path refreshes upload pressure, so the
