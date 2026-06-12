@@ -278,30 +278,26 @@ func TestWriteDocumentAckDoesNotWaitForBackendUpload(t *testing.T) {
 	if _, err := s.WriteDocument(ctx, "tx-upload-ack-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
 		t.Fatalf("WriteDocument doc-1: %v", err)
 	}
+	if _, err := s.WriteDocument(ctx, "tx-upload-ack-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	backendStore.waitBlockPutStarted(t)
 
 	writeDone := make(chan error, 1)
 	go func() {
-		_, err := s.WriteDocument(ctx, "tx-upload-ack-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b")))
+		_, err := s.WriteDocument(ctx, "tx-upload-ack-3", "doc-3.bin", "application/octet-stream", "", bytes.NewReader([]byte("c")))
 		writeDone <- err
 	}()
 
 	select {
 	case err := <-writeDone:
 		if err != nil {
-			t.Fatalf("WriteDocument doc-2: %v", err)
+			t.Fatalf("WriteDocument doc-3: %v", err)
 		}
-	case <-backendStore.blockPutStarted:
-		select {
-		case err := <-writeDone:
-			if err != nil {
-				t.Fatalf("WriteDocument doc-2 while Backend blocked: %v", err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("WriteDocument waited for blocked Backend upload")
-		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WriteDocument waited for blocked Backend upload")
 	}
 
-	backendStore.waitBlockPutStarted(t)
 	backendStore.releaseBlockPut()
 	waitPendingUploads(t, s, 0)
 }
@@ -330,7 +326,20 @@ func TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterRe
 		t.Fatalf("Close first shard: %v", err)
 	}
 
-	assertPendingUploadWithoutConfirmationInDir(t, dataDir, 1)
+	assertPendingUploadWithoutConfirmationInDir(t, dataDir, pending.BlockID)
+
+	recovered := openUploadTestShardInDir(t, dataDir, shard.UploadConfig{
+		Enabled: false,
+		Backend: backendStore,
+		CellID:  testCellID,
+	})
+	waitPendingUploads(t, recovered, 1)
+	if _, err := recovered.ConfirmedUploadForTest(pending.BlockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("ConfirmedUploadForTest before upload resumes error = %v, want ErrConfirmedUploadNotFound", err)
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatalf("Close recovered shard: %v", err)
+	}
 
 	reopened := openUploadTestShardInDir(t, dataDir, shard.UploadConfig{
 		Enabled:     true,
@@ -344,9 +353,7 @@ func TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterRe
 	if err != nil {
 		t.Fatalf("ConfirmedUploadForTest after reopen: %v", err)
 	}
-	if confirmed.BlockID != pending.BlockID || confirmed.BlockObject.Key != backendObjectKey(pending.BlockID, "blk") {
-		t.Fatalf("confirmed upload after reopen = %+v, want Block %d Backend object", confirmed, pending.BlockID)
-	}
+	assertConfirmedUploadMatchesPending(t, confirmed, pending)
 }
 
 func openUploadTestShard(t *testing.T, upload shard.UploadConfig) *shard.Shard {
@@ -470,6 +477,36 @@ func confirmedUploadForTest(blockSize int64) index.ConfirmedUpload {
 
 func shardValidationValue(kind string) string {
 	return kind + "-validation"
+}
+
+func assertConfirmedUploadMatchesPending(t *testing.T, confirmed index.ConfirmedUpload, pending shard.PendingUpload) {
+	t.Helper()
+
+	if confirmed.BlockID != pending.BlockID {
+		t.Fatalf("confirmed BlockID = %d, want %d", confirmed.BlockID, pending.BlockID)
+	}
+	if confirmed.ShardID != testShardID {
+		t.Fatalf("confirmed ShardID = %d, want %d", confirmed.ShardID, testShardID)
+	}
+	if confirmed.UploadGeneration != pending.UploadGeneration {
+		t.Fatalf("confirmed upload generation = %d, want %d", confirmed.UploadGeneration, pending.UploadGeneration)
+	}
+	if confirmed.SealedSizeBytes != pending.SealedSizeBytes {
+		t.Fatalf("confirmed sealed size = %d, want %d", confirmed.SealedSizeBytes, pending.SealedSizeBytes)
+	}
+	assertConfirmedObjectMetadata(t, "Block", confirmed.BlockObject, backendObjectKey(pending.BlockID, "blk"))
+	assertConfirmedObjectMetadata(t, "Index", confirmed.IndexObject, backendObjectKey(pending.BlockID, "idx"))
+}
+
+func assertConfirmedObjectMetadata(t *testing.T, kind string, meta index.BackendObjectMetadata, wantKey string) {
+	t.Helper()
+
+	if meta.Key != wantKey {
+		t.Fatalf("confirmed %s object key = %q, want %q", kind, meta.Key, wantKey)
+	}
+	if meta.SizeBytes == 0 || meta.ValidationToken == "" {
+		t.Fatalf("confirmed %s object metadata = %+v, want size and validation token", kind, meta)
+	}
 }
 
 type emptyValidationBackend struct {

@@ -4,7 +4,7 @@ baseline_commit: 783d4da2a115b24d52c4a5342dbb58257e1757a9
 
 # Story 3.1: Committed Backend Upload Confirmation
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -65,6 +65,16 @@ so that Backend durability is observable without entering the write ACK path.
   - [x] `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`
   - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
   - [x] If runtime evidence, production rehearsal, scripts, or deployment contracts change, run `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` or the narrowest documented Tier 2 target that exercises Backend upload confirmation.
+
+### Review Findings
+
+- [x] [Review][Patch] ACK-independence test could pass before Backend upload was blocked [internal/shard/upload_outbox_test.go:288] — fixed by forcing the Backend `.blk` upload to start and block before launching the write whose ACK independence is asserted.
+- [x] [Review][Patch] Split-success reopen fixture did not assert recovered Shard state before re-confirmation [internal/shard/upload_outbox_test.go:335] — fixed by reopening with uploads disabled, asserting pending state plus no committed confirmation, then reopening with uploads enabled.
+- [x] [Review][Patch] Split-success fixture hard-coded Block ID instead of using the pending upload [internal/shard/upload_outbox_test.go:333] — fixed by checking `pending.BlockID`.
+- [x] [Review][Patch] Confirmed upload assertion did not verify split metadata, size, token, Shard, and generation [internal/shard/upload_outbox_test.go:343] — fixed by asserting Block and Index object metadata plus Shard ID, sealed size, and upload generation.
+- [x] [Review][Patch] Evidence artifact overclaimed split-success controller coverage [epic-3-backend-upload-confirmation-evidence.md:52] — fixed by citing both the existing controller interrupted-proposal test and the Shard reopen fixture.
+- [x] [Review][Patch] CONCERNS evidence row lacked a next action [epic-3-backend-upload-confirmation-evidence.md:55] — fixed by recording the `SCRAP_E2E=1` Tier 2 runtime-evidence next action and Story 6.6 real S3/IAM deferral.
+- [x] [Review][Patch] Leak-scan evidence used placeholders instead of rerunnable commands [epic-3-backend-upload-confirmation-evidence.md:58] — fixed by adding concrete changed-file scan commands.
 
 ## Dev Notes
 
@@ -190,6 +200,17 @@ GPT-5 Codex
 - SECURITY: Secret keyword scan over changed Story 3.1 files found only expected story/status text and validation-token test fixtures; no secret-shaped values were introduced.
 - REDACTION: Raw identifier/evidence scan over changed Story 3.1 files found only expected checklist/story text, sprint `story_location`, bounded Backend object shape tests, and provider-doc references.
 - AUTHORITY: Public-routing Backend-inventory scan over `internal/cmd/public_store_router.go`, `internal/server`, `internal/cmd/app.go`, and `internal/cmd/public_store_router_test.go` returned no Backend key/list/head/get/S3/object matches. A wider membership scan found only existing server `member_id` log-field tests, not authority input.
+- CODE-REVIEW: BMAD review layers found 7 actionable Story 3.1 patch findings and no decision-needed or deferred findings.
+- CODE-REVIEW-FIX: Tightened ACK-independence test ordering, added recovered-Shard no-confirmation assertion before upload resumes, removed hard-coded Block ID, expanded confirmed split-metadata assertions, and made evidence commands/CONCERNS next actions reproducible.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestWriteDocumentAckDoesNotWaitForBackendUpload -count=1 -v` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestUploadAndConfirmRetriesAfterInterruptedConfirmProposal -count=1 -v` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterReopen -count=1 -v` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -run Test.*Upload -count=1` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run TestWriteDocumentAckDoesNotWaitForBackendUpload -count=10 -v` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterReopen -count=10 -v` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -count=1` passed.
+- REVIEW-FIX-VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed after review fixes.
+- REVIEW-FIX-VERIFY: Final `git diff --check`, secret keyword scan, raw identifier scan, and public-routing Backend-inventory authority scan passed with only expected bounded matches.
 
 ### Completion Notes List
 
@@ -200,6 +221,7 @@ GPT-5 Codex
 - Added deterministic split-success recovery coverage proving Backend `.blk` and `.idx` objects alone do not create committed upload authority; pending upload remains until the real Shard reopen path commits `ConfirmUpload`.
 - Added the Epic 3 upload confirmation evidence artifact with authority path, changed boundaries, focused test evidence, E2E skip limitation, package-boundary evidence, and `make check` evidence.
 - No proto, generated code, storage format, Backend key format, production code, dependency, or wire-contract changes were made.
+- Addressed BMAD code-review findings without production-code changes.
 
 ### File List
 
@@ -213,3 +235,5 @@ GPT-5 Codex
 - 2026-06-11: Created Story 3.1 Committed Backend Upload Confirmation context and moved status to ready-for-dev.
 - 2026-06-11: Started Story 3.1 implementation and moved status to in-progress.
 - 2026-06-11: Completed Story 3.1 evidence/tests and moved status to review.
+- 2026-06-11: Addressed BMAD code-review findings for Story 3.1.
+- 2026-06-11: Passed review-fix verification and moved status to done.
