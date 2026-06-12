@@ -263,6 +263,92 @@ func TestShardUploadProcessorResumesPendingUploadAfterReopen(t *testing.T) {
 	waitPendingUploads(t, reopened, 0)
 }
 
+func TestWriteDocumentAckDoesNotWaitForBackendUpload(t *testing.T) {
+	ctx := context.Background()
+	backendStore := newBlockingUploadBackend()
+	t.Cleanup(backendStore.releaseBlockPut)
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:        true,
+		Backend:        backendStore,
+		CellID:         testCellID,
+		Concurrency:    1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	if _, err := s.WriteDocument(ctx, "tx-upload-ack-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := s.WriteDocument(ctx, "tx-upload-ack-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b")))
+		writeDone <- err
+	}()
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("WriteDocument doc-2: %v", err)
+		}
+	case <-backendStore.blockPutStarted:
+		select {
+		case err := <-writeDone:
+			if err != nil {
+				t.Fatalf("WriteDocument doc-2 while Backend blocked: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("WriteDocument waited for blocked Backend upload")
+		}
+	}
+
+	backendStore.waitBlockPutStarted(t)
+	backendStore.releaseBlockPut()
+	waitPendingUploads(t, s, 0)
+}
+
+func TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterReopen(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	backendStore := backend.NewFS(t.TempDir())
+
+	s := openUploadTestShardInDir(t, dataDir, shard.UploadConfig{
+		Enabled:        true,
+		CellID:         testCellID,
+		Concurrency:    1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+	if _, err := s.WriteDocument(ctx, "tx-upload-split-1", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(bytes.Repeat([]byte("a"), 64))); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-upload-split-2", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("b"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	pending := waitPendingUploads(t, s, 1)[0]
+	putBackendObjectFromFile(ctx, t, backendStore, backendObjectKey(pending.BlockID, "blk"), block.FilePath(filepath.Join(dataDir, "blocks"), pending.BlockID))
+	putBackendObjectFromFile(ctx, t, backendStore, backendObjectKey(pending.BlockID, "idx"), block.IdxFilePath(filepath.Join(dataDir, "blocks"), pending.BlockID))
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close first shard: %v", err)
+	}
+
+	assertPendingUploadWithoutConfirmationInDir(t, dataDir, 1)
+
+	reopened := openUploadTestShardInDir(t, dataDir, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+	t.Cleanup(func() { _ = reopened.Close() })
+	waitPendingUploads(t, reopened, 0)
+	confirmed, err := reopened.ConfirmedUploadForTest(pending.BlockID)
+	if err != nil {
+		t.Fatalf("ConfirmedUploadForTest after reopen: %v", err)
+	}
+	if confirmed.BlockID != pending.BlockID || confirmed.BlockObject.Key != backendObjectKey(pending.BlockID, "blk") {
+		t.Fatalf("confirmed upload after reopen = %+v, want Block %d Backend object", confirmed, pending.BlockID)
+	}
+}
+
 func openUploadTestShard(t *testing.T, upload shard.UploadConfig) *shard.Shard {
 	t.Helper()
 
@@ -318,8 +404,13 @@ func waitPendingUploads(t *testing.T, s *shard.Shard, want int) []shard.PendingU
 
 func waitBackendObject(ctx context.Context, t *testing.T, store backend.Backend, key string) {
 	t.Helper()
+	waitBackendObjectWithin(ctx, t, store, key, 5*time.Second)
+}
 
-	deadline := time.Now().Add(5 * time.Second)
+func waitBackendObjectWithin(ctx context.Context, t *testing.T, store backend.Backend, key string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		meta, err := store.HeadObject(ctx, key)
 		if err == nil && meta.Size > 0 && meta.ETag != "" {
@@ -331,6 +422,25 @@ func waitBackendObject(ctx context.Context, t *testing.T, store backend.Backend,
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for backend object %s", key)
+}
+
+func putBackendObjectFromFile(ctx context.Context, t *testing.T, store backend.Backend, key, path string) {
+	t.Helper()
+
+	file, err := os.Open(path) //nolint:gosec // test paths are generated from controlled temporary Shard data
+	if err != nil {
+		t.Fatalf("Open %s: %v", path, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatalf("Stat %s: %v", path, err)
+	}
+	if _, err := store.PutObject(ctx, key, file, info.Size(), backend.PutOpts{}); err != nil {
+		t.Fatalf("PutObject %s: %v", key, err)
+	}
+	waitBackendObject(ctx, t, store, key)
 }
 
 func backendObjectKey(blockID uint64, ext string) string {
@@ -583,6 +693,82 @@ func (b *gatedBackend) waitBlockPutDone(t *testing.T) {
 	}
 }
 
+type blockingUploadBackend struct {
+	mu              sync.Mutex
+	objects         map[string]backend.ObjectMeta
+	blockPutStarted chan struct{}
+	releaseBlock    chan struct{}
+	startOnce       sync.Once
+	releaseOnce     sync.Once
+}
+
+func newBlockingUploadBackend() *blockingUploadBackend {
+	return &blockingUploadBackend{
+		objects:         make(map[string]backend.ObjectMeta),
+		blockPutStarted: make(chan struct{}),
+		releaseBlock:    make(chan struct{}),
+	}
+}
+
+func (b *blockingUploadBackend) PutObject(ctx context.Context, key string, body io.Reader, size int64, _ backend.PutOpts) (backend.PutResult, error) {
+	if strings.HasSuffix(key, ".blk") {
+		b.startOnce.Do(func() { close(b.blockPutStarted) })
+		select {
+		case <-ctx.Done():
+			return backend.PutResult{}, ctx.Err()
+		case <-b.releaseBlock:
+		}
+	}
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		return backend.PutResult{}, fmt.Errorf("%w: read object: %w", backend.ErrPermanent, err)
+	}
+
+	meta := backend.ObjectMeta{
+		Size:        size,
+		ETag:        "validation-" + strings.TrimPrefix(filepath.Ext(key), "."),
+		ContentType: backend.DefaultContentType,
+	}
+	b.mu.Lock()
+	b.objects[key] = meta
+	b.mu.Unlock()
+	return backend.PutResult{Size: size, ETag: meta.ETag}, nil
+}
+
+func (b *blockingUploadBackend) HeadObject(_ context.Context, key string) (backend.ObjectMeta, error) {
+	b.mu.Lock()
+	meta, ok := b.objects[key]
+	b.mu.Unlock()
+	if !ok {
+		return backend.ObjectMeta{}, backend.ErrNotFound
+	}
+	return meta, nil
+}
+
+func (b *blockingUploadBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	return nil, backend.ObjectMeta{}, backend.ErrPermanent
+}
+
+func (b *blockingUploadBackend) DeleteObject(context.Context, string) error {
+	return backend.ErrPermanent
+}
+
+func (b *blockingUploadBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
+	return nil, backend.ErrPermanent
+}
+
+func (b *blockingUploadBackend) waitBlockPutStarted(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.blockPutStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Backend .blk put to start")
+	}
+}
+
+func (b *blockingUploadBackend) releaseBlockPut() {
+	b.releaseOnce.Do(func() { close(b.releaseBlock) })
+}
+
 type indexVerificationMismatchShardBackend struct {
 	mu       sync.Mutex
 	objects  map[string]backend.ObjectMeta
@@ -646,6 +832,32 @@ func (b *indexVerificationMismatchShardBackend) waitIndexVerification(t *testing
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for Backend .idx verification")
+}
+
+func assertPendingUploadWithoutConfirmationInDir(t *testing.T, dataDir string, blockID uint64) {
+	t.Helper()
+
+	idx, err := index.Open(filepath.Join(dataDir, "pebble"))
+	if err != nil {
+		t.Fatalf("Open index: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	pending, err := idx.GetPendingUpload(blockID)
+	if err != nil {
+		t.Fatalf("GetPendingUpload block %d: %v", blockID, err)
+	}
+	if pending.BlockID != blockID {
+		t.Fatalf("pending BlockID = %d, want %d", pending.BlockID, blockID)
+	}
+	if _, err := idx.GetConfirmedUpload(blockID); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
+		t.Fatalf("GetConfirmedUpload block %d error = %v, want ErrConfirmedUploadNotFound", blockID, err)
+	}
+
+	markerPath := filepath.Join(dataDir, "blocks", fmt.Sprintf("%016x.confirmed-upload.json", blockID))
+	if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("confirmed upload marker stat error = %v, want not exist", err)
+	}
 }
 
 func assertConfirmedUploadMissingFor(t *testing.T, s *shard.Shard, blockID uint64, duration time.Duration) {

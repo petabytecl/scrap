@@ -4,7 +4,7 @@ baseline_commit: 783d4da2a115b24d52c4a5342dbb58257e1757a9
 
 # Story 3.1: Committed Backend Upload Confirmation
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -32,39 +32,39 @@ so that Backend durability is observable without entering the write ACK path.
 
 ## Tasks / Subtasks
 
-- [ ] Reconcile the current implementation against the Epic 3 authority contract. (AC: 1, 4)
-  - [ ] Trace `SealBlock` -> pending Upload Outbox -> Backend PUT/HEAD verification -> proposed `ConfirmUpload` -> committed Confirmed Upload Catalog -> local `*.confirmed-upload.json` marker, and record the changed-boundary list in this story or an Epic 3 evidence artifact.
-  - [ ] Confirm the current `ConfirmUpload` proto still carries separate `.blk` and `.idx` Backend object metadata plus `upload_generation`; do not change proto or generated code unless a real authority gap is found.
-  - [ ] Confirm `ConfirmedUploadForTest`, restore reads, production rehearsal, and diagnostics read committed authority from Raft-derived state or the committed marker, not Backend inventory.
-- [ ] Strengthen committed-metadata authority tests where evidence is missing or stale. (AC: 1, 4)
-  - [ ] Add or update tests proving a committed `SealBlock` materializes one pending upload obligation and a committed `ConfirmUpload` clears it only after catalog/authority marker persistence succeeds.
-  - [ ] Add or update a split-success fixture where `.blk` and `.idx` Backend PUT/HEAD verification succeeds but `ConfirmUpload` proposal or commit is interrupted; assert pending upload remains and Confirmed Upload Catalog plus committed authority marker stay absent.
-  - [ ] Cover restart/reopen or replay for the split-success fixture if current unit coverage only proves the controller fake. Use a real Shard reopen path for recovery claims.
-  - [ ] Preserve generation fencing: stale generation confirmations must not clear a newer pending upload or overwrite newer confirmed authority.
-- [ ] Prove Backend upload remains outside the write ACK path. (AC: 2)
-  - [ ] Add or update a deterministic test with delayed, unavailable, or transiently failing Backend upload where `WriteDocument` ACK succeeds from local durability before upload confirmation.
-  - [ ] Keep this story to ACK independence and committed confirmation. Do not absorb Story 3.2 admission pressure policy, threshold tuning, or drain/rejection closure.
-  - [ ] Ensure failed Backend upload never changes Document visibility, public routing, Shard authority, or duplicate-write conflict behavior.
-- [ ] Produce committed upload evidence for operators. (AC: 1, 2, 4)
-  - [ ] Add or update a checked-in evidence artifact, likely `_bmad-output/implementation-artifacts/epic-3-backend-upload-confirmation-evidence.md`, with rows for committed authority, ACK independence, split-success, and redaction.
-  - [ ] Each evidence row must include AC ID, command, artifact/test path, commit/ref, result `PASS`, `CONCERNS`, or `FAIL`, and a concise next action for non-PASS rows.
-  - [ ] Include production rehearsal context only as local production-mode evidence unless real S3/IAM is actually run; real S3/IAM closure remains Story 6.6.
-- [ ] Add redaction and authority-boundary scans. (AC: 3)
-  - [ ] Scan changed code and evidence for raw `transaction_id`, `document_name`, idempotency keys, Backend object keys, file paths, validation tokens, trace IDs, request IDs, sensitive peer addresses, auth claims, gRPC metadata, and dependency errors that embed paths or object keys.
-  - [ ] Allow only bounded examples where they are explicitly evidence, such as object-key shape samples or fixture strings that are not production identifiers.
-  - [ ] Add or rerun an authority scan proving public API routing and Shard membership do not consume Backend keys, S3 listings, local files, pod names, certificates, or peer addresses as authority.
-- [ ] Preserve package and durable-format boundaries. (AC: 1-4)
-  - [ ] Keep implementation in `internal/shard`, `internal/index`, existing E2E helpers, scripts, or BMAD evidence artifacts unless a stronger package-boundary case is proven.
-  - [ ] Do not create `internal/common`, `shared`, `util`, a new Backend wrapper, or a new dependency.
-  - [ ] Do not change Block/Frame layout, Backend object key format, public/peer/admin wire contracts, Raft command shape, or Confirmed Upload Catalog schema without an ADR and migration/evidence scope.
-  - [ ] Do not make Backend HEAD/list observations, Local Block Lifecycle, Pebble-only state, or evidence artifacts durable upload authority.
-- [ ] Run focused and regression verification. (AC: 1-4)
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -run 'Test.*Upload|Test.*Confirm' -count=1`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -count=1`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build go test ./test/e2e -run 'TestE2EBackendUploadHappyPath|TestE2EBackendUploadLeaderChange|TestE2EBackendUploadAdmissionPressure|TestE2EMultiShardBackendUploadUsesNonZeroShard' -count=1 -v`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make check`
-  - [ ] If runtime evidence, production rehearsal, scripts, or deployment contracts change, run `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` or the narrowest documented Tier 2 target that exercises Backend upload confirmation.
+- [x] Reconcile the current implementation against the Epic 3 authority contract. (AC: 1, 4)
+  - [x] Trace `SealBlock` -> pending Upload Outbox -> Backend PUT/HEAD verification -> proposed `ConfirmUpload` -> committed Confirmed Upload Catalog -> local `*.confirmed-upload.json` marker, and record the changed-boundary list in this story or an Epic 3 evidence artifact.
+  - [x] Confirm the current `ConfirmUpload` proto still carries separate `.blk` and `.idx` Backend object metadata plus `upload_generation`; do not change proto or generated code unless a real authority gap is found.
+  - [x] Confirm `ConfirmedUploadForTest`, restore reads, production rehearsal, and diagnostics read committed authority from Raft-derived state or the committed marker, not Backend inventory.
+- [x] Strengthen committed-metadata authority tests where evidence is missing or stale. (AC: 1, 4)
+  - [x] Add or update tests proving a committed `SealBlock` materializes one pending upload obligation and a committed `ConfirmUpload` clears it only after catalog/authority marker persistence succeeds.
+  - [x] Add or update a split-success fixture where `.blk` and `.idx` Backend PUT/HEAD verification succeeds but `ConfirmUpload` proposal or commit is interrupted; assert pending upload remains and Confirmed Upload Catalog plus committed authority marker stay absent.
+  - [x] Cover restart/reopen or replay for the split-success fixture if current unit coverage only proves the controller fake. Use a real Shard reopen path for recovery claims.
+  - [x] Preserve generation fencing: stale generation confirmations must not clear a newer pending upload or overwrite newer confirmed authority.
+- [x] Prove Backend upload remains outside the write ACK path. (AC: 2)
+  - [x] Add or update a deterministic test with delayed, unavailable, or transiently failing Backend upload where `WriteDocument` ACK succeeds from local durability before upload confirmation.
+  - [x] Keep this story to ACK independence and committed confirmation. Do not absorb Story 3.2 admission pressure policy, threshold tuning, or drain/rejection closure.
+  - [x] Ensure failed Backend upload never changes Document visibility, public routing, Shard authority, or duplicate-write conflict behavior.
+- [x] Produce committed upload evidence for operators. (AC: 1, 2, 4)
+  - [x] Add or update a checked-in evidence artifact, likely `_bmad-output/implementation-artifacts/epic-3-backend-upload-confirmation-evidence.md`, with rows for committed authority, ACK independence, split-success, and redaction.
+  - [x] Each evidence row must include AC ID, command, artifact/test path, commit/ref, result `PASS`, `CONCERNS`, or `FAIL`, and a concise next action for non-PASS rows.
+  - [x] Include production rehearsal context only as local production-mode evidence unless real S3/IAM is actually run; real S3/IAM closure remains Story 6.6.
+- [x] Add redaction and authority-boundary scans. (AC: 3)
+  - [x] Scan changed code and evidence for raw `transaction_id`, `document_name`, idempotency keys, Backend object keys, file paths, validation tokens, trace IDs, request IDs, sensitive peer addresses, auth claims, gRPC metadata, and dependency errors that embed paths or object keys.
+  - [x] Allow only bounded examples where they are explicitly evidence, such as object-key shape samples or fixture strings that are not production identifiers.
+  - [x] Add or rerun an authority scan proving public API routing and Shard membership do not consume Backend keys, S3 listings, local files, pod names, certificates, or peer addresses as authority.
+- [x] Preserve package and durable-format boundaries. (AC: 1-4)
+  - [x] Keep implementation in `internal/shard`, `internal/index`, existing E2E helpers, scripts, or BMAD evidence artifacts unless a stronger package-boundary case is proven.
+  - [x] Do not create `internal/common`, `shared`, `util`, a new Backend wrapper, or a new dependency.
+  - [x] Do not change Block/Frame layout, Backend object key format, public/peer/admin wire contracts, Raft command shape, or Confirmed Upload Catalog schema without an ADR and migration/evidence scope.
+  - [x] Do not make Backend HEAD/list observations, Local Block Lifecycle, Pebble-only state, or evidence artifacts durable upload authority.
+- [x] Run focused and regression verification. (AC: 1-4)
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -run 'Test.*Upload|Test.*Confirm' -count=1`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -count=1`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build go test ./test/e2e -run 'TestE2EBackendUploadHappyPath|TestE2EBackendUploadLeaderChange|TestE2EBackendUploadAdmissionPressure|TestE2EMultiShardBackendUploadUsesNonZeroShard' -count=1 -v`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
+  - [x] If runtime evidence, production rehearsal, scripts, or deployment contracts change, run `env GOCACHE=/tmp/scrap-v2-go-build make tier2-e2e-up` or the narrowest documented Tier 2 target that exercises Backend upload confirmation.
 
 ## Dev Notes
 
@@ -176,18 +176,40 @@ GPT-5 Codex
 - RESEARCH: `gh search repos 'raft upload outbox object storage Go' --limit 5 --json fullName,url,description` returned no reusable implementation candidates.
 - RESEARCH: `gh search code 'ConfirmUpload language:Go' --limit 5 --json repository,path,url` returned unrelated generic upload code.
 - RESEARCH: Official AWS SDK for Go v2 and Amazon S3 docs reviewed for S3 PutObject integrity, HeadObject metadata/waiter behavior, and current checksum defaults.
+- DEV-STORY: `git status --short --branch` resumed Story 3.1 on `v2...origin/v2` with story, sprint-status, evidence, and `internal/shard/upload_outbox_test.go` changes only.
+- DEV-STORY: Added `TestWriteDocumentAckDoesNotWaitForBackendUpload` to block Backend `.blk` upload while a subsequent `WriteDocument` returns from local durability.
+- DEV-STORY: Replaced the discarded canceled-proposal fixture with `TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterReopen`, which leaves Backend objects present without committed confirmation, asserts pending Upload Outbox remains and confirmed catalog/marker are absent, then reopens and confirms through the Shard path.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestWriteDocumentAckDoesNotWaitForBackendUpload|TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterReopen' -count=1 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -run 'Test.*Upload|Test.*Confirm' -count=1` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard -count=1` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test ./test/e2e -run 'TestE2EBackendUploadHappyPath|TestE2EBackendUploadLeaderChange|TestE2EBackendUploadAdmissionPressure|TestE2EMultiShardBackendUploadUsesNonZeroShard' -count=1 -v` passed with all targeted E2E tests skipped because `SCRAP_E2E=1` was not set.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run 'TestWriteDocumentAckDoesNotWaitForBackendUpload|TestShardUploadProcessorIgnoresBackendObjectsWithoutCommittedConfirmAfterReopen' -count=10 -v` passed.
+- VERIFY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed.
+- VERIFY: `git diff --check` passed.
+- SECURITY: Secret keyword scan over changed Story 3.1 files found only expected story/status text and validation-token test fixtures; no secret-shaped values were introduced.
+- REDACTION: Raw identifier/evidence scan over changed Story 3.1 files found only expected checklist/story text, sprint `story_location`, bounded Backend object shape tests, and provider-doc references.
+- AUTHORITY: Public-routing Backend-inventory scan over `internal/cmd/public_store_router.go`, `internal/server`, `internal/cmd/app.go`, and `internal/cmd/public_store_router_test.go` returned no Backend key/list/head/get/S3/object matches. A wider membership scan found only existing server `member_id` log-field tests, not authority input.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - Story 3.1 created with implementation intelligence from current code, current Epic 3 ACs, governing ADRs, and prior upload-outbox hardening stories.
 - Scoped Story 3.1 to committed upload confirmation evidence, write ACK independence, redacted evidence, and split-success fail-closed behavior.
 - Explicitly excluded upload pressure policy, local eviction, restore-first cold reads, production security startup, and real S3/IAM closure from this story.
+- Added deterministic ACK-independence coverage proving a blocked Backend upload does not delay the next `WriteDocument` ACK.
+- Added deterministic split-success recovery coverage proving Backend `.blk` and `.idx` objects alone do not create committed upload authority; pending upload remains until the real Shard reopen path commits `ConfirmUpload`.
+- Added the Epic 3 upload confirmation evidence artifact with authority path, changed boundaries, focused test evidence, E2E skip limitation, package-boundary evidence, and `make check` evidence.
+- No proto, generated code, storage format, Backend key format, production code, dependency, or wire-contract changes were made.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-1-committed-backend-upload-confirmation.md`
+- `_bmad-output/implementation-artifacts/epic-3-backend-upload-confirmation-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/shard/upload_outbox_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 3.1 Committed Backend Upload Confirmation context and moved status to ready-for-dev.
+- 2026-06-11: Started Story 3.1 implementation and moved status to in-progress.
+- 2026-06-11: Completed Story 3.1 evidence/tests and moved status to review.
