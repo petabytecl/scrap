@@ -5,7 +5,7 @@ created: 2026-06-11T21:01:00-04:00
 
 # Story 3.2: Upload Pressure and Safe Admission Evidence
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -22,33 +22,33 @@ so that the Cell degrades before durability is compromised.
 
 ## Tasks / Subtasks
 
-- [ ] Build the Story 3.2 evidence checklist before code changes. (AC: 1-4)
-  - [ ] Record current upload pressure authority path: committed `SealBlock` plus local upload obligations -> pending upload stats -> `uploadController.SetPressure` -> admission `RESOURCE_EXHAUSTED`.
-  - [ ] Identify which existing tests already prove each AC and which gaps need new focused tests or evidence rows.
-  - [ ] Keep failed behavior fixes local to the relevant Epic 1 or Epic 2 boundary; do not hide unrelated defects inside evidence text.
-- [ ] Prove pressure is computed from committed upload obligations and local retry obligations. (AC: 1)
-  - [ ] Add or update focused shard/index tests showing committed pending uploads contribute to `PendingBytes`, `PendingBlocks`, and pressure level.
-  - [ ] Preserve the de-duplication rule in `uploadObligations.pressureStats`: a Block present in committed pending uploads and local retry obligations counts once.
-  - [ ] Verify pressure levels use normalized thresholds from `UploadPressureConfig` and surface before writes continue into unsafe runway.
-- [ ] Prove pressure rejection and recovery are state-driven. (AC: 2)
-  - [ ] Extend `TestUploadPressureRejectsWritesAndResumesAfterDrain` or add a narrow companion fixture that rejects at pressure/critical and accepts again only after committed confirmation clears the pending upload.
-  - [ ] Assert recovery uses `ConfirmUploadForTest` or the real upload confirm path, not manual Pebble edits, Backend inventory/listing, or operator mutation.
-  - [ ] Keep Backend upload asynchronous and outside the write ACK path; Story 3.1 already owns ACK-independence evidence.
-- [ ] Prove rejected admission leaves no accepted partial Document state. (AC: 4)
-  - [ ] Add a deterministic test around the seal-triggered rejection path in `sealAndOpenNew`.
-  - [ ] After a rejected write, assert `HeadDocument`/`ReadDocument`/`FindDocuments` do not expose the rejected Document.
-  - [ ] Assert no Openlog prep file remains for the rejected Document and that the active new Block is still reusable for a later accepted write after pressure drains.
-  - [ ] Do not require zero-byte new-Block cleanup if the design intentionally leaves the newly opened empty Block as active writable state; document that distinction in evidence.
-- [ ] Prove telemetry, admin health, and client errors are bounded. (AC: 3)
-  - [ ] Keep `scrap.upload.*` metrics bounded to Shard ID, pressure level/status, and small enumerations. Do not add raw `transaction_id`, `document_name`, idempotency keys, Backend keys, file paths, trace IDs, request IDs, peer addresses, or auth claims as labels or log fields.
-  - [ ] Verify public write rejection maps to gRPC `RESOURCE_EXHAUSTED` with `ErrorInfo.reason == "upload_pressure"`.
-  - [ ] Verify admin health exposes `upload_pressure`, `upload_pressure_level`, `upload_pending_bytes`, and `upload_pending_blocks` without raw identifiers.
-  - [ ] Record leak-scan commands and expected bounded matches in the evidence artifact.
-- [ ] Capture Epic 3 evidence and regression gates. (AC: 1-4)
-  - [ ] Create or update an Epic 3 evidence artifact for upload pressure with AC rows, reproducible commands, result, notes, and remaining Tier 2/Tier 3 gaps.
-  - [ ] Run focused tests first, then package/race gates needed for concurrency and pressure state.
-  - [ ] Run `make check` before code-review handoff unless a narrower failure clearly blocks and is documented.
-  - [ ] If deployed evidence is claimed, run the E2E target with `SCRAP_E2E=1`; a skipped E2E run must be recorded as CONCERNS, not PASS.
+- [x] Build the Story 3.2 evidence checklist before code changes. (AC: 1-4)
+  - [x] Record current upload pressure authority path: committed `SealBlock` plus local upload obligations -> pending upload stats -> `uploadController.SetPressure` -> admission `RESOURCE_EXHAUSTED`.
+  - [x] Identify which existing tests already prove each AC and which gaps need new focused tests or evidence rows.
+  - [x] Keep failed behavior fixes local to the relevant Epic 1 or Epic 2 boundary; do not hide unrelated defects inside evidence text.
+- [x] Prove pressure is computed from committed upload obligations and local retry obligations. (AC: 1)
+  - [x] Add or update focused shard/index tests showing committed pending uploads contribute to `PendingBytes`, `PendingBlocks`, and pressure level.
+  - [x] Preserve the de-duplication rule in `uploadObligations.pressureStats`: a Block present in committed pending uploads and local retry obligations counts once.
+  - [x] Verify pressure levels use normalized thresholds from `UploadPressureConfig` and surface before writes continue into unsafe runway.
+- [x] Prove pressure rejection and recovery are state-driven. (AC: 2)
+  - [x] Extend `TestUploadPressureRejectsWritesAndResumesAfterDrain` or add a narrow companion fixture that rejects at pressure/critical and accepts again only after committed confirmation clears the pending upload.
+  - [x] Assert recovery uses `ConfirmUploadForTest` or the real upload confirm path, not manual Pebble edits, Backend inventory/listing, or operator mutation.
+  - [x] Keep Backend upload asynchronous and outside the write ACK path; Story 3.1 already owns ACK-independence evidence.
+- [x] Prove rejected admission leaves no accepted partial Document state. (AC: 4)
+  - [x] Add a deterministic test around the seal-triggered rejection path in `sealAndOpenNew`.
+  - [x] After a rejected write, assert `HeadDocument`/`ReadDocument`/`FindDocuments` do not expose the rejected Document.
+  - [x] Assert no Openlog prep file remains for the rejected Document and that the active new Block is still reusable for a later accepted write after pressure drains.
+  - [x] Do not require zero-byte new-Block cleanup if the design intentionally leaves the newly opened empty Block as active writable state; document that distinction in evidence.
+- [x] Prove telemetry, admin health, and client errors are bounded. (AC: 3)
+  - [x] Keep `scrap.upload.*` metrics bounded to Shard ID, pressure level/status, and small enumerations. Do not add raw `transaction_id`, `document_name`, idempotency keys, Backend keys, file paths, trace IDs, request IDs, peer addresses, or auth claims as labels or log fields.
+  - [x] Verify public write rejection maps to gRPC `RESOURCE_EXHAUSTED` with `ErrorInfo.reason == "upload_pressure"`.
+  - [x] Verify admin health exposes `upload_pressure`, `upload_pressure_level`, `upload_pending_bytes`, and `upload_pending_blocks` without raw identifiers.
+  - [x] Record leak-scan commands and expected bounded matches in the evidence artifact.
+- [x] Capture Epic 3 evidence and regression gates. (AC: 1-4)
+  - [x] Create or update an Epic 3 evidence artifact for upload pressure with AC rows, reproducible commands, result, notes, and remaining Tier 2/Tier 3 gaps.
+  - [x] Run focused tests first, then package/race gates needed for concurrency and pressure state.
+  - [x] Run `make check` before code-review handoff unless a narrower failure clearly blocks and is documented.
+  - [x] If deployed evidence is claimed, run the E2E target with `SCRAP_E2E=1`; a skipped E2E run must be recorded as CONCERNS, not PASS.
 
 ## Dev Notes
 
@@ -101,7 +101,8 @@ Run focused gates first:
 
 ```bash
 env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestUploadPressure|TestSealTriggeredUploadPressure|TestUploadOutbox|TestWriteDocument_NoPrepFile' -count=1 -v
-env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server ./internal/admin ./internal/cmd -run 'UploadPressure|ResourceExhausted' -count=1 -v
+env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server ./internal/admin -run 'UploadPressure|ResourceExhausted' -count=1 -v
+env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'ShardDiagnosticsPressure|UploadPressure|ResourceExhausted' -count=1 -v
 env GOCACHE=/tmp/scrap-v2-go-build go test -race ./internal/shard -run 'TestUploadPressure|TestSealTriggeredUploadPressure' -count=10 -v
 ```
 
@@ -175,4 +176,22 @@ TBD by dev-story.
 
 ### Completion Notes List
 
+- Created the Story 3.2 upload-pressure evidence artifact before code changes, including authority path, AC coverage map, gap list, and planned verification commands.
+- Added `TestUploadOutboxRefreshPressureCombinesCommittedAndLocalObligations` to prove committed pending uploads and unique local obligations drive pending bytes, pending Blocks, and critical pressure level.
+- Strengthened `TestUploadPressureRejectsWritesAndResumesAfterDrain` so recovery requires the pending upload to drain through confirmation before a later write is accepted.
+- Strengthened `TestSealTriggeredUploadPressureRejectsCurrentWrite` so a pressure-rejected write is not visible through head/read/find, leaves no Openlog prep file, and the active Block remains reusable after pressure drains.
+- Added `TestUploadOTelMetricsUsesBoundedAttributes` to lock upload metrics to bounded `scrap.shard_id` and `status` attributes.
+- Updated the Epic 3 upload-pressure evidence artifact with PASS rows for focused, race, package, and broad local gates; recorded the Tier 2 E2E target as CONCERNS because it was skipped without `SCRAP_E2E=1`.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/3-2-upload-pressure-and-safe-admission-evidence.md`
+- `_bmad-output/implementation-artifacts/epic-3-upload-pressure-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/shard/upload_metrics_otel_test.go`
+- `internal/shard/upload_outbox_boundary_test.go`
+- `internal/shard/upload_pressure_test.go`
+
+### Change Log
+
+- 2026-06-11: Added focused upload-pressure evidence tests, completed Story 3.2 evidence artifact, and verified focused/race/package/broad local gates.

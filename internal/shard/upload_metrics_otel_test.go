@@ -132,6 +132,31 @@ func TestUploadOTelMetrics_VerifyTotal(t *testing.T) {
 	}
 }
 
+func TestUploadOTelMetricsUsesBoundedAttributes(t *testing.T) {
+	provider, reader := newTestMeter(t)
+	m, err := shard.NewUploadOTelMetrics(provider.Meter("test"))
+	if err != nil {
+		t.Fatalf("new upload otel metrics: %v", err)
+	}
+
+	m.SetPending(7, 4096, 2)
+	m.RecordUpload(7, "success", time.Second)
+	m.RecordVerify(7, "pass")
+	m.SetPressureLevel(7, shard.UploadPressureLevelPressure)
+	m.SetConcurrency(7, 4)
+	m.SetAuthPaused(7, false)
+
+	rm := collectMetrics(t, reader)
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.pending_bytes"), "scrap.shard_id")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.pending_blocks"), "scrap.shard_id")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.total"), "scrap.shard_id", "status")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.duration"), "scrap.shard_id")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.verify_total"), "scrap.shard_id", "status")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.pressure_level"), "scrap.shard_id")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.concurrency"), "scrap.shard_id")
+	assertUploadMetricAttributeKeys(t, findMetric(rm, "scrap.upload.auth_paused"), "scrap.shard_id")
+}
+
 func TestUploadOTelMetrics_ImplementsInterface(t *testing.T) {
 	provider, _ := newTestMeter(t)
 	m, err := shard.NewUploadOTelMetrics(provider.Meter("test"))
@@ -140,4 +165,34 @@ func TestUploadOTelMetrics_ImplementsInterface(t *testing.T) {
 	}
 
 	var _ shard.UploadMetrics = m
+}
+
+func assertUploadMetricAttributeKeys(t *testing.T, metric *metricdata.Metrics, want ...string) {
+	t.Helper()
+	if metric == nil {
+		t.Fatal("metric not found")
+	}
+	wantSet := make(map[string]struct{}, len(want))
+	for _, key := range want {
+		wantSet[key] = struct{}{}
+	}
+	sets := metricAttributeSets(metric)
+	if len(sets) == 0 {
+		t.Fatalf("metric %s has no attribute sets", metric.Name)
+	}
+	for _, attrs := range sets {
+		gotSet := make(map[string]struct{}, len(attrs))
+		for _, attr := range attrs {
+			key := string(attr.Key)
+			gotSet[key] = struct{}{}
+			if _, ok := wantSet[key]; !ok {
+				t.Fatalf("metric %s attribute key %q is not bounded; want only %v", metric.Name, key, want)
+			}
+		}
+		for key := range wantSet {
+			if _, ok := gotSet[key]; !ok {
+				t.Fatalf("metric %s missing attribute key %q", metric.Name, key)
+			}
+		}
+	}
 }

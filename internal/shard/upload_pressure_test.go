@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -33,6 +35,7 @@ func TestUploadPressureRejectsWritesAndResumesAfterDrain(t *testing.T) {
 		t.Fatalf("ConfirmUploadForTest: %v", err)
 	}
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelOK)
+	waitPendingUploads(t, s, 0)
 
 	writeUploadPressureDoc(t, s, "tx-pressure-3", []byte("accepted"))
 }
@@ -76,7 +79,8 @@ func TestLocalUploadObligationBackgroundRetryRunsUnderUploadPressure(t *testing.
 }
 
 func TestSealTriggeredUploadPressureRejectsCurrentWrite(t *testing.T) {
-	s := openUploadTestShard(t, shard.UploadConfig{
+	dir := t.TempDir()
+	s := openUploadTestShardInDir(t, dir, shard.UploadConfig{
 		Enabled: true,
 		Pressure: shard.UploadPressureConfig{
 			BudgetBytes: 40,
@@ -88,11 +92,23 @@ func TestSealTriggeredUploadPressureRejectsCurrentWrite(t *testing.T) {
 	ctx := context.Background()
 
 	writeUploadPressureDoc(t, s, "tx-seal-pressure-1", bytes.Repeat([]byte("a"), 64))
-	_, err := s.WriteDocument(ctx, "tx-seal-pressure-2", "doc.bin", "application/octet-stream", "", bytes.NewReader([]byte("rejected")))
+	rejectedTxID := "tx-seal-pressure-2"
+	rejectedDocName := "doc.bin"
+	_, err := s.WriteDocument(ctx, rejectedTxID, rejectedDocName, "application/octet-stream", "", bytes.NewReader([]byte("rejected")))
 	assertUploadPressureError(t, err)
 
 	waitUploadPressureLevel(t, s, shard.UploadPressureLevelCritical)
-	waitPendingUploads(t, s, 1)
+	pending := waitPendingUploads(t, s, 1)[0]
+	assertRejectedPressureWriteInvisible(t, s, rejectedTxID, rejectedDocName)
+	assertNoOpenlogPrepFiles(t, dir)
+
+	if err := s.ConfirmUploadForTest(ctx, confirmedUploadForTest(pending.SealedSizeBytes)); err != nil {
+		t.Fatalf("ConfirmUploadForTest: %v", err)
+	}
+	waitUploadPressureLevel(t, s, shard.UploadPressureLevelOK)
+	waitPendingUploads(t, s, 0)
+
+	writeUploadPressureDoc(t, s, "tx-seal-pressure-3", []byte("accepted"))
 }
 
 func TestUploadPressureWarnRaisesConcurrencyAndClears(t *testing.T) {
@@ -237,6 +253,44 @@ func assertUploadPressureError(t *testing.T, err error) {
 	reason, ok := storeapi.ResourceExhaustedReason(err)
 	if !ok || reason != storeapi.ResourceExhaustedReasonUploadPressure {
 		t.Fatalf("resource exhausted reason = %q, %v; want upload_pressure", reason, ok)
+	}
+}
+
+func assertRejectedPressureWriteInvisible(t *testing.T, s *shard.Shard, txID, docName string) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := s.HeadDocument(ctx, txID, docName); !isMissingDocumentOrTransaction(err) {
+		t.Fatalf("HeadDocument rejected write error = %v, want missing Document or Transaction", err)
+	}
+	rc, _, err := s.ReadDocument(ctx, txID, docName)
+	if rc != nil {
+		_ = rc.Close()
+	}
+	if !isMissingDocumentOrTransaction(err) {
+		t.Fatalf("ReadDocument rejected write error = %v, want missing Document or Transaction", err)
+	}
+	docs, err := s.FindDocuments(ctx, txID)
+	if err != nil {
+		t.Fatalf("FindDocuments rejected Transaction: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Fatalf("FindDocuments rejected Transaction returned %d Documents, want none: %+v", len(docs), docs)
+	}
+}
+
+func assertNoOpenlogPrepFiles(t *testing.T, dataDir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Join(dataDir, "openlog"))
+	if err != nil {
+		t.Fatalf("ReadDir openlog: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		t.Fatalf("openlog prep file remained after pressure rejection: %s", entry.Name())
 	}
 }
 

@@ -72,6 +72,56 @@ func TestUploadOutboxAppliesDuplicateBlockSealedEventIdempotently(t *testing.T) 
 	}
 }
 
+func TestUploadOutboxRefreshPressureCombinesCommittedAndLocalObligations(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	lifecycle := newBlockUploadLifecycle()
+	outbox := newUploadOutbox(t.TempDir(), idx, lifecycle)
+
+	committed := blockSealedEvent{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 100,
+		SealedAtUs:      1716700000000000,
+	}
+	if err := outbox.ApplyBlockSealed(committed); err != nil {
+		t.Fatalf("ApplyBlockSealed: %v", err)
+	}
+	outbox.RecordBlockSealed(blockSealedEvent{
+		BlockID:         uploadApplyTestBlockID,
+		ShardID:         7,
+		SealedSizeBytes: 999,
+		SealedAtUs:      1716700001000000,
+	})
+	outbox.RecordBlockSealed(blockSealedEvent{
+		BlockID:         uploadApplyTestBlockID + 1,
+		ShardID:         7,
+		SealedSizeBytes: 20,
+		SealedAtUs:      1716700002000000,
+	})
+
+	controller := newUploadController(nil, UploadConfig{
+		Pressure: UploadPressureConfig{
+			BudgetBytes: 100,
+			WarnPct:     0.50,
+			PressurePct: 0.75,
+			CriticalPct: 0.95,
+		},
+	}, 7, nil, nil, nil)
+	if err := outbox.RefreshPressure(controller); err != nil {
+		t.Fatalf("RefreshPressure: %v", err)
+	}
+	got := controller.snapshot()
+	if got.PendingBlocks != 2 {
+		t.Fatalf("pending blocks = %d, want committed plus local obligations", got.PendingBlocks)
+	}
+	if got.PendingBytes != 120 {
+		t.Fatalf("pending bytes = %d, want committed size plus unique local size", got.PendingBytes)
+	}
+	if got.Level != UploadPressureLevelCritical {
+		t.Fatalf("pressure level = %s, want %s", got.Level, UploadPressureLevelCritical)
+	}
+}
+
 func TestUploadOutboxAppliesUploadConfirmedEvent(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	sealed := blockSealedEvent{
