@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -485,7 +487,7 @@ func TestReadDocumentRestoreRequiresMatchingEvictionMarker(t *testing.T) {
 
 func TestEncryptedReadDocumentRestoresThenUsesEnvelopePath(t *testing.T) {
 	ctx := context.Background()
-	backendStore := backend.NewFS(t.TempDir())
+	backendStore := newCountingDiscoveryBackend(backend.NewFS(t.TempDir()))
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	s := openEncryptedUploadTestShard(t, shard.UploadConfig{
 		Enabled:     true,
@@ -495,9 +497,11 @@ func TestEncryptedReadDocumentRestoresThenUsesEnvelopePath(t *testing.T) {
 	}, transit)
 
 	content := bytes.Repeat([]byte("encrypted restore plaintext:"), 64)
-	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
+	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore.countingGetBackend.Backend, content)
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	assertReadRestoreStartsFromEvictedConfirmedBlock(t, blocksDir, confirmed)
+	assertBackendObjectOmitsPlaintext(ctx, t, backendStore.countingGetBackend.Backend, confirmed.BlockObject.Key, content)
+	backendStore.resetCalls()
 
 	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
 	if err != nil {
@@ -508,8 +512,128 @@ func TestEncryptedReadDocumentRestoresThenUsesEnvelopePath(t *testing.T) {
 	assertRestoredDocument(t, rc, meta, content)
 	assertRestorePublishedHotBlock(t, blocksDir)
 	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+	assertRestoreUsedCommittedBackendObjectOnly(t, backendStore, confirmed)
 	entry := readOnlyIndexEntry(t, s.DataDirForTest(), "tx-restore", "doc-1.bin")
 	assertEnvelopeMetadata(t, entry, len(content))
+}
+
+func TestReadDocumentEncryptedRestoreFailsClosedWhenKeyMaterialUnavailable(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name      string
+		unwrapErr error
+	}{
+		{name: "unavailable", unwrapErr: encryption.ErrUnavailable},
+		{name: "auth denied", unwrapErr: encryption.ErrAuthDenied},
+		{name: "missing key", unwrapErr: encryption.ErrMissingKey},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			backendStore := backend.NewFS(t.TempDir())
+			transit := &mutableTransit{
+				delegate: encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey}),
+			}
+			s := openEncryptedUploadTestShard(t, shard.UploadConfig{
+				Enabled:     true,
+				Backend:     backendStore,
+				CellID:      testCellID,
+				Concurrency: 1,
+			}, transit)
+
+			content := bytes.Repeat([]byte("encrypted unavailable restore plaintext:"), 32)
+			confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
+			transit.unwrapErr = tt.unwrapErr
+
+			err := assertEncryptedRestoreCryptoUnavailable(ctx, t, s)
+			assertCryptoRestoreErrorSanitized(t, err, content, confirmed.BlockObject.Key)
+			assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
+			assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+		})
+	}
+}
+
+func TestReadDocumentEncryptedRestoreFailsClosedWhenKeyVersionRejected(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	s := openEncryptedUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	}, transit)
+
+	content := bytes.Repeat([]byte("encrypted wrong version restore plaintext:"), 32)
+	confirmed := stageEvictedConfirmedBlock(ctx, t, s, backendStore, content)
+	transit.RequireMinimumVersion(2)
+
+	err := assertEncryptedRestoreCryptoUnavailable(ctx, t, s)
+	assertCryptoRestoreErrorSanitized(t, err, content, confirmed.BlockObject.Key)
+	assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
+	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
+}
+
+func TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope(t *testing.T) {
+	ctx := context.Background()
+	backendStore := backend.NewFS(t.TempDir())
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	s := openEncryptedUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     backendStore,
+		CellID:      testCellID,
+		Concurrency: 1,
+	}, transit)
+
+	content := bytes.Repeat([]byte("encrypted rewrap restore plaintext:"), 48)
+	if _, err := s.WriteDocument(ctx, "tx-restore", "doc-1.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument doc-1: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-restore-next", "doc-2.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument doc-2: %v", err)
+	}
+	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "blk"))
+	waitBackendObject(ctx, t, backendStore, backendObjectKey(1, "idx"))
+	waitPendingUploads(t, s, 0)
+	initialConfirmed := waitConfirmedUpload(t, s)
+	beforeBlock := readTestBlockFile(t, s.DataDirForTest())
+
+	transit.Rotate()
+	result, err := s.RewrapDocument(ctx, rewrap.Request{
+		TransactionID: "tx-restore",
+		DocumentName:  "doc-1.bin",
+		KeyVersion:    2,
+		Reason:        "test",
+	})
+	if err != nil {
+		t.Fatalf("RewrapDocument: %v", err)
+	}
+	if !result.Changed || result.OldKeyVersion != 1 || result.NewKeyVersion != 2 {
+		t.Fatalf("RewrapDocument result = %+v, want changed 1->2", result)
+	}
+	assertBlockPayloadUnchanged(t, s.DataDirForTest(), beforeBlock)
+	assertIndexEnvelopeVersion(t, s.DataDirForTest(), "tx-restore", "doc-1.bin", 2)
+
+	waitPendingUploads(t, s, 0)
+	confirmed := waitConfirmedUploadGeneration(t, s, 1, initialConfirmed.UploadGeneration)
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := shard.WriteEvictionMarker(blocksDir, evictionMarkerFromConfirmed(confirmed)); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
+	if err := os.Remove(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("remove local Block: %v", err)
+	}
+	assertReadRestoreStartsFromEvictedConfirmedBlock(t, blocksDir, confirmed)
+
+	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if err != nil {
+		t.Fatalf("ReadDocument after rewrapped restore: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	assertRestoredDocument(t, rc, meta, content)
+	assertRestorePublishedHotBlock(t, blocksDir)
+	assertBlockPayloadUnchanged(t, s.DataDirForTest(), beforeBlock)
+	assertIndexEnvelopeVersion(t, s.DataDirForTest(), "tx-restore", "doc-1.bin", 2)
+	assertBlockOmitsPlaintext(t, s.DataDirForTest(), content)
 }
 
 func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
@@ -1052,6 +1176,78 @@ func assertRestoreUsedCommittedBackendObjectOnly(t *testing.T, backendStore *cou
 	}
 }
 
+func assertBackendObjectOmitsPlaintext(
+	ctx context.Context,
+	t *testing.T,
+	backendStore backend.Backend,
+	key string,
+	plaintext []byte,
+) {
+	t.Helper()
+
+	rc, _, err := backendStore.GetObject(ctx, key, backend.GetOpts{})
+	if err != nil {
+		t.Fatalf("Backend GetObject for plaintext check: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll Backend object: %v", err)
+	}
+	if bytes.Contains(data, plaintext) {
+		t.Fatal("Backend object contains plaintext Document bytes")
+	}
+}
+
+func assertEncryptedRestoreCryptoUnavailable(ctx context.Context, t *testing.T, s *shard.Shard) error {
+	t.Helper()
+
+	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if err == nil {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		t.Fatal("ReadDocument encrypted restore error = nil, want crypto unavailable")
+	}
+	if rc != nil {
+		t.Fatal("ReadDocument encrypted restore returned reader on crypto failure")
+	}
+	if meta != (storeapi.DocumentMeta{}) {
+		t.Fatalf("ReadDocument encrypted restore meta = %+v, want zero", meta)
+	}
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("ReadDocument encrypted restore error = %v, want ErrUnavailable", err)
+	}
+	reason, ok := storeapi.UnavailableReason(err)
+	if !ok || reason != storeapi.UnavailableReasonCryptoUnavailable {
+		t.Fatalf("UnavailableReason = %q/%v, want crypto_unavailable", reason, ok)
+	}
+	return err
+}
+
+func assertCryptoRestoreErrorSanitized(t *testing.T, err error, plaintext []byte, backendKey string) {
+	t.Helper()
+
+	message := err.Error()
+	for _, forbidden := range []string{
+		string(plaintext),
+		backendKey,
+		"fake-transit:",
+		"transit unavailable",
+		"transit auth denied",
+		"transit missing key",
+		"transit minimum version",
+		"/tmp",
+		"tx-restore",
+		"doc-1.bin",
+	} {
+		if forbidden != "" && strings.Contains(message, forbidden) {
+			t.Fatalf("crypto restore error %q contains forbidden detail %q", message, forbidden)
+		}
+	}
+}
+
 func assertRepairRestorePublishedHotBlock(t *testing.T, blocksDir string) {
 	t.Helper()
 
@@ -1146,6 +1342,30 @@ func waitConfirmedUpload(t *testing.T, s *shard.Shard) index.ConfirmedUpload {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for confirmed upload block %d", blockID)
+	return index.ConfirmedUpload{}
+}
+
+func waitConfirmedUploadGeneration(
+	t *testing.T,
+	s *shard.Shard,
+	blockID uint64,
+	previousGeneration int64,
+) index.ConfirmedUpload {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		confirmed, err := s.ConfirmedUploadForTest(blockID)
+		if err == nil && confirmed.UploadGeneration > previousGeneration {
+			return confirmed
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf(
+		"timed out waiting for confirmed upload block %d generation greater than %d",
+		blockID,
+		previousGeneration,
+	)
 	return index.ConfirmedUpload{}
 }
 

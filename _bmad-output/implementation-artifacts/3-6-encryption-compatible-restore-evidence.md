@@ -5,7 +5,7 @@ created: 2026-06-11T23:37:59-04:00
 
 # Story 3.6: Encryption-Compatible Restore Evidence
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -34,37 +34,37 @@ so that cold reads do not bypass OpenBao, checksum, or plaintext verification be
 
 ## Tasks / Subtasks
 
-- [ ] Build the Story 3.6 evidence artifact before production-code changes. (AC: 1-5)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-3-encryption-restore-evidence.md` with AC rows, exact commands, results, adapter/fixture scope, leak-scan allowlist, and remaining concerns.
-  - [ ] Record the encryption-compatible restore path: encrypted write -> sealed Block upload -> committed Confirmed Upload Catalog -> local `.blk` eviction -> Backend ciphertext restore -> staged `.blk` verification -> normal local read -> envelope unwrap/decrypt -> plaintext SHA-256 verification.
-  - [ ] State that direct Backend ciphertext streaming remains out of V2 per ADR 0027 and is not implemented or claimed.
-  - [ ] State that real production OpenBao interaction is Epic 4 release evidence unless a later story explicitly broadens scope.
-- [ ] Strengthen ciphertext restore proof. (AC: 1, 4)
-  - [ ] Reuse `TestEncryptedReadDocumentRestoresThenUsesEnvelopePath` rather than creating a second read path.
-  - [ ] Prove Backend-resident Block bytes and restored local Block bytes do not contain the plaintext marker.
-  - [ ] Prove restore uses committed Confirmed Upload Catalog metadata and full-object Backend `GetObject`, not Backend list, HEAD, direct stream-to-client, or per-Frame/range reads.
-  - [ ] Assert the read returns plaintext only after the restored local Block is present and normal envelope decryption succeeds.
-- [ ] Prove Transit and key-material failures fail closed after restore. (AC: 2, 5)
-  - [ ] Add focused Shard restore tests that write/upload/evict with a working fake Transit, then make `ReadDocument` restore the encrypted Block while Transit unwrap is unavailable, auth denied, missing key, or minimum-version rejected.
-  - [ ] For each failure, assert `storeapi.ErrUnavailable` with `storeapi.UnavailableReasonCryptoUnavailable` unless existing mapping documents a narrower safe outcome.
-  - [ ] Assert no plaintext bytes are returned to the caller and no public/deployed error text includes plaintext, wrapped-key ciphertext, Backend object keys, Transit tokens, Transaction IDs, Document names, paths, or dependency detail strings.
-  - [ ] If restore succeeds before decryption fails, explicitly document that the restored local Block remains ciphertext and the read still fails closed.
-- [ ] Prove rewrapped metadata converges through restore. (AC: 3)
-  - [ ] Build a scenario around existing `RewrapDocument` behavior: write encrypted Document, seal/upload, rotate fake Transit, rewrap to a newer key version while the leader has the local Block, wait for replacement upload/Confirmed Upload Catalog metadata if the implementation requeues upload generation, evict the local `.blk`, restore, and read successfully.
-  - [ ] Assert restored reads use the current index/envelope metadata and return plaintext matching the original Document bytes.
-  - [ ] Assert rewrap does not rewrite Block payload bytes and restore does not require a Backend plaintext object.
-  - [ ] Assert evidence and failure output do not leak wrapped-key ciphertext or key material.
-- [ ] Preserve architecture and security boundaries. (AC: 1-5)
-  - [ ] Keep Transit/envelope primitives in `internal/encryption`, restore orchestration in `internal/shard`, Block/Frame verification in `internal/block`, Backend byte storage in `internal/backend`, and public status mapping in `internal/server`.
-  - [ ] Do not import OpenBao client types into Shard, Backend, Block, server, peer, admin, or public protobuf packages.
-  - [ ] Do not change public, peer, admin, Raft, Block/Frame, Backend object, or Pebble formats without a new ADR and explicit migration plan.
-  - [ ] Do not introduce new runtime dependencies, assertion libraries, mocking frameworks, global key caches, plaintext fallbacks, or production fake-Transit allowances.
-- [ ] Run focused and regression verification. (AC: 1-5)
-  - [ ] Run focused encrypted restore, encrypted read/key-failure, rewrap, Store/server public error, and evidence-bundle tests.
-  - [ ] Run package regression for `internal/shard`, `internal/encryption`, `internal/block`, `internal/backend`, `internal/server`, `internal/store`, `internal/rewrap`, and `internal/scrapctl/evidencebundle`.
-  - [ ] Run Shard race coverage for encrypted restore and rewrap paths if production concurrency or restore code changes.
-  - [ ] Run `make check` before BMAD code review unless a concrete blocker is recorded in the story.
-  - [ ] Run credential/identifier leak scans over touched story/evidence files and changed code.
+- [x] Build the Story 3.6 evidence artifact before production-code changes. (AC: 1-5)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-3-encryption-restore-evidence.md` with AC rows, exact commands, results, adapter/fixture scope, leak-scan allowlist, and remaining concerns.
+  - [x] Record the encryption-compatible restore path: encrypted write -> sealed Block upload -> committed Confirmed Upload Catalog -> local `.blk` eviction -> Backend ciphertext restore -> staged `.blk` verification -> normal local read -> envelope unwrap/decrypt -> plaintext SHA-256 verification.
+  - [x] State that direct Backend ciphertext streaming remains out of V2 per ADR 0027 and is not implemented or claimed.
+  - [x] State that real production OpenBao interaction is Epic 4 release evidence unless a later story explicitly broadens scope.
+- [x] Strengthen ciphertext restore proof. (AC: 1, 4)
+  - [x] Reuse `TestEncryptedReadDocumentRestoresThenUsesEnvelopePath` rather than creating a second read path.
+  - [x] Prove Backend-resident Block bytes and restored local Block bytes do not contain the plaintext marker.
+  - [x] Prove restore uses committed Confirmed Upload Catalog metadata and full-object Backend `GetObject`, not Backend list, HEAD, direct stream-to-client, or per-Frame/range reads.
+  - [x] Assert the read returns plaintext only after the restored local Block is present and normal envelope decryption succeeds.
+- [x] Prove Transit and key-material failures fail closed after restore. (AC: 2, 5)
+  - [x] Add focused Shard restore tests that write/upload/evict with a working fake Transit, then make `ReadDocument` restore the encrypted Block while Transit unwrap is unavailable, auth denied, missing key, or minimum-version rejected.
+  - [x] For each failure, assert `storeapi.ErrUnavailable` with `storeapi.UnavailableReasonCryptoUnavailable` unless existing mapping documents a narrower safe outcome.
+  - [x] Assert no plaintext bytes are returned to the caller and no public/deployed error text includes plaintext, wrapped-key ciphertext, Backend object keys, Transit tokens, Transaction IDs, Document names, paths, or dependency detail strings.
+  - [x] If restore succeeds before decryption fails, explicitly document that the restored local Block remains ciphertext and the read still fails closed.
+- [x] Prove rewrapped metadata converges through restore. (AC: 3)
+  - [x] Build a scenario around existing `RewrapDocument` behavior: write encrypted Document, seal/upload, rotate fake Transit, rewrap to a newer key version while the leader has the local Block, wait for replacement upload/Confirmed Upload Catalog metadata if the implementation requeues upload generation, evict the local `.blk`, restore, and read successfully.
+  - [x] Assert restored reads use the current index/envelope metadata and return plaintext matching the original Document bytes.
+  - [x] Assert rewrap does not rewrite Block payload bytes and restore does not require a Backend plaintext object.
+  - [x] Assert evidence and failure output do not leak wrapped-key ciphertext or key material.
+- [x] Preserve architecture and security boundaries. (AC: 1-5)
+  - [x] Keep Transit/envelope primitives in `internal/encryption`, restore orchestration in `internal/shard`, Block/Frame verification in `internal/block`, Backend byte storage in `internal/backend`, and public status mapping in `internal/server`.
+  - [x] Do not import OpenBao client types into Shard, Backend, Block, server, peer, admin, or public protobuf packages.
+  - [x] Do not change public, peer, admin, Raft, Block/Frame, Backend object, or Pebble formats without a new ADR and explicit migration plan.
+  - [x] Do not introduce new runtime dependencies, assertion libraries, mocking frameworks, global key caches, plaintext fallbacks, or production fake-Transit allowances.
+- [x] Run focused and regression verification. (AC: 1-5)
+  - [x] Run focused encrypted restore, encrypted read/key-failure, rewrap, Store/server public error, and evidence-bundle tests.
+  - [x] Run package regression for `internal/shard`, `internal/encryption`, `internal/block`, `internal/backend`, `internal/server`, `internal/store`, `internal/rewrap`, and `internal/scrapctl/evidencebundle`.
+  - [x] Run Shard race coverage for encrypted restore and rewrap paths if production concurrency or restore code changes.
+  - [x] Run `make check` before BMAD code review unless a concrete blocker is recorded in the story.
+  - [x] Run credential/identifier leak scans over touched story/evidence files and changed code.
 
 ## Dev Notes
 
@@ -202,6 +202,19 @@ GPT-5 Codex.
 - CREATE-STORY: Exa search checked current OpenBao Transit docs for datakey, rewrap, key version, and minimum decryption version behavior.
 - CREATE-STORY: GitHub repo/code searches found no reusable external implementation candidate; Story 3.6 should reuse local fake Transit, OpenBao adapter tests, and Shard restore fixtures.
 - CREATE-STORY: Current baseline commit is `d5e36e12ec1e7065db9a0b45fce0d696d89cf7b6`.
+- DEV-STORY: Started implementation from clean `v2...origin/v2` after pushing story creation commit `32ca0c9479cd92dc685b91a6645bc0d5cd4c9f7b`; preserved story baseline commit `d5e36e12ec1e7065db9a0b45fce0d696d89cf7b6`.
+- DEV-STORY: Strengthened `TestEncryptedReadDocumentRestoresThenUsesEnvelopePath` to prove Backend object bytes and restored local Block bytes omit plaintext, restore uses the committed Backend key with one full-object `GetObject`, and restore does not use Backend HEAD/LIST or a second direct streaming path.
+- DEV-STORY: AC-3.6.1 focused command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestEncryptedReadDocumentRestoresThenUsesEnvelopePath -count=1 -v`.
+- DEV-STORY: Added Shard encrypted restore fail-closed tests for Transit unavailable, auth denied, missing key, and minimum-version rejection after local Block restore; failures return no reader, zero metadata, `crypto_unavailable`, and leave only ciphertext local bytes.
+- DEV-STORY: Added public server regression for `crypto_unavailable` status sanitization; confirmed RED before fixing `internal/server.unavailableStatus` for crypto reasons.
+- DEV-STORY: AC-3.6.2/AC-3.6.5 focused commands passed for Shard encrypted restore crypto failures and public server crypto-unavailable sanitization.
+- DEV-STORY: Added `TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope` to prove rewrap after upload waits for replacement Confirmed Upload Catalog generation, preserves Block payload bytes, evicts/restores the rewrapped Block, and reads plaintext through envelope key version 2.
+- DEV-STORY: AC-3.6.3 focused command passed: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestReadDocumentEncryptedRestoreUsesRewrappedEnvelope -count=1 -v`.
+- DEV-STORY: Boundary check passed with changed-file scope limited to BMAD artifacts, `internal/shard/restore_test.go`, and `internal/server` status mapping/tests; `make package-boundaries` passed.
+- DEV-STORY: Final focused Story 3.6 Shard restore, existing encrypted-read, Transit boundary, public server mapping, evidence-bundle, package regression, and Shard race gates passed.
+- DEV-STORY: Touched-file credential and identifier leak scans passed with only allowlisted BMAD prose, test-fixture, and source-identifier matches; no real secrets or deployed raw identifier leaks were found.
+- DEV-STORY: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed, including formatting diff, package boundaries, buf/proto checks, golangci-lint, all Go tests, all race tests, integration-tagged tests with LocalStack/OpenBao containers, and `scrapd`/`scrapctl` builds.
+- DEV-STORY: Moved Story 3.6 and sprint status to `review` after all tasks, ACs, File List, and verification gates were complete.
 
 ### Completion Notes List
 
@@ -209,12 +222,24 @@ GPT-5 Codex.
 - Scoped Story 3.6 to fixture-backed encryption-compatible restore evidence, crypto-unavailable fail-closed behavior after restore, rewrapped envelope restore, wrong-key/minimum-version failure, and redaction proof.
 - Preserved non-goals for direct Backend streaming, production OpenBao proof, real S3/IAM rehearsal, Story 3.7 final closure, and V2 release readiness.
 - Identified existing implementation to reuse: `internal/shard/restore_test.go`, `internal/shard/encryption_test.go`, `internal/encryption/fake.go`, `internal/encryption/openbao.go`, `internal/shard/rewrap.go`, and `internal/scrapctl/evidencebundle`.
+- Created `_bmad-output/implementation-artifacts/epic-3-encryption-restore-evidence.md` before production-code changes with pending AC rows, restore/encryption path, fixture boundary, planned verification, leak-scan allowlist, and remaining scope.
+- Proved encrypted restore uses committed full-Block Backend restore and normal envelope read path without plaintext in Backend/restored Block bytes or Backend discovery calls.
+- Proved Transit unavailable, auth denied, missing key, and wrong/minimum key version failures after encrypted restore fail closed without returning plaintext and with sanitized public `crypto_unavailable` status.
+- Proved rewrapped envelope metadata converges through restore without rewriting Block payload bytes and restored reads verify the original plaintext.
+- Preserved package boundaries, public wire contracts, storage formats, dependency set, and fixture boundary; no production OpenBao proof is claimed.
+- Completed focused, package, race, evidence-bundle, leak-scan, and full `make check` verification for Story 3.6.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-6-encryption-compatible-restore-evidence.md`
+- `_bmad-output/implementation-artifacts/epic-3-encryption-restore-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/server/restore_unavailable_test.go`
+- `internal/server/server.go`
+- `internal/shard/restore_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 3.6 Encryption-Compatible Restore Evidence context and moved status to ready-for-dev.
+- 2026-06-11: Started Story 3.6 implementation and moved status to in-progress.
+- 2026-06-11: Completed Story 3.6 implementation and moved status to review.

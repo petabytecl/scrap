@@ -616,12 +616,20 @@ func unavailableStatus(err error) error {
 		return status.Errorf(codes.Unavailable, "%v", err)
 	}
 
-	st, detailErr := status.New(codes.Unavailable, fmt.Sprintf("%v", err)).
+	message := unavailableStatusMessage(reason, err)
+	st, detailErr := status.New(codes.Unavailable, message).
 		WithDetails(&errdetails.ErrorInfo{Reason: reason})
 	if detailErr != nil {
-		return status.Errorf(codes.Unavailable, "%v", err)
+		return status.Error(codes.Unavailable, message)
 	}
 	return st.Err()
+}
+
+func unavailableStatusMessage(reason string, err error) string {
+	if reason == storeapi.UnavailableReasonCryptoUnavailable {
+		return storeapi.ErrUnavailable.Error()
+	}
+	return fmt.Sprintf("%v", err)
 }
 
 func resourceExhaustedStatus(err error) error {

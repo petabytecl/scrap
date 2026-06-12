@@ -25,7 +25,10 @@ import (
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
-type restoreUnavailableStore struct{}
+type restoreUnavailableStore struct {
+	reason  string
+	message string
+}
 
 func (restoreUnavailableStore) WriteDocument(context.Context, string, string, string, string, io.Reader) (storeapi.WriteResult, error) {
 	return storeapi.WriteResult{}, storeapi.ErrInvalidArgument
@@ -35,8 +38,16 @@ func (restoreUnavailableStore) HeadDocument(context.Context, string, string) (st
 	return storeapi.DocumentMeta{}, storeapi.ErrNotFound
 }
 
-func (restoreUnavailableStore) ReadDocument(context.Context, string, string) (io.ReadCloser, storeapi.DocumentMeta, error) {
-	return nil, storeapi.DocumentMeta{}, storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, "Backend restore unavailable")
+func (s restoreUnavailableStore) ReadDocument(context.Context, string, string) (io.ReadCloser, storeapi.DocumentMeta, error) {
+	reason := s.reason
+	if reason == "" {
+		reason = storeapi.UnavailableReasonBackendRestoreUnavailable
+	}
+	message := s.message
+	if message == "" {
+		message = "Backend restore unavailable"
+	}
+	return nil, storeapi.DocumentMeta{}, storeapi.NewUnavailable(reason, message)
 }
 
 func (restoreUnavailableStore) FindDocuments(context.Context, string) ([]storeapi.DocumentMeta, error) {
@@ -91,6 +102,45 @@ func TestReadDocumentRestoreUnavailableReturnsErrorInfoDetail(t *testing.T) {
 	}
 	if info.GetReason() != storeapi.UnavailableReasonBackendRestoreUnavailable {
 		t.Fatalf("reason = %q, want backend_restore_unavailable", info.GetReason())
+	}
+}
+
+func TestReadDocumentCryptoUnavailableReturnsSanitizedErrorInfoDetail(t *testing.T) {
+	client := startRestoreServer(t, restoreUnavailableStore{
+		reason:  storeapi.UnavailableReasonCryptoUnavailable,
+		message: "leaky plaintext fake-transit:v1 /tmp/internal tx-restore doc.bin",
+	})
+	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
+		TransactionId: "tx-restore",
+		DocumentName:  "doc.bin",
+	})
+	if err != nil {
+		t.Fatalf("ReadDocument: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected crypto unavailable error")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("code = %s, want UNAVAILABLE", st.Code())
+	}
+	if st.Message() != storeapi.ErrUnavailable.Error() {
+		t.Fatalf("message = %q, want sanitized unavailable message", st.Message())
+	}
+	if forbidden := []string{"plaintext", "fake-transit", "/tmp", "tx-restore", "doc.bin"}; statusMessageContainsAny(st.Message(), forbidden) {
+		t.Fatalf("message = %q, contains crypto internals", st.Message())
+	}
+	info := errorInfoDetail(st)
+	if info == nil {
+		t.Fatalf("expected ErrorInfo detail, details=%T", st.Details())
+	}
+	if info.GetReason() != storeapi.UnavailableReasonCryptoUnavailable {
+		t.Fatalf("reason = %q, want crypto_unavailable", info.GetReason())
 	}
 }
 
