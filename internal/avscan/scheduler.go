@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const maxSignatureVersionLen = 128
@@ -18,6 +19,7 @@ type Config struct {
 	Engine                   Engine
 	ProgressStore            ProgressStore
 	SignatureVersionProvider SignatureVersionProvider
+	DetectionReporter        DetectionReporter
 	Metrics                  Metrics
 	PauseController          PauseController
 	IOBudget                 IOBudget
@@ -594,6 +596,18 @@ func (s *Scheduler) scanOne(ctx context.Context, block Block) error {
 		s.recordMetricsFailure(reason)
 		return err
 	}
+	if err := s.reportDetections(ctx, block, result); err != nil {
+		reason := reasonForScanError(err)
+		s.updateSnapshot(func(snapshot *Snapshot) {
+			snapshot.Status = StatusDegraded
+			snapshot.LastReason = reason
+			snapshot.InFlightBlocks = 0
+			snapshot.FailedBlocks++
+		})
+		s.recordBlock("failed", reason)
+		s.recordMetricsFailure(reason)
+		return err
+	}
 	s.recordBlock(string(result.Status), ReasonNone)
 	s.updateSnapshot(func(snapshot *Snapshot) {
 		if block.BlockID > snapshot.LastScannedBlockID {
@@ -603,6 +617,58 @@ func (s *Scheduler) scanOne(ctx context.Context, block Block) error {
 		snapshot.InFlightBlocks = 0
 		s.completed[block.BlockID] = struct{}{}
 	})
+	return nil
+}
+
+func (s *Scheduler) reportDetections(ctx context.Context, block Block, result Result) error {
+	if len(result.Detections) == 0 {
+		if result.Status == ResultDetected {
+			return fmt.Errorf("%w: detected result without detections", ErrInvalidDetection)
+		}
+		return nil
+	}
+	for _, detection := range result.Detections {
+		if err := validateDetection(detection); err != nil {
+			return err
+		}
+	}
+	if s.cfg.DetectionReporter == nil {
+		return ErrDetectionReporterUnavailable
+	}
+	if err := s.cfg.DetectionReporter.ReportDetections(ctx, block, append([]Detection(nil), result.Detections...)); err != nil {
+		return fmt.Errorf("%w: %w", ErrQuarantineFailed, err)
+	}
+	return nil
+}
+
+func validateDetection(detection Detection) error {
+	if err := validateDetectionText("transaction_id", detection.TransactionID); err != nil {
+		return err
+	}
+	if err := validateDetectionText("document_name", detection.DocumentName); err != nil {
+		return err
+	}
+	if detection.DetectedAtUs < 0 {
+		return fmt.Errorf("%w: detected_at_us is negative", ErrInvalidDetection)
+	}
+	if detection.ScanType != DetectionScanTypeInitial && detection.ScanType != DetectionScanTypeRescan {
+		return fmt.Errorf("%w: scan_type is required", ErrInvalidDetection)
+	}
+	if detection.Reason != DetectionReasonScannerDetection {
+		return fmt.Errorf("%w: reason is required", ErrInvalidDetection)
+	}
+	return nil
+}
+
+func validateDetectionText(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("%w: %s is required", ErrInvalidDetection, name)
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: %s contains control character", ErrInvalidDetection, name)
+		}
+	}
 	return nil
 }
 
@@ -707,6 +773,8 @@ func reasonForScanError(err error) Reason {
 		return ReasonEngineUnavailable
 	case errors.Is(err, ErrScanPanic):
 		return ReasonScanPanic
+	case errors.Is(err, ErrQuarantineFailed), errors.Is(err, ErrDetectionReporterUnavailable), errors.Is(err, ErrInvalidDetection):
+		return ReasonQuarantineFailed
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return ReasonCanceled
 	default:

@@ -91,6 +91,14 @@ func applySpanInfo(cmd *scrapv1.RaftCommand, mode telemetry.IdentifierMode) (str
 		)
 		attrs = append(attrs, blockIDAttribute(c.RewrapDoc.GetBlockId()))
 		return "rewrap_document", attrs
+	case *scrapv1.RaftCommand_QuarantineDoc:
+		attrs := telemetry.DocumentIdentityAttributes(
+			c.QuarantineDoc.GetTransactionId(),
+			c.QuarantineDoc.GetDocumentName(),
+			mode,
+		)
+		attrs = append(attrs, blockIDAttribute(c.QuarantineDoc.GetBlockId()))
+		return "quarantine_document", attrs
 	case *scrapv1.RaftCommand_SealBlock:
 		return "seal_block", []attribute.KeyValue{blockIDAttribute(c.SealBlock.GetBlockId())}
 	case *scrapv1.RaftCommand_ConfirmUpload:
@@ -117,6 +125,8 @@ func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) e
 		s.applyCommitDocumentCommand(c.CommitDoc, entryIndex)
 	case *scrapv1.RaftCommand_RewrapDoc:
 		return s.applyRewrapDocumentEnvelopeCommand(c.RewrapDoc, entryIndex)
+	case *scrapv1.RaftCommand_QuarantineDoc:
+		return s.applyQuarantineDocumentCommand(c.QuarantineDoc)
 	case *scrapv1.RaftCommand_ConsistencyCheck:
 		s.scrubs.applyConsistencyCheck(c.ConsistencyCheck, entryIndex)
 	case *scrapv1.RaftCommand_SealBlock:

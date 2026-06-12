@@ -64,6 +64,7 @@ func newScannerCoordinator(
 		Engine:                   cfg.Engine,
 		ProgressStore:            progressStore,
 		SignatureVersionProvider: cfg.SignatureVersionProvider,
+		DetectionReporter:        c,
 		Metrics:                  cfg.Metrics,
 		PauseController:          pauseController,
 		IOBudget:                 scrub.NewTokenBucket(cfg.ioRate()),
@@ -125,6 +126,14 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 		})
 	}
 	return out, nil
+}
+
+func (c *scannerCoordinator) ReportDetections(ctx context.Context, block avscan.Block, detections []avscan.Detection) error {
+	reporter, ok := c.core.(avscan.DetectionReporter)
+	if !ok {
+		return avscan.ErrDetectionReporterUnavailable
+	}
+	return reporter.ReportDetections(ctx, block, detections)
 }
 
 func scannerBlockOpener(blockID uint64, path string) func(context.Context) (io.ReadCloser, error) {

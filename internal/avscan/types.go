@@ -12,10 +12,13 @@ const (
 )
 
 var (
-	ErrEngineUnavailable = errors.New("avscan: engine unavailable")
-	ErrScanPanic         = errors.New("avscan: scan panic")
-	ErrBlockSource       = errors.New("avscan: Block source unavailable")
-	ErrProgressNotFound  = errors.New("avscan: scanner progress not found")
+	ErrEngineUnavailable            = errors.New("avscan: engine unavailable")
+	ErrScanPanic                    = errors.New("avscan: scan panic")
+	ErrBlockSource                  = errors.New("avscan: Block source unavailable")
+	ErrProgressNotFound             = errors.New("avscan: scanner progress not found")
+	ErrInvalidDetection             = errors.New("avscan: invalid detection")
+	ErrDetectionReporterUnavailable = errors.New("avscan: detection reporter unavailable")
+	ErrQuarantineFailed             = errors.New("avscan: quarantine report failed")
 )
 
 type Status string
@@ -39,6 +42,7 @@ const (
 	ReasonIOBudget          Reason = "io_budget"
 	ReasonPaused            Reason = "paused"
 	ReasonProgressFailed    Reason = "progress_failed"
+	ReasonQuarantineFailed  Reason = "quarantine_failed"
 )
 
 type ResultStatus string
@@ -64,6 +68,28 @@ func (b Block) OpenBytes(ctx context.Context) (io.ReadCloser, error) {
 type Result struct {
 	Status           ResultStatus
 	ScannedDocuments int
+	Detections       []Detection
+}
+
+type DetectionScanType string
+
+const (
+	DetectionScanTypeInitial DetectionScanType = "initial"
+	DetectionScanTypeRescan  DetectionScanType = "rescan"
+)
+
+type DetectionReason string
+
+const (
+	DetectionReasonScannerDetection DetectionReason = "scanner_detection"
+)
+
+type Detection struct {
+	TransactionID string
+	DocumentName  string
+	DetectedAtUs  int64
+	ScanType      DetectionScanType
+	Reason        DetectionReason
 }
 
 type Snapshot struct {
@@ -92,6 +118,10 @@ type LeaderChecker interface {
 
 type Engine interface {
 	Scan(context.Context, Block) (Result, error)
+}
+
+type DetectionReporter interface {
+	ReportDetections(context.Context, Block, []Detection) error
 }
 
 type ProgressStore interface {

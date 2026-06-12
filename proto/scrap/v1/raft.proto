@@ -9,6 +9,7 @@ message RaftCommand {
     SealBlock                   seal_block        = 3;
     ConfirmUpload               confirm_upload    = 4;
     RewrapDocumentEnvelope      rewrap_doc        = 7;
+    QuarantineDocument          quarantine_doc    = 8;
   }
 
   // W3C trace context, injected by the proposing leader and extracted by every
@@ -17,6 +18,26 @@ message RaftCommand {
   // (empty context -> a root apply span). See ADR 0013.
   string traceparent = 5;
   string tracestate  = 6;
+}
+
+enum QuarantineScanType {
+  QUARANTINE_SCAN_TYPE_UNSPECIFIED = 0;
+  QUARANTINE_SCAN_TYPE_INITIAL     = 1;
+  QUARANTINE_SCAN_TYPE_RESCAN      = 2;
+}
+
+enum QuarantineReason {
+  QUARANTINE_REASON_UNSPECIFIED       = 0;
+  QUARANTINE_REASON_SCANNER_DETECTION = 1;
+}
+
+message QuarantineDocument {
+  string transaction_id = 1;
+  string document_name  = 2;
+  uint64 block_id       = 3;
+  int64  detected_at_us = 4;
+  QuarantineScanType scan_type = 5;
+  QuarantineReason   reason    = 6;
 }
 
 message RequestConsistencyCheck {

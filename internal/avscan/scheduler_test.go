@@ -535,6 +535,85 @@ func TestSchedulerDeduplicatesBlockListerDuplicates(t *testing.T) {
 	}
 }
 
+func TestSchedulerReportsDetectionsBeforePersistingProgress(t *testing.T) {
+	store := &memoryProgressStore{}
+	reporter := &recordingDetectionReporter{}
+	detection := Detection{
+		TransactionID: "tx-detected",
+		DocumentName:  "detected.xml",
+		ScanType:      DetectionScanTypeInitial,
+		Reason:        DetectionReasonScannerDetection,
+	}
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{
+				Status:           ResultDetected,
+				ScannedDocuments: 1,
+				Detections:       []Detection{detection},
+			}, nil
+		}),
+		DetectionReporter:        reporter,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got := len(reporter.reports); got != 1 {
+		t.Fatalf("reports = %d, want 1", got)
+	}
+	report := reporter.reports[0]
+	if report.block.BlockID != 1 {
+		t.Fatalf("reported BlockID = %d, want 1", report.block.BlockID)
+	}
+	if !reflect.DeepEqual(report.detections, []Detection{detection}) {
+		t.Fatalf("reported detections = %+v, want %+v", report.detections, []Detection{detection})
+	}
+	assertSavedProgress(t, store.lastSaved(), 1)
+}
+
+func TestSchedulerQuarantineReportFailureDoesNotPersistProgress(t *testing.T) {
+	store := &memoryProgressStore{}
+	reportErr := errors.New("raft unavailable")
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{
+				Status:           ResultDetected,
+				ScannedDocuments: 1,
+				Detections: []Detection{{
+					TransactionID: "tx-detected",
+					DocumentName:  "detected.xml",
+					ScanType:      DetectionScanTypeInitial,
+					Reason:        DetectionReasonScannerDetection,
+				}},
+			}, nil
+		}),
+		DetectionReporter:        &recordingDetectionReporter{err: reportErr},
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if !errors.Is(err, reportErr) {
+		t.Fatalf("RunOnce error = %v, want %v", err, reportErr)
+	}
+	if got := store.lastSaved().LastScannedBlockID; got != 0 {
+		t.Fatalf("saved progress BlockID = %d, want 0 after quarantine report failure", got)
+	}
+	if got := scheduler.Snapshot().LastReason; got != ReasonQuarantineFailed {
+		t.Fatalf("last reason = %q, want %q", got, ReasonQuarantineFailed)
+	}
+}
+
 func TestSchedulerContinuesAfterPoisonBlock(t *testing.T) {
 	engine := &poisonOnceEngine{}
 	scheduler := NewScheduler(Config{
@@ -918,6 +997,24 @@ type mutableSignatureVersion struct {
 
 func (v *mutableSignatureVersion) SignatureVersion(context.Context) (string, error) {
 	return v.version, nil
+}
+
+type detectionReport struct {
+	block      Block
+	detections []Detection
+}
+
+type recordingDetectionReporter struct {
+	reports []detectionReport
+	err     error
+}
+
+func (r *recordingDetectionReporter) ReportDetections(_ context.Context, block Block, detections []Detection) error {
+	r.reports = append(r.reports, detectionReport{
+		block:      block,
+		detections: append([]Detection(nil), detections...),
+	})
+	return r.err
 }
 
 func assertSavedProgress(t *testing.T, got Progress, blockID uint64) {

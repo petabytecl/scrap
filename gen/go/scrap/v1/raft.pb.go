@@ -21,6 +21,101 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type QuarantineScanType int32
+
+const (
+	QuarantineScanType_QUARANTINE_SCAN_TYPE_UNSPECIFIED QuarantineScanType = 0
+	QuarantineScanType_QUARANTINE_SCAN_TYPE_INITIAL     QuarantineScanType = 1
+	QuarantineScanType_QUARANTINE_SCAN_TYPE_RESCAN      QuarantineScanType = 2
+)
+
+// Enum value maps for QuarantineScanType.
+var (
+	QuarantineScanType_name = map[int32]string{
+		0: "QUARANTINE_SCAN_TYPE_UNSPECIFIED",
+		1: "QUARANTINE_SCAN_TYPE_INITIAL",
+		2: "QUARANTINE_SCAN_TYPE_RESCAN",
+	}
+	QuarantineScanType_value = map[string]int32{
+		"QUARANTINE_SCAN_TYPE_UNSPECIFIED": 0,
+		"QUARANTINE_SCAN_TYPE_INITIAL":     1,
+		"QUARANTINE_SCAN_TYPE_RESCAN":      2,
+	}
+)
+
+func (x QuarantineScanType) Enum() *QuarantineScanType {
+	p := new(QuarantineScanType)
+	*p = x
+	return p
+}
+
+func (x QuarantineScanType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QuarantineScanType) Descriptor() protoreflect.EnumDescriptor {
+	return file_scrap_v1_raft_proto_enumTypes[0].Descriptor()
+}
+
+func (QuarantineScanType) Type() protoreflect.EnumType {
+	return &file_scrap_v1_raft_proto_enumTypes[0]
+}
+
+func (x QuarantineScanType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QuarantineScanType.Descriptor instead.
+func (QuarantineScanType) EnumDescriptor() ([]byte, []int) {
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{0}
+}
+
+type QuarantineReason int32
+
+const (
+	QuarantineReason_QUARANTINE_REASON_UNSPECIFIED       QuarantineReason = 0
+	QuarantineReason_QUARANTINE_REASON_SCANNER_DETECTION QuarantineReason = 1
+)
+
+// Enum value maps for QuarantineReason.
+var (
+	QuarantineReason_name = map[int32]string{
+		0: "QUARANTINE_REASON_UNSPECIFIED",
+		1: "QUARANTINE_REASON_SCANNER_DETECTION",
+	}
+	QuarantineReason_value = map[string]int32{
+		"QUARANTINE_REASON_UNSPECIFIED":       0,
+		"QUARANTINE_REASON_SCANNER_DETECTION": 1,
+	}
+)
+
+func (x QuarantineReason) Enum() *QuarantineReason {
+	p := new(QuarantineReason)
+	*p = x
+	return p
+}
+
+func (x QuarantineReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QuarantineReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_scrap_v1_raft_proto_enumTypes[1].Descriptor()
+}
+
+func (QuarantineReason) Type() protoreflect.EnumType {
+	return &file_scrap_v1_raft_proto_enumTypes[1]
+}
+
+func (x QuarantineReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QuarantineReason.Descriptor instead.
+func (QuarantineReason) EnumDescriptor() ([]byte, []int) {
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{1}
+}
+
 type RaftCommand struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Command:
@@ -30,6 +125,7 @@ type RaftCommand struct {
 	//	*RaftCommand_SealBlock
 	//	*RaftCommand_ConfirmUpload
 	//	*RaftCommand_RewrapDoc
+	//	*RaftCommand_QuarantineDoc
 	Command isRaftCommand_Command `protobuf_oneof:"command"`
 	// W3C trace context, injected by the proposing leader and extracted by every
 	// voter at apply time so the state-machine apply is traceable on all replicas.
@@ -123,6 +219,15 @@ func (x *RaftCommand) GetRewrapDoc() *RewrapDocumentEnvelope {
 	return nil
 }
 
+func (x *RaftCommand) GetQuarantineDoc() *QuarantineDocument {
+	if x != nil {
+		if x, ok := x.Command.(*RaftCommand_QuarantineDoc); ok {
+			return x.QuarantineDoc
+		}
+	}
+	return nil
+}
+
 func (x *RaftCommand) GetTraceparent() string {
 	if x != nil {
 		return x.Traceparent
@@ -161,6 +266,10 @@ type RaftCommand_RewrapDoc struct {
 	RewrapDoc *RewrapDocumentEnvelope `protobuf:"bytes,7,opt,name=rewrap_doc,json=rewrapDoc,proto3,oneof"`
 }
 
+type RaftCommand_QuarantineDoc struct {
+	QuarantineDoc *QuarantineDocument `protobuf:"bytes,8,opt,name=quarantine_doc,json=quarantineDoc,proto3,oneof"`
+}
+
 func (*RaftCommand_CommitDoc) isRaftCommand_Command() {}
 
 func (*RaftCommand_ConsistencyCheck) isRaftCommand_Command() {}
@@ -170,6 +279,92 @@ func (*RaftCommand_SealBlock) isRaftCommand_Command() {}
 func (*RaftCommand_ConfirmUpload) isRaftCommand_Command() {}
 
 func (*RaftCommand_RewrapDoc) isRaftCommand_Command() {}
+
+func (*RaftCommand_QuarantineDoc) isRaftCommand_Command() {}
+
+type QuarantineDocument struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TransactionId string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	DocumentName  string                 `protobuf:"bytes,2,opt,name=document_name,json=documentName,proto3" json:"document_name,omitempty"`
+	BlockId       uint64                 `protobuf:"varint,3,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
+	DetectedAtUs  int64                  `protobuf:"varint,4,opt,name=detected_at_us,json=detectedAtUs,proto3" json:"detected_at_us,omitempty"`
+	ScanType      QuarantineScanType     `protobuf:"varint,5,opt,name=scan_type,json=scanType,proto3,enum=scrap.v1.QuarantineScanType" json:"scan_type,omitempty"`
+	Reason        QuarantineReason       `protobuf:"varint,6,opt,name=reason,proto3,enum=scrap.v1.QuarantineReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuarantineDocument) Reset() {
+	*x = QuarantineDocument{}
+	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuarantineDocument) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuarantineDocument) ProtoMessage() {}
+
+func (x *QuarantineDocument) ProtoReflect() protoreflect.Message {
+	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuarantineDocument.ProtoReflect.Descriptor instead.
+func (*QuarantineDocument) Descriptor() ([]byte, []int) {
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *QuarantineDocument) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
+func (x *QuarantineDocument) GetDocumentName() string {
+	if x != nil {
+		return x.DocumentName
+	}
+	return ""
+}
+
+func (x *QuarantineDocument) GetBlockId() uint64 {
+	if x != nil {
+		return x.BlockId
+	}
+	return 0
+}
+
+func (x *QuarantineDocument) GetDetectedAtUs() int64 {
+	if x != nil {
+		return x.DetectedAtUs
+	}
+	return 0
+}
+
+func (x *QuarantineDocument) GetScanType() QuarantineScanType {
+	if x != nil {
+		return x.ScanType
+	}
+	return QuarantineScanType_QUARANTINE_SCAN_TYPE_UNSPECIFIED
+}
+
+func (x *QuarantineDocument) GetReason() QuarantineReason {
+	if x != nil {
+		return x.Reason
+	}
+	return QuarantineReason_QUARANTINE_REASON_UNSPECIFIED
+}
 
 type RequestConsistencyCheck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -181,7 +376,7 @@ type RequestConsistencyCheck struct {
 
 func (x *RequestConsistencyCheck) Reset() {
 	*x = RequestConsistencyCheck{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	mi := &file_scrap_v1_raft_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -193,7 +388,7 @@ func (x *RequestConsistencyCheck) String() string {
 func (*RequestConsistencyCheck) ProtoMessage() {}
 
 func (x *RequestConsistencyCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[1]
+	mi := &file_scrap_v1_raft_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -206,7 +401,7 @@ func (x *RequestConsistencyCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestConsistencyCheck.ProtoReflect.Descriptor instead.
 func (*RequestConsistencyCheck) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{1}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RequestConsistencyCheck) GetScrubId() string {
@@ -235,7 +430,7 @@ type SealBlock struct {
 
 func (x *SealBlock) Reset() {
 	*x = SealBlock{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	mi := &file_scrap_v1_raft_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -247,7 +442,7 @@ func (x *SealBlock) String() string {
 func (*SealBlock) ProtoMessage() {}
 
 func (x *SealBlock) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[2]
+	mi := &file_scrap_v1_raft_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -260,7 +455,7 @@ func (x *SealBlock) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SealBlock.ProtoReflect.Descriptor instead.
 func (*SealBlock) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{2}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SealBlock) GetBlockId() uint64 {
@@ -302,7 +497,7 @@ type BackendObjectMetadata struct {
 
 func (x *BackendObjectMetadata) Reset() {
 	*x = BackendObjectMetadata{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[3]
+	mi := &file_scrap_v1_raft_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -314,7 +509,7 @@ func (x *BackendObjectMetadata) String() string {
 func (*BackendObjectMetadata) ProtoMessage() {}
 
 func (x *BackendObjectMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[3]
+	mi := &file_scrap_v1_raft_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -327,7 +522,7 @@ func (x *BackendObjectMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BackendObjectMetadata.ProtoReflect.Descriptor instead.
 func (*BackendObjectMetadata) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{3}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *BackendObjectMetadata) GetKey() string {
@@ -365,7 +560,7 @@ type ConfirmUpload struct {
 
 func (x *ConfirmUpload) Reset() {
 	*x = ConfirmUpload{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[4]
+	mi := &file_scrap_v1_raft_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -377,7 +572,7 @@ func (x *ConfirmUpload) String() string {
 func (*ConfirmUpload) ProtoMessage() {}
 
 func (x *ConfirmUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[4]
+	mi := &file_scrap_v1_raft_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -390,7 +585,7 @@ func (x *ConfirmUpload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmUpload.ProtoReflect.Descriptor instead.
 func (*ConfirmUpload) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{4}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ConfirmUpload) GetBlockId() uint64 {
@@ -451,7 +646,7 @@ type RewrapDocumentEnvelope struct {
 
 func (x *RewrapDocumentEnvelope) Reset() {
 	*x = RewrapDocumentEnvelope{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[5]
+	mi := &file_scrap_v1_raft_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +658,7 @@ func (x *RewrapDocumentEnvelope) String() string {
 func (*RewrapDocumentEnvelope) ProtoMessage() {}
 
 func (x *RewrapDocumentEnvelope) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[5]
+	mi := &file_scrap_v1_raft_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +671,7 @@ func (x *RewrapDocumentEnvelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RewrapDocumentEnvelope.ProtoReflect.Descriptor instead.
 func (*RewrapDocumentEnvelope) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{5}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RewrapDocumentEnvelope) GetTransactionId() string {
@@ -554,7 +749,7 @@ type CommitDocument struct {
 
 func (x *CommitDocument) Reset() {
 	*x = CommitDocument{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[6]
+	mi := &file_scrap_v1_raft_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -566,7 +761,7 @@ func (x *CommitDocument) String() string {
 func (*CommitDocument) ProtoMessage() {}
 
 func (x *CommitDocument) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[6]
+	mi := &file_scrap_v1_raft_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -579,7 +774,7 @@ func (x *CommitDocument) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitDocument.ProtoReflect.Descriptor instead.
 func (*CommitDocument) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{6}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CommitDocument) GetTransactionId() string {
@@ -673,7 +868,7 @@ type OpenlogEntry struct {
 
 func (x *OpenlogEntry) Reset() {
 	*x = OpenlogEntry{}
-	mi := &file_scrap_v1_raft_proto_msgTypes[7]
+	mi := &file_scrap_v1_raft_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -685,7 +880,7 @@ func (x *OpenlogEntry) String() string {
 func (*OpenlogEntry) ProtoMessage() {}
 
 func (x *OpenlogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_scrap_v1_raft_proto_msgTypes[7]
+	mi := &file_scrap_v1_raft_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -698,7 +893,7 @@ func (x *OpenlogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenlogEntry.ProtoReflect.Descriptor instead.
 func (*OpenlogEntry) Descriptor() ([]byte, []int) {
-	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{7}
+	return file_scrap_v1_raft_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *OpenlogEntry) GetTransactionId() string {
@@ -747,7 +942,7 @@ var File_scrap_v1_raft_proto protoreflect.FileDescriptor
 
 const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\n" +
-	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\xa2\x03\n" +
+	"\x13scrap/v1/raft.proto\x12\bscrap.v1\"\xe9\x03\n" +
 	"\vRaftCommand\x129\n" +
 	"\n" +
 	"commit_doc\x18\x01 \x01(\v2\x18.scrap.v1.CommitDocumentH\x00R\tcommitDoc\x12P\n" +
@@ -756,12 +951,20 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"seal_block\x18\x03 \x01(\v2\x13.scrap.v1.SealBlockH\x00R\tsealBlock\x12@\n" +
 	"\x0econfirm_upload\x18\x04 \x01(\v2\x17.scrap.v1.ConfirmUploadH\x00R\rconfirmUpload\x12A\n" +
 	"\n" +
-	"rewrap_doc\x18\a \x01(\v2 .scrap.v1.RewrapDocumentEnvelopeH\x00R\trewrapDoc\x12 \n" +
+	"rewrap_doc\x18\a \x01(\v2 .scrap.v1.RewrapDocumentEnvelopeH\x00R\trewrapDoc\x12E\n" +
+	"\x0equarantine_doc\x18\b \x01(\v2\x1c.scrap.v1.QuarantineDocumentH\x00R\rquarantineDoc\x12 \n" +
 	"\vtraceparent\x18\x05 \x01(\tR\vtraceparent\x12\x1e\n" +
 	"\n" +
 	"tracestate\x18\x06 \x01(\tR\n" +
 	"tracestateB\t\n" +
-	"\acommand\"\\\n" +
+	"\acommand\"\x90\x02\n" +
+	"\x12QuarantineDocument\x12%\n" +
+	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
+	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x19\n" +
+	"\bblock_id\x18\x03 \x01(\x04R\ablockId\x12$\n" +
+	"\x0edetected_at_us\x18\x04 \x01(\x03R\fdetectedAtUs\x129\n" +
+	"\tscan_type\x18\x05 \x01(\x0e2\x1c.scrap.v1.QuarantineScanTypeR\bscanType\x122\n" +
+	"\x06reason\x18\x06 \x01(\x0e2\x1a.scrap.v1.QuarantineReasonR\x06reason\"\\\n" +
 	"\x17RequestConsistencyCheck\x12\x19\n" +
 	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12&\n" +
 	"\x0frequested_at_us\x18\x02 \x01(\x03R\rrequestedAtUs\"\x8f\x01\n" +
@@ -814,7 +1017,14 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\bblock_id\x18\x03 \x01(\x04R\ablockId\x12!\n" +
 	"\fstart_offset\x18\x04 \x01(\x04R\vstartOffset\x12!\n" +
 	"\fcontent_type\x18\x05 \x01(\tR\vcontentType\x12'\n" +
-	"\x0fidempotency_key\x18\x06 \x01(\tR\x0eidempotencyKeyB\x8c\x01\n" +
+	"\x0fidempotency_key\x18\x06 \x01(\tR\x0eidempotencyKey*}\n" +
+	"\x12QuarantineScanType\x12$\n" +
+	" QUARANTINE_SCAN_TYPE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cQUARANTINE_SCAN_TYPE_INITIAL\x10\x01\x12\x1f\n" +
+	"\x1bQUARANTINE_SCAN_TYPE_RESCAN\x10\x02*^\n" +
+	"\x10QuarantineReason\x12!\n" +
+	"\x1dQUARANTINE_REASON_UNSPECIFIED\x10\x00\x12'\n" +
+	"#QUARANTINE_REASON_SCANNER_DETECTION\x10\x01B\x8c\x01\n" +
 	"\fcom.scrap.v1B\tRaftProtoP\x01Z0github.com/petabytecl/scrap/gen/scrap/v1;scrapv1\xa2\x02\x03SXX\xaa\x02\bScrap.V1\xca\x02\bScrap\\V1\xe2\x02\x14Scrap\\V1\\GPBMetadata\xea\x02\tScrap::V1b\x06proto3"
 
 var (
@@ -829,30 +1039,37 @@ func file_scrap_v1_raft_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_raft_proto_rawDescData
 }
 
-var file_scrap_v1_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_scrap_v1_raft_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_scrap_v1_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_scrap_v1_raft_proto_goTypes = []any{
-	(*RaftCommand)(nil),             // 0: scrap.v1.RaftCommand
-	(*RequestConsistencyCheck)(nil), // 1: scrap.v1.RequestConsistencyCheck
-	(*SealBlock)(nil),               // 2: scrap.v1.SealBlock
-	(*BackendObjectMetadata)(nil),   // 3: scrap.v1.BackendObjectMetadata
-	(*ConfirmUpload)(nil),           // 4: scrap.v1.ConfirmUpload
-	(*RewrapDocumentEnvelope)(nil),  // 5: scrap.v1.RewrapDocumentEnvelope
-	(*CommitDocument)(nil),          // 6: scrap.v1.CommitDocument
-	(*OpenlogEntry)(nil),            // 7: scrap.v1.OpenlogEntry
+	(QuarantineScanType)(0),         // 0: scrap.v1.QuarantineScanType
+	(QuarantineReason)(0),           // 1: scrap.v1.QuarantineReason
+	(*RaftCommand)(nil),             // 2: scrap.v1.RaftCommand
+	(*QuarantineDocument)(nil),      // 3: scrap.v1.QuarantineDocument
+	(*RequestConsistencyCheck)(nil), // 4: scrap.v1.RequestConsistencyCheck
+	(*SealBlock)(nil),               // 5: scrap.v1.SealBlock
+	(*BackendObjectMetadata)(nil),   // 6: scrap.v1.BackendObjectMetadata
+	(*ConfirmUpload)(nil),           // 7: scrap.v1.ConfirmUpload
+	(*RewrapDocumentEnvelope)(nil),  // 8: scrap.v1.RewrapDocumentEnvelope
+	(*CommitDocument)(nil),          // 9: scrap.v1.CommitDocument
+	(*OpenlogEntry)(nil),            // 10: scrap.v1.OpenlogEntry
 }
 var file_scrap_v1_raft_proto_depIdxs = []int32{
-	6, // 0: scrap.v1.RaftCommand.commit_doc:type_name -> scrap.v1.CommitDocument
-	1, // 1: scrap.v1.RaftCommand.consistency_check:type_name -> scrap.v1.RequestConsistencyCheck
-	2, // 2: scrap.v1.RaftCommand.seal_block:type_name -> scrap.v1.SealBlock
-	4, // 3: scrap.v1.RaftCommand.confirm_upload:type_name -> scrap.v1.ConfirmUpload
-	5, // 4: scrap.v1.RaftCommand.rewrap_doc:type_name -> scrap.v1.RewrapDocumentEnvelope
-	3, // 5: scrap.v1.ConfirmUpload.block_object:type_name -> scrap.v1.BackendObjectMetadata
-	3, // 6: scrap.v1.ConfirmUpload.index_object:type_name -> scrap.v1.BackendObjectMetadata
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	9,  // 0: scrap.v1.RaftCommand.commit_doc:type_name -> scrap.v1.CommitDocument
+	4,  // 1: scrap.v1.RaftCommand.consistency_check:type_name -> scrap.v1.RequestConsistencyCheck
+	5,  // 2: scrap.v1.RaftCommand.seal_block:type_name -> scrap.v1.SealBlock
+	7,  // 3: scrap.v1.RaftCommand.confirm_upload:type_name -> scrap.v1.ConfirmUpload
+	8,  // 4: scrap.v1.RaftCommand.rewrap_doc:type_name -> scrap.v1.RewrapDocumentEnvelope
+	3,  // 5: scrap.v1.RaftCommand.quarantine_doc:type_name -> scrap.v1.QuarantineDocument
+	0,  // 6: scrap.v1.QuarantineDocument.scan_type:type_name -> scrap.v1.QuarantineScanType
+	1,  // 7: scrap.v1.QuarantineDocument.reason:type_name -> scrap.v1.QuarantineReason
+	6,  // 8: scrap.v1.ConfirmUpload.block_object:type_name -> scrap.v1.BackendObjectMetadata
+	6,  // 9: scrap.v1.ConfirmUpload.index_object:type_name -> scrap.v1.BackendObjectMetadata
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_scrap_v1_raft_proto_init() }
@@ -866,19 +1083,21 @@ func file_scrap_v1_raft_proto_init() {
 		(*RaftCommand_SealBlock)(nil),
 		(*RaftCommand_ConfirmUpload)(nil),
 		(*RaftCommand_RewrapDoc)(nil),
+		(*RaftCommand_QuarantineDoc)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_raft_proto_rawDesc), len(file_scrap_v1_raft_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   8,
+			NumEnums:      2,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_scrap_v1_raft_proto_goTypes,
 		DependencyIndexes: file_scrap_v1_raft_proto_depIdxs,
+		EnumInfos:         file_scrap_v1_raft_proto_enumTypes,
 		MessageInfos:      file_scrap_v1_raft_proto_msgTypes,
 	}.Build()
 	File_scrap_v1_raft_proto = out.File

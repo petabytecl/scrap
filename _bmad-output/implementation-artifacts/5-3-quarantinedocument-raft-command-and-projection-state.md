@@ -5,7 +5,7 @@ created: 2026-06-12T13:54:44-04:00
 
 # Story 5.3: QuarantineDocument Raft Command and Projection State
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,49 +33,49 @@ so that unsafe content state is replicated authority, not local scanner state.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 5.3 evidence artifact before production code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-5-quarantinedocument-raft-projection-evidence.md`.
-  - [ ] Record baseline commit, changed-boundary list, Raft command field summary, Projection key summary, replay/rebuild commands, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
-  - [ ] Keep closure scoped to Story 5.3. Do not claim read denial, public metadata scan status, admin confirm/release, `scrapctl` quarantine UX, or Epic 5 closure.
+- [x] Create the Story 5.3 evidence artifact before production code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-5-quarantinedocument-raft-projection-evidence.md`.
+  - [x] Record baseline commit, changed-boundary list, Raft command field summary, Projection key summary, replay/rebuild commands, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
+  - [x] Keep closure scoped to Story 5.3. Do not claim read denial, public metadata scan status, admin confirm/release, `scrapctl` quarantine UX, or Epic 5 closure.
 
-- [ ] Add the metadata-only Raft wire contract. (AC: 1, 3)
-  - [ ] Update `proto/scrap/v1/raft.proto` with an additive `QuarantineDocument` oneof variant. Do not renumber existing variants; `5` and `6` are already trace context fields and `7` is `rewrap_doc`.
-  - [ ] Add a `QuarantineDocument` message that carries bounded metadata only: `transaction_id`, `document_name`, optional `block_id` evidence, `detected_at_us`, and a bounded scan type/reason. Do not carry Document bytes, rule text, signature names, raw scanner payloads, dependency error strings, or file paths.
-  - [ ] Include the ADR 0008 scan-type distinction (`INITIAL`/`RESCAN`) for operational triage if a scan-type field is added. Unknown/empty values must be validated before apply changes Projection state.
-  - [ ] Regenerate `gen/go/scrap/v1/raft.pb.go` through the repo protobuf toolchain. Do not edit generated files by hand.
-  - [ ] Add proto/apply tests that prove the command can be marshaled, decoded, and dispatched without affecting existing command compatibility.
+- [x] Add the metadata-only Raft wire contract. (AC: 1, 3)
+  - [x] Update `proto/scrap/v1/raft.proto` with an additive `QuarantineDocument` oneof variant. Do not renumber existing variants; `5` and `6` are already trace context fields and `7` is `rewrap_doc`.
+  - [x] Add a `QuarantineDocument` message that carries bounded metadata only: `transaction_id`, `document_name`, optional `block_id` evidence, `detected_at_us`, and a bounded scan type/reason. Do not carry Document bytes, rule text, signature names, raw scanner payloads, dependency error strings, or file paths.
+  - [x] Include the ADR 0008 scan-type distinction (`INITIAL`/`RESCAN`) for operational triage if a scan-type field is added. Unknown/empty values must be validated before apply changes Projection state.
+  - [x] Regenerate `gen/go/scrap/v1/raft.pb.go` through the repo protobuf toolchain. Do not edit generated files by hand.
+  - [x] Add proto/apply tests that prove the command can be marshaled, decoded, and dispatched without affecting existing command compatibility.
 
-- [ ] Add Content Quarantine Projection storage in `internal/index`. (AC: 2, 4)
-  - [ ] Add a focused quarantine Projection file, for example `internal/index/content_quarantine.go`, instead of mixing quarantine state into Transaction entries, scanner watermarks, Upload Outbox, or Confirmed Upload Catalog.
-  - [ ] Use the ADR 0008 sparse key shape `q\x01<transaction_id>\x00<document_name>` unless implementation discovers a concrete collision; changing the storage shape requires documenting the rationale because ADR 0008 names this prefix.
-  - [ ] Store only bounded quarantine metadata needed for later read/admin stories. Keep Block bytes untouched and do not mutate `.blk` or `.idx` files.
-  - [ ] Provide narrow methods such as put/get/list/delete or put/get only if later stories can add list/delete without speculative work. Include sentinel not-found errors and strict decode validation.
-  - [ ] Ensure quarantine keys participate in `Index.StreamingHash()` because Content Quarantine is replicated read-side authority, unlike Story 5.2 scanner watermarks.
-  - [ ] Add index tests for missing state, put/get, duplicate idempotency, corrupt/truncated/unknown-version values, key ordering or point-get behavior, and StreamingHash changes when quarantine state differs.
+- [x] Add Content Quarantine Projection storage in `internal/index`. (AC: 2, 4)
+  - [x] Add a focused quarantine Projection file, for example `internal/index/content_quarantine.go`, instead of mixing quarantine state into Transaction entries, scanner watermarks, Upload Outbox, or Confirmed Upload Catalog.
+  - [x] Use the ADR 0008 sparse key shape `q\x01<transaction_id>\x00<document_name>` unless implementation discovers a concrete collision; changing the storage shape requires documenting the rationale because ADR 0008 names this prefix.
+  - [x] Store only bounded quarantine metadata needed for later read/admin stories. Keep Block bytes untouched and do not mutate `.blk` or `.idx` files.
+  - [x] Provide narrow methods such as put/get/list/delete or put/get only if later stories can add list/delete without speculative work. Include sentinel not-found errors and strict decode validation.
+  - [x] Ensure quarantine keys participate in `Index.StreamingHash()` because Content Quarantine is replicated read-side authority, unlike Story 5.2 scanner watermarks.
+  - [x] Add index tests for missing state, put/get, duplicate idempotency, corrupt/truncated/unknown-version values, key ordering or point-get behavior, and StreamingHash changes when quarantine state differs.
 
-- [ ] Wire Shard-owned proposal and apply behavior. (AC: 1-4)
-  - [ ] Add a Shard-level method or coordinator path that accepts bounded scanner detections and proposes `QuarantineDocument` through the existing Raft proposer.
-  - [ ] Add `applyQuarantineDocumentCommand` dispatch in `internal/shard/apply.go` and keep the actual Projection mutation close to `internal/shard/projection.go` or a small sibling file.
-  - [ ] Apply must validate Document identity with existing store validation, reject empty/invalid scan metadata, and return bounded errors without raw scanner payloads.
-  - [ ] Apply must be idempotent for duplicate commands for the same `(transaction_id, document_name)` and must not corrupt Transaction entries or increment Document counts.
-  - [ ] If the command references a Block ID, verify it is metadata evidence only. Do not infer visibility or Shard ownership from local files, Backend objects, scanner memory, or Block lifecycle state.
-  - [ ] Add apply-span telemetry mapping for `quarantine_document` using hashed Document identity by default and no raw scanner payload attributes.
+- [x] Wire Shard-owned proposal and apply behavior. (AC: 1-4)
+  - [x] Add a Shard-level method or coordinator path that accepts bounded scanner detections and proposes `QuarantineDocument` through the existing Raft proposer.
+  - [x] Add `applyQuarantineDocumentCommand` dispatch in `internal/shard/apply.go` and keep the actual Projection mutation close to `internal/shard/projection.go` or a small sibling file.
+  - [x] Apply must validate Document identity with existing store validation, reject empty/invalid scan metadata, and return bounded errors without raw scanner payloads.
+  - [x] Apply must be idempotent for duplicate commands for the same `(transaction_id, document_name)` and must not corrupt Transaction entries or increment Document counts.
+  - [x] If the command references a Block ID, verify it is metadata evidence only. Do not infer visibility or Shard ownership from local files, Backend objects, scanner memory, or Block lifecycle state.
+  - [x] Add apply-span telemetry mapping for `quarantine_document` using hashed Document identity by default and no raw scanner payload attributes.
 
-- [ ] Extend `internal/avscan` hit reporting without granting scanner authority. (AC: 1, 3)
-  - [ ] Extend `avscan.Result` with a bounded list of detections or a callback interface that reports affected Documents by identity. Keep the interface consumer-defined and minimal.
-  - [ ] `internal/avscan` must not import `internal/index`, `internal/shard`, generated Raft command types, gRPC status packages, or admin packages.
-  - [ ] Scheduler behavior remains Story 5.1/5.2 compliant: leader-only, post-ACK, non-blocking for writes, stream-based over `Block.OpenBytes`, serialized `RunOnce`, retry-safe after scan failures, and progress persisted only after successful Block scan completion.
-  - [ ] A detection proposal failure must make scanner/quarantine status observable with bounded reason, but it must not block writes or treat scanner state as Projection authority.
+- [x] Extend `internal/avscan` hit reporting without granting scanner authority. (AC: 1, 3)
+  - [x] Extend `avscan.Result` with a bounded list of detections or a callback interface that reports affected Documents by identity. Keep the interface consumer-defined and minimal.
+  - [x] `internal/avscan` must not import `internal/index`, `internal/shard`, generated Raft command types, gRPC status packages, or admin packages.
+  - [x] Scheduler behavior remains Story 5.1/5.2 compliant: leader-only, post-ACK, non-blocking for writes, stream-based over `Block.OpenBytes`, serialized `RunOnce`, retry-safe after scan failures, and progress persisted only after successful Block scan completion.
+  - [x] A detection proposal failure must make scanner/quarantine status observable with bounded reason, but it must not block writes or treat scanner state as Projection authority.
 
-- [ ] Prove replay/rebuild and restart behavior. (AC: 2, 4)
-  - [ ] Add tests where a committed `QuarantineDocument` command applies, the Projection is reopened or rebuilt, and the quarantine point-get still resolves from Raft-applied state.
-  - [ ] Add tests where scanner memory is empty after restart but committed quarantine state remains in the Projection after replay.
-  - [ ] Add duplicate command tests and corrupt Projection value tests. Corrupt quarantine Projection state should fail closed for the quarantine lookup path introduced in this story, while public read behavior remains unchanged until Story 5.4.
-  - [ ] Do not add sleeps. Use direct apply, fake proposers, manual ticks, contexts, or bounded polling with clear failure messages.
+- [x] Prove replay/rebuild and restart behavior. (AC: 2, 4)
+  - [x] Add tests where a committed `QuarantineDocument` command applies, the Projection is reopened or rebuilt, and the quarantine point-get still resolves from Raft-applied state.
+  - [x] Add tests where scanner memory is empty after restart but committed quarantine state remains in the Projection after replay.
+  - [x] Add duplicate command tests and corrupt Projection value tests. Corrupt quarantine Projection state should fail closed for the quarantine lookup path introduced in this story, while public read behavior remains unchanged until Story 5.4.
+  - [x] Do not add sleeps. Use direct apply, fake proposers, manual ticks, contexts, or bounded polling with clear failure messages.
 
-- [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
-  - [ ] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
-  - [ ] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
+- [x] Update story, evidence, and sprint artifacts. (AC: 1-4)
+  - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
+  - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
   - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
 
 ## Dev Notes
@@ -224,17 +224,41 @@ GPT-5 Codex for story creation.
 ### Debug Log References
 
 - 2026-06-12T13:54:44-04:00 - Story 5.3 created from sprint status after Story 5.2 implementation, BMAD code review, review fixes, commit, and push completed.
+- 2026-06-12T13:58:18-04:00 - Dev-story workflow started from pushed baseline `b4d43cdbe54004e2234266af9bf7cafa65deea14`; story and sprint status moved to in-progress.
+- 2026-06-12T13:58:18-04:00 - Created Story 5.3 evidence artifact before production code changes.
+- 2026-06-12T14:03:00-04:00 - Added RED tests for Content Quarantine Projection state, scanner detection reporting, Shard proposal/apply behavior, and apply-span redaction.
+- 2026-06-12T14:05:09-04:00 - Implemented metadata-only `QuarantineDocument` proto, sparse Projection state, avscan detection reporting, and Shard proposal/apply glue. Focused package tests passed after fixing invalid-test assertion.
+- 2026-06-12T14:10:42-04:00 - Final implementation gates passed: `make proto-check`, targeted package tests, `git diff --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
 - Story 5.3 is ready for dev-story implementation.
+- Created scoped evidence artifact with baseline commit, changed boundaries, projected Raft command and Projection key summaries, verification plan, redaction notes, and explicit out-of-scope read/admin/CLI closure.
+- Added additive `QuarantineDocument` Raft command with bounded scan type and reason enums, regenerated protobuf output, and apply-span mapping that uses hashed Document identity by default.
+- Added sparse Content Quarantine Projection state under the ADR 0008 `q\x01<transaction_id>\x00<document_name>` key shape with strict encode/decode validation, not-found sentinel behavior, idempotent put, corrupt-value tests, and StreamingHash participation.
+- Added scanner detection reporting in `internal/avscan`; detection report failures are observable as `quarantine_failed` and do not advance persisted scanner progress.
+- Added Shard-owned detection proposal and apply behavior so scanner hits become metadata-only Raft commands and committed quarantine metadata materializes in the Projection without touching Block bytes or public read behavior.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-3-quarantinedocument-raft-command-and-projection-state.md`
+- `_bmad-output/implementation-artifacts/epic-5-quarantinedocument-raft-projection-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `gen/go/scrap/v1/raft.pb.go`
+- `internal/avscan/scheduler.go`
+- `internal/avscan/scheduler_test.go`
+- `internal/avscan/types.go`
+- `internal/index/content_quarantine.go`
+- `internal/index/content_quarantine_test.go`
+- `internal/shard/apply.go`
+- `internal/shard/content_quarantine.go`
+- `internal/shard/content_quarantine_test.go`
+- `internal/shard/scanner.go`
+- `proto/scrap/v1/raft.proto`
 
 ### Change Log
 
 - 2026-06-12 - Created Story 5.3 developer context and moved sprint status to ready-for-dev.
+- 2026-06-12 - Started Story 5.3 implementation and created scoped evidence artifact.
+- 2026-06-12 - Implemented Story 5.3 QuarantineDocument Raft command and Projection state; moved story to review after local gates passed.
