@@ -5,7 +5,7 @@ created: 2026-06-11T23:02:12-04:00
 
 # Story 3.5: Restore Failure and Corruption Semantics
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,46 +33,46 @@ so that operators can distinguish transient dependency failures from data loss.
 
 ## Tasks / Subtasks
 
-- [ ] Build the Story 3.5 evidence artifact before production-code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-3-restore-failure-evidence.md` with AC rows, failure taxonomy table, exact commands, results, leak-scan allowlist, and remaining concerns.
-  - [ ] Record current restore authority path and failure points: `ReadDocument` -> Projection Resolution -> Local Block Lifecycle `evicted` -> Confirmed Upload Catalog -> Backend `GetObject` -> staging -> metadata validation -> copy -> Block/Frame/Document verification -> atomic publish.
-  - [ ] Record all non-goals above so evidence does not claim encryption closure, deployed production restore, final Epic 3 closure, or release readiness.
-- [ ] Add or verify public typed error reasons for restore failures. (AC: 1, 2, 4)
-  - [ ] Reuse existing `storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, ...)` for transient dependency failures unless retry exhaustion needs a narrower unavailable reason such as `backend_restore_retry_exhausted`.
-  - [ ] Add bounded data-loss reason support only if the current public surface cannot express restore-specific `DATA_LOSS` causes. Prefer a Store-layer pattern analogous to `UnavailableError` and `ResourceExhaustedError`, plus server `ErrorInfo` detail, without protobuf changes.
-  - [ ] Suggested data-loss reasons: `backend_restore_missing`, `backend_restore_corrupt`, `backend_restore_checksum_mismatch`, and `backend_restore_metadata_mismatch`. Collapse reasons only if tests prove the operator outcome remains precise and documented.
-  - [ ] Keep Store/core packages free of `grpc/status` and `codes`; transport mapping belongs in `internal/server`.
-- [ ] Prove transient Backend dependency failures fail closed. (AC: 1)
-  - [ ] Strengthen or reuse `TestReadDocumentRestoreBackendTransientReturnsUnavailable` and missing-Backend-config coverage.
-  - [ ] Cover provider-neutral transient classes that should stay `UNAVAILABLE`: `backend.ErrThrottled`, `backend.ErrTransient`, and `backend.ErrAuth`.
-  - [ ] Assert failed restore returns nil reader, zero metadata, no partial bytes, no restore marker, no published `.blk`, no leftover staging file, and an eviction marker that remains available for repair/operator intervention.
-  - [ ] Add public gRPC coverage in `internal/server` proving `ReadDocument` returns `codes.Unavailable` and `ErrorInfo.Reason == backend_restore_unavailable`.
-- [ ] Prove missing/corrupt confirmed Backend objects are `DATA_LOSS`. (AC: 2, 4)
-  - [ ] Reuse or strengthen tests for Backend not-found, corrupt object class, permanent/conflict class if they indicate confirmed Backend object invariant breakage, size mismatch, validation-token mismatch, Block header corruption, Frame CRC corruption, and Document SHA-256 mismatch.
-  - [ ] Add public gRPC coverage proving `ReadDocument` maps restore data loss to `codes.DataLoss` and carries a restore-specific ErrorInfo reason if data-loss reasons are added.
-  - [ ] Verify failed restore never atomically publishes staged bytes after metadata, checksum, header, Frame, or Document verification failure.
-  - [ ] Verify repair/health observability records `data_loss` without cardinality-heavy attributes.
-- [ ] Prove cancellation and timeout semantics. (AC: 3, 4)
-  - [ ] Reuse Story 3.4's bounded fake-Backend helpers (`releaseBackendOnce`, `waitRestoreBackendStarted`, `waitReadResult`, `waitErrorResult`) instead of unbounded channel receives.
-  - [ ] Keep waiter cancellation distinct from leader cancellation: a waiter cancellation returns no reader/metadata and must not cancel another in-flight restore; a leader deadline may fail the restore closed and leave the Block evicted.
-  - [ ] Add public server tests if current transport coverage does not prove `context.Canceled` and `context.DeadlineExceeded` survive restore-first `ReadDocument`.
-  - [ ] Assert cleanup is deterministic: no staging files remain, restore singleflight map entry is deleted, and metrics/health carry a bounded `canceled` or timeout-specific reason.
-- [ ] Add or document bounded retry-budget behavior. (AC: 4)
-  - [ ] Inventory existing retry behavior first. S3 SDK/provider retries may exist below `internal/backend`, but Story 3.5 needs Shard-visible evidence for the restore outcome and budget.
-  - [ ] If no explicit Shard-visible budget exists, add the smallest restore-local retry policy that preserves package boundaries. Retry only transient dependency classes; never retry not-found, corrupt, permanent, conflict, metadata mismatch, checksum mismatch, or verification failures.
-  - [ ] Bound retry attempts by context deadline/cancellation and a small config/default. Do not add unowned background goroutines, global retry state, cross-Shard coordination, sleeps in tests, or a new dependency.
-  - [ ] Prove exhausted retry budget returns a documented typed outcome, publishes no partial local Block, and records a bounded metric/health reason.
-- [ ] Preserve architecture and security boundaries. (AC: 1-4)
-  - [ ] Keep restore orchestration in `internal/shard`, Backend error classes in `internal/backend`, lifecycle marker transitions in `internal/localblock`, public mapping in `internal/store` and `internal/server`, and operator-facing health in `internal/eviction`.
-  - [ ] Do not create `internal/coldread`, `common`, `util`, a second read path, a new Backend wrapper package, new assertion/mocking libraries, or broad abstractions for one story.
-  - [ ] Do not use Backend list/HEAD/object existence as consistency authority. Restore must follow committed metadata and explicit verification only.
-  - [ ] Do not leak raw `transaction_id`, `document_name`, idempotency keys, Backend object keys, validation tokens, trace IDs, request IDs, auth claims, peer addresses, filesystem paths, or dependency error strings in public errors, deployed logs, metrics, traces, screenshots, or evidence.
-- [ ] Run focused and regression verification. (AC: 1-4)
-  - [ ] Run focused Shard restore failure/corruption/cancellation/retry tests.
-  - [ ] Run focused Store/server error reason tests.
-  - [ ] Run restore metric and eviction health tests.
-  - [ ] Run race coverage for restore cancellation/singleflight if production code changes concurrency or retry behavior.
-  - [ ] Run `make check` before BMAD code review unless a concrete blocker is recorded in the story.
+- [x] Build the Story 3.5 evidence artifact before production-code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-3-restore-failure-evidence.md` with AC rows, failure taxonomy table, exact commands, results, leak-scan allowlist, and remaining concerns.
+  - [x] Record current restore authority path and failure points: `ReadDocument` -> Projection Resolution -> Local Block Lifecycle `evicted` -> Confirmed Upload Catalog -> Backend `GetObject` -> staging -> metadata validation -> copy -> Block/Frame/Document verification -> atomic publish.
+  - [x] Record all non-goals above so evidence does not claim encryption closure, deployed production restore, final Epic 3 closure, or release readiness.
+- [x] Add or verify public typed error reasons for restore failures. (AC: 1, 2, 4)
+  - [x] Reuse existing `storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, ...)` for transient dependency failures unless retry exhaustion needs a narrower unavailable reason such as `backend_restore_retry_exhausted`.
+  - [x] Add bounded data-loss reason support only if the current public surface cannot express restore-specific `DATA_LOSS` causes. Prefer a Store-layer pattern analogous to `UnavailableError` and `ResourceExhaustedError`, plus server `ErrorInfo` detail, without protobuf changes.
+  - [x] Suggested data-loss reasons: `backend_restore_missing`, `backend_restore_corrupt`, `backend_restore_checksum_mismatch`, and `backend_restore_metadata_mismatch`. Collapse reasons only if tests prove the operator outcome remains precise and documented.
+  - [x] Keep Store/core packages free of `grpc/status` and `codes`; transport mapping belongs in `internal/server`.
+- [x] Prove transient Backend dependency failures fail closed. (AC: 1)
+  - [x] Strengthen or reuse `TestReadDocumentRestoreBackendTransientReturnsUnavailable` and missing-Backend-config coverage.
+  - [x] Cover provider-neutral transient classes that should stay `UNAVAILABLE`: `backend.ErrThrottled`, `backend.ErrTransient`, and `backend.ErrAuth`.
+  - [x] Assert failed restore returns nil reader, zero metadata, no partial bytes, no restore marker, no published `.blk`, no leftover staging file, and an eviction marker that remains available for repair/operator intervention.
+  - [x] Add public gRPC coverage in `internal/server` proving `ReadDocument` returns `codes.Unavailable` and `ErrorInfo.Reason == backend_restore_unavailable`.
+- [x] Prove missing/corrupt confirmed Backend objects are `DATA_LOSS`. (AC: 2, 4)
+  - [x] Reuse or strengthen tests for Backend not-found, corrupt object class, permanent/conflict class if they indicate confirmed Backend object invariant breakage, size mismatch, validation-token mismatch, Block header corruption, Frame CRC corruption, and Document SHA-256 mismatch.
+  - [x] Add public gRPC coverage proving `ReadDocument` maps restore data loss to `codes.DataLoss` and carries a restore-specific ErrorInfo reason if data-loss reasons are added.
+  - [x] Verify failed restore never atomically publishes staged bytes after metadata, checksum, header, Frame, or Document verification failure.
+  - [x] Verify repair/health observability records `data_loss` without cardinality-heavy attributes.
+- [x] Prove cancellation and timeout semantics. (AC: 3, 4)
+  - [x] Reuse Story 3.4's bounded fake-Backend helpers (`releaseBackendOnce`, `waitRestoreBackendStarted`, `waitReadResult`, `waitErrorResult`) instead of unbounded channel receives.
+  - [x] Keep waiter cancellation distinct from leader cancellation: a waiter cancellation returns no reader/metadata and must not cancel another in-flight restore; a leader deadline may fail the restore closed and leave the Block evicted.
+  - [x] Add public server tests if current transport coverage does not prove `context.Canceled` and `context.DeadlineExceeded` survive restore-first `ReadDocument`.
+  - [x] Assert cleanup is deterministic: no staging files remain, restore singleflight map entry is deleted, and metrics/health carry a bounded `canceled` or timeout-specific reason.
+- [x] Add or document bounded retry-budget behavior. (AC: 4)
+  - [x] Inventory existing retry behavior first. S3 SDK/provider retries may exist below `internal/backend`, but Story 3.5 needs Shard-visible evidence for the restore outcome and budget.
+  - [x] If no explicit Shard-visible budget exists, add the smallest restore-local retry policy that preserves package boundaries. Retry only transient dependency classes; never retry not-found, corrupt, permanent, conflict, metadata mismatch, checksum mismatch, or verification failures.
+  - [x] Bound retry attempts by context deadline/cancellation and a small config/default. Do not add unowned background goroutines, global retry state, cross-Shard coordination, sleeps in tests, or a new dependency.
+  - [x] Prove exhausted retry budget returns a documented typed outcome, publishes no partial local Block, and records a bounded metric/health reason.
+- [x] Preserve architecture and security boundaries. (AC: 1-4)
+  - [x] Keep restore orchestration in `internal/shard`, Backend error classes in `internal/backend`, lifecycle marker transitions in `internal/localblock`, public mapping in `internal/store` and `internal/server`, and operator-facing health in `internal/eviction`.
+  - [x] Do not create `internal/coldread`, `common`, `util`, a second read path, a new Backend wrapper package, new assertion/mocking libraries, or broad abstractions for one story.
+  - [x] Do not use Backend list/HEAD/object existence as consistency authority. Restore must follow committed metadata and explicit verification only.
+  - [x] Do not leak raw `transaction_id`, `document_name`, idempotency keys, Backend object keys, validation tokens, trace IDs, request IDs, auth claims, peer addresses, filesystem paths, or dependency error strings in public errors, deployed logs, metrics, traces, screenshots, or evidence.
+- [x] Run focused and regression verification. (AC: 1-4)
+  - [x] Run focused Shard restore failure/corruption/cancellation/retry tests.
+  - [x] Run focused Store/server error reason tests.
+  - [x] Run restore metric and eviction health tests.
+  - [x] Run race coverage for restore cancellation/singleflight if production code changes concurrency or retry behavior.
+  - [x] Run `make check` before BMAD code review unless a concrete blocker is recorded in the story.
 
 ## Dev Notes
 
@@ -218,6 +218,13 @@ GPT-5 Codex.
 - CREATE-STORY: Loaded BMAD create-story workflow, customization block, `CONTEXT.md`, `_bmad-output/project-context.md`, sprint status, Epic 3, Story 3.5 ACs, FR-8, architecture DG-3, ADR 0016, ADR 0020, ADR 0027, Story 3.4, current restore/error/server/metric code, and recent git history.
 - CREATE-STORY: GitHub searches found no reusable candidate for the exact restore failure taxonomy; Exa research was used only for timeout/retry prior art and S3 error-classification context.
 - CREATE-STORY: Current baseline commit is `ff329492f4f198a949c5485e2dedb91cbfdda12c`.
+- DEV-STORY: Started implementation from clean `v2...origin/v2` after pushing story creation commit `ec6feedc39f2d24890d65dab55e062375959030a`; preserved story baseline commit `ff329492f4f198a949c5485e2dedb91cbfdda12c`.
+- DEV-STORY: Created `_bmad-output/implementation-artifacts/epic-3-restore-failure-evidence.md` before production-code changes with restore authority path, AC rows, failure taxonomy, boundary watchlist, planned verification commands, and leak-scan allowlist.
+- DEV-STORY: Added Store `DataLossError` reason support and server `codes.DataLoss` ErrorInfo mapping for restore-specific reasons without proto or Store gRPC dependencies.
+- DEV-STORY: Added restore-specific data-loss mapping in Shard for missing confirmed Backend objects, corrupt/permanent/conflict Backend classes, metadata mismatch, validation-token mismatch, and restored Block verification failures.
+- DEV-STORY: Added bounded restore retry attempts around full restore-object download attempts; retries only `backend_restore_unavailable` outcomes and never retries missing/corrupt/permanent/conflict/metadata/checksum failures.
+- DEV-STORY: Focused Story 3.5 Shard, Store, server, metric/health, package regression, Shard race, and `make check` gates passed.
+- DEV-STORY: `git diff --check` passed; credential and identifier scans matched only allowlisted prose, fixtures, source identifiers, environment/cache paths, and redaction tests.
 
 ### Completion Notes List
 
@@ -226,12 +233,27 @@ GPT-5 Codex.
 - Identified existing implementation to reuse: `internal/shard/restore.go`, `internal/backend/errors.go`, `internal/store/errors.go`, `internal/server/server.go`, restore tests, restore metrics, and eviction health snapshots.
 - Flagged likely gaps: public restore-specific `DATA_LOSS` reason details, provider-neutral transient-class coverage beyond one sentinel, explicit retry-budget exhaustion evidence, and public cancellation/timeout restore-first proof.
 - Preserved non-goals for encryption-compatible restore, production OpenBao/S3/IAM rehearsal, final Epic 3 closure, and release readiness.
+- Created the Story 3.5 restore failure evidence artifact before production-code changes and left all AC rows pending until verified.
+- Implemented public restore-specific DATA_LOSS reasons with gRPC ErrorInfo details while preserving Store/server package boundaries.
+- Implemented bounded Shard-visible restore retry budget for transient Backend restore failures and proved retry exhaustion fails closed with no partial publish.
+- Proved transient, missing, corrupt, metadata mismatch, checksum mismatch, cancellation, timeout/deadline, retry, metric, and health evidence with focused tests and `make check`.
+- Completed final whitespace and security/redaction checks; no real secrets or new deployed raw-identifier leaks were found.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-5-restore-failure-and-corruption-semantics.md`
+- `_bmad-output/implementation-artifacts/epic-3-restore-failure-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/server/restore_unavailable_test.go`
+- `internal/server/server.go`
+- `internal/shard/restore.go`
+- `internal/shard/restore_test.go`
+- `internal/shard/upload.go`
+- `internal/store/errors.go`
+- `internal/store/errors_test.go`
 
 ## Change Log
 
 - 2026-06-11: Created Story 3.5 Restore Failure and Corruption Semantics context and moved status to ready-for-dev.
+- 2026-06-11: Started Story 3.5 implementation and created restore failure evidence artifact.
+- 2026-06-11: Completed restore failure semantics, verification gates, and moved status to review.

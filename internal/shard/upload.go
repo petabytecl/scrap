@@ -46,6 +46,9 @@ type UploadConfig struct {
 
 	RetryBaseDelay time.Duration
 	AuthRetryDelay time.Duration
+
+	RestoreMaxAttempts    int
+	RestoreRetryBaseDelay time.Duration
 }
 
 type PendingUpload = index.PendingUpload

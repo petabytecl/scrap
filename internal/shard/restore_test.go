@@ -49,24 +49,96 @@ func TestReadDocumentRestoresEvictedBlockFromBackend(t *testing.T) {
 
 func TestReadDocumentRestoreBackendTransientReturnsUnavailable(t *testing.T) {
 	ctx := context.Background()
-	backendStore := &failingGetBackend{
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "throttled", err: backend.ErrThrottled},
+		{name: "transient", err: backend.ErrTransient},
+		{name: "auth", err: backend.ErrAuth},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			backendStore := &failingGetBackend{
+				Backend: backend.NewFS(t.TempDir()),
+				err:     tt.err,
+			}
+			s := openUploadTestShard(t, shard.UploadConfig{
+				Enabled:               true,
+				Backend:               backendStore,
+				CellID:                testCellID,
+				Concurrency:           1,
+				RestoreMaxAttempts:    1,
+				RestoreRetryBaseDelay: time.Nanosecond,
+			})
+
+			content := bytes.Repeat([]byte("transient restore "), 4)
+			stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+			err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrUnavailable)
+			reason, ok := storeapi.UnavailableReason(err)
+			if !ok || reason != storeapi.UnavailableReasonBackendRestoreUnavailable {
+				t.Fatalf("unavailable reason = %q/%v, want backend_restore_unavailable", reason, ok)
+			}
+		})
+	}
+}
+
+func TestReadDocumentRestoreRetriesTransientBackendFailures(t *testing.T) {
+	ctx := context.Background()
+	backendStore := &retryingGetBackend{
 		Backend: backend.NewFS(t.TempDir()),
-		err:     backend.ErrTransient,
+		errs:    []error{backend.ErrTransient, backend.ErrThrottled},
 	}
 	s := openUploadTestShard(t, shard.UploadConfig{
-		Enabled:     true,
-		Backend:     backendStore,
-		CellID:      testCellID,
-		Concurrency: 1,
+		Enabled:               true,
+		Backend:               backendStore,
+		CellID:                testCellID,
+		Concurrency:           1,
+		RestoreMaxAttempts:    3,
+		RestoreRetryBaseDelay: time.Nanosecond,
 	})
 
-	content := bytes.Repeat([]byte("transient restore "), 4)
+	content := bytes.Repeat([]byte("retry restore "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+	rc, meta, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if err != nil {
+		t.Fatalf("ReadDocument after retry: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	assertRestoredDocument(t, rc, meta, content)
+	assertRestorePublishedHotBlock(t, filepath.Join(s.DataDirForTest(), "blocks"))
+	if got := backendStore.calls.Load(); got != 3 {
+		t.Fatalf("Backend GetObject calls = %d, want 3", got)
+	}
+}
+
+func TestReadDocumentRestoreRetryBudgetExhaustedFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	backendStore := &retryingGetBackend{
+		Backend: backend.NewFS(t.TempDir()),
+		errs:    []error{backend.ErrTransient, backend.ErrThrottled, backend.ErrAuth},
+	}
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:               true,
+		Backend:               backendStore,
+		CellID:                testCellID,
+		Concurrency:           1,
+		RestoreMaxAttempts:    2,
+		RestoreRetryBaseDelay: time.Nanosecond,
+	})
+
+	content := bytes.Repeat([]byte("retry exhausted restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
 	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrUnavailable)
 	reason, ok := storeapi.UnavailableReason(err)
 	if !ok || reason != storeapi.UnavailableReasonBackendRestoreUnavailable {
 		t.Fatalf("unavailable reason = %q/%v, want backend_restore_unavailable", reason, ok)
+	}
+	if got := backendStore.calls.Load(); got != 2 {
+		t.Fatalf("Backend GetObject calls = %d, want 2", got)
 	}
 }
 
@@ -123,7 +195,44 @@ func TestReadDocumentRestoreMissingBackendObjectReturnsDataLoss(t *testing.T) {
 		t.Fatalf("DeleteObject: %v", err)
 	}
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreMissing)
+}
+
+func TestReadDocumentRestoreBackendInvariantFailuresReturnDataLoss(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "corrupt", err: backend.ErrCorrupt},
+		{name: "permanent", err: backend.ErrPermanent},
+		{name: "conflict", err: backend.ErrConflict},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			backendStore := &retryingGetBackend{
+				Backend: backend.NewFS(t.TempDir()),
+				errs:    []error{tt.err},
+			}
+			s := openUploadTestShard(t, shard.UploadConfig{
+				Enabled:               true,
+				Backend:               backendStore,
+				CellID:                testCellID,
+				Concurrency:           1,
+				RestoreMaxAttempts:    3,
+				RestoreRetryBaseDelay: time.Nanosecond,
+			})
+
+			content := bytes.Repeat([]byte("backend invariant restore "), 4)
+			stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
+
+			err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+			assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreCorrupt)
+			if got := backendStore.calls.Load(); got != 1 {
+				t.Fatalf("Backend GetObject calls = %d, want 1", got)
+			}
+		})
+	}
 }
 
 func TestReadDocumentRestoreSizeMismatchReturnsDataLoss(t *testing.T) {
@@ -145,7 +254,8 @@ func TestReadDocumentRestoreSizeMismatchReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("size mismatch restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreMetadataMismatch)
 }
 
 func TestReadDocumentRestoreValidationTokenMismatchReturnsDataLoss(t *testing.T) {
@@ -167,7 +277,8 @@ func TestReadDocumentRestoreValidationTokenMismatchReturnsDataLoss(t *testing.T)
 	content := bytes.Repeat([]byte("validation mismatch restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreMetadataMismatch)
 }
 
 func TestReadDocumentRestoreCorruptBackendObjectReturnsDataLoss(t *testing.T) {
@@ -183,7 +294,8 @@ func TestReadDocumentRestoreCorruptBackendObjectReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("corrupt restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreChecksumMismatch)
 }
 
 func TestReadDocumentRestoreCorruptHeaderReturnsDataLoss(t *testing.T) {
@@ -204,7 +316,8 @@ func TestReadDocumentRestoreCorruptHeaderReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("header restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreChecksumMismatch)
 }
 
 func TestReadDocumentRestoreCorruptFrameHeaderReturnsDataLoss(t *testing.T) {
@@ -227,7 +340,8 @@ func TestReadDocumentRestoreCorruptFrameHeaderReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("frame header restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreChecksumMismatch)
 }
 
 func TestReadDocumentRestoreCorruptDocumentSHAReturnsDataLoss(t *testing.T) {
@@ -249,7 +363,8 @@ func TestReadDocumentRestoreCorruptDocumentSHAReturnsDataLoss(t *testing.T) {
 	content := bytes.Repeat([]byte("sha restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, backendStore.Backend, content)
 
-	_ = assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	err := assertReadDocumentRestoreFailsClosed(ctx, t, s, storeapi.ErrDataLoss)
+	assertDataLossReason(t, err, storeapi.DataLossReasonBackendRestoreChecksumMismatch)
 }
 
 func TestReadDocumentRestoreRequiresCommittedConfirmUpload(t *testing.T) {
@@ -794,6 +909,15 @@ func assertReadDocumentRestoreFailsClosed(ctx context.Context, t *testing.T, s *
 	return err
 }
 
+func assertDataLossReason(t *testing.T, err error, want string) {
+	t.Helper()
+
+	reason, ok := storeapi.DataLossReason(err)
+	if !ok || reason != want {
+		t.Fatalf("data-loss reason = %q/%v, want %s", reason, ok, want)
+	}
+}
+
 func assertRestorePublishedHotBlock(t *testing.T, blocksDir string) {
 	t.Helper()
 
@@ -1143,6 +1267,20 @@ type failingGetBackend struct {
 
 func (b *failingGetBackend) GetObject(context.Context, string, backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
 	return nil, backend.ObjectMeta{}, b.err
+}
+
+type retryingGetBackend struct {
+	backend.Backend
+	errs  []error
+	calls atomic.Int32
+}
+
+func (b *retryingGetBackend) GetObject(ctx context.Context, key string, opts backend.GetOpts) (io.ReadCloser, backend.ObjectMeta, error) {
+	call := int(b.calls.Add(1)) - 1
+	if call < len(b.errs) {
+		return nil, backend.ObjectMeta{}, b.errs[call]
+	}
+	return b.Backend.GetObject(ctx, key, opts)
 }
 
 type corruptingGetBackend struct {

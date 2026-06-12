@@ -73,3 +73,32 @@ func TestUnavailableReasonMissing(t *testing.T) {
 		t.Fatalf("UnavailableReason = %q/%v, want empty/false", reason, ok)
 	}
 }
+
+func TestDataLossErrorReason(t *testing.T) {
+	err := store.NewDataLoss(store.DataLossReasonBackendRestoreCorrupt, "restore corrupt")
+
+	if !errors.Is(err, store.ErrDataLoss) {
+		t.Fatal("DataLossError should match ErrDataLoss")
+	}
+	reason, ok := store.DataLossReason(err)
+	if !ok || reason != store.DataLossReasonBackendRestoreCorrupt {
+		t.Fatalf("DataLossReason = %q/%v, want backend_restore_corrupt", reason, ok)
+	}
+	if got, want := err.Error(), "data corruption detected: restore corrupt"; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestDataLossErrorWithoutMessage(t *testing.T) {
+	err := store.NewDataLoss(store.DataLossReasonBackendRestoreCorrupt, "")
+
+	if got, want := err.Error(), store.ErrDataLoss.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestDataLossReasonMissing(t *testing.T) {
+	if reason, ok := store.DataLossReason(store.ErrDataLoss); ok || reason != "" {
+		t.Fatalf("DataLossReason = %q/%v, want empty/false", reason, ok)
+	}
+}

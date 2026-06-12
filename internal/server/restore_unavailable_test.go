@@ -34,8 +34,26 @@ func (restoreUnavailableStore) FindDocuments(context.Context, string) ([]storeap
 	return nil, storeapi.ErrNotFound
 }
 
+type restoreDataLossStore struct{}
+
+func (restoreDataLossStore) WriteDocument(context.Context, string, string, string, string, io.Reader) (storeapi.WriteResult, error) {
+	return storeapi.WriteResult{}, storeapi.ErrInvalidArgument
+}
+
+func (restoreDataLossStore) HeadDocument(context.Context, string, string) (storeapi.DocumentMeta, error) {
+	return storeapi.DocumentMeta{}, storeapi.ErrNotFound
+}
+
+func (restoreDataLossStore) ReadDocument(context.Context, string, string) (io.ReadCloser, storeapi.DocumentMeta, error) {
+	return nil, storeapi.DocumentMeta{}, storeapi.NewDataLoss(storeapi.DataLossReasonBackendRestoreCorrupt, "Backend restore corrupt")
+}
+
+func (restoreDataLossStore) FindDocuments(context.Context, string) ([]storeapi.DocumentMeta, error) {
+	return nil, storeapi.ErrNotFound
+}
+
 func TestReadDocumentRestoreUnavailableReturnsErrorInfoDetail(t *testing.T) {
-	client := startRestoreUnavailableServer(t)
+	client := startRestoreServer(t, restoreUnavailableStore{})
 	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
 		TransactionId: "tx-restore",
 		DocumentName:  "doc.bin",
@@ -64,7 +82,37 @@ func TestReadDocumentRestoreUnavailableReturnsErrorInfoDetail(t *testing.T) {
 	}
 }
 
-func startRestoreUnavailableServer(t *testing.T) scrapv1.DocumentServiceClient {
+func TestReadDocumentRestoreDataLossReturnsErrorInfoDetail(t *testing.T) {
+	client := startRestoreServer(t, restoreDataLossStore{})
+	stream, err := client.ReadDocument(context.Background(), &scrapv1.ReadDocumentRequest{
+		TransactionId: "tx-restore",
+		DocumentName:  "doc.bin",
+	})
+	if err != nil {
+		t.Fatalf("ReadDocument: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected restore data-loss error")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.DataLoss {
+		t.Fatalf("code = %s, want DATA_LOSS", st.Code())
+	}
+	info := errorInfoDetail(st)
+	if info == nil {
+		t.Fatalf("expected ErrorInfo detail, details=%T", st.Details())
+	}
+	if info.GetReason() != storeapi.DataLossReasonBackendRestoreCorrupt {
+		t.Fatalf("reason = %q, want backend_restore_corrupt", info.GetReason())
+	}
+}
+
+func startRestoreServer(t *testing.T, store storeapi.Store) scrapv1.DocumentServiceClient {
 	t.Helper()
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener, context not meaningful
@@ -73,7 +121,7 @@ func startRestoreUnavailableServer(t *testing.T) scrapv1.DocumentServiceClient {
 	}
 
 	gs := grpc.NewServer()
-	server.Register(gs, restoreUnavailableStore{})
+	server.Register(gs, store)
 	go func() { _ = gs.Serve(lis) }()
 	t.Cleanup(gs.GracefulStop)
 

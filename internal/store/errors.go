@@ -5,12 +5,16 @@ import "errors"
 const (
 	ResourceExhaustedReasonUploadPressure = "upload_pressure"
 
-	UnavailableReasonBackendRestoreUnavailable = "backend_restore_unavailable"
-	UnavailableReasonCryptoUnavailable         = "crypto_unavailable"
-	UnavailableReasonProjectionRebuild         = "projection_rebuild_in_progress"
-	UnavailableReasonShardRouteUnavailable     = "shard_route_unavailable"
-	UnavailableReasonShardRoutingPending       = "shard_routing_pending"
-	UnavailableReasonUploadPending             = "upload_pending"
+	DataLossReasonBackendRestoreCorrupt          = "backend_restore_corrupt"
+	DataLossReasonBackendRestoreChecksumMismatch = "backend_restore_checksum_mismatch"
+	DataLossReasonBackendRestoreMetadataMismatch = "backend_restore_metadata_mismatch"
+	DataLossReasonBackendRestoreMissing          = "backend_restore_missing"
+	UnavailableReasonBackendRestoreUnavailable   = "backend_restore_unavailable"
+	UnavailableReasonCryptoUnavailable           = "crypto_unavailable"
+	UnavailableReasonProjectionRebuild           = "projection_rebuild_in_progress"
+	UnavailableReasonShardRouteUnavailable       = "shard_route_unavailable"
+	UnavailableReasonShardRoutingPending         = "shard_routing_pending"
+	UnavailableReasonUploadPending               = "upload_pending"
 )
 
 var (
@@ -53,6 +57,37 @@ func ResourceExhaustedReason(err error) (string, bool) {
 		return "", false
 	}
 	return resourceErr.Reason, true
+}
+
+type DataLossError struct {
+	Reason  string
+	Message string
+}
+
+func NewDataLoss(reason, message string) *DataLossError {
+	return &DataLossError{
+		Reason:  reason,
+		Message: message,
+	}
+}
+
+func (e *DataLossError) Error() string {
+	if e.Message == "" {
+		return ErrDataLoss.Error()
+	}
+	return ErrDataLoss.Error() + ": " + e.Message
+}
+
+func (e *DataLossError) Unwrap() error {
+	return ErrDataLoss
+}
+
+func DataLossReason(err error) (string, bool) {
+	var dataLossErr *DataLossError
+	if !errors.As(err, &dataLossErr) || dataLossErr.Reason == "" {
+		return "", false
+	}
+	return dataLossErr.Reason, true
 }
 
 type UnavailableError struct {

@@ -594,7 +594,7 @@ func mapStoreError(err error) error {
 	case errors.Is(err, storeapi.ErrUnavailable), errors.Is(err, storeapi.ErrRebuilding):
 		return availabilityStatus(err)
 	case errors.Is(err, storeapi.ErrDataLoss):
-		return status.Errorf(codes.DataLoss, "%v", err)
+		return dataLossStatus(err)
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
@@ -634,6 +634,20 @@ func resourceExhaustedStatus(err error) error {
 		WithDetails(&errdetails.ErrorInfo{Reason: reason})
 	if detailErr != nil {
 		return status.Errorf(codes.ResourceExhausted, "%v", err)
+	}
+	return st.Err()
+}
+
+func dataLossStatus(err error) error {
+	reason, ok := storeapi.DataLossReason(err)
+	if !ok {
+		return status.Errorf(codes.DataLoss, "%v", err)
+	}
+
+	st, detailErr := status.New(codes.DataLoss, fmt.Sprintf("%v", err)).
+		WithDetails(&errdetails.ErrorInfo{Reason: reason})
+	if detailErr != nil {
+		return status.Errorf(codes.DataLoss, "%v", err)
 	}
 	return st.Err()
 }

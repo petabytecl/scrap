@@ -18,7 +18,13 @@ import (
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
-const restoreCopyBufferSize = 1024 * 1024
+const (
+	restoreCopyBufferSize = 1024 * 1024
+
+	defaultRestoreMaxAttempts = 3
+	defaultRestoreRetryBase   = 100 * time.Millisecond
+	maxRestoreRetryBackoff    = time.Second
+)
 
 type restoreStagingFile interface {
 	io.Writer
@@ -299,7 +305,10 @@ func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput,
 
 func validateRestoreAuthority(confirmed index.ConfirmedUpload, lifecycle localblock.Lifecycle) error {
 	if err := localblock.ValidateEvictionMarkerMatches(lifecycle, evictionMarkerExpectation(confirmed)); err != nil {
-		return fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+		return fmt.Errorf("%w: %w", storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreMetadataMismatch,
+			fmt.Sprintf("Block %d restore authority mismatch", confirmed.BlockID),
+		), err)
 	}
 	return nil
 }
@@ -372,14 +381,23 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, t
 
 func verifyRestoredBlock(input restoreInput, blkPath, idxPath string) error {
 	if err := block.VerifyHeader(blkPath, input.confirmed.ShardID, input.confirmed.BlockID); err != nil {
-		return fmt.Errorf("%w: restored Block %d header invalid: %w", storeapi.ErrDataLoss, input.confirmed.BlockID, err)
+		return fmt.Errorf("%w: %w", storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreChecksumMismatch,
+			fmt.Sprintf("restored Block %d header invalid", input.confirmed.BlockID),
+		), err)
 	}
 	result, err := block.VerifyBlock(blkPath, idxPath)
 	if err != nil {
-		return fmt.Errorf("%w: restored Block %d verification failed: %w", storeapi.ErrDataLoss, input.confirmed.BlockID, err)
+		return fmt.Errorf("%w: %w", storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreChecksumMismatch,
+			fmt.Sprintf("restored Block %d verification failed", input.confirmed.BlockID),
+		), err)
 	}
 	if len(result.CorruptFrames) > 0 {
-		return fmt.Errorf("%w: restored Block %d has corrupt frames: %+v", storeapi.ErrDataLoss, input.confirmed.BlockID, result.CorruptFrames)
+		return storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreChecksumMismatch,
+			fmt.Sprintf("restored Block %d has corrupt frames", input.confirmed.BlockID),
+		)
 	}
 	return nil
 }
@@ -467,6 +485,58 @@ func (s *Shard) downloadRestoreIndex(ctx context.Context, input restoreInput) (s
 }
 
 func (s *Shard) downloadRestoreObject(ctx context.Context, input restoreInput, object index.BackendObjectMetadata, ext string) (string, error) {
+	maxAttempts := s.restoreMaxAttempts()
+	delay := s.restoreRetryBaseDelay()
+	for attempt := 1; ; attempt++ {
+		path, err := s.downloadRestoreObjectOnce(ctx, input, object, ext)
+		if err == nil {
+			return path, nil
+		}
+		if !isRetryableRestoreError(err) || attempt >= maxAttempts {
+			return "", err
+		}
+		if err := sleepRestoreRetry(ctx, delay); err != nil {
+			return "", err
+		}
+		delay = minDuration(delay*backoffMultiplier, maxRestoreRetryBackoff)
+	}
+}
+
+func (s *Shard) restoreMaxAttempts() int {
+	if s.upload.RestoreMaxAttempts > 0 {
+		return s.upload.RestoreMaxAttempts
+	}
+	return defaultRestoreMaxAttempts
+}
+
+func (s *Shard) restoreRetryBaseDelay() time.Duration {
+	if s.upload.RestoreRetryBaseDelay > 0 {
+		return s.upload.RestoreRetryBaseDelay
+	}
+	return defaultRestoreRetryBase
+}
+
+func isRetryableRestoreError(err error) bool {
+	reason, ok := storeapi.UnavailableReason(err)
+	return ok && reason == storeapi.UnavailableReasonBackendRestoreUnavailable
+}
+
+func sleepRestoreRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *Shard) downloadRestoreObjectOnce(ctx context.Context, input restoreInput, object index.BackendObjectMetadata, ext string) (string, error) {
 	rc, meta, err := input.backend.GetObject(ctx, object.Key, backend.GetOpts{})
 	if err != nil {
 		return "", mapRestoreBackendError(err, input.confirmed.BlockID)
@@ -499,10 +569,16 @@ func (s *Shard) downloadRestoreObject(ctx context.Context, input restoreInput, o
 
 func validateRestoreObjectMeta(blockID uint64, ext string, object index.BackendObjectMetadata, meta backend.ObjectMeta) error {
 	if meta.Size != object.SizeBytes {
-		return fmt.Errorf("%w: restored %s for Block %d size %d does not match confirmed size %d", storeapi.ErrDataLoss, ext, blockID, meta.Size, object.SizeBytes)
+		return storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreMetadataMismatch,
+			fmt.Sprintf("restored %s for Block %d size %d does not match confirmed size %d", ext, blockID, meta.Size, object.SizeBytes),
+		)
 	}
 	if meta.ETag != "" && meta.ETag != object.ValidationToken {
-		return fmt.Errorf("%w: restored %s for Block %d validation token mismatch", storeapi.ErrDataLoss, ext, blockID)
+		return storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreMetadataMismatch,
+			fmt.Sprintf("restored %s for Block %d validation token mismatch", ext, blockID),
+		)
 	}
 	return nil
 }
@@ -519,7 +595,10 @@ func copyRestoreObject(tmp restoreStagingFile, rc io.Reader, blockID uint64, ext
 	}
 	if written != object.SizeBytes {
 		_ = tmp.Close()
-		return fmt.Errorf("%w: restored %s for Block %d copied %d bytes, expected %d", storeapi.ErrDataLoss, ext, blockID, written, object.SizeBytes)
+		return storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreMetadataMismatch,
+			fmt.Sprintf("restored %s for Block %d copied %d bytes, expected %d", ext, blockID, written, object.SizeBytes),
+		)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -569,8 +648,16 @@ func mapRestoreBackendError(err error, blockID uint64) error {
 	switch backend.ErrorClass(err) {
 	case backend.ClassThrottled, backend.ClassTransient, backend.ClassAuth:
 		return storeapi.NewUnavailable(storeapi.UnavailableReasonBackendRestoreUnavailable, fmt.Sprintf("Backend restore unavailable for Block %d", blockID))
-	case backend.ClassNotFound, backend.ClassCorrupt, backend.ClassPermanent, backend.ClassConflict:
-		return fmt.Errorf("%w: Backend restore failed for Block %d: %w", storeapi.ErrDataLoss, blockID, err)
+	case backend.ClassNotFound:
+		return fmt.Errorf("%w: %w", storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreMissing,
+			fmt.Sprintf("Backend restore missing confirmed object for Block %d", blockID),
+		), err)
+	case backend.ClassCorrupt, backend.ClassPermanent, backend.ClassConflict:
+		return fmt.Errorf("%w: %w", storeapi.NewDataLoss(
+			storeapi.DataLossReasonBackendRestoreCorrupt,
+			fmt.Sprintf("Backend restore corrupt confirmed object for Block %d", blockID),
+		), err)
 	default:
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
