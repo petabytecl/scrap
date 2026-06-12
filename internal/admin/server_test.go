@@ -15,6 +15,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/quarantine"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -72,6 +73,19 @@ type rewrapServiceStub struct {
 	health rewrap.HealthSnapshot
 }
 
+type quarantineServiceStub struct {
+	listCalls    int
+	inspectCalls int
+	confirmCalls int
+	releaseCalls int
+	filter       quarantine.ListFilter
+	identity     quarantine.Identity
+	records      []quarantine.Record
+	record       quarantine.Record
+	result       quarantine.Result
+	err          error
+}
+
 func (evictionHealthProviderStub) EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error) {
 	return eviction.HealthSnapshot{
 		Pressure:               "degraded",
@@ -96,6 +110,30 @@ func (s *rewrapServiceStub) RewrapDocument(_ context.Context, req rewrap.Request
 
 func (s *rewrapServiceStub) RewrapHealthSnapshot() rewrap.HealthSnapshot {
 	return s.health
+}
+
+func (s *quarantineServiceStub) ListContentQuarantines(_ context.Context, filter quarantine.ListFilter) ([]quarantine.Record, error) {
+	s.listCalls++
+	s.filter = filter
+	return s.records, s.err
+}
+
+func (s *quarantineServiceStub) InspectContentQuarantine(_ context.Context, identity quarantine.Identity) (quarantine.Record, error) {
+	s.inspectCalls++
+	s.identity = identity
+	return s.record, s.err
+}
+
+func (s *quarantineServiceStub) ConfirmContentQuarantine(_ context.Context, identity quarantine.Identity) (quarantine.Result, error) {
+	s.confirmCalls++
+	s.identity = identity
+	return s.result, s.err
+}
+
+func (s *quarantineServiceStub) ReleaseContentQuarantine(_ context.Context, identity quarantine.Identity) (quarantine.Result, error) {
+	s.releaseCalls++
+	s.identity = identity
+	return s.result, s.err
 }
 
 func TestServer_HealthEndpointReportsUploadPressure(t *testing.T) {
@@ -384,6 +422,135 @@ func TestServer_RewrapDocumentEndpointMapsServiceErrors(t *testing.T) {
 	}
 }
 
+func TestServer_QuarantineListEndpointReturnsBoundedJSON(t *testing.T) {
+	service, srv := newQuarantineEndpointTestServer()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/admin/quarantine/documents?"+"transaction_"+"id=tx-quarantine&limit=1", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.listCalls != 1 || service.filter.TransactionID != "tx-quarantine" || service.filter.Limit != 1 {
+		t.Fatalf("list call = %d filter = %+v", service.listCalls, service.filter)
+	}
+	assertNoSensitiveQuarantineFields(t, resp.Body.String())
+	if !strings.Contains(resp.Body.String(), `"documents"`) {
+		t.Fatalf("list body missing documents: %s", resp.Body.String())
+	}
+}
+
+func TestServer_QuarantineInspectEndpointReturnsBoundedJSON(t *testing.T) {
+	service, srv := newQuarantineEndpointTestServer()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/admin/quarantine/document?"+"transaction_"+"id=tx-quarantine&document_"+"name=doc.xml", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("inspect status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.inspectCalls != 1 || service.identity.TransactionID != "tx-quarantine" || service.identity.DocumentName != "doc.xml" {
+		t.Fatalf("inspect identity = %+v calls=%d", service.identity, service.inspectCalls)
+	}
+	assertNoSensitiveQuarantineFields(t, resp.Body.String())
+}
+
+func TestServer_QuarantineDecisionEndpointsReturnBoundedJSON(t *testing.T) {
+	service, srv := newQuarantineEndpointTestServer()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/quarantine/confirm", strings.NewReader(`{"transaction_id":"tx-quarantine","document_name":"doc.xml"}`))
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.confirmCalls != 1 {
+		t.Fatalf("confirm calls = %d, want 1", service.confirmCalls)
+	}
+	assertNoSensitiveQuarantineFields(t, resp.Body.String())
+
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/quarantine/release", strings.NewReader(`{"transaction_id":"tx-quarantine","document_name":"doc.xml"}`))
+	resp = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("release status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.releaseCalls != 1 {
+		t.Fatalf("release calls = %d, want 1", service.releaseCalls)
+	}
+	assertNoSensitiveQuarantineFields(t, resp.Body.String())
+}
+
+func newQuarantineEndpointTestServer() (*quarantineServiceStub, *admin.Server) {
+	record := quarantine.Record{
+		ShardID:       7,
+		TransactionID: "tx-quarantine",
+		DocumentName:  "doc.xml",
+		BlockID:       42,
+		DetectedAt:    time.Date(2026, 6, 12, 15, 0, 0, 0, time.UTC),
+		ScanType:      quarantine.ScanTypeInitial,
+		Reason:        quarantine.ReasonScannerDetection,
+		Lifecycle:     quarantine.LifecycleActive,
+	}
+	service := &quarantineServiceStub{
+		records: []quarantine.Record{record},
+		record:  record,
+		result: quarantine.Result{
+			Status:   quarantine.StatusOK,
+			Reason:   quarantine.ReasonOK,
+			Changed:  true,
+			Document: record,
+		},
+	}
+	return service, admin.New(admin.WithQuarantineService(service))
+}
+
+func TestServer_QuarantineRejectsInvalidJSONBeforeService(t *testing.T) {
+	service := &quarantineServiceStub{}
+	srv := admin.New(admin.WithQuarantineService(service))
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/quarantine/confirm", strings.NewReader(`{"transaction_id":"tx","document_name":"doc.xml","operator_note":"nope"}`))
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+	if service.confirmCalls != 0 {
+		t.Fatalf("confirm calls = %d, want 0", service.confirmCalls)
+	}
+	assertQuarantineJSONError(t, resp.Body.String(), quarantine.ReasonInvalidRequest)
+}
+
+func TestServer_QuarantineMapsServiceErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		reason string
+	}{
+		{name: "invalid request", err: quarantine.ErrInvalidRequest, status: http.StatusBadRequest, reason: quarantine.ReasonInvalidRequest},
+		{name: "not found", err: quarantine.ErrNotFound, status: http.StatusNotFound, reason: quarantine.ReasonNotFound},
+		{name: "not leader", err: &storeapi.NotLeaderError{LeaderAddr: "scrapd-1:9090"}, status: http.StatusServiceUnavailable, reason: quarantine.ReasonNotLeader},
+		{name: "unavailable", err: storeapi.NewUnavailable(storeapi.UnavailableReasonShardRouteUnavailable, "Shard route unavailable"), status: http.StatusServiceUnavailable, reason: quarantine.ReasonUnavailable},
+		{name: "data loss", err: storeapi.ErrDataLoss, status: http.StatusPreconditionFailed, reason: quarantine.ReasonDataLoss},
+		{name: "internal", err: errors.New("dependency path /tmp/secret"), status: http.StatusInternalServerError, reason: quarantine.ReasonInternalError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &quarantineServiceStub{err: tt.err}
+			srv := admin.New(admin.WithQuarantineService(service))
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/quarantine/release", strings.NewReader(`{"transaction_id":"tx","document_name":"doc.xml"}`))
+			resp := httptest.NewRecorder()
+
+			srv.Handler().ServeHTTP(resp, req)
+
+			if resp.Code != tt.status {
+				t.Fatalf("status = %d, want %d: %s", resp.Code, tt.status, resp.Body.String())
+			}
+			assertNoSensitiveQuarantineFields(t, resp.Body.String())
+			assertQuarantineJSONError(t, resp.Body.String(), tt.reason)
+		})
+	}
+}
+
 func assertNoSensitiveRewrapFields(t *testing.T, body string, extraForbidden ...string) {
 	t.Helper()
 
@@ -392,6 +559,40 @@ func assertNoSensitiveRewrapFields(t *testing.T, body string, extraForbidden ...
 		if strings.Contains(body, value) {
 			t.Fatalf("rewrap evidence leaked %q: %s", value, body)
 		}
+	}
+}
+
+func assertNoSensitiveQuarantineFields(t *testing.T, body string) {
+	t.Helper()
+
+	forbidden := []string{
+		"payload",
+		"signature",
+		"yara",
+		"clamd",
+		"trace_id",
+		"request_id",
+		"auth_claim",
+		"operator_note",
+		"/tmp/secret",
+		"Backend key",
+	}
+	for _, value := range forbidden {
+		if strings.Contains(body, value) {
+			t.Fatalf("quarantine response leaked %q: %s", value, body)
+		}
+	}
+}
+
+func assertQuarantineJSONError(t *testing.T, body, reason string) {
+	t.Helper()
+
+	var got quarantine.Result
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode quarantine error response: %v", err)
+	}
+	if got.Status != quarantine.StatusFailed || got.Reason != reason {
+		t.Fatalf("quarantine error response = %+v, want failed/%s", got, reason)
 	}
 }
 

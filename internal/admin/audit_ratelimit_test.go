@@ -16,6 +16,7 @@ import (
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/quarantine"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 	securityfixture "github.com/petabytecl/scrap/test/fixtures/security"
@@ -429,6 +430,47 @@ func TestAdminAuditsRewrapRouteAsDocumentOperation(t *testing.T) {
 	}
 	if events[0].Operation != audit.OperationRewrapDocument || events[0].Target != audit.TargetDocument || events[0].Result != audit.ResultAllowed {
 		t.Fatalf("audit event = %+v, want rewrap_document/document allowed", events[0])
+	}
+}
+
+func TestAdminAuditsQuarantineRoutesAsDocumentOperations(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	service := &quarantineServiceStub{
+		result: quarantine.Result{Status: quarantine.StatusOK, Reason: quarantine.ReasonOK, Changed: true},
+	}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithQuarantineService(service))
+
+	requests := []struct {
+		ctx       context.Context
+		method    string
+		path      string
+		body      string
+		operation string
+	}{
+		{ctx: adminAuthContext(security.RoleAdminReader), method: http.MethodGet, path: "/admin/quarantine/documents?limit=1", operation: audit.OperationQuarantineList},
+		{ctx: adminAuthContext(security.RoleAdminReader), method: http.MethodGet, path: "/admin/quarantine/document?" + "transaction_" + "id=tx&document_" + "name=doc.xml", operation: audit.OperationQuarantineInspect},
+		{ctx: adminAuthContext(security.RoleAdminOperator), method: http.MethodPost, path: "/admin/quarantine/confirm", body: `{"transaction_id":"tx","document_name":"doc.xml"}`, operation: audit.OperationQuarantineConfirm},
+		{ctx: adminAuthContext(security.RoleAdminBreakGlass), method: http.MethodPost, path: "/admin/quarantine/release", body: `{"transaction_id":"tx","document_name":"doc.xml"}`, operation: audit.OperationQuarantineRelease},
+	}
+
+	for _, tc := range requests {
+		req := httptest.NewRequestWithContext(tc.ctx, tc.method, tc.path, bytes.NewReader([]byte(tc.body)))
+		resp := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s %s status = %d, want 200: %s", tc.method, tc.path, resp.Code, resp.Body.String())
+		}
+	}
+
+	events := sink.Events()
+	if len(events) != len(requests) {
+		t.Fatalf("audit events = %d, want %d: %+v", len(events), len(requests), events)
+	}
+	for i, tc := range requests {
+		if events[i].Operation != tc.operation || events[i].Target != audit.TargetDocument || events[i].Result != audit.ResultAllowed {
+			t.Fatalf("event %d = %+v, want %s/document allowed", i, events[i], tc.operation)
+		}
 	}
 }
 

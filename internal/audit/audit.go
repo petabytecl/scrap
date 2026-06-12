@@ -60,6 +60,10 @@ const (
 	OperationEvictionPlanStatus  = "eviction_plan_status"
 	OperationEvictionApply       = "eviction_apply"
 	OperationRewrapDocument      = "rewrap_document"
+	OperationQuarantineList      = "quarantine_list"
+	OperationQuarantineInspect   = "quarantine_inspect"
+	OperationQuarantineConfirm   = "quarantine_confirm"
+	OperationQuarantineRelease   = "quarantine_release"
 	OperationPprofIndex          = "pprof_index"
 	OperationPprofCmdline        = "pprof_cmdline"
 	OperationPprofProfile        = "pprof_profile"
@@ -330,6 +334,10 @@ var allowedOperations = set(
 	OperationEvictionPlanStatus,
 	OperationEvictionApply,
 	OperationRewrapDocument,
+	OperationQuarantineList,
+	OperationQuarantineInspect,
+	OperationQuarantineConfirm,
+	OperationQuarantineRelease,
 	OperationPprofIndex,
 	OperationPprofCmdline,
 	OperationPprofProfile,

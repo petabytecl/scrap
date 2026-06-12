@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -129,6 +130,43 @@ func TestContentQuarantineReadCloserDeniesBytesAfterConcurrentQuarantine(t *test
 	}
 	if n != 0 {
 		t.Fatalf("Read returned n=%d bytes=%q, want no bytes", n, buf[:n])
+	}
+}
+
+func TestReleaseQuarantineAllowsReadOnlyAfterCommittedApply(t *testing.T) {
+	ctx := context.Background()
+	s := openQuarantineReadShard(t)
+
+	if _, err := s.WriteDocument(ctx, "tx-quarantine", "detected.xml", "text/xml", "", bytes.NewReader([]byte("safe after release"))); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	if _, _, err := s.ReadDocument(ctx, "tx-quarantine", "detected.xml"); !errors.Is(err, storeapi.ErrFailedPrecondition) {
+		t.Fatalf("ReadDocument after quarantine = %v, want ErrFailedPrecondition", err)
+	}
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest("proposal-confirm"), 78); err != nil {
+		t.Fatalf("apply confirm: %v", err)
+	}
+	if _, _, err := s.ReadDocument(ctx, "tx-quarantine", "detected.xml"); !errors.Is(err, storeapi.ErrFailedPrecondition) {
+		t.Fatalf("ReadDocument after confirm = %v, want ErrFailedPrecondition", err)
+	}
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest("proposal-release"), 79); err != nil {
+		t.Fatalf("apply release: %v", err)
+	}
+
+	rc, _, err := s.ReadDocument(ctx, "tx-quarantine", "detected.xml")
+	if err != nil {
+		t.Fatalf("ReadDocument after release: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadDocument body after release: %v", err)
+	}
+	if string(got) != "safe after release" {
+		t.Fatalf("ReadDocument body = %q, want safe after release", got)
 	}
 }
 

@@ -223,6 +223,52 @@ func TestRaftCommandRewrapDocumentEnvelopeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRaftCommandConfirmQuarantineRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ConfirmQuarantine{
+			ConfirmQuarantine: &scrapv1.ConfirmQuarantine{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "invoice.xml",
+				ConfirmedAtUs: 1716700004000000,
+				ProposalId:    "proposal-confirm",
+			},
+		},
+	})
+	confirm := decoded.GetConfirmQuarantine()
+	if confirm == nil {
+		t.Fatal("decoded ConfirmQuarantine should not be nil")
+	}
+	if confirm.GetTransactionId() != "tx-quarantine" || confirm.GetDocumentName() != "invoice.xml" {
+		t.Fatalf("ConfirmQuarantine identity = %q/%q", confirm.GetTransactionId(), confirm.GetDocumentName())
+	}
+	if confirm.GetConfirmedAtUs() != 1716700004000000 || confirm.GetProposalId() != "proposal-confirm" {
+		t.Fatalf("ConfirmQuarantine metadata = %d/%q", confirm.GetConfirmedAtUs(), confirm.GetProposalId())
+	}
+}
+
+func TestRaftCommandReleaseQuarantineRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ReleaseQuarantine{
+			ReleaseQuarantine: &scrapv1.ReleaseQuarantine{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "invoice.xml",
+				ReleasedAtUs:  1716700005000000,
+				ProposalId:    "proposal-release",
+			},
+		},
+	})
+	release := decoded.GetReleaseQuarantine()
+	if release == nil {
+		t.Fatal("decoded ReleaseQuarantine should not be nil")
+	}
+	if release.GetTransactionId() != "tx-quarantine" || release.GetDocumentName() != "invoice.xml" {
+		t.Fatalf("ReleaseQuarantine identity = %q/%q", release.GetTransactionId(), release.GetDocumentName())
+	}
+	if release.GetReleasedAtUs() != 1716700005000000 || release.GetProposalId() != "proposal-release" {
+		t.Fatalf("ReleaseQuarantine metadata = %d/%q", release.GetReleasedAtUs(), release.GetProposalId())
+	}
+}
+
 func assertRaftBackendObject(t *testing.T, label string, got *scrapv1.BackendObjectMetadata, key string, size int64, validation string) {
 	t.Helper()
 

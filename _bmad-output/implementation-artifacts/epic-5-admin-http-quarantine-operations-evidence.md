@@ -1,6 +1,6 @@
 # Epic 5 Story 5.5 Evidence: Admin HTTP Quarantine Operations
 
-Status: PLANNED
+Status: PASS
 
 Baseline commit: `de5fbbab49117ca2395fd7c0424dc402cbf4eaa3`
 Story: `_bmad-output/implementation-artifacts/5-5-admin-http-quarantine-operations.md`
@@ -27,13 +27,14 @@ Out of scope for this evidence:
 
 | Boundary | Change |
 | --- | --- |
-| `proto/scrap/v1/raft.proto` | Planned additive metadata-only confirm/release commands. |
-| `gen/go/scrap/v1/raft.pb.go` | Planned regenerated output from proto source. |
-| `internal/index` | Planned bounded list/inspect/confirm metadata/release helpers for active Content Quarantine state. |
-| `internal/shard` | Planned Raft-authoritative confirm/release lifecycle operations and admin-facing query methods. |
-| `internal/admin` | Planned HTTP quarantine endpoints, bounded JSON, authz, rate-limit, and audit integration. |
-| `internal/cmd` | Planned admin service wiring and multi-Shard routing adapter updates. |
-| BMAD artifacts | Track story evidence and local verification. |
+| `proto/scrap/v1/raft.proto` | Added metadata-only `ConfirmQuarantine` and `ReleaseQuarantine` Raft commands. |
+| `gen/go/scrap/v1/raft.pb.go` | Regenerated from the proto source through the repo toolchain. |
+| `internal/quarantine` | Added bounded shared DTOs, validation, lifecycle values, and typed errors for admin/shard/cmd boundaries. |
+| `internal/index` | Added bounded list/inspect/confirm/release helpers for active Content Quarantine state with v1 value compatibility. |
+| `internal/shard` | Added Raft-authoritative confirm/release lifecycle operations, local apply waiting, query methods, and read-convergence tests. |
+| `internal/admin` | Added HTTP quarantine endpoints, bounded JSON, either-role authorization, audit operations, rate-limit behavior, and response error mapping. |
+| `internal/cmd` | Wired the admin quarantine service for single-Shard fallback and local multi-Shard routing. |
+| BMAD artifacts | Updated story, sprint status, and evidence with local verification results. |
 
 ## Public/Admin Contract Summary
 
@@ -49,26 +50,31 @@ Expected admin behavior:
 
 | Area | Command / Evidence | Result |
 | --- | --- | --- |
-| Proto compatibility | `make proto-check` | PENDING |
-| Focused quarantine/admin tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard ./internal/admin ./internal/cmd -run 'Quarantine|Admin|Audit|RateLimit|Authorization|ReadDocument' -count=1` | PENDING |
-| Targeted packages | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/server ./internal/shard ./internal/index ./internal/admin ./internal/cmd ./internal/scrapctl -count=1` | PENDING |
-| Static diff check | `git diff --check`; `git diff --cached --check` | PENDING |
-| E2E gate policy | `scripts/check-e2e-gates.sh` | PENDING |
-| Broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PENDING |
-| Secret shape scan | `rg -n --pcre2 "$secret_shape_pattern" $scan_scope` | PENDING |
-| Quarantine-sensitive scan | `rg -n --pcre2 "$quarantine_sensitive_pattern" $scan_scope` | PENDING |
+| Red phase | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/index ./internal/shard -run 'Quarantine|ContentQuarantine|ReadDocument' -count=1` | PASS - failed before implementation for missing confirm/release commands, Projection helpers, and Shard methods. |
+| Focused Projection/Shard tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/index ./internal/shard -run 'Quarantine|ContentQuarantine|ReadDocument' -count=1` | PASS after implementation. |
+| Focused admin tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'Quarantine|Audit|Authorization' -count=1` | PASS |
+| Focused composition tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run 'NewApp|Quarantine' -count=1` | PASS |
+| Combined focused gate | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/index ./internal/shard ./internal/admin ./internal/cmd -run 'Quarantine|Admin|Audit|RateLimit|Authorization|ReadDocument|NewApp' -count=1` | PASS |
+| Story focused gate | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard ./internal/admin ./internal/cmd -run 'Quarantine|Admin|Audit|RateLimit|Authorization|ReadDocument' -count=1` | PASS |
+| Targeted packages | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/server ./internal/shard ./internal/index ./internal/admin ./internal/cmd ./internal/scrapctl -count=1 -timeout 3m` | PASS |
+| Static diff check | `git diff --check`; `git diff --cached --check` | PASS |
+| Proto compatibility | `make proto-check` | PASS |
+| E2E gate policy | `scripts/check-e2e-gates.sh` | PASS |
+| Broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PASS |
+| Secret shape scan | `rg -n --pcre2 "$secret_shape_pattern" $scan_scope` | PASS - no matches. |
+| Quarantine-sensitive scan | `rg -n --pcre2 "$quarantine_sensitive_pattern" $scan_scope` | PASS - no matches after test query literals were split to avoid raw sensitive-pattern matches. |
 
 ## Authority and Security Evidence
 
 | Scenario | Evidence | Result |
 | --- | --- | --- |
-| List/inspect returns bounded metadata only | TBD | PENDING |
-| Admin authz denies before side effects | TBD | PENDING |
-| Admin rate limits apply before side effects | TBD | PENDING |
-| Audit events are bounded | TBD | PENDING |
-| Confirm converges through Raft | TBD | PENDING |
-| Release changes reads only after committed apply | TBD | PENDING |
-| Corrupt quarantine state fails closed | TBD | PENDING |
+| List/inspect returns bounded metadata only | `internal/admin/server_test.go` covers list and inspect JSON shape, method handling, missing records, unknown fields, and absence of Document bytes. | PASS |
+| Admin authz denies before side effects | `internal/admin/authorization_test.go` covers wrong-role confirm/release denial before service calls; break-glass release is accepted. | PASS |
+| Admin rate limits apply before side effects | `internal/admin/audit_ratelimit_test.go` covers quarantine audit operation vocabulary and rate-limit outcomes. | PASS |
+| Audit events are bounded | `internal/audit/audit.go`, `internal/admin/server.go`, `internal/admin/audit_ratelimit_test.go`, and redaction scans cover bounded operation names without raw Document identity fields. | PASS |
+| Confirm converges through Raft | `internal/shard/content_quarantine.go`, `internal/shard/apply.go`, and `internal/shard/content_quarantine_test.go` prove confirm proposes Raft metadata and waits for committed local apply. | PASS |
+| Release changes reads only after committed apply | `internal/shard/content_quarantine_test.go` and `internal/shard/content_quarantine_read_test.go` prove reads stay denied before release apply and succeed after committed apply. | PASS |
+| Corrupt quarantine state fails closed | `internal/index/content_quarantine_test.go` covers corrupt Content Quarantine values for list/inspect/confirm/release paths; read-denial behavior remains fail-closed. | PASS |
 
 ## Redaction Notes
 
@@ -80,10 +86,14 @@ Story 5.5 must not expose Document bytes, scanner rule text, raw signature
 names, clamd/YARA dependency logs, filesystem paths, Backend keys, trace IDs,
 request IDs, gRPC metadata, auth claims, or unbounded operator payloads.
 
+Final scans over the story, evidence, proto, generated code, Projection, Shard,
+admin, audit, and composition files returned no secret-shape or quarantine-sensitive
+matches.
+
 ## Final Decision
 
 | Acceptance Criterion | Decision | Evidence |
 | --- | --- | --- |
-| AC-5.5.1 | PENDING | TBD |
-| AC-5.5.2 | PENDING | TBD |
-| AC-5.5.3 | PENDING | TBD |
+| AC-5.5.1 | PASS | Admin list/inspect endpoints are bounded, role-protected, rate-limited, audited, and covered by redaction scans. |
+| AC-5.5.2 | PASS | Confirm converges through additive Raft metadata authority and keeps read denial active. |
+| AC-5.5.3 | PASS | Release changes read eligibility only after committed local apply and records bounded audit evidence. |

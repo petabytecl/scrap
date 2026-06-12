@@ -70,6 +70,7 @@ type Server struct {
 	evictionHealth     EvictionHealthProvider
 	shardDiagnostics   ShardDiagnosticsProvider
 	rewrapService      RewrapService
+	quarantineService  QuarantineService
 	securityMode       security.Mode
 	readiness          security.Readiness
 	authorizer         *security.Authorizer
@@ -178,6 +179,12 @@ func New(opts ...Option) *Server {
 	if s.rewrapService != nil {
 		mux.HandleFunc("/admin/rewrap/document", s.handleRewrapDocument)
 	}
+	if s.quarantineService != nil {
+		mux.HandleFunc("/admin/quarantine/documents", s.handleQuarantineDocuments)
+		mux.HandleFunc("/admin/quarantine/document", s.handleQuarantineDocument)
+		mux.HandleFunc("/admin/quarantine/confirm", s.handleQuarantineConfirm)
+		mux.HandleFunc("/admin/quarantine/release", s.handleQuarantineRelease)
+	}
 	if s.pprofEnabled {
 		// GET-only: profiling is a read-only diagnostic. getOnly rejects every other
 		// method, including HEAD — which net/http's ServeMux otherwise routes to a
@@ -267,36 +274,76 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security
 }
 
 func (s *Server) authorizeMethod(w http.ResponseWriter, r *http.Request, role security.Role, method string) (*http.Request, bool) {
+	authorizedRequest, _, ok := s.authorizeAnyMethod(w, r, []security.Role{role}, method)
+	return authorizedRequest, ok
+}
+
+func (s *Server) authorizeAnyMethod(
+	w http.ResponseWriter,
+	r *http.Request,
+	roles []security.Role,
+	method string,
+) (*http.Request, security.Role, bool) {
+	role := security.RoleUnknown
+	if len(roles) > 0 {
+		role = roles[0]
+	}
 	operation, target := auditRequest(r, role)
 	resolvedRequest, principalErr := s.requestWithResolvedPrincipal(r)
 	if decision := s.checkRateLimit(resolvedRequest.Context(), operation); decision.Limited {
 		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return nil, false
+			return nil, role, false
 		}
 		http.Error(w, security.ErrRateLimited.Error(), http.StatusTooManyRequests)
-		return nil, false
+		return nil, role, false
 	}
 	if principalErr != nil {
 		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(principalErr)); err != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return nil, false
+			return nil, role, false
 		}
 		http.Error(w, principalErr.Error(), security.HTTPStatusForAuthorization(principalErr))
-		return nil, false
+		return nil, role, false
 	}
 	if s.authorizer == nil {
-		return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+		authorizedRequest, ok := s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+		return authorizedRequest, role, ok
 	}
-	if err := s.authorizer.Authorize(resolvedRequest.Context(), role); err != nil {
+	role, err := s.authorizeAnyRole(resolvedRequest.Context(), roles)
+	if err != nil {
 		if auditErr := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return nil, false
+			return nil, role, false
 		}
 		http.Error(w, err.Error(), security.HTTPStatusForAuthorization(err))
-		return nil, false
+		return nil, role, false
 	}
-	return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+	authorizedRequest, ok := s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
+	return authorizedRequest, role, ok
+}
+
+func (s *Server) authorizeAnyRole(ctx context.Context, roles []security.Role) (security.Role, error) {
+	role := security.RoleUnknown
+	if len(roles) > 0 {
+		role = roles[0]
+	}
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		if s.authorizer != nil {
+			s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
+		}
+		return role, security.UnauthenticatedError("authentication required")
+	}
+	for _, candidate := range roles {
+		if _, ok := principal.Roles[candidate]; ok {
+			return candidate, nil
+		}
+	}
+	if s.authorizer != nil {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMissingRole)
+	}
+	return role, security.PermissionDeniedErrorWithStatus("permission denied", security.AuthorizationStatusMissingRole)
 }
 
 func (s *Server) auditAllowedOrMethodDenied(
@@ -459,17 +506,21 @@ type auditRoute struct {
 }
 
 var adminAuditRoutes = map[string]auditRoute{
-	"/healthz":                   {operation: audit.OperationHealth, target: audit.TargetAdmin},
-	"/metrics":                   {operation: audit.OperationMetrics, target: audit.TargetMetrics},
-	"/admin/rewrap/document":     {operation: audit.OperationRewrapDocument, target: audit.TargetDocument},
-	"/test-hooks/projection-key": {operation: audit.OperationProjectionKeyHook, target: audit.TargetEvidence},
-	"/test-hooks/transit-rotate": {operation: audit.OperationTransitRotateHook, target: audit.TargetEvidence},
-	"/test-hooks/light-scrub":    {operation: audit.OperationLightScrubHook, target: audit.TargetEvidence},
-	"/debug/pprof/":              {operation: audit.OperationPprofIndex, target: audit.TargetProfile},
-	"/debug/pprof/cmdline":       {operation: audit.OperationPprofCmdline, target: audit.TargetProfile},
-	"/debug/pprof/profile":       {operation: audit.OperationPprofProfile, target: audit.TargetProfile},
-	"/debug/pprof/trace":         {operation: audit.OperationPprofTrace, target: audit.TargetProfile},
-	"/debug/pprof/symbol":        {operation: audit.OperationPprofSymbol, target: audit.TargetProfile},
+	"/healthz":                    {operation: audit.OperationHealth, target: audit.TargetAdmin},
+	"/metrics":                    {operation: audit.OperationMetrics, target: audit.TargetMetrics},
+	"/admin/rewrap/document":      {operation: audit.OperationRewrapDocument, target: audit.TargetDocument},
+	"/admin/quarantine/documents": {operation: audit.OperationQuarantineList, target: audit.TargetDocument},
+	"/admin/quarantine/document":  {operation: audit.OperationQuarantineInspect, target: audit.TargetDocument},
+	"/admin/quarantine/confirm":   {operation: audit.OperationQuarantineConfirm, target: audit.TargetDocument},
+	"/admin/quarantine/release":   {operation: audit.OperationQuarantineRelease, target: audit.TargetDocument},
+	"/test-hooks/projection-key":  {operation: audit.OperationProjectionKeyHook, target: audit.TargetEvidence},
+	"/test-hooks/transit-rotate":  {operation: audit.OperationTransitRotateHook, target: audit.TargetEvidence},
+	"/test-hooks/light-scrub":     {operation: audit.OperationLightScrubHook, target: audit.TargetEvidence},
+	"/debug/pprof/":               {operation: audit.OperationPprofIndex, target: audit.TargetProfile},
+	"/debug/pprof/cmdline":        {operation: audit.OperationPprofCmdline, target: audit.TargetProfile},
+	"/debug/pprof/profile":        {operation: audit.OperationPprofProfile, target: audit.TargetProfile},
+	"/debug/pprof/trace":          {operation: audit.OperationPprofTrace, target: audit.TargetProfile},
+	"/debug/pprof/symbol":         {operation: audit.OperationPprofSymbol, target: audit.TargetProfile},
 }
 
 func auditEvictionRequest(r *http.Request) (string, string) {

@@ -136,6 +136,8 @@ func TestNewAppLeavesSingleShardAdminRoutesDisabledForMultiShardSingleLocalMembe
 	}
 
 	assertAdminPostStatus(t, app, "/admin/rewrap/document", `{}`, http.StatusBadRequest)
+	assertAdminPostStatus(t, app, "/admin/quarantine/release", `{"transaction_id":"tx-bravo","document_name":"doc.xml"}`, http.StatusServiceUnavailable)
+	assertAdminGetStatus(t, app, "/admin/quarantine/document?"+"transaction_"+"id=tx-alpha&document_"+"name=doc.xml", http.StatusNotFound)
 	assertAdminPostStatus(t, app, "/test-hooks/projection-key", `{}`, http.StatusBadRequest)
 	assertAppHealthUploadPressure(t, app, "ok", 0)
 
@@ -167,6 +169,7 @@ func TestNewAppRegistersMultiShardTestHooks(t *testing.T) {
 		"completed": true
 	}`, http.StatusNoContent)
 	assertAdminPostStatus(t, app, "/admin/rewrap/document", `{}`, http.StatusBadRequest)
+	assertAdminPostStatus(t, app, "/admin/quarantine/confirm", `{}`, http.StatusBadRequest)
 	assertAppHealthUploadPressure(t, app, "ok", 0)
 }
 
@@ -177,6 +180,16 @@ func assertAdminPostStatus(t *testing.T, app *App, path, body string, want int) 
 	app.adminSrv.Handler().ServeHTTP(rec, req)
 	if rec.Code != want {
 		t.Fatalf("POST %s status = %d, want %d", path, rec.Code, want)
+	}
+}
+
+func assertAdminGetStatus(t *testing.T, app *App, path string, want int) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
+	app.adminSrv.Handler().ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("GET %s status = %d, want %d: %s", path, rec.Code, want, rec.Body.String())
 	}
 }
 

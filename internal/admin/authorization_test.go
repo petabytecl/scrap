@@ -11,6 +11,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/quarantine"
 	"github.com/petabytecl/scrap/internal/security"
 )
 
@@ -70,6 +71,54 @@ func TestAdminAuthorizationDeniesRewrapBeforeSideEffect(t *testing.T) {
 	}
 	if service.calls != 0 {
 		t.Fatalf("rewrap calls = %d, want 0", service.calls)
+	}
+}
+
+func TestAdminAuthorizationDeniesQuarantineConfirmBeforeSideEffect(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	service := &quarantineServiceStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithQuarantineService(service))
+
+	req := httptest.NewRequestWithContext(
+		adminAuthContext(security.RoleAdminReader),
+		http.MethodPost,
+		"/admin/quarantine/confirm",
+		bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":"doc.xml"}`)),
+	)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.Code)
+	}
+	if service.confirmCalls != 0 {
+		t.Fatalf("confirm calls = %d, want 0", service.confirmCalls)
+	}
+}
+
+func TestAdminAuthorizationAllowsQuarantineReleaseForBreakGlass(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	service := &quarantineServiceStub{
+		result: quarantine.Result{Status: quarantine.StatusOK, Reason: quarantine.ReasonOK, Changed: true},
+	}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithQuarantineService(service))
+
+	req := httptest.NewRequestWithContext(
+		adminAuthContext(security.RoleAdminBreakGlass),
+		http.MethodPost,
+		"/admin/quarantine/release",
+		bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":"doc.xml"}`)),
+	)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.releaseCalls != 1 {
+		t.Fatalf("release calls = %d, want 1", service.releaseCalls)
 	}
 }
 

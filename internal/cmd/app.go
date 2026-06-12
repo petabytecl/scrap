@@ -12,6 +12,7 @@ import (
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/peer"
+	"github.com/petabytecl/scrap/internal/quarantine"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
@@ -240,12 +241,14 @@ func appendShardAdminOptions(opts []admin.Option, cfg Config, topology startupTo
 				admin.WithEvictionPlanStatusProvider(localShard),
 				admin.WithEvictionHealthProvider(localShard),
 				admin.WithRewrapService(localShard),
+				admin.WithQuarantineService(localShard),
 			)
 		}
 	} else {
 		opts = append(opts,
 			admin.WithUploadPressureProvider(adapter),
 			admin.WithRewrapService(adapter),
+			admin.WithQuarantineService(adapter),
 		)
 	}
 	return appendTestHookAdminOptions(opts, cfg, adapter, transit)
@@ -333,6 +336,100 @@ func (a appShardSetAdminAdapter) RewrapHealthSnapshot() rewrap.HealthSnapshot {
 		snapshot.Status = rewrap.StatusOK
 	}
 	return snapshot
+}
+
+func (a appShardSetAdminAdapter) ListContentQuarantines(ctx context.Context, filter quarantine.ListFilter) ([]quarantine.Record, error) {
+	filter, err := filter.Validate()
+	if err != nil {
+		return nil, err
+	}
+	if filter.TransactionID != "" {
+		localShard, err := a.localShardForQuarantineTransaction(filter.TransactionID)
+		if err != nil {
+			return nil, err
+		}
+		return localShard.ListContentQuarantines(ctx, filter)
+	}
+	records := make([]quarantine.Record, 0, filter.Limit)
+	for _, shardID := range a.shards.IDs() {
+		if len(records) >= filter.Limit {
+			break
+		}
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			continue
+		}
+		next, err := localShard.ListContentQuarantines(ctx, quarantine.ListFilter{Limit: filter.Limit - len(records)})
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, next...)
+	}
+	return records, nil
+}
+
+func (a appShardSetAdminAdapter) InspectContentQuarantine(ctx context.Context, identity quarantine.Identity) (quarantine.Record, error) {
+	localShard, err := a.localShardForQuarantineIdentity(identity)
+	if err != nil {
+		return quarantine.Record{}, err
+	}
+	return localShard.InspectContentQuarantine(ctx, identity)
+}
+
+func (a appShardSetAdminAdapter) ConfirmContentQuarantine(ctx context.Context, identity quarantine.Identity) (quarantine.Result, error) {
+	result := quarantine.Result{
+		Status: quarantine.StatusFailed,
+		Reason: quarantine.ReasonInvalidRequest,
+	}
+	localShard, err := a.localShardForQuarantineIdentity(identity)
+	if err != nil {
+		result.Reason = quarantineAdapterReason(err)
+		return result, err
+	}
+	return localShard.ConfirmContentQuarantine(ctx, identity)
+}
+
+func (a appShardSetAdminAdapter) ReleaseContentQuarantine(ctx context.Context, identity quarantine.Identity) (quarantine.Result, error) {
+	result := quarantine.Result{
+		Status: quarantine.StatusFailed,
+		Reason: quarantine.ReasonInvalidRequest,
+	}
+	localShard, err := a.localShardForQuarantineIdentity(identity)
+	if err != nil {
+		result.Reason = quarantineAdapterReason(err)
+		return result, err
+	}
+	return localShard.ReleaseContentQuarantine(ctx, identity)
+}
+
+func (a appShardSetAdminAdapter) localShardForQuarantineIdentity(identity quarantine.Identity) (*shard.Shard, error) {
+	if err := identity.Validate(); err != nil {
+		return nil, err
+	}
+	return a.localShardForQuarantineTransaction(identity.TransactionID)
+}
+
+func (a appShardSetAdminAdapter) localShardForQuarantineTransaction(txID string) (*shard.Shard, error) {
+	route, err := a.topology.Placement.Lookup(txID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: route Transaction", quarantine.ErrInvalidRequest)
+	}
+	localShard, ok := a.localShard(route.ShardID)
+	if !ok {
+		return nil, storeapi.NewUnavailable(storeapi.UnavailableReasonShardRouteUnavailable, "Shard route unavailable")
+	}
+	return localShard, nil
+}
+
+func quarantineAdapterReason(err error) string {
+	switch {
+	case errors.Is(err, quarantine.ErrInvalidRequest):
+		return quarantine.ReasonInvalidRequest
+	case errors.Is(err, storeapi.ErrUnavailable):
+		return quarantine.ReasonUnavailable
+	default:
+		return quarantine.ReasonInternalError
+	}
 }
 
 func mergeRewrapHealthSnapshot(current, next rewrap.HealthSnapshot, failures map[string]int) rewrap.HealthSnapshot {

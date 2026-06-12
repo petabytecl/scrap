@@ -309,6 +309,133 @@ func TestContentQuarantineAffectsStreamingHash(t *testing.T) {
 	}
 }
 
+func TestContentQuarantineListFiltersAndLimits(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	first := contentQuarantineFixture("tx-a", "doc-a.xml", 7)
+	second := contentQuarantineFixture("tx-b", "doc-b.xml", 8)
+	putContentQuarantineForTest(t, idx, first)
+	putContentQuarantineForTest(t, idx, second)
+
+	list, err := idx.ListContentQuarantines("", 10)
+	if err != nil {
+		t.Fatalf("ListContentQuarantines: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list length = %d, want 2", len(list))
+	}
+	filtered, err := idx.ListContentQuarantines(first.TransactionID, 1)
+	if err != nil {
+		t.Fatalf("ListContentQuarantines filtered: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].DocumentName != first.DocumentName {
+		t.Fatalf("filtered list = %+v, want only %s", filtered, first.DocumentName)
+	}
+}
+
+func TestContentQuarantineConfirmAndRelease(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	first := contentQuarantineFixture("tx-a", "doc-a.xml", 7)
+	second := contentQuarantineFixture("tx-b", "doc-b.xml", 8)
+	putContentQuarantineForTest(t, idx, first)
+	putContentQuarantineForTest(t, idx, second)
+	if err := idx.ConfirmContentQuarantine(first.TransactionID, first.DocumentName, 1716700003000000); err != nil {
+		t.Fatalf("ConfirmContentQuarantine: %v", err)
+	}
+	confirmed, err := idx.GetContentQuarantine(first.TransactionID, first.DocumentName)
+	if err != nil {
+		t.Fatalf("GetContentQuarantine confirmed: %v", err)
+	}
+	if confirmed.ConfirmedAtUs != 1716700003000000 {
+		t.Fatalf("ConfirmedAtUs = %d, want 1716700003000000", confirmed.ConfirmedAtUs)
+	}
+	if err := idx.ReleaseContentQuarantine(first.TransactionID, first.DocumentName); err != nil {
+		t.Fatalf("ReleaseContentQuarantine: %v", err)
+	}
+	if _, err := idx.GetContentQuarantine(first.TransactionID, first.DocumentName); !errors.Is(err, ErrContentQuarantineNotFound) {
+		t.Fatalf("GetContentQuarantine after release = %v, want ErrContentQuarantineNotFound", err)
+	}
+	remaining, err := idx.ListContentQuarantines("", 10)
+	if err != nil {
+		t.Fatalf("ListContentQuarantines remaining: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].DocumentName != second.DocumentName {
+		t.Fatalf("remaining list = %+v, want only %s", remaining, second.DocumentName)
+	}
+}
+
+func contentQuarantineFixture(txID, docName string, blockID uint64) ContentQuarantine {
+	return ContentQuarantine{
+		TransactionID: txID,
+		DocumentName:  docName,
+		BlockID:       blockID,
+		DetectedAtUs:  1716700001000000,
+		ScanType:      ContentQuarantineScanTypeInitial,
+		Reason:        ContentQuarantineReasonScannerDetection,
+	}
+}
+
+func putContentQuarantineForTest(t *testing.T, idx *Index, quarantine ContentQuarantine) {
+	t.Helper()
+	if err := idx.PutContentQuarantine(quarantine); err != nil {
+		t.Fatalf("PutContentQuarantine: %v", err)
+	}
+}
+
+func TestContentQuarantineDecodesV1RecordsAsUnconfirmed(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	key, err := contentQuarantineKey("tx-v1", "doc.xml")
+	if err != nil {
+		t.Fatalf("contentQuarantineKey: %v", err)
+	}
+	if err := idx.db.Set(key, contentQuarantineValueV1ForTest(
+		ContentQuarantineScanTypeInitial,
+		ContentQuarantineReasonScannerDetection,
+	), pebble.Sync); err != nil {
+		t.Fatalf("Set v1 value: %v", err)
+	}
+	got, err := idx.GetContentQuarantine("tx-v1", "doc.xml")
+	if err != nil {
+		t.Fatalf("GetContentQuarantine v1: %v", err)
+	}
+	if got.ConfirmedAtUs != 0 {
+		t.Fatalf("ConfirmedAtUs = %d, want 0 for v1", got.ConfirmedAtUs)
+	}
+}
+
+func TestContentQuarantineListFailsClosedOnCorruptValue(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	key, err := contentQuarantineKey("tx-corrupt", "doc.xml")
+	if err != nil {
+		t.Fatalf("contentQuarantineKey: %v", err)
+	}
+	if err := idx.db.Set(key, []byte{contentQuarantineValueVersion, 1, 2}, pebble.Sync); err != nil {
+		t.Fatalf("Set corrupt value: %v", err)
+	}
+	if _, err := idx.ListContentQuarantines("", 10); !errors.Is(err, ErrInvalidContentQuarantine) {
+		t.Fatalf("ListContentQuarantines error = %v, want ErrInvalidContentQuarantine", err)
+	}
+}
+
 func contentQuarantineValueHeaderForTest(scanType ContentQuarantineScanType, reason ContentQuarantineReason) []byte {
 	value := []byte{
 		contentQuarantineValueVersion,
@@ -319,6 +446,12 @@ func contentQuarantineValueHeaderForTest(scanType ContentQuarantineScanType, rea
 	}
 	putNonNegativeInt64(value[9:17], 1716700001000000)
 	return value
+}
+
+func contentQuarantineValueV1ForTest(scanType ContentQuarantineScanType, reason ContentQuarantineReason) []byte {
+	value := contentQuarantineValueHeaderForTest(scanType, reason)
+	value[0] = contentQuarantineValueVersionV1
+	return value[:contentQuarantineValueLenV1]
 }
 
 func contentQuarantineValueWithDetectedTimeForTest(

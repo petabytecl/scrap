@@ -12,6 +12,8 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/quarantine"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func TestShardReportDetectionsProposesQuarantineCommand(t *testing.T) {
@@ -256,11 +258,173 @@ func TestApplyQuarantineDocumentRejectsMissingDetectedTime(t *testing.T) {
 	}
 }
 
+func TestShardInspectAndListContentQuarantine(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+
+	identity := quarantine.Identity{TransactionID: "tx-quarantine", DocumentName: "detected.xml"}
+	got, err := s.InspectContentQuarantine(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("InspectContentQuarantine: %v", err)
+	}
+	if got.TransactionID != identity.TransactionID || got.DocumentName != identity.DocumentName || got.Lifecycle != quarantine.LifecycleActive {
+		t.Fatalf("inspect result = %+v", got)
+	}
+	list, err := s.ListContentQuarantines(context.Background(), quarantine.ListFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListContentQuarantines: %v", err)
+	}
+	if len(list) != 1 || list[0].DocumentName != identity.DocumentName {
+		t.Fatalf("list result = %+v", list)
+	}
+}
+
+func TestApplyConfirmAndReleaseContentQuarantine(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	identity := quarantine.Identity{TransactionID: "tx-quarantine", DocumentName: "detected.xml"}
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest("proposal-confirm"), 78); err != nil {
+		t.Fatalf("apply confirm: %v", err)
+	}
+	confirmed, err := s.InspectContentQuarantine(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("InspectContentQuarantine confirmed: %v", err)
+	}
+	if confirmed.Lifecycle != quarantine.LifecycleConfirmed || confirmed.ConfirmedAt == nil {
+		t.Fatalf("confirmed inspect result = %+v", confirmed)
+	}
+
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest("proposal-release"), 79); err != nil {
+		t.Fatalf("apply release: %v", err)
+	}
+	if _, err := s.InspectContentQuarantine(context.Background(), identity); !errors.Is(err, quarantine.ErrNotFound) {
+		t.Fatalf("InspectContentQuarantine after release = %v, want ErrNotFound", err)
+	}
+}
+
+func TestShardConfirmContentQuarantineWaitsForApply(t *testing.T) {
+	raft := &quarantineProposalRaft{proposedCh: make(chan []byte, 1)}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		result, err := s.ConfirmContentQuarantine(context.Background(), quarantine.Identity{
+			TransactionID: "tx-quarantine",
+			DocumentName:  "detected.xml",
+		})
+		if result.Status != quarantine.StatusOK || !result.Changed {
+			done <- errors.New("confirm result was not ok/changed")
+			return
+		}
+		done <- err
+	}()
+
+	data := waitQuarantineProposal(t, raft, "ConfirmContentQuarantine")
+	assertQuarantineOperationPending(t, done, "ConfirmContentQuarantine")
+
+	applyQuarantineProposal(t, s, data)
+	waitQuarantineOperationDone(t, done, "ConfirmContentQuarantine")
+}
+
+func TestShardReleaseKeepsReadGateClosedUntilApply(t *testing.T) {
+	raft := &quarantineProposalRaft{proposedCh: make(chan []byte, 1)}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		result, err := s.ReleaseContentQuarantine(context.Background(), quarantine.Identity{
+			TransactionID: "tx-quarantine",
+			DocumentName:  "detected.xml",
+		})
+		if result.Status != quarantine.StatusOK || !result.Changed {
+			done <- errors.New("release result was not ok/changed")
+			return
+		}
+		done <- err
+	}()
+
+	data := waitQuarantineProposal(t, raft, "ReleaseContentQuarantine")
+	s.mu.Lock()
+	readErr := s.ensureContentReadAllowedLocked("tx-quarantine", "detected.xml")
+	s.mu.Unlock()
+	if !errors.Is(readErr, storeapi.ErrFailedPrecondition) {
+		t.Fatalf("read gate before release apply = %v, want ErrFailedPrecondition", readErr)
+	}
+
+	applyQuarantineProposal(t, s, data)
+	waitQuarantineOperationDone(t, done, "ReleaseContentQuarantine")
+	s.mu.Lock()
+	readErr = s.ensureContentReadAllowedLocked("tx-quarantine", "detected.xml")
+	s.mu.Unlock()
+	if readErr != nil {
+		t.Fatalf("read gate after release apply = %v, want nil", readErr)
+	}
+}
+
+func waitQuarantineProposal(t *testing.T, raft *quarantineProposalRaft, operation string) []byte {
+	t.Helper()
+	select {
+	case data := <-raft.proposedCh:
+		return data
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not propose command", operation)
+		return nil
+	}
+}
+
+func assertQuarantineOperationPending(t *testing.T, done <-chan error, operation string) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("%s completed before apply: %v", operation, err)
+	default:
+	}
+}
+
+func waitQuarantineOperationDone(t *testing.T, done <-chan error, operation string) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s after apply: %v", operation, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not complete after apply", operation)
+	}
+}
+
 func TestApplySpanInfoForQuarantineDocumentRedactsIdentity(t *testing.T) {
 	assertApplySpan(t, quarantineRaftCommandForTest(), "quarantine_document", []string{
 		"scrap.transaction.hash",
 		"scrap.document.hash",
 		"scrap.block_id",
+	})
+}
+
+func TestApplySpanInfoForQuarantineLifecycleRedactsIdentity(t *testing.T) {
+	assertApplySpan(t, confirmQuarantineRaftCommandForTest("proposal-confirm"), "confirm_quarantine", []string{
+		"scrap.transaction.hash",
+		"scrap.document.hash",
+	})
+	assertApplySpan(t, releaseQuarantineRaftCommandForTest("proposal-release"), "release_quarantine", []string{
+		"scrap.transaction.hash",
+		"scrap.document.hash",
 	})
 }
 
@@ -274,6 +438,32 @@ func quarantineRaftCommandForTest() *scrapv1.RaftCommand {
 				DetectedAtUs:  1716700001000000,
 				ScanType:      scrapv1.QuarantineScanType_QUARANTINE_SCAN_TYPE_INITIAL,
 				Reason:        scrapv1.QuarantineReason_QUARANTINE_REASON_SCANNER_DETECTION,
+			},
+		},
+	}
+}
+
+func confirmQuarantineRaftCommandForTest(proposalID string) *scrapv1.RaftCommand {
+	return &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ConfirmQuarantine{
+			ConfirmQuarantine: &scrapv1.ConfirmQuarantine{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "detected.xml",
+				ConfirmedAtUs: 1716700003000000,
+				ProposalId:    proposalID,
+			},
+		},
+	}
+}
+
+func releaseQuarantineRaftCommandForTest(proposalID string) *scrapv1.RaftCommand {
+	return &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ReleaseQuarantine{
+			ReleaseQuarantine: &scrapv1.ReleaseQuarantine{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "detected.xml",
+				ReleasedAtUs:  1716700004000000,
+				ProposalId:    proposalID,
 			},
 		},
 	}
