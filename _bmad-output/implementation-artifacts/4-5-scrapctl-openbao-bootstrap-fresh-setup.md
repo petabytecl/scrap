@@ -5,7 +5,7 @@ created: 2026-06-12T02:56:47-04:00
 
 # Story 4.5: `scrapctl openbao bootstrap` Fresh Setup
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,53 +33,53 @@ so that rehearsals do not depend on undocumented scripts.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 4.5 evidence artifact before behavior changes. (AC: 1-3)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md`.
-  - [ ] Record baseline commit, timestamp, files reviewed, exact commands, expected/actual results, redaction scans, source links, changed-boundary list, and the split from Story 4.6/4.7.
-  - [ ] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not mark an AC pass from design intent alone.
+- [x] Create the Story 4.5 evidence artifact before behavior changes. (AC: 1-3)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md`.
+  - [x] Record baseline commit, timestamp, files reviewed, exact commands, expected/actual results, redaction scans, source links, changed-boundary list, and the split from Story 4.6/4.7.
+  - [x] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not mark an AC pass from design intent alone.
 
-- [ ] Add `scrapctl openbao bootstrap` command routing. (AC: 1, 3)
-  - [ ] Update `internal/scrapctl/run.go` usage and `runCommand` to route `scrapctl openbao bootstrap`.
-  - [ ] Add focused files under `internal/scrapctl/` such as `openbao.go`, `openbao_bootstrap.go`, and `openbao_bootstrap_test.go`; keep `cmd/scrapctl/main.go` as an entrypoint only.
-  - [ ] Preserve existing `scrapctl` common flag behavior (`--timeout`, `--output`, TLS defaults) where it applies, but do not make S.C.R.A.P. admin TLS flags stand in for OpenBao server TLS unless the implementation validates that boundary explicitly.
+- [x] Add `scrapctl openbao bootstrap` command routing. (AC: 1, 3)
+  - [x] Update `internal/scrapctl/run.go` usage and `runCommand` to route `scrapctl openbao bootstrap`.
+  - [x] Add focused files under `internal/scrapctl/` such as `openbao.go`, `openbao_bootstrap.go`, and `openbao_bootstrap_test.go`; keep `cmd/scrapctl/main.go` as an entrypoint only.
+  - [x] Preserve existing `scrapctl` common flag behavior (`--timeout`, `--output`, TLS defaults) where it applies, but do not make S.C.R.A.P. admin TLS flags stand in for OpenBao server TLS unless the implementation validates that boundary explicitly.
 
-- [ ] Implement fresh bootstrap with explicit configuration and no raw secret flags. (AC: 1, 2)
-  - [ ] Support address, mount path, key name, key type, key derivation, timeout, output format, and evidence path as validated flags/env inputs.
-  - [ ] Read tokens and unseal key shares only from named environment variables, not from raw CLI flag values. Prefer `--token-env` and repeatable `--unseal-key-env` style inputs over `--token` or `--unseal-key`.
-  - [ ] For an uninitialized target, require an explicit init mode and an explicit init-secret output path before calling `Sys().InitWithContext`; write returned root token/unseal material only to that 0600 secret file and never to stdout, stderr, logs, or evidence.
-  - [ ] For an initialized sealed target, call `Sys().UnsealWithOptionsWithContext` with env-provided shares until seal status reports unsealed or a bounded failure occurs.
-  - [ ] For an initialized unsealed target, require a token from the configured token env unless the current process just initialized the target and is using the freshly returned root token in memory.
-  - [ ] Fail closed with a bounded actionable reason when required env vars, init-secret path, address, mount path, key name, token, or unseal material are missing.
+- [x] Implement fresh bootstrap with explicit configuration and no raw secret flags. (AC: 1, 2)
+  - [x] Support address, mount path, key name, key type, key derivation, timeout, output format, and evidence path as validated flags/env inputs.
+  - [x] Read tokens and unseal key shares only from named environment variables, not from raw CLI flag values. Prefer `--token-env` and repeatable `--unseal-key-env` style inputs over `--token` or `--unseal-key`.
+  - [x] For an uninitialized target, require an explicit init mode and an explicit init-secret output path before calling `Sys().InitWithContext`; write returned root token/unseal material only to that 0600 secret file and never to stdout, stderr, logs, or evidence.
+  - [x] For an initialized sealed target, call `Sys().UnsealWithOptionsWithContext` with env-provided shares until seal status reports unsealed or a bounded failure occurs.
+  - [x] For an initialized unsealed target, require a token from the configured token env unless the current process just initialized the target and is using the freshly returned root token in memory.
+  - [x] Fail closed with a bounded actionable reason when required env vars, init-secret path, address, mount path, key name, token, or unseal material are missing.
 
-- [ ] Mount Transit and create/verify the S.C.R.A.P. Transit key through the official client. (AC: 1, 3)
-  - [ ] Use `github.com/openbao/openbao/api` methods such as `Sys().InitStatusWithContext`, `Sys().InitWithContext`, `Sys().SealStatusWithContext`, `Sys().UnsealWithOptionsWithContext`, `Sys().MountWithContext`, `Sys().ListMountsWithContext`, and `Logical().WriteWithContext`.
-  - [ ] Create or verify a Transit mount with type `transit`; default to `transit` unless the operator supplies another validated mount path.
-  - [ ] Create or verify the S.C.R.A.P. Transit key; default to `scrap-documents`, `aes256-gcm96`, and `derived=true` to match `internal/encryption` and `test/integration/testinfra/openbao`.
-  - [ ] Treat deep compatible-rerun checks and incompatible-state mutation/failure proof as Story 4.6 scope. Story 4.5 may verify the mount/key immediately after creation or in a fresh already-ready target, but must not claim full idempotency closure.
-  - [ ] Do not shell out to `bao`, `vault`, `curl`, `kubectl`, or local scripts for OpenBao API operations.
+- [x] Mount Transit and create/verify the S.C.R.A.P. Transit key through the official client. (AC: 1, 3)
+  - [x] Use `github.com/openbao/openbao/api` methods such as `Sys().InitStatusWithContext`, `Sys().InitWithContext`, `Sys().SealStatusWithContext`, `Sys().UnsealWithOptionsWithContext`, `Sys().MountWithContext`, `Sys().ListMountsWithContext`, and `Logical().WriteWithContext`.
+  - [x] Create or verify a Transit mount with type `transit`; default to `transit` unless the operator supplies another validated mount path.
+  - [x] Create or verify the S.C.R.A.P. Transit key; default to `scrap-documents`, `aes256-gcm96`, and `derived=true` to match `internal/encryption` and `test/integration/testinfra/openbao`.
+  - [x] Treat deep compatible-rerun checks and incompatible-state mutation/failure proof as Story 4.6 scope. Story 4.5 may verify the mount/key immediately after creation or in a fresh already-ready target, but must not claim full idempotency closure.
+  - [x] Do not shell out to `bao`, `vault`, `curl`, `kubectl`, or local scripts for OpenBao API operations.
 
-- [ ] Emit redacted operator output and evidence. (AC: 1, 2)
-  - [ ] Text and JSON output must include status, bounded phase results, OpenBao address identity reduced to a safe endpoint summary, Transit mount/key names when safe, evidence artifact path, and next action.
-  - [ ] The CLI-generated evidence report must include command name, sanitized args, environment variable names used, environment class (`local`, `prod-like`, or explicit operator value), artifact path, result, phase statuses, dependency/client version, and redaction scan results.
-  - [ ] Output, errors, evidence, and any logs must exclude root tokens, unseal keys, Transit tokens, private keys, client cert contents, wrapped keys, raw OpenBao response bodies, raw dependency logs, and unbounded paths.
-  - [ ] Redaction must be explicit for bootstrap; do not rely only on `diagnosticTextValue` because it redacts any word containing `key` and may hide safe operator labels while missing structured secret fields.
+- [x] Emit redacted operator output and evidence. (AC: 1, 2)
+  - [x] Text and JSON output must include status, bounded phase results, OpenBao address identity reduced to a safe endpoint summary, Transit mount/key names when safe, evidence artifact path, and next action.
+  - [x] The CLI-generated evidence report must include command name, sanitized args, environment variable names used, environment class (`local`, `prod-like`, or explicit operator value), artifact path, result, phase statuses, dependency/client version, and redaction scan results.
+  - [x] Output, errors, evidence, and any logs must exclude root tokens, unseal keys, Transit tokens, private keys, client cert contents, wrapped keys, raw OpenBao response bodies, raw dependency logs, and unbounded paths.
+  - [x] Redaction must be explicit for bootstrap; do not rely only on `diagnosticTextValue` because it redacts any word containing `key` and may hide safe operator labels while missing structured secret fields.
 
-- [ ] Preserve package, authority, and security boundaries. (AC: 1-3)
-  - [ ] Keep bootstrap behavior in `internal/scrapctl` or a small CLI-owned sub-boundary. Do not import Store, Shard, Backend, admin internals, or production encryption lifecycle authority.
-  - [ ] OpenBao client types must not flow into Shard, Backend, server, admin, public API, peer API, or generated protobuf contracts.
-  - [ ] Do not change storage format, wire protocol, Document identity, Backend object identity, Raft commands, envelope metadata format, production startup gates, or admin/public/peer authorization behavior in this story.
-  - [ ] Do not add a new OpenBao dependency or upgrade the existing module unless the story first records why ADR 0023's current dependency cannot satisfy the bootstrap API calls.
+- [x] Preserve package, authority, and security boundaries. (AC: 1-3)
+  - [x] Keep bootstrap behavior in `internal/scrapctl` or a small CLI-owned sub-boundary. Do not import Store, Shard, Backend, admin internals, or production encryption lifecycle authority.
+  - [x] OpenBao client types must not flow into Shard, Backend, server, admin, public API, peer API, or generated protobuf contracts.
+  - [x] Do not change storage format, wire protocol, Document identity, Backend object identity, Raft commands, envelope metadata format, production startup gates, or admin/public/peer authorization behavior in this story.
+  - [x] Do not add a new OpenBao dependency or upgrade the existing module unless the story first records why ADR 0023's current dependency cannot satisfy the bootstrap API calls.
 
-- [ ] Add focused tests before implementation and integration proof after implementation. (AC: 1-3)
-  - [ ] Unit-test option parsing, env-secret loading, missing-config failures, init-secret file permissions, no raw secret flags, text/JSON output redaction, evidence report redaction, and official-client dependency boundaries.
-  - [ ] Add an integration test that exercises the `scrapctl openbao bootstrap` command against an OpenBao container without using the existing fixture's hidden `bootstrapTransit` as the behavior under test.
-  - [ ] Keep Testcontainers setup separate from the operator command implementation. The test may start OpenBao, but the command must perform mount/key bootstrap itself.
+- [x] Add focused tests before implementation and integration proof after implementation. (AC: 1-3)
+  - [x] Unit-test option parsing, env-secret loading, missing-config failures, init-secret file permissions, no raw secret flags, text/JSON output redaction, evidence report redaction, and official-client dependency boundaries.
+  - [x] Add an integration test that exercises the `scrapctl openbao bootstrap` command against an OpenBao container without using the existing fixture's hidden `bootstrapTransit` as the behavior under test.
+  - [x] Keep Testcontainers setup separate from the operator command implementation. The test may start OpenBao, but the command must perform mount/key bootstrap itself.
 
-- [ ] Update story, evidence, and tracker artifacts. (AC: 1-3)
-  - [ ] Update this story with debug logs, completion notes, review findings, and file list.
-  - [ ] Update `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md` with final AC matrix rows, command evidence, and redaction scan classification.
-  - [ ] Move `_bmad-output/implementation-artifacts/sprint-status.yaml` to `review` only when implementation and local verification are complete.
-  - [ ] Do not mark Story 4.6 idempotency/incompatible-state or Story 4.7 production rehearsal complete from Story 4.5 tests.
+- [x] Update story, evidence, and tracker artifacts. (AC: 1-3)
+  - [x] Update this story with debug logs, completion notes, review findings, and file list.
+  - [x] Update `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md` with final AC matrix rows, command evidence, and redaction scan classification.
+  - [x] Move `_bmad-output/implementation-artifacts/sprint-status.yaml` to `review` only when implementation and local verification are complete.
+  - [x] Do not mark Story 4.6 idempotency/incompatible-state or Story 4.7 production rehearsal complete from Story 4.5 tests.
 
 ## Dev Notes
 
@@ -224,6 +224,39 @@ GPT-5 Codex
 
 ### Debug Log References
 
+- 2026-06-12: Created initial Story 4.5 evidence artifact before behavior changes; AC rows remain `CONCERNS` pending implementation and verification.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'OpenBao|Bootstrap|Redact|Secret|Evidence' -count=1 -v` - PASS. Covered option parsing, missing token, init secret output, unseal env shares, text/JSON report redaction, raw secret flag rejection, address userinfo rejection, and evidence file redaction.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./cmd/scrapctl ./internal/scrapctl -count=1` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl ./cmd/scrapctl ./internal/encryption -count=1` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test -tags integration ./test/integration -run TestIntegrationScrapctlOpenBaoBootstrapFreshSetup -count=1 -v` - PASS with Docker server `29.5.2` and `openbao/openbao:2.5.4`.
+- `go tool -modfile=tools.go.mod golangci-lint run --timeout=5m ./internal/scrapctl ./cmd/scrapctl ./test/integration` - PASS with `0 issues`.
+- `git diff --check` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after splitting the OpenBao bootstrap implementation into focused files under the 800-line file limit.
+- Final credential, identifier, and strict shaped-value leak scans over the story, evidence artifact, touched `scrapctl` code, and bootstrap integration test - PASS with 0 filtered strict shaped-value matches.
+
 ### Completion Notes List
 
+- Created `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md` with baseline scope, files reviewed, initial AC matrix, source evidence notes, and explicit Story 4.6/4.7 exclusions.
+- Added `scrapctl openbao bootstrap` routing, validation, operator output, and evidence report generation inside the `internal/scrapctl` boundary.
+- Implemented official OpenBao client bootstrap operations for init status, init, seal status, unseal, Transit mount verification/creation, and Transit key verification/creation without shelling out to `bao`, `vault`, `curl`, or local scripts.
+- Kept sensitive values behind the secret boundary: token and unseal shares are read only from named env vars, init root/unseal material is written only to an explicit 0600 secret file, and output/evidence/errors run bootstrap-specific forbidden-value checks.
+- Added focused unit tests plus an OpenBao container integration test that starts a plain dev target and verifies the command-created Transit mount and S.C.R.A.P. key through the official client.
+- Preserved Story 4.5 scope boundaries; Story 4.6 still owns full compatible rerun and incompatible-state proof, and Story 4.7 still owns final prod-like production security rehearsal closure.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/4-5-scrapctl-openbao-bootstrap-fresh-setup.md`
+- `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `cmd/scrapctl/main_test.go`
+- `internal/scrapctl/doctor_test.go`
+- `internal/scrapctl/run.go`
+- `internal/scrapctl/openbao.go`
+- `internal/scrapctl/openbao_bootstrap_test.go`
+- `internal/scrapctl/openbao_client.go`
+- `internal/scrapctl/openbao_report.go`
+- `test/integration/openbao_bootstrap_scrapctl_test.go`
+
+### Change Log
+
+- 2026-06-12: Implemented `scrapctl openbao bootstrap`, added official OpenBao client unit/integration coverage, closed Story 4.5 evidence with PASS rows, and moved the story to review.

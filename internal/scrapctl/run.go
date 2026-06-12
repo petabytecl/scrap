@@ -17,7 +17,7 @@ import (
 
 const (
 	kubectlGlobalFlagCapacity = 4
-	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction>"
+	scrapctlUsage             = "scrapctl <doctor|status|upload-pressure|peers|leader|fault|evidence|eviction|openbao>"
 
 	defaultNamespace      = "scrap"
 	defaultCluster        = "scrap-prodlike"
@@ -36,9 +36,10 @@ type Runner interface {
 }
 
 type Deps struct {
-	Runner      Runner
-	HTTPClient  *http.Client
-	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	Runner               Runner
+	HTTPClient           *http.Client
+	DialContext          func(ctx context.Context, network, address string) (net.Conn, error)
+	OpenBaoClientFactory OpenBaoClientFactory
 }
 
 type execRunner struct{}
@@ -66,6 +67,13 @@ func Run(args []string, stdout, stderr io.Writer, deps Deps) error {
 }
 
 func runCommand(name string, args []string, stdout, stderr io.Writer, deps Deps) error {
+	if name == "openbao" {
+		return runOpenBao(args, stdout, stderr, deps)
+	}
+	return runBuiltInCommand(name, args, stdout, stderr, deps)
+}
+
+func runBuiltInCommand(name string, args []string, stdout, stderr io.Writer, deps Deps) error {
 	switch name {
 	case "doctor":
 		return runDoctor(args, stdout, deps)
@@ -99,6 +107,9 @@ func (d Deps) withDefaults() Deps {
 	if d.DialContext == nil {
 		var dialer net.Dialer
 		d.DialContext = dialer.DialContext
+	}
+	if d.OpenBaoClientFactory == nil {
+		d.OpenBaoClientFactory = newOfficialOpenBaoBootstrapClient
 	}
 	return d
 }
