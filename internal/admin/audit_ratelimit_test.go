@@ -6,14 +6,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	runtimepprof "runtime/pprof"
 	"testing"
 	"time"
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/security"
 	securityfixture "github.com/petabytecl/scrap/test/fixtures/security"
 )
@@ -61,38 +64,192 @@ func TestAdminAuditsDangerousOperationAndRateLimitDenial(t *testing.T) {
 	}
 }
 
-func TestAdminAuditsDangerousOperationFailure(t *testing.T) {
+func TestAdminAuditsDangerousOperationFailures(t *testing.T) {
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminOperator, security.RoleAdminBreakGlass),
+	})
+
+	for _, tc := range []struct {
+		name      string
+		server    func(audit.Sink) *admin.Server
+		request   func(context.Context) *http.Request
+		status    int
+		operation string
+		target    string
+	}{
+		{
+			name: "eviction plan create",
+			server: func(sink audit.Sink) *admin.Server {
+				return admin.New(
+					admin.WithAuthorizer(security.NewStaticAuthorizer()),
+					admin.WithAuditSink(sink),
+					admin.WithEvictionPlanner(&failingEvictionPlanner{err: errors.New("planner failed")}),
+				)
+			},
+			request: func(ctx context.Context) *http.Request {
+				return httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/eviction/plans", bytes.NewReader([]byte(`{}`)))
+			},
+			status:    http.StatusInternalServerError,
+			operation: audit.OperationEvictionPlanCreate,
+			target:    audit.TargetBlock,
+		},
+		{
+			name: "eviction apply",
+			server: func(sink audit.Sink) *admin.Server {
+				return admin.New(
+					admin.WithAuthorizer(security.NewStaticAuthorizer()),
+					admin.WithAuditSink(sink),
+					admin.WithEvictionApplier(&failingEvictionApplier{err: eviction.ErrApplyDisabled}),
+				)
+			},
+			request: func(ctx context.Context) *http.Request {
+				return httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/eviction/plans/plan-1/apply", bytes.NewReader([]byte(`{}`)))
+			},
+			status:    http.StatusPreconditionFailed,
+			operation: audit.OperationEvictionApply,
+			target:    audit.TargetBlock,
+		},
+		{
+			name: "rewrap",
+			server: func(sink audit.Sink) *admin.Server {
+				return admin.New(
+					admin.WithAuthorizer(security.NewStaticAuthorizer()),
+					admin.WithAuditSink(sink),
+					admin.WithRewrapService(&rewrapServiceStub{err: rewrap.ErrNotEncrypted}),
+				)
+			},
+			request: func(ctx context.Context) *http.Request {
+				return httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/rewrap/document", bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":"doc.xml"}`)))
+			},
+			status:    http.StatusPreconditionFailed,
+			operation: audit.OperationRewrapDocument,
+			target:    audit.TargetDocument,
+		},
+		{
+			name: "projection key hook",
+			server: func(sink audit.Sink) *admin.Server {
+				return admin.New(
+					admin.WithAuthorizer(security.NewStaticAuthorizer()),
+					admin.WithAuditSink(sink),
+					admin.WithProjectionInjector(&projectionInjectorStub{err: errors.New("inject failed")}),
+				)
+			},
+			request: func(ctx context.Context) *http.Request {
+				return httptest.NewRequestWithContext(ctx, http.MethodPost, "/test-hooks/projection-key", bytes.NewReader([]byte(`{"transaction_id":"tx","block_id":1,"doc_count":1}`)))
+			},
+			status:    http.StatusInternalServerError,
+			operation: audit.OperationProjectionKeyHook,
+			target:    audit.TargetEvidence,
+		},
+		{
+			name: "transit rotate hook",
+			server: func(sink audit.Sink) *admin.Server {
+				return admin.New(
+					admin.WithAuthorizer(security.NewStaticAuthorizer()),
+					admin.WithAuditSink(sink),
+					admin.WithTransitRotator(&transitRotatorStub{err: errors.New("rotate failed")}),
+				)
+			},
+			request: func(ctx context.Context) *http.Request {
+				return httptest.NewRequestWithContext(ctx, http.MethodPost, "/test-hooks/transit-rotate", nil)
+			},
+			status:    http.StatusInternalServerError,
+			operation: audit.OperationTransitRotateHook,
+			target:    audit.TargetEvidence,
+		},
+		{
+			name: "light scrub hook",
+			server: func(sink audit.Sink) *admin.Server {
+				return admin.New(
+					admin.WithAuthorizer(security.NewStaticAuthorizer()),
+					admin.WithAuditSink(sink),
+					admin.WithLightScrubber(&lightScrubberStub{err: errors.New("scrub failed")}),
+				)
+			},
+			request: func(ctx context.Context) *http.Request {
+				return httptest.NewRequestWithContext(ctx, http.MethodPost, "/test-hooks/light-scrub", nil)
+			},
+			status:    http.StatusInternalServerError,
+			operation: audit.OperationLightScrubHook,
+			target:    audit.TargetEvidence,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := audit.NewMemorySink()
+			srv := tc.server(sink)
+			resp := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(resp, tc.request(ctx))
+
+			if resp.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", resp.Code, tc.status, resp.Body.String())
+			}
+			assertDangerousFailureAudit(t, sink.Events(), tc.operation, tc.target)
+		})
+	}
+}
+
+func TestAdminAuditsDangerousValidationFailure(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithProjectionInjector(&projectionInjectorStub{}))
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminBreakGlass),
+	})
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/test-hooks/projection-key", bytes.NewReader([]byte(`{}`)))
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+	assertDangerousFailureAudit(t, sink.Events(), audit.OperationProjectionKeyHook, audit.TargetEvidence)
+}
+
+func TestAdminAuditsPprofProfileFailure(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithPprof())
+	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
+		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
+		Roles: security.NewRoleSet(security.RoleAdminBreakGlass),
+	})
+	if err := runtimepprof.StartCPUProfile(io.Discard); err != nil {
+		t.Fatalf("StartCPUProfile setup: %v", err)
+	}
+	defer runtimepprof.StopCPUProfile()
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/debug/pprof/profile", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", resp.Code, resp.Body.String())
+	}
+	assertDangerousFailureAudit(t, sink.Events(), audit.OperationPprofProfile, audit.TargetProfile)
+}
+
+func TestAdminDangerousFailureAuditUsesResolvedTLSPrincipal(t *testing.T) {
+	principal := "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a"
+	authz := adminAuthorizerForPrincipal(t, principal, security.RoleAdminOperator)
 	sink := audit.NewMemorySink()
 	applier := &failingEvictionApplier{err: eviction.ErrApplyDisabled}
 	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithEvictionApplier(applier))
-	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
-		ID:    "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a",
-		Roles: security.NewRoleSet(security.RoleAdminOperator),
-	})
 
-	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin/eviction/plans/plan-1/apply", bytes.NewReader([]byte(`{}`)))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/eviction/plans/plan-1/apply", bytes.NewReader([]byte(`{}`)))
+	req.TLS = adminTLSStateForPrincipal(t, principal)
 	resp := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusPreconditionFailed {
 		t.Fatalf("status = %d, want 412: %s", resp.Code, resp.Body.String())
 	}
-	if applier.calls != 1 {
-		t.Fatalf("applier calls = %d, want 1", applier.calls)
-	}
 	events := sink.Events()
-	if len(events) != 2 {
-		t.Fatalf("audit events = %d, want allowed and failed: %+v", len(events), events)
-	}
-	if events[0].Operation != audit.OperationEvictionApply || events[0].Result != audit.ResultAllowed {
-		t.Fatalf("first audit event = %+v, want eviction_apply allowed", events[0])
-	}
-	if events[1].Operation != audit.OperationEvictionApply ||
-		events[1].Target != audit.TargetBlock ||
-		events[1].Result != audit.ResultFailed ||
-		events[1].Reason != audit.ReasonInternalError {
-		t.Fatalf("second audit event = %+v, want eviction_apply/block failed internal_error", events[1])
+	assertDangerousFailureAudit(t, events, audit.OperationEvictionApply, audit.TargetBlock)
+	if events[1].Principal != audit.PrincipalHandle(principal) {
+		t.Fatalf("failed audit principal = %q, want %q", events[1].Principal, audit.PrincipalHandle(principal))
 	}
 }
 
@@ -340,6 +497,30 @@ type failingEvictionApplier struct {
 func (a *failingEvictionApplier) ApplyEvictionPlan(context.Context, eviction.ApplyRequest) (eviction.ApplyResult, error) {
 	a.calls++
 	return eviction.ApplyResult{}, a.err
+}
+
+type failingEvictionPlanner struct {
+	err error
+}
+
+func (p *failingEvictionPlanner) CreateEvictionPlan(context.Context, eviction.PlanRequest) (eviction.Plan, error) {
+	return eviction.Plan{}, p.err
+}
+
+func assertDangerousFailureAudit(t *testing.T, events []audit.Event, operation, target string) {
+	t.Helper()
+	if len(events) != 2 {
+		t.Fatalf("audit events = %d, want allowed and failed: %+v", len(events), events)
+	}
+	if events[0].Operation != operation || events[0].Target != target || events[0].Result != audit.ResultAllowed {
+		t.Fatalf("first audit event = %+v, want %s/%s allowed", events[0], operation, target)
+	}
+	if events[1].Operation != operation ||
+		events[1].Target != target ||
+		events[1].Result != audit.ResultFailed ||
+		events[1].Reason != audit.ReasonInternalError {
+		t.Fatalf("second audit event = %+v, want %s/%s failed internal_error", events[1], operation, target)
+	}
 }
 
 type failAfterFirstAuditSink struct {

@@ -26,14 +26,19 @@ func WithRewrapService(service RewrapService) Option {
 }
 
 func (s *Server) handleRewrapDocument(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMethod(w, r, security.RoleAdminOperator, http.MethodPost) {
+	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminOperator, http.MethodPost)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 
 	var req rewrap.Request
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRewrapBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminOperator, audit.OperationRewrapDocument, audit.TargetDocument) {
+			return
+		}
 		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}

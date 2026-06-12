@@ -210,28 +210,35 @@ func (s *Server) registerTestHooks(mux *http.ServeMux) {
 
 func (s *Server) authorizedHandler(role security.Role, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authorize(w, r, role) {
+		authorizedRequest, ok := s.authorize(w, r, role)
+		if !ok {
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, authorizedRequest)
 	})
 }
 
 func (s *Server) authorizedFunc(role security.Role, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.authorize(w, r, role) {
+		authorizedRequest, ok := s.authorize(w, r, role)
+		if !ok {
 			return
 		}
-		next(w, r)
+		next(w, authorizedRequest)
 	}
 }
 
 func (s *Server) authorizedGetFunc(role security.Role, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.authorizeMethod(w, r, role, http.MethodGet) {
+		authorizedRequest, ok := s.authorizeMethod(w, r, role, http.MethodGet)
+		if !ok {
 			return
 		}
-		next(w, r)
+		if role == security.RoleAdminBreakGlass {
+			s.serveAuditedResponse(w, authorizedRequest, role, next)
+			return
+		}
+		next(w, authorizedRequest)
 	}
 }
 
@@ -243,35 +250,40 @@ func (s *Server) authorizedGetPprof(next http.HandlerFunc) http.HandlerFunc {
 		default:
 			role = security.RoleAdminBreakGlass
 		}
-		if !s.authorizeMethod(w, r, role, http.MethodGet) {
+		authorizedRequest, ok := s.authorizeMethod(w, r, role, http.MethodGet)
+		if !ok {
 			return
 		}
-		next(w, r)
+		if role == security.RoleAdminBreakGlass {
+			s.serveAuditedResponse(w, authorizedRequest, role, next)
+			return
+		}
+		next(w, authorizedRequest)
 	}
 }
 
-func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security.Role) bool {
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request, role security.Role) (*http.Request, bool) {
 	return s.authorizeMethod(w, r, role, "")
 }
 
-func (s *Server) authorizeMethod(w http.ResponseWriter, r *http.Request, role security.Role, method string) bool {
+func (s *Server) authorizeMethod(w http.ResponseWriter, r *http.Request, role security.Role, method string) (*http.Request, bool) {
 	operation, target := auditRequest(r, role)
 	resolvedRequest, principalErr := s.requestWithResolvedPrincipal(r)
 	if decision := s.checkRateLimit(resolvedRequest.Context(), operation); decision.Limited {
 		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited); err != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return false
+			return nil, false
 		}
 		http.Error(w, security.ErrRateLimited.Error(), http.StatusTooManyRequests)
-		return false
+		return nil, false
 	}
 	if principalErr != nil {
 		if err := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(principalErr)); err != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return false
+			return nil, false
 		}
 		http.Error(w, principalErr.Error(), security.HTTPStatusForAuthorization(principalErr))
-		return false
+		return nil, false
 	}
 	if s.authorizer == nil {
 		return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
@@ -279,28 +291,33 @@ func (s *Server) authorizeMethod(w http.ResponseWriter, r *http.Request, role se
 	if err := s.authorizer.Authorize(resolvedRequest.Context(), role); err != nil {
 		if auditErr := s.recordAudit(resolvedRequest.Context(), role, operation, target, audit.ResultDenied, s.auditReasonForError(err)); auditErr != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return false
+			return nil, false
 		}
 		http.Error(w, err.Error(), security.HTTPStatusForAuthorization(err))
-		return false
+		return nil, false
 	}
 	return s.auditAllowedOrMethodDenied(w, resolvedRequest, role, operation, target, method)
 }
 
-func (s *Server) auditAllowedOrMethodDenied(w http.ResponseWriter, r *http.Request, role security.Role, operation, target, method string) bool {
+func (s *Server) auditAllowedOrMethodDenied(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	operation, target, method string,
+) (*http.Request, bool) {
 	if method != "" && r.Method != method {
 		if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultDenied, audit.ReasonMethodNotAllowed); err != nil {
 			http.Error(w, "audit event failed", http.StatusInternalServerError)
-			return false
+			return nil, false
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return false
+		return nil, false
 	}
 	if err := s.recordAudit(r.Context(), role, operation, target, audit.ResultAllowed, audit.ReasonAllowed); err != nil {
 		http.Error(w, "audit event failed", http.StatusInternalServerError)
-		return false
+		return nil, false
 	}
-	return true
+	return r, true
 }
 
 func (s *Server) requestWithResolvedPrincipal(r *http.Request) (*http.Request, error) {
@@ -367,6 +384,42 @@ func (s *Server) recordFailedOperation(w http.ResponseWriter, r *http.Request, r
 		return false
 	}
 	return true
+}
+
+func (s *Server) serveAuditedResponse(w http.ResponseWriter, r *http.Request, role security.Role, next http.HandlerFunc) {
+	recorder := &statusRecordingResponseWriter{ResponseWriter: w}
+	next(recorder, r)
+	if recorder.statusCode >= http.StatusBadRequest {
+		operation, target := auditRequest(r, role)
+		_ = s.recordAudit(r.Context(), role, operation, target, audit.ResultFailed, audit.ReasonInternalError)
+	}
+}
+
+type statusRecordingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (w *statusRecordingResponseWriter) WriteHeader(statusCode int) {
+	if w.statusCode == 0 {
+		w.statusCode = statusCode
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *statusRecordingResponseWriter) Write(data []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	written, err := w.ResponseWriter.Write(data)
+	if err != nil {
+		return written, fmt.Errorf("admin write response: %w", err)
+	}
+	return written, nil
+}
+
+func (w *statusRecordingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (s *Server) auditReasonForError(err error) string {
@@ -509,18 +562,26 @@ type projectionKeyRequest struct {
 }
 
 func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost) {
+	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 
 	var req projectionKeyRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTestHookBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationProjectionKeyHook, audit.TargetEvidence) {
+			return
+		}
 		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
 	if req.TransactionID == "" || req.BlockID == 0 || req.DocCount == 0 {
+		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationProjectionKeyHook, audit.TargetEvidence) {
+			return
+		}
 		http.Error(w, "transaction_id, block_id, and doc_count are required", http.StatusBadRequest)
 		return
 	}
@@ -536,9 +597,11 @@ func (s *Server) handleProjectionKeyHook(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleTransitRotateHook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost) {
+	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 	if err := s.transitRotator.RotateTransitKey(r.Context()); err != nil {
 		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationTransitRotateHook, audit.TargetEvidence) {
 			return
@@ -550,9 +613,11 @@ func (s *Server) handleTransitRotateHook(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleLightScrubHook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost) {
+	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminBreakGlass, http.MethodPost)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 	if err := s.lightScrubber.RunLightScrub(r.Context()); err != nil {
 		if !s.recordFailedOperation(w, r, security.RoleAdminBreakGlass, audit.OperationLightScrubHook, audit.TargetEvidence) {
 			return
@@ -596,9 +661,11 @@ type healthResponse struct {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMethod(w, r, security.RoleAdminReader, http.MethodGet) {
+	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminReader, http.MethodGet)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 
 	if !s.handleEvidenceMarker(w, r) {
 		return

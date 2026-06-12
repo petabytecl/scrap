@@ -121,6 +121,16 @@ func publicDeniedAuditCases(writerCtx, readerCtx context.Context, srv *documentS
 			code:      codes.Unauthenticated,
 		},
 		{
+			name: "HeadDocument wrong role",
+			call: func() error {
+				_, err := srv.HeadDocument(writerCtx, &scrapv1.HeadDocumentRequest{TransactionId: rawTx, DocumentName: rawDoc})
+				return err
+			},
+			operation: audit.OperationHeadDocument,
+			reason:    audit.ReasonMissingRole,
+			code:      codes.PermissionDenied,
+		},
+		{
 			name: "FindDocuments wrong role",
 			call: func() error {
 				_, err := srv.FindDocuments(writerCtx, &scrapv1.FindDocumentsRequest{TransactionId: rawTx})
@@ -129,6 +139,16 @@ func publicDeniedAuditCases(writerCtx, readerCtx context.Context, srv *documentS
 			operation: audit.OperationFindDocuments,
 			reason:    audit.ReasonMissingRole,
 			code:      codes.PermissionDenied,
+		},
+		{
+			name: "FindDocuments missing principal",
+			call: func() error {
+				_, err := srv.FindDocuments(context.Background(), &scrapv1.FindDocumentsRequest{TransactionId: rawTx})
+				return err
+			},
+			operation: audit.OperationFindDocuments,
+			reason:    audit.ReasonUnauthenticated,
+			code:      codes.Unauthenticated,
 		},
 		{
 			name: "ReadDocument wrong role",
@@ -140,6 +160,15 @@ func publicDeniedAuditCases(writerCtx, readerCtx context.Context, srv *documentS
 			code:      codes.PermissionDenied,
 		},
 		{
+			name: "ReadDocument missing principal",
+			call: func() error {
+				return srv.ReadDocument(&scrapv1.ReadDocumentRequest{TransactionId: rawTx, DocumentName: rawDoc}, &readDocumentStream{ctx: context.Background()})
+			},
+			operation: audit.OperationReadDocument,
+			reason:    audit.ReasonUnauthenticated,
+			code:      codes.Unauthenticated,
+		},
+		{
 			name: "WriteDocument wrong role",
 			call: func() error {
 				return srv.WriteDocument(&writeDocumentStream{ctx: readerCtx})
@@ -147,6 +176,15 @@ func publicDeniedAuditCases(writerCtx, readerCtx context.Context, srv *documentS
 			operation: audit.OperationWriteDocument,
 			reason:    audit.ReasonMissingRole,
 			code:      codes.PermissionDenied,
+		},
+		{
+			name: "WriteDocument missing principal",
+			call: func() error {
+				return srv.WriteDocument(&writeDocumentStream{ctx: context.Background()})
+			},
+			operation: audit.OperationWriteDocument,
+			reason:    audit.ReasonUnauthenticated,
+			code:      codes.Unauthenticated,
 		},
 	}
 }

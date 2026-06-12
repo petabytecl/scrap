@@ -25,12 +25,14 @@ type projectionInjectorStub struct {
 	blockID   uint64
 	docCount  uint16
 	completed bool
+	err       error
 }
 
 type uploadPressureProviderStub struct{}
 
 type transitRotatorStub struct {
 	calls int
+	err   error
 }
 
 type lightScrubberStub struct {
@@ -43,7 +45,7 @@ func (s *projectionInjectorStub) InjectProjectionKey(_ context.Context, txID str
 	s.blockID = blockID
 	s.docCount = docCount
 	s.completed = completed
-	return nil
+	return s.err
 }
 
 func (uploadPressureProviderStub) UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int) {
@@ -52,7 +54,7 @@ func (uploadPressureProviderStub) UploadPressureSnapshot() (level int, levelName
 
 func (s *transitRotatorStub) RotateTransitKey(context.Context) error {
 	s.calls++
-	return nil
+	return s.err
 }
 
 func (s *lightScrubberStub) RunLightScrub(context.Context) error {

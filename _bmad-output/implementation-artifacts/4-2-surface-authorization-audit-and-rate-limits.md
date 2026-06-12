@@ -5,7 +5,7 @@ created: 2026-06-12T01:07:25-04:00
 
 # Story 4.2: Surface Authorization, Audit, and Rate Limits
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -101,6 +101,15 @@ so that production surfaces fail closed before side effects.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes security boundary behavior or evidence.
   - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
   - [x] If `make production-rehearsal-security` is not run, record it as skipped with closure impact. Do not claim production rehearsal readiness from package tests.
+
+### Review Findings
+
+- [x] [Review][Patch] Admin failed-operation audit behavior was wired into multiple routes but only tested on eviction apply [internal/admin/audit_ratelimit_test.go] - fixed with route coverage for eviction plan create/apply, rewrap, projection-key hook, Transit rotate hook, and light scrub failures.
+- [x] [Review][Patch] Dangerous pprof profile capture failures did not emit a `ResultFailed` audit event [internal/admin/server.go] - fixed with status-tracked break-glass GET handling and pprof failure coverage.
+- [x] [Review][Patch] Public gRPC evidence did not cover missing-principal denial for every required Document method [internal/server/audit_ratelimit_test.go] - fixed with missing-principal and wrong-role audit coverage for `HeadDocument`, `FindDocuments`, `ReadDocument`, and `WriteDocument`.
+- [x] [Review][Patch] TLS-resolved admin principals were not propagated to handler failure audits [internal/admin/server.go] - fixed by returning the resolved request from authorization helpers and proving failed-audit attribution with a TLS principal.
+- [x] [Review][Patch] Authorized malformed dangerous requests returned validation errors without failed audit events [internal/admin/eviction.go] - fixed for eviction, rewrap, and projection-key validation failures.
+- [x] [Review][Patch] Evidence wording overclaimed fail-closed semantics for post-operation failed-audit rejection [_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md] - tightened to specify post-operation failure audit rejection returns 500 before the operation-specific response.
 
 ## Dev Notes
 
@@ -272,6 +281,8 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - 2026-06-12T01:16:00-04:00 - Added `recordFailedOperation` and wired dangerous admin failure paths for eviction, rewrap, projection-key hook, Transit rotate hook, and light scrub hook.
 - 2026-06-12T01:17:00-04:00 - Added public gRPC denied audit/redaction test and `scrapctl` bounded admin-denial tests.
 - 2026-06-12T01:21:39-04:00 - Completed focused tests, affected regression, leak scans, `git diff --check`, and `make check`.
+- 2026-06-12T01:37:30-04:00 - Addressed code-review findings: expanded dangerous admin failure coverage, added pprof failure audit, propagated resolved TLS request context, added public missing-principal coverage, and tightened evidence wording.
+- 2026-06-12T01:39:47-04:00 - Re-ran affected regression, leak scans, `git diff --check`, and `make check`; all passed after review fixes.
 
 ### Completion Notes List
 
@@ -280,8 +291,10 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - Added `scrapctl status` denial tests for admin HTTP 403 and 429 responses, proving bounded errors do not copy raw response bodies.
 - Added dangerous admin operation failure audit tests, including fail-closed behavior when the failed audit event cannot be recorded.
 - Implemented bounded failed-operation audit events for admin eviction plan creation/apply, rewrap, projection-key hook, Transit rotate hook, and light scrub hook failure paths.
+- Expanded review-fix coverage to all newly wired dangerous admin failure routes, pprof profile capture failure, authorized malformed dangerous requests, and TLS-resolved principal attribution on failure audit.
+- Expanded public gRPC denied audit coverage so all four Document methods have both missing-principal and wrong-role evidence.
 - No `internal/scrapctl/evidencebundle` code update was needed; existing security report signals are sufficient for this local Story 4.2 evidence.
-- Verification passed: focused primitive/surface/app/CLI tests, affected package regression, `git diff --check`, strict token scan, broader leak-scan classification, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- Verification passed before and after review fixes: focused primitive/surface/app/CLI tests, affected package regression, `git diff --check`, strict token scan, broader leak-scan classification, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### File List
 
@@ -292,6 +305,7 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - `internal/admin/eviction.go`
 - `internal/admin/rewrap.go`
 - `internal/admin/server.go`
+- `internal/admin/server_test.go`
 - `internal/scrapctl/tls_test.go`
 - `internal/server/audit_ratelimit_test.go`
 

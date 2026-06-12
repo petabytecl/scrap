@@ -47,14 +47,19 @@ func WithEvictionPlanStatusProvider(provider EvictionPlanStatusProvider) Option 
 }
 
 func (s *Server) handleEvictionPlans(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMethod(w, r, security.RoleAdminOperator, http.MethodPost) {
+	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminOperator, http.MethodPost)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 
 	var req eviction.PlanRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxEvictionPlanBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminOperator, audit.OperationEvictionPlanCreate, audit.TargetBlock) {
+			return
+		}
 		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
@@ -95,14 +100,19 @@ func (s *Server) handleEvictionPlanByID(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request, planID string) {
-	if !s.authorize(w, r, security.RoleAdminOperator) {
+	authorizedRequest, ok := s.authorize(w, r, security.RoleAdminOperator)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 	if s.evictionApplier == nil {
 		http.NotFound(w, r)
 		return
 	}
 	if err := decodeEvictionApplyBody(w, r); err != nil {
+		if !s.recordFailedOperation(w, r, security.RoleAdminOperator, audit.OperationEvictionApply, audit.TargetBlock) {
+			return
+		}
 		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
@@ -124,9 +134,11 @@ func (s *Server) handleEvictionPlanApply(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleEvictionPlanStatus(w http.ResponseWriter, r *http.Request, planID string) {
-	if !s.authorize(w, r, security.RoleAdminReader) {
+	authorizedRequest, ok := s.authorize(w, r, security.RoleAdminReader)
+	if !ok {
 		return
 	}
+	r = authorizedRequest
 	if s.evictionPlanStatus == nil {
 		http.NotFound(w, r)
 		return

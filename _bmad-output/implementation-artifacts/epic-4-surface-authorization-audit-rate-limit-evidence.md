@@ -1,6 +1,6 @@
 # Epic 4 Story 4.2 Evidence: Surface Authorization, Audit, and Rate Limits
 
-Status: review
+Status: done
 
 ## Metadata
 
@@ -88,14 +88,23 @@ Sources:
 | 2026-06-12T01:21:00-04:00 | strict token literal scan over BMAD artifacts and touched security packages | No AWS/GitHub/Slack/private-key literals | No matches | PASS |
 | 2026-06-12T01:21:00-04:00 | credential-shaped and identifier/path scans over changed files | Matches are expected vocabulary/artifact prose/test fixtures only | Credential-shaped: 75; identifier/path: 34 | PASS |
 | 2026-06-12T01:21:39-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build make check` | Full local gate passes | Passed: lint 0 issues, `go test ./...`, `go test -race ./...`, integration tests, builds | PASS |
+| 2026-06-12T01:34:00-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'TestAdminAuditsDangerousOperationFailures|TestAdminAuditsDangerousValidationFailure|TestAdminAuditsPprofProfileFailure|TestAdminDangerousFailureAuditUsesResolvedTLSPrincipal|TestAdminDangerousOperationFailsClosedWhenFailureAuditRejected' -count=1 -v` | Review-fix admin failure audit coverage passes | Passed | PASS |
+| 2026-06-12T01:34:00-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run 'TestDocumentServerAuditsDeniedPublicOperationsWithoutRawIdentifierLeaks' -count=1 -v` | Review-fix public missing-principal and wrong-role evidence passes | Passed | PASS |
+| 2026-06-12T01:35:00-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin -run 'Authoriz|Audit|RateLimit|Denied|Pprof|BreakGlass|Metrics|Eviction|Rewrap|ShardDiagnostics|LightScrub|Transit' -count=1 -v` | Affected admin surface tests pass after review fixes | Passed | PASS |
+| 2026-06-12T01:35:00-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server -run 'Authoriz|Audit|RateLimit|Denied' -count=1 -v` | Affected public server tests pass after review fixes | Passed | PASS |
+| 2026-06-12T01:38:00-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/security ./internal/audit ./internal/server ./internal/peer ./internal/admin ./internal/cmd ./internal/scrapctl ./internal/scrapctl/evidencebundle -count=1` | Affected package regression passes after review fixes | Passed | PASS |
+| 2026-06-12T01:38:00-04:00 | `git diff --check` | Whitespace check passes after review fixes | Passed | PASS |
+| 2026-06-12T01:38:00-04:00 | strict token literal scan over BMAD artifacts and touched security packages | No AWS/GitHub/Slack/private-key literals | No matches | PASS |
+| 2026-06-12T01:38:00-04:00 | credential-shaped and identifier/path scans over changed files | Matches are expected security vocabulary/artifact prose/test fixtures only | Credential-shaped: 461; identifier/path: 202 | PASS |
+| 2026-06-12T01:39:47-04:00 | `env GOCACHE=/tmp/scrap-v2-go-build make check` | Full local gate passes after review fixes | Passed: lint 0 issues, `go test ./...`, `go test -race ./...`, integration tests, builds | PASS |
 
 ## Final Surface Matrix
 
 | Surface | Denial artifact | No side effect proof | Audit proof | Rate-limit proof | Result |
 | --- | --- | --- | --- | --- | --- |
-| Public gRPC | `TestDocumentServerAuditsDeniedPublicOperationsWithoutRawIdentifierLeaks` | Store calls remain 0 for denied write/read/head/find cases | Denied audit events use bounded surface/operation/target/result/reason and no raw tx/doc/principal fragments | `TestDocumentServerAuditsAndRateLimitsPublicReads` returns `codes.ResourceExhausted` and no extra Store call | PASS |
+| Public gRPC | `TestDocumentServerAuditsDeniedPublicOperationsWithoutRawIdentifierLeaks` | Store calls remain 0 for denied write/read/head/find cases | Denied audit events cover missing-principal and wrong-role cases for all Document methods using bounded surface/operation/target/result/reason and no raw tx/doc/principal fragments | `TestDocumentServerAuditsAndRateLimitsPublicReads` returns `codes.ResourceExhausted` and no extra Store call | PASS |
 | Peer RPC | Existing peer auth/audit tests, including wrong-Shard denial matrix | Router/sink/local file/Block resolver side effects remain 0 for wrong-Shard cases | Wrong-Shard audit, log, and auth metric evidence excludes raw peer, Document, path, Backend key, and dependency error fixtures | `TestPeerServerAuditsAndRateLimitsPeerOperations` returns `codes.ResourceExhausted` after one allowed peer operation | PASS |
-| Admin HTTP | Existing admin auth tests plus new dangerous-failure tests | Wrong-role admin tests keep provider/service/handler counters at 0; failed-operation audit is emitted after authorized handler failure | New failed audit uses `ResultFailed` and `ReasonInternalError`; audit-sink rejection returns 500 | `TestAdminAuditsDangerousOperationAndRateLimitDenial` returns HTTP 429 before second handler call | PASS |
+| Admin HTTP | Existing admin auth tests plus dangerous-failure review-fix tests | Wrong-role admin tests keep provider/service/handler counters at 0; failed-operation audit is emitted after authorized handler failure, malformed dangerous requests, and pprof profile failure | New failed audit uses `ResultFailed` and `ReasonInternalError`; TLS-resolved principal attribution is preserved; post-operation failed-audit sink rejection returns 500 before the operation-specific response | `TestAdminAuditsDangerousOperationAndRateLimitDenial` returns HTTP 429 before second handler call | PASS |
 | `scrapctl` admin path | `TestStatusAdminDenialsReturnBoundedErrors` and production TLS tests | `scrapctl` makes no storage/server-side bypass and requires TLS before production HTTP calls | Admin 403/429 bodies containing raw secret fixtures are not copied to output/errors | 429 status is surfaced as bounded `GET healthz status: 429` | PASS |
 
 ## Redaction / Leak Scan
@@ -103,8 +112,8 @@ Sources:
 | Check | Command | Result | Classification |
 | --- | --- | --- | --- |
 | Strict token literals | `rg -n --pcre2 '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9_]{36,}|xox[baprs]-[A-Za-z0-9-]+|-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----)' ...` | No matches | PASS |
-| Credential-shaped terms | `rg --count-matches --pcre2 "$cred_pattern" ...` | 75 matches | Expected security vocabulary, BMAD prose, and deliberate redaction fixtures such as `secret-token`; no hardcoded credential. |
-| Identifier/path terms | `rg --count-matches --pcre2 "$identifier_pattern" ...` | 34 matches | Expected test fixtures, JSON field names, BMAD prose, and command examples; no leaked runtime identifier. |
+| Credential-shaped terms | `rg --count-matches --pcre2 "$cred_pattern" ...` | 461 matches | Expected security vocabulary, BMAD prose, authz package identifiers, certificate/TLS test vocabulary, and deliberate redaction fixtures such as `secret-token`; no hardcoded credential. |
+| Identifier/path terms | `rg --count-matches --pcre2 "$identifier_pattern" ...` | 202 matches | Expected test fixtures, JSON field names, BMAD prose, command examples, TLS certificate test vocabulary, and path examples; no leaked runtime identifier. |
 
 ## Known Closure Boundaries
 
