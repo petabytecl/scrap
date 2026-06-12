@@ -344,6 +344,13 @@ func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {
 			want: security.ClassSecurityMode,
 		},
 		{
+			name: "unknown security mode",
+			mutate: func(cfg *Config) {
+				cfg.SecurityMode = security.Mode("staging")
+			},
+			want: security.ClassSecurityMode,
+		},
+		{
 			name: "missing tls",
 			mutate: func(cfg *Config) {
 				cfg.ProductionGates.TLS = security.TLSConfig{}
@@ -368,6 +375,20 @@ func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {
 			name: "missing transit config",
 			mutate: func(cfg *Config) {
 				cfg.ProductionGates.Transit = security.TransitConfig{}
+			},
+			want: security.ClassTransitConfig,
+		},
+		{
+			name: "fake transit",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.Transit.Fake = true
+			},
+			want: security.ClassTransitConfig,
+		},
+		{
+			name: "missing transit token env",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.Transit.TokenPresent = false
 			},
 			want: security.ClassTransitConfig,
 		},
@@ -416,5 +437,22 @@ func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {
 				t.Fatalf("ErrorClass() = %q, want %q; err=%v", got, tt.want, err)
 			}
 		})
+	}
+}
+
+func TestNewAppProductionSecurityGateSentinelReachesBackend(t *testing.T) {
+	t.Setenv("SCRAP_BACKEND_TYPE", "s3")
+	cfg := productionTestAppConfig(t)
+	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t)
+
+	_, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+	if err == nil {
+		t.Fatal("newApp succeeded, want S3 Backend sentinel error")
+	}
+	if got := security.ErrorClass(err); got != "" {
+		t.Fatalf("ErrorClass() = %q, want non-security Backend sentinel error; err=%v", got, err)
+	}
+	if !strings.Contains(err.Error(), "SCRAP_S3_BUCKET") {
+		t.Fatalf("newApp error = %v, want S3 Backend sentinel naming SCRAP_S3_BUCKET", err)
 	}
 }

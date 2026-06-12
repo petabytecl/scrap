@@ -5,7 +5,7 @@ created: 2026-06-12T00:39:25-04:00
 
 # Story 4.1: Production Security Startup Gate
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -74,6 +74,12 @@ so that unsafe Cells never serve production traffic.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes or verifies startup/security behavior.
   - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed test fixture, allowed policy vocabulary, or artifact prose.
   - [x] If `make production-rehearsal-security` is not run, record it as skipped with closure impact. Do not claim production rehearsal readiness from package tests.
+
+### Review Findings
+
+- [x] [Review][Patch] Add app-level startup gate variants for unknown security mode, fake Transit, and missing Transit token env [`internal/cmd/app_test.go`].
+- [x] [Review][Patch] Add a valid-production Backend sentinel control so fail-before-subsystems tests prove the S3 Backend sentinel is reachable when security gates pass [`internal/cmd/app_test.go`].
+- [x] [Review][Patch] Tighten evidence wording so no-listener proof is described as deterministic construction-order proof, and record strict token scan evidence [`_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md`].
 
 ## Dev Notes
 
@@ -200,11 +206,13 @@ GPT-5 Codex
 
 - 2026-06-12T00:43:04-04:00 - Marked Story 4.1 in progress and created the evidence artifact before code behavior changes.
 - 2026-06-12T00:49:11-04:00 - Expanded app-level production startup gate matrix and recorded focused tests, affected regression, leak scans, and `make check`.
+- 2026-06-12T01:16:00-04:00 - Addressed code-review findings by adding app-level gate variants, a Backend sentinel control, and tighter evidence wording.
 
 ### Completion Notes List
 
 - Created `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md` with baseline scope, files reviewed, initial AC matrix, required-setting matrix, no-listener proof matrix, redaction scan placeholders, and strict `PASS`/`CONCERNS`/`FAIL` result language.
-- Expanded `TestNewAppRejectsProductionSecurityGatesBeforeSubsystems` to cover security mode, TLS, role policy, peer identity policy, Transit config, audit policy, rate-limit policy, test hooks, and pprof using the production test fixture plus invalid Backend sentinel.
+- Expanded `TestNewAppRejectsProductionSecurityGatesBeforeSubsystems` to cover missing and unknown security mode, TLS, role policy, peer identity policy, Transit config, fake Transit, missing Transit token env, audit policy, rate-limit policy, test hooks, and pprof using the production test fixture plus invalid Backend sentinel.
+- Added `TestNewAppProductionSecurityGateSentinelReachesBackend` to prove an otherwise valid production config reaches the S3 Backend sentinel, so the gate matrix proves failure before that later startup step.
 - Recorded Story 4.1 evidence as `PASS` for config/startup-gate scope while explicitly excluding live OpenBao outage/sealed/unauthorized readiness and production rehearsal claims.
 - Verification passed: focused `internal/security`, `internal/cmd`, `internal/admin`, `internal/scrapctl`, and `internal/scrapctl/evidencebundle` tests; affected package regression; `git diff --check`; and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
