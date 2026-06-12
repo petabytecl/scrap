@@ -4,7 +4,7 @@ baseline_commit: 1e368285db815bc32c75e8d131018883bade0d5d
 
 # Story 6.1: V2 Release Evidence Matrix
 
-Status: review
+Status: done
 
 ## Story
 
@@ -59,6 +59,18 @@ so that V2 readiness can be audited from current linked evidence.
   - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
   - [x] Update this story's Dev Agent Record with debug logs, completion notes, and file list.
   - [x] Move Story 6.1 and `sprint-status.yaml` to `review` for BMAD dev completion; leave final `done` to BMAD code review.
+
+### Review Findings
+
+- [x] [Review][Patch] Baseline/ref attribution was ambiguous and now distinguishes story baseline, story creation ref, and implementation ref.
+- [x] [Review][Patch] Top-level artifact status no longer reads as release-ready; matrix status and release gate status are separate.
+- [x] [Review][Patch] FR and ADR rows now include owner, evidence command, artifact path, environment, timestamp, commit/ref, actual/expected result, redaction proof, freshness, status, and mitigation fields.
+- [x] [Review][Patch] Story coverage now uses individual story rows instead of epic-only rollups.
+- [x] [Review][Patch] GitHub issue coverage now includes a sanitized per-issue snapshot artifact for all 104 milestone issues and the open issue `#429` release gate.
+- [x] [Review][Patch] Current-run verification rows now include attribution fields instead of command/result only.
+- [x] [Review][Patch] Leak-scan evidence now records scan scope and expanded pattern definitions.
+- [x] [Review][Patch] Rows with unresolved final evidence no longer claim unconditional `PASS`.
+- [x] [Review][Patch] Removed stale unrelated completion-note debris from the Dev Agent Record.
 
 ## Dev Notes
 
@@ -182,22 +194,27 @@ Codex (GPT-5)
 - 2026-06-12T17:43:08-04:00 - Story context created from Epic 6, FR-16, DG-5, ADR 0025, ADR 0026, ADR 0027, PRD closure policy, production rehearsal docs, live issue `#429`, Story 5.7 review lessons, and recent git history.
 - 2026-06-12T17:46:51-04:00 - Dev-story started from baseline commit `1e368285db815bc32c75e8d131018883bade0d5d`; Story 6.1 and sprint status moved to `in-progress`.
 - 2026-06-12T17:51:16-04:00 - Created `v2-release-evidence-matrix.md`, reconciled live GitHub issue state, classified FR/ADR/story gates, and passed `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, leak scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T18:01:45-04:00 - BMAD code review fixes added explicit full-schema attribution, per-story rows, sanitized issue snapshot evidence, reproducible scan scope, and corrected release status classifications.
+- 2026-06-12T18:13:09-04:00 - Post-review verification passed and Story 6.1 moved to done.
 
 ### Completion Notes List
 
-- Ultimate context engine analysis completed - comprehensive developer guide created.
-- Created `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` with FR-1 through FR-16 rows, ADR 0001 through ADR 0027 rows, story status rollup, live GitHub issue snapshot, verification rows, and release-sensitive scan classification.
+- Created `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` with FR-1 through FR-16 rows, ADR 0001 through ADR 0027 rows, individual story status rows, live GitHub issue snapshot linkage, verification rows, and release-sensitive scan classification.
+- Added `_bmad-output/implementation-artifacts/v2-release-issue-snapshot.json` as a sanitized tracker metadata snapshot for all 104 closed milestone issues plus issue `#429`.
 - Current V2 release gate is intentionally `FAIL` because Epic 6 final documentation/evidence gates are incomplete and issue `#429` remains open; this is recorded as visible release evidence, not a Story 6.1 failure.
 - No production code changed; Story 6.1 stayed aggregation-only.
 - Verification passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, release scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- BMAD code review findings resolved; no decision-needed or deferred findings remain.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-1-v2-release-evidence-matrix.md`
 - `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
+- `_bmad-output/implementation-artifacts/v2-release-issue-snapshot.json`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-06-12 - Created Story 6.1 context for V2 release evidence matrix.
 - 2026-06-12 - Implemented the V2 release evidence matrix and moved Story 6.1 to review.
+- 2026-06-12 - Addressed BMAD code review findings for Story 6.1.
