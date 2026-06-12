@@ -162,4 +162,6 @@ type GateInput struct {
 	RewrapReason        string
 	Phase5GateOK        bool
 	Phase5GateReason    string
+	PrivacyScanOK       bool
+	PrivacyScanReason   string
 }

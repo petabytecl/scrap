@@ -38,7 +38,8 @@ make production-rehearsal
 ## Failure Path
 
 1. If evidence bundle generation fails, preserve the bundle path and gate
-   failure reason.
+   failure reason. Inspect `gates.json`, `manifest.json`, and
+   `privacy-scan.json` when present.
 2. If Tier 2 or Tier 3 fails, do not close the release claim.
 3. If production rehearsal security fails, keep production security/Transit
    readiness open.
@@ -55,6 +56,11 @@ Escalate missing required release evidence to the release owner.
 ## Expected Outputs
 
 - Evidence bundle path is printed and the gate passes or fails explicitly.
+- `manifest.json` records bundle-relative artifact paths, checksums,
+  provenance, command descriptors, environment summary, and required evidence
+  statuses.
+- `privacy-scan.json` records forbidden-shape scan status without echoing
+  matched secret text.
 - Tier 2 and Tier 3 artifacts are linked to commit/ref and environment.
 - Production rehearsal reports stay in ignored artifact paths.
 - Final S3/IAM proof is separate from filesystem Backend security proof.

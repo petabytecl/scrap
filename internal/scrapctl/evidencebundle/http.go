@@ -114,10 +114,15 @@ func captureTraceEvidence(ctx context.Context, client *http.Client, cfg Config, 
 	if !ok || !jsonHasKey(body, "traces") {
 		body = []byte(`{"traces":[]}`)
 	}
-	if err := writeRawJSONFile(filepath.Join(dir, "scrapd.json"), body); err != nil {
+	count := traceCount(body)
+	summary := map[string]any{
+		"query":       "service.name=scrapd",
+		"trace_count": count,
+		"redacted":    true,
+	}
+	if err := writeJSONFile(filepath.Join(dir, "scrapd.json"), summary); err != nil {
 		return false, "", err
 	}
-	count := traceCount(body)
 	if count > 0 {
 		return true, strconv.Itoa(count) + " trace(s) found for service.name=scrapd", nil
 	}

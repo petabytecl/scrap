@@ -51,6 +51,12 @@ printf '{"scenario":"throughput","total_ops":20,"failed_ops":0}'
 	if _, err := os.Stat(filepath.Join(bundlePath, "gates.json")); err != nil {
 		t.Fatalf("stat gates.json: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(bundlePath, "manifest.json")); err != nil {
+		t.Fatalf("stat manifest.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundlePath, "privacy-scan.json")); err != nil {
+		t.Fatalf("stat privacy-scan.json: %v", err)
+	}
 	if !strings.Contains(stderr.String(), "PASS - Evidence bundle") {
 		t.Fatalf("stderr missing pass summary:\n%s", stderr.String())
 	}

@@ -99,6 +99,7 @@ func gateChecks(values gateValues, metricsOK bool, input GateInput) []GateCheck 
 		{Name: "encryption_outcomes_recorded", Pass: input.EncryptionOK, Reason: input.EncryptionReason},
 		{Name: "rewrap_outcomes_recorded", Pass: input.RewrapOK, Reason: input.RewrapReason},
 		{Name: "phase5_gate_recorded", Pass: input.Phase5GateOK, Reason: input.Phase5GateReason},
+		{Name: "privacy_scan_passed", Pass: input.PrivacyScanOK, Reason: input.PrivacyScanReason},
 	}
 }
 
@@ -124,7 +125,8 @@ func securityGatePasses(input GateInput) bool {
 		input.AuditOK &&
 		input.EncryptionOK &&
 		input.RewrapOK &&
-		input.Phase5GateOK
+		input.Phase5GateOK &&
+		input.PrivacyScanOK
 }
 
 func writesForScenario(scenario string, stress map[string]any) float64 {

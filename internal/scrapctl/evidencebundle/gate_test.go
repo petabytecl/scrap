@@ -43,6 +43,8 @@ func TestEvaluateGateIsScenarioAware(t *testing.T) {
 				RewrapReason:       "rewrap ok",
 				Phase5GateOK:       true,
 				Phase5GateReason:   "phase5 blocked by non-production mode",
+				PrivacyScanOK:      true,
+				PrivacyScanReason:  "privacy scan passed",
 			})
 			if !gate.Pass {
 				t.Fatalf("gate pass = false, checks = %+v", gate.Checks)

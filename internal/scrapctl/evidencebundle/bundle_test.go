@@ -26,6 +26,8 @@ func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) 
 		"stress-results.json",
 		"queries.json",
 		"gates.json",
+		"manifest.json",
+		"privacy-scan.json",
 		"metrics/rpc_requests_baseline.json",
 		"metrics/rpc_requests_cumulative_after.json",
 		"metrics/rpc_requests.json",
@@ -52,8 +54,12 @@ func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) 
 	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", true)
 	assertBundleCheck(t, result.Gate, "rewrap_outcomes_recorded", true)
 	assertBundleCheck(t, result.Gate, "phase5_gate_recorded", true)
+	assertBundleCheck(t, result.Gate, "privacy_scan_passed", true)
 	assertEvidenceProbeHealthIncludesSecurityMode(t, result.BundlePath)
 	assertSecurityEvidenceReport(t, result.BundlePath)
+	assertTraceEvidenceRedacted(t, result.BundlePath)
+	assertBundlePrivacyScan(t, result.BundlePath, "PASS")
+	assertBundleManifest(t, result.BundlePath)
 }
 
 func assertEvidenceProbeHealthIncludesSecurityMode(t *testing.T, root string) {
@@ -86,6 +92,24 @@ func assertSecurityEvidenceReport(t *testing.T, root string) {
 	}
 	if !report.EncryptedWriteReadOK || !report.EncryptedBackendUploadOK || !report.EncryptedRestoreOK {
 		t.Fatalf("encryption report = %+v, want write/read/upload/restore true", report)
+	}
+}
+
+func assertTraceEvidenceRedacted(t *testing.T, root string) {
+	t.Helper()
+
+	var trace struct {
+		Query      string `json:"query"`
+		TraceCount int    `json:"trace_count"`
+		Redacted   bool   `json:"redacted"`
+		TraceID    string `json:"traceID"`
+	}
+	readBundleJSON(t, root, "traces/scrapd.json", &trace)
+	if trace.Query != "service.name=scrapd" || trace.TraceCount == 0 || !trace.Redacted {
+		t.Fatalf("trace evidence = %+v, want redacted count summary", trace)
+	}
+	if trace.TraceID != "" {
+		t.Fatalf("trace evidence leaked traceID: %+v", trace)
 	}
 }
 
@@ -274,6 +298,16 @@ func TestGenerateFailsWhenEncryptedRestoreProofIsMissing(t *testing.T) {
 	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
 }
 
+func TestGenerateFailsWhenPrivacyScanFindsSensitiveOutput(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{leakStressStderr: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "privacy_scan_passed", false)
+	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
+}
+
 func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 	t.Helper()
 
@@ -309,7 +343,7 @@ func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 		Clock:        clock,
 		Sleeper:      noSleep,
 		Command:      fakeMetadataCommand{},
-		StressRunner: fakeStressRunner{scenario: "throughput"},
+		StressRunner: fakeStressRunner{scenario: "throughput", signals: signals},
 		AdminProbe:   fakeAdminProbe{signals: signals},
 		HTTPClient:   &http.Client{Transport: transport},
 		Logf:         func(string, ...any) {},
@@ -350,6 +384,7 @@ type fakeSignals struct {
 	developmentHealthWithSecurityReport bool
 	missingSecurityRestore              bool
 	adminProbeFailed                    bool
+	leakStressStderr                    bool
 	evictionPlanID                      string
 	requireEvictionHealthBeforeMetrics  bool
 }
@@ -445,16 +480,21 @@ func (fakeMetadataCommand) Run(_ context.Context, name string, args ...string) (
 
 type fakeStressRunner struct {
 	scenario string
+	signals  fakeSignals
 }
 
 func (r fakeStressRunner) RunStress(context.Context, StressRequest) (StressResult, error) {
+	stderr := ""
+	if r.signals.leakStressStderr {
+		stderr = "Bearer shaped-secret-token transaction_id=tx-leak /tmp/leak\n"
+	}
 	switch r.scenario {
 	case "mixed":
-		return StressResult{Stdout: `{"scenario":"mixed","write":{"total_ops":10,"failed_ops":0},"read":{"total_ops":5,"failed_ops":0},"head":{"total_ops":5,"failed_ops":0}}`}, nil
+		return StressResult{Stdout: `{"scenario":"mixed","write":{"total_ops":10,"failed_ops":0},"read":{"total_ops":5,"failed_ops":0},"head":{"total_ops":5,"failed_ops":0}}`, Stderr: stderr}, nil
 	case "pressure":
-		return StressResult{Stdout: `{"scenario":"pressure","total_writes":10,"other_errors":0,"pressure_rejections":3}`}, nil
+		return StressResult{Stdout: `{"scenario":"pressure","total_writes":10,"other_errors":0,"pressure_rejections":3}`, Stderr: stderr}, nil
 	default:
-		return StressResult{Stdout: `{"scenario":"throughput","total_ops":20,"failed_ops":0}`}, nil
+		return StressResult{Stdout: `{"scenario":"throughput","total_ops":20,"failed_ops":0}`, Stderr: stderr}, nil
 	}
 }
 
@@ -578,4 +618,88 @@ func assertBundleCheck(t *testing.T, gate Gate, name string, want bool) {
 		}
 	}
 	t.Fatalf("check %s not found in %+v", name, gate.Checks)
+}
+
+func assertBundlePrivacyScan(t *testing.T, root, want string) {
+	t.Helper()
+
+	var report struct {
+		Status        string `json:"status"`
+		FindingsCount int    `json:"findings_count"`
+	}
+	readBundleJSON(t, root, "privacy-scan.json", &report)
+	if report.Status != want {
+		t.Fatalf("privacy scan status = %q, want %q", report.Status, want)
+	}
+	if want == "PASS" && report.FindingsCount != 0 {
+		t.Fatalf("privacy scan findings = %d, want 0", report.FindingsCount)
+	}
+	if want == "FAIL" && report.FindingsCount == 0 {
+		t.Fatal("privacy scan findings = 0, want at least one finding")
+	}
+}
+
+func assertBundleManifest(t *testing.T, root string) {
+	t.Helper()
+
+	var manifest testBundleManifest
+	readBundleJSON(t, root, "manifest.json", &manifest)
+	assertBundleManifestSummary(t, manifest)
+	assertBundleManifestArtifacts(t, manifest.Artifacts)
+	assertBundleManifestEvidence(t, manifest.Evidence)
+}
+
+type testBundleManifest struct {
+	SchemaVersion string                 `json:"schema_version"`
+	BundleName    string                 `json:"bundle_name"`
+	Scenario      string                 `json:"scenario"`
+	PrivacyStatus string                 `json:"privacy_status"`
+	Artifacts     []testManifestArtifact `json:"artifacts"`
+	Evidence      []testManifestEvidence `json:"evidence"`
+}
+
+type testManifestArtifact struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size_bytes"`
+}
+
+type testManifestEvidence struct {
+	Area   string `json:"area"`
+	Status string `json:"status"`
+}
+
+func assertBundleManifestSummary(t *testing.T, manifest testBundleManifest) {
+	t.Helper()
+
+	if manifest.SchemaVersion != "scrap.evidence.bundle/v1" {
+		t.Fatalf("schema version = %q", manifest.SchemaVersion)
+	}
+	if manifest.BundleName == "" || manifest.Scenario != "throughput" || manifest.PrivacyStatus != "PASS" {
+		t.Fatalf("manifest summary = %+v, want populated throughput PASS", manifest)
+	}
+}
+
+func assertBundleManifestArtifacts(t *testing.T, artifacts []testManifestArtifact) {
+	t.Helper()
+
+	if len(artifacts) == 0 {
+		t.Fatal("manifest artifacts empty")
+	}
+	for _, artifact := range artifacts {
+		if artifact.Path == "" || artifact.SHA256 == "" || artifact.Size <= 0 {
+			t.Fatalf("manifest artifact incomplete: %+v", artifact)
+		}
+		if filepath.IsAbs(artifact.Path) {
+			t.Fatalf("manifest artifact path is absolute: %q", artifact.Path)
+		}
+	}
+}
+
+func assertBundleManifestEvidence(t *testing.T, evidence []testManifestEvidence) {
+	t.Helper()
+
+	if len(evidence) == 0 {
+		t.Fatal("manifest evidence status rows empty")
+	}
 }

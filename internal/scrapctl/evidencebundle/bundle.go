@@ -80,6 +80,8 @@ type signalResults struct {
 	rewrapReason        string
 	phase5GateOK        bool
 	phase5GateReason    string
+	privacyScanOK       bool
+	privacyScanReason   string
 }
 
 type generationState struct {
@@ -114,8 +116,17 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 	if err := captureTelemetryEvidence(ctx, cfg, opts, &state); err != nil {
 		return Result{}, err
 	}
+	privacyReport, err := writePrivacyScan(state.paths.root)
+	if err != nil {
+		return Result{}, err
+	}
+	state.signals.privacyScanOK = privacyReport.Status == privacyStatusPass
+	state.signals.privacyScanReason = privacyGateReason(privacyReport)
 	gate, err := writeGate(ctx, opts, state)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := writeManifest(cfg, state, gate, privacyReport); err != nil {
 		return Result{}, err
 	}
 	return Result{BundlePath: state.paths.root, Gate: gate}, nil
@@ -280,6 +291,8 @@ func writeGate(_ context.Context, opts Options, state generationState) (Gate, er
 		RewrapReason:        state.signals.rewrapReason,
 		Phase5GateOK:        state.signals.phase5GateOK,
 		Phase5GateReason:    state.signals.phase5GateReason,
+		PrivacyScanOK:       state.signals.privacyScanOK,
+		PrivacyScanReason:   state.signals.privacyScanReason,
 	})
 	if err := writeJSONFile(filepath.Join(state.paths.root, "gates.json"), gate); err != nil {
 		return Gate{}, err
@@ -461,6 +474,13 @@ func metricQueries() []metricQuery {
 		{name: "eviction_restore_total", query: "sum(scrap_eviction_restore_total_total) by (reason, result, failure_reason)"},
 		{name: "eviction_evicted_blocks", query: "scrap_eviction_evicted_blocks"},
 		{name: "eviction_restore_failed_blocks", query: "scrap_eviction_restore_failed_blocks"},
+		{name: "eviction_quarantined_blocks", query: "scrap_eviction_quarantined_blocks"},
+		{name: "avscan_lag_blocks", query: "scrap_avscan_lag_blocks"},
+		{name: "avscan_engine_unavailable", query: "sum(scrap_avscan_engine_unavailable_total) by (scrap_shard_id)"},
+		{name: "avscan_failures", query: "sum(rate(scrap_avscan_failures_total[5m])) by (scrap_shard_id, reason)"},
+		{name: "security_rate_limit_denials", query: "sum(rate(scrap_security_rate_limit_denials_total[5m])) by (scrap_surface, scrap_operation, scrap_reason)"},
+		{name: "security_authorization_denials", query: "sum(rate(scrap_security_authorization_denials_total[5m])) by (scrap_surface, scrap_operation, scrap_reason, scrap_authorization_status)"},
+		{name: "scrub_deep_corruptions", query: "sum(rate(scrap_scrub_deep_corruptions_total[5m])) by (scrap_shard_id)"},
 	}
 }
 
