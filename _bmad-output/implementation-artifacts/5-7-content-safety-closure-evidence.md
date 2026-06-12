@@ -4,7 +4,7 @@ baseline_commit: fcb82d6c1b5bcfacb532edd7f6e3d3909991fd32
 
 # Story 5.7: Content Safety Closure Evidence
 
-Status: review
+Status: done
 
 ## Story
 
@@ -51,6 +51,14 @@ so that Epic 5 cannot close from scanner happy-path tests alone.
   - [x] Update this story's Dev Agent Record with debug log references, completion notes, and file list.
   - [x] Update `epic-5-content-safety-closure-evidence.md` with the final decision.
   - [x] If every closure row passes, update `sprint-status.yaml` for Story 5.7 to `review` for BMAD dev completion; leave `done` and `epic-5` closure for the BMAD code-review workflow.
+
+### Review Findings
+
+- [x] [Review][Patch] Identity leak scan omitted filesystem path, auth marker, operator field, and hyphenated key classes [_bmad-output/implementation-artifacts/epic-5-content-safety-closure-evidence.md:79]
+- [x] [Review][Patch] Leak-scan matches needed row-level false-positive classification [_bmad-output/implementation-artifacts/epic-5-content-safety-closure-evidence.md:84]
+- [x] [Review][Patch] Closure matrix rows needed exact proof names instead of generic labels [_bmad-output/implementation-artifacts/epic-5-content-safety-closure-evidence.md:39]
+- [x] [Review][Patch] Dev Agent Record retained an unresolved model placeholder [_bmad-output/implementation-artifacts/5-7-content-safety-closure-evidence.md:155]
+- [x] [Review][Patch] Source evidence status vocabulary was inconsistent [_bmad-output/implementation-artifacts/epic-5-content-safety-closure-evidence.md:25]
 
 ## Dev Notes
 
@@ -152,7 +160,7 @@ If production code changes, add or update focused tests first and rerun the affe
 
 ### Agent Model Used
 
-TBD during dev-story
+Codex (GPT-5)
 
 ### Debug Log References
 
@@ -160,6 +168,8 @@ TBD during dev-story
 - 2026-06-12T17:21:23-04:00 - Dev-story started from baseline commit `fcb82d6c1b5bcfacb532edd7f6e3d3909991fd32`; Story 5.7 and sprint status moved to `in-progress`.
 - 2026-06-12T17:21:43-04:00 - Added aggregate Epic 5 closure evidence artifact with source evidence matrix, closure matrix, P0 blocker table, and pending current-run gates.
 - 2026-06-12T17:24:10-04:00 - Current-run gates passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, leak scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T17:34:26-04:00 - BMAD code review findings addressed: broadened leak scans, added match-location classifications, normalized source decisions, replaced generic proof labels, and filled the model record.
+- 2026-06-12T17:38:44-04:00 - Review-fix broad gate passed with `env GOCACHE=/tmp/scrap-v2-go-build make check`; BMAD code review moved Story 5.7 to `done`.
 
 ### Completion Notes List
 
@@ -168,7 +178,8 @@ TBD during dev-story
 - Final closure decision is `PASS`: no P0 unsafe-read or quarantine-authority evidence gap remains open.
 - Current-run leak scans found no shaped credentials; scanner-sensitive and identity-value matches were classified as safe negative prose or redaction test fixtures, not closure output leaks.
 - Full local verification passed with `env GOCACHE=/tmp/scrap-v2-go-build make check`.
-- BMAD dev-story moved Story 5.7 and sprint status to `review`; final `done` transition is left for the BMAD code-review workflow.
+- BMAD dev-story moved Story 5.7 and sprint status to `review`; BMAD code review completed the final `done` transition after review fixes.
+- BMAD code review findings were patched in the story and closure artifact; no production code changed.
 
 ### File List
 
@@ -179,3 +190,5 @@ TBD during dev-story
 ## Change Log
 
 - 2026-06-12 - Added Epic 5 content safety closure evidence, classified leak-scan findings, passed current-run gates, and moved Story 5.7 to review.
+- 2026-06-12 - Addressed BMAD code review findings for leak-scan coverage, false-positive auditability, exact proof names, and story record completeness.
+- 2026-06-12 - Completed BMAD code review for Story 5.7 and moved story tracking to done after review-fix verification.
