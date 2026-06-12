@@ -538,12 +538,7 @@ func TestSchedulerDeduplicatesBlockListerDuplicates(t *testing.T) {
 func TestSchedulerReportsDetectionsBeforePersistingProgress(t *testing.T) {
 	store := &memoryProgressStore{}
 	reporter := &recordingDetectionReporter{}
-	detection := Detection{
-		TransactionID: "tx-detected",
-		DocumentName:  "detected.xml",
-		ScanType:      DetectionScanTypeInitial,
-		Reason:        DetectionReasonScannerDetection,
-	}
+	detection := detectionForTest()
 	scheduler := NewScheduler(Config{
 		ShardID:       7,
 		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
@@ -591,6 +586,7 @@ func TestSchedulerQuarantineReportFailureDoesNotPersistProgress(t *testing.T) {
 				Detections: []Detection{{
 					TransactionID: "tx-detected",
 					DocumentName:  "detected.xml",
+					DetectedAtUs:  1716700001000000,
 					ScanType:      DetectionScanTypeInitial,
 					Reason:        DetectionReasonScannerDetection,
 				}},
@@ -611,6 +607,128 @@ func TestSchedulerQuarantineReportFailureDoesNotPersistProgress(t *testing.T) {
 	}
 	if got := scheduler.Snapshot().LastReason; got != ReasonQuarantineFailed {
 		t.Fatalf("last reason = %q, want %q", got, ReasonQuarantineFailed)
+	}
+}
+
+func TestSchedulerRejectsDetectionsWhenResultIsClean(t *testing.T) {
+	store := &memoryProgressStore{}
+	reporter := &recordingDetectionReporter{}
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{
+				Status:           ResultClean,
+				ScannedDocuments: 1,
+				Detections:       []Detection{detectionForTest()},
+			}, nil
+		}),
+		DetectionReporter:        reporter,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if !errors.Is(err, ErrInvalidDetection) {
+		t.Fatalf("RunOnce error = %v, want ErrInvalidDetection", err)
+	}
+	if len(reporter.reports) != 0 {
+		t.Fatalf("reports = %d, want 0", len(reporter.reports))
+	}
+	if got := store.lastSaved().LastScannedBlockID; got != 0 {
+		t.Fatalf("saved progress BlockID = %d, want 0", got)
+	}
+}
+
+func TestSchedulerRejectsUnboundedDetectionList(t *testing.T) {
+	store := &memoryProgressStore{}
+	reporter := &recordingDetectionReporter{}
+	detections := make([]Detection, MaxDetectionsPerBlock+1)
+	for i := range detections {
+		detections[i] = detectionForTest()
+	}
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{
+				Status:           ResultDetected,
+				ScannedDocuments: len(detections),
+				Detections:       detections,
+			}, nil
+		}),
+		DetectionReporter:        reporter,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if !errors.Is(err, ErrInvalidDetection) {
+		t.Fatalf("RunOnce error = %v, want ErrInvalidDetection", err)
+	}
+	if len(reporter.reports) != 0 {
+		t.Fatalf("reports = %d, want 0", len(reporter.reports))
+	}
+}
+
+func TestSchedulerRejectsDetectionWithoutDetectedTime(t *testing.T) {
+	detection := detectionForTest()
+	detection.DetectedAtUs = 0
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{
+				Status:           ResultDetected,
+				ScannedDocuments: 1,
+				Detections:       []Detection{detection},
+			}, nil
+		}),
+		DetectionReporter:        &recordingDetectionReporter{},
+		ProgressStore:            &memoryProgressStore{},
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if !errors.Is(err, ErrInvalidDetection) {
+		t.Fatalf("RunOnce error = %v, want ErrInvalidDetection", err)
+	}
+}
+
+func TestSchedulerQuarantineCancellationKeepsCanceledReason(t *testing.T) {
+	store := &memoryProgressStore{}
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{
+				Status:           ResultDetected,
+				ScannedDocuments: 1,
+				Detections:       []Detection{detectionForTest()},
+			}, nil
+		}),
+		DetectionReporter:        &recordingDetectionReporter{err: context.Canceled},
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOnce error = %v, want context.Canceled", err)
+	}
+	if got := scheduler.Snapshot().LastReason; got != ReasonCanceled {
+		t.Fatalf("last reason = %q, want %q", got, ReasonCanceled)
+	}
+	if got := store.lastSaved().LastScannedBlockID; got != 0 {
+		t.Fatalf("saved progress BlockID = %d, want 0", got)
 	}
 }
 
@@ -997,6 +1115,16 @@ type mutableSignatureVersion struct {
 
 func (v *mutableSignatureVersion) SignatureVersion(context.Context) (string, error) {
 	return v.version, nil
+}
+
+func detectionForTest() Detection {
+	return Detection{
+		TransactionID: "tx-detected",
+		DocumentName:  "detected.xml",
+		DetectedAtUs:  1716700001000000,
+		ScanType:      DetectionScanTypeInitial,
+		Reason:        DetectionReasonScannerDetection,
+	}
 }
 
 type detectionReport struct {

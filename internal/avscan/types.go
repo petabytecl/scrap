@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	DefaultInterval = 30 * time.Second
+	DefaultInterval       = 30 * time.Second
+	MaxDetectionsPerBlock = 8192
 )
 
 var (

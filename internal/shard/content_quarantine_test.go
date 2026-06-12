@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
@@ -15,7 +16,12 @@ import (
 
 func TestShardReportDetectionsProposesQuarantineCommand(t *testing.T) {
 	raft := &quarantineProposalRaft{}
-	s := &Shard{raft: raft}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+	raft.onPropose = func(data []byte) {
+		applyQuarantineProposal(t, s, data)
+	}
 
 	err := s.ReportDetections(context.Background(), avscan.Block{BlockID: 42}, []avscan.Detection{{
 		TransactionID: "tx-quarantine",
@@ -39,6 +45,75 @@ func TestShardReportDetectionsProposesQuarantineCommand(t *testing.T) {
 		t.Fatalf("proposed command = %T, want QuarantineDocument", cmd.GetCommand())
 	}
 	assertQuarantineCommand(t, quarantine)
+}
+
+func TestShardReportDetectionsWaitsForQuarantineApply(t *testing.T) {
+	raft := &quarantineProposalRaft{
+		proposedCh: make(chan []byte, 1),
+	}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.ReportDetections(context.Background(), avscan.Block{BlockID: 42}, []avscan.Detection{{
+			TransactionID: "tx-quarantine",
+			DocumentName:  "detected.xml",
+			DetectedAtUs:  1716700001000000,
+			ScanType:      avscan.DetectionScanTypeInitial,
+			Reason:        avscan.DetectionReasonScannerDetection,
+		}})
+	}()
+
+	var data []byte
+	select {
+	case data = <-raft.proposedCh:
+	case <-time.After(time.Second):
+		t.Fatal("ReportDetections did not propose quarantine command")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("ReportDetections completed before apply: %v", err)
+	default:
+	}
+
+	applyQuarantineProposal(t, s, data)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReportDetections after apply: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReportDetections did not complete after apply")
+	}
+}
+
+func TestShardReportDetectionsValidatesBatchBeforeProposal(t *testing.T) {
+	raft := &quarantineProposalRaft{}
+	s := &Shard{raft: raft}
+
+	err := s.ReportDetections(context.Background(), avscan.Block{BlockID: 42}, []avscan.Detection{
+		{
+			TransactionID: "tx-quarantine",
+			DocumentName:  "detected.xml",
+			DetectedAtUs:  1716700001000000,
+			ScanType:      avscan.DetectionScanTypeInitial,
+			Reason:        avscan.DetectionReasonScannerDetection,
+		},
+		{
+			TransactionID: "tx-quarantine",
+			DocumentName:  "missing-time.xml",
+			ScanType:      avscan.DetectionScanTypeInitial,
+			Reason:        avscan.DetectionReasonScannerDetection,
+		},
+	})
+	if err == nil {
+		t.Fatal("ReportDetections succeeded for invalid batch")
+	}
+	if len(raft.proposed) != 0 {
+		t.Fatalf("proposed commands = %d, want 0", len(raft.proposed))
+	}
 }
 
 func TestApplyQuarantineDocumentStoresProjectionState(t *testing.T) {
@@ -96,6 +171,28 @@ func TestApplyQuarantineDocumentSurvivesProjectionReopen(t *testing.T) {
 	}
 }
 
+func TestApplyQuarantineDocumentRebuildsFreshProjectionFromRaftReplay(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	data, err := proto.Marshal(quarantineRaftCommandForTest())
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+
+	err = s.applyEntries([]raftpb.Entry{{
+		Type:  raftpb.EntryNormal,
+		Index: 77,
+		Data:  data,
+	}}, 0)
+	if err != nil {
+		t.Fatalf("applyEntries: %v", err)
+	}
+
+	if _, err := idx.GetContentQuarantine("tx-quarantine", "detected.xml"); err != nil {
+		t.Fatalf("GetContentQuarantine after replay: %v", err)
+	}
+}
+
 func TestApplyQuarantineDocumentIsDuplicateSafe(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	s := shardForApplyTest(t, idx)
@@ -130,6 +227,29 @@ func TestApplyQuarantineDocumentRejectsInvalidMetadata(t *testing.T) {
 	}, 77)
 	if err == nil {
 		t.Fatal("applyEntryCommand succeeded for invalid metadata")
+	}
+	if _, getErr := idx.GetContentQuarantine("tx-quarantine", "detected.xml"); !errors.Is(getErr, index.ErrContentQuarantineNotFound) {
+		t.Fatalf("GetContentQuarantine after invalid apply = %v, want ErrContentQuarantineNotFound", getErr)
+	}
+}
+
+func TestApplyQuarantineDocumentRejectsMissingDetectedTime(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+
+	err := s.applyEntryCommand(&scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_QuarantineDoc{
+			QuarantineDoc: &scrapv1.QuarantineDocument{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "detected.xml",
+				BlockId:       42,
+				ScanType:      scrapv1.QuarantineScanType_QUARANTINE_SCAN_TYPE_INITIAL,
+				Reason:        scrapv1.QuarantineReason_QUARANTINE_REASON_SCANNER_DETECTION,
+			},
+		},
+	}, 77)
+	if err == nil {
+		t.Fatal("applyEntryCommand succeeded without detected_at_us")
 	}
 	if _, getErr := idx.GetContentQuarantine("tx-quarantine", "detected.xml"); !errors.Is(getErr, index.ErrContentQuarantineNotFound) {
 		t.Fatalf("GetContentQuarantine after invalid apply = %v, want ErrContentQuarantineNotFound", getErr)
@@ -183,11 +303,20 @@ func assertQuarantineCommand(t *testing.T, quarantine *scrapv1.QuarantineDocumen
 }
 
 type quarantineProposalRaft struct {
-	proposed [][]byte
+	proposed   [][]byte
+	proposedCh chan []byte
+	onPropose  func([]byte)
 }
 
 func (r *quarantineProposalRaft) Propose(_ context.Context, data []byte) error {
-	r.proposed = append(r.proposed, append([]byte(nil), data...))
+	copied := append([]byte(nil), data...)
+	r.proposed = append(r.proposed, copied)
+	if r.proposedCh != nil {
+		r.proposedCh <- copied
+	}
+	if r.onPropose != nil {
+		r.onPropose(copied)
+	}
 	return nil
 }
 
@@ -206,3 +335,15 @@ func (r *quarantineProposalRaft) CommitIndex() uint64 { return 0 }
 func (r *quarantineProposalRaft) WithStableLeadership(run func() error) error { return run() }
 
 func (r *quarantineProposalRaft) Stop() {}
+
+func applyQuarantineProposal(t *testing.T, s *Shard, data []byte) {
+	t.Helper()
+
+	cmd := &scrapv1.RaftCommand{}
+	if err := proto.Unmarshal(data, cmd); err != nil {
+		t.Fatalf("unmarshal proposed command: %v", err)
+	}
+	if err := s.applyEntryCommand(cmd, 77); err != nil {
+		t.Fatalf("applyEntryCommand: %v", err)
+	}
+}

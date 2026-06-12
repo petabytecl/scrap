@@ -7,7 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
-	"unicode"
+
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 const maxSignatureVersionLen = 128
@@ -621,53 +622,57 @@ func (s *Scheduler) scanOne(ctx context.Context, block Block) error {
 }
 
 func (s *Scheduler) reportDetections(ctx context.Context, block Block, result Result) error {
+	if err := validateDetectionResult(result); err != nil {
+		return err
+	}
+	if len(result.Detections) == 0 {
+		return nil
+	}
+	if s.cfg.DetectionReporter == nil {
+		return ErrDetectionReporterUnavailable
+	}
+	if err := s.cfg.DetectionReporter.ReportDetections(ctx, block, append([]Detection(nil), result.Detections...)); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrQuarantineFailed, err)
+	}
+	return nil
+}
+
+func validateDetectionResult(result Result) error {
 	if len(result.Detections) == 0 {
 		if result.Status == ResultDetected {
 			return fmt.Errorf("%w: detected result without detections", ErrInvalidDetection)
 		}
 		return nil
 	}
+	if result.Status != ResultDetected {
+		return fmt.Errorf("%w: detections require detected result", ErrInvalidDetection)
+	}
+	if len(result.Detections) > MaxDetectionsPerBlock {
+		return fmt.Errorf("%w: detection count %d exceeds %d", ErrInvalidDetection, len(result.Detections), MaxDetectionsPerBlock)
+	}
 	for _, detection := range result.Detections {
 		if err := validateDetection(detection); err != nil {
 			return err
 		}
 	}
-	if s.cfg.DetectionReporter == nil {
-		return ErrDetectionReporterUnavailable
-	}
-	if err := s.cfg.DetectionReporter.ReportDetections(ctx, block, append([]Detection(nil), result.Detections...)); err != nil {
-		return fmt.Errorf("%w: %w", ErrQuarantineFailed, err)
-	}
 	return nil
 }
 
 func validateDetection(detection Detection) error {
-	if err := validateDetectionText("transaction_id", detection.TransactionID); err != nil {
-		return err
+	if err := storeapi.ValidateDocumentIdentity(detection.TransactionID, detection.DocumentName, ""); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidDetection, err)
 	}
-	if err := validateDetectionText("document_name", detection.DocumentName); err != nil {
-		return err
-	}
-	if detection.DetectedAtUs < 0 {
-		return fmt.Errorf("%w: detected_at_us is negative", ErrInvalidDetection)
+	if detection.DetectedAtUs <= 0 {
+		return fmt.Errorf("%w: detected_at_us is required", ErrInvalidDetection)
 	}
 	if detection.ScanType != DetectionScanTypeInitial && detection.ScanType != DetectionScanTypeRescan {
 		return fmt.Errorf("%w: scan_type is required", ErrInvalidDetection)
 	}
 	if detection.Reason != DetectionReasonScannerDetection {
 		return fmt.Errorf("%w: reason is required", ErrInvalidDetection)
-	}
-	return nil
-}
-
-func validateDetectionText(name, value string) error {
-	if value == "" {
-		return fmt.Errorf("%w: %s is required", ErrInvalidDetection, name)
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("%w: %s contains control character", ErrInvalidDetection, name)
-		}
 	}
 	return nil
 }
@@ -773,10 +778,10 @@ func reasonForScanError(err error) Reason {
 		return ReasonEngineUnavailable
 	case errors.Is(err, ErrScanPanic):
 		return ReasonScanPanic
-	case errors.Is(err, ErrQuarantineFailed), errors.Is(err, ErrDetectionReporterUnavailable), errors.Is(err, ErrInvalidDetection):
-		return ReasonQuarantineFailed
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return ReasonCanceled
+	case errors.Is(err, ErrQuarantineFailed), errors.Is(err, ErrDetectionReporterUnavailable), errors.Is(err, ErrInvalidDetection):
+		return ReasonQuarantineFailed
 	default:
 		return ReasonScanFailed
 	}

@@ -2,6 +2,7 @@ package index
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -116,12 +117,20 @@ func TestContentQuarantineRejectsInvalidState(t *testing.T) {
 			wantErrMsg: "document_name contains control character",
 		},
 		{
-			name: "negative detected time",
+			name: "missing detected time",
 			mutate: func(q ContentQuarantine) ContentQuarantine {
-				q.DetectedAtUs = -1
+				q.DetectedAtUs = 0
 				return q
 			},
-			wantErrMsg: "detected_at_us is negative",
+			wantErrMsg: "detected_at_us is required",
+		},
+		{
+			name: "oversized transaction",
+			mutate: func(q ContentQuarantine) ContentQuarantine {
+				q.TransactionID = strings.Repeat("t", contentQuarantineTextMaxBytes("transaction_id")+1)
+				return q
+			},
+			wantErrMsg: "transaction_id exceeds",
 		},
 		{
 			name: "missing scan type",
@@ -165,8 +174,8 @@ func TestContentQuarantineRejectsCorruptValues(t *testing.T) {
 		{name: "empty", val: nil},
 		{name: "unknown version", val: []byte{0xff}},
 		{name: "truncated", val: []byte{contentQuarantineValueVersion, 1, 2}},
-		{name: "missing scan type", val: append(contentQuarantineValueHeaderForTest(0, ContentQuarantineReasonScannerDetection), 0)},
-		{name: "missing reason", val: append(contentQuarantineValueHeaderForTest(ContentQuarantineScanTypeInitial, 0), 0)},
+		{name: "missing scan type", val: contentQuarantineValueHeaderForTest(0, ContentQuarantineReasonScannerDetection)},
+		{name: "missing reason", val: contentQuarantineValueHeaderForTest(ContentQuarantineScanTypeInitial, 0)},
 	}
 
 	for _, tt := range tests {
@@ -184,10 +193,78 @@ func TestContentQuarantineRejectsCorruptValues(t *testing.T) {
 			if err := idx.db.Set(key, tt.val, pebble.Sync); err != nil {
 				t.Fatalf("Set corrupt value: %v", err)
 			}
-			if _, err := idx.GetContentQuarantine("tx-quarantine", "doc.xml"); err == nil {
-				t.Fatal("GetContentQuarantine succeeded for corrupt value")
+			if _, err := idx.GetContentQuarantine("tx-quarantine", "doc.xml"); !errors.Is(err, ErrInvalidContentQuarantine) {
+				t.Fatalf("GetContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
 			}
 		})
+	}
+}
+
+func TestContentQuarantineRejectsOversizedLookupIdentity(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	_, err = idx.GetContentQuarantine(strings.Repeat("t", contentQuarantineTextMaxBytes("transaction_id")+1), "doc.xml")
+	if !errors.Is(err, ErrInvalidContentQuarantine) {
+		t.Fatalf("GetContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
+	}
+}
+
+func TestContentQuarantineRejectsMissingDetectedTime(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	err = idx.PutContentQuarantine(ContentQuarantine{
+		TransactionID: "tx-quarantine",
+		DocumentName:  "doc.xml",
+		BlockID:       7,
+		ScanType:      ContentQuarantineScanTypeInitial,
+		Reason:        ContentQuarantineReasonScannerDetection,
+	})
+	if !errors.Is(err, ErrInvalidContentQuarantine) {
+		t.Fatalf("PutContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
+	}
+	if got := err.Error(); !contains(got, "detected_at_us is required") {
+		t.Fatalf("error = %q, want detected_at_us is required", got)
+	}
+}
+
+func TestContentQuarantineRejectsCorruptKeys(t *testing.T) {
+	_, err := decodeContentQuarantine([]byte(contentQuarantinePrefix+"bad-key"), contentQuarantineValueHeaderForTest(
+		ContentQuarantineScanTypeInitial,
+		ContentQuarantineReasonScannerDetection,
+	))
+	if !errors.Is(err, ErrInvalidContentQuarantine) {
+		t.Fatalf("decodeContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
+	}
+}
+
+func TestContentQuarantineRejectsZeroDetectedTimeFromCorruptValue(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	key, err := contentQuarantineKey("tx-quarantine", "doc.xml")
+	if err != nil {
+		t.Fatalf("contentQuarantineKey: %v", err)
+	}
+	if err := idx.db.Set(key, contentQuarantineValueWithDetectedTimeForTest(
+		0,
+		ContentQuarantineScanTypeInitial,
+		ContentQuarantineReasonScannerDetection,
+	), pebble.Sync); err != nil {
+		t.Fatalf("Set corrupt value: %v", err)
+	}
+	if _, err := idx.GetContentQuarantine("tx-quarantine", "doc.xml"); !errors.Is(err, ErrInvalidContentQuarantine) {
+		t.Fatalf("GetContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
 	}
 }
 
@@ -233,13 +310,25 @@ func TestContentQuarantineAffectsStreamingHash(t *testing.T) {
 }
 
 func contentQuarantineValueHeaderForTest(scanType ContentQuarantineScanType, reason ContentQuarantineReason) []byte {
-	return []byte{
+	value := []byte{
 		contentQuarantineValueVersion,
 		7, 0, 0, 0, 0, 0, 0, 0,
 		0, 0, 0, 0, 0, 0, 0, 0,
 		byte(scanType),
 		byte(reason),
 	}
+	putNonNegativeInt64(value[9:17], 1716700001000000)
+	return value
+}
+
+func contentQuarantineValueWithDetectedTimeForTest(
+	detectedAtUs int64,
+	scanType ContentQuarantineScanType,
+	reason ContentQuarantineReason,
+) []byte {
+	value := contentQuarantineValueHeaderForTest(scanType, reason)
+	putNonNegativeInt64(value[9:17], detectedAtUs)
+	return value
 }
 
 func contains(s, substr string) bool {

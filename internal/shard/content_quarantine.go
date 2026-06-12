@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -15,27 +14,66 @@ import (
 )
 
 func (s *Shard) ReportDetections(ctx context.Context, block avscan.Block, detections []avscan.Detection) error {
+	if len(detections) > avscan.MaxDetectionsPerBlock {
+		return fmt.Errorf("shard: %w: detection count %d exceeds %d", avscan.ErrInvalidDetection, len(detections), avscan.MaxDetectionsPerBlock)
+	}
+	commands := make([]*scrapv1.RaftCommand, 0, len(detections))
 	for _, detection := range detections {
-		if err := s.proposeQuarantineDocument(ctx, block.BlockID, detection); err != nil {
+		cmd, err := quarantineCommandFromDetection(block.BlockID, detection)
+		if err != nil {
+			return err
+		}
+		commands = append(commands, cmd)
+	}
+	for _, cmd := range commands {
+		if err := s.proposeQuarantineDocument(ctx, cmd); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Shard) proposeQuarantineDocument(ctx context.Context, blockID uint64, detection avscan.Detection) error {
-	cmd, err := quarantineCommandFromDetection(blockID, detection)
-	if err != nil {
+func (s *Shard) proposeQuarantineDocument(ctx context.Context, cmd *scrapv1.RaftCommand) error {
+	quarantine := cmd.GetQuarantineDoc()
+	if quarantine == nil {
+		return errors.New("shard: quarantine command is required")
+	}
+	key := quarantineProposalKey(quarantine)
+	doneCh := make(chan error, 1)
+	if err := s.watchQuarantineProposal(key, doneCh); err != nil {
 		return err
 	}
 	injectTraceContext(ctx, cmd)
 	data, err := proto.Marshal(cmd)
 	if err != nil {
+		s.forgetProposal(key)
 		return fmt.Errorf("shard: marshal quarantine document command: %w", err)
 	}
 	if err := s.Propose(ctx, data); err != nil {
+		s.forgetProposal(key)
 		return fmt.Errorf("shard: propose quarantine document: %w", err)
 	}
+
+	select {
+	case applyErr := <-doneCh:
+		return applyErr
+	case <-ctx.Done():
+		s.forgetProposal(key)
+		return ctx.Err()
+	}
+}
+
+func (s *Shard) watchQuarantineProposal(key string, doneCh chan error) error {
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
+	if s.proposals == nil {
+		s.proposals = make(map[string]chan error)
+	}
+	if _, ok := s.proposals[key]; ok {
+		return errors.New("shard: quarantine proposal already in flight")
+	}
+	s.proposals[key] = doneCh
 	return nil
 }
 
@@ -44,11 +82,8 @@ func quarantineCommandFromDetection(blockID uint64, detection avscan.Detection) 
 		return nil, err
 	}
 	detectedAtUs := detection.DetectedAtUs
-	if detectedAtUs == 0 {
-		detectedAtUs = time.Now().UnixMicro()
-	}
-	if detectedAtUs < 0 {
-		return nil, fmt.Errorf("shard: quarantine detected_at_us is negative: %d", detectedAtUs)
+	if detectedAtUs <= 0 {
+		return nil, errors.New("shard: quarantine detected_at_us is required")
 	}
 	scanType, err := quarantineScanTypeFromDetection(detection.ScanType)
 	if err != nil {
@@ -73,6 +108,13 @@ func quarantineCommandFromDetection(blockID uint64, detection avscan.Detection) 
 }
 
 func (s *Shard) applyQuarantineDocumentCommand(cmd *scrapv1.QuarantineDocument) error {
+	key := quarantineProposalKey(cmd)
+	applyErr := s.applyQuarantineDocumentCommandLocked(cmd)
+	s.notifyProposal(key, applyErr)
+	return applyErr
+}
+
+func (s *Shard) applyQuarantineDocumentCommandLocked(cmd *scrapv1.QuarantineDocument) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -94,8 +136,8 @@ func (s *Shard) applyQuarantineDocumentLocked(cmd *scrapv1.QuarantineDocument) e
 	if err != nil {
 		return err
 	}
-	if cmd.GetDetectedAtUs() < 0 {
-		return fmt.Errorf("shard: quarantine detected_at_us is negative: %d", cmd.GetDetectedAtUs())
+	if cmd.GetDetectedAtUs() <= 0 {
+		return errors.New("shard: quarantine detected_at_us is required")
 	}
 	err = s.idx.PutContentQuarantine(index.ContentQuarantine{
 		TransactionID: cmd.GetTransactionId(),
@@ -109,6 +151,28 @@ func (s *Shard) applyQuarantineDocumentLocked(cmd *scrapv1.QuarantineDocument) e
 		return fmt.Errorf("shard: apply quarantine document: %w", err)
 	}
 	return nil
+}
+
+func (s *Shard) notifyProposal(key string, applyErr error) {
+	s.proposalMu.Lock()
+	defer s.proposalMu.Unlock()
+
+	if ch, ok := s.proposals[key]; ok {
+		ch <- applyErr
+		delete(s.proposals, key)
+	}
+}
+
+func quarantineProposalKey(cmd *scrapv1.QuarantineDocument) string {
+	return fmt.Sprintf(
+		"quarantine\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d",
+		cmd.GetTransactionId(),
+		cmd.GetDocumentName(),
+		cmd.GetBlockId(),
+		cmd.GetDetectedAtUs(),
+		cmd.GetScanType(),
+		cmd.GetReason(),
+	)
 }
 
 func quarantineScanTypeFromDetection(scanType avscan.DetectionScanType) (scrapv1.QuarantineScanType, error) {

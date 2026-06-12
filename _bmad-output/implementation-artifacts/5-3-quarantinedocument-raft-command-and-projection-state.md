@@ -5,7 +5,7 @@ created: 2026-06-12T13:54:44-04:00
 
 # Story 5.3: QuarantineDocument Raft Command and Projection State
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -76,7 +76,19 @@ so that unsafe content state is replicated authority, not local scanner state.
 - [x] Update story, evidence, and sprint artifacts. (AC: 1-4)
   - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
   - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
-  - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
+  - [x] Run `bmad-code-review`; address critical/high findings before marking `done`.
+
+### Review Findings
+
+- [x] [Review][Patch] Scheduler accepted detections on non-detected scan results [internal/avscan/scheduler.go] — fixed by rejecting any non-`ResultDetected` result that carries detections.
+- [x] [Review][Patch] Detection batches were unbounded [internal/avscan/types.go] — fixed with `MaxDetectionsPerBlock` enforcement in scheduler and Shard ingestion.
+- [x] [Review][Patch] Quarantine reporter cancellation was classified as quarantine failure [internal/avscan/scheduler.go] — fixed by preserving `context.Canceled`/deadline errors and prioritizing canceled reason mapping.
+- [x] [Review][Patch] Missing `detected_at_us` could reach Raft apply/Projection state [internal/shard/content_quarantine.go] — fixed by requiring positive timestamps in scanner detection validation, Shard proposal, Shard apply, and Projection encode/decode validation.
+- [x] [Review][Patch] Content Quarantine identity validation missed store byte bounds [internal/index/content_quarantine.go] — fixed by applying store identity byte limits to quarantine key construction and lookup.
+- [x] [Review][Patch] Mixed valid/invalid detection batches could partially propose [internal/shard/content_quarantine.go] — fixed by validating the full batch before proposing any command.
+- [x] [Review][Patch] Scanner progress could advance after proposal acceptance but before local Raft apply [internal/shard/content_quarantine.go] — fixed by waiting for the matching committed apply notification before `ReportDetections` returns to the scheduler.
+- [x] [Review][Patch] Replay evidence only proved Pebble reopen, not Raft replay into a fresh Projection [internal/shard/content_quarantine_test.go] — fixed with `TestApplyQuarantineDocumentRebuildsFreshProjectionFromRaftReplay`.
+- [x] [Review][Patch] Corrupt quarantine decode errors and tests did not prove sentinel/enum behavior [internal/index/content_quarantine_test.go] — fixed by wrapping malformed quarantine state with `ErrInvalidContentQuarantine` and correcting corrupt-value fixtures.
 
 ## Dev Notes
 
@@ -229,6 +241,8 @@ GPT-5 Codex for story creation.
 - 2026-06-12T14:03:00-04:00 - Added RED tests for Content Quarantine Projection state, scanner detection reporting, Shard proposal/apply behavior, and apply-span redaction.
 - 2026-06-12T14:05:09-04:00 - Implemented metadata-only `QuarantineDocument` proto, sparse Projection state, avscan detection reporting, and Shard proposal/apply glue. Focused package tests passed after fixing invalid-test assertion.
 - 2026-06-12T14:10:42-04:00 - Final implementation gates passed: `make proto-check`, targeted package tests, `git diff --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T14:34:51-04:00 - BMAD code review completed with no decision-needed findings. Applied review fixes for bounded detections, result/status consistency, cancellation classification, required detection timestamps, quarantine identity bounds, full-batch prevalidation, Raft-apply wait, fresh replay evidence, and corrupt Projection sentinel coverage.
+- 2026-06-12T14:39:39-04:00 - Post-review gates passed: focused index/avscan/shard tests, targeted package tests, `make proto-check`, `git diff --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
@@ -239,6 +253,7 @@ GPT-5 Codex for story creation.
 - Added sparse Content Quarantine Projection state under the ADR 0008 `q\x01<transaction_id>\x00<document_name>` key shape with strict encode/decode validation, not-found sentinel behavior, idempotent put, corrupt-value tests, and StreamingHash participation.
 - Added scanner detection reporting in `internal/avscan`; detection report failures are observable as `quarantine_failed` and do not advance persisted scanner progress.
 - Added Shard-owned detection proposal and apply behavior so scanner hits become metadata-only Raft commands and committed quarantine metadata materializes in the Projection without touching Block bytes or public read behavior.
+- Addressed BMAD code-review patch findings by bounding scanner detections, requiring positive detection timestamps, preserving cancellation semantics, validating batches before proposal, waiting for committed local apply before scanner progress can advance, and adding fresh Raft replay evidence.
 
 ### File List
 
@@ -262,3 +277,4 @@ GPT-5 Codex for story creation.
 - 2026-06-12 - Created Story 5.3 developer context and moved sprint status to ready-for-dev.
 - 2026-06-12 - Started Story 5.3 implementation and created scoped evidence artifact.
 - 2026-06-12 - Implemented Story 5.3 QuarantineDocument Raft command and Projection state; moved story to review after local gates passed.
+- 2026-06-12 - Addressed BMAD code-review findings and moved Story 5.3 to done after post-review gates passed.

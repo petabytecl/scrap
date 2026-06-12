@@ -9,6 +9,8 @@ import (
 	"unicode"
 
 	"github.com/cockroachdb/pebble"
+
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 var (
@@ -102,10 +104,10 @@ func decodeContentQuarantine(key, val []byte) (ContentQuarantine, error) {
 		return ContentQuarantine{}, err
 	}
 	if len(val) != contentQuarantineValueLen {
-		return ContentQuarantine{}, fmt.Errorf("index: content quarantine value length %d", len(val))
+		return ContentQuarantine{}, fmt.Errorf("%w: value length %d", ErrInvalidContentQuarantine, len(val))
 	}
 	if val[0] != contentQuarantineValueVersion {
-		return ContentQuarantine{}, fmt.Errorf("index: content quarantine value version %d", val[0])
+		return ContentQuarantine{}, fmt.Errorf("%w: value version %d", ErrInvalidContentQuarantine, val[0])
 	}
 	detectedAtUs, err := readContentQuarantineInt64(val[9:17], "detected_at_us")
 	if err != nil {
@@ -127,12 +129,12 @@ func decodeContentQuarantine(key, val []byte) (ContentQuarantine, error) {
 
 func decodeContentQuarantineKey(key []byte) (string, string, error) {
 	if !bytes.HasPrefix(key, []byte(contentQuarantinePrefix)) {
-		return "", "", errors.New("index: content quarantine key prefix")
+		return "", "", fmt.Errorf("%w: key prefix", ErrInvalidContentQuarantine)
 	}
 	rest := key[len(contentQuarantinePrefix):]
 	sep := bytes.IndexByte(rest, 0)
 	if sep < 0 {
-		return "", "", errors.New("index: content quarantine key missing separator")
+		return "", "", fmt.Errorf("%w: key missing separator", ErrInvalidContentQuarantine)
 	}
 	txID := string(rest[:sep])
 	docName := string(rest[sep+1:])
@@ -146,8 +148,8 @@ func validateContentQuarantine(quarantine ContentQuarantine) error {
 	if err := validateContentQuarantineIdentity(quarantine.TransactionID, quarantine.DocumentName); err != nil {
 		return err
 	}
-	if quarantine.DetectedAtUs < 0 {
-		return fmt.Errorf("%w: detected_at_us is negative: %d", ErrInvalidContentQuarantine, quarantine.DetectedAtUs)
+	if quarantine.DetectedAtUs <= 0 {
+		return fmt.Errorf("%w: detected_at_us is required", ErrInvalidContentQuarantine)
 	}
 	if !validContentQuarantineScanType(quarantine.ScanType) {
 		return fmt.Errorf("%w: scan_type is required", ErrInvalidContentQuarantine)
@@ -169,12 +171,27 @@ func validateContentQuarantineText(name, value string) error {
 	if value == "" {
 		return fmt.Errorf("%w: %s is required", ErrInvalidContentQuarantine, name)
 	}
+	maxBytes := contentQuarantineTextMaxBytes(name)
+	if len(value) > maxBytes {
+		return fmt.Errorf("%w: %s exceeds %d bytes", ErrInvalidContentQuarantine, name, maxBytes)
+	}
 	for _, r := range value {
 		if unicode.IsControl(r) {
 			return fmt.Errorf("%w: %s contains control character", ErrInvalidContentQuarantine, name)
 		}
 	}
 	return nil
+}
+
+func contentQuarantineTextMaxBytes(name string) int {
+	switch name {
+	case "transaction_id":
+		return storeapi.MaxTransactionIDBytes
+	case "document_name":
+		return storeapi.MaxDocumentNameBytes
+	default:
+		return 0
+	}
 }
 
 func validContentQuarantineScanType(scanType ContentQuarantineScanType) bool {
@@ -188,7 +205,7 @@ func validContentQuarantineReason(reason ContentQuarantineReason) bool {
 func readContentQuarantineInt64(buf []byte, field string) (int64, error) {
 	raw := binary.LittleEndian.Uint64(buf)
 	if raw > math.MaxInt64 {
-		return 0, fmt.Errorf("index: content quarantine %s overflows int64", field)
+		return 0, fmt.Errorf("%w: %s overflows int64", ErrInvalidContentQuarantine, field)
 	}
 	return int64(raw), nil
 }

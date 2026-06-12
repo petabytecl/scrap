@@ -69,6 +69,7 @@ Document identity.
 | Index quarantine tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index -run ContentQuarantine -count=1` | PASS |
 | Scanner detection tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -run 'Detection|Quarantine' -count=1` | PASS |
 | Shard Raft/apply tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'Quarantine|ApplySpan' -count=1` | PASS |
+| Review-fix focused tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index -run ContentQuarantine -count=1`; `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -run 'Detection|Quarantine' -count=1`; `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'Quarantine|ApplySpan' -count=1` | PASS |
 | Targeted packages | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1` | PASS |
 | Static diff check | `git diff --check` | PASS |
 | E2E gate policy | `scripts/check-e2e-gates.sh` | PASS |
@@ -82,8 +83,29 @@ Document identity.
 | --- | --- | --- |
 | Duplicate quarantine command is idempotent | `TestApplyQuarantineDocumentIsDuplicateSafe`, `TestContentQuarantineDuplicatePutIsIdempotent` | PASS |
 | Committed quarantine state survives Projection reopen/restart | `TestApplyQuarantineDocumentSurvivesProjectionReopen` | PASS |
+| Committed quarantine state rebuilds from Raft replay into a fresh Projection | `TestApplyQuarantineDocumentRebuildsFreshProjectionFromRaftReplay` applies a `QuarantineDocument` entry through `applyEntries`. | PASS |
 | Scanner memory absent after restart does not remove quarantine state | `TestApplyQuarantineDocumentSurvivesProjectionReopen` reopens Projection from disk without scanner memory. | PASS |
 | Corrupt quarantine value fails closed at quarantine lookup boundary | `TestContentQuarantineRejectsCorruptValues` | PASS |
+
+## Code Review Remediation
+
+BMAD code review found patch-class issues in detection/result consistency, detection
+batch bounds, cancellation classification, required timestamps, identity byte bounds,
+batch prevalidation, Raft apply waiting, replay evidence, and corrupt Projection
+sentinel coverage.
+
+Remediation:
+
+- `internal/avscan` rejects detections unless the scan result is `detected`, enforces
+  `MaxDetectionsPerBlock`, preserves cancellation/deadline classification, and
+  validates Document identity through store byte bounds.
+- `internal/shard` validates the full detection batch before any proposal and waits
+  for the matching committed apply notification before scanner progress can advance.
+- `internal/index` rejects missing detection timestamps, enforces identity byte
+  bounds, and wraps malformed quarantine decode errors with `ErrInvalidContentQuarantine`.
+- Tests now cover fresh Raft replay into Projection state, apply wait behavior,
+  unbounded detection rejection, cancellation preservation, missing timestamps,
+  batch prevalidation, and corrupt-value enum/sentinel behavior.
 
 ## Redaction Notes
 
@@ -100,5 +122,5 @@ bounded or hashed identifiers by default.
 | --- | --- | --- |
 | AC-5.3.1 | PASS | `proto/scrap/v1/raft.proto`, `TestShardReportDetectionsProposesQuarantineCommand`, `make proto-check` |
 | AC-5.3.2 | PASS | `internal/index/content_quarantine.go`, `TestContentQuarantineRoundTrip`, `TestContentQuarantineAffectsStreamingHash` |
-| AC-5.3.3 | PASS | `internal/avscan` detection reporter boundary, `internal/shard/content_quarantine.go`, `TestSchedulerReportsDetectionsBeforePersistingProgress` |
-| AC-5.3.4 | PASS | `TestApplyQuarantineDocumentSurvivesProjectionReopen`, `TestApplyQuarantineDocumentIsDuplicateSafe`, `TestContentQuarantineRejectsCorruptValues` |
+| AC-5.3.3 | PASS | `internal/avscan` detection reporter boundary, `internal/shard/content_quarantine.go`, `TestSchedulerReportsDetectionsBeforePersistingProgress`, `TestShardReportDetectionsWaitsForQuarantineApply` |
+| AC-5.3.4 | PASS | `TestApplyQuarantineDocumentRebuildsFreshProjectionFromRaftReplay`, `TestApplyQuarantineDocumentSurvivesProjectionReopen`, `TestApplyQuarantineDocumentIsDuplicateSafe`, `TestContentQuarantineRejectsCorruptValues` |
