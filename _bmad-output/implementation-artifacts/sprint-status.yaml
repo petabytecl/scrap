@@ -1,5 +1,5 @@
 # generated: 2026-06-10T20:50:36-04:00
-# last_updated: 2026-06-12T02:48:11-04:00
+# last_updated: 2026-06-12T02:56:47-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-12T02:48:11-04:00"
+last_updated: "2026-06-12T02:56:47-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -71,7 +71,7 @@ development_status:
   4-2-surface-authorization-audit-and-rate-limits: done
   4-3-openbao-backed-encrypted-write-and-read: done
   4-4-durable-envelope-rewrap-workflow: done
-  4-5-scrapctl-openbao-bootstrap-fresh-setup: backlog
+  4-5-scrapctl-openbao-bootstrap-fresh-setup: ready-for-dev
   4-6-scrapctl-openbao-bootstrap-idempotency-and-incompatible-state: backlog
   4-7-production-security-rehearsal-evidence-closure: backlog
   epic-4-retrospective: optional
