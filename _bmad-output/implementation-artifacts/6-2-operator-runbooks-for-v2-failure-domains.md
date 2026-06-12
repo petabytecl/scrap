@@ -4,7 +4,7 @@ baseline_commit: 12fe6d7e498e406ef0a5aabc7d9125310a2d664a
 
 # Story 6.2: Operator Runbooks for V2 Failure Domains
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -23,57 +23,57 @@ from source code.
 
 ## Tasks / Subtasks
 
-- [ ] Create the V2 operator runbook documentation surface. (AC: 1, 2)
-  - [ ] Create `docs/runbooks/README.md` as the index for all Story 6.2 runbooks.
-  - [ ] Add `docs/runbooks/v2-startup-security-readiness.md`.
-  - [ ] Add `docs/runbooks/v2-mtls-certificate-rotation.md`.
-  - [ ] Add `docs/runbooks/v2-openbao-transit-dependency.md`.
-  - [ ] Add `docs/runbooks/v2-backend-upload-pressure.md`.
-  - [ ] Add `docs/runbooks/v2-restore-failures.md`.
-  - [ ] Add `docs/runbooks/v2-eviction-campaigns.md`.
-  - [ ] Add `docs/runbooks/v2-block-quarantine-repair.md`.
-  - [ ] Add `docs/runbooks/v2-content-quarantine-response.md`.
-  - [ ] Add `docs/runbooks/v2-multi-shard-routing-health.md`.
-  - [ ] Add `docs/runbooks/v2-evidence-collection.md`.
-  - [ ] Keep files focused; do not combine unrelated failure domains into one large document.
-- [ ] Apply a common runbook checklist to every runbook. (AC: 1, 2)
-  - [ ] Each runbook must include: purpose, owning feature epic or release gate, symptoms, normal path, failure path, rollback or escalation, expected outputs, evidence collection, redaction requirements, authority-boundary note, and references.
-  - [ ] Create `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md`.
-  - [ ] In the evidence artifact, record a row for each runbook showing section coverage, owner, source requirement, command validation result, authority-boundary review result, redaction result, and final `PASS`/`CONCERNS`/`FAIL`.
-- [ ] Validate every command example against implemented surfaces. (AC: 3, 5)
-  - [ ] Use `go run ./cmd/scrapctl --help` and `internal/scrapctl/run.go` to confirm top-level commands before documenting them.
-  - [ ] Use subcommand source files before writing examples: `internal/scrapctl/openbao.go`, `internal/scrapctl/quarantine.go`, `internal/scrapctl/eviction.go`, `internal/scrapctl/evidence.go`, and `internal/scrapctl/fault.go`.
-  - [ ] Use only implemented make targets from `Makefile`, especially `production-rehearsal-security`, `production-rehearsal`, `production-rehearsal-down`, `tier2-e2e-up`, `tier3-evidence-up`, `evidence-bundle`, `evidence-up`, `evidence-down`, `local-dev-status`, and the prod-like targets.
-  - [ ] If a needed operational command does not exist, mark the runbook row `CONCERNS` or `FAIL` with owner and mitigation. Do not invent commands such as a direct restore CLI if the implemented surface does not provide one.
-- [ ] Preserve source-of-truth boundaries in incident steps. (AC: 4)
-  - [ ] State that Raft/Shard metadata and committed feature state are authority for storage behavior.
-  - [ ] State that Pebble Projection, Confirmed Upload Catalog, Local Block Lifecycle, Backend objects, audit, and OTel evidence have scoped roles and are not interchangeable.
-  - [ ] For restore and cold-read instructions, prohibit using Backend inventory, Backend LIST/HEAD, local files, or telemetry as the consistency oracle.
-  - [ ] For Block Quarantine, keep it filesystem-level Block isolation and repair; do not conflate it with Content Quarantine.
-  - [ ] For Content Quarantine, keep it metadata-level Document gating through committed quarantine state; do not instruct operators to edit Block bytes.
-- [ ] Make critical workflows independently runnable from documented commands and expected outputs. (AC: 3, 5)
-  - [ ] Cold reads and Backend restore: document how to confirm restore-first behavior through current feature evidence, relevant make/e2e gates, `scrapctl status`, `scrapctl upload-pressure`, `scrapctl evidence bundle`, and `scrapctl fault backend break|restore` where appropriate.
-  - [ ] Content Quarantine: document `scrapctl quarantine list|inspect|confirm|release|evidence`, required admin roles, expected denied-read behavior, and expected evidence report fields.
-  - [ ] OpenBao fail-closed behavior: document production rehearsal checks, `scrapctl openbao bootstrap`, `make production-rehearsal-security`, and the platform-managed OpenBao boundary.
-  - [ ] Backend restore failure handling: document transient Backend failure, missing/corrupt Backend object failure, no partial publish, sanitized public errors, and the owning Epic 3 evidence links.
-  - [ ] For any workflow that is currently only proven by package or local evidence, mark the evidence scope explicitly; do not promote it to final release proof.
-- [ ] Enforce redaction and evidence hygiene. (AC: 3, 5)
-  - [ ] Do not paste credential values, private key material, generated certificate material, Document payloads, unredacted Backend-key material, unredacted Backend object names, unredacted log output, trace IDs, request IDs, auth claims, or dependency output that embeds sensitive paths.
-  - [ ] Use placeholder names and bracket-split scan patterns in the evidence artifact where needed so validation commands do not self-match.
-  - [ ] Add a false-positive table for any deliberate references that match release-sensitive scan terms.
-  - [ ] Keep generated runtime reports under ignored `artifacts/` or `evidence/`; link paths and sanitized summaries only.
-- [ ] Keep Story 6.2 inside its release-doc scope. (AC: 1-5)
-  - [ ] Do not implement new production behavior, new `scrapctl` commands, new admin endpoints, alert/query references, the release evidence bundle, Tier 2/Tier 3 final evidence, real S3/IAM closure, or final V2 closure policy.
-  - [ ] Do not edit `docs/prd-closure-policy.md` unless a contradiction prevents accurate runbook classification; policy updates are Story 6.7 scope.
-  - [ ] Do not create an ADR unless this work changes deployment, security, auth, wire, storage, or cross-package ownership contracts.
-- [ ] Run verification and update BMAD tracking. (AC: 1-5)
-  - [ ] `git diff --check`
-  - [ ] `make proto-check`
-  - [ ] `scripts/check-e2e-gates.sh`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make check`
-  - [ ] Run command-surface validation for all documented commands and record it in `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md`.
-  - [ ] Run redaction and authority-boundary scans over `docs/runbooks/`, this story, and the evidence artifact.
-  - [ ] Update this story's Dev Agent Record and move the story to `review`; leave `done` for BMAD code review.
+- [x] Create the V2 operator runbook documentation surface. (AC: 1, 2)
+  - [x] Create `docs/runbooks/README.md` as the index for all Story 6.2 runbooks.
+  - [x] Add `docs/runbooks/v2-startup-security-readiness.md`.
+  - [x] Add `docs/runbooks/v2-mtls-certificate-rotation.md`.
+  - [x] Add `docs/runbooks/v2-openbao-transit-dependency.md`.
+  - [x] Add `docs/runbooks/v2-backend-upload-pressure.md`.
+  - [x] Add `docs/runbooks/v2-restore-failures.md`.
+  - [x] Add `docs/runbooks/v2-eviction-campaigns.md`.
+  - [x] Add `docs/runbooks/v2-block-quarantine-repair.md`.
+  - [x] Add `docs/runbooks/v2-content-quarantine-response.md`.
+  - [x] Add `docs/runbooks/v2-multi-shard-routing-health.md`.
+  - [x] Add `docs/runbooks/v2-evidence-collection.md`.
+  - [x] Keep files focused; do not combine unrelated failure domains into one large document.
+- [x] Apply a common runbook checklist to every runbook. (AC: 1, 2)
+  - [x] Each runbook must include: purpose, owning feature epic or release gate, symptoms, normal path, failure path, rollback or escalation, expected outputs, evidence collection, redaction requirements, authority-boundary note, and references.
+  - [x] Create `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md`.
+  - [x] In the evidence artifact, record a row for each runbook showing section coverage, owner, source requirement, command validation result, authority-boundary review result, redaction result, and final `PASS`/`CONCERNS`/`FAIL`.
+- [x] Validate every command example against implemented surfaces. (AC: 3, 5)
+  - [x] Use `go run ./cmd/scrapctl --help` and `internal/scrapctl/run.go` to confirm top-level commands before documenting them.
+  - [x] Use subcommand source files before writing examples: `internal/scrapctl/openbao.go`, `internal/scrapctl/quarantine.go`, `internal/scrapctl/eviction.go`, `internal/scrapctl/evidence.go`, and `internal/scrapctl/fault.go`.
+  - [x] Use only implemented make targets from `Makefile`, especially `production-rehearsal-security`, `production-rehearsal`, `production-rehearsal-down`, `tier2-e2e-up`, `tier3-evidence-up`, `evidence-bundle`, `evidence-up`, `evidence-down`, `local-dev-status`, and the prod-like targets.
+  - [x] If a needed operational command does not exist, mark the runbook row `CONCERNS` or `FAIL` with owner and mitigation. Do not invent commands such as a direct restore CLI if the implemented surface does not provide one.
+- [x] Preserve source-of-truth boundaries in incident steps. (AC: 4)
+  - [x] State that Raft/Shard metadata and committed feature state are authority for storage behavior.
+  - [x] State that Pebble Projection, Confirmed Upload Catalog, Local Block Lifecycle, Backend objects, audit, and OTel evidence have scoped roles and are not interchangeable.
+  - [x] For restore and cold-read instructions, prohibit using Backend inventory, Backend LIST/HEAD, local files, or telemetry as the consistency oracle.
+  - [x] For Block Quarantine, keep it filesystem-level Block isolation and repair; do not conflate it with Content Quarantine.
+  - [x] For Content Quarantine, keep it metadata-level Document gating through committed quarantine state; do not instruct operators to edit Block bytes.
+- [x] Make critical workflows independently runnable from documented commands and expected outputs. (AC: 3, 5)
+  - [x] Cold reads and Backend restore: document how to confirm restore-first behavior through current feature evidence, relevant make/e2e gates, `scrapctl status`, `scrapctl upload-pressure`, `scrapctl evidence bundle`, and `scrapctl fault backend break|restore` where appropriate.
+  - [x] Content Quarantine: document `scrapctl quarantine list|inspect|confirm|release|evidence`, required admin roles, expected denied-read behavior, and expected evidence report fields.
+  - [x] OpenBao fail-closed behavior: document production rehearsal checks, `scrapctl openbao bootstrap`, `make production-rehearsal-security`, and the platform-managed OpenBao boundary.
+  - [x] Backend restore failure handling: document transient Backend failure, missing/corrupt Backend object failure, no partial publish, sanitized public errors, and the owning Epic 3 evidence links.
+  - [x] For any workflow that is currently only proven by package or local evidence, mark the evidence scope explicitly; do not promote it to final release proof.
+- [x] Enforce redaction and evidence hygiene. (AC: 3, 5)
+  - [x] Do not paste credential values, private key material, generated certificate material, Document payloads, unredacted Backend-key material, unredacted Backend object names, unredacted log output, trace IDs, request IDs, auth claims, or dependency output that embeds sensitive paths.
+  - [x] Use placeholder names and bracket-split scan patterns in the evidence artifact where needed so validation commands do not self-match.
+  - [x] Add a false-positive table for any deliberate references that match release-sensitive scan terms.
+  - [x] Keep generated runtime reports under ignored `artifacts/` or `evidence/`; link paths and sanitized summaries only.
+- [x] Keep Story 6.2 inside its release-doc scope. (AC: 1-5)
+  - [x] Do not implement new production behavior, new `scrapctl` commands, new admin endpoints, alert/query references, the release evidence bundle, Tier 2/Tier 3 final evidence, real S3/IAM closure, or final V2 closure policy.
+  - [x] Do not edit `docs/prd-closure-policy.md` unless a contradiction prevents accurate runbook classification; policy updates are Story 6.7 scope.
+  - [x] Do not create an ADR unless this work changes deployment, security, auth, wire, storage, or cross-package ownership contracts.
+- [x] Run verification and update BMAD tracking. (AC: 1-5)
+  - [x] `git diff --check`
+  - [x] `make proto-check`
+  - [x] `scripts/check-e2e-gates.sh`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
+  - [x] Run command-surface validation for all documented commands and record it in `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md`.
+  - [x] Run redaction and authority-boundary scans over `docs/runbooks/`, this story, and the evidence artifact.
+  - [x] Update this story's Dev Agent Record and move the story to `review`; leave `done` for BMAD code review.
 
 ## Dev Notes
 
@@ -217,11 +217,35 @@ Classify every match as either a required warning, a safe placeholder, or a bug 
 ### Debug Log References
 
 - 2026-06-12T18:20:00-04:00 - Story context created from Epic 6, FR-16, DG-5, Story 6.1 review lessons, closure policy, production rehearsal docs, OpenBao deployment contract, implemented `scrapctl` command surfaces, Makefile gates, repo context, and quick external runbook research.
+- 2026-06-12T18:25:26-04:00 - Dev-story started from implementation baseline `cb5bfbf075e2b8de22217098ce7c7844677b09a3`; Story 6.2 and sprint status moved to in-progress.
+- 2026-06-12T18:30:43-04:00 - Created `docs/runbooks/` with ten V2 operator runbooks plus index, created `v2-operator-runbook-evidence.md`, validated commands, classified redaction/authority scan matches, and passed all required gates.
 
 ### Completion Notes List
 
+- Created the durable V2 operator runbook set under `docs/runbooks/`.
+- Added `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md` with per-runbook checklist coverage, command validation, authority review, redaction review, false-positive classification, and remaining release scope.
+- Story 6.2 stayed documentation/evidence scoped: no production code, protobuf, deployment manifest, ADR, alert/query, release bundle, Tier gate, S3/IAM, or closure-policy behavior changed.
+- Verification passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, command-surface validation, redaction/authority scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/6-2-operator-runbooks-for-v2-failure-domains.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/v2-operator-runbook-evidence.md`
+- `docs/runbooks/README.md`
+- `docs/runbooks/v2-startup-security-readiness.md`
+- `docs/runbooks/v2-mtls-certificate-rotation.md`
+- `docs/runbooks/v2-openbao-transit-dependency.md`
+- `docs/runbooks/v2-backend-upload-pressure.md`
+- `docs/runbooks/v2-restore-failures.md`
+- `docs/runbooks/v2-eviction-campaigns.md`
+- `docs/runbooks/v2-block-quarantine-repair.md`
+- `docs/runbooks/v2-content-quarantine-response.md`
+- `docs/runbooks/v2-multi-shard-routing-health.md`
+- `docs/runbooks/v2-evidence-collection.md`
 
 ## Change Log
 
 - 2026-06-12 - Created Story 6.2 context for V2 operator runbooks.
+- 2026-06-12 - Started Story 6.2 implementation.
+- 2026-06-12 - Implemented V2 operator runbooks and moved Story 6.2 to review.
