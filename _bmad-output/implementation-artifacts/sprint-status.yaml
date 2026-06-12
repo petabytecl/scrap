@@ -1,5 +1,5 @@
 # generated: 2026-06-10T20:50:36-04:00
-# last_updated: 2026-06-12T13:50:11-04:00
+# last_updated: 2026-06-12T13:54:44-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-12T13:50:11-04:00"
+last_updated: "2026-06-12T13:54:44-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -78,7 +78,7 @@ development_status:
   epic-5: in-progress
   5-1-content-scanner-engine-boundary-and-scheduling: done
   5-2-scanner-watermarks-and-rescan-priority: done
-  5-3-quarantinedocument-raft-command-and-projection-state: backlog
+  5-3-quarantinedocument-raft-command-and-projection-state: ready-for-dev
   5-4-quarantined-read-denial-and-metadata-reconciliation: backlog
   5-5-admin-http-quarantine-operations: backlog
   5-6-scrapctl-quarantine-operator-workflow: backlog
