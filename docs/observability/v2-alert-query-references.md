@@ -14,7 +14,9 @@ risks that do not yet have dedicated telemetry.
 ## Query Conventions
 
 - PromQL examples use the Prometheus-normalized names exported from the OTel
-  instruments. The source metric names are recorded in the evidence artifact.
+  instruments. For OTel counter names that already end in `.total`, the
+  exporter exposes a `_total_total` counter family; the source metric names
+  are recorded in the evidence artifact.
 - Rate expressions use a `[5m]` window to match the evidence query pack and
   the current OTel export cadence.
 - Alert labels must stay stable and bounded. Use labels for routing dimensions
@@ -47,7 +49,7 @@ Status values:
 | AQR-007 | Backend upload lag | Sealed Blocks are not uploading fast enough or pending upload bytes/blocks keep growing. | Upload pending bytes/blocks, upload result rate, upload duration, and verify results. | Check Backend dependency health, upload outbox state, and preserve evidence before forcing retries. | [Backend upload pressure](../runbooks/v2-backend-upload-pressure.md) | PASS |
 | AQR-008 | Upload pressure | Admission pressure is near or at critical because pending upload work exceeds budget. | `scrap.upload.pressure_level`, pending bytes/blocks, and RESOURCE_EXHAUSTED RPC status. | Protect write ACK safety; reduce load or repair Backend dependency before treating pressure as healthy. | [Backend upload pressure](../runbooks/v2-backend-upload-pressure.md) | PASS |
 | AQR-009 | Block Quarantine and scrub | Deep Scrub found corrupt Block data or Block Quarantine is active. | Deep Scrub counters, quarantine gauges, and scrub progress. | Follow Block Quarantine repair; affected Documents must fail closed until repair completes. | [Block Quarantine repair](../runbooks/v2-block-quarantine-repair.md) | PASS |
-| AQR-010 | Content Scanner lag or outage | Scanner work is lagging, unavailable, failing, or duplicating schedules. | Content Scanner run/block/failure/lag/engine-unavailable metrics. | Keep scanning asynchronous and route engine failures through the Content Quarantine response path if Documents are flagged. | [Content Quarantine response](../runbooks/v2-content-quarantine-response.md) | PASS |
+| AQR-010 | Content Scanner lag or outage | Scanner work is lagging, unavailable, failing, or duplicating schedules. | Content Scanner run/block/failure/lag/engine-unavailable metrics. | Keep scanning asynchronous; route engine outage, lag, failures, or flagged Documents through Content Quarantine response. | [Content Quarantine response](../runbooks/v2-content-quarantine-response.md) | PASS |
 | AQR-011 | Content Quarantine state | Operators need to inspect, confirm, release, or prove Content Quarantine state. | Content Scanner metrics and `scrapctl quarantine` evidence. A dedicated Content Quarantine count metric is not implemented. | Use admin and `scrapctl` quarantine workflows; record the metric gap as `CONCERNS`. | [Content Quarantine response](../runbooks/v2-content-quarantine-response.md) | CONCERNS |
 | AQR-012 | Transit outage | OpenBao Transit is unavailable or encryption fails closed. | Production security rehearsal, bootstrap evidence, and startup readiness output. A direct runtime Transit outage metric is not implemented. | Leave production encryption failed closed and escalate to the platform OpenBao owner. | [OpenBao Transit dependency](../runbooks/v2-openbao-transit-dependency.md), [Startup/security readiness](../runbooks/v2-startup-security-readiness.md) | CONCERNS |
 | AQR-013 | Audit sink failure | Production security evidence cannot prove audit delivery. | Production security readiness and rehearsal evidence. A direct audit sink failure metric is not implemented. | Do not claim final release readiness until audit evidence is current and linked. | [Startup/security readiness](../runbooks/v2-startup-security-readiness.md) | CONCERNS |
@@ -60,15 +62,21 @@ Status values:
 ### Public RPC Availability and Latency
 
 ```promql
-# Request rate by method and gRPC status.
-sum(rate(scrap_rpc_server_requests_total[5m])) by (rpc_method, rpc_grpc_status_code)
+# Request rate by public Document method and gRPC status.
+sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService"}[5m])) by (rpc_method, rpc_grpc_status_code)
 
-# Error ratio across public RPCs.
-sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code!="0"}[5m])) /
-sum(rate(scrap_rpc_server_requests_total[5m]))
+# Server/dependency failure ratio across public RPCs. Evaluate the ratio only
+# when request rate is non-zero; keep expected client/status outcomes separate.
+sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService"}[5m])) > 0
+and
+sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService",rpc_grpc_status_code=~"2|4|13|14|15"}[5m])) /
+clamp_min(sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService"}[5m])), 0.001)
+
+# Non-OK investigation by public method and status.
+sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService",rpc_grpc_status_code!="0"}[5m])) by (rpc_method, rpc_grpc_status_code)
 
 # p99 request latency by method.
-histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m])) by (le, rpc_method))
+histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket{rpc_service="scrap.v1.DocumentService"}[5m])) by (le, rpc_method))
 ```
 
 ### Write ACK Latency
@@ -78,18 +86,20 @@ histogram_quantile(0.99, sum(rate(scrap_rpc_server_duration_seconds_bucket[5m]))
 histogram_quantile(0.99, sum(rate(scrap_write_stage_duration_seconds_bucket[5m])) by (le, scrap_write_stage))
 
 # Average write-stage latency by bounded stage name.
+sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_write_stage) > 0
+and
 sum(rate(scrap_write_stage_duration_seconds_sum[5m])) by (scrap_write_stage) /
-sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_write_stage)
+clamp_min(sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_write_stage), 0.001)
 ```
 
 ### Read and Restore Failures
 
 ```promql
 # Public read/head/find failures by bounded method and status.
-sum(rate(scrap_rpc_server_requests_total{rpc_method=~"ReadDocument|HeadDocument|FindDocuments",rpc_grpc_status_code!="0"}[5m])) by (rpc_method, rpc_grpc_status_code)
+sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService",rpc_method=~"ReadDocument|HeadDocument|FindDocuments",rpc_grpc_status_code!="0"}[5m])) by (rpc_method, rpc_grpc_status_code)
 
-# Restore operation outcomes by bounded status.
-sum(rate(scrap_eviction_restore_total[5m])) by (status)
+# Restore operation outcomes by bounded reason, result, and failure reason.
+sum(rate(scrap_eviction_restore_total_total[5m])) by (reason, result, failure_reason)
 
 # Current restore failure inventory by bounded reason.
 scrap_eviction_restore_failures_by_reason
@@ -103,7 +113,7 @@ scrap_upload_pending_bytes
 scrap_upload_pending_blocks
 
 # Upload outcomes by bounded status.
-sum(rate(scrap_upload_total[5m])) by (status)
+sum(rate(scrap_upload_total_total[5m])) by (status)
 
 # Pressure level: 0=ok, 1=warn, 2=pressure, 3=critical.
 scrap_upload_pressure_level
@@ -126,6 +136,7 @@ scrap_avscan_lag_blocks
 scrap_avscan_in_flight_blocks
 sum(rate(scrap_avscan_failures_total[5m])) by (scrap_shard_id, reason)
 sum(rate(scrap_avscan_engine_unavailable_total[5m])) by (scrap_shard_id)
+absent_over_time(scrap_avscan_runs_total[30m])
 ```
 
 ### Security Denials
@@ -141,11 +152,18 @@ sum(rate(scrap_security_authorization_denials_total[5m])) by (scrap_surface, scr
 ### Shard Leader and Apply Health
 
 ```promql
-# Leader presence by Shard.
-scrap_raft_is_leader
+# Leader anomaly by Shard: zero, missing, or multiple leaders are unhealthy.
+sum(scrap_raft_is_leader) by (scrap_shard_id) != 1
+or
+absent(scrap_raft_is_leader)
 
-# Apply lag. Positive growth means commit is outrunning apply.
-max(scrap_raft_commit_index) by (scrap_shard_id) - max(scrap_raft_applied_index) by (scrap_shard_id)
+# Apply lag by bounded Member/Shard identity. Positive growth means commit is
+# outrunning apply on at least one reporting Member.
+max by (scrap_shard_id, scrap_member_id) (scrap_raft_commit_index - scrap_raft_applied_index)
+or
+absent(scrap_raft_commit_index)
+or
+absent(scrap_raft_applied_index)
 ```
 
 ## TraceQL References
@@ -155,16 +173,16 @@ identifiers in release evidence.
 
 ```traceql
 # Slow write proposal spans.
-{ span.scrap.write.stage = "raft_propose" } | duration > 100ms
+{ span.scrap.write.stage = "raft_propose" } | span:duration > 100ms
 
 # Apply spans across voters.
-{ name = "scrap.apply/commit_document" }
+{ span:name = "scrap.apply/commit_document" }
 
 # Upload spans for sealed Blocks.
-{ name =~ "scrap.upload/.*" }
+{ span:name =~ "scrap.upload/.*" }
 
 # Error spans.
-{ status = error }
+{ span:status = error }
 ```
 
 ## LogQL References

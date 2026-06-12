@@ -4,7 +4,7 @@ baseline_commit: 25042bca63662449a2a8803818e8fce8bb7222e4
 
 # Story 6.3: Alert and Query References
 
-Status: review
+Status: done
 
 ## Story
 
@@ -63,6 +63,18 @@ signals.
   - [x] Validate every documented metric/query name against existing code, existing evidence-stack query pack, or an explicit gap row.
   - [x] Run redaction/privacy scans over `docs/observability/`, `docs/runbooks/README.md`, this story, and `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`.
   - [x] Update this story's Dev Agent Record and move the story to `review`; leave `done` for BMAD code review.
+
+### Review Findings
+
+- [x] [Review][Patch] Correct PromQL restore/upload counter names and exact metric validation [docs/observability/v2-alert-query-references.md]
+- [x] [Review][Patch] Scope and guard public RPC availability queries [docs/observability/v2-alert-query-references.md]
+- [x] [Review][Patch] Guard idle write-stage average latency queries [docs/observability/v2-alert-query-references.md]
+- [x] [Review][Patch] Use scoped TraceQL fields for Story 6.3 examples [docs/observability/v2-alert-query-references.md]
+- [x] [Review][Patch] Strengthen Shard leader and apply-lag queries [docs/observability/v2-alert-query-references.md]
+- [x] [Review][Patch] Clarify scanner outage handling before Documents are flagged [docs/observability/v2-alert-query-references.md]
+- [x] [Review][Patch] Broaden redaction and host-path scan coverage [6-3-alert-and-query-references.md]
+- [x] [Review][Patch] Add auditable runbook and command-surface validation [v2-alert-query-reference-evidence.md]
+- [x] [Review][Patch] Remove LogQL from the runbook index primary command list [docs/runbooks/README.md]
 
 ## Dev Notes
 
@@ -142,17 +154,26 @@ env GOCACHE=/tmp/scrap-v2-go-build make check
 Run source validation for documented query/metric references and record results in `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`:
 
 ```bash
-rg -n "scrap\\.rpc\\.server|scrap\\.write\\.stage|scrap\\.upload|scrap\\.raft|scrap\\.eviction|scrap\\.scrub|scrap\\.avscan|scrap\\.security|process\\.runtime\\.go" internal deploy/kustomize/components/evidence-stack docs/observability _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md
-rg -n "runbook|v2-.*\\.md|docs/runbooks" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md
+rg -n "scrap_rpc_server_duration_seconds_bucket|scrap_write_stage_duration_seconds_bucket|scrap_eviction_restore_total_total|scrap_upload_total_total|scrap_scrub_deep_corruptions_total|scrap_avscan_failures_total|scrap_security_rate_limit_denials_total|scrap_raft_is_leader" deploy internal test docs/observability/v2-alert-query-references.md
+rg -n '"scrap\.rpc\.server\.duration"|"scrap\.write\.stage\.duration"|"scrap\.eviction\.restore\.total"|"scrap\.upload\.total"|"scrap\.scrub\.deep\.corruptions"|"scrap\.avscan\.failures"|"scrap\.security\.rate_limit\.denials"|"scrap\.security\.authorization\.denials"|"scrap\.raft\.is_leader"' internal test
+go run ./cmd/scrapctl --help
+test -f docs/runbooks/v2-startup-security-readiness.md
+test -f docs/runbooks/v2-evidence-collection.md
+test -f docs/runbooks/v2-multi-shard-routing-health.md
+test -f docs/runbooks/v2-restore-failures.md
+test -f docs/runbooks/v2-block-quarantine-repair.md
+test -f docs/runbooks/v2-content-quarantine-response.md
+test -f docs/runbooks/v2-backend-upload-pressure.md
+test -f docs/runbooks/v2-openbao-transit-dependency.md
 rg -n "PASS|CONCERNS|FAIL" _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md
 ```
 
 Run release-sensitive scans over the story, new docs, updated runbook index, and evidence artifact. Keep patterns bracket-split:
 
 ```bash
-secret_shape='([a]ccess[_-]?[k]ey|[p]assword|[t]oken|PRIVATE [K]EY|BEGIN [A-Z ]*KEY)'
-identity_shape='transaction[_-]?[i]d=|document[_-]?[n]ame=|trace[_-]?[i]d=|request[_-]?[i]d=|Backend [k]ey|raw [l]og|auth [c]laim'
-path_shape='/home/c[o]to|/t[m]p/|host-absolute'
+secret_shape='(?i)([a]ccess[_-]?[k]ey|[p]assword|[t]oken|Bearer[[:space:]]+|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]+\.|PRIVATE [K]EY|BEGIN [A-Z ]*KEY)'
+identity_shape='(?i)(transaction[_-]?[i]d|transactionId|document[_-]?[n]ame|documentName|trace[_-]?[i]d|traceID|request[_-]?[i]d|requestID|x-request-id)[[:space:]]*[:=]|Backend [k]ey|raw [l]og|auth [c]laim'
+path_shape='(^|[[:space:]])(/(home|Users|var|opt|private|tmp)/|[A-Za-z]:\\)|host-[a]bsolute'
 rg -n --pcre2 "$secret_shape" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md
 rg -n --pcre2 "$identity_shape" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md
 rg -n --pcre2 "$path_shape" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md
@@ -199,6 +220,7 @@ GPT-5 Codex
 - 2026-06-12T18:55:19-04:00 - Story marked in-progress in story file and sprint status.
 - 2026-06-12T18:56:00-04:00 - Red checks confirmed alert/query docs, evidence artifact, and runbook index link were absent before implementation.
 - 2026-06-12T19:00:58-04:00 - Verification passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, `env GOCACHE=/tmp/scrap-v2-go-build make check`, source validation, status/runbook validation, placeholder scan, and release-sensitive scans.
+- 2026-06-12T19:16:48-04:00 - Code review fixes applied for exact PromQL names, guarded/scoped queries, scoped TraceQL, Shard-health semantics, scanner outage wording, runbook command list, link validation, command validation, and broader redaction scans.
 
 ### Completion Notes List
 
@@ -208,6 +230,7 @@ GPT-5 Codex
 - Linked the alert/query reference from the operator runbook index.
 - Preserved Epic 6 aggregation-only scope: no production telemetry, `scrapctl`, admin endpoint, dashboard, deployment manifest, protobuf, ADR, or closure-policy changes were made.
 - Missing peer/admin/Content Quarantine inventory/Transit/audit/evidence-leak telemetry remains visible as `CONCERNS`; no metric names were fabricated.
+- BMAD code review patch findings were resolved and validation guidance was updated to prevent the exact-query/source-validation gap from recurring.
 
 ### File List
 
@@ -221,3 +244,4 @@ GPT-5 Codex
 
 - 2026-06-12 - Created Story 6.3 context for alert and query references.
 - 2026-06-12 - Implemented Story 6.3 alert/query references and moved story to review.
+- 2026-06-12 - Addressed Story 6.3 code review findings.
