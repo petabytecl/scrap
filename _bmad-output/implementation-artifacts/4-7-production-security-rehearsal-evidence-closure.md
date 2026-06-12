@@ -5,7 +5,7 @@ created: 2026-06-12T11:23:45-04:00
 
 # Story 4.7: Production Security Rehearsal Evidence Closure
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,52 +33,62 @@ so that Epic 4 cannot close from local happy-path security tests.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Epic 4 closure evidence artifact before script/code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-4-production-security-rehearsal-closure-evidence.md`.
-  - [ ] Record baseline commit, timestamp, command, commit/ref, environment, expected result, actual result, artifact path, redaction proof, and final `PASS`/`CONCERNS`/`FAIL` rows.
-  - [ ] Link the existing Story 4.1 through 4.6 evidence artifacts and name the owning story for every linked claim.
-  - [ ] Classify filesystem Backend, LocalStack, or other local/test endpoints as local/interim evidence. Do not mark them as real S3/IAM proof.
+- [x] Create the Epic 4 closure evidence artifact before script/code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-4-production-security-rehearsal-closure-evidence.md`.
+  - [x] Record baseline commit, timestamp, command, commit/ref, environment, expected result, actual result, artifact path, redaction proof, and final `PASS`/`CONCERNS`/`FAIL` rows.
+  - [x] Link the existing Story 4.1 through 4.6 evidence artifacts and name the owning story for every linked claim.
+  - [x] Classify filesystem Backend, LocalStack, or other local/test endpoints as local/interim evidence. Do not mark them as real S3/IAM proof.
 
-- [ ] Inventory prior Epic 4 evidence and closure gaps. (AC: 1, 4)
-  - [ ] Link Story 4.1 startup fail-closed evidence: `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md`.
-  - [ ] Link Story 4.2 public/peer/admin/`scrapctl` authz, audit, and rate-limit evidence: `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md`.
-  - [ ] Link Story 4.3 encrypted write/read, Transit/key failure, OpenBao adapter, and redaction evidence: `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
-  - [ ] Link Story 4.4 durable rewrap, idempotency, interruption, and redaction evidence: `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md`.
-  - [ ] Link Story 4.5 fresh OpenBao bootstrap, official-client use, and redaction evidence: `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md`.
-  - [ ] Link Story 4.6 compatible rerun, incompatible-state no-mutation, and bootstrap slice closure evidence: `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-idempotency-evidence.md`.
-  - [ ] Keep closure status `FAIL` or `CONCERNS` until the production-security rehearsal command and drill artifacts are actually present and leak-scanned.
+- [x] Inventory prior Epic 4 evidence and closure gaps. (AC: 1, 4)
+  - [x] Link Story 4.1 startup fail-closed evidence: `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md`.
+  - [x] Link Story 4.2 public/peer/admin/`scrapctl` authz, audit, and rate-limit evidence: `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md`.
+  - [x] Link Story 4.3 encrypted write/read, Transit/key failure, OpenBao adapter, and redaction evidence: `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
+  - [x] Link Story 4.4 durable rewrap, idempotency, interruption, and redaction evidence: `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md`.
+  - [x] Link Story 4.5 fresh OpenBao bootstrap, official-client use, and redaction evidence: `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md`.
+  - [x] Link Story 4.6 compatible rerun, incompatible-state no-mutation, and bootstrap slice closure evidence: `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-idempotency-evidence.md`.
+  - [x] Keep closure status `FAIL` or `CONCERNS` until the production-security rehearsal command and drill artifacts are actually present and leak-scanned.
 
-- [ ] Bring `make production-rehearsal-security` artifacts up to AC-4.7 metadata. (AC: 2, 3)
-  - [ ] Reuse `scripts/production-rehearsal.sh` and `Makefile` targets instead of creating a parallel rehearsal runner.
-  - [ ] Extend the rehearsal report if needed so `artifacts/production-rehearsal/report.json` includes the invoked command, commit/ref, timestamp, environment name, Backend classification, OpenBao image, expected result, actual result, artifact/report paths, redaction proof, and local override classification.
-  - [ ] Prefer routing OpenBao init/mount/key setup through the supported `scrapctl openbao bootstrap` path where practical. If the script keeps direct setup for a narrow reason, record the reason in evidence and keep DG-4 boundaries explicit.
-  - [ ] Ensure report fields stay machine-readable, low-cardinality, and redacted. Do not include root tokens, unseal keys, Transit tokens, private keys, client cert material, wrapped keys, raw Document payloads, raw Backend keys, raw provider bodies, or raw logs.
-  - [ ] Update `scripts/check-e2e-gates.sh` only when new rehearsal-report invariants need a structural guard.
+- [x] Bring `make production-rehearsal-security` artifacts up to AC-4.7 metadata. (AC: 2, 3)
+  - [x] Reuse `scripts/production-rehearsal.sh` and `Makefile` targets instead of creating a parallel rehearsal runner.
+  - [x] Extend the rehearsal report if needed so `artifacts/production-rehearsal/report.json` includes the invoked command, commit/ref, timestamp, environment name, Backend classification, OpenBao image, expected result, actual result, artifact/report paths, redaction proof, and local override classification.
+  - [x] Prefer routing OpenBao init/mount/key setup through the supported `scrapctl openbao bootstrap` path where practical. If the script keeps direct setup for a narrow reason, record the reason in evidence and keep DG-4 boundaries explicit.
+  - [x] Ensure report fields stay machine-readable, low-cardinality, and redacted. Do not include root tokens, unseal keys, Transit tokens, private keys, client cert material, wrapped keys, raw Document payloads, raw Backend keys, raw provider bodies, or raw logs.
+  - [x] Update `scripts/check-e2e-gates.sh` only when new rehearsal-report invariants need a structural guard.
 
-- [ ] Add or validate production-rehearsal fail-closed drills. (AC: 2, 4)
-  - [ ] Record a Transit unavailable drill in the production-rehearsal artifact path. The expected result is a failed write/read or readiness operation with no plaintext fallback and no secret leakage.
-  - [ ] Record an OpenBao auth denied drill using a bounded/no-capability token or equivalent policy-safe setup. The expected result is a typed fail-closed denial without raw provider body, token, or key material leakage.
-  - [ ] Record a wrong key policy, missing key, or incompatible key drill that proves the production path fails closed instead of creating unsafe state or falling back to plaintext.
-  - [ ] Keep every drill deterministic and self-contained under `artifacts/production-rehearsal/`, which is ignored by Git.
-  - [ ] If a drill cannot be safely exercised in this local rehearsal target, record `FAIL` or `CONCERNS` with the exact missing artifact; do not defer a P0 security gap to Epic 6.
+- [x] Add or validate production-rehearsal fail-closed drills. (AC: 2, 4)
+  - [x] Record a Transit unavailable drill in the production-rehearsal artifact path. The expected result is a failed write/read or readiness operation with no plaintext fallback and no secret leakage.
+  - [x] Record an OpenBao auth denied drill using a bounded/no-capability token or equivalent policy-safe setup. The expected result is a typed fail-closed denial without raw provider body, token, or key material leakage.
+  - [x] Record a wrong key policy, missing key, or incompatible key drill that proves the production path fails closed instead of creating unsafe state or falling back to plaintext.
+  - [x] Keep every drill deterministic and self-contained under `artifacts/production-rehearsal/`, which is ignored by Git.
+  - [x] If a drill cannot be safely exercised in this local rehearsal target, record `FAIL` or `CONCERNS` with the exact missing artifact; do not defer a P0 security gap to Epic 6.
 
-- [ ] Verify redaction and no-overclaim behavior. (AC: 1-4)
-  - [ ] Run leak scans over the story, closure evidence, rehearsal script, generated report schema tests, and any touched code.
-  - [ ] Prove public tracker-ready evidence excludes tokens, private keys, generated certificate material, raw logs, raw Backend keys, raw Document payloads, wrapped keys, and raw dependency errors.
-  - [ ] Ensure the closure artifact states exactly what the filesystem-backed security rehearsal proves and what remains for real S3/IAM.
-  - [ ] Do not mark Epic 4 or release closure done if production-rehearsal artifacts are missing, local-only, or leak-scanning is incomplete.
+- [x] Verify redaction and no-overclaim behavior. (AC: 1-4)
+  - [x] Run leak scans over the story, closure evidence, rehearsal script, generated report schema tests, and any touched code.
+  - [x] Prove public tracker-ready evidence excludes tokens, private keys, generated certificate material, raw logs, raw Backend keys, raw Document payloads, wrapped keys, and raw dependency errors.
+  - [x] Ensure the closure artifact states exactly what the filesystem-backed security rehearsal proves and what remains for real S3/IAM.
+  - [x] Do not mark Epic 4 or release closure done if production-rehearsal artifacts are missing, local-only, or leak-scanning is incomplete.
 
-- [ ] Preserve package, authority, and evidence boundaries. (AC: 1-4)
-  - [ ] Expected touch points are `_bmad-output/implementation-artifacts`, `scripts/production-rehearsal.sh`, `scripts/check-e2e-gates.sh`, `Makefile` only if target wiring changes, and narrow tests or evidence parsing helpers if needed.
-  - [ ] Keep OpenBao client behavior behind `internal/encryption` and `internal/scrapctl`; do not pass OpenBao client types into Shard, Backend, server, admin, or public API contracts.
-  - [ ] Do not change Document identity, Backend object identity, storage format, Block/Frame layout, Raft command shape, envelope metadata format, public/peer/admin wire contracts, or production OpenBao lifecycle ownership.
-  - [ ] Create an ADR only if the implementation changes deployment ownership, security/auth contracts, wire/storage format, dependency choices, or cross-package boundaries.
+- [x] Preserve package, authority, and evidence boundaries. (AC: 1-4)
+  - [x] Expected touch points are `_bmad-output/implementation-artifacts`, `scripts/production-rehearsal.sh`, `scripts/check-e2e-gates.sh`, `Makefile` only if target wiring changes, and narrow tests or evidence parsing helpers if needed.
+  - [x] Keep OpenBao client behavior behind `internal/encryption` and `internal/scrapctl`; do not pass OpenBao client types into Shard, Backend, server, admin, or public API contracts.
+  - [x] Do not change Document identity, Backend object identity, storage format, Block/Frame layout, Raft command shape, envelope metadata format, public/peer/admin wire contracts, or production OpenBao lifecycle ownership.
+  - [x] Create an ADR only if the implementation changes deployment ownership, security/auth contracts, wire/storage format, dependency choices, or cross-package boundaries.
 
-- [ ] Update story, evidence, and tracker artifacts. (AC: 1-4)
-  - [ ] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
-  - [ ] Update this story with debug log references, completion notes, review findings, and file list.
-  - [ ] Update `_bmad-output/implementation-artifacts/sprint-status.yaml` through `review` and then `done` only after code review and fixes.
-  - [ ] Do not move Epic 4 to `done` from this story unless every Epic 4 closure row is `PASS` and no required P0 evidence is missing.
+- [x] Update story, evidence, and tracker artifacts. (AC: 1-4)
+  - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
+  - [x] Update this story with debug log references, completion notes, review findings, and file list.
+  - [x] Update `_bmad-output/implementation-artifacts/sprint-status.yaml` through `review` and then `done` only after code review and fixes.
+  - [x] Do not move Epic 4 to `done` from this story unless every Epic 4 closure row is `PASS` and no required P0 evidence is missing.
+
+### Review Findings
+
+- [x] [Review][Patch] Fail-closed drills accepted any write failure as PASS [scripts/production-rehearsal.sh] - fixed by validating the expected gRPC code and bounded ErrorInfo/message marker for each drill before writing a pass result.
+- [x] [Review][Patch] Auth-denied drill used an arbitrary invalid token [scripts/production-rehearsal.sh] - fixed by creating a short-lived OpenBao token with no Transit capabilities for the auth-denied drill.
+- [x] [Review][Patch] Redaction proof was asserted instead of measured [scripts/production-rehearsal.sh] - fixed by scanning generated report, bootstrap evidence, drill stdout/stderr/log/result files, and main logs for secret-shaped material before declaring redaction pass.
+- [x] [Review][Patch] Drill `scrapd` cleanup only ran on the success path [scripts/production-rehearsal.sh] - fixed by tracking the active drill PID in global cleanup.
+- [x] [Review][Patch] Transit-unavailable drill depended on unchecked port arithmetic [scripts/production-rehearsal.sh] - fixed by validating port inputs, avoiding overflow at port 65535, and checking the selected unavailable endpoint is not responding.
+- [x] [Review][Patch] Structural gates did not require generated report validation [scripts/check-e2e-gates.sh] - fixed by requiring the rehearsal report invariant validator, expected drill error validation, artifact redaction scan, bounded auth-denied token creation, and stricter source markers.
+- [x] [Review][Patch] Commit/ref evidence did not identify dirty-tree attribution [scripts/production-rehearsal.sh] - fixed by adding `git_worktree_state` and `git_diff_sha256` to the generated report.
 
 ## Dev Notes
 
@@ -208,17 +218,59 @@ rg -n --pcre2 "$strict_value_pattern" $scan_scope
 
 ### Agent Model Used
 
-GPT-5 Codex for story creation. The implementation agent should append the execution model used during dev-story.
+GPT-5 Codex for story creation and implementation.
 
 ### Debug Log References
 
 - 2026-06-12T11:23:45-04:00 - Story 4.7 created from sprint status after Story 4.6 implementation, review, `make check`, commit, and push completed.
+- 2026-06-12T11:27:21-04:00 - Marked Story 4.7 in progress after the ready-for-dev story checkpoint was committed and pushed.
+- `scripts/check-e2e-gates.sh` - PASS before implementation; existing structural rehearsal target invariants remain valid.
+- `git diff --check` - PASS after creating the initial closure evidence artifact.
+- Strict shaped-secret scan over Story 4.7, the closure artifact, and sprint status - PASS with 0 matches.
+- `scripts/check-e2e-gates.sh` - RED after adding production-rehearsal Shard placement guards; failed with missing Shard placement file.
+- `bash -n scripts/production-rehearsal.sh` - PASS after adding the placement writer and report fields.
+- `bash -n scripts/check-e2e-gates.sh` - PASS after structural guard updates.
+- `git diff --check` - PASS after production rehearsal script and gate changes.
+- `scripts/check-e2e-gates.sh` - PASS after production rehearsal placement/report/drill guards.
+- `env GOCACHE=/tmp/scrap-v2-go-build make production-rehearsal-security` - PASS before code review fixes; generated `artifacts/production-rehearsal/report.json` at commit `e7bb8c98c7fb9f8be3863f5cc9ea9a11c61c825e`.
+- `jq . artifacts/production-rehearsal/report.json` - PASS before code review fixes; report includes command, commit/ref, timestamp, local evidence tier, two-Shard placement, Backend classification, OpenBao bootstrap evidence path, redaction proof, and three fail-closed drill rows.
+- Strict shaped-secret, sensitive-value, payload, and plaintext scans over story/evidence/scripts/report/drill outputs - PASS with no matches in tracker-ready evidence and no plaintext payload found under main or drill data directories.
+- `make production-rehearsal-down` - PASS after inspection.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS; includes static checks, `go test ./...`, race tests, integration tests, and final binary builds.
+- `bmad-code-review` - completed with patch findings for drill false positives, auth-denied token setup, measured redaction proof, drill cleanup, unavailable-port validation, structural report validation, and dirty-tree attribution.
+- `bash -n scripts/production-rehearsal.sh` - PASS after review fixes.
+- `bash -n scripts/check-e2e-gates.sh` - PASS after review fixes.
+- `scripts/check-e2e-gates.sh` - PASS after review fixes.
+- `git diff --check` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build make production-rehearsal-security` - PASS after review fixes; generated report timestamp `2026-06-12T15:52:26Z`, `git_worktree_state=dirty`, and `git_diff_sha256=e9aebc9bf3ec59aabf03c89ad6701298b7e5473305e0ab27d6e1a82114672292`.
+- `jq . artifacts/production-rehearsal/runtime/redaction-scan.json` - PASS after review fixes; scan artifact recorded no forbidden material across bootstrap evidence, main logs, generated report, and drill stdout/stderr/log/result files.
+- `make production-rehearsal-down` - PASS after review-fix rehearsal inspection.
+- Strict shaped-secret scan over final story/evidence/scripts/report/drill outputs - PASS. Sensitive-value and payload scans over generated tracker-ready report/drill outputs - PASS. Plaintext payload scans over main and drill data directories - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after review fixes; includes static checks, `go test ./...`, race tests, integration tests, and final binary builds.
+
+### Change Log
+
+- 2026-06-12: Created initial Epic 4 production security rehearsal closure evidence artifact with prior evidence inventory and explicit fail-closed closure gaps.
+- 2026-06-12: Added production rehearsal Shard placement, release-grade report metadata, `scrapctl openbao bootstrap` wiring, fail-closed drill capture, and structural E2E gate guards.
+- 2026-06-12: Updated Story 4.7 evidence to `PASS` for local production-security rehearsal closure while keeping real S3/IAM closure out of scope.
+- 2026-06-12: Addressed code review findings by validating drill error shape, using a bounded OpenBao auth-denied token, measuring generated-artifact redaction, improving drill cleanup, and adding dirty-tree report attribution.
 
 ### Completion Notes List
 
-- Story context created. Implementation pending.
+- Story context created.
+- Initial closure evidence artifact created before script/code changes.
+- Prior Story 4.1 through 4.6 evidence inventory linked with owning stories, scoped decisions, and current closure gaps.
+- `make production-rehearsal-security` now runs through the supported `scrapctl openbao bootstrap` path and writes release-grade metadata to `artifacts/production-rehearsal/report.json`.
+- Production rehearsal now writes an explicit two-Shard placement file and exports it through `SCRAP_SHARD_PLACEMENT_FILE`, preserving production startup fail-closed behavior.
+- Fail-closed drills for Transit unavailable, auth denied, and missing Transit key produce result artifacts under `artifacts/production-rehearsal/runtime/fail-closed-drills/` with no plaintext fallback.
+- Local filesystem Backend evidence is marked as `local-production-security`; real S3/IAM production rehearsal remains Story 6.6 / issue #429.
+- Code review findings were resolved and rerun through the production-security rehearsal. The final generated report records dirty-tree attribution through `git_diff_sha256` so local evidence is attributable before commit.
+- BMAD code review complete: 0 decision-needed, 7 patch findings fixed, 0 deferred, 0 left open. Story moved to `done`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/4-7-production-security-rehearsal-evidence-closure.md`
+- `_bmad-output/implementation-artifacts/epic-4-production-security-rehearsal-closure-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `scripts/check-e2e-gates.sh`
+- `scripts/production-rehearsal.sh`

@@ -34,10 +34,15 @@ policy_dir="$runtime_dir/policies"
 openbao_dir="$runtime_dir/openbao"
 data_dir="$runtime_dir/scrap-data"
 log_dir="$runtime_dir/logs"
+placement_file="$runtime_dir/shard-placement.json"
 report_file="$work_dir/report.json"
 scrapd_log="$log_dir/scrapd.log"
 openbao_log="$log_dir/openbao.log"
 scrapd_pid_file="$runtime_dir/scrapd.pid"
+bootstrap_evidence_file="$runtime_dir/openbao-bootstrap-evidence.json"
+drill_dir="$runtime_dir/fail-closed-drills"
+redaction_scan_file="$runtime_dir/redaction-scan.json"
+active_drill_pid=""
 
 ca_key="$tls_dir/ca.key"
 ca_cert="$tls_dir/ca.pem"
@@ -105,14 +110,18 @@ cleanup() {
 		log "OpenBao container: $openbao_container"
 		return
 	fi
+	if [ -n "$active_drill_pid" ]; then
+		stop_pid "$active_drill_pid"
+		active_drill_pid=""
+	fi
 	stop_scrapd
 	stop_openbao
 }
 
 prepare_workspace() {
 	rm -rf "$runtime_dir"
-	mkdir -p "$tls_dir" "$policy_dir" "$openbao_dir/config" "$openbao_dir/data" "$data_dir" "$log_dir"
-	chmod 700 "$work_dir" "$runtime_dir" "$tls_dir" "$policy_dir" "$openbao_dir" "$data_dir" "$log_dir"
+	mkdir -p "$tls_dir" "$policy_dir" "$openbao_dir/config" "$openbao_dir/data" "$data_dir" "$log_dir" "$drill_dir"
+	chmod 700 "$work_dir" "$runtime_dir" "$tls_dir" "$policy_dir" "$openbao_dir" "$data_dir" "$log_dir" "$drill_dir"
 }
 
 principal_id() {
@@ -230,6 +239,29 @@ EOF
 	chmod 600 "$role_policy" "$peer_policy" "$audit_policy" "$rate_policy"
 }
 
+write_shard_placement() {
+	cat > "$placement_file" <<EOF
+{
+  "slot_count": 1024,
+  "shards": [7, 9],
+  "local_shards": [7, 9],
+  "ranges": [
+    {
+      "shard_id": 7,
+      "start_slot": 0,
+      "end_slot": 511
+    },
+    {
+      "shard_id": 9,
+      "start_slot": 512,
+      "end_slot": 1023
+    }
+  ]
+}
+EOF
+	chmod 600 "$placement_file"
+}
+
 write_openbao_config() {
 	cat > "$openbao_config" <<EOF
 ui = false
@@ -273,15 +305,34 @@ validate_backend_config() {
 	esac
 }
 
-validate_rehearsal_config() {
-	case "$block_seal_size" in
+validate_positive_integer() {
+	local label=$1
+	local value=$2
+	case "$value" in
 	''|*[!0-9]*)
-		die "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE must be a positive integer, got: $block_seal_size"
+		die "${label} must be a positive integer, got: $value"
 		;;
 	esac
-	if [ "$((10#$block_seal_size))" -le 0 ]; then
-		die "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE must be greater than zero, got: $block_seal_size"
+	if [ "$((10#$value))" -le 0 ]; then
+		die "${label} must be greater than zero, got: $value"
 	fi
+}
+
+validate_port() {
+	local label=$1
+	local value=$2
+	validate_positive_integer "$label" "$value"
+	if [ "$((10#$value))" -gt 65535 ]; then
+		die "${label} must be <= 65535, got: $value"
+	fi
+}
+
+validate_rehearsal_config() {
+	validate_positive_integer "SCRAP_PROD_REHEARSAL_BLOCK_SEAL_SIZE" "$block_seal_size"
+	validate_port "SCRAP_PROD_REHEARSAL_OPENBAO_PORT" "$openbao_port"
+	validate_port "SCRAP_PROD_REHEARSAL_CLIENT_PORT" "$client_port"
+	validate_port "SCRAP_PROD_REHEARSAL_PEER_PORT" "$peer_port"
+	validate_port "SCRAP_PROD_REHEARSAL_ADMIN_PORT" "$admin_port"
 	validate_backend_config
 }
 
@@ -314,35 +365,64 @@ wait_openbao_tls() {
 }
 
 initialize_openbao() {
-	local init_json unseal_key root_token
-	init_json=$("$curl_bin" --silent --show-error --fail-with-body --cacert "$ca_cert" \
-		--request PUT \
-		--data '{"secret_shares":1,"secret_threshold":1}' \
-		"$openbao_addr/v1/sys/init")
-	printf '%s\n' "$init_json" > "$openbao_dir/init.json"
-	unseal_key=$(printf '%s\n' "$init_json" | "$jq_bin" -r '.keys_base64[0] // .unseal_keys_b64[0]')
-	root_token=$(printf '%s\n' "$init_json" | "$jq_bin" -r '.root_token')
-	[ -n "$unseal_key" ] && [ "$unseal_key" != "null" ] || die "OpenBao init did not return an unseal key"
+	local root_token
+	log "bootstrapping OpenBao Transit with scrapctl"
+	NO_PROXY="127.0.0.1,localhost" \
+		no_proxy="127.0.0.1,localhost" \
+		SSL_CERT_FILE="$combined_ca" \
+		OPENBAO_TOKEN="" \
+		"$scrapctl_bin" openbao bootstrap \
+		--address="$openbao_addr" \
+		--token-env=OPENBAO_TOKEN \
+		--mount-path="$transit_mount" \
+		--key-name="$transit_key" \
+		--key-type=aes256-gcm96 \
+		--key-derived=true \
+		--environment=production-rehearsal \
+		--init \
+		--init-secrets-path="$openbao_dir/init.json" \
+		--evidence-path="$bootstrap_evidence_file" >/dev/null
+	root_token=$("$jq_bin" -r '.root_token' "$openbao_dir/init.json")
 	[ -n "$root_token" ] && [ "$root_token" != "null" ] || die "OpenBao init did not return a root token"
 	printf '%s' "$root_token" > "$openbao_dir/root-token"
 	chmod 600 "$openbao_dir/init.json" "$openbao_dir/root-token"
+}
 
+create_auth_denied_token() {
+	local root_token policy_name policy_text policy_payload token_payload token_json token
+	root_token=$(cat "$openbao_dir/root-token")
+	policy_name="scrap-production-rehearsal-auth-denied"
+	policy_payload="$runtime_dir/auth-denied-policy.json"
+	token_payload="$runtime_dir/auth-denied-token-request.json"
+	policy_text=$(cat <<EOF
+path "${transit_mount}/*" {
+  capabilities = []
+}
+EOF
+)
+	"$jq_bin" -n --arg policy "$policy_text" '{policy: $policy}' > "$policy_payload"
+	chmod 600 "$policy_payload"
 	"$curl_bin" --silent --show-error --fail-with-body --cacert "$ca_cert" \
+		--header "X-Vault-Token: ${root_token}" \
 		--request PUT \
-		--data "{\"key\":\"${unseal_key}\"}" \
-		"$openbao_addr/v1/sys/unseal" >/dev/null
+		--data @"$policy_payload" \
+		"$openbao_addr/v1/sys/policies/acl/${policy_name}" >/dev/null
 
-	"$curl_bin" --silent --show-error --fail-with-body --cacert "$ca_cert" \
+	"$jq_bin" -n --arg policy "$policy_name" '{
+		policies: [$policy],
+		no_default_policy: true,
+		ttl: "5m",
+		display_name: "production-rehearsal-auth-denied"
+	}' > "$token_payload"
+	chmod 600 "$token_payload"
+	token_json=$("$curl_bin" --silent --show-error --fail-with-body --cacert "$ca_cert" \
 		--header "X-Vault-Token: ${root_token}" \
 		--request POST \
-		--data '{"type":"transit"}' \
-		"$openbao_addr/v1/sys/mounts/${transit_mount}" >/dev/null
-
-	"$curl_bin" --silent --show-error --fail-with-body --cacert "$ca_cert" \
-		--header "X-Vault-Token: ${root_token}" \
-		--request POST \
-		--data '{"type":"aes256-gcm96"}' \
-		"$openbao_addr/v1/${transit_mount}/keys/${transit_key}" >/dev/null
+		--data @"$token_payload" \
+		"$openbao_addr/v1/auth/token/create")
+	token=$(printf '%s\n' "$token_json" | "$jq_bin" -r '.auth.client_token')
+	[ -n "$token" ] && [ "$token" != "null" ] || die "OpenBao auth-denied drill token creation did not return a token"
+	printf '%s' "$token"
 }
 
 scrapd_env() {
@@ -357,6 +437,7 @@ scrapd_env() {
 		SCRAP_ENVIRONMENT="production-rehearsal" \
 		SCRAP_MEMBER_ID="$member_id" \
 		SCRAP_BACKEND_TYPE="$backend" \
+		SCRAP_SHARD_PLACEMENT_FILE="$placement_file" \
 		SCRAP_TLS_PUBLIC_CERT="$scrap_cert" \
 		SCRAP_TLS_PUBLIC_KEY="$scrap_key" \
 		SCRAP_TLS_PUBLIC_CLIENT_CA="$ca_cert" \
@@ -375,11 +456,11 @@ scrapd_env() {
 		SCRAP_TLS_SCRAPCTL_SERVER_NAME="$server_name" \
 		SCRAP_ROLE_POLICY_FILE="$role_policy" \
 		SCRAP_PEER_IDENTITY_POLICY_FILE="$peer_policy" \
-		SCRAP_TRANSIT_ADDR="$openbao_addr" \
+		SCRAP_TRANSIT_ADDR="${SCRAP_TRANSIT_ADDR_OVERRIDE:-$openbao_addr}" \
 		SCRAP_TRANSIT_MOUNT="$transit_mount" \
-		SCRAP_TRANSIT_KEY="$transit_key" \
+		SCRAP_TRANSIT_KEY="${SCRAP_TRANSIT_KEY_OVERRIDE:-$transit_key}" \
 		SCRAP_TRANSIT_TOKEN_ENV="OPENBAO_TOKEN" \
-		OPENBAO_TOKEN="$root_token" \
+		OPENBAO_TOKEN="${OPENBAO_TOKEN_OVERRIDE:-$root_token}" \
 		SCRAP_AUDIT_POLICY_FILE="$audit_policy" \
 		SCRAP_RATE_LIMIT_POLICY_FILE="$rate_policy" \
 		SCRAP_PPROF_ENABLED="false" \
@@ -608,31 +689,460 @@ wait_uploads_drained() {
 	die "upload pending blocks did not drain; see $health_file"
 }
 
+stop_pid() {
+	local pid=$1
+	if kill -0 "$pid" >/dev/null 2>&1; then
+		kill "$pid" >/dev/null 2>&1 || true
+		wait "$pid" >/dev/null 2>&1 || true
+	fi
+}
+
+wait_drill_scrapd_health() {
+	local pid=$1
+	local log_file=$2
+	local deadline
+	deadline=$(($(date +%s) + 60))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if "$scrapd_bin" healthcheck \
+			--address="127.0.0.1:${client_port}" \
+			--tls-cert="$scrap_cert" \
+			--tls-key="$scrap_key" \
+			--tls-ca="$ca_cert" \
+			--tls-server-name="$server_name" \
+			--timeout=2s >/dev/null 2>&1; then
+			return
+		fi
+		if ! kill -0 "$pid" >/dev/null 2>&1; then
+			die "drill scrapd exited before healthcheck passed; see $log_file"
+		fi
+		sleep 1
+	done
+	die "drill scrapd healthcheck did not pass; see $log_file"
+}
+
+wait_drill_scrapd_leader() {
+	local pid=$1
+	local log_file=$2
+	local leader_file=$3
+	local deadline
+	deadline=$(($(date +%s) + 60))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if scrapd_env "$scrapctl_bin" leader \
+			--metrics-url="https://127.0.0.1:${admin_port}/metrics" \
+			--output=json > "$leader_file" 2>/dev/null &&
+			"$jq_bin" -e '.is_leader == true and .leader_id == 1' "$leader_file" >/dev/null; then
+			return
+		fi
+		if ! kill -0 "$pid" >/dev/null 2>&1; then
+			die "drill scrapd exited before Raft leadership; see $leader_file and $log_file"
+		fi
+		sleep 1
+	done
+	die "drill scrapd did not become Raft leader; see $leader_file and $log_file"
+}
+
+assert_expected_drill_error() {
+	local name=$1
+	local expected_code=$2
+	local expected_marker=$3
+	local write_err=$4
+	if ! grep -Eq "Code:[[:space:]]+${expected_code}([[:space:]]|$)" "$write_err"; then
+		die "fail-closed drill ${name} returned an unexpected gRPC code; expected ${expected_code}, see $write_err"
+	fi
+	if [ -n "$expected_marker" ] && ! grep -F "$expected_marker" "$write_err" >/dev/null; then
+		die "fail-closed drill ${name} did not include the expected bounded error marker; see $write_err"
+	fi
+}
+
+redaction_forbidden_pattern() {
+	printf '%s' '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9_]{36,}|xox[baprs]-|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|[hs]v[bs]\.[A-Za-z0-9_-]{20,}|aws_access_[k]ey_id|aws_[s]ecret_access_[k]ey|root_token|client_token|keys_base64|unseal_keys|X-Vault-Token|Authorization:[[:space:]]*[Bb]earer)'
+}
+
+assert_artifact_redaction() {
+	local label=$1
+	shift
+	local findings_file="$runtime_dir/${label}-redaction-findings.txt"
+	rm -f "$findings_file"
+	if grep -R -a -n -E "$(redaction_forbidden_pattern)" "$@" > "$findings_file"; then
+		die "redaction scan found forbidden material in ${label}; see $findings_file"
+	fi
+	rm -f "$findings_file"
+}
+
+write_redaction_scan() {
+	local include_report=${1:-false}
+	local scan_files files_json path
+	scan_files=("$bootstrap_evidence_file" "$scrapd_log" "$openbao_log")
+	if [ "$include_report" = "true" ]; then
+		scan_files+=("$report_file")
+	fi
+	while IFS= read -r path; do
+		scan_files+=("$path")
+	done < <(find "$drill_dir" -type f \( -name result.json -o -name write-error.txt -o -name write-response.json -o -name scrapd.log \) -print)
+
+	assert_artifact_redaction "rehearsal-artifacts" "${scan_files[@]}"
+	files_json=$(printf '%s\n' "${scan_files[@]}" | "$jq_bin" -R . | "$jq_bin" -s .)
+	"$jq_bin" -n \
+		--arg status "passed" \
+		--argjson files "$files_json" \
+		'{
+			status: $status,
+			forbidden_material_found: false,
+			scanned_artifacts: $files
+		}' > "$redaction_scan_file"
+	chmod 600 "$redaction_scan_file"
+}
+
+write_document_expect_failure() {
+	local name=$1
+	local tx_id=$2
+	local doc_name=$3
+	local payload=$4
+	local write_req=$5
+	local write_out=$6
+	local write_err=$7
+	local expected_code=$8
+	local expected_marker=$9
+	local payload_b64
+	payload_b64=$(printf '%s' "$payload" | "$base64_bin" -w0)
+	cat > "$write_req" <<EOF
+{"init":{"transactionId":"${tx_id}","documentName":"${doc_name}","contentType":"text/plain","idempotencyKey":"${tx_id}"}}
+{"chunkData":"${payload_b64}"}
+EOF
+	if "$grpcurl_bin" $(grpcurl_common_args) \
+		-d @ "127.0.0.1:${client_port}" scrap.v1.DocumentService/WriteDocument \
+		< "$write_req" > "$write_out" 2> "$write_err"; then
+		die "fail-closed drill ${tx_id} unexpectedly wrote a Document; see $write_out"
+	fi
+	assert_expected_drill_error "$name" "$expected_code" "$expected_marker" "$write_err"
+}
+
+run_fail_closed_write_drill() {
+	local name=$1
+	local transit_addr=$2
+	local token=$3
+	local key_name=$4
+	local expected=$5
+	local expected_code=$6
+	local expected_marker=$7
+	local drill_root drill_data drill_log drill_pid leader_file write_req write_out write_err result_file tx_id payload
+	drill_root="$drill_dir/$name"
+	drill_data="$drill_root/scrap-data"
+	drill_log="$drill_root/scrapd.log"
+	leader_file="$drill_root/leader.json"
+	write_req="$drill_root/write-request.json"
+	write_out="$drill_root/write-response.json"
+	write_err="$drill_root/write-error.txt"
+	result_file="$drill_root/result.json"
+	tx_id="prod-rehearsal-${name}-$(date -u +%Y%m%dT%H%M%SZ)"
+	payload="production rehearsal fail closed drill ${name} payload"
+	mkdir -p "$drill_data"
+	chmod 700 "$drill_root" "$drill_data"
+
+	SCRAP_TRANSIT_ADDR_OVERRIDE="$transit_addr" \
+		SCRAP_TRANSIT_KEY_OVERRIDE="$key_name" \
+		OPENBAO_TOKEN_OVERRIDE="$token" \
+		scrapd_env "$scrapd_bin" \
+		--data-dir="$drill_data" \
+		--listen-addr="127.0.0.1:${client_port}" \
+		--peer-addr="127.0.0.1:${peer_port}" \
+		--admin-addr="127.0.0.1:${admin_port}" \
+		--block-seal-size="$block_seal_size" \
+		--peers="1=127.0.0.1:${peer_port}" >"$drill_log" 2>&1 &
+	drill_pid=$!
+	active_drill_pid=$drill_pid
+	wait_drill_scrapd_health "$drill_pid" "$drill_log"
+	wait_drill_scrapd_leader "$drill_pid" "$drill_log" "$leader_file"
+	write_document_expect_failure "$name" "$tx_id" "fail-closed-${name}.txt" "$payload" "$write_req" "$write_out" "$write_err" "$expected_code" "$expected_marker"
+	stop_pid "$drill_pid"
+	active_drill_pid=""
+	if grep -R -a -F "$payload" "$drill_data" >/dev/null 2>&1; then
+		die "fail-closed drill ${name} left plaintext under $drill_data"
+	fi
+	assert_artifact_redaction "drill-${name}" "$write_out" "$write_err" "$drill_log"
+	"$jq_bin" -n \
+		--arg name "$name" \
+		--arg expected "$expected" \
+		--arg actual "write failed closed without plaintext fallback" \
+		--arg artifact "$result_file" \
+		--arg log "$drill_log" \
+		--arg stdout "$write_out" \
+		--arg stderr "$write_err" \
+		'{
+			name: $name,
+			status: "pass",
+			expected_result: $expected,
+			actual_result: $actual,
+			artifact_path: $artifact,
+			log_path: $log,
+			stdout_path: $stdout,
+			stderr_path: $stderr,
+			plaintext_leak_scan_ok: true,
+			secret_leak_scan_ok: true
+		}' > "$result_file"
+}
+
+assert_unavailable_endpoint() {
+	local addr=$1
+	if "$curl_bin" --silent --show-error --cacert "$ca_cert" --max-time 2 \
+		--output /dev/null "$addr/v1/sys/health" >/dev/null 2>&1; then
+		die "Transit-unavailable drill endpoint unexpectedly responded: $addr"
+	fi
+}
+
+run_fail_closed_drills() {
+	local root_token auth_denied_token unavailable_addr unavailable_port
+	root_token=$(cat "$openbao_dir/root-token")
+	auth_denied_token=$(create_auth_denied_token)
+	if [ "$((10#$openbao_port))" -ge 65535 ]; then
+		unavailable_port=1
+	else
+		unavailable_port=$((10#$openbao_port + 1))
+	fi
+	unavailable_addr="https://127.0.0.1:${unavailable_port}"
+	assert_unavailable_endpoint "$unavailable_addr"
+	rm -rf "$drill_dir"
+	mkdir -p "$drill_dir"
+	chmod 700 "$drill_dir"
+	run_fail_closed_write_drill \
+		"transit_unavailable" \
+		"$unavailable_addr" \
+		"$root_token" \
+		"$transit_key" \
+		"write fails closed when OpenBao Transit is unavailable" \
+		"Unavailable" \
+		"ChJjcnlwdG9fdW5hdmFpbGFibGU="
+	run_fail_closed_write_drill \
+		"auth_denied" \
+		"$openbao_addr" \
+		"$auth_denied_token" \
+		"$transit_key" \
+		"write fails closed when OpenBao denies the configured token" \
+		"Unavailable" \
+		"ChJjcnlwdG9fdW5hdmFpbGFibGU="
+	run_fail_closed_write_drill \
+		"missing_key" \
+		"$openbao_addr" \
+		"$root_token" \
+		"missing-scrap-documents" \
+		"write fails closed when the configured Transit key is missing" \
+		"DataLoss" \
+		"data corruption detected"
+}
+
+json_bool() {
+	if "$@"; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
+}
+
+git_commit_ref() {
+	if command -v git >/dev/null 2>&1 && git rev-parse HEAD >/dev/null 2>&1; then
+		git rev-parse HEAD
+		return
+	fi
+	printf 'unknown'
+}
+
+git_worktree_state() {
+	if ! command -v git >/dev/null 2>&1 || ! git rev-parse HEAD >/dev/null 2>&1; then
+		printf 'unknown'
+		return
+	fi
+	if git diff --quiet HEAD --; then
+		printf 'clean'
+		return
+	fi
+	printf 'dirty'
+}
+
+git_diff_sha256() {
+	if ! command -v git >/dev/null 2>&1 || ! git rev-parse HEAD >/dev/null 2>&1; then
+		printf 'unknown'
+		return
+	fi
+	if git diff --quiet HEAD --; then
+		printf ''
+		return
+	fi
+	git diff HEAD -- | "$openssl_bin" dgst -sha256 -r | awk '{print $1}'
+}
+
+rehearsal_command_name() {
+	if [ -n "${SCRAP_PROD_REHEARSAL_COMMAND:-}" ]; then
+		printf '%s' "$SCRAP_PROD_REHEARSAL_COMMAND"
+		return
+	fi
+	case "$backend" in
+	fs)
+		printf 'make production-rehearsal-security'
+		;;
+	s3)
+		printf 'make production-rehearsal'
+		;;
+	*)
+		printf 'scripts/production-rehearsal.sh run'
+		;;
+	esac
+}
+
+evidence_tier() {
+	case "$backend" in
+	fs)
+		printf 'local-production-security'
+		;;
+	s3)
+		if [ "${SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3:-false}" = "true" ]; then
+			printf 'local-s3-override'
+			return
+		fi
+		printf 'real-s3-iam'
+		;;
+	*)
+		printf 'unknown'
+		;;
+	esac
+}
+
+drill_results_json() {
+	if find "$drill_dir" -type f -name result.json -print -quit | grep -q .; then
+		find "$drill_dir" -type f -name result.json -print0 | sort -z | xargs -0 "$jq_bin" -s '.'
+		return
+	fi
+	printf '[]\n'
+}
+
 write_report() {
 	local health_file="$runtime_dir/health.json"
 	local upload_confirmation_file="$runtime_dir/upload-confirmation.json"
-	local status readiness confirmed_count
+	local status readiness confirmed_count drills_json command commit_ref worktree_state diff_sha timestamp tier
 	status=$("$jq_bin" -r '.security_mode' "$health_file")
 	readiness=$("$jq_bin" -r '.production_readiness_status' "$health_file")
 	confirmed_count=$("$jq_bin" -r '.confirmed_upload_count' "$upload_confirmation_file")
-	cat > "$report_file" <<EOF
-{
-  "status": "passed",
-  "security_mode": "${status}",
-  "production_readiness_status": "${readiness}",
-  "backend": "${backend}",
-  "openbao_image": "${openbao_image}",
-  "openbao_transit": "real",
-  "test_hooks_enabled": false,
-  "pprof_enabled": false,
-  "encrypted_write_read_ok": true,
-  "plaintext_leak_scan_ok": true,
-  "backend_upload_confirmed": true,
-  "confirmed_upload_count": ${confirmed_count},
-  "log_dir": "${log_dir}"
-}
-EOF
+	drills_json=$(drill_results_json)
+	command=$(rehearsal_command_name)
+	commit_ref=$(git_commit_ref)
+	worktree_state=$(git_worktree_state)
+	diff_sha=$(git_diff_sha256)
+	timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	tier=$(evidence_tier)
+	"$jq_bin" -n \
+		--arg status "passed" \
+		--arg command "$command" \
+		--arg commit_ref "$commit_ref" \
+		--arg worktree_state "$worktree_state" \
+		--arg diff_sha "$diff_sha" \
+		--arg timestamp "$timestamp" \
+		--arg environment "production-rehearsal" \
+		--arg tier "$tier" \
+		--arg security_mode "$status" \
+		--arg readiness "$readiness" \
+		--arg backend "$backend" \
+		--arg openbao_image "$openbao_image" \
+		--arg expected "production mode with real OpenBao Transit, encrypted write/read, committed Backend upload confirmation, fail-closed drills, and redacted artifacts passes" \
+		--arg actual "production security rehearsal passed" \
+		--arg artifact "$report_file" \
+		--arg work_dir "$work_dir" \
+		--arg placement_file "$placement_file" \
+		--arg log_dir "$log_dir" \
+		--arg data_dir "$data_dir" \
+		--arg drill_dir "$drill_dir" \
+		--arg bootstrap_evidence "$bootstrap_evidence_file" \
+		--arg redaction_scan "$redaction_scan_file" \
+		--argjson confirmed_count "$confirmed_count" \
+		--argjson drills "$drills_json" \
+		--argjson filesystem_backend "$(json_bool test "$backend" = "fs")" \
+		--argjson local_s3_override "$(json_bool test "${SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3:-false}" = "true")" \
+		--argjson real_s3_iam "$(json_bool test "$tier" = "real-s3-iam")" \
+		'{
+			status: $status,
+			command: $command,
+			commit_ref: $commit_ref,
+			git_worktree_state: $worktree_state,
+			git_diff_sha256: $diff_sha,
+			timestamp: $timestamp,
+			environment: $environment,
+			evidence_tier: $tier,
+			expected_result: $expected,
+			actual_result: $actual,
+			artifact_path: $artifact,
+			report_path: $artifact,
+			work_dir: $work_dir,
+			shard_placement: {
+				file: $placement_file,
+				slot_count: 1024,
+				local_shards: [7, 9],
+				route_map: "0-511:shard=7,512-1023:shard=9"
+			},
+			security_mode: $security_mode,
+			production_readiness_status: $readiness,
+			backend: $backend,
+			local_overrides: {
+				filesystem_backend: $filesystem_backend,
+				local_s3_endpoint_allowed: $local_s3_override,
+				real_s3_iam: $real_s3_iam
+			},
+			openbao_image: $openbao_image,
+			openbao_transit: "real",
+			openbao_bootstrap: {
+				command: "scrapctl openbao bootstrap",
+				evidence_path: $bootstrap_evidence
+			},
+			test_hooks_enabled: false,
+			pprof_enabled: false,
+			encrypted_write_read_ok: true,
+			plaintext_leak_scan_ok: true,
+			backend_upload_confirmed: true,
+			confirmed_upload_count: $confirmed_count,
+			fail_closed_drills: $drills,
+			redaction_proof: {
+				status: "passed",
+				plaintext_leak_scan_ok: true,
+				report_excludes_secret_material: true,
+				tracker_ready_evidence_excludes_raw_logs: true,
+				scan_artifact_path: $redaction_scan,
+				scan_scope: [$data_dir, $artifact, $drill_dir]
+			},
+			log_dir: $log_dir
+		}' > "$report_file"
 	log "wrote report: $report_file"
+}
+
+assert_report_invariants() {
+	"$jq_bin" -e '
+		.status == "passed" and
+		.command != "" and
+		.commit_ref != "" and
+		(.git_worktree_state == "clean" or .git_worktree_state == "dirty" or .git_worktree_state == "unknown") and
+		(.git_worktree_state != "dirty" or .git_diff_sha256 != "") and
+		.timestamp != "" and
+		.environment == "production-rehearsal" and
+		.evidence_tier != "" and
+		.expected_result != "" and
+		.actual_result != "" and
+		.artifact_path != "" and
+		.shard_placement.slot_count == 1024 and
+		.shard_placement.local_shards == [7, 9] and
+		.security_mode == "production" and
+		.production_readiness_status == "ready" and
+		.backend != "" and
+		(.local_overrides.real_s3_iam | type) == "boolean" and
+		.openbao_transit == "real" and
+		.openbao_bootstrap.command == "scrapctl openbao bootstrap" and
+		.openbao_bootstrap.evidence_path != "" and
+		.test_hooks_enabled == false and
+		.pprof_enabled == false and
+		.encrypted_write_read_ok == true and
+		.plaintext_leak_scan_ok == true and
+		.backend_upload_confirmed == true and
+		.confirmed_upload_count > 0 and
+		(.fail_closed_drills | length) == 3 and
+		all(.fail_closed_drills[]; .status == "pass" and .expected_result != "" and .actual_result != "" and .artifact_path != "" and .plaintext_leak_scan_ok == true and .secret_leak_scan_ok == true) and
+		.redaction_proof.status == "passed" and
+		.redaction_proof.scan_artifact_path != ""
+	' "$report_file" >/dev/null || die "production rehearsal report failed invariant validation; see $report_file"
 }
 
 run_rehearsal() {
@@ -649,13 +1159,19 @@ run_rehearsal() {
 	prepare_workspace
 	write_tls_material
 	write_policies
+	write_shard_placement
 	write_openbao_config
 	trap cleanup EXIT INT TERM
 	start_openbao
 	start_scrapd
 	verify_admin_health
 	write_read_document
+	stop_scrapd
+	run_fail_closed_drills
+	write_redaction_scan false
 	write_report
+	write_redaction_scan true
+	assert_report_invariants
 	log "production rehearsal passed"
 }
 
