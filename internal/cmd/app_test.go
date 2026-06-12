@@ -331,27 +331,90 @@ func appPeerRaftMessage(t *testing.T) []byte {
 }
 
 func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {
-	t.Setenv("SCRAP_BACKEND_TYPE", "s3")
-	cfg := Config{
-		DataDir:           t.TempDir(),
-		ListenAddr:        "127.0.0.1:0",
-		PeerAddr:          "127.0.0.1:0",
-		AdminAddr:         "127.0.0.1:0",
-		BlockSealSize:     shard.DefaultBlockSealSize,
-		UploadEnabled:     true,
-		UploadConcurrency: shard.DefaultUploadConcurrency,
-		PeerPort:          defaultPeerPort,
-		Namespace:         "default",
-		SecurityMode:      security.ModeProduction,
-		Scrub:             scrub.ParseConfig(),
-		UploadPressure:    shard.ParseUploadPressureConfigFromEnv(),
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   security.ConfigClass
+	}{
+		{
+			name: "missing security mode",
+			mutate: func(cfg *Config) {
+				cfg.SecurityMode = ""
+			},
+			want: security.ClassSecurityMode,
+		},
+		{
+			name: "missing tls",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.TLS = security.TLSConfig{}
+			},
+			want: security.ClassTLSConfig,
+		},
+		{
+			name: "missing role policy",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.RolePolicyPath = ""
+			},
+			want: security.ClassRolePolicy,
+		},
+		{
+			name: "missing peer identity policy",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.PeerIdentityPolicyPath = ""
+			},
+			want: security.ClassPeerIdentityPolicy,
+		},
+		{
+			name: "missing transit config",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.Transit = security.TransitConfig{}
+			},
+			want: security.ClassTransitConfig,
+		},
+		{
+			name: "missing audit policy",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.AuditSink = security.AuditSinkConfig{}
+			},
+			want: security.ClassAuditConfig,
+		},
+		{
+			name: "missing rate limit policy",
+			mutate: func(cfg *Config) {
+				cfg.ProductionGates.RateLimits = security.RateLimitConfig{}
+			},
+			want: security.ClassRateLimitConfig,
+		},
+		{
+			name: "test hooks enabled",
+			mutate: func(cfg *Config) {
+				cfg.TestHooks = true
+			},
+			want: security.ClassDangerousHooks,
+		},
+		{
+			name: "pprof enabled",
+			mutate: func(cfg *Config) {
+				cfg.PprofEnabled = true
+			},
+			want: security.ClassDangerousHooks,
+		},
 	}
 
-	_, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
-	if err == nil {
-		t.Fatal("newApp succeeded, want production security gate error")
-	}
-	if got := security.ErrorClass(err); got != security.ClassTLSConfig {
-		t.Fatalf("ErrorClass() = %q, want %q; err=%v", got, security.ClassTLSConfig, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SCRAP_BACKEND_TYPE", "s3")
+			cfg := productionTestAppConfig(t)
+			cfg.ShardPlacementFile = writeTwoShardPlacementFile(t)
+			tt.mutate(&cfg)
+
+			_, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})
+			if err == nil {
+				t.Fatal("newApp succeeded, want production security gate error")
+			}
+			if got := security.ErrorClass(err); got != tt.want {
+				t.Fatalf("ErrorClass() = %q, want %q; err=%v", got, tt.want, err)
+			}
+		})
 	}
 }

@@ -5,7 +5,7 @@ created: 2026-06-12T00:39:25-04:00
 
 # Story 4.1: Production Security Startup Gate
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,47 +33,47 @@ so that unsafe Cells never serve production traffic.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 4.1 evidence artifact before behavior changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md`.
-  - [ ] Record baseline commit, evaluation timestamp, exact files reviewed, evidence owner, command, expected result, actual result, artifact status, and redaction proof.
-  - [ ] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases like `PASS with concerns`.
-  - [ ] If current code already satisfies a row, prove it with current tests or source evidence. Do not mark a row as pass from the old Story 1.1 artifact alone.
+- [x] Create the Story 4.1 evidence artifact before behavior changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md`.
+  - [x] Record baseline commit, evaluation timestamp, exact files reviewed, evidence owner, command, expected result, actual result, artifact status, and redaction proof.
+  - [x] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases like `PASS with concerns`.
+  - [x] If current code already satisfies a row, prove it with current tests or source evidence. Do not mark a row as pass from the old Story 1.1 artifact alone.
 
-- [ ] Audit and reuse the existing startup gate implementation. (AC: 1-4)
-  - [ ] Read and preserve `internal/security/startup_gate.go`, `internal/security/mode.go`, `internal/security/tls_config.go`, `internal/cmd/config.go`, `internal/cmd/app.go`, and `internal/cmd/tls.go`.
-  - [ ] Reuse existing `security.ValidateStartupGates`, `security.ParseMode`, TLS builders, policy loaders, and `newApp` validation ordering unless a test proves a bug.
-  - [ ] Confirm `newApp` validates production security gates before topology, Backend opening, telemetry construction, Shard opening, gRPC server construction, listeners, admin server creation, pprof, or test hooks.
-  - [ ] Classify any missing live Transit readiness behavior explicitly. Story 4.1 must fail missing or contradictory Transit config and fake Transit; do not claim real OpenBao outage/sealed/unauthorized proof unless a current command proves it.
+- [x] Audit and reuse the existing startup gate implementation. (AC: 1-4)
+  - [x] Read and preserve `internal/security/startup_gate.go`, `internal/security/mode.go`, `internal/security/tls_config.go`, `internal/cmd/config.go`, `internal/cmd/app.go`, and `internal/cmd/tls.go`.
+  - [x] Reuse existing `security.ValidateStartupGates`, `security.ParseMode`, TLS builders, policy loaders, and `newApp` validation ordering unless a test proves a bug.
+  - [x] Confirm `newApp` validates production security gates before topology, Backend opening, telemetry construction, Shard opening, gRPC server construction, listeners, admin server creation, pprof, or test hooks.
+  - [x] Classify any missing live Transit readiness behavior explicitly. Story 4.1 must fail missing or contradictory Transit config and fake Transit; do not claim real OpenBao outage/sealed/unauthorized proof unless a current command proves it.
 
-- [ ] Expand fail-before-serving proof for every required class. (AC: 1, 4)
-  - [ ] Extend `TestNewAppRejectsProductionSecurityGatesBeforeSubsystems` or add an equivalent table test covering missing TLS, role policy, peer identity policy, Transit config, audit policy, rate-limit policy, `SCRAP_TEST_HOOKS=true`, and `SCRAP_PPROF_ENABLED=true`.
-  - [ ] The test must prove failure happens before serving surfaces are opened. Prefer deterministic construction-order assertions such as an invalid S3 Backend sentinel or injected listener/subsystem side-effect checks over sleeps or flaky port probing.
-  - [ ] Include security mode defaults: unset, unknown, and malformed `SCRAP_SECURITY_MODE` fail closed and never imply development/test.
-  - [ ] Preserve the existing development/test smoke behavior only when the mode is explicit and visible as non-production readiness.
+- [x] Expand fail-before-serving proof for every required class. (AC: 1, 4)
+  - [x] Extend `TestNewAppRejectsProductionSecurityGatesBeforeSubsystems` or add an equivalent table test covering missing TLS, role policy, peer identity policy, Transit config, audit policy, rate-limit policy, `SCRAP_TEST_HOOKS=true`, and `SCRAP_PPROF_ENABLED=true`.
+  - [x] The test must prove failure happens before serving surfaces are opened. Prefer deterministic construction-order assertions such as an invalid S3 Backend sentinel or injected listener/subsystem side-effect checks over sleeps or flaky port probing.
+  - [x] Include security mode defaults: unset, unknown, and malformed `SCRAP_SECURITY_MODE` fail closed and never imply development/test.
+  - [x] Preserve the existing development/test smoke behavior only when the mode is explicit and visible as non-production readiness.
 
-- [ ] Keep startup gate validation broad and redacted. (AC: 1, 3, 4)
-  - [ ] Preserve or extend negative tests in `internal/security` for TLS files, invalid PEM, mismatched key pair, invalid/expired CA, expired cert, wrong identity, missing role policy, invalid role, missing peer identity, contradictory peer identity, missing Transit config, HTTP Transit address, relative Transit path, missing Transit token env, fake Transit, invalid audit policy, invalid rate-limit policy, test hooks, and pprof.
-  - [ ] Assert startup errors expose bounded classes and env/config keys, not absolute paths, cert/key material, token values, dependency logs, policy contents, or raw identifiers.
-  - [ ] Keep TLS 1.3 and `tls.RequireAndVerifyClientCert` semantics through the shared TLS builders. Do not hand-roll per-surface TLS behavior.
+- [x] Keep startup gate validation broad and redacted. (AC: 1, 3, 4)
+  - [x] Preserve or extend negative tests in `internal/security` for TLS files, invalid PEM, mismatched key pair, invalid/expired CA, expired cert, wrong identity, missing role policy, invalid role, missing peer identity, contradictory peer identity, missing Transit config, HTTP Transit address, relative Transit path, missing Transit token env, fake Transit, invalid audit policy, invalid rate-limit policy, test hooks, and pprof.
+  - [x] Assert startup errors expose bounded classes and env/config keys, not absolute paths, cert/key material, token values, dependency logs, policy contents, or raw identifiers.
+  - [x] Keep TLS 1.3 and `tls.RequireAndVerifyClientCert` semantics through the shared TLS builders. Do not hand-roll per-surface TLS behavior.
 
-- [ ] Prove valid production config wires the security posture. (AC: 2)
-  - [ ] Reuse or extend `TestAppSecurityRuntimeLoadsProductionAuthorizer` to prove production public gRPC, peer gRPC, admin TLS, authorizer, audit sink, rate limiter, Transit, and telemetry security labels are explicitly configured.
-  - [ ] Include `scrapctl` production client posture by testing existing production TLS requirements in `internal/scrapctl` rather than moving server-side enforcement into the CLI.
-  - [ ] Confirm admin health/evidence surfaces show `security_mode=production` and production readiness only after startup gates pass; non-production remains `not_ready` with `non_production_security_mode`.
+- [x] Prove valid production config wires the security posture. (AC: 2)
+  - [x] Reuse or extend `TestAppSecurityRuntimeLoadsProductionAuthorizer` to prove production public gRPC, peer gRPC, admin TLS, authorizer, audit sink, rate limiter, Transit, and telemetry security labels are explicitly configured.
+  - [x] Include `scrapctl` production client posture by testing existing production TLS requirements in `internal/scrapctl` rather than moving server-side enforcement into the CLI.
+  - [x] Confirm admin health/evidence surfaces show `security_mode=production` and production readiness only after startup gates pass; non-production remains `not_ready` with `non_production_security_mode`.
 
-- [ ] Preserve package and authority boundaries. (AC: 1-4)
-  - [ ] Keep startup composition and env parsing in `internal/cmd`.
-  - [ ] Keep reusable security primitives in `internal/security`.
-  - [ ] Keep public gRPC behavior in `internal/server`, peer checks in `internal/peer`, admin status in `internal/admin`, CLI display/client TLS loading in `internal/scrapctl`, and Transit operations in `internal/encryption`.
-  - [ ] Do not change storage identity, Block/Frame layout, Backend object identity, protobuf wire contracts, Shard authority, Pebble Projection authority, or OpenBao bootstrap behavior for this story.
-  - [ ] Do not introduce runtime dependencies, assertion libraries, mocking frameworks, package-level globals, or new telemetry labels unless an accepted ADR/story explicitly requires it.
+- [x] Preserve package and authority boundaries. (AC: 1-4)
+  - [x] Keep startup composition and env parsing in `internal/cmd`.
+  - [x] Keep reusable security primitives in `internal/security`.
+  - [x] Keep public gRPC behavior in `internal/server`, peer checks in `internal/peer`, admin status in `internal/admin`, CLI display/client TLS loading in `internal/scrapctl`, and Transit operations in `internal/encryption`.
+  - [x] Do not change storage identity, Block/Frame layout, Backend object identity, protobuf wire contracts, Shard authority, Pebble Projection authority, or OpenBao bootstrap behavior for this story.
+  - [x] Do not introduce runtime dependencies, assertion libraries, mocking frameworks, package-level globals, or new telemetry labels unless an accepted ADR/story explicitly requires it.
 
-- [ ] Record verification and leak scans. (AC: 1-4)
-  - [ ] Run focused security and startup tests first, then affected package regression.
-  - [ ] Run `git diff --check`.
-  - [ ] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes or verifies startup/security behavior.
-  - [ ] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed test fixture, allowed policy vocabulary, or artifact prose.
-  - [ ] If `make production-rehearsal-security` is not run, record it as skipped with closure impact. Do not claim production rehearsal readiness from package tests.
+- [x] Record verification and leak scans. (AC: 1-4)
+  - [x] Run focused security and startup tests first, then affected package regression.
+  - [x] Run `git diff --check`.
+  - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes or verifies startup/security behavior.
+  - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed test fixture, allowed policy vocabulary, or artifact prose.
+  - [x] If `make production-rehearsal-security` is not run, record it as skipped with closure impact. Do not claim production rehearsal readiness from package tests.
 
 ## Dev Notes
 
@@ -194,10 +194,27 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+GPT-5 Codex
 
 ### Debug Log References
 
+- 2026-06-12T00:43:04-04:00 - Marked Story 4.1 in progress and created the evidence artifact before code behavior changes.
+- 2026-06-12T00:49:11-04:00 - Expanded app-level production startup gate matrix and recorded focused tests, affected regression, leak scans, and `make check`.
+
 ### Completion Notes List
 
+- Created `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md` with baseline scope, files reviewed, initial AC matrix, required-setting matrix, no-listener proof matrix, redaction scan placeholders, and strict `PASS`/`CONCERNS`/`FAIL` result language.
+- Expanded `TestNewAppRejectsProductionSecurityGatesBeforeSubsystems` to cover security mode, TLS, role policy, peer identity policy, Transit config, audit policy, rate-limit policy, test hooks, and pprof using the production test fixture plus invalid Backend sentinel.
+- Recorded Story 4.1 evidence as `PASS` for config/startup-gate scope while explicitly excluding live OpenBao outage/sealed/unauthorized readiness and production rehearsal claims.
+- Verification passed: focused `internal/security`, `internal/cmd`, `internal/admin`, `internal/scrapctl`, and `internal/scrapctl/evidencebundle` tests; affected package regression; `git diff --check`; and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/4-1-production-security-startup-gate.md`
+- `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/cmd/app_test.go`
+
+### Change Log
+
+- 2026-06-12 - Expanded production startup gate app-level matrix, added Story 4.1 evidence artifact, and moved story to review.
