@@ -9,7 +9,6 @@ import (
 
 	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/block"
-	"github.com/petabytecl/scrap/internal/index"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
@@ -46,7 +45,7 @@ type scannerCoordinator struct {
 func newScannerCoordinator(
 	core scannerCore,
 	blocksDir string,
-	idx *index.Index,
+	progressStore avscan.ProgressStore,
 	shardID uint64,
 	cfg ScannerConfig,
 	pauseController scrub.PauseController,
@@ -63,7 +62,7 @@ func newScannerCoordinator(
 		BlockLister:              c,
 		LeaderChecker:            core,
 		Engine:                   cfg.Engine,
-		ProgressStore:            scannerProgressStore{idx: idx},
+		ProgressStore:            progressStore,
 		SignatureVersionProvider: cfg.SignatureVersionProvider,
 		Metrics:                  cfg.Metrics,
 		PauseController:          pauseController,

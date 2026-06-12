@@ -38,9 +38,10 @@ type Scheduler struct {
 }
 
 type runProgressState struct {
-	enabled          bool
-	frontier         uint64
-	signatureVersion string
+	enabled                   bool
+	frontier                  uint64
+	signatureVersion          string
+	resetDuplicateSuppression bool
 }
 
 type scanRunState struct {
@@ -191,22 +192,14 @@ func (s *Scheduler) RunOnce(ctx context.Context) (err error) {
 		return ErrEngineUnavailable
 	}
 
-	progress, progressReason, err := s.progressForRun(ctx)
+	progress, blocks, progressReason, err := s.prepareScanRun(ctx)
 	if err != nil {
 		status = StatusDegraded
 		reason = progressReason
 		s.recordFailure(reason, s.lagFromSnapshot())
 		return err
 	}
-	s.updateProgressSnapshot(progress)
 
-	blocks, err := s.cfg.BlockLister.ListSealedBlocks(ctx)
-	if err != nil {
-		status = StatusDegraded
-		reason = ReasonListFailed
-		s.recordFailure(reason, s.lagFromSnapshot())
-		return fmt.Errorf("avscan: list sealed Blocks: %w", err)
-	}
 	blocks = s.eligibleBlocks(blocks, progress)
 	s.setLag(len(blocks))
 	s.updateSnapshot(func(snapshot *Snapshot) {
@@ -225,6 +218,31 @@ func (s *Scheduler) RunOnce(ctx context.Context) (err error) {
 		snapshot.InFlightBlocks = 0
 	})
 	return nil
+}
+
+func (s *Scheduler) prepareScanRun(ctx context.Context) (runProgressState, []Block, Reason, error) {
+	progress, reason, err := s.progressForRun(ctx)
+	if err != nil {
+		return runProgressState{}, nil, reason, err
+	}
+	if progress.resetDuplicateSuppression {
+		s.clearCompleted()
+		s.updateProgressSnapshot(progress)
+	}
+
+	blocks, err := s.cfg.BlockLister.ListSealedBlocks(ctx)
+	if err != nil {
+		return runProgressState{}, nil, ReasonListFailed, fmt.Errorf("avscan: list sealed Blocks: %w", err)
+	}
+	progress, reason, err = s.reconcileProgressWithBlocks(ctx, progress, blocks)
+	if err != nil {
+		return runProgressState{}, nil, reason, err
+	}
+	if progress.resetDuplicateSuppression {
+		s.clearCompleted()
+	}
+	s.updateProgressSnapshot(progress)
+	return progress, blocks, ReasonNone, nil
 }
 
 func (s *Scheduler) scanBlocks(ctx context.Context, blocks []Block, progress runProgressState) (Reason, error) {
@@ -272,14 +290,32 @@ func (s *Scheduler) persistProgressAfterScan(ctx context.Context, block Block, s
 	if !state.progress.enabled || state.frontierBlocked {
 		return ReasonNone, nil
 	}
+	if block.BlockID != state.progress.frontier+1 {
+		state.frontierBlocked = true
+		return ReasonNone, nil
+	}
 
 	state.progress.frontier = block.BlockID
+	s.advanceProgressThroughCompleted(&state.progress)
 	if err := s.saveProgress(ctx, state.progress); err != nil {
-		reason := ReasonProgressFailed
+		reason := reasonForProgressError(err)
 		s.recordFailure(reason, state.remaining)
 		return reason, err
 	}
 	return ReasonNone, nil
+}
+
+func (s *Scheduler) advanceProgressThroughCompleted(progress *runProgressState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for {
+		nextBlockID := progress.frontier + 1
+		if _, ok := s.completed[nextBlockID]; !ok {
+			return
+		}
+		progress.frontier = nextBlockID
+	}
 }
 
 func (s *Scheduler) waitBeforeScan(ctx context.Context, block Block, remaining int) (Reason, error) {
@@ -350,7 +386,13 @@ func (s *Scheduler) eligibleBlocks(blocks []Block, progress runProgressState) []
 	defer s.mu.Unlock()
 
 	out := make([]Block, 0, len(ordered))
+	seen := make(map[uint64]struct{}, len(ordered))
 	for _, block := range ordered {
+		if _, ok := seen[block.BlockID]; ok {
+			s.recordDuplicate()
+			continue
+		}
+		seen[block.BlockID] = struct{}{}
 		if progress.enabled && block.BlockID <= progress.frontier {
 			continue
 		}
@@ -364,27 +406,28 @@ func (s *Scheduler) eligibleBlocks(blocks []Block, progress runProgressState) []
 }
 
 func (s *Scheduler) progressForRun(ctx context.Context) (runProgressState, Reason, error) {
-	if s.cfg.ProgressStore == nil {
+	if s.cfg.ProgressStore == nil || s.cfg.SignatureVersionProvider == nil {
 		return runProgressState{}, ReasonNone, nil
 	}
 
 	progress, err := s.loadProgress(ctx)
 	if err != nil {
-		return runProgressState{}, ReasonProgressFailed, err
+		return runProgressState{}, reasonForProgressError(err), err
 	}
 	if err := validateSignatureVersion(progress.LastSignatureVersionScanned); err != nil {
 		return runProgressState{}, ReasonProgressFailed, err
 	}
 
-	progress, err = s.progressWithCurrentSignature(ctx, progress)
+	progress, changed, err := s.progressWithCurrentSignature(ctx, progress)
 	if err != nil {
-		return runProgressState{}, ReasonProgressFailed, err
+		return runProgressState{}, reasonForProgressError(err), err
 	}
 
 	return runProgressState{
-		enabled:          true,
-		frontier:         progress.LastScannedBlockID,
-		signatureVersion: progress.LastSignatureVersionScanned,
+		enabled:                   true,
+		frontier:                  progress.LastScannedBlockID,
+		signatureVersion:          progress.LastSignatureVersionScanned,
+		resetDuplicateSuppression: changed,
 	}, ReasonNone, nil
 }
 
@@ -399,20 +442,16 @@ func (s *Scheduler) loadProgress(ctx context.Context) (Progress, error) {
 	return Progress{}, fmt.Errorf("avscan: load scanner progress: %w", err)
 }
 
-func (s *Scheduler) progressWithCurrentSignature(ctx context.Context, progress Progress) (Progress, error) {
-	if s.cfg.SignatureVersionProvider == nil {
-		return progress, nil
-	}
-
+func (s *Scheduler) progressWithCurrentSignature(ctx context.Context, progress Progress) (Progress, bool, error) {
 	current, err := s.cfg.SignatureVersionProvider.SignatureVersion(ctx)
 	if err != nil {
-		return Progress{}, fmt.Errorf("avscan: signature version: %w", err)
+		return Progress{}, false, fmt.Errorf("avscan: signature version: %w", err)
 	}
 	if err := validateSignatureVersion(current); err != nil {
-		return Progress{}, err
+		return Progress{}, false, err
 	}
 	if current == progress.LastSignatureVersionScanned {
-		return progress, nil
+		return progress, false, nil
 	}
 
 	reset := Progress{
@@ -420,9 +459,40 @@ func (s *Scheduler) progressWithCurrentSignature(ctx context.Context, progress P
 		LastSignatureVersionScanned: current,
 	}
 	if err := s.cfg.ProgressStore.SaveScannerProgress(ctx, reset); err != nil {
-		return Progress{}, fmt.Errorf("avscan: reset scanner progress: %w", err)
+		return Progress{}, false, fmt.Errorf("avscan: reset scanner progress: %w", err)
 	}
-	return reset, nil
+	return reset, true, nil
+}
+
+func (s *Scheduler) reconcileProgressWithBlocks(
+	ctx context.Context,
+	progress runProgressState,
+	blocks []Block,
+) (runProgressState, Reason, error) {
+	if !progress.enabled || len(blocks) == 0 {
+		return progress, ReasonNone, nil
+	}
+	maxBlockID := maxListedBlockID(blocks)
+	if progress.frontier <= maxBlockID {
+		return progress, ReasonNone, nil
+	}
+
+	progress.frontier = 0
+	progress.resetDuplicateSuppression = true
+	if err := s.saveProgress(ctx, progress); err != nil {
+		return runProgressState{}, reasonForProgressError(err), err
+	}
+	return progress, ReasonNone, nil
+}
+
+func maxListedBlockID(blocks []Block) uint64 {
+	var maxBlockID uint64
+	for _, block := range blocks {
+		if block.BlockID > maxBlockID {
+			maxBlockID = block.BlockID
+		}
+	}
+	return maxBlockID
 }
 
 func (s *Scheduler) updateProgressSnapshot(progress runProgressState) {
@@ -430,7 +500,7 @@ func (s *Scheduler) updateProgressSnapshot(progress runProgressState) {
 		return
 	}
 	s.updateSnapshot(func(snapshot *Snapshot) {
-		if progress.frontier > snapshot.LastScannedBlockID {
+		if progress.resetDuplicateSuppression || progress.frontier > snapshot.LastScannedBlockID {
 			snapshot.LastScannedBlockID = progress.frontier
 		}
 	})
@@ -448,6 +518,12 @@ func (s *Scheduler) saveProgress(ctx context.Context, progress runProgressState)
 		return fmt.Errorf("avscan: save scanner progress: %w", err)
 	}
 	return nil
+}
+
+func (s *Scheduler) clearCompleted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completed = make(map[uint64]struct{})
 }
 
 func validateSignatureVersion(version string) error {
@@ -636,4 +712,8 @@ func reasonForScanError(err error) Reason {
 	default:
 		return ReasonScanFailed
 	}
+}
+
+func reasonForProgressError(err error) Reason {
+	return reasonForWaitError(err, ReasonProgressFailed)
 }

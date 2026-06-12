@@ -60,7 +60,7 @@ The scanner watermark is progress evidence only. It is not Document visibility a
 | Restart resumes from persisted frontier | `TestSchedulerResumesFromPersistedProgressAfterReconstruction`, `TestScannerCoordinatorPersistsProgressAcrossReconstruction` | PASS |
 | Signature-version change resets scan priority | `TestSchedulerSignatureVersionChangeResetsProgressFromBeginning` | PASS |
 | Lower persisted frontier duplicates work safely | `TestSchedulerResumesFromPersistedProgressAfterReconstruction` retries only Blocks above the persisted frontier. | PASS |
-| Higher persisted frontier skips known work without visibility changes | `TestSchedulerHigherPersistedFrontierSkipsKnownBlocks` | PASS |
+| Higher persisted frontier triggers duplicate-safe rescan without visibility changes | `TestSchedulerHigherPersistedFrontierRescansKnownBlocks` | PASS |
 | Old signature version rescans from Shard beginning | `TestSchedulerSignatureVersionChangeResetsProgressFromBeginning` | PASS |
 
 ## Redaction Notes
@@ -74,4 +74,36 @@ Signature versions are bounded identifiers. Tests and scans must not persist or 
 | AC-5.2.1 | PASS | `internal/index/scanner_watermark.go`, `TestScannerWatermarkRoundTrip`, `TestScannerWatermarkParticipatesInStreamingHash` |
 | AC-5.2.2 | PASS | `TestSchedulerResumesFromPersistedProgressAfterReconstruction`, `TestScannerCoordinatorPersistsProgressAcrossReconstruction`; watermarks remain progress-only and no read/public metadata path changed. |
 | AC-5.2.3 | PASS | `TestSchedulerSignatureVersionChangeResetsProgressFromBeginning`; signature versions are bounded identifiers and redaction scans passed. |
-| AC-5.2.4 | PASS | `TestSchedulerDoesNotPersistFrontierPastFailedLowerBlock`, `TestSchedulerHigherPersistedFrontierSkipsKnownBlocks`, missing-progress zero fallback tests. |
+| AC-5.2.4 | PASS | `TestSchedulerDoesNotPersistFrontierPastFailedLowerBlock`, `TestSchedulerHigherPersistedFrontierRescansKnownBlocks`, missing-progress zero fallback tests. |
+
+## Code Review Follow-up Evidence
+
+BMAD review found high-risk gaps in same-process signature updates, persisted frontier conflicts, and Projection rebuild handle swaps. Follow-up fixes added these regression tests:
+
+- `TestSchedulerSignatureVersionChangeClearsProcessLocalDuplicates`
+- `TestSchedulerHigherPersistedFrontierRescansKnownBlocks`
+- `TestScannerProgressStoreUsesCurrentProjectionAfterSwap`
+- `TestScannerWatermarkDoesNotAffectStreamingHash`
+- `TestSchedulerNilSignatureProviderUsesProcessLocalProgress`
+- `TestSchedulerDeduplicatesBlockListerDuplicates`
+- `TestSchedulerProgressSaveCancellationIsCancellation`
+- `TestSchedulerDoesNotPersistAcrossGapAboveFrontier`
+- `TestSchedulerAdvancesFrontierThroughCompletedBlocksAfterGapFills`
+
+Targeted follow-up gate:
+
+```bash
+env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1
+```
+
+Result: PASS.
+
+Final post-review gates:
+
+| Area | Command / Evidence | Result |
+| --- | --- | --- |
+| Static diff check | `git diff --check` | PASS |
+| E2E gate policy | `scripts/check-e2e-gates.sh` | PASS |
+| Broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PASS |
+| Secret shape scan | `rg -n --pcre2 "$secret_shape_pattern" $scan_scope` | PASS - no matches |
+| Scanner-sensitive scan | `rg -n --pcre2 "$scanner_sensitive_pattern" $scan_scope` | PASS - no matches |

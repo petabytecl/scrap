@@ -296,6 +296,33 @@ func TestSchedulerSignatureVersionChangeResetsProgressFromBeginning(t *testing.T
 	assertSavedProgress(t, store.lastSaved(), 3)
 }
 
+func TestSchedulerSignatureVersionChangeClearsProcessLocalDuplicates(t *testing.T) {
+	store := &memoryProgressStore{}
+	signatures := &mutableSignatureVersion{version: "daily-2026.06.11:1"}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: signatures,
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce: %v", err)
+	}
+	signatures.version = schedulerTestSignatureVersion
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
+	}
+	if got, want := engine.blockIDs(), []uint64{1, 2, 1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
+	assertSavedProgress(t, store.lastSaved(), 2)
+}
+
 func TestSchedulerMissingProgressActsAsZeroProgress(t *testing.T) {
 	store := &memoryProgressStore{loadErr: ErrProgressNotFound}
 	engine := &recordingEngine{}
@@ -316,6 +343,41 @@ func TestSchedulerMissingProgressActsAsZeroProgress(t *testing.T) {
 		t.Fatalf("scanned Blocks = %v, want %v", got, want)
 	}
 	assertSavedProgress(t, store.lastSaved(), 2)
+}
+
+func TestSchedulerNilSignatureProviderUsesProcessLocalProgress(t *testing.T) {
+	store := &memoryProgressStore{}
+	firstEngine := &recordingEngine{}
+	first := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine:        firstEngine,
+		ProgressStore: store,
+		Interval:      time.Hour,
+	})
+	if err := first.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce: %v", err)
+	}
+	if len(store.saves) != 0 {
+		t.Fatalf("progress saves = %d, want 0 without signature provider", len(store.saves))
+	}
+
+	secondEngine := &recordingEngine{}
+	second := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine:        secondEngine,
+		ProgressStore: store,
+		Interval:      time.Hour,
+	})
+	if err := second.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
+	}
+	if got, want := secondEngine.blockIDs(), []uint64{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second scanned Blocks = %v, want %v", got, want)
+	}
 }
 
 func TestSchedulerProgressSaveFailureIsObservable(t *testing.T) {
@@ -347,7 +409,31 @@ func TestSchedulerProgressSaveFailureIsObservable(t *testing.T) {
 	}
 }
 
-func TestSchedulerHigherPersistedFrontierSkipsKnownBlocks(t *testing.T) {
+func TestSchedulerProgressSaveCancellationIsCancellation(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{LastSignatureVersionScanned: schedulerTestSignatureVersion},
+		saveErr:  context.Canceled,
+	}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   &recordingEngine{},
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	err := scheduler.RunOnce(context.Background())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOnce error = %v, want context.Canceled", err)
+	}
+	if got := scheduler.Snapshot().LastReason; got != ReasonCanceled {
+		t.Fatalf("last reason = %q, want %q", got, ReasonCanceled)
+	}
+}
+
+func TestSchedulerHigherPersistedFrontierRescansKnownBlocks(t *testing.T) {
 	store := &memoryProgressStore{
 		progress: Progress{
 			LastScannedBlockID:          99,
@@ -368,10 +454,85 @@ func TestSchedulerHigherPersistedFrontierSkipsKnownBlocks(t *testing.T) {
 	if err := scheduler.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if got := engine.blockIDs(); len(got) != 0 {
-		t.Fatalf("scanned Blocks = %v, want none", got)
+	if got, want := engine.blockIDs(), []uint64{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
 	}
-	assertSavedProgress(t, store.lastSaved(), 99)
+	assertSavedProgress(t, store.lastSaved(), 2)
+}
+
+func TestSchedulerDoesNotPersistAcrossGapAboveFrontier(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          1,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got, want := engine.blockIDs(), []uint64{3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
+	assertSavedProgress(t, store.lastSaved(), 1)
+}
+
+func TestSchedulerAdvancesFrontierThroughCompletedBlocksAfterGapFills(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          1,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	lister := &mutableBlockLister{blocks: []Block{{BlockID: 3}}}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              lister,
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   &recordingEngine{},
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce: %v", err)
+	}
+	assertSavedProgress(t, store.lastSaved(), 1)
+
+	lister.blocks = []Block{{BlockID: 2}, {BlockID: 3}}
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
+	}
+	assertSavedProgress(t, store.lastSaved(), 3)
+}
+
+func TestSchedulerDeduplicatesBlockListerDuplicates(t *testing.T) {
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 1}, {BlockID: 2}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine:        engine,
+		Interval:      time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got, want := engine.blockIDs(), []uint64{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
 }
 
 func TestSchedulerContinuesAfterPoisonBlock(t *testing.T) {
@@ -576,6 +737,14 @@ func (f blockListerFunc) ListSealedBlocks(ctx context.Context) ([]Block, error) 
 	return f(ctx)
 }
 
+type mutableBlockLister struct {
+	blocks []Block
+}
+
+func (l *mutableBlockLister) ListSealedBlocks(context.Context) ([]Block, error) {
+	return append([]Block(nil), l.blocks...), nil
+}
+
 type staticLeaderChecker bool
 
 func (l staticLeaderChecker) IsLeader() bool {
@@ -741,6 +910,14 @@ type staticSignatureVersion string
 
 func (v staticSignatureVersion) SignatureVersion(context.Context) (string, error) {
 	return string(v), nil
+}
+
+type mutableSignatureVersion struct {
+	version string
+}
+
+func (v *mutableSignatureVersion) SignatureVersion(context.Context) (string, error) {
+	return v.version, nil
 }
 
 func assertSavedProgress(t *testing.T, got Progress, blockID uint64) {

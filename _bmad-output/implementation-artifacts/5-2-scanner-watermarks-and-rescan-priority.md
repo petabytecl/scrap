@@ -5,7 +5,7 @@ created: 2026-06-12T13:07:03-04:00
 
 # Story 5.2: Scanner Watermarks and Rescan Priority
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -44,7 +44,7 @@ so that rescans are deterministic and restart-safe.
   - [x] Include `LastScannedBlockID uint64` and `LastSignatureVersionScanned string` in the stored value.
   - [x] Use a dedicated bounded key prefix such as `"\x00scanner-watermark\x00"` with explicit lower/upper bounds if iteration is needed.
   - [x] Use existing Pebble patterns: `idx.db.Set(..., pebble.Sync)`, `idx.db.Get`, decode validation, sentinel `Err...NotFound`, and package-local encoding helpers.
-  - [x] Add index tests for missing watermark, put/get, corrupt/truncated/unknown-version value, invalid signature version, and streaming hash determinism with watermark keys included.
+  - [x] Add index tests for missing watermark, put/get, corrupt/truncated/unknown-version value, invalid signature version, and projection consistency hash determinism with watermark keys excluded.
 
 - [x] Add a scanner progress boundary to `internal/avscan` without importing `internal/index`. (AC: 1-4)
   - [x] Define small consumer-side interfaces in `internal/avscan`, for example `ProgressStore` and `SignatureVersionProvider`; keep them to the methods the scheduler consumes.
@@ -77,7 +77,19 @@ so that rescans are deterministic and restart-safe.
 - [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
   - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
   - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
-  - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
+  - [x] Run `bmad-code-review`; address critical/high findings before marking `done`.
+
+### Review Findings
+
+- [x] [Review][Patch] Same-process signature updates can skip the required rescan [internal/avscan/scheduler.go] — cleared process-local duplicate suppression when the active signature version changes and added same-process v1-to-v2 rescan coverage.
+- [x] [Review][Patch] Higher-than-known persisted frontier skips known Blocks [internal/avscan/scheduler.go] — treated persisted frontier conflicts as reset-to-zero rescan conditions and updated rollback/conflict coverage to expect duplicate-safe scanning.
+- [x] [Review][Patch] Projection rebuild can leave scanner progress wired to a stale closed Pebble handle [internal/shard/scanner_progress.go] — changed the adapter to resolve the current Shard Projection under `s.mu` for each load/save and added Projection swap coverage.
+- [x] [Review][Patch] Leader-only scanner watermark can perturb replica consistency hash [internal/index/index.go] — excluded scanner watermark keys from `StreamingHash` while keeping the persisted record in the Projection.
+- [x] [Review][Patch] Missing signature provider can persist block-only progress [internal/avscan/scheduler.go] — made persistent scanner progress inactive unless both a progress store and signature-version provider are configured.
+- [x] [Review][Patch] Lister duplicate Block IDs can scan twice in one run [internal/avscan/scheduler.go] — deduplicated eligible Blocks before scanning and record duplicate skips.
+- [x] [Review][Patch] Context cancellation during progress save is reported as progress failure [internal/avscan/scheduler.go] — mapped progress-store cancellation/deadline errors to `ReasonCanceled`.
+- [x] [Review][Patch] Gap above persisted frontier can incorrectly advance persisted progress [internal/avscan/scheduler.go] — only persisted numerically contiguous Block frontier advancement; higher Blocks can scan but do not move the persisted frontier across a gap.
+- [x] [Review][Patch] Signature reset leaves runtime snapshot reporting old high frontier [internal/avscan/scheduler.go] — reset `Snapshot.LastScannedBlockID` when duplicate suppression is reset for signature/frontier conflict.
 
 ## Dev Notes
 
@@ -211,6 +223,8 @@ GPT-5 Codex for story creation.
 - 2026-06-12T13:22:44-04:00 - Wired Shard scanner progress adapter through the Projection-backed coordinator. Verified with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run Scanner -count=1`.
 - 2026-06-12T13:23:51-04:00 - Targeted Story 5.2 package gate passed with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1`.
 - 2026-06-12T13:30:33-04:00 - Final implementation gates passed: `git diff --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T13:44:41-04:00 - BMAD code review findings addressed for scanner rescan reset, rollback conflict, Projection rebuild handle swap, hash isolation, nil signature provider behavior, duplicate lister entries, cancellation reason mapping, and frontier gaps. Targeted gate passed with `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1`.
+- 2026-06-12T13:50:11-04:00 - Final post-review gates passed: `git diff --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`. Story moved to done.
 
 ### Completion Notes List
 
@@ -221,6 +235,7 @@ GPT-5 Codex for story creation.
 - Added `internal/avscan` progress and signature-version interfaces, restart resume from persisted frontier, contiguous-frontier persistence, signature-version reset priority, and duplicate-safe rollback/conflict tests without importing `internal/index`.
 - Added Shard-local scanner progress adapter from `*index.Index` to `avscan.ProgressStore`, plus coordinator reconstruction coverage proving persisted progress survives scheduler reconstruction without exposing Block paths to scanner engines.
 - Local implementation verification passed and the story is ready for the BMAD code-review workflow.
+- Addressed BMAD review findings: persistent progress now requires a signature provider, signature changes clear process-local duplicate suppression, higher-than-known persisted frontiers reset to safe rescan, Projection rebuilds cannot leave scanner progress on a closed Pebble handle, scanner watermarks are excluded from replica consistency hashes, duplicate lister entries are skipped, progress-save cancellation is reported as cancellation, and numeric frontier gaps do not advance persisted progress.
 
 ### File List
 
@@ -230,6 +245,7 @@ GPT-5 Codex for story creation.
 - `internal/avscan/scheduler.go`
 - `internal/avscan/scheduler_test.go`
 - `internal/avscan/types.go`
+- `internal/index/index.go`
 - `internal/index/scanner_watermark.go`
 - `internal/index/scanner_watermark_test.go`
 - `internal/shard/scanner.go`
@@ -240,3 +256,4 @@ GPT-5 Codex for story creation.
 ### Change Log
 
 - 2026-06-12 - Implemented Story 5.2 scanner watermarks and deterministic rescan priority; moved story to review after local gates passed.
+- 2026-06-12 - Addressed BMAD code review findings and moved Story 5.2 to done after post-review gates passed.

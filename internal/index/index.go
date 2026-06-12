@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -132,6 +133,9 @@ func (idx *Index) StreamingHash() (appliedIndex uint64, hash [32]byte, err error
 
 	h := sha256.New()
 	for iter.First(); iter.Valid(); iter.Next() {
+		if bytes.HasPrefix(iter.Key(), []byte(scannerWatermarkPrefix)) {
+			continue
+		}
 		val, err := iter.ValueAndErr()
 		if err != nil {
 			return 0, [32]byte{}, fmt.Errorf("index: iter value: %w", err)

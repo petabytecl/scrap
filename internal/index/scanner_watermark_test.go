@@ -108,7 +108,7 @@ func TestScannerWatermarkRejectsInvalidSignatureVersion(t *testing.T) {
 	}
 }
 
-func TestScannerWatermarkParticipatesInStreamingHash(t *testing.T) {
+func TestScannerWatermarkDoesNotAffectStreamingHash(t *testing.T) {
 	idx1, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open idx1: %v", err)
@@ -149,8 +149,8 @@ func TestScannerWatermarkParticipatesInStreamingHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamingHash changed idx2: %v", err)
 	}
-	if bytes.Equal(hash1[:], hash3[:]) {
-		t.Fatal("changing scanner watermark should change streaming hash")
+	if !bytes.Equal(hash1[:], hash3[:]) {
+		t.Fatal("changing scanner watermark should not change projection consistency hash")
 	}
 }
 

@@ -3,9 +3,11 @@ package shard
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,8 +34,9 @@ func TestScannerCoordinatorPersistsProgressAcrossReconstruction(t *testing.T) {
 	createScannerProgressTestBlock(t, blocksDir, 2)
 
 	core := scannerProgressTestCore{leader: true, openBlockID: 99}
+	source := &scannerProgressTestIndexSource{idx: idx}
 	firstEngine := &scannerProgressRecordingEngine{}
-	first := newScannerCoordinator(core, blocksDir, idx, 7, ScannerConfig{
+	first := newScannerCoordinator(core, blocksDir, scannerProgressStore{source: source}, 7, ScannerConfig{
 		Engine:                   firstEngine,
 		SignatureVersionProvider: scannerProgressSignatureVersion("daily-2026.06.12:1"),
 		Interval:                 time.Hour,
@@ -48,7 +51,7 @@ func TestScannerCoordinatorPersistsProgressAcrossReconstruction(t *testing.T) {
 	createScannerProgressTestBlock(t, blocksDir, 3)
 
 	secondEngine := &scannerProgressRecordingEngine{}
-	second := newScannerCoordinator(core, blocksDir, idx, 7, ScannerConfig{
+	second := newScannerCoordinator(core, blocksDir, scannerProgressStore{source: source}, 7, ScannerConfig{
 		Engine:                   secondEngine,
 		SignatureVersionProvider: scannerProgressSignatureVersion("daily-2026.06.12:1"),
 		Interval:                 time.Hour,
@@ -58,6 +61,48 @@ func TestScannerCoordinatorPersistsProgressAcrossReconstruction(t *testing.T) {
 	}
 	if got, want := secondEngine.blockIDs(), []uint64{3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("second scanned Blocks = %v, want %v", got, want)
+	}
+}
+
+func TestScannerProgressStoreUsesCurrentProjectionAfterSwap(t *testing.T) {
+	dir := t.TempDir()
+	first, err := index.Open(filepath.Join(dir, "first"))
+	if err != nil {
+		t.Fatalf("Open first index: %v", err)
+	}
+	source := &scannerProgressTestIndexSource{idx: first}
+	store := scannerProgressStore{source: source}
+
+	progress := avscan.Progress{
+		LastScannedBlockID:          2,
+		LastSignatureVersionScanned: "daily-2026.06.12:1",
+	}
+	if err := store.SaveScannerProgress(context.Background(), progress); err != nil {
+		t.Fatalf("Save first progress: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close first index: %v", err)
+	}
+
+	second, err := index.Open(filepath.Join(dir, "second"))
+	if err != nil {
+		t.Fatalf("Open second index: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	source.set(second)
+
+	if _, err := store.LoadScannerProgress(context.Background()); !errors.Is(err, avscan.ErrProgressNotFound) {
+		t.Fatalf("Load after swap error = %v, want ErrProgressNotFound", err)
+	}
+	if err := store.SaveScannerProgress(context.Background(), progress); err != nil {
+		t.Fatalf("Save after swap: %v", err)
+	}
+	got, err := second.GetScannerWatermark()
+	if err != nil {
+		t.Fatalf("GetScannerWatermark after swap: %v", err)
+	}
+	if got.LastScannedBlockID != 2 || got.LastSignatureVersionScanned != progress.LastSignatureVersionScanned {
+		t.Fatalf("watermark after swap = %+v, want %+v", got, progress)
 	}
 }
 
@@ -119,4 +164,22 @@ type scannerProgressSignatureVersion string
 
 func (v scannerProgressSignatureVersion) SignatureVersion(context.Context) (string, error) {
 	return string(v), nil
+}
+
+type scannerProgressTestIndexSource struct {
+	mu  sync.Mutex
+	idx *index.Index
+}
+
+func (s *scannerProgressTestIndexSource) withScannerProjection(use func(*index.Index) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return use(s.idx)
+}
+
+func (s *scannerProgressTestIndexSource) set(idx *index.Index) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idx = idx
 }
