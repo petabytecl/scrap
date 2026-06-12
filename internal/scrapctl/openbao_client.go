@@ -108,10 +108,14 @@ func (c *officialOpenBaoBootstrapClient) ReadTransitKey(ctx context.Context, mou
 	if secret == nil || secret.Data == nil {
 		return openBaoTransitKeyStatus{}, errOpenBaoKeyMissing
 	}
+	keyType, typePresent := openBaoString(secret.Data, "type")
+	derived, derivedPresent := openBaoBool(secret.Data, "derived")
 	return openBaoTransitKeyStatus{
-		Type:          openBaoString(secret.Data, "type"),
-		Derived:       openBaoBool(secret.Data, "derived"),
-		LatestVersion: openBaoIntValue(secret.Data, "latest_version"),
+		Type:           keyType,
+		TypePresent:    typePresent,
+		Derived:        derived,
+		DerivedPresent: derivedPresent,
+		LatestVersion:  openBaoIntValue(secret.Data, "latest_version"),
 	}, nil
 }
 
@@ -138,14 +142,14 @@ func openBaoPath(parts ...string) string {
 	return strings.Join(segments, "/")
 }
 
-func openBaoString(data map[string]any, key string) string {
-	value, _ := data[key].(string)
-	return value
+func openBaoString(data map[string]any, key string) (string, bool) {
+	value, ok := data[key].(string)
+	return value, ok
 }
 
-func openBaoBool(data map[string]any, key string) bool {
-	value, _ := data[key].(bool)
-	return value
+func openBaoBool(data map[string]any, key string) (bool, bool) {
+	value, ok := data[key].(bool)
+	return value, ok
 }
 
 func openBaoIntValue(data map[string]any, key string) int {

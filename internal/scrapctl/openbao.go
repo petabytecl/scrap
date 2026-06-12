@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	baoapi "github.com/openbao/openbao/api"
 )
@@ -77,9 +79,11 @@ type openBaoMount struct {
 }
 
 type openBaoTransitKeyStatus struct {
-	Type          string
-	Derived       bool
-	LatestVersion int
+	Type           string
+	TypePresent    bool
+	Derived        bool
+	DerivedPresent bool
+	LatestVersion  int
 }
 
 type openBaoBootstrapOptions struct {
@@ -115,6 +119,8 @@ type openBaoBootstrapReport struct {
 	RedactionChecks    []openBaoRedactionCheck   `json:"redaction_checks"`
 	Dependency         openBaoDependencyEvidence `json:"dependency"`
 	ChangedBoundaries  []string                  `json:"changed_boundaries"`
+	SanitizedArgs      []string                  `json:"sanitized_args"`
+	EnvVarsUsed        []string                  `json:"env_vars_used"`
 	NextAction         string                    `json:"next_action"`
 }
 
@@ -132,13 +138,15 @@ type openBaoRedactionCheck struct {
 
 type openBaoDependencyEvidence struct {
 	Module     string `json:"module"`
+	Version    string `json:"version"`
 	Client     string `json:"client"`
 	Operations string `json:"operations"`
 }
 
 type openBaoBootstrapState struct {
-	report          openBaoBootstrapReport
-	forbiddenValues []string
+	report           openBaoBootstrapReport
+	forbiddenValues  []string
+	initUnsealShares []string
 }
 
 type stringListFlag []string
@@ -178,11 +186,15 @@ func runOpenBaoBootstrap(args []string, stdout, stderr io.Writer, deps Deps) err
 		state.report.Status = "fail"
 		state.report.NextAction = "fix reported OpenBao bootstrap failure and rerun command"
 	}
-	if err := finalizeOpenBaoBootstrapReport(opts, stdout, state); err != nil {
+	stderrText := ""
+	if runErr != nil {
+		stderrText = fmt.Sprintf("openbao bootstrap: %s\n", safeOpenBaoError(runErr))
+	}
+	if err := finalizeOpenBaoBootstrapReport(opts, stdout, state, stderrText, ""); err != nil {
 		return err
 	}
 	if runErr != nil {
-		_, _ = fmt.Fprintf(stderr, "openbao bootstrap: %s\n", safeOpenBaoError(runErr))
+		_, _ = io.WriteString(stderr, stderrText)
 		return errors.New(safeOpenBaoError(runErr))
 	}
 	return nil
@@ -217,6 +229,9 @@ func parseOpenBaoBootstrapOptions(args []string) (openBaoBootstrapOptions, error
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return openBaoBootstrapOptions{}, fmt.Errorf("parse flags: %w", err)
+	}
+	if err := rejectOpenBaoAdminTLSFlags(fs); err != nil {
+		return openBaoBootstrapOptions{}, err
 	}
 	if !flagWasSet(fs, "address") {
 		opts.address = firstEnv("OPENBAO_ADDR", "BAO_ADDR")
@@ -259,7 +274,7 @@ func validateOpenBaoBootstrapTargetOptions(opts openBaoBootstrapOptions) error {
 	if _, err := cleanOpenBaoPath("mount path", opts.mountPath); err != nil {
 		return err
 	}
-	if _, err := cleanOpenBaoPath("key name", opts.keyName); err != nil {
+	if _, err := cleanOpenBaoKeyName(opts.keyName); err != nil {
 		return err
 	}
 	if strings.TrimSpace(opts.keyType) == "" {
@@ -271,6 +286,9 @@ func validateOpenBaoBootstrapTargetOptions(opts openBaoBootstrapOptions) error {
 	if strings.TrimSpace(opts.evidencePath) == "" {
 		return errors.New("evidence-path is required")
 	}
+	if err := validateOperatorPath("evidence-path", opts.evidencePath); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -280,6 +298,12 @@ func validateOpenBaoBootstrapInitOptions(opts openBaoBootstrapOptions) error {
 	}
 	if strings.TrimSpace(opts.initSecretsPath) == "" {
 		return errors.New("init-secrets-path is required when init is enabled")
+	}
+	if err := validateOperatorPath("init-secrets-path", opts.initSecretsPath); err != nil {
+		return err
+	}
+	if sameOperatorPath(opts.evidencePath, opts.initSecretsPath) {
+		return errors.New("evidence-path and init-secrets-path must be different")
 	}
 	if opts.secretShares <= 0 {
 		return errors.New("init-secret-shares must be positive")
@@ -323,7 +347,7 @@ func executeOpenBaoBootstrap(ctx context.Context, opts openBaoBootstrapOptions, 
 	}
 
 	mountPath, _ := cleanOpenBaoPath("mount path", opts.mountPath)
-	keyName, _ := cleanOpenBaoPath("key name", opts.keyName)
+	keyName, _ := cleanOpenBaoKeyName(opts.keyName)
 	if err := ensureOpenBaoTransitMount(ctx, client, mountPath, &state); err != nil {
 		return state, err
 	}
@@ -356,6 +380,13 @@ func initializeOpenBaoIfNeeded(
 		state.addPhase("init", "fail", err.Error())
 		return "", err
 	}
+	sink, err := reserveOpenBaoInitSecretSink(opts.initSecretsPath)
+	if err != nil {
+		state.addPhase("init_secrets", "fail", err.Error())
+		return "", err
+	}
+	defer sink.cleanupUnlessCommitted()
+
 	initResult, err := client.Init(ctx, openBaoInitRequest{
 		SecretShares:    opts.secretShares,
 		SecretThreshold: opts.secretThreshold,
@@ -367,13 +398,14 @@ func initializeOpenBaoIfNeeded(
 	state.captureSecret(initResult.RootToken)
 	state.captureSecrets(initResult.Keys...)
 	state.captureSecrets(initResult.KeysB64...)
-	if err := writeOpenBaoInitSecrets(opts.initSecretsPath, initResult); err != nil {
+	if err := sink.write(initResult); err != nil {
 		state.addPhase("init_secrets", "fail", err.Error())
 		return "", err
 	}
 	state.report.InitPerformed = true
 	state.report.InitSecretsWritten = true
 	client.SetToken(initResult.RootToken)
+	state.initUnsealShares = initUnsealShares(initResult)
 	state.addPhase("init", "ok", "init material written to explicit secret file")
 	return initResult.RootToken, nil
 }
@@ -411,12 +443,15 @@ func applyOpenBaoBootstrapToken(client openBaoBootstrapClient, opts openBaoBoots
 }
 
 func unsealOpenBao(ctx context.Context, client openBaoBootstrapClient, envNames []string, state *openBaoBootstrapState) (openBaoSealStatus, error) {
+	if len(state.initUnsealShares) > 0 {
+		return unsealOpenBaoWithShares(ctx, client, state.initUnsealShares, state)
+	}
 	if len(envNames) == 0 {
 		err := errors.New("at least one unseal-key-env is required for sealed targets")
 		state.addPhase("unseal", "fail", err.Error())
 		return openBaoSealStatus{Sealed: true}, err
 	}
-	var status openBaoSealStatus
+	shares := make([]string, 0, len(envNames))
 	for _, envName := range envNames {
 		key := strings.TrimSpace(os.Getenv(envName))
 		if key == "" {
@@ -425,6 +460,14 @@ func unsealOpenBao(ctx context.Context, client openBaoBootstrapClient, envNames 
 			return openBaoSealStatus{Sealed: true}, err
 		}
 		state.captureSecret(key)
+		shares = append(shares, key)
+	}
+	return unsealOpenBaoWithShares(ctx, client, shares, state)
+}
+
+func unsealOpenBaoWithShares(ctx context.Context, client openBaoBootstrapClient, shares []string, state *openBaoBootstrapState) (openBaoSealStatus, error) {
+	var status openBaoSealStatus
+	for _, key := range shares {
 		next, err := client.Unseal(ctx, key)
 		if err != nil {
 			state.addPhase("unseal", "fail", safeOpenBaoError(err))
@@ -496,10 +539,10 @@ func ensureOpenBaoTransitKey(ctx context.Context, client openBaoBootstrapClient,
 }
 
 func validateOpenBaoTransitKey(key openBaoTransitKeyStatus, keyType string, derived bool) error {
-	if key.Type != "" && key.Type != keyType {
+	if !key.TypePresent || key.Type != keyType {
 		return errors.New("existing transit key type is incompatible")
 	}
-	if key.Derived != derived {
+	if !key.DerivedPresent || key.Derived != derived {
 		return errors.New("existing transit key derivation setting is incompatible")
 	}
 	if key.LatestVersion < 1 {
@@ -544,6 +587,53 @@ func cleanOpenBaoPath(label, raw string) (string, error) {
 		}
 	}
 	return cleaned, nil
+}
+
+func cleanOpenBaoKeyName(raw string) (string, error) {
+	cleaned, err := cleanOpenBaoPath("key name", raw)
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(cleaned, "/") {
+		return "", errors.New("key name is invalid")
+	}
+	return cleaned, nil
+}
+
+func rejectOpenBaoAdminTLSFlags(fs *flag.FlagSet) error {
+	for _, name := range []string{"tls-cert", "tls-key", "tls-ca", "tls-server-name"} {
+		if flagWasSet(fs, name) {
+			return errors.New("admin/public TLS flags do not configure OpenBao; use an OpenBao address with the required TLS endpoint")
+		}
+	}
+	return nil
+}
+
+func validateOperatorPath(label, path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("%s is required", label)
+	}
+	if strings.ContainsFunc(path, unicode.IsControl) {
+		return fmt.Errorf("%s is invalid", label)
+	}
+	return nil
+}
+
+func sameOperatorPath(left, right string) bool {
+	leftAbs, leftErr := filepath.Abs(filepath.Clean(left))
+	rightAbs, rightErr := filepath.Abs(filepath.Clean(right))
+	if leftErr == nil && rightErr == nil {
+		return leftAbs == rightAbs
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func initUnsealShares(result openBaoInitResult) []string {
+	if len(result.KeysB64) > 0 {
+		return append([]string(nil), result.KeysB64...)
+	}
+	return append([]string(nil), result.Keys...)
 }
 
 func mountKey(mountPath string) string {
@@ -611,11 +701,8 @@ func safeBootstrapReason(value string) string {
 	if len(value) > diagnosticTextMaxBytes {
 		return diagnosticTextRedacted
 	}
-	lower := strings.ToLower(value)
-	for _, marker := range []string{"secret", "password", "private", "bearer", "authorization"} {
-		if strings.Contains(lower, marker) {
-			return diagnosticTextRedacted
-		}
+	if bootstrapSensitiveText(value) {
+		return diagnosticTextRedacted
 	}
 	for _, r := range value {
 		if diagnosticTextRuneAllowed(r) || r == ' ' || r == ':' {
@@ -624,4 +711,29 @@ func safeBootstrapReason(value string) string {
 		return diagnosticTextRedacted
 	}
 	return value
+}
+
+func bootstrapSensitiveText(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"secret",
+		"password",
+		"private",
+		"bearer",
+		"authorization",
+		"root token",
+		"unseal key",
+		"transit token",
+		"wrapped key",
+		"client cert",
+		"token=",
+		"token:",
+		"key=",
+		"key:",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }

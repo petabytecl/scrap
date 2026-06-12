@@ -7,14 +7,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 )
 
-func finalizeOpenBaoBootstrapReport(opts openBaoBootstrapOptions, stdout io.Writer, state openBaoBootstrapState) error {
+type openBaoInitSecretSink struct {
+	file      *os.File
+	path      string
+	committed bool
+}
+
+func finalizeOpenBaoBootstrapReport(opts openBaoBootstrapOptions, stdout io.Writer, state openBaoBootstrapState, stderrText, logText string) error {
 	textOutput := renderOpenBaoBootstrapText(state.report)
 	report := state.report
-	report.RedactionChecks = redactionChecksForBootstrap(textOutput, report, state.forbiddenValues)
-	if err := verifyBootstrapNoForbiddenValues(textOutput, report, state.forbiddenValues); err != nil {
+	report.RedactionChecks = redactionChecksForBootstrap(textOutput, stderrText, logText, report, state.forbiddenValues)
+	if err := verifyBootstrapNoForbiddenValues(textOutput, stderrText, logText, report, state.forbiddenValues); err != nil {
 		return err
 	}
 	if err := writeOpenBaoBootstrapEvidence(opts.evidencePath, report); err != nil {
@@ -31,7 +38,7 @@ func finalizeOpenBaoBootstrapReport(opts openBaoBootstrapOptions, stdout io.Writ
 
 func newOpenBaoBootstrapReport(opts openBaoBootstrapOptions, endpoint string) openBaoBootstrapReport {
 	mountPath, _ := cleanOpenBaoPath("mount path", opts.mountPath)
-	keyName, _ := cleanOpenBaoPath("key name", opts.keyName)
+	keyName, _ := cleanOpenBaoKeyName(opts.keyName)
 	return openBaoBootstrapReport{
 		Status:          "in-progress",
 		Command:         "scrapctl openbao bootstrap",
@@ -44,6 +51,7 @@ func newOpenBaoBootstrapReport(opts openBaoBootstrapOptions, endpoint string) op
 		EvidencePath:    opts.evidencePath,
 		Dependency: openBaoDependencyEvidence{
 			Module:     "github.com/openbao/openbao/api",
+			Version:    openBaoAPIModuleVersion(),
 			Client:     "official OpenBao Go API client",
 			Operations: "sys init/status/seal/unseal/mounts and logical transit key writes",
 		},
@@ -52,6 +60,8 @@ func newOpenBaoBootstrapReport(opts openBaoBootstrapOptions, endpoint string) op
 			"cmd/scrapctl entrypoint unchanged",
 			"no Shard/Backend/server/admin/public API boundary change",
 		},
+		SanitizedArgs: sanitizedOpenBaoBootstrapArgs(opts),
+		EnvVarsUsed:   openBaoBootstrapEnvVars(opts),
 	}
 }
 
@@ -105,7 +115,7 @@ func renderOpenBaoBootstrapText(report openBaoBootstrapReport) string {
 	return b.String()
 }
 
-func redactionChecksForBootstrap(textOutput string, report openBaoBootstrapReport, forbiddenValues []string) []openBaoRedactionCheck {
+func redactionChecksForBootstrap(textOutput, stderrText, logText string, report openBaoBootstrapReport, forbiddenValues []string) []openBaoRedactionCheck {
 	checks := []openBaoRedactionCheck{
 		{Surface: "stdout", Status: "pass"},
 		{Surface: "stderr", Status: "pass"},
@@ -116,15 +126,27 @@ func redactionChecksForBootstrap(textOutput string, report openBaoBootstrapRepor
 	if err := verifyBootstrapTextNoForbiddenValues(textOutput, forbiddenValues); err != nil {
 		checks[0] = openBaoRedactionCheck{Surface: "stdout", Status: "fail", Reason: safeBootstrapReason(err.Error())}
 	}
+	if err := verifyBootstrapTextNoForbiddenValues(stderrText, forbiddenValues); err != nil {
+		checks[1] = openBaoRedactionCheck{Surface: "stderr", Status: "fail", Reason: safeBootstrapReason(err.Error())}
+	}
 	if err := verifyBootstrapReportNoForbiddenValues(report, forbiddenValues); err != nil {
 		checks[2] = openBaoRedactionCheck{Surface: "report", Status: "fail", Reason: safeBootstrapReason(err.Error())}
 		checks[3] = openBaoRedactionCheck{Surface: "artifact", Status: "fail", Reason: safeBootstrapReason(err.Error())}
 	}
+	if err := verifyBootstrapTextNoForbiddenValues(logText, forbiddenValues); err != nil {
+		checks[4] = openBaoRedactionCheck{Surface: "logs", Status: "fail", Reason: safeBootstrapReason(err.Error())}
+	}
 	return checks
 }
 
-func verifyBootstrapNoForbiddenValues(textOutput string, report openBaoBootstrapReport, forbiddenValues []string) error {
+func verifyBootstrapNoForbiddenValues(textOutput, stderrText, logText string, report openBaoBootstrapReport, forbiddenValues []string) error {
 	if err := verifyBootstrapTextNoForbiddenValues(textOutput, forbiddenValues); err != nil {
+		return err
+	}
+	if err := verifyBootstrapTextNoForbiddenValues(stderrText, forbiddenValues); err != nil {
+		return err
+	}
+	if err := verifyBootstrapTextNoForbiddenValues(logText, forbiddenValues); err != nil {
 		return err
 	}
 	return verifyBootstrapReportNoForbiddenValues(report, forbiddenValues)
@@ -156,13 +178,44 @@ func writeOpenBaoBootstrapEvidence(path string, report openBaoBootstrapReport) e
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create openbao bootstrap evidence directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, openBaoEvidenceFileMode); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, openBaoEvidenceFileMode) //nolint:gosec // path is explicit operator-selected evidence output.
+	if err != nil {
 		return fmt.Errorf("write openbao bootstrap evidence: %w", err)
 	}
-	return nil
+	if err := file.Chmod(openBaoEvidenceFileMode); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write openbao bootstrap evidence: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write openbao bootstrap evidence: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write openbao bootstrap evidence: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("write openbao bootstrap evidence: %w", err)
+	}
+	return syncDirectory(filepath.Dir(path))
 }
 
-func writeOpenBaoInitSecrets(path string, result openBaoInitResult) error {
+func reserveOpenBaoInitSecretSink(path string) (*openBaoInitSecretSink, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, errors.New("create init secrets directory failed")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, openBaoSecretFileMode) //nolint:gosec // path is an explicit operator-provided init secret sink required by this command.
+	if err != nil {
+		return nil, errors.New("reserve init secrets file failed")
+	}
+	if err := file.Chmod(openBaoSecretFileMode); err != nil {
+		_ = file.Close()
+		return nil, errors.New("reserve init secrets file failed")
+	}
+	return &openBaoInitSecretSink{file: file, path: path}, nil
+}
+
+func (s *openBaoInitSecretSink) write(result openBaoInitResult) error {
 	data, err := json.MarshalIndent(struct {
 		RootToken string   `json:"root_token"`
 		Keys      []string `json:"keys,omitempty"`
@@ -176,16 +229,82 @@ func writeOpenBaoInitSecrets(path string, result openBaoInitResult) error {
 		return errors.New("marshal init secrets failed")
 	}
 	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return errors.New("create init secrets directory failed")
+	if _, err := s.file.Write(data); err != nil {
+		return errors.New("write init secrets file failed")
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, openBaoSecretFileMode) //nolint:gosec // path is an explicit operator-provided init secret sink required by this command.
+	if err := s.file.Sync(); err != nil {
+		return errors.New("write init secrets file failed")
+	}
+	if err := s.file.Close(); err != nil {
+		return errors.New("write init secrets file failed")
+	}
+	s.committed = true
+	return syncDirectory(filepath.Dir(s.path))
+}
+
+func (s *openBaoInitSecretSink) cleanupUnlessCommitted() {
+	if s == nil || s.committed {
+		return
+	}
+	_ = s.file.Close()
+	_ = os.Remove(s.path)
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // path is the parent of an operator-selected output file.
 	if err != nil {
-		return errors.New("write init secrets file failed")
+		return fmt.Errorf("sync output directory: %w", err)
 	}
-	defer func() { _ = file.Close() }()
-	if _, err := file.Write(data); err != nil {
-		return errors.New("write init secrets file failed")
+	defer func() { _ = dir.Close() }()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync output directory: %w", err)
 	}
 	return nil
+}
+
+func sanitizedOpenBaoBootstrapArgs(opts openBaoBootstrapOptions) []string {
+	args := []string{
+		"--address=" + safeBootstrapEndpoint(opts.address),
+		"--token-env=" + safeBootstrapLabel(opts.tokenEnv),
+		"--mount-path=" + safeBootstrapLabel(opts.mountPath),
+		"--key-name=" + safeBootstrapLabel(opts.keyName),
+		"--key-type=" + safeBootstrapLabel(opts.keyType),
+		fmt.Sprintf("--key-derived=%t", opts.derived),
+		"--environment=" + safeBootstrapLabel(opts.environment),
+		"--evidence-path=" + opts.evidencePath,
+	}
+	if opts.init {
+		args = append(args,
+			"--init",
+			"--init-secrets-path="+diagnosticTextRedacted,
+			fmt.Sprintf("--init-secret-shares=%d", opts.secretShares),
+			fmt.Sprintf("--init-secret-threshold=%d", opts.secretThreshold),
+		)
+	}
+	for _, envName := range opts.unsealKeyEnv {
+		args = append(args, "--unseal-key-env="+safeBootstrapLabel(envName))
+	}
+	return args
+}
+
+func openBaoBootstrapEnvVars(opts openBaoBootstrapOptions) []string {
+	envVars := []string{safeBootstrapLabel(opts.tokenEnv)}
+	for _, envName := range opts.unsealKeyEnv {
+		envVars = append(envVars, safeBootstrapLabel(envName))
+	}
+	return envVars
+}
+
+func openBaoAPIModuleVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/openbao/openbao/api" {
+				if dep.Replace != nil {
+					return dep.Replace.Version
+				}
+				return dep.Version
+			}
+		}
+	}
+	return "unknown"
 }

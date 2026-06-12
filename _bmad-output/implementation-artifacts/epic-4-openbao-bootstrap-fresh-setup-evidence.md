@@ -1,6 +1,6 @@
 ---
 story: 4.5-scrapctl-openbao-bootstrap-fresh-setup
-status: review
+status: done
 created: 2026-06-12T03:00:18-04:00
 story_context_baseline: e9148db5f9769a4f04876e94a1aaa4cf6d28326c
 implementation_start_commit: a0aac0d5cdc9e382d398f5a6c419c710c3308374
@@ -56,9 +56,9 @@ Story 4.5 does not claim full idempotent rerun behavior, incompatible-state fail
 
 | AC | Status | Current proof | Remaining evidence needed |
 | --- | --- | --- | --- |
-| AC-4.5.1 fresh target bootstrap succeeds and emits redacted evidence | PASS | `scrapctl openbao bootstrap` now validates address/env/mount/key/evidence inputs, supports explicit init with 0600 secret output, unseals from env-provided shares, mounts Transit, creates/verifies `scrap-documents`, writes a redacted evidence report, and renders text/JSON output. `TestOpenBaoBootstrapFreshInitializedTargetWritesEvidence`, `TestOpenBaoBootstrapInitializesAndWritesSecretFile0600`, `TestOpenBaoBootstrapUnsealsFromEnvironmentWithoutLeakingShares`, and `TestIntegrationScrapctlOpenBaoBootstrapFreshSetup` prove fresh initialized/unsealed, init, sealed/unseal, and OpenBao container command behavior. | None for Story 4.5. Story 4.6 owns deep idempotent rerun and incompatible-state closure. |
-| AC-4.5.2 sensitive values never leave the secret boundary | PASS | Unit tests prove root tokens, unseal shares, token env values, raw secret flags, URL userinfo, and init response material stay out of stdout, stderr, errors, reports, and evidence. Init material is written only to explicit 0600 `--init-secrets-path`. Final leak scans found 180 credential-vocabulary matches, 61 sensitive-identifier vocabulary matches, 7 raw strict-pattern false positives from Go selectors, and 0 filtered strict shaped-value matches. | None for Story 4.5. Story 4.7 owns final prod-like full evidence-bundle leak aggregation. |
-| AC-4.5.3 official OpenBao Go API client only | PASS | `internal/scrapctl/openbao_client.go` uses `github.com/openbao/openbao/api` for `InitStatusWithContext`, `InitWithContext`, `SealStatusWithContext`, `UnsealWithOptionsWithContext`, `ListMountsWithContext`, `MountWithContext`, and `Logical().Read/WriteWithContext`. Boundary scan found no new shell-based OpenBao operations; matches were existing generic command runners and test strings. | None. |
+| AC-4.5.1 fresh target bootstrap succeeds and emits redacted evidence | PASS | `scrapctl openbao bootstrap` now validates address/env/mount/key/evidence inputs, supports explicit init with reserved/fsynced 0600 secret output, unseals from either env-provided shares or init-returned shares kept only in memory, mounts Transit, creates/verifies `scrap-documents`, writes a redacted evidence report, and renders text/JSON output. `TestOpenBaoBootstrapFreshInitializedTargetWritesEvidence`, `TestOpenBaoBootstrapInitializesAndWritesSecretFile0600`, `TestOpenBaoBootstrapUnsealsFromEnvironmentWithoutLeakingShares`, and `TestIntegrationScrapctlOpenBaoBootstrapFreshSetup` prove fresh initialized/unsealed, init-plus-unseal, sealed/unseal, and an uninitialized OpenBao container command path. | None for Story 4.5. Story 4.6 owns deep idempotent rerun and incompatible-state closure. |
+| AC-4.5.2 sensitive values never leave the secret boundary | PASS | Unit tests prove root tokens, unseal shares, token env values, raw secret flags, URL userinfo, and init response material stay out of stdout, stderr, errors, reports, and evidence. Init material is written only to explicit 0600 `--init-secrets-path`; evidence rewrites enforce 0600. Reports now record sanitized args, env var names, dependency version, and redaction checks over actual stdout, stderr, report/artifact, and command log surfaces. | None for Story 4.5. Story 4.7 owns final prod-like full evidence-bundle leak aggregation. |
+| AC-4.5.3 official OpenBao Go API client only | PASS | `internal/scrapctl/openbao_client.go` uses `github.com/openbao/openbao/api` for `InitStatusWithContext`, `InitWithContext`, `SealStatusWithContext`, `UnsealWithOptionsWithContext`, `ListMountsWithContext`, `MountWithContext`, and `Logical().Read/WriteWithContext`. Boundary scan found no new shell-based OpenBao operations; matches were existing generic command runners and the integration readiness probe. | None. |
 
 ## Source Evidence Notes
 
@@ -69,17 +69,23 @@ Story 4.5 does not claim full idempotent rerun behavior, incompatible-state fail
 - Local `go doc` confirms the pinned `github.com/openbao/openbao/api` module exposes `InitStatusWithContext`, `InitWithContext`, `SealStatusWithContext`, `UnsealWithOptionsWithContext`, `ListMountsWithContext`, `MountWithContext`, and `Logical().WriteWithContext`.
 - `internal/scrapctl.openBaoBootstrapOptions` rejects raw secret flags by absence, rejects OpenBao address userinfo, and reads sensitive values only from named env vars.
 - `internal/scrapctl.writeOpenBaoInitSecrets` writes init root token/unseal material only to an explicit operator-provided file with mode `0600`; evidence and operator output record only that the secret file was written.
-- `test/integration/openbao_bootstrap_scrapctl_test.go` starts a plain OpenBao dev container without the repo's pre-bootstrapped Transit fixture, then verifies the CLI-created `transit/` mount and `scrap-documents` key through the official client.
+- `test/integration/openbao_bootstrap_scrapctl_test.go` starts an uninitialized OpenBao file-storage server without the repo's pre-bootstrapped Transit fixture, then runs `scrapctl openbao bootstrap --init`, verifies init secret mode/redaction, and verifies the CLI-created `transit/` mount and `scrap-documents` key through the official client.
 
 ## Command Evidence
 
 - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'OpenBao|Bootstrap|Redact|Secret|Evidence' -count=1 -v` - PASS. Covered option parsing, missing token, init secret output, unseal env shares, text/JSON report redaction, raw secret flag rejection, address userinfo rejection, and evidence file redaction.
 - `env GOCACHE=/tmp/scrap-v2-go-build go test ./cmd/scrapctl ./internal/scrapctl -count=1` - PASS. Covered binary help output plus full `scrapctl` package regression.
 - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl ./cmd/scrapctl ./internal/encryption -count=1` - PASS. Covered affected package regression after the official-client adapter and CLI changes.
-- `env GOCACHE=/tmp/scrap-v2-go-build go test -tags integration ./test/integration -run TestIntegrationScrapctlOpenBaoBootstrapFreshSetup -count=1 -v` - PASS. Testcontainers started `openbao/openbao:2.5.4`; `scrapctl openbao bootstrap` mounted Transit and created/verified `scrap-documents` without using the pre-bootstrapped Transit fixture.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test -tags integration ./test/integration -run TestIntegrationScrapctlOpenBaoBootstrapFreshSetup -count=1 -v` - PASS. Testcontainers started an uninitialized `openbao/openbao:2.5.4` file-storage server; `scrapctl openbao bootstrap --init` initialized, wrote init material to a 0600 secret file, unsealed from returned shares in memory, mounted Transit, and created/verified `scrap-documents` without using the pre-bootstrapped Transit fixture.
 - `rg -n 'exec\.Command|\bbao\b|\bvault\b|\bcurl\b|RawRequest|/v1/sys|/v1/transit' internal/scrapctl cmd/scrapctl test/integration/openbao_bootstrap_scrapctl_test.go` - PASS after classification. Matches were existing generic command runners, existing evidencebundle command adapters, test token variable names, and the integration health wait path; no new shell-based OpenBao operation or raw OpenBao HTTP client path was added.
 - `git diff --check` - PASS.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after the file split. Covered formatter diff, package-boundary checks, buf lint/generate diff, golangci-lint with `0 issues`, `go test ./...`, `go test -race ./...`, integration tests including LocalStack and both OpenBao container tests, and `scrapd`/`scrapctl` builds.
+- BMAD code review - PASS after fixes. Blind Hunter, Edge Case Hunter, and Acceptance Auditor findings were triaged into patch items; no decision-needed or deferred findings remained.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'OpenBao|Bootstrap|Redact|Secret|Evidence' -count=1 -v` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./cmd/scrapctl ./internal/scrapctl -count=1` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl ./cmd/scrapctl ./internal/encryption -count=1` - PASS after review fixes.
+- `go tool -modfile=tools.go.mod golangci-lint run --timeout=5m ./internal/scrapctl ./cmd/scrapctl ./test/integration` - PASS after review fixes with `0 issues`.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after review fixes. Covered formatter diff, package-boundary checks, buf lint/generate diff, golangci-lint with `0 issues`, `go test ./...`, `go test -race ./...`, integration tests including LocalStack and both OpenBao container tests, and `scrapd`/`scrapctl` builds.
 
 ## Leak Scan Evidence
 
@@ -87,8 +93,8 @@ Final scans covered `_bmad-output/implementation-artifacts/4-5-scrapctl-openbao-
 
 | Scan | Status | Classification |
 | --- | --- | --- |
-| credential vocabulary scan | PASS | 180 broad matches. Matches are allowed story/evidence/security-policy vocabulary, env var names, redaction test fixture names, OpenBao client references, and existing evidencebundle tests. No hardcoded credential values were found. |
-| sensitive identifier vocabulary scan | PASS | 61 broad matches. Matches are allowed story/evidence prose, OpenBao bootstrap redaction tests, CLI label names, and security vocabulary. |
+| credential vocabulary scan | PASS | 226 broad matches. Matches are allowed story/evidence/security-policy vocabulary, env var names, redaction test fixture names, OpenBao client references, and existing evidencebundle tests. No hardcoded credential values were found. |
+| sensitive identifier vocabulary scan | PASS | 76 broad matches. Matches are allowed story/evidence prose, OpenBao bootstrap redaction tests, CLI label names, and security vocabulary. |
 | strict shaped-value raw scan | PASS | 7 raw matches. All 7 are false positives from the OpenBao-style `[sb].` branch matching Go selectors: `signals.*` in existing evidencebundle tests and the OpenBao client factory selector in the new bootstrap code. |
 | strict shaped-value filtered scan | PASS | 0 matches after excluding the selector false positives with `rg -v 'signals\.|deps\.OpenBaoClientFactory'`. No shaped cloud keys, GitHub tokens, Slack tokens, private-key blocks, AWS credential assignment forms, or OpenBao-style token values were found. |
 

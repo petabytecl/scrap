@@ -5,7 +5,7 @@ created: 2026-06-12T02:56:47-04:00
 
 # Story 4.5: `scrapctl openbao bootstrap` Fresh Setup
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -80,6 +80,21 @@ so that rehearsals do not depend on undocumented scripts.
   - [x] Update `_bmad-output/implementation-artifacts/epic-4-openbao-bootstrap-fresh-setup-evidence.md` with final AC matrix rows, command evidence, and redaction scan classification.
   - [x] Move `_bmad-output/implementation-artifacts/sprint-status.yaml` to `review` only when implementation and local verification are complete.
   - [x] Do not mark Story 4.6 idempotency/incompatible-state or Story 4.7 production rehearsal complete from Story 4.5 tests.
+
+### Review Findings
+
+- [x] [Review][Patch] Init secret material could be destroyed by `--evidence-path` and `--init-secrets-path` collision [internal/scrapctl/openbao.go:299]
+- [x] [Review][Patch] Fresh init path did not prove or handle sealed-after-init unseal before Transit mount/key work [internal/scrapctl/openbao.go:380]
+- [x] [Review][Patch] Integration evidence used OpenBao dev mode and did not test init/sealed unseal behavior [test/integration/openbao_bootstrap_scrapctl_test.go:25]
+- [x] [Review][Patch] Evidence report lacked sanitized args, env var names, and dependency version fields required by the story [internal/scrapctl/openbao_report.go:39]
+- [x] [Review][Patch] stderr/log redaction checks were recorded as pass without checking the actual emitted surfaces [internal/scrapctl/openbao_report.go:118]
+- [x] [Review][Patch] Generic error sanitizer did not guard common root/unseal/token/key leakage shapes [internal/scrapctl/openbao.go:701]
+- [x] [Review][Patch] Existing Transit key verification accepted missing type/derived metadata as compatible [internal/scrapctl/openbao.go:539]
+- [x] [Review][Patch] Existing evidence files could keep permissive permissions after report rewrite [internal/scrapctl/openbao_report.go:172]
+- [x] [Review][Patch] Evidence path control characters could forge text output lines [internal/scrapctl/openbao.go:612]
+- [x] [Review][Patch] S.C.R.A.P. admin/public TLS flags were accepted on OpenBao bootstrap without configuring OpenBao TLS [internal/scrapctl/openbao.go:594]
+- [x] [Review][Patch] Init secret write was not fsynced before continuing after one-time init material was generated [internal/scrapctl/openbao_report.go:218]
+- [x] [Review][Patch] Slash-bearing Transit key names were accepted but reinterpreted as multiple path segments [internal/scrapctl/openbao.go:582]
 
 ## Dev Notes
 
@@ -233,6 +248,13 @@ GPT-5 Codex
 - `git diff --check` - PASS.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after splitting the OpenBao bootstrap implementation into focused files under the 800-line file limit.
 - Final credential, identifier, and strict shaped-value leak scans over the story, evidence artifact, touched `scrapctl` code, and bootstrap integration test - PASS with 0 filtered strict shaped-value matches.
+- BMAD code review: Blind Hunter, Edge Case Hunter, and Acceptance Auditor reported actionable patch findings; no decision-needed or deferred findings remained after triage.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl -run 'OpenBao|Bootstrap|Redact|Secret|Evidence' -count=1 -v` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./cmd/scrapctl ./internal/scrapctl -count=1` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl ./cmd/scrapctl ./internal/encryption -count=1` - PASS after review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test -tags integration ./test/integration -run TestIntegrationScrapctlOpenBaoBootstrapFreshSetup -count=1 -v` - PASS after changing the integration to start an uninitialized OpenBao file-storage server and exercise `--init`.
+- `go tool -modfile=tools.go.mod golangci-lint run --timeout=5m ./internal/scrapctl ./cmd/scrapctl ./test/integration` - PASS after review fixes with `0 issues`.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after review fixes.
 
 ### Completion Notes List
 
@@ -242,6 +264,7 @@ GPT-5 Codex
 - Kept sensitive values behind the secret boundary: token and unseal shares are read only from named env vars, init root/unseal material is written only to an explicit 0600 secret file, and output/evidence/errors run bootstrap-specific forbidden-value checks.
 - Added focused unit tests plus an OpenBao container integration test that starts a plain dev target and verifies the command-created Transit mount and S.C.R.A.P. key through the official client.
 - Preserved Story 4.5 scope boundaries; Story 4.6 still owns full compatible rerun and incompatible-state proof, and Story 4.7 still owns final prod-like production security rehearsal closure.
+- Addressed code-review findings by reserving and fsyncing the init secret sink before OpenBao init, using returned init shares for in-memory unseal, rejecting evidence/init path collisions, enforcing 0600 evidence mode, recording sanitized args/env vars/dependency version, checking actual stderr/log redaction surfaces, rejecting missing key metadata, rejecting OpenBao-irrelevant admin TLS flags, and making the integration test exercise an uninitialized OpenBao server.
 
 ### File List
 
@@ -260,3 +283,4 @@ GPT-5 Codex
 ### Change Log
 
 - 2026-06-12: Implemented `scrapctl openbao bootstrap`, added official OpenBao client unit/integration coverage, closed Story 4.5 evidence with PASS rows, and moved the story to review.
+- 2026-06-12: Addressed Story 4.5 BMAD code-review findings and moved story to done.
