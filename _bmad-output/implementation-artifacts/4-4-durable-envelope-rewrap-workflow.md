@@ -5,7 +5,7 @@ created: 2026-06-12T02:18:53-04:00
 
 # Story 4.4: Durable Envelope Rewrap Workflow
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -91,6 +91,15 @@ so that key rotation converges without rewriting Block payload bytes.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story closes security/encryption lifecycle behavior.
   - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
   - [x] If a command is skipped, record the skip reason and closure impact in the evidence artifact. Do not mark an AC as pass from intent alone.
+
+### Review Findings
+
+- [x] [Review][Patch] Restore the rewrap readability helper's Document-name parameter [internal/shard/encryption_test.go:359] — fixed by passing the requested Document name through the helper and using a non-`doc.xml` Document in the multi-Member rewrap fixture.
+- [x] [Review][Patch] Remove the Block 1 assumption from envelope convergence checks [internal/shard/encryption_test.go:590] — fixed by finding the target Document across local Block index files before parsing envelope metadata.
+- [x] [Review][Patch] Strengthen multi-Member convergence proof [internal/shard/encryption_test.go:244] — fixed by requiring all Members to converge on byte-identical replacement envelope metadata while retaining original-leader and replacement-leader read checks.
+- [x] [Review][Patch] Add explicit interrupted-client proposal wait coverage [internal/shard/rewrap_apply_test.go:354] — fixed with `TestProposeRewrapDocumentForgetsProposalOnContextCancel`.
+- [x] [Review][Patch] Clarify admin redaction evidence scope [_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md:19] — fixed by distinguishing health/error/evidence redaction from the existing authorized operator response contract that echoes requested Document identity.
+- [x] [Review][Patch] Tighten leak-scan audit trail [_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md:110] — fixed by preserving exact scan scope, final counts, and match classification in the evidence artifact.
 
 ## Dev Notes
 
@@ -278,6 +287,7 @@ GPT-5 Codex
 - `git diff --check` - PASS.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after tightening the helper that `unparam` flagged.
 - Final credential, identifier, and strict shaped-value leak scans over the story, evidence artifact, and touched code - PASS with zero forbidden strict shaped-value leaks.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'Rewrap|rewrap|UploadGeneration|ConfirmUpload|BackendKeyPrefix|RestoreUsesRewrappedEnvelope|EncryptedShardRewrap|ProposeRewrapDocumentForgetsProposalOnContextCancel' -count=1 -v` - PASS after code-review fixes.
 
 ### Completion Notes List
 
@@ -285,6 +295,7 @@ GPT-5 Codex
 - Closed the Story 4.4 evidence artifact with PASS rows for Raft authority, idempotent retry/interruption, no Block rewrite, old/new metadata safety, upload-generation protection, admin health/audit, and redaction.
 - Preserved the existing production boundaries and contracts; implementation changes are limited to focused test coverage and BMAD evidence/tracker artifacts.
 - Fixed the initial `make check` lint failure by removing the constant `doc.xml` parameter from the local test helper.
+- Addressed code-review findings by restoring a generic read helper, removing the Block 1 assumption from envelope lookup, adding proposal-wait cancellation cleanup coverage, and tightening evidence wording.
 
 ### File List
 
@@ -292,7 +303,9 @@ GPT-5 Codex
 - `_bmad-output/implementation-artifacts/epic-4-durable-envelope-rewrap-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 - `internal/shard/encryption_test.go`
+- `internal/shard/rewrap_apply_test.go`
 
 ### Change Log
 
 - 2026-06-12: Added multi-Member encrypted rewrap convergence evidence, closed the Story 4.4 AC matrix, updated tracker status to review, and ran focused plus broad verification gates.
+- 2026-06-12: Addressed BMAD code-review findings, added interrupted proposal-wait coverage, tightened multi-Member envelope convergence proof, and moved Story 4.4 to done.

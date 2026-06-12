@@ -351,6 +351,30 @@ func TestApplyRewrapNotifiesMatchingProposalID(t *testing.T) {
 	}
 }
 
+func TestProposeRewrapDocumentForgetsProposalOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Shard{
+		raft:      &evictionApplyRaftStub{leader: true},
+		proposals: make(map[string]chan error),
+	}
+	cancel()
+
+	err := s.proposeRewrapDocument(ctx, 1, rewrap.Request{
+		TransactionID: "tx-rewrap",
+		DocumentName:  "doc.xml",
+	}, rewrap.Result{
+		OldKeyVersion: 1,
+		NewKeyVersion: 2,
+		RewrappedAt:   time.Unix(1716700002, 0),
+	}, rewrapApplyEnvelope(t, 2))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("proposeRewrapDocument error = %v, want context canceled", err)
+	}
+	if len(s.proposals) != 0 {
+		t.Fatalf("proposal waiters = %d, want none after cancellation", len(s.proposals))
+	}
+}
+
 func writeRewrapApplyIndex(t *testing.T, blocksDir string, envelope []byte) {
 	t.Helper()
 

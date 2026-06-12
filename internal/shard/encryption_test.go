@@ -189,8 +189,9 @@ func TestEncryptedShardReadMapsInvalidTransitRequestToDataLoss(t *testing.T) {
 func TestEncryptedShardRewrapUpdatesEnvelopeWithoutRewritingBlock(t *testing.T) {
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	s, dataDir := openEncryptedTestShard(t, transit)
+	docName := "doc.xml"
 	content := bytes.Repeat([]byte("rewrap plaintext:"), 64)
-	if _, err := s.WriteDocument(context.Background(), "tx-rewrap", "doc.xml", "text/xml", "", bytes.NewReader(content)); err != nil {
+	if _, err := s.WriteDocument(context.Background(), "tx-rewrap", docName, "text/xml", "", bytes.NewReader(content)); err != nil {
 		t.Fatalf("WriteDocument: %v", err)
 	}
 	beforeBlock := readTestBlockFile(t, dataDir)
@@ -198,7 +199,7 @@ func TestEncryptedShardRewrapUpdatesEnvelopeWithoutRewritingBlock(t *testing.T) 
 	transit.Rotate()
 	result, err := s.RewrapDocument(context.Background(), rewrap.Request{
 		TransactionID: "tx-rewrap",
-		DocumentName:  "doc.xml",
+		DocumentName:  docName,
 		KeyVersion:    2,
 		Reason:        "test",
 	})
@@ -209,9 +210,9 @@ func TestEncryptedShardRewrapUpdatesEnvelopeWithoutRewritingBlock(t *testing.T) 
 		t.Fatalf("RewrapDocument result = %+v, want changed 1->2", result)
 	}
 	assertBlockPayloadUnchanged(t, dataDir, beforeBlock)
-	assertIndexEnvelopeVersion(t, dataDir, "tx-rewrap", "doc.xml", 2)
-	assertRewrappedDocumentReadable(t, s, "tx-rewrap", content)
-	assertRewrapIsIdempotent(t, s, "tx-rewrap", "doc.xml", 2)
+	assertIndexEnvelopeVersion(t, dataDir, "tx-rewrap", docName, 2)
+	assertRewrappedDocumentReadable(t, s, "tx-rewrap", docName, content)
+	assertRewrapIsIdempotent(t, s, "tx-rewrap", docName, 2)
 }
 
 func TestEncryptedShardRewrapConvergesAcrossMembersWithoutRewritingBlocks(t *testing.T) {
@@ -221,8 +222,9 @@ func TestEncryptedShardRewrapConvergesAcrossMembersWithoutRewritingBlocks(t *tes
 	cluster := openEncryptedWriteAckCluster(t, transit, replicator)
 	leader := cluster.waitForLeader(t)
 
+	docName := "cluster-doc.xml"
 	content := bytes.Repeat([]byte("cluster rewrap plaintext:"), 32)
-	if _, err := leader.WriteDocument(ctx, "tx-rewrap-cluster", "doc.xml", "text/xml", "", bytes.NewReader(content)); err != nil {
+	if _, err := leader.WriteDocument(ctx, "tx-rewrap-cluster", docName, "text/xml", "", bytes.NewReader(content)); err != nil {
 		t.Fatalf("WriteDocument: %v", err)
 	}
 	beforeBlocks := readClusterBlockFiles(t, cluster)
@@ -230,7 +232,7 @@ func TestEncryptedShardRewrapConvergesAcrossMembersWithoutRewritingBlocks(t *tes
 	transit.Rotate()
 	result, err := leader.RewrapDocument(ctx, rewrap.Request{
 		TransactionID: "tx-rewrap-cluster",
-		DocumentName:  "doc.xml",
+		DocumentName:  docName,
 		KeyVersion:    2,
 		Reason:        "test",
 	})
@@ -241,26 +243,34 @@ func TestEncryptedShardRewrapConvergesAcrossMembersWithoutRewritingBlocks(t *tes
 		t.Fatalf("RewrapDocument result = %+v, want changed 1->2", result)
 	}
 
+	var wantEnvelope []byte
 	for i, member := range cluster.shards {
-		waitForMemberEnvelopeVersion(t, member, "tx-rewrap-cluster", "doc.xml", 2)
+		gotEnvelope := waitForMemberEnvelope(t, member, "tx-rewrap-cluster", docName, 2)
+		if wantEnvelope == nil {
+			wantEnvelope = gotEnvelope
+		}
+		if !bytes.Equal(gotEnvelope, wantEnvelope) {
+			t.Fatalf("member %d envelope metadata diverged from committed replacement", i+1)
+		}
 		assertBlockPayloadUnchanged(t, member.DataDirForTest(), beforeBlocks[i])
 	}
-	assertRewrappedDocumentReadable(t, leader, "tx-rewrap-cluster", content)
+	assertRewrappedDocumentReadable(t, leader, "tx-rewrap-cluster", docName, content)
 
 	if err := leader.Close(); err != nil {
 		t.Fatalf("Close original leader: %v", err)
 	}
 	cluster.removeMemberForTest(leader)
 	replacement := cluster.waitForLeader(t)
-	assertRewrappedDocumentReadable(t, replacement, "tx-rewrap-cluster", content)
+	assertRewrappedDocumentReadable(t, replacement, "tx-rewrap-cluster", docName, content)
 }
 
 func TestEncryptedShardRewrapFailureRecordsHealthAndPreservesRead(t *testing.T) {
 	baseTransit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	transit := &mutableTransit{delegate: baseTransit}
 	s, _ := openEncryptedTestShard(t, transit)
+	docName := "doc.xml"
 	content := []byte("readable after failed rewrap")
-	if _, err := s.WriteDocument(context.Background(), "tx-rewrap-fail", "doc.xml", "text/xml", "", bytes.NewReader(content)); err != nil {
+	if _, err := s.WriteDocument(context.Background(), "tx-rewrap-fail", docName, "text/xml", "", bytes.NewReader(content)); err != nil {
 		t.Fatalf("WriteDocument: %v", err)
 	}
 
@@ -268,7 +278,7 @@ func TestEncryptedShardRewrapFailureRecordsHealthAndPreservesRead(t *testing.T) 
 	transit.rewrapErr = fmt.Errorf("transit outage: %w", encryption.ErrUnavailable)
 	result, err := s.RewrapDocument(context.Background(), rewrap.Request{
 		TransactionID: "tx-rewrap-fail",
-		DocumentName:  "doc.xml",
+		DocumentName:  docName,
 		KeyVersion:    2,
 		Reason:        "test",
 	})
@@ -287,7 +297,7 @@ func TestEncryptedShardRewrapFailureRecordsHealthAndPreservesRead(t *testing.T) 
 	if snapshot.FailuresByReason[rewrap.ReasonCryptoUnavailable] != 1 {
 		t.Fatalf("crypto unavailable failures = %d, want 1", snapshot.FailuresByReason[rewrap.ReasonCryptoUnavailable])
 	}
-	assertRewrappedDocumentReadable(t, s, "tx-rewrap-fail", content)
+	assertRewrappedDocumentReadable(t, s, "tx-rewrap-fail", docName, content)
 }
 
 func TestShardRewrapRejectsInvalidAndUnavailableRequests(t *testing.T) {
@@ -356,10 +366,10 @@ func assertIndexEnvelopeVersion(t *testing.T, dataDir, txID, docName string, wan
 	}
 }
 
-func assertRewrappedDocumentReadable(t *testing.T, s *shard.Shard, txID string, want []byte) {
+func assertRewrappedDocumentReadable(t *testing.T, s *shard.Shard, txID, docName string, want []byte) {
 	t.Helper()
 
-	rc, _, err := s.ReadDocument(context.Background(), txID, "doc.xml")
+	rc, _, err := s.ReadDocument(context.Background(), txID, docName)
 	if err != nil {
 		t.Fatalf("ReadDocument after rewrap: %v", err)
 	}
@@ -565,13 +575,13 @@ func (sc *shardCluster) removeMemberForTest(member *shard.Shard) {
 	sc.shards = remaining
 }
 
-func waitForMemberEnvelopeVersion(t *testing.T, s *shard.Shard, txID, docName string, wantKeyVersion int) {
+func waitForMemberEnvelope(t *testing.T, s *shard.Shard, txID, docName string, wantKeyVersion int) []byte {
 	t.Helper()
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		version, err := readEnvelopeVersion(s.DataDirForTest(), txID, docName)
+		envelopeBytes, version, err := readEnvelopeMetadata(s.DataDirForTest(), txID, docName)
 		if err != nil {
 			lastErr = err
 			time.Sleep(10 * time.Millisecond)
@@ -582,42 +592,56 @@ func waitForMemberEnvelopeVersion(t *testing.T, s *shard.Shard, txID, docName st
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		return
+		return envelopeBytes
 	}
 	t.Fatalf("timed out waiting for rewrapped member envelope: %v", lastErr)
+	return nil
 }
 
-func readEnvelopeVersion(dataDir, txID, docName string) (int, error) {
-	ir, err := block.OpenIndexReader(block.IdxFilePath(filepath.Join(dataDir, "blocks"), 1))
+func readEnvelopeMetadata(dataDir, txID, docName string) ([]byte, int, error) {
+	entry, err := findIndexEntry(dataDir, txID, docName)
 	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = ir.Close() }()
-
-	entry, err := ir.Find(txID, docName)
-	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	envelope, err := encryption.ParseEnvelope(entry.EncryptionEnvelope)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
-	return envelope.KeyVersion, nil
+	return append([]byte(nil), entry.EncryptionEnvelope...), envelope.KeyVersion, nil
 }
 
 func readOnlyIndexEntry(t *testing.T, dataDir, txID, docName string) block.IndexEntry {
 	t.Helper()
-	ir, err := block.OpenIndexReader(filepath.Join(dataDir, "blocks", "0000000000000001.idx"))
-	if err != nil {
-		t.Fatalf("OpenIndexReader: %v", err)
-	}
-	defer func() { _ = ir.Close() }()
-
-	entry, err := ir.Find(txID, docName)
+	entry, err := findIndexEntry(dataDir, txID, docName)
 	if err != nil {
 		t.Fatalf("Find index entry: %v", err)
 	}
 	return entry
+}
+
+func findIndexEntry(dataDir, txID, docName string) (block.IndexEntry, error) {
+	idxFiles, err := filepath.Glob(filepath.Join(dataDir, "blocks", "*.idx"))
+	if err != nil {
+		return block.IndexEntry{}, fmt.Errorf("list Block indexes: %w", err)
+	}
+	for _, idxPath := range idxFiles {
+		ir, err := block.OpenIndexReader(idxPath)
+		if err != nil {
+			return block.IndexEntry{}, err
+		}
+		entry, findErr := ir.Find(txID, docName)
+		closeErr := ir.Close()
+		if findErr == nil && closeErr == nil {
+			return entry, nil
+		}
+		if closeErr != nil {
+			return block.IndexEntry{}, closeErr
+		}
+		if !errors.Is(findErr, block.ErrDocNotFound) {
+			return block.IndexEntry{}, findErr
+		}
+	}
+	return block.IndexEntry{}, fmt.Errorf("index entry not found for %s/%s", txID, docName)
 }
 
 func flattenFramesForTest(frames [][]byte) []byte {
