@@ -4,6 +4,13 @@ package scrap.v1;
 
 import "google/protobuf/timestamp.proto";
 
+enum ScanStatus {
+  SCAN_STATUS_UNSPECIFIED = 0;
+  SCAN_STATUS_CLEAN = 1;
+  SCAN_STATUS_QUARANTINED = 2;
+  SCAN_STATUS_UNSCANNED = 3;
+}
+
 service DocumentService {
   rpc WriteDocument(stream WriteDocumentRequest) returns (WriteDocumentResponse);
   rpc HeadDocument(HeadDocumentRequest) returns (HeadDocumentResponse);
@@ -44,6 +51,7 @@ message HeadDocumentResponse {
   int64 size = 3;
   string sha256_checksum = 4;
   google.protobuf.Timestamp created_at = 5;
+  ScanStatus scan_status = 6;
 }
 
 message ReadDocumentRequest {
@@ -81,6 +89,7 @@ message DocumentMeta {
   int64 size = 3;
   string sha256_checksum = 4;
   google.protobuf.Timestamp created_at = 5;
+  ScanStatus scan_status = 6;
 }
 
 message LeaderHint {

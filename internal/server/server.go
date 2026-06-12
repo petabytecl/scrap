@@ -247,6 +247,7 @@ func (s *documentServer) HeadDocument(ctx context.Context, req *scrapv1.HeadDocu
 		Size:           meta.Size,
 		Sha256Checksum: hex.EncodeToString(meta.SHA256[:]),
 		CreatedAt:      timestamppb.New(meta.CreatedAt),
+		ScanStatus:     scanStatusToProto(meta.ScanStatus),
 	}, nil
 }
 
@@ -471,10 +472,24 @@ func (s *documentServer) FindDocuments(ctx context.Context, req *scrapv1.FindDoc
 			Size:           d.Size,
 			Sha256Checksum: hex.EncodeToString(d.SHA256[:]),
 			CreatedAt:      timestamppb.New(d.CreatedAt),
+			ScanStatus:     scanStatusToProto(d.ScanStatus),
 		})
 	}
 
 	return &scrapv1.FindDocumentsResponse{Documents: pbDocs}, nil
+}
+
+func scanStatusToProto(status storeapi.ScanStatus) scrapv1.ScanStatus {
+	switch status {
+	case storeapi.ScanStatusClean:
+		return scrapv1.ScanStatus_SCAN_STATUS_CLEAN
+	case storeapi.ScanStatusQuarantined:
+		return scrapv1.ScanStatus_SCAN_STATUS_QUARANTINED
+	case storeapi.ScanStatusUnscanned:
+		return scrapv1.ScanStatus_SCAN_STATUS_UNSCANNED
+	default:
+		return scrapv1.ScanStatus_SCAN_STATUS_UNSPECIFIED
+	}
 }
 
 func (s *documentServer) requireRole(ctx context.Context, role security.Role) error {
@@ -581,7 +596,10 @@ func mapStoreError(err error) error {
 		}
 		return st.Err()
 	}
+	return mapNonLeaderStoreError(err)
+}
 
+func mapNonLeaderStoreError(err error) error {
 	switch {
 	case errors.Is(err, storeapi.ErrAlreadyExists):
 		return status.Errorf(codes.AlreadyExists, "%v", err)
@@ -591,6 +609,8 @@ func mapStoreError(err error) error {
 		return status.Errorf(codes.InvalidArgument, "%v", err)
 	case errors.Is(err, storeapi.ErrResourceExhausted):
 		return resourceExhaustedStatus(err)
+	case errors.Is(err, storeapi.ErrFailedPrecondition):
+		return preconditionStatus(err)
 	case errors.Is(err, storeapi.ErrUnavailable), errors.Is(err, storeapi.ErrRebuilding):
 		return availabilityStatus(err)
 	case errors.Is(err, storeapi.ErrDataLoss):
@@ -598,6 +618,24 @@ func mapStoreError(err error) error {
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
+}
+
+func preconditionStatus(err error) error {
+	reason, ok := storeapi.PreconditionReason(err)
+	if !ok || !publicPreconditionReason(reason) {
+		return status.Error(codes.FailedPrecondition, storeapi.ErrFailedPrecondition.Error())
+	}
+
+	st, detailErr := status.New(codes.FailedPrecondition, fmt.Sprintf("%v", err)).
+		WithDetails(&errdetails.ErrorInfo{Reason: reason})
+	if detailErr != nil {
+		return status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	return st.Err()
+}
+
+func publicPreconditionReason(reason string) bool {
+	return reason == storeapi.PreconditionReasonContentQuarantined
 }
 
 func availabilityStatus(err error) error {

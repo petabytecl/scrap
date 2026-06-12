@@ -19,10 +19,20 @@ type WriteResult struct {
 	CreatedAt time.Time
 }
 
+type ScanStatus byte
+
+const (
+	ScanStatusUnspecified ScanStatus = iota
+	ScanStatusClean
+	ScanStatusQuarantined
+	ScanStatusUnscanned
+)
+
 type DocumentMeta struct {
 	Name        string
 	ContentType string
 	Size        int64
 	SHA256      [32]byte
 	CreatedAt   time.Time
+	ScanStatus  ScanStatus
 }

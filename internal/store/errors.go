@@ -5,6 +5,8 @@ import "errors"
 const (
 	ResourceExhaustedReasonUploadPressure = "upload_pressure"
 
+	PreconditionReasonContentQuarantined = "QUARANTINED_AV"
+
 	DataLossReasonBackendRestoreCorrupt          = "backend_restore_corrupt"
 	DataLossReasonBackendRestoreChecksumMismatch = "backend_restore_checksum_mismatch"
 	DataLossReasonBackendRestoreMetadataMismatch = "backend_restore_metadata_mismatch"
@@ -18,15 +20,47 @@ const (
 )
 
 var (
-	ErrAlreadyExists     = errors.New("document already exists")
-	ErrNotFound          = errors.New("document not found")
-	ErrTxNotFound        = errors.New("transaction not found")
-	ErrInvalidArgument   = errors.New("invalid argument")
-	ErrResourceExhausted = errors.New("resource exhausted")
-	ErrUnavailable       = errors.New("temporarily unavailable")
-	ErrDataLoss          = errors.New("data corruption detected")
-	ErrRebuilding        = errors.New("projection rebuild in progress")
+	ErrAlreadyExists      = errors.New("document already exists")
+	ErrNotFound           = errors.New("document not found")
+	ErrTxNotFound         = errors.New("transaction not found")
+	ErrInvalidArgument    = errors.New("invalid argument")
+	ErrResourceExhausted  = errors.New("resource exhausted")
+	ErrFailedPrecondition = errors.New("failed precondition")
+	ErrUnavailable        = errors.New("temporarily unavailable")
+	ErrDataLoss           = errors.New("data corruption detected")
+	ErrRebuilding         = errors.New("projection rebuild in progress")
 )
+
+type PreconditionError struct {
+	Reason  string
+	Message string
+}
+
+func NewPrecondition(reason, message string) *PreconditionError {
+	return &PreconditionError{
+		Reason:  reason,
+		Message: message,
+	}
+}
+
+func (e *PreconditionError) Error() string {
+	if e.Message == "" {
+		return ErrFailedPrecondition.Error()
+	}
+	return ErrFailedPrecondition.Error() + ": " + e.Message
+}
+
+func (e *PreconditionError) Unwrap() error {
+	return ErrFailedPrecondition
+}
+
+func PreconditionReason(err error) (string, bool) {
+	var preconditionErr *PreconditionError
+	if !errors.As(err, &preconditionErr) || preconditionErr.Reason == "" {
+		return "", false
+	}
+	return preconditionErr.Reason, true
+}
 
 type ResourceExhaustedError struct {
 	Reason  string

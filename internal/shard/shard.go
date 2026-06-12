@@ -494,6 +494,10 @@ func (s *Shard) HeadDocument(ctx context.Context, txID, docName string) (storeap
 	if err := s.ensureMetadataReadAllowed(entry.blockID); err != nil {
 		return storeapi.DocumentMeta{}, err
 	}
+	scanStatus, err := s.contentScanStatusLocked(txID, docName)
+	if err != nil {
+		return storeapi.DocumentMeta{}, err
+	}
 
 	return storeapi.DocumentMeta{
 		Name:        entry.DocName,
@@ -501,6 +505,7 @@ func (s *Shard) HeadDocument(ctx context.Context, txID, docName string) (storeap
 		Size:        entry.TotalBytes,
 		SHA256:      entry.SHA256,
 		CreatedAt:   entry.CreatedAt,
+		ScanStatus:  scanStatus,
 	}, nil
 }
 
@@ -541,6 +546,10 @@ func (s *Shard) readDocumentFromProjection(
 			expectedBlockID,
 		)
 	}
+	if err := s.ensureContentReadAllowedLocked(txID, docName); err != nil {
+		s.mu.Unlock()
+		return nil, storeapi.DocumentMeta{}, err
+	}
 	if err := s.ensureReadableBlockLockedForReason(ctx, entry.blockID, restoreReason); err != nil {
 		return nil, storeapi.DocumentMeta{}, err
 	}
@@ -554,6 +563,7 @@ func (s *Shard) readDocumentFromProjection(
 		Size:        entry.TotalBytes,
 		SHA256:      entry.SHA256,
 		CreatedAt:   entry.CreatedAt,
+		ScanStatus:  storeapi.ScanStatusUnscanned,
 	}
 	s.mu.Unlock()
 
@@ -613,12 +623,17 @@ func (s *Shard) FindDocuments(ctx context.Context, txID string) ([]storeapi.Docu
 
 	docs := make([]storeapi.DocumentMeta, 0, len(resolved))
 	for _, doc := range resolved {
+		scanStatus, err := s.contentScanStatusLocked(txID, doc.DocName)
+		if err != nil {
+			return nil, err
+		}
 		docs = append(docs, storeapi.DocumentMeta{
 			Name:        doc.DocName,
 			ContentType: doc.ContentType,
 			Size:        doc.TotalBytes,
 			SHA256:      doc.SHA256,
 			CreatedAt:   doc.CreatedAt,
+			ScanStatus:  scanStatus,
 		})
 	}
 	return docs, nil

@@ -102,3 +102,17 @@ func TestDataLossReasonMissing(t *testing.T) {
 		t.Fatalf("DataLossReason = %q/%v, want empty/false", reason, ok)
 	}
 }
+
+func TestPreconditionReason(t *testing.T) {
+	err := store.NewPrecondition(store.PreconditionReasonContentQuarantined, "content quarantined")
+	if !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Fatalf("errors.Is(err, ErrFailedPrecondition) = false for %v", err)
+	}
+	reason, ok := store.PreconditionReason(err)
+	if !ok {
+		t.Fatalf("PreconditionReason ok = false for %v", err)
+	}
+	if reason != store.PreconditionReasonContentQuarantined {
+		t.Fatalf("reason = %q, want %q", reason, store.PreconditionReasonContentQuarantined)
+	}
+}

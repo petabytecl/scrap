@@ -215,4 +215,30 @@ func contentQuarantineReasonFromCommand(reason scrapv1.QuarantineReason) (index.
 	}
 }
 
+func (s *Shard) ensureContentReadAllowedLocked(txID, docName string) error {
+	scanStatus, err := s.contentScanStatusLocked(txID, docName)
+	if err != nil {
+		return err
+	}
+	if scanStatus != storeapi.ScanStatusQuarantined {
+		return nil
+	}
+	return storeapi.NewPrecondition(storeapi.PreconditionReasonContentQuarantined, "content quarantined")
+}
+
+func (s *Shard) contentScanStatusLocked(txID, docName string) (storeapi.ScanStatus, error) {
+	if s.idx == nil {
+		return storeapi.ScanStatusUnspecified, fmt.Errorf("%w: projection is nil", storeapi.ErrDataLoss)
+	}
+	_, err := s.idx.GetContentQuarantine(txID, docName)
+	switch {
+	case err == nil:
+		return storeapi.ScanStatusQuarantined, nil
+	case errors.Is(err, index.ErrContentQuarantineNotFound):
+		return storeapi.ScanStatusUnscanned, nil
+	default:
+		return storeapi.ScanStatusUnspecified, fmt.Errorf("%w: content quarantine lookup: %w", storeapi.ErrDataLoss, err)
+	}
+}
+
 var _ avscan.DetectionReporter = (*Shard)(nil)

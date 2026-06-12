@@ -14,8 +14,10 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/shard"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func TestGRPCReadDocumentStreamsVerifiedMetadataThenChunks(t *testing.T) {
@@ -80,6 +82,95 @@ func TestGRPCReadDocumentCorruptBlockReturnsDataLossBeforeAnyMessage(t *testing.
 	}
 	if status.Code(err) != codes.DataLoss {
 		t.Fatalf("first Recv status = %s, want %s (err=%v)", status.Code(err), codes.DataLoss, err)
+	}
+}
+
+func TestGRPCQuarantinedReadDeniedAndMetadataExposesScanStatus(t *testing.T) {
+	ctx := context.Background()
+	client, s := startReadVerificationShardServer(t)
+	payload := bytes.Repeat([]byte("quarantined read payload "), 8)
+	writeDocument(ctx, t, client, "tx-read-quarantined", "unsafe.xml", "text/xml", payload)
+	writeDocument(ctx, t, client, "tx-read-quarantined", "safe.xml", "text/xml", []byte("safe payload"))
+
+	reportReadVerificationDetection(ctx, t, s, "tx-read-quarantined", "unsafe.xml")
+
+	head, err := client.HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
+		TransactionId: "tx-read-quarantined",
+		DocumentName:  "unsafe.xml",
+	})
+	if err != nil {
+		t.Fatalf("HeadDocument quarantined: %v", err)
+	}
+	assertGRPCScanStatus(t, "HeadDocument", head.GetScanStatus(), scrapv1.ScanStatus_SCAN_STATUS_QUARANTINED)
+
+	find, err := client.FindDocuments(ctx, &scrapv1.FindDocumentsRequest{
+		TransactionId: "tx-read-quarantined",
+	})
+	if err != nil {
+		t.Fatalf("FindDocuments: %v", err)
+	}
+	statuses := grpcScanStatusesByDocument(find.GetDocuments())
+	assertGRPCScanStatus(t, "FindDocuments unsafe", statuses["unsafe.xml"], scrapv1.ScanStatus_SCAN_STATUS_QUARANTINED)
+	assertGRPCScanStatus(t, "FindDocuments safe", statuses["safe.xml"], scrapv1.ScanStatus_SCAN_STATUS_UNSCANNED)
+
+	stream, err := client.ReadDocument(ctx, &scrapv1.ReadDocumentRequest{
+		TransactionId: "tx-read-quarantined",
+		DocumentName:  "unsafe.xml",
+	})
+	if err != nil {
+		t.Fatalf("ReadDocument: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err == nil {
+		t.Fatalf("ReadDocument returned response before quarantine denial: %+v", msg)
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ReadDocument status = %s, want %s (err=%v)", status.Code(err), codes.FailedPrecondition, err)
+	}
+	assertGRPCErrorInfoReason(t, err, storeapi.PreconditionReasonContentQuarantined)
+}
+
+func reportReadVerificationDetection(ctx context.Context, t *testing.T, s *shard.Shard, txID, docName string) {
+	t.Helper()
+
+	err := s.ReportDetections(ctx, avscan.Block{BlockID: 1}, []avscan.Detection{{
+		TransactionID: txID,
+		DocumentName:  docName,
+		DetectedAtUs:  1716700001000000,
+		ScanType:      avscan.DetectionScanTypeInitial,
+		Reason:        avscan.DetectionReasonScannerDetection,
+	}})
+	if err != nil {
+		t.Fatalf("ReportDetections: %v", err)
+	}
+}
+
+func grpcScanStatusesByDocument(docs []*scrapv1.DocumentMeta) map[string]scrapv1.ScanStatus {
+	statuses := make(map[string]scrapv1.ScanStatus, len(docs))
+	for _, doc := range docs {
+		statuses[doc.GetName()] = doc.GetScanStatus()
+	}
+	return statuses
+}
+
+func assertGRPCScanStatus(t *testing.T, label string, got, want scrapv1.ScanStatus) {
+	t.Helper()
+
+	if got != want {
+		t.Fatalf("%s scan_status = %v, want %v", label, got, want)
+	}
+}
+
+func assertGRPCErrorInfoReason(t *testing.T, err error, want string) {
+	t.Helper()
+
+	st := status.Convert(err)
+	info := errorInfoDetail(st)
+	if info == nil {
+		t.Fatalf("expected ErrorInfo detail, details=%T", st.Details())
+	}
+	if info.GetReason() != want {
+		t.Fatalf("reason = %q, want %q", info.GetReason(), want)
 	}
 }
 

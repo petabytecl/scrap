@@ -74,6 +74,16 @@ func (idx *Index) GetContentQuarantine(txID, docName string) (ContentQuarantine,
 	return decodeContentQuarantine(key, val)
 }
 
+// CorruptContentQuarantineForTest overwrites one Content Quarantine value with
+// caller-provided bytes so higher layers can prove fail-closed behavior.
+func (idx *Index) CorruptContentQuarantineForTest(txID, docName string, val []byte) error {
+	key, err := contentQuarantineKey(txID, docName)
+	if err != nil {
+		return err
+	}
+	return idx.db.Set(key, val, pebble.Sync)
+}
+
 func contentQuarantineKey(txID, docName string) ([]byte, error) {
 	if err := validateContentQuarantineIdentity(txID, docName); err != nil {
 		return nil, err

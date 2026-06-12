@@ -5,7 +5,7 @@ created: 2026-06-12T14:44:19-04:00
 
 # Story 5.4: Quarantined Read Denial and Metadata Reconciliation
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,54 +33,54 @@ so that reconciliation can continue without serving quarantined bytes.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 5.4 evidence artifact before production code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-5-quarantined-read-metadata-evidence.md`.
-  - [ ] Record baseline commit, changed-boundary list, public status/error contract, read-denial proof, metadata status proof, race/replay proof, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
-  - [ ] Keep closure scoped to Story 5.4. Do not claim admin HTTP operations, `scrapctl` quarantine UX, confirm/release lifecycle, or Epic 5 closure.
+- [x] Create the Story 5.4 evidence artifact before production code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-5-quarantined-read-metadata-evidence.md`.
+  - [x] Record baseline commit, changed-boundary list, public status/error contract, read-denial proof, metadata status proof, race/replay proof, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
+  - [x] Keep closure scoped to Story 5.4. Do not claim admin HTTP operations, `scrapctl` quarantine UX, confirm/release lifecycle, or Epic 5 closure.
 
-- [ ] Add the public metadata scan-status contract. (AC: 2)
-  - [ ] Update `proto/scrap/v1/document.proto` with an additive `ScanStatus` enum and `scan_status` fields on `HeadDocumentResponse` and `DocumentMeta`. Do not renumber existing fields.
-  - [ ] Include the ADR 0008 public states `CLEAN`, `QUARANTINED`, and `UNSCANNED`; reserve the zero value for an unspecified default.
-  - [ ] Do not add per-Document clean authority in this story. Until a committed clean state exists, non-quarantined existing Documents should surface as `UNSCANNED`.
-  - [ ] Regenerate `gen/go/scrap/v1/document.pb.go` and related gRPC output through the repo protobuf toolchain. Do not edit generated files by hand.
-  - [ ] Update proto/server contract tests so `HeadDocument` and `FindDocuments` expose the expected scan status.
+- [x] Add the public metadata scan-status contract. (AC: 2)
+  - [x] Update `proto/scrap/v1/document.proto` with an additive `ScanStatus` enum and `scan_status` fields on `HeadDocumentResponse` and `DocumentMeta`. Do not renumber existing fields.
+  - [x] Include the ADR 0008 public states `CLEAN`, `QUARANTINED`, and `UNSCANNED`; reserve the zero value for an unspecified default.
+  - [x] Do not add per-Document clean authority in this story. Until a committed clean state exists, non-quarantined existing Documents should surface as `UNSCANNED`.
+  - [x] Regenerate `gen/go/scrap/v1/document.pb.go` and related gRPC output through the repo protobuf toolchain. Do not edit generated files by hand.
+  - [x] Update proto/server contract tests so `HeadDocument` and `FindDocuments` expose the expected scan status.
 
-- [ ] Add store-domain status and precondition error types. (AC: 1-3)
-  - [ ] Extend `internal/store.DocumentMeta` with a bounded scan-status value.
-  - [ ] Add a typed store error for quarantined reads that unwraps to a precondition sentinel and carries public reason `QUARANTINED_AV`.
-  - [ ] Map the quarantine precondition to gRPC `codes.FailedPrecondition` in `internal/server`, using `google.rpc.ErrorInfo` if it fits the existing error-detail style.
-  - [ ] Keep core store and Shard packages free of gRPC imports.
-  - [ ] Ensure error messages and details are bounded and do not include raw scanner payloads, rule text, signatures, file paths, Backend keys, trace IDs, request IDs, or Document bytes.
+- [x] Add store-domain status and precondition error types. (AC: 1-3)
+  - [x] Extend `internal/store.DocumentMeta` with a bounded scan-status value.
+  - [x] Add a typed store error for quarantined reads that unwraps to a precondition sentinel and carries public reason `QUARANTINED_AV`.
+  - [x] Map the quarantine precondition to gRPC `codes.FailedPrecondition` in `internal/server`, using `google.rpc.ErrorInfo` if it fits the existing error-detail style.
+  - [x] Keep core store and Shard packages free of gRPC imports.
+  - [x] Ensure error messages and details are bounded and do not include raw scanner payloads, rule text, signatures, file paths, Backend keys, trace IDs, request IDs, or Document bytes.
 
-- [ ] Gate Shard reads on Content Quarantine state. (AC: 1, 3, 4)
-  - [ ] In `internal/shard`, consult the committed Content Quarantine Projection via point-get before serving `ReadDocument` bytes.
-  - [ ] Perform the gate while holding the Shard Projection lock and before `ensureReadableBlockLockedForReason`, restore, Block open, or decrypt work can return bytes.
-  - [ ] Return no reader, zero metadata, and the typed quarantine precondition when a matching quarantine record exists.
-  - [ ] If the quarantine lookup itself is corrupt or unavailable, fail closed: return an error and do not fall through to byte serving.
-  - [ ] Preserve existing leader-read, validation, restore-first, encryption, and data-loss behavior for non-quarantined Documents.
+- [x] Gate Shard reads on Content Quarantine state. (AC: 1, 3, 4)
+  - [x] In `internal/shard`, consult the committed Content Quarantine Projection via point-get before serving `ReadDocument` bytes.
+  - [x] Perform the gate while holding the Shard Projection lock and before `ensureReadableBlockLockedForReason`, restore, Block open, or decrypt work can return bytes.
+  - [x] Return no reader, zero metadata, and the typed quarantine precondition when a matching quarantine record exists.
+  - [x] If the quarantine lookup itself is corrupt or unavailable, fail closed: return an error and do not fall through to byte serving.
+  - [x] Preserve existing leader-read, validation, restore-first, encryption, and data-loss behavior for non-quarantined Documents.
 
-- [ ] Reconcile metadata status for `HeadDocument` and `FindDocuments`. (AC: 2, 4)
-  - [ ] Set `ScanStatusQuarantined` on metadata when a matching Content Quarantine record exists.
-  - [ ] Set `ScanStatusUnscanned` for existing non-quarantined Documents until a later story adds clean-state authority.
-  - [ ] Keep `FindDocuments` Transaction-scoped and routed to exactly one owning Shard. Do not add cross-Shard quarantine registries.
-  - [ ] Preserve Transaction document-count integrity and include quarantined Documents in metadata results.
-  - [ ] Keep metadata bounded: scan status is an enum only, not a scanner rule, signature, dependency error, or operator note.
+- [x] Reconcile metadata status for `HeadDocument` and `FindDocuments`. (AC: 2, 4)
+  - [x] Set `ScanStatusQuarantined` on metadata when a matching Content Quarantine record exists.
+  - [x] Set `ScanStatusUnscanned` for existing non-quarantined Documents until a later story adds clean-state authority.
+  - [x] Keep `FindDocuments` Transaction-scoped and routed to exactly one owning Shard. Do not add cross-Shard quarantine registries.
+  - [x] Preserve Transaction document-count integrity and include quarantined Documents in metadata results.
+  - [x] Keep metadata bounded: scan status is an enum only, not a scanner rule, signature, dependency error, or operator note.
 
-- [ ] Update public server behavior. (AC: 1-3)
-  - [ ] Map store scan statuses to `scrap.v1.ScanStatus` in `HeadDocument` and `FindDocuments`.
-  - [ ] Ensure `ReadDocument` returns `FAILED_PRECONDITION` before sending read metadata or chunks for quarantined Documents.
-  - [ ] Add tests proving server-streaming reads emit no metadata and no chunks on quarantine denial.
-  - [ ] Preserve authentication, authorization, audit, rate-limit, cancellation, and route-unavailable behavior.
+- [x] Update public server behavior. (AC: 1-3)
+  - [x] Map store scan statuses to `scrap.v1.ScanStatus` in `HeadDocument` and `FindDocuments`.
+  - [x] Ensure `ReadDocument` returns `FAILED_PRECONDITION` before sending read metadata or chunks for quarantined Documents.
+  - [x] Add tests proving server-streaming reads emit no metadata and no chunks on quarantine denial.
+  - [x] Preserve authentication, authorization, audit, rate-limit, cancellation, and route-unavailable behavior.
 
-- [ ] Prove fail-closed race and replay behavior. (AC: 3, 4)
-  - [ ] Add deterministic tests for quarantine-before-read, read-after-quarantine-apply, and replayed quarantine Projection state denying reads.
-  - [ ] Add coverage where metadata remains available while read bytes are denied.
-  - [ ] Add corrupt quarantine Projection coverage showing reads do not serve bytes when quarantine state cannot be trusted.
-  - [ ] Do not use sleeps. Use direct apply, fake proposers, manual channels, contexts, or bounded polling with clear failure messages.
+- [x] Prove fail-closed race and replay behavior. (AC: 3, 4)
+  - [x] Add deterministic tests for quarantine-before-read, read-after-quarantine-apply, and replayed quarantine Projection state denying reads.
+  - [x] Add coverage where metadata remains available while read bytes are denied.
+  - [x] Add corrupt quarantine Projection coverage showing reads do not serve bytes when quarantine state cannot be trusted.
+  - [x] Do not use sleeps. Use direct apply, fake proposers, manual channels, contexts, or bounded polling with clear failure messages.
 
 - [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
-  - [ ] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
-  - [ ] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
+  - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
+  - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
   - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
 
 ## Dev Notes
@@ -232,22 +232,45 @@ GPT-5 Codex for story creation.
 ### Debug Log References
 
 - 2026-06-12T14:44:19-04:00 - Story 5.4 created from sprint status after Story 5.3 implementation, BMAD code review, review fixes, commit, and push completed.
+- 2026-06-12T14:47:32-04:00 - Dev-story workflow started from pushed baseline `3cc94e44bf32b9a069859f7bb262a6ba741b8016`; story and sprint status moved to in-progress.
+- 2026-06-12T14:50:00-04:00 - Added RED tests for public scan status, store precondition error, server `FAILED_PRECONDITION` mapping, Shard read denial, metadata reconciliation, replay, and corrupt quarantine fail-closed behavior.
+- 2026-06-12T14:54:00-04:00 - Implemented additive `ScanStatus` proto fields, store scan status/precondition types, server mapping, and Shard Content Quarantine read/metadata gates.
+- 2026-06-12T15:02:49-04:00 - Final implementation gates passed: focused store/server/shard tests, targeted package gate, `make proto-check`, `git diff --check`, `git diff --cached --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
 - Created Story 5.4 from the next backlog item in `sprint-status.yaml`.
 - Scoped implementation to public read denial and metadata scan status only.
-- Captured current code boundaries: document proto lacks scan status, store metadata lacks scan status, server error mapping lacks FailedPrecondition, and Shard read/head/find paths do not consult Content Quarantine.
-- Included Story 5.3 review-fix intelligence so implementation does not regress committed quarantine authority.
+- Added public `ScanStatus` metadata fields for `HeadDocument` and `FindDocuments`, with non-quarantined Documents reporting `UNSCANNED` until clean-state authority exists.
+- Added store-domain scan status and a bounded quarantine precondition error reason `QUARANTINED_AV`.
+- Added Shard read gating against committed Content Quarantine Projection state before Block restore/open/decrypt can serve bytes.
+- Preserved metadata availability for quarantined Documents through `HeadDocument` and `FindDocuments`.
+- Added server mapping to gRPC `FAILED_PRECONDITION` with bounded `ErrorInfo` and no stream metadata/chunks on denial.
+- Added replay and corrupt-quarantine fail-closed tests.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-4-quarantined-read-denial-and-metadata-reconciliation.md`
 - `_bmad-output/implementation-artifacts/epic-5-quarantined-read-metadata-evidence.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `proto/scrap/v1/document.proto`
+- `gen/go/scrap/v1/document.pb.go`
+- `internal/store/store.go`
+- `internal/store/errors.go`
+- `internal/store/errors_test.go`
+- `internal/store/proto_document_contract_test.go`
+- `internal/server/server.go`
+- `internal/server/quarantine_read_test.go`
+- `internal/server/read_verification_test.go`
+- `internal/shard/content_quarantine.go`
+- `internal/shard/content_quarantine_read_test.go`
+- `internal/shard/shard.go`
+- `internal/index/content_quarantine.go`
 
 ## Change Log
 
 | Date | Version | Description | Author |
 | --- | --- | --- | --- |
 | 2026-06-12 | 0.1 | Initial ready-for-dev story created from Epic 5 Story 5.4. | GPT-5 Codex |
+| 2026-06-12 | 0.2 | Started dev-story implementation. | GPT-5 Codex |
+| 2026-06-12 | 1.0 | Implemented quarantined read denial and metadata scan status; moved story to review. | GPT-5 Codex |

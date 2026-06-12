@@ -22,6 +22,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ScanStatus int32
+
+const (
+	ScanStatus_SCAN_STATUS_UNSPECIFIED ScanStatus = 0
+	ScanStatus_SCAN_STATUS_CLEAN       ScanStatus = 1
+	ScanStatus_SCAN_STATUS_QUARANTINED ScanStatus = 2
+	ScanStatus_SCAN_STATUS_UNSCANNED   ScanStatus = 3
+)
+
+// Enum value maps for ScanStatus.
+var (
+	ScanStatus_name = map[int32]string{
+		0: "SCAN_STATUS_UNSPECIFIED",
+		1: "SCAN_STATUS_CLEAN",
+		2: "SCAN_STATUS_QUARANTINED",
+		3: "SCAN_STATUS_UNSCANNED",
+	}
+	ScanStatus_value = map[string]int32{
+		"SCAN_STATUS_UNSPECIFIED": 0,
+		"SCAN_STATUS_CLEAN":       1,
+		"SCAN_STATUS_QUARANTINED": 2,
+		"SCAN_STATUS_UNSCANNED":   3,
+	}
+)
+
+func (x ScanStatus) Enum() *ScanStatus {
+	p := new(ScanStatus)
+	*p = x
+	return p
+}
+
+func (x ScanStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ScanStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_scrap_v1_document_proto_enumTypes[0].Descriptor()
+}
+
+func (ScanStatus) Type() protoreflect.EnumType {
+	return &file_scrap_v1_document_proto_enumTypes[0]
+}
+
+func (x ScanStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ScanStatus.Descriptor instead.
+func (ScanStatus) EnumDescriptor() ([]byte, []int) {
+	return file_scrap_v1_document_proto_rawDescGZIP(), []int{0}
+}
+
 type WriteDocumentRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Part:
@@ -307,6 +359,7 @@ type HeadDocumentResponse struct {
 	Size           int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
 	Sha256Checksum string                 `protobuf:"bytes,4,opt,name=sha256_checksum,json=sha256Checksum,proto3" json:"sha256_checksum,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ScanStatus     ScanStatus             `protobuf:"varint,6,opt,name=scan_status,json=scanStatus,proto3,enum=scrap.v1.ScanStatus" json:"scan_status,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -374,6 +427,13 @@ func (x *HeadDocumentResponse) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *HeadDocumentResponse) GetScanStatus() ScanStatus {
+	if x != nil {
+		return x.ScanStatus
+	}
+	return ScanStatus_SCAN_STATUS_UNSPECIFIED
 }
 
 type ReadDocumentRequest struct {
@@ -689,6 +749,7 @@ type DocumentMeta struct {
 	Size           int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
 	Sha256Checksum string                 `protobuf:"bytes,4,opt,name=sha256_checksum,json=sha256Checksum,proto3" json:"sha256_checksum,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ScanStatus     ScanStatus             `protobuf:"varint,6,opt,name=scan_status,json=scanStatus,proto3,enum=scrap.v1.ScanStatus" json:"scan_status,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -756,6 +817,13 @@ func (x *DocumentMeta) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *DocumentMeta) GetScanStatus() ScanStatus {
+	if x != nil {
+		return x.ScanStatus
+	}
+	return ScanStatus_SCAN_STATUS_UNSPECIFIED
 }
 
 type LeaderHint struct {
@@ -826,14 +894,16 @@ const file_scrap_v1_document_proto_rawDesc = "" +
 	"\x13HeadDocumentRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x1b\n" +
-	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"\xc5\x01\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"\xfc\x01\n" +
 	"\x14HeadDocumentResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12'\n" +
 	"\x0fsha256_checksum\x18\x04 \x01(\tR\x0esha256Checksum\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"~\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x125\n" +
+	"\vscan_status\x18\x06 \x01(\x0e2\x14.scrap.v1.ScanStatusR\n" +
+	"scanStatus\"~\n" +
 	"\x13ReadDocumentRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x1b\n" +
@@ -853,18 +923,26 @@ const file_scrap_v1_document_proto_rawDesc = "" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"M\n" +
 	"\x15FindDocumentsResponse\x124\n" +
-	"\tdocuments\x18\x01 \x03(\v2\x16.scrap.v1.DocumentMetaR\tdocuments\"\xbd\x01\n" +
+	"\tdocuments\x18\x01 \x03(\v2\x16.scrap.v1.DocumentMetaR\tdocuments\"\xf4\x01\n" +
 	"\fDocumentMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12'\n" +
 	"\x0fsha256_checksum\x18\x04 \x01(\tR\x0esha256Checksum\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"-\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x125\n" +
+	"\vscan_status\x18\x06 \x01(\x0e2\x14.scrap.v1.ScanStatusR\n" +
+	"scanStatus\"-\n" +
 	"\n" +
 	"LeaderHint\x12\x1f\n" +
 	"\vleader_addr\x18\x01 \x01(\tR\n" +
-	"leaderAddr2\xd7\x02\n" +
+	"leaderAddr*x\n" +
+	"\n" +
+	"ScanStatus\x12\x1b\n" +
+	"\x17SCAN_STATUS_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11SCAN_STATUS_CLEAN\x10\x01\x12\x1b\n" +
+	"\x17SCAN_STATUS_QUARANTINED\x10\x02\x12\x19\n" +
+	"\x15SCAN_STATUS_UNSCANNED\x10\x032\xd7\x02\n" +
 	"\x0fDocumentService\x12R\n" +
 	"\rWriteDocument\x12\x1e.scrap.v1.WriteDocumentRequest\x1a\x1f.scrap.v1.WriteDocumentResponse(\x01\x12M\n" +
 	"\fHeadDocument\x12\x1d.scrap.v1.HeadDocumentRequest\x1a\x1e.scrap.v1.HeadDocumentResponse\x12O\n" +
@@ -884,43 +962,47 @@ func file_scrap_v1_document_proto_rawDescGZIP() []byte {
 	return file_scrap_v1_document_proto_rawDescData
 }
 
+var file_scrap_v1_document_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_scrap_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_scrap_v1_document_proto_goTypes = []any{
-	(*WriteDocumentRequest)(nil),  // 0: scrap.v1.WriteDocumentRequest
-	(*WriteDocumentInit)(nil),     // 1: scrap.v1.WriteDocumentInit
-	(*WriteDocumentResponse)(nil), // 2: scrap.v1.WriteDocumentResponse
-	(*HeadDocumentRequest)(nil),   // 3: scrap.v1.HeadDocumentRequest
-	(*HeadDocumentResponse)(nil),  // 4: scrap.v1.HeadDocumentResponse
-	(*ReadDocumentRequest)(nil),   // 5: scrap.v1.ReadDocumentRequest
-	(*ReadDocumentResponse)(nil),  // 6: scrap.v1.ReadDocumentResponse
-	(*ReadDocumentMeta)(nil),      // 7: scrap.v1.ReadDocumentMeta
-	(*FindDocumentsRequest)(nil),  // 8: scrap.v1.FindDocumentsRequest
-	(*FindDocumentsResponse)(nil), // 9: scrap.v1.FindDocumentsResponse
-	(*DocumentMeta)(nil),          // 10: scrap.v1.DocumentMeta
-	(*LeaderHint)(nil),            // 11: scrap.v1.LeaderHint
-	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
+	(ScanStatus)(0),               // 0: scrap.v1.ScanStatus
+	(*WriteDocumentRequest)(nil),  // 1: scrap.v1.WriteDocumentRequest
+	(*WriteDocumentInit)(nil),     // 2: scrap.v1.WriteDocumentInit
+	(*WriteDocumentResponse)(nil), // 3: scrap.v1.WriteDocumentResponse
+	(*HeadDocumentRequest)(nil),   // 4: scrap.v1.HeadDocumentRequest
+	(*HeadDocumentResponse)(nil),  // 5: scrap.v1.HeadDocumentResponse
+	(*ReadDocumentRequest)(nil),   // 6: scrap.v1.ReadDocumentRequest
+	(*ReadDocumentResponse)(nil),  // 7: scrap.v1.ReadDocumentResponse
+	(*ReadDocumentMeta)(nil),      // 8: scrap.v1.ReadDocumentMeta
+	(*FindDocumentsRequest)(nil),  // 9: scrap.v1.FindDocumentsRequest
+	(*FindDocumentsResponse)(nil), // 10: scrap.v1.FindDocumentsResponse
+	(*DocumentMeta)(nil),          // 11: scrap.v1.DocumentMeta
+	(*LeaderHint)(nil),            // 12: scrap.v1.LeaderHint
+	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
 }
 var file_scrap_v1_document_proto_depIdxs = []int32{
-	1,  // 0: scrap.v1.WriteDocumentRequest.init:type_name -> scrap.v1.WriteDocumentInit
-	12, // 1: scrap.v1.WriteDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
-	12, // 2: scrap.v1.HeadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
-	7,  // 3: scrap.v1.ReadDocumentResponse.meta:type_name -> scrap.v1.ReadDocumentMeta
-	12, // 4: scrap.v1.ReadDocumentMeta.created_at:type_name -> google.protobuf.Timestamp
-	10, // 5: scrap.v1.FindDocumentsResponse.documents:type_name -> scrap.v1.DocumentMeta
-	12, // 6: scrap.v1.DocumentMeta.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 7: scrap.v1.DocumentService.WriteDocument:input_type -> scrap.v1.WriteDocumentRequest
-	3,  // 8: scrap.v1.DocumentService.HeadDocument:input_type -> scrap.v1.HeadDocumentRequest
-	5,  // 9: scrap.v1.DocumentService.ReadDocument:input_type -> scrap.v1.ReadDocumentRequest
-	8,  // 10: scrap.v1.DocumentService.FindDocuments:input_type -> scrap.v1.FindDocumentsRequest
-	2,  // 11: scrap.v1.DocumentService.WriteDocument:output_type -> scrap.v1.WriteDocumentResponse
-	4,  // 12: scrap.v1.DocumentService.HeadDocument:output_type -> scrap.v1.HeadDocumentResponse
-	6,  // 13: scrap.v1.DocumentService.ReadDocument:output_type -> scrap.v1.ReadDocumentResponse
-	9,  // 14: scrap.v1.DocumentService.FindDocuments:output_type -> scrap.v1.FindDocumentsResponse
-	11, // [11:15] is the sub-list for method output_type
-	7,  // [7:11] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	2,  // 0: scrap.v1.WriteDocumentRequest.init:type_name -> scrap.v1.WriteDocumentInit
+	13, // 1: scrap.v1.WriteDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
+	13, // 2: scrap.v1.HeadDocumentResponse.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 3: scrap.v1.HeadDocumentResponse.scan_status:type_name -> scrap.v1.ScanStatus
+	8,  // 4: scrap.v1.ReadDocumentResponse.meta:type_name -> scrap.v1.ReadDocumentMeta
+	13, // 5: scrap.v1.ReadDocumentMeta.created_at:type_name -> google.protobuf.Timestamp
+	11, // 6: scrap.v1.FindDocumentsResponse.documents:type_name -> scrap.v1.DocumentMeta
+	13, // 7: scrap.v1.DocumentMeta.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 8: scrap.v1.DocumentMeta.scan_status:type_name -> scrap.v1.ScanStatus
+	1,  // 9: scrap.v1.DocumentService.WriteDocument:input_type -> scrap.v1.WriteDocumentRequest
+	4,  // 10: scrap.v1.DocumentService.HeadDocument:input_type -> scrap.v1.HeadDocumentRequest
+	6,  // 11: scrap.v1.DocumentService.ReadDocument:input_type -> scrap.v1.ReadDocumentRequest
+	9,  // 12: scrap.v1.DocumentService.FindDocuments:input_type -> scrap.v1.FindDocumentsRequest
+	3,  // 13: scrap.v1.DocumentService.WriteDocument:output_type -> scrap.v1.WriteDocumentResponse
+	5,  // 14: scrap.v1.DocumentService.HeadDocument:output_type -> scrap.v1.HeadDocumentResponse
+	7,  // 15: scrap.v1.DocumentService.ReadDocument:output_type -> scrap.v1.ReadDocumentResponse
+	10, // 16: scrap.v1.DocumentService.FindDocuments:output_type -> scrap.v1.FindDocumentsResponse
+	13, // [13:17] is the sub-list for method output_type
+	9,  // [9:13] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_scrap_v1_document_proto_init() }
@@ -941,13 +1023,14 @@ func file_scrap_v1_document_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scrap_v1_document_proto_rawDesc), len(file_scrap_v1_document_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_scrap_v1_document_proto_goTypes,
 		DependencyIndexes: file_scrap_v1_document_proto_depIdxs,
+		EnumInfos:         file_scrap_v1_document_proto_enumTypes,
 		MessageInfos:      file_scrap_v1_document_proto_msgTypes,
 	}.Build()
 	File_scrap_v1_document_proto = out.File
