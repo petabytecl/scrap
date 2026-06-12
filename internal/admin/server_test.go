@@ -437,6 +437,9 @@ func TestServer_QuarantineListEndpointReturnsBoundedJSON(t *testing.T) {
 	if !strings.Contains(resp.Body.String(), `"documents"`) {
 		t.Fatalf("list body missing documents: %s", resp.Body.String())
 	}
+	if !strings.Contains(resp.Body.String(), `"shard_id":0`) {
+		t.Fatalf("list body missing shard_id 0: %s", resp.Body.String())
+	}
 }
 
 func TestServer_QuarantineInspectEndpointReturnsBoundedJSON(t *testing.T) {
@@ -480,7 +483,7 @@ func TestServer_QuarantineDecisionEndpointsReturnBoundedJSON(t *testing.T) {
 
 func newQuarantineEndpointTestServer() (*quarantineServiceStub, *admin.Server) {
 	record := quarantine.Record{
-		ShardID:       7,
+		ShardID:       0,
 		TransactionID: "tx-quarantine",
 		DocumentName:  "doc.xml",
 		BlockID:       42,
@@ -496,27 +499,84 @@ func newQuarantineEndpointTestServer() (*quarantineServiceStub, *admin.Server) {
 			Status:   quarantine.StatusOK,
 			Reason:   quarantine.ReasonOK,
 			Changed:  true,
-			Document: record,
+			Document: &record,
 		},
 	}
 	return service, admin.New(admin.WithQuarantineService(service))
 }
 
-func TestServer_QuarantineRejectsInvalidJSONBeforeService(t *testing.T) {
+func TestServer_QuarantineRejectsInvalidDecisionBodiesBeforeService(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown field", body: `{"transaction_id":"tx","document_name":"doc.xml","operator_note":"nope"}`},
+		{name: "trailing json", body: `{"transaction_id":"tx","document_name":"doc.xml"} {"transaction_id":"tx2","document_name":"doc2.xml"}`},
+		{name: "invalid identity", body: `{"transaction_id":"tx","document_name":""}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &quarantineServiceStub{}
+			srv := admin.New(admin.WithQuarantineService(service))
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/quarantine/confirm", strings.NewReader(tt.body))
+			resp := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(resp, req)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+			}
+			if service.confirmCalls != 0 {
+				t.Fatalf("confirm calls = %d, want 0", service.confirmCalls)
+			}
+			assertQuarantineJSONError(t, resp.Body.String(), quarantine.ReasonInvalidRequest)
+		})
+	}
+}
+
+func TestServer_QuarantineRejectsAmbiguousQueriesBeforeService(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "duplicate list transaction", path: "/admin/quarantine/documents?" + "transaction_" + "id=tx-a&transaction_" + "id=tx-b"},
+		{name: "duplicate inspect document", path: "/admin/quarantine/document?" + "transaction_" + "id=tx&document_" + "name=doc-a.xml&document_" + "name=doc-b.xml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &quarantineServiceStub{}
+			srv := admin.New(admin.WithQuarantineService(service))
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, nil)
+			resp := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(resp, req)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+			}
+			if service.listCalls != 0 || service.inspectCalls != 0 {
+				t.Fatalf("service calls list=%d inspect=%d, want 0", service.listCalls, service.inspectCalls)
+			}
+			assertQuarantineJSONError(t, resp.Body.String(), quarantine.ReasonInvalidRequest)
+		})
+	}
+}
+
+func TestServer_QuarantineMethodDeniedReturnsJSON(t *testing.T) {
 	service := &quarantineServiceStub{}
 	srv := admin.New(admin.WithQuarantineService(service))
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/admin/quarantine/confirm", strings.NewReader(`{"transaction_id":"tx","document_name":"doc.xml","operator_note":"nope"}`))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/admin/quarantine/confirm", nil)
 	resp := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(resp, req)
 
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405: %s", resp.Code, resp.Body.String())
 	}
-	if service.confirmCalls != 0 {
-		t.Fatalf("confirm calls = %d, want 0", service.confirmCalls)
+	if got := resp.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
-	assertQuarantineJSONError(t, resp.Body.String(), quarantine.ReasonInvalidRequest)
+	assertQuarantineJSONError(t, resp.Body.String(), quarantine.ReasonMethodNotAllowed)
 }
 
 func TestServer_QuarantineMapsServiceErrors(t *testing.T) {
@@ -530,6 +590,7 @@ func TestServer_QuarantineMapsServiceErrors(t *testing.T) {
 		{name: "not found", err: quarantine.ErrNotFound, status: http.StatusNotFound, reason: quarantine.ReasonNotFound},
 		{name: "not leader", err: &storeapi.NotLeaderError{LeaderAddr: "scrapd-1:9090"}, status: http.StatusServiceUnavailable, reason: quarantine.ReasonNotLeader},
 		{name: "unavailable", err: storeapi.NewUnavailable(storeapi.UnavailableReasonShardRouteUnavailable, "Shard route unavailable"), status: http.StatusServiceUnavailable, reason: quarantine.ReasonUnavailable},
+		{name: "failed precondition", err: storeapi.ErrFailedPrecondition, status: http.StatusPreconditionFailed, reason: quarantine.ReasonFailedPrecondition},
 		{name: "data loss", err: storeapi.ErrDataLoss, status: http.StatusPreconditionFailed, reason: quarantine.ReasonDataLoss},
 		{name: "internal", err: errors.New("dependency path /tmp/secret"), status: http.StatusInternalServerError, reason: quarantine.ReasonInternalError},
 	}
@@ -593,6 +654,9 @@ func assertQuarantineJSONError(t *testing.T, body, reason string) {
 	}
 	if got.Status != quarantine.StatusFailed || got.Reason != reason {
 		t.Fatalf("quarantine error response = %+v, want failed/%s", got, reason)
+	}
+	if got.Document != nil {
+		t.Fatalf("quarantine error response document = %+v, want omitted", got.Document)
 	}
 }
 

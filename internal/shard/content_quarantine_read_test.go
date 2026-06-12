@@ -146,13 +146,13 @@ func TestReleaseQuarantineAllowsReadOnlyAfterCommittedApply(t *testing.T) {
 	if _, _, err := s.ReadDocument(ctx, "tx-quarantine", "detected.xml"); !errors.Is(err, storeapi.ErrFailedPrecondition) {
 		t.Fatalf("ReadDocument after quarantine = %v, want ErrFailedPrecondition", err)
 	}
-	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest("proposal-confirm"), 78); err != nil {
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest(), 78); err != nil {
 		t.Fatalf("apply confirm: %v", err)
 	}
 	if _, _, err := s.ReadDocument(ctx, "tx-quarantine", "detected.xml"); !errors.Is(err, storeapi.ErrFailedPrecondition) {
 		t.Fatalf("ReadDocument after confirm = %v, want ErrFailedPrecondition", err)
 	}
-	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest("proposal-release"), 79); err != nil {
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest(), 79); err != nil {
 		t.Fatalf("apply release: %v", err)
 	}
 

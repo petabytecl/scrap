@@ -14,6 +14,7 @@ import (
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/quarantine"
 	"github.com/petabytecl/scrap/internal/rewrap"
+	"github.com/petabytecl/scrap/internal/routing"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
 	"github.com/petabytecl/scrap/internal/shard"
@@ -412,6 +413,9 @@ func (a appShardSetAdminAdapter) localShardForQuarantineIdentity(identity quaran
 func (a appShardSetAdminAdapter) localShardForQuarantineTransaction(txID string) (*shard.Shard, error) {
 	route, err := a.topology.Placement.Lookup(txID)
 	if err != nil {
+		if errors.Is(err, routing.ErrRouteNotFound) {
+			return nil, storeapi.NewUnavailable(storeapi.UnavailableReasonShardRouteUnavailable, "Shard route unavailable")
+		}
 		return nil, fmt.Errorf("%w: route Transaction", quarantine.ErrInvalidRequest)
 	}
 	localShard, ok := a.localShard(route.ShardID)

@@ -148,6 +148,22 @@ func TestContentQuarantineRejectsInvalidState(t *testing.T) {
 			},
 			wantErrMsg: "reason is required",
 		},
+		{
+			name: "detected time outside json range",
+			mutate: func(q ContentQuarantine) ContentQuarantine {
+				q.DetectedAtUs = maxContentQuarantineUnixMicro + 1
+				return q
+			},
+			wantErrMsg: "detected_at_us exceeds json time range",
+		},
+		{
+			name: "confirmed time outside json range",
+			mutate: func(q ContentQuarantine) ContentQuarantine {
+				q.ConfirmedAtUs = maxContentQuarantineUnixMicro + 1
+				return q
+			},
+			wantErrMsg: "confirmed_at_us exceeds json time range",
+		},
 	}
 
 	for _, tt := range tests {
@@ -337,7 +353,7 @@ func TestContentQuarantineListFiltersAndLimits(t *testing.T) {
 	}
 }
 
-func TestContentQuarantineConfirmAndRelease(t *testing.T) {
+func TestContentQuarantineConfirmIsIdempotent(t *testing.T) {
 	idx, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -345,9 +361,7 @@ func TestContentQuarantineConfirmAndRelease(t *testing.T) {
 	defer func() { _ = idx.Close() }()
 
 	first := contentQuarantineFixture("tx-a", "doc-a.xml", 7)
-	second := contentQuarantineFixture("tx-b", "doc-b.xml", 8)
 	putContentQuarantineForTest(t, idx, first)
-	putContentQuarantineForTest(t, idx, second)
 	if err := idx.ConfirmContentQuarantine(first.TransactionID, first.DocumentName, 1716700003000000); err != nil {
 		t.Fatalf("ConfirmContentQuarantine: %v", err)
 	}
@@ -358,6 +372,29 @@ func TestContentQuarantineConfirmAndRelease(t *testing.T) {
 	if confirmed.ConfirmedAtUs != 1716700003000000 {
 		t.Fatalf("ConfirmedAtUs = %d, want 1716700003000000", confirmed.ConfirmedAtUs)
 	}
+	if err := idx.ConfirmContentQuarantine(first.TransactionID, first.DocumentName, 1716700004000000); err != nil {
+		t.Fatalf("ConfirmContentQuarantine idempotent: %v", err)
+	}
+	confirmed, err = idx.GetContentQuarantine(first.TransactionID, first.DocumentName)
+	if err != nil {
+		t.Fatalf("GetContentQuarantine after second confirm: %v", err)
+	}
+	if confirmed.ConfirmedAtUs != 1716700003000000 {
+		t.Fatalf("ConfirmedAtUs after second confirm = %d, want original", confirmed.ConfirmedAtUs)
+	}
+}
+
+func TestContentQuarantineReleaseRemovesOnlyRequestedRecord(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	first := contentQuarantineFixture("tx-a", "doc-a.xml", 7)
+	second := contentQuarantineFixture("tx-b", "doc-b.xml", 8)
+	putContentQuarantineForTest(t, idx, first)
+	putContentQuarantineForTest(t, idx, second)
 	if err := idx.ReleaseContentQuarantine(first.TransactionID, first.DocumentName); err != nil {
 		t.Fatalf("ReleaseContentQuarantine: %v", err)
 	}
@@ -436,14 +473,52 @@ func TestContentQuarantineListFailsClosedOnCorruptValue(t *testing.T) {
 	}
 }
 
-func contentQuarantineValueHeaderForTest(scanType ContentQuarantineScanType, reason ContentQuarantineReason) []byte {
-	value := []byte{
-		contentQuarantineValueVersion,
-		7, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0,
-		byte(scanType),
-		byte(reason),
+func TestContentQuarantineConfirmAndReleaseFailClosedOnCorruptValue(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Index) error
+	}{
+		{
+			name: "confirm",
+			run: func(idx *Index) error {
+				return idx.ConfirmContentQuarantine("tx-corrupt", "doc.xml", 1716700003000000)
+			},
+		},
+		{
+			name: "release",
+			run: func(idx *Index) error {
+				return idx.ReleaseContentQuarantine("tx-corrupt", "doc.xml")
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = idx.Close() }()
+
+			key, err := contentQuarantineKey("tx-corrupt", "doc.xml")
+			if err != nil {
+				t.Fatalf("contentQuarantineKey: %v", err)
+			}
+			if err := idx.db.Set(key, []byte{contentQuarantineValueVersion, 1, 2}, pebble.Sync); err != nil {
+				t.Fatalf("Set corrupt value: %v", err)
+			}
+			if err := tt.run(idx); !errors.Is(err, ErrInvalidContentQuarantine) {
+				t.Fatalf("%s error = %v, want ErrInvalidContentQuarantine", tt.name, err)
+			}
+		})
+	}
+}
+
+func contentQuarantineValueHeaderForTest(scanType ContentQuarantineScanType, reason ContentQuarantineReason) []byte {
+	value := make([]byte, contentQuarantineValueLen)
+	value[0] = contentQuarantineValueVersion
+	value[1] = 7
+	value[17] = byte(scanType)
+	value[18] = byte(reason)
 	putNonNegativeInt64(value[9:17], 1716700001000000)
 	return value
 }

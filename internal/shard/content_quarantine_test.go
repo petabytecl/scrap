@@ -195,6 +195,103 @@ func TestApplyQuarantineDocumentRebuildsFreshProjectionFromRaftReplay(t *testing
 	}
 }
 
+func TestApplyConfirmQuarantineSurvivesProjectionReopen(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	s := shardForApplyTest(t, idx)
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest(), 78); err != nil {
+		t.Fatalf("apply confirm: %v", err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := index.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen index after confirm: %v", err)
+	}
+	confirmed, err := reopened.GetContentQuarantine("tx-quarantine", "detected.xml")
+	if err != nil {
+		t.Fatalf("GetContentQuarantine after confirm reopen: %v", err)
+	}
+	if confirmed.ConfirmedAtUs != 1716700003000000 {
+		t.Fatalf("ConfirmedAtUs after reopen = %d, want 1716700003000000", confirmed.ConfirmedAtUs)
+	}
+	_ = reopened.Close()
+}
+
+func TestApplyReleaseQuarantineSurvivesProjectionReopen(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	s := shardForApplyTest(t, idx)
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatalf("Close before release: %v", err)
+	}
+
+	reopened, err := index.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen index before release: %v", err)
+	}
+	s = shardForApplyTest(t, reopened)
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest(), 79); err != nil {
+		t.Fatalf("apply release: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close after release: %v", err)
+	}
+
+	reopened, err = index.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen index after release: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if _, err := reopened.GetContentQuarantine("tx-quarantine", "detected.xml"); !errors.Is(err, index.ErrContentQuarantineNotFound) {
+		t.Fatalf("GetContentQuarantine after release reopen = %v, want ErrContentQuarantineNotFound", err)
+	}
+}
+
+func TestApplyQuarantineLifecycleRebuildsFreshProjectionFromRaftReplay(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	entries := []raftpb.Entry{
+		raftEntryForCommand(t, 77, quarantineRaftCommandForTest()),
+		raftEntryForCommand(t, 78, confirmQuarantineRaftCommandForTest()),
+	}
+
+	if err := s.applyEntries(entries, 0); err != nil {
+		t.Fatalf("applyEntries confirm: %v", err)
+	}
+	confirmed, err := idx.GetContentQuarantine("tx-quarantine", "detected.xml")
+	if err != nil {
+		t.Fatalf("GetContentQuarantine after confirm replay: %v", err)
+	}
+	if confirmed.ConfirmedAtUs != 1716700003000000 {
+		t.Fatalf("ConfirmedAtUs after confirm replay = %d, want 1716700003000000", confirmed.ConfirmedAtUs)
+	}
+
+	releaseEntry := raftEntryForCommand(t, 79, releaseQuarantineRaftCommandForTest())
+	if err := s.applyEntries([]raftpb.Entry{releaseEntry}, 0); err != nil {
+		t.Fatalf("applyEntries release: %v", err)
+	}
+	if _, err := idx.GetContentQuarantine("tx-quarantine", "detected.xml"); !errors.Is(err, index.ErrContentQuarantineNotFound) {
+		t.Fatalf("GetContentQuarantine after release replay = %v, want ErrContentQuarantineNotFound", err)
+	}
+}
+
 func TestApplyQuarantineDocumentIsDuplicateSafe(t *testing.T) {
 	idx := openApplyTestIndex(t)
 	s := shardForApplyTest(t, idx)
@@ -289,7 +386,7 @@ func TestApplyConfirmAndReleaseContentQuarantine(t *testing.T) {
 		t.Fatalf("apply quarantine: %v", err)
 	}
 	identity := quarantine.Identity{TransactionID: "tx-quarantine", DocumentName: "detected.xml"}
-	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest("proposal-confirm"), 78); err != nil {
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest(), 78); err != nil {
 		t.Fatalf("apply confirm: %v", err)
 	}
 	confirmed, err := s.InspectContentQuarantine(context.Background(), identity)
@@ -300,7 +397,7 @@ func TestApplyConfirmAndReleaseContentQuarantine(t *testing.T) {
 		t.Fatalf("confirmed inspect result = %+v", confirmed)
 	}
 
-	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest("proposal-release"), 79); err != nil {
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest(), 79); err != nil {
 		t.Fatalf("apply release: %v", err)
 	}
 	if _, err := s.InspectContentQuarantine(context.Background(), identity); !errors.Is(err, quarantine.ErrNotFound) {
@@ -335,6 +432,87 @@ func TestShardConfirmContentQuarantineWaitsForApply(t *testing.T) {
 
 	applyQuarantineProposal(t, s, data)
 	waitQuarantineOperationDone(t, done, "ConfirmContentQuarantine")
+}
+
+func TestShardConfirmContentQuarantineFailureReportsActiveRecord(t *testing.T) {
+	raft := &quarantineProposalRaft{err: storeapi.ErrUnavailable}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+
+	result, err := s.ConfirmContentQuarantine(context.Background(), quarantine.Identity{
+		TransactionID: "tx-quarantine",
+		DocumentName:  "detected.xml",
+	})
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("ConfirmContentQuarantine error = %v, want ErrUnavailable", err)
+	}
+	if result.Status != quarantine.StatusFailed || result.Document == nil {
+		t.Fatalf("confirm result = %+v, want failed with active document", result)
+	}
+	if result.Document.Lifecycle != quarantine.LifecycleActive || result.Document.ConfirmedAt != nil {
+		t.Fatalf("confirm failure document = %+v, want active/unconfirmed", result.Document)
+	}
+}
+
+func TestShardConfirmContentQuarantineAlreadyConfirmedIsIdempotent(t *testing.T) {
+	raft := &quarantineProposalRaft{}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest(), 78); err != nil {
+		t.Fatalf("apply confirm: %v", err)
+	}
+
+	result, err := s.ConfirmContentQuarantine(context.Background(), quarantine.Identity{
+		TransactionID: "tx-quarantine",
+		DocumentName:  "detected.xml",
+	})
+	if err != nil {
+		t.Fatalf("ConfirmContentQuarantine already confirmed: %v", err)
+	}
+	if result.Status != quarantine.StatusOK || result.Changed {
+		t.Fatalf("confirm result = %+v, want ok unchanged", result)
+	}
+	if result.Document == nil || result.Document.Lifecycle != quarantine.LifecycleConfirmed {
+		t.Fatalf("confirm document = %+v, want confirmed", result.Document)
+	}
+	if len(raft.proposed) != 0 {
+		t.Fatalf("proposed commands = %d, want 0", len(raft.proposed))
+	}
+}
+
+func TestShardReleaseContentQuarantineResultMarksReleased(t *testing.T) {
+	raft := &quarantineProposalRaft{}
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	s.raft = raft
+	raft.onPropose = func(data []byte) {
+		applyQuarantineProposal(t, s, data)
+	}
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+
+	result, err := s.ReleaseContentQuarantine(context.Background(), quarantine.Identity{
+		TransactionID: "tx-quarantine",
+		DocumentName:  "detected.xml",
+	})
+	if err != nil {
+		t.Fatalf("ReleaseContentQuarantine: %v", err)
+	}
+	if result.Status != quarantine.StatusOK || !result.Changed {
+		t.Fatalf("release result = %+v, want ok changed", result)
+	}
+	if result.Document == nil || result.Document.Lifecycle != quarantine.LifecycleReleased {
+		t.Fatalf("release document = %+v, want released", result.Document)
+	}
 }
 
 func TestShardReleaseKeepsReadGateClosedUntilApply(t *testing.T) {
@@ -418,11 +596,11 @@ func TestApplySpanInfoForQuarantineDocumentRedactsIdentity(t *testing.T) {
 }
 
 func TestApplySpanInfoForQuarantineLifecycleRedactsIdentity(t *testing.T) {
-	assertApplySpan(t, confirmQuarantineRaftCommandForTest("proposal-confirm"), "confirm_quarantine", []string{
+	assertApplySpan(t, confirmQuarantineRaftCommandForTest(), "confirm_quarantine", []string{
 		"scrap.transaction.hash",
 		"scrap.document.hash",
 	})
-	assertApplySpan(t, releaseQuarantineRaftCommandForTest("proposal-release"), "release_quarantine", []string{
+	assertApplySpan(t, releaseQuarantineRaftCommandForTest(), "release_quarantine", []string{
 		"scrap.transaction.hash",
 		"scrap.document.hash",
 	})
@@ -443,27 +621,27 @@ func quarantineRaftCommandForTest() *scrapv1.RaftCommand {
 	}
 }
 
-func confirmQuarantineRaftCommandForTest(proposalID string) *scrapv1.RaftCommand {
+func confirmQuarantineRaftCommandForTest() *scrapv1.RaftCommand {
 	return &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_ConfirmQuarantine{
 			ConfirmQuarantine: &scrapv1.ConfirmQuarantine{
 				TransactionId: "tx-quarantine",
 				DocumentName:  "detected.xml",
 				ConfirmedAtUs: 1716700003000000,
-				ProposalId:    proposalID,
+				ProposalId:    "proposal-confirm",
 			},
 		},
 	}
 }
 
-func releaseQuarantineRaftCommandForTest(proposalID string) *scrapv1.RaftCommand {
+func releaseQuarantineRaftCommandForTest() *scrapv1.RaftCommand {
 	return &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_ReleaseQuarantine{
 			ReleaseQuarantine: &scrapv1.ReleaseQuarantine{
 				TransactionId: "tx-quarantine",
 				DocumentName:  "detected.xml",
 				ReleasedAtUs:  1716700004000000,
-				ProposalId:    proposalID,
+				ProposalId:    "proposal-release",
 			},
 		},
 	}
@@ -496,9 +674,13 @@ type quarantineProposalRaft struct {
 	proposed   [][]byte
 	proposedCh chan []byte
 	onPropose  func([]byte)
+	err        error
 }
 
 func (r *quarantineProposalRaft) Propose(_ context.Context, data []byte) error {
+	if r.err != nil {
+		return r.err
+	}
 	copied := append([]byte(nil), data...)
 	r.proposed = append(r.proposed, copied)
 	if r.proposedCh != nil {
@@ -508,6 +690,19 @@ func (r *quarantineProposalRaft) Propose(_ context.Context, data []byte) error {
 		r.onPropose(copied)
 	}
 	return nil
+}
+
+func raftEntryForCommand(t *testing.T, index uint64, cmd *scrapv1.RaftCommand) raftpb.Entry {
+	t.Helper()
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	return raftpb.Entry{
+		Type:  raftpb.EntryNormal,
+		Index: index,
+		Data:  data,
+	}
 }
 
 func (r *quarantineProposalRaft) ReadIndex(context.Context) (uint64, error) { return 0, nil }

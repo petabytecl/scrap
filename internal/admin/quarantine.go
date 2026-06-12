@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -29,7 +30,7 @@ func WithQuarantineService(service QuarantineService) Option {
 }
 
 func (s *Server) handleQuarantineDocuments(w http.ResponseWriter, r *http.Request) {
-	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminReader, http.MethodGet)
+	authorizedRequest, role, ok := s.authorizeQuarantineMethod(w, r, security.RoleAdminReader, http.MethodGet)
 	if !ok {
 		return
 	}
@@ -37,7 +38,7 @@ func (s *Server) handleQuarantineDocuments(w http.ResponseWriter, r *http.Reques
 
 	filter, err := parseQuarantineListFilter(r)
 	if err != nil {
-		if !s.recordFailedOperation(w, r, security.RoleAdminReader, audit.OperationQuarantineList, audit.TargetDocument) {
+		if !s.recordInvalidQuarantineRequest(w, r, role, audit.OperationQuarantineList) {
 			return
 		}
 		writeQuarantineError(w, err)
@@ -55,7 +56,7 @@ func (s *Server) handleQuarantineDocuments(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleQuarantineDocument(w http.ResponseWriter, r *http.Request) {
-	authorizedRequest, ok := s.authorizeMethod(w, r, security.RoleAdminReader, http.MethodGet)
+	authorizedRequest, role, ok := s.authorizeQuarantineMethod(w, r, security.RoleAdminReader, http.MethodGet)
 	if !ok {
 		return
 	}
@@ -63,7 +64,7 @@ func (s *Server) handleQuarantineDocument(w http.ResponseWriter, r *http.Request
 
 	identity, err := parseQuarantineIdentityQuery(r)
 	if err != nil {
-		if !s.recordFailedOperation(w, r, security.RoleAdminReader, audit.OperationQuarantineInspect, audit.TargetDocument) {
+		if !s.recordInvalidQuarantineRequest(w, r, role, audit.OperationQuarantineInspect) {
 			return
 		}
 		writeQuarantineError(w, err)
@@ -94,7 +95,7 @@ func (s *Server) handleQuarantineDecision(
 	operation string,
 	apply func(context.Context, quarantine.Identity) (quarantine.Result, error),
 ) {
-	authorizedRequest, role, ok := s.authorizeAnyMethod(
+	authorizedRequest, role, ok := s.authorizeQuarantineAnyMethod(
 		w,
 		r,
 		[]security.Role{security.RoleAdminOperator, security.RoleAdminBreakGlass},
@@ -109,7 +110,21 @@ func (s *Server) handleQuarantineDecision(
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxQuarantineBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&identity); err != nil {
-		if !s.recordFailedOperation(w, r, role, operation, audit.TargetDocument) {
+		if !s.recordInvalidQuarantineRequest(w, r, role, operation) {
+			return
+		}
+		writeQuarantineError(w, quarantine.ErrInvalidRequest)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if !s.recordInvalidQuarantineRequest(w, r, role, operation) {
+			return
+		}
+		writeQuarantineError(w, quarantine.ErrInvalidRequest)
+		return
+	}
+	if err := identity.Validate(); err != nil {
+		if !s.recordInvalidQuarantineRequest(w, r, role, operation) {
 			return
 		}
 		writeQuarantineError(w, quarantine.ErrInvalidRequest)
@@ -126,6 +141,105 @@ func (s *Server) handleQuarantineDecision(
 	writeQuarantineJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) authorizeQuarantineMethod(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	method string,
+) (*http.Request, security.Role, bool) {
+	return s.authorizeQuarantineAnyMethod(w, r, []security.Role{role}, method)
+}
+
+func (s *Server) authorizeQuarantineAnyMethod(
+	w http.ResponseWriter,
+	r *http.Request,
+	roles []security.Role,
+	method string,
+) (*http.Request, security.Role, bool) {
+	role := security.RoleUnknown
+	if len(roles) > 0 {
+		role = roles[0]
+	}
+	operation, target := auditRequest(r, role)
+	resolvedRequest, principalErr := s.requestWithResolvedPrincipal(r)
+	if !s.allowQuarantineRateLimit(w, resolvedRequest, role, operation, target) {
+		return nil, role, false
+	}
+	if principalErr != nil {
+		s.writeQuarantineAuthDenied(w, resolvedRequest, role, operation, target, principalErr)
+		return nil, role, false
+	}
+	if s.authorizer != nil {
+		authorizedRole, err := s.authorizeAnyRole(resolvedRequest.Context(), roles)
+		role = authorizedRole
+		if err != nil {
+			s.writeQuarantineAuthDenied(w, resolvedRequest, role, operation, target, err)
+			return nil, role, false
+		}
+	}
+	if method != "" && r.Method != method {
+		s.writeQuarantineMethodDenied(w, resolvedRequest, role, operation, target)
+		return nil, role, false
+	}
+	if !s.recordQuarantineAudit(w, resolvedRequest, role, operation, target, audit.ResultAllowed, audit.ReasonAllowed) {
+		return nil, role, false
+	}
+	return resolvedRequest, role, true
+}
+
+func (s *Server) allowQuarantineRateLimit(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	operation string,
+	target string,
+) bool {
+	if decision := s.checkRateLimit(r.Context(), operation); !decision.Limited {
+		return true
+	}
+	if !s.recordQuarantineAudit(w, r, role, operation, target, audit.ResultRateLimited, audit.ReasonRateLimited) {
+		return false
+	}
+	writeQuarantineJSON(w, http.StatusTooManyRequests, quarantine.Result{
+		Status: quarantine.StatusFailed,
+		Reason: quarantine.ReasonRateLimited,
+	})
+	return false
+}
+
+func (s *Server) writeQuarantineAuthDenied(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	operation string,
+	target string,
+	err error,
+) {
+	if !s.recordQuarantineAudit(w, r, role, operation, target, audit.ResultDenied, s.auditReasonForError(err)) {
+		return
+	}
+	writeQuarantineJSON(w, security.HTTPStatusForAuthorization(err), quarantine.Result{
+		Status: quarantine.StatusFailed,
+		Reason: quarantineAuthReasonForError(err),
+	})
+}
+
+func (s *Server) writeQuarantineMethodDenied(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	operation string,
+	target string,
+) {
+	if !s.recordQuarantineAudit(w, r, role, operation, target, audit.ResultDenied, audit.ReasonMethodNotAllowed) {
+		return
+	}
+	writeQuarantineJSON(w, http.StatusMethodNotAllowed, quarantine.Result{
+		Status: quarantine.StatusFailed,
+		Reason: quarantine.ReasonMethodNotAllowed,
+	})
+}
+
 type quarantineListResponse struct {
 	Documents []quarantine.Record `json:"documents"`
 }
@@ -137,8 +251,16 @@ func parseQuarantineListFilter(r *http.Request) (quarantine.ListFilter, error) {
 			return quarantine.ListFilter{}, quarantine.ErrInvalidRequest
 		}
 	}
-	filter := quarantine.ListFilter{TransactionID: query.Get("transaction_id")}
-	if rawLimit := query.Get("limit"); rawLimit != "" {
+	txID, err := singleQuarantineQueryValue(query, "transaction_id")
+	if err != nil {
+		return quarantine.ListFilter{}, err
+	}
+	rawLimit, err := singleQuarantineQueryValue(query, "limit")
+	if err != nil {
+		return quarantine.ListFilter{}, err
+	}
+	filter := quarantine.ListFilter{TransactionID: txID}
+	if rawLimit != "" {
 		limit, err := strconv.Atoi(rawLimit)
 		if err != nil {
 			return quarantine.ListFilter{}, quarantine.ErrInvalidRequest
@@ -155,14 +277,61 @@ func parseQuarantineIdentityQuery(r *http.Request) (quarantine.Identity, error) 
 			return quarantine.Identity{}, quarantine.ErrInvalidRequest
 		}
 	}
+	txID, err := singleQuarantineQueryValue(query, "transaction_id")
+	if err != nil {
+		return quarantine.Identity{}, err
+	}
+	docName, err := singleQuarantineQueryValue(query, "document_name")
+	if err != nil {
+		return quarantine.Identity{}, err
+	}
 	identity := quarantine.Identity{
-		TransactionID: query.Get("transaction_id"),
-		DocumentName:  query.Get("document_name"),
+		TransactionID: txID,
+		DocumentName:  docName,
 	}
 	if err := identity.Validate(); err != nil {
 		return quarantine.Identity{}, err
 	}
 	return identity, nil
+}
+
+func singleQuarantineQueryValue(query map[string][]string, key string) (string, error) {
+	values := query[key]
+	if len(values) == 0 {
+		return "", nil
+	}
+	if len(values) != 1 {
+		return "", quarantine.ErrInvalidRequest
+	}
+	return values[0], nil
+}
+
+func (s *Server) recordInvalidQuarantineRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	operation string,
+) bool {
+	return s.recordQuarantineAudit(w, r, role, operation, audit.TargetDocument, audit.ResultFailed, audit.ReasonInvalidRequest)
+}
+
+func (s *Server) recordQuarantineAudit(
+	w http.ResponseWriter,
+	r *http.Request,
+	role security.Role,
+	operation string,
+	target string,
+	result string,
+	reason string,
+) bool {
+	if err := s.recordAudit(r.Context(), role, operation, target, result, reason); err != nil {
+		writeQuarantineJSON(w, http.StatusInternalServerError, quarantine.Result{
+			Status: quarantine.StatusFailed,
+			Reason: quarantine.ReasonAuditFailed,
+		})
+		return false
+	}
+	return true
 }
 
 func writeQuarantineResultError(w http.ResponseWriter, result quarantine.Result, err error) {
@@ -181,12 +350,14 @@ func writeQuarantineError(w http.ResponseWriter, err error) {
 }
 
 func writeQuarantineJSON(w http.ResponseWriter, status int, value any) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		status = http.StatusInternalServerError
+		body = []byte(`{"status":"failed","reason":"internal_error","changed":false}`)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		http.Error(w, `{"status":"failed","reason":"internal_error"}`, http.StatusInternalServerError)
-		return
-	}
+	_, _ = w.Write(append(body, '\n'))
 }
 
 func quarantineHTTPStatus(err error) int {
@@ -216,8 +387,21 @@ func quarantineReasonForError(err error) string {
 		return quarantine.ReasonNotLeader
 	case errors.Is(err, storeapi.ErrUnavailable):
 		return quarantine.ReasonUnavailable
-	case errors.Is(err, storeapi.ErrDataLoss), errors.Is(err, storeapi.ErrFailedPrecondition):
+	case errors.Is(err, storeapi.ErrDataLoss):
 		return quarantine.ReasonDataLoss
+	case errors.Is(err, storeapi.ErrFailedPrecondition):
+		return quarantine.ReasonFailedPrecondition
+	default:
+		return quarantine.ReasonInternalError
+	}
+}
+
+func quarantineAuthReasonForError(err error) string {
+	switch {
+	case errors.Is(err, security.ErrUnauthenticated):
+		return quarantine.ReasonUnauthenticated
+	case errors.Is(err, security.ErrPermissionDenied):
+		return quarantine.ReasonPermissionDenied
 	default:
 		return quarantine.ReasonInternalError
 	}

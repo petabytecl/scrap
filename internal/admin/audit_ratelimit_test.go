@@ -474,6 +474,81 @@ func TestAdminAuditsQuarantineRoutesAsDocumentOperations(t *testing.T) {
 	}
 }
 
+func TestAdminAuditsQuarantineValidationFailureAsInvalidRequest(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	service := &quarantineServiceStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithQuarantineService(service))
+
+	req := httptest.NewRequestWithContext(
+		adminAuthContext(security.RoleAdminOperator),
+		http.MethodPost,
+		"/admin/quarantine/confirm",
+		bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":""}`)),
+	)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+	if service.confirmCalls != 0 {
+		t.Fatalf("confirm calls = %d, want 0", service.confirmCalls)
+	}
+	events := sink.Events()
+	if len(events) != 2 {
+		t.Fatalf("audit events = %d, want 2: %+v", len(events), events)
+	}
+	if events[0].Operation != audit.OperationQuarantineConfirm || events[0].Result != audit.ResultAllowed {
+		t.Fatalf("first audit event = %+v, want quarantine_confirm allowed", events[0])
+	}
+	if events[1].Operation != audit.OperationQuarantineConfirm ||
+		events[1].Result != audit.ResultFailed ||
+		events[1].Reason != audit.ReasonInvalidRequest {
+		t.Fatalf("second audit event = %+v, want quarantine_confirm failed invalid_request", events[1])
+	}
+}
+
+func TestAdminQuarantineRateLimitDenialReturnsJSON(t *testing.T) {
+	authz := security.NewStaticAuthorizer()
+	sink := audit.NewMemorySink()
+	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+		Surfaces: []security.RateLimitSurfacePolicy{
+			{Surface: security.RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
+		},
+	})
+	service := &quarantineServiceStub{}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithRateLimiter(limiter), admin.WithQuarantineService(service))
+	ctx := adminAuthContext(security.RoleAdminReader)
+
+	first := httptest.NewRequestWithContext(ctx, http.MethodGet, "/admin/quarantine/documents?limit=1", nil)
+	firstResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(firstResp, first)
+	if firstResp.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200: %s", firstResp.Code, firstResp.Body.String())
+	}
+
+	second := httptest.NewRequestWithContext(ctx, http.MethodGet, "/admin/quarantine/documents?limit=1", nil)
+	secondResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(secondResp, second)
+	if secondResp.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429: %s", secondResp.Code, secondResp.Body.String())
+	}
+	if got := secondResp.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	assertQuarantineJSONError(t, secondResp.Body.String(), quarantine.ReasonRateLimited)
+	events := sink.Events()
+	if len(events) != 2 {
+		t.Fatalf("audit events = %d, want 2: %+v", len(events), events)
+	}
+	if events[1].Operation != audit.OperationQuarantineList ||
+		events[1].Result != audit.ResultRateLimited ||
+		events[1].Reason != audit.ReasonRateLimited {
+		t.Fatalf("second audit event = %+v, want quarantine_list rate_limited", events[1])
+	}
+}
+
 func TestAdminAuditsWildcardPprofRoutesAsProfiles(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	sink := audit.NewMemorySink()

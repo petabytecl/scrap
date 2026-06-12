@@ -25,6 +25,9 @@ const (
 	contentQuarantineValueVersion   = 0x02
 	contentQuarantineValueLenV1     = 1 + sizeBlockID + 8 + 1 + 1
 	contentQuarantineValueLen       = contentQuarantineValueLenV1 + 8
+	// time.Time.MarshalJSON accepts years through 9999. Projection values above
+	// this bound are corrupt for the admin evidence surface and must fail closed.
+	maxContentQuarantineUnixMicro = 253402300799999999
 )
 
 type ContentQuarantineScanType byte
@@ -122,6 +125,9 @@ func (idx *Index) ConfirmContentQuarantine(txID, docName string, confirmedAtUs i
 	quarantine, err := idx.GetContentQuarantine(txID, docName)
 	if err != nil {
 		return err
+	}
+	if quarantine.ConfirmedAtUs > 0 {
+		return nil
 	}
 	quarantine.ConfirmedAtUs = confirmedAtUs
 	return idx.PutContentQuarantine(quarantine)
@@ -275,8 +281,14 @@ func validateContentQuarantine(quarantine ContentQuarantine) error {
 	if quarantine.DetectedAtUs <= 0 {
 		return fmt.Errorf("%w: detected_at_us is required", ErrInvalidContentQuarantine)
 	}
+	if quarantine.DetectedAtUs > maxContentQuarantineUnixMicro {
+		return fmt.Errorf("%w: detected_at_us exceeds json time range", ErrInvalidContentQuarantine)
+	}
 	if quarantine.ConfirmedAtUs < 0 {
 		return fmt.Errorf("%w: confirmed_at_us must be non-negative", ErrInvalidContentQuarantine)
+	}
+	if quarantine.ConfirmedAtUs > maxContentQuarantineUnixMicro {
+		return fmt.Errorf("%w: confirmed_at_us exceeds json time range", ErrInvalidContentQuarantine)
 	}
 	if !validContentQuarantineScanType(quarantine.ScanType) {
 		return fmt.Errorf("%w: scan_type is required", ErrInvalidContentQuarantine)

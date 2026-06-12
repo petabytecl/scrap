@@ -330,20 +330,14 @@ func (s *Server) authorizeAnyRole(ctx context.Context, roles []security.Role) (s
 	}
 	principal, ok := security.PrincipalFromContext(ctx)
 	if !ok {
-		if s.authorizer != nil {
-			s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
-		}
-		return role, security.UnauthenticatedError("authentication required")
+		return role, s.authorizer.Authorize(ctx, role)
 	}
 	for _, candidate := range roles {
 		if _, ok := principal.Roles[candidate]; ok {
-			return candidate, nil
+			return candidate, s.authorizer.Authorize(ctx, candidate)
 		}
 	}
-	if s.authorizer != nil {
-		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMissingRole)
-	}
-	return role, security.PermissionDeniedErrorWithStatus("permission denied", security.AuthorizationStatusMissingRole)
+	return role, s.authorizer.Authorize(ctx, role)
 }
 
 func (s *Server) auditAllowedOrMethodDenied(

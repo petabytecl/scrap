@@ -61,6 +61,9 @@ Expected admin behavior:
 | Proto compatibility | `make proto-check` | PASS |
 | E2E gate policy | `scripts/check-e2e-gates.sh` | PASS |
 | Broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PASS |
+| Review-fix focused gate | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/index ./internal/shard ./internal/admin ./internal/cmd -run 'Quarantine|Admin|Audit|RateLimit|Authorization|ReadDocument|NewApp' -count=1` | PASS |
+| Review-fix targeted packages | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/server ./internal/shard ./internal/index ./internal/admin ./internal/cmd ./internal/scrapctl -count=1 -timeout 3m` | PASS |
+| Review-fix broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PASS |
 | Secret shape scan | `rg -n --pcre2 "$secret_shape_pattern" $scan_scope` | PASS - no matches. |
 | Quarantine-sensitive scan | `rg -n --pcre2 "$quarantine_sensitive_pattern" $scan_scope` | PASS - no matches after test query literals were split to avoid raw sensitive-pattern matches. |
 
@@ -69,12 +72,13 @@ Expected admin behavior:
 | Scenario | Evidence | Result |
 | --- | --- | --- |
 | List/inspect returns bounded metadata only | `internal/admin/server_test.go` covers list and inspect JSON shape, method handling, missing records, unknown fields, and absence of Document bytes. | PASS |
-| Admin authz denies before side effects | `internal/admin/authorization_test.go` covers wrong-role confirm/release denial before service calls; break-glass release is accepted. | PASS |
-| Admin rate limits apply before side effects | `internal/admin/audit_ratelimit_test.go` covers quarantine audit operation vocabulary and rate-limit outcomes. | PASS |
-| Audit events are bounded | `internal/audit/audit.go`, `internal/admin/server.go`, `internal/admin/audit_ratelimit_test.go`, and redaction scans cover bounded operation names without raw Document identity fields. | PASS |
-| Confirm converges through Raft | `internal/shard/content_quarantine.go`, `internal/shard/apply.go`, and `internal/shard/content_quarantine_test.go` prove confirm proposes Raft metadata and waits for committed local apply. | PASS |
-| Release changes reads only after committed apply | `internal/shard/content_quarantine_test.go` and `internal/shard/content_quarantine_read_test.go` prove reads stay denied before release apply and succeed after committed apply. | PASS |
-| Corrupt quarantine state fails closed | `internal/index/content_quarantine_test.go` covers corrupt Content Quarantine values for list/inspect/confirm/release paths; read-denial behavior remains fail-closed. | PASS |
+| Admin authz denies before side effects | `internal/admin/authorization_test.go` covers wrong-role confirm/release denial before service calls, JSON-only denial responses, and break-glass release through the policy-backed authorizer. | PASS |
+| Admin rate limits apply before side effects | `internal/admin/audit_ratelimit_test.go` covers quarantine audit operation vocabulary, rate-limit outcomes, and JSON-only rate-limit responses. | PASS |
+| Audit events are bounded | `internal/audit/audit.go`, `internal/admin/server.go`, `internal/admin/audit_ratelimit_test.go`, and redaction scans cover bounded operation names and invalid-request audit reasons without raw Document identity fields. | PASS |
+| Confirm converges through Raft | `internal/shard/content_quarantine.go`, `internal/shard/apply.go`, and `internal/shard/content_quarantine_test.go` prove confirm proposes Raft metadata, waits for committed local apply, is idempotent after confirmation, and does not report failed proposals as confirmed. | PASS |
+| Release changes reads only after committed apply | `internal/shard/content_quarantine_test.go` and `internal/shard/content_quarantine_read_test.go` prove reads stay denied before release apply, succeed after committed apply, and successful release responses mark the lifecycle as released. | PASS |
+| Replay/reopen evidence | `internal/shard/content_quarantine_test.go` covers confirm/release replay from Raft entries and Projection reopen persistence without scanner memory. | PASS |
+| Corrupt quarantine state fails closed | `internal/index/content_quarantine_test.go` covers corrupt Content Quarantine values for list/inspect/confirm/release paths plus timestamp bounds that could otherwise break JSON encoding. | PASS |
 
 ## Redaction Notes
 

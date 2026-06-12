@@ -196,10 +196,14 @@ func (s *Shard) ConfirmContentQuarantine(ctx context.Context, identity quarantin
 	if err != nil {
 		return finishQuarantineResult(result, err)
 	}
+	snapshotRecord := contentQuarantineRecord(s.shardID, record)
+	result.Document = &snapshotRecord
+	if record.ConfirmedAtUs > 0 {
+		result.Status = quarantine.StatusOK
+		result.Reason = quarantine.ReasonOK
+		return result, nil
+	}
 	confirmedAt := time.Now().UTC()
-	result.Document = contentQuarantineRecord(s.shardID, record)
-	result.Document.Lifecycle = quarantine.LifecycleConfirmed
-	result.Document.ConfirmedAt = &confirmedAt
 
 	proposalID := ulid.New().String()
 	err = s.proposeQuarantineLifecycle(ctx, quarantineLifecycleProposal{
@@ -218,9 +222,15 @@ func (s *Shard) ConfirmContentQuarantine(ctx context.Context, identity quarantin
 	if err != nil {
 		return finishQuarantineResult(result, err)
 	}
+	confirmedRecord, err := s.contentQuarantineSnapshot(identity)
+	if err != nil {
+		return finishQuarantineResult(result, err)
+	}
+	confirmedDocument := contentQuarantineRecord(s.shardID, confirmedRecord)
 	result.Status = quarantine.StatusOK
 	result.Reason = quarantine.ReasonOK
 	result.Changed = true
+	result.Document = &confirmedDocument
 	return result, nil
 }
 
@@ -233,7 +243,8 @@ func (s *Shard) ReleaseContentQuarantine(ctx context.Context, identity quarantin
 	if err != nil {
 		return finishQuarantineResult(result, err)
 	}
-	result.Document = contentQuarantineRecord(s.shardID, record)
+	releasedDocument := contentQuarantineRecord(s.shardID, record)
+	result.Document = &releasedDocument
 
 	proposalID := ulid.New().String()
 	err = s.proposeQuarantineLifecycle(ctx, quarantineLifecycleProposal{
@@ -255,6 +266,8 @@ func (s *Shard) ReleaseContentQuarantine(ctx context.Context, identity quarantin
 	result.Status = quarantine.StatusOK
 	result.Reason = quarantine.ReasonOK
 	result.Changed = true
+	result.Document.Lifecycle = quarantine.LifecycleReleased
+	result.Document.ConfirmedAt = nil
 	return result, nil
 }
 

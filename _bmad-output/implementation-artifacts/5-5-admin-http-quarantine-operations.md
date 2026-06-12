@@ -5,7 +5,7 @@ created: 2026-06-12T15:32:07-04:00
 
 # Story 5.5: Admin HTTP Quarantine Operations
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -91,10 +91,25 @@ so that quarantine response follows the existing V2 admin surface.
   - [x] Add composition tests for route-to-owning-Shard behavior if adapter logic changes.
   - [x] Add redaction scans over story/evidence/admin/quarantine/shard/index/proto code.
 
-- [ ] Update story, evidence, and sprint artifacts. (AC: 1-3)
+- [x] Update story, evidence, and sprint artifacts. (AC: 1-3)
   - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
   - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
-  - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
+  - [x] Run `bmad-code-review`; address critical/high findings before marking `done`.
+
+### Review Findings
+
+- [x] [Review][Patch] Quarantine auth, rate-limit, and method-denied responses were not JSON-only [internal/admin/quarantine.go]
+- [x] [Review][Patch] Confirm/release request bodies accepted trailing JSON and invalid identities could reach the service boundary [internal/admin/quarantine.go]
+- [x] [Review][Patch] Duplicate quarantine query parameters could select an unexpected identity or limit [internal/admin/quarantine.go]
+- [x] [Review][Patch] Failed confirm responses could present an uncommitted confirmed lifecycle [internal/shard/content_quarantine.go]
+- [x] [Review][Patch] Successful release responses kept the pre-release active lifecycle [internal/shard/content_quarantine.go]
+- [x] [Review][Patch] Repeated confirm could rewrite confirmed metadata [internal/index/content_quarantine.go]
+- [x] [Review][Patch] Shard 0 list responses omitted required bounded shard metadata [internal/quarantine/types.go]
+- [x] [Review][Patch] Confirm/release replay and Projection reopen evidence was incomplete [internal/shard/content_quarantine_test.go]
+- [x] [Review][Patch] Corrupt confirm/release Projection state and JSON time-range corruption lacked explicit tests [internal/index/content_quarantine_test.go]
+- [x] [Review][Patch] Quarantine validation failures were audited with the generic internal-error reason [internal/admin/audit_ratelimit_test.go]
+- [x] [Review][Patch] Placement route-not-found errors were mapped as invalid requests instead of route unavailable [internal/cmd/app.go]
+- [x] [Review][Patch] The either-role admin authorization helper bypassed the existing Authorizer decision path [internal/admin/server.go]
 
 ## Dev Notes
 
@@ -257,6 +272,8 @@ GPT-5 Codex for implementation.
 - 2026-06-12T15:57:00-04:00 - Implementation completed for additive Raft lifecycle commands, Projection helpers, Shard authority methods, admin HTTP endpoints, audit operations, and composition wiring.
 - 2026-06-12T15:57:29-04:00 - Full local gate passed: `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 - 2026-06-12T15:59:31-04:00 - Final static/proto/e2e gate checks and redaction scans passed with no matches.
+- 2026-06-12T16:08:00-04:00 - BMAD code review completed with 12 patch findings and no decision-needed/deferred items.
+- 2026-06-12T16:26:55-04:00 - Review fixes passed focused tests, targeted package gate, and full `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
@@ -270,6 +287,7 @@ GPT-5 Codex for implementation.
 - Added admin HTTP quarantine endpoints with reader/operator or break-glass authorization, bounded JSON parsing, audit operations, and rate-limit integration.
 - Wired quarantine operations through the composition root for single-Shard fallback and local multi-Shard routing.
 - Verified focused tests, targeted package gates, `make check`, proto check, e2e policy gate, diff checks, and redaction scans.
+- Addressed all BMAD code review patch findings: JSON-only quarantine failures, strict admin input parsing, Shard 0 metadata, idempotent confirm, corrected lifecycle response state, replay/reopen evidence, corrupt-state evidence, route error mapping, and either-role authorization consistency.
 
 ### File List
 
@@ -302,3 +320,4 @@ GPT-5 Codex for implementation.
 | --- | --- | --- | --- |
 | 2026-06-12 | 0.1 | Initial ready-for-dev story created from Epic 5 Story 5.5. | GPT-5 Codex |
 | 2026-06-12 | 0.2 | Implemented admin HTTP quarantine operations and Raft lifecycle authority. | GPT-5 Codex |
+| 2026-06-12 | 0.3 | Addressed BMAD code review findings and completed Story 5.5. | GPT-5 Codex |

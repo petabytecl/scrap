@@ -92,6 +92,10 @@ func TestAdminAuthorizationDeniesQuarantineConfirmBeforeSideEffect(t *testing.T)
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.Code)
 	}
+	if got := resp.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	assertQuarantineJSONError(t, resp.Body.String(), quarantine.ReasonPermissionDenied)
 	if service.confirmCalls != 0 {
 		t.Fatalf("confirm calls = %d, want 0", service.confirmCalls)
 	}
@@ -119,6 +123,39 @@ func TestAdminAuthorizationAllowsQuarantineReleaseForBreakGlass(t *testing.T) {
 	}
 	if service.releaseCalls != 1 {
 		t.Fatalf("release calls = %d, want 1", service.releaseCalls)
+	}
+}
+
+func TestAdminAuthorizationAllowsQuarantineBreakGlassWithPolicyAuthorizer(t *testing.T) {
+	principal := "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a"
+	authz := adminAuthorizerForPrincipal(t, principal, security.RoleAdminBreakGlass)
+	service := &quarantineServiceStub{
+		result: quarantine.Result{Status: quarantine.StatusOK, Reason: quarantine.ReasonOK, Changed: true},
+	}
+	srv := admin.New(admin.WithAuthorizer(authz), admin.WithQuarantineService(service))
+
+	ctx, err := authz.ContextWithPrincipalID(context.Background(), principal)
+	if err != nil {
+		t.Fatalf("ContextWithPrincipalID: %v", err)
+	}
+	req := httptest.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		"/admin/quarantine/release",
+		bytes.NewReader([]byte(`{"transaction_id":"tx","document_name":"doc.xml"}`)),
+	)
+	resp := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if service.releaseCalls != 1 {
+		t.Fatalf("release calls = %d, want 1", service.releaseCalls)
+	}
+	if got := authz.AuthorizationStatus(); got != security.AuthorizationStatusConfigured {
+		t.Fatalf("authorization status = %q, want configured", got)
 	}
 }
 

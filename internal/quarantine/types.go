@@ -25,12 +25,24 @@ const (
 	ReasonInvalidRequest = "invalid_request"
 	// ReasonNotFound marks a missing active quarantine record.
 	ReasonNotFound = "not_found"
+	// ReasonUnauthenticated marks a missing admin identity.
+	ReasonUnauthenticated = "unauthenticated"
+	// ReasonPermissionDenied marks an admin caller without an accepted role.
+	ReasonPermissionDenied = "permission_denied"
+	// ReasonRateLimited marks an admin request rejected by rate limits.
+	ReasonRateLimited = "rate_limited"
+	// ReasonMethodNotAllowed marks an unsupported admin HTTP method.
+	ReasonMethodNotAllowed = "method_not_allowed"
 	// ReasonNotLeader marks a leader-gated operation on a follower.
 	ReasonNotLeader = "not_leader"
 	// ReasonUnavailable marks a routed but unavailable Shard.
 	ReasonUnavailable = "unavailable"
+	// ReasonFailedPrecondition marks a non-corruption precondition failure.
+	ReasonFailedPrecondition = "failed_precondition"
 	// ReasonDataLoss marks corrupt quarantine Projection state.
 	ReasonDataLoss = "data_loss"
+	// ReasonAuditFailed marks failure to persist the required audit event.
+	ReasonAuditFailed = "audit_failed"
 	// ReasonInternalError marks unexpected failures.
 	ReasonInternalError = "internal_error"
 
@@ -38,6 +50,8 @@ const (
 	LifecycleActive = "active"
 	// LifecycleConfirmed means the active quarantine has been confirmed.
 	LifecycleConfirmed = "confirmed"
+	// LifecycleReleased means the active quarantine gate was removed.
+	LifecycleReleased = "released"
 
 	// ScanTypeInitial is the initial Content Scanner pass.
 	ScanTypeInitial = "initial"
@@ -92,7 +106,7 @@ func (f ListFilter) Validate() (ListFilter, error) {
 
 // Record is the bounded admin representation of one active Content Quarantine.
 type Record struct {
-	ShardID       uint64     `json:"shard_id,omitempty"`
+	ShardID       uint64     `json:"shard_id"`
 	TransactionID string     `json:"transaction_id"`
 	DocumentName  string     `json:"document_name"`
 	BlockID       uint64     `json:"block_id"`
@@ -105,8 +119,8 @@ type Record struct {
 
 // Result is the bounded admin response for confirm and release decisions.
 type Result struct {
-	Status   string `json:"status"`
-	Reason   string `json:"reason"`
-	Changed  bool   `json:"changed"`
-	Document Record `json:"document,omitempty"`
+	Status   string  `json:"status"`
+	Reason   string  `json:"reason"`
+	Changed  bool    `json:"changed"`
+	Document *Record `json:"document,omitempty"`
 }
