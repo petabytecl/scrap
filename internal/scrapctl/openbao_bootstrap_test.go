@@ -133,6 +133,200 @@ func TestOpenBaoBootstrapUnsealsFromEnvironmentWithoutLeakingShares(t *testing.T
 	}
 }
 
+func TestOpenBaoBootstrapCompatibleRerunDoesNotMutateMountOrKey(t *testing.T) {
+	client := newFakeOpenBaoBootstrapClient()
+	client.initialized = true
+	client.seal = openBaoSealStatus{Initialized: true, Sealed: false}
+	client.mounts["transit/"] = openBaoMount{Type: "transit"}
+	client.key = &openBaoTransitKeyStatus{
+		Type:           "aes256-gcm96",
+		TypePresent:    true,
+		Derived:        true,
+		DerivedPresent: true,
+		LatestVersion:  1,
+	}
+	t.Setenv("BAO_TOKEN", "bao-token-secret")
+	evidencePath := filepath.Join(t.TempDir(), "bootstrap-evidence.json")
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run([]string{
+		"openbao", "bootstrap",
+		"--address=http://127.0.0.1:8200",
+		"--evidence-path=" + evidencePath,
+		"--output=json",
+	}, &out, &stderr, Deps{OpenBaoClientFactory: client.factory})
+	if err != nil {
+		t.Fatalf("openbao bootstrap compatible rerun: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), stderr.String())
+	}
+
+	report := readOpenBaoBootstrapReport(t, evidencePath)
+	if report.Status != "ok" {
+		t.Fatalf("status = %q, want ok", report.Status)
+	}
+	assertOpenBaoPhase(t, report, "mount", "ok", "transit mount verified")
+	assertOpenBaoPhase(t, report, "key", "ok", "transit key verified")
+	assertReportHasRedactionPasses(t, report, "stdout", "stderr", "report", "artifact", "logs")
+	if client.mountTransitCalls != 0 {
+		t.Fatalf("mount transit calls = %d, want 0", client.mountTransitCalls)
+	}
+	if client.createTransitKeyCalls != 0 {
+		t.Fatalf("create transit key calls = %d, want 0", client.createTransitKeyCalls)
+	}
+	if client.listMountsCalls != 1 {
+		t.Fatalf("list mounts calls = %d, want 1", client.listMountsCalls)
+	}
+	if client.readTransitKeyCalls != 1 {
+		t.Fatalf("read transit key calls = %d, want 1", client.readTransitKeyCalls)
+	}
+	for _, forbidden := range []string{"bao-token-secret"} {
+		assertTextNotContains(t, out.String(), forbidden)
+		assertTextNotContains(t, stderr.String(), forbidden)
+		assertTextNotContains(t, string(mustReadFile(t, evidencePath)), forbidden)
+	}
+}
+
+func TestOpenBaoBootstrapRejectsIncompatibleMountWithoutMutation(t *testing.T) {
+	client := newFakeOpenBaoBootstrapClient()
+	client.initialized = true
+	client.seal = openBaoSealStatus{Initialized: true, Sealed: false}
+	client.mounts["transit/"] = openBaoMount{Type: "kv"}
+	t.Setenv("BAO_TOKEN", "bao-token-secret")
+	evidencePath := filepath.Join(t.TempDir(), "bootstrap-evidence.json")
+
+	var stderr bytes.Buffer
+	err := Run([]string{
+		"openbao", "bootstrap",
+		"--address=http://127.0.0.1:8200",
+		"--evidence-path=" + evidencePath,
+	}, io.Discard, &stderr, Deps{OpenBaoClientFactory: client.factory})
+	if err == nil || !strings.Contains(err.Error(), "existing mount is not transit") {
+		t.Fatalf("error = %v, want incompatible mount", err)
+	}
+
+	report := readOpenBaoBootstrapReport(t, evidencePath)
+	if report.Status != "fail" {
+		t.Fatalf("status = %q, want fail", report.Status)
+	}
+	assertOpenBaoPhase(t, report, "mount", "fail", "existing mount is not transit")
+	if client.mountTransitCalls != 0 {
+		t.Fatalf("mount transit calls = %d, want 0", client.mountTransitCalls)
+	}
+	if client.readTransitKeyCalls != 0 {
+		t.Fatalf("read transit key calls = %d, want 0", client.readTransitKeyCalls)
+	}
+	if client.createTransitKeyCalls != 0 {
+		t.Fatalf("create transit key calls = %d, want 0", client.createTransitKeyCalls)
+	}
+	assertReportHasRedactionPasses(t, report, "stdout", "stderr", "report", "artifact", "logs")
+	assertTextNotContains(t, stderr.String(), "bao-token-secret")
+}
+
+func TestOpenBaoBootstrapRejectsIncompatibleExistingKeyWithoutRepair(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        openBaoTransitKeyStatus
+		wantReason string
+	}{
+		{
+			name: "wrong type",
+			key: openBaoTransitKeyStatus{
+				Type:           "chacha20-poly1305",
+				TypePresent:    true,
+				Derived:        true,
+				DerivedPresent: true,
+				LatestVersion:  1,
+			},
+			wantReason: "existing transit key type is incompatible",
+		},
+		{
+			name: "derived mismatch",
+			key: openBaoTransitKeyStatus{
+				Type:           "aes256-gcm96",
+				TypePresent:    true,
+				Derived:        false,
+				DerivedPresent: true,
+				LatestVersion:  1,
+			},
+			wantReason: "existing transit key derivation setting is incompatible",
+		},
+		{
+			name: "missing type metadata",
+			key: openBaoTransitKeyStatus{
+				Derived:        true,
+				DerivedPresent: true,
+				LatestVersion:  1,
+			},
+			wantReason: "existing transit key type is incompatible",
+		},
+		{
+			name: "missing derived metadata",
+			key: openBaoTransitKeyStatus{
+				Type:          "aes256-gcm96",
+				TypePresent:   true,
+				LatestVersion: 1,
+			},
+			wantReason: "existing transit key derivation setting is incompatible",
+		},
+		{
+			name: "invalid latest version",
+			key: openBaoTransitKeyStatus{
+				Type:           "aes256-gcm96",
+				TypePresent:    true,
+				Derived:        true,
+				DerivedPresent: true,
+			},
+			wantReason: "transit key latest version is invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertOpenBaoBootstrapRejectsExistingKey(t, tt.key, tt.wantReason)
+		})
+	}
+}
+
+func assertOpenBaoBootstrapRejectsExistingKey(t *testing.T, key openBaoTransitKeyStatus, wantReason string) {
+	t.Helper()
+
+	client := newFakeOpenBaoBootstrapClient()
+	client.initialized = true
+	client.seal = openBaoSealStatus{Initialized: true, Sealed: false}
+	client.mounts["transit/"] = openBaoMount{Type: "transit"}
+	client.key = &key
+	t.Setenv("BAO_TOKEN", "bao-token-secret")
+	evidencePath := filepath.Join(t.TempDir(), "bootstrap-evidence.json")
+
+	var stderr bytes.Buffer
+	err := Run([]string{
+		"openbao", "bootstrap",
+		"--address=http://127.0.0.1:8200",
+		"--evidence-path=" + evidencePath,
+	}, io.Discard, &stderr, Deps{OpenBaoClientFactory: client.factory})
+	if err == nil || !strings.Contains(err.Error(), wantReason) {
+		t.Fatalf("error = %v, want %q", err, wantReason)
+	}
+
+	report := readOpenBaoBootstrapReport(t, evidencePath)
+	if report.Status != "fail" {
+		t.Fatalf("status = %q, want fail", report.Status)
+	}
+	assertOpenBaoPhase(t, report, "mount", "ok", "transit mount verified")
+	assertOpenBaoPhase(t, report, "key", "fail", wantReason)
+	if client.mountTransitCalls != 0 {
+		t.Fatalf("mount transit calls = %d, want 0", client.mountTransitCalls)
+	}
+	if client.createTransitKeyCalls != 0 {
+		t.Fatalf("create transit key calls = %d, want 0", client.createTransitKeyCalls)
+	}
+	if client.readTransitKeyCalls != 1 {
+		t.Fatalf("read transit key calls = %d, want 1", client.readTransitKeyCalls)
+	}
+	assertReportHasRedactionPasses(t, report, "stdout", "stderr", "report", "artifact", "logs")
+	assertTextNotContains(t, stderr.String(), "bao-token-secret")
+}
+
 func TestOpenBaoBootstrapRejectsMissingTokenForExistingTarget(t *testing.T) {
 	client := newFakeOpenBaoBootstrapClient()
 	client.initialized = true
@@ -277,17 +471,21 @@ func TestOpenBaoBootstrapRejectsExistingKeyWithMissingMetadata(t *testing.T) {
 }
 
 type fakeOpenBaoBootstrapClient struct {
-	config         openBaoClientConfig
-	initialized    bool
-	seal           openBaoSealStatus
-	initResult     openBaoInitResult
-	unsealStatuses []openBaoSealStatus
-	mounts         map[string]openBaoMount
-	key            *openBaoTransitKeyStatus
-	tokens         []string
-	unsealKeys     []string
-	mounted        bool
-	createdKey     bool
+	config                openBaoClientConfig
+	initialized           bool
+	seal                  openBaoSealStatus
+	initResult            openBaoInitResult
+	unsealStatuses        []openBaoSealStatus
+	mounts                map[string]openBaoMount
+	key                   *openBaoTransitKeyStatus
+	tokens                []string
+	unsealKeys            []string
+	mounted               bool
+	createdKey            bool
+	listMountsCalls       int
+	mountTransitCalls     int
+	readTransitKeyCalls   int
+	createTransitKeyCalls int
 }
 
 func newFakeOpenBaoBootstrapClient() *fakeOpenBaoBootstrapClient {
@@ -338,16 +536,19 @@ func (f *fakeOpenBaoBootstrapClient) Unseal(_ context.Context, key string) (open
 }
 
 func (f *fakeOpenBaoBootstrapClient) ListMounts(context.Context) (map[string]openBaoMount, error) {
+	f.listMountsCalls++
 	return f.mounts, nil
 }
 
 func (f *fakeOpenBaoBootstrapClient) MountTransit(_ context.Context, mountPath string) error {
+	f.mountTransitCalls++
 	f.mounted = true
 	f.mounts[mountPath+"/"] = openBaoMount{Type: "transit"}
 	return nil
 }
 
 func (f *fakeOpenBaoBootstrapClient) ReadTransitKey(context.Context, string, string) (openBaoTransitKeyStatus, error) {
+	f.readTransitKeyCalls++
 	if f.key == nil {
 		return openBaoTransitKeyStatus{}, errOpenBaoKeyMissing
 	}
@@ -355,6 +556,7 @@ func (f *fakeOpenBaoBootstrapClient) ReadTransitKey(context.Context, string, str
 }
 
 func (f *fakeOpenBaoBootstrapClient) CreateTransitKey(_ context.Context, _, _, keyType string, derived bool) error {
+	f.createTransitKeyCalls++
 	f.createdKey = true
 	f.key = &openBaoTransitKeyStatus{
 		Type:           keyType,
@@ -364,6 +566,21 @@ func (f *fakeOpenBaoBootstrapClient) CreateTransitKey(_ context.Context, _, _, k
 		LatestVersion:  1,
 	}
 	return nil
+}
+
+func assertOpenBaoPhase(t *testing.T, report openBaoBootstrapReport, name, status, reason string) {
+	t.Helper()
+
+	for _, phase := range report.Phases {
+		if phase.Name != name {
+			continue
+		}
+		if phase.Status != status || phase.Reason != reason {
+			t.Fatalf("phase %s = status %q reason %q, want status %q reason %q", name, phase.Status, phase.Reason, status, reason)
+		}
+		return
+	}
+	t.Fatalf("phase %s not found in %+v", name, report.Phases)
 }
 
 func readOpenBaoBootstrapReport(t *testing.T, path string) openBaoBootstrapReport {
