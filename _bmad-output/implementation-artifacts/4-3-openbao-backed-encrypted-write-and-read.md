@@ -5,7 +5,7 @@ created: 2026-06-12T01:46:31-04:00
 
 # Story 4.3: OpenBao-Backed Encrypted Write and Read
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,56 +33,56 @@ so that plaintext is never stored as the production default.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 4.3 evidence artifact before behavior changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
-  - [ ] Record baseline commit, timestamp, owner, exact files reviewed, current coverage, gaps, commands, expected results, actual results, redaction proof, and remaining Story 4.7 production-rehearsal scope.
-  - [ ] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases.
-  - [ ] If existing code already satisfies a row, prove it with current tests or source evidence. Do not mark a row pass from intent, architecture, or old story notes alone.
+- [x] Create the Story 4.3 evidence artifact before behavior changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
+  - [x] Record baseline commit, timestamp, owner, exact files reviewed, current coverage, gaps, commands, expected results, actual results, redaction proof, and remaining Story 4.7 production-rehearsal scope.
+  - [x] Use strict result language per row: `PASS`, `CONCERNS`, or `FAIL`; do not use hybrid phrases.
+  - [x] If existing code already satisfies a row, prove it with current tests or source evidence. Do not mark a row pass from intent, architecture, or old story notes alone.
 
-- [ ] Audit and reuse the existing Transit/envelope implementation. (AC: 1-4)
-  - [ ] Read and preserve `internal/encryption/transit.go`, `internal/encryption/envelope.go`, `internal/encryption/fake.go`, `internal/encryption/openbao.go`, and their tests.
-  - [ ] Reuse `encryption.Transit`, `encryption.OpenBaoTransit`, `encryption.FakeTransit`, `encryption.EncryptDocument`, `encryption.DecryptDocument`, `encryption.MarshalEnvelope`, and `encryption.ParseEnvelope` before adding any new abstraction.
-  - [ ] Confirm `internal/cmd/tls.go` and `internal/cmd/app.go` pass production-capable Transit into `shard.EncryptionConfig`, while development fake Transit does not silently enable encrypted production behavior.
-  - [ ] Do not add a new crypto library, assertion/mock framework, Transit package, key cache, OpenBao wrapper, direct Backend decrypt path, or alternate envelope format unless the evidence proves the current boundary cannot satisfy an AC.
+- [x] Audit and reuse the existing Transit/envelope implementation. (AC: 1-4)
+  - [x] Read and preserve `internal/encryption/transit.go`, `internal/encryption/envelope.go`, `internal/encryption/fake.go`, `internal/encryption/openbao.go`, and their tests.
+  - [x] Reuse `encryption.Transit`, `encryption.OpenBaoTransit`, `encryption.FakeTransit`, `encryption.EncryptDocument`, `encryption.DecryptDocument`, `encryption.MarshalEnvelope`, and `encryption.ParseEnvelope` before adding any new abstraction.
+  - [x] Confirm `internal/cmd/tls.go` and `internal/cmd/app.go` pass production-capable Transit into `shard.EncryptionConfig`, while development fake Transit does not silently enable encrypted production behavior.
+  - [x] Do not add a new crypto library, assertion/mock framework, Transit package, key cache, OpenBao wrapper, direct Backend decrypt path, or alternate envelope format unless the evidence proves the current boundary cannot satisfy an AC.
 
-- [ ] Close encrypted write evidence. (AC: 1, 3)
-  - [ ] Prove `Shard.WriteDocument` encrypts before `block.Writer.AppendDocumentFrames` writes Frame payloads.
-  - [ ] Prove `.blk` payload bytes do not contain the plaintext marker and `.idx` stores a parseable envelope for the written Document.
-  - [ ] Prove Frame CRC validates stored ciphertext, not plaintext; corrupting stored ciphertext must fail as data loss before any plaintext return.
-  - [ ] Prove write ACK requires encryption and envelope metadata persistence. Transit data-key failure, invalid envelope state, Block append failure, Raft/apply failure, or envelope metadata persistence failure must not ACK a Document or expose plaintext fallback.
-  - [ ] Prove the plaintext SHA-256 and plaintext size remain the metadata values returned to clients, while stored Frame bytes are ciphertext.
+- [x] Close encrypted write evidence. (AC: 1, 3)
+  - [x] Prove `Shard.WriteDocument` encrypts before `block.Writer.AppendDocumentFrames` writes Frame payloads.
+  - [x] Prove `.blk` payload bytes do not contain the plaintext marker and `.idx` stores a parseable envelope for the written Document.
+  - [x] Prove Frame CRC validates stored ciphertext, not plaintext; corrupting stored ciphertext must fail as data loss before any plaintext return.
+  - [x] Prove write ACK requires encryption and envelope metadata persistence. Transit data-key failure, invalid envelope state, Block append failure, Raft/apply failure, or envelope metadata persistence failure must not ACK a Document or expose plaintext fallback.
+  - [x] Prove the plaintext SHA-256 and plaintext size remain the metadata values returned to clients, while stored Frame bytes are ciphertext.
 
-- [ ] Close encrypted read evidence. (AC: 2, 3)
-  - [ ] Prove normal `Shard.ReadDocument` follows Projection Resolution, reads ciphertext Frames through `internal/block`, decrypts through `internal/encryption`, verifies plaintext SHA-256, and returns plaintext bytes only after verification succeeds.
-  - [ ] Prove plaintext SHA mismatch, envelope metadata mismatch, malformed envelope, invalid Transit request, and ciphertext authentication failure map to data loss where appropriate.
-  - [ ] Prove an encrypted Document cannot be read when Shard encryption is disabled or Transit is unavailable; the error must be typed as `crypto_unavailable` and must not fall back to ciphertext streaming or plaintext bypass.
-  - [ ] Keep `internal/server` responsible only for gRPC mapping. Core packages must not import `grpc/status` or `grpc/codes`.
+- [x] Close encrypted read evidence. (AC: 2, 3)
+  - [x] Prove normal `Shard.ReadDocument` follows Projection Resolution, reads ciphertext Frames through `internal/block`, decrypts through `internal/encryption`, verifies plaintext SHA-256, and returns plaintext bytes only after verification succeeds.
+  - [x] Prove plaintext SHA mismatch, envelope metadata mismatch, malformed envelope, invalid Transit request, and ciphertext authentication failure map to data loss where appropriate.
+  - [x] Prove an encrypted Document cannot be read when Shard encryption is disabled or Transit is unavailable; the error must be typed as `crypto_unavailable` and must not fall back to ciphertext streaming or plaintext bypass.
+  - [x] Keep `internal/server` responsible only for gRPC mapping. Core packages must not import `grpc/status` or `grpc/codes`.
 
-- [ ] Close Transit failure and redaction matrix. (AC: 3, 4)
-  - [ ] Cover write and read failures for Transit unavailable, auth denied, missing key, and minimum-version rejection.
-  - [ ] Prove `internal/encryption/openbao.go` classifies provider failures without logging or returning Transit tokens, provider response bodies, wrapped-key ciphertext, plaintext data keys, raw Transaction IDs, raw Document names, cert/key material, raw paths, or dependency error strings that embed sensitive values.
-  - [ ] Use deterministic fake Transit for Tier 1 crypto-path tests and existing OpenBao testcontainer integration for OpenBao adapter parity where the environment supports it.
-  - [ ] If `make production-rehearsal-security` is skipped, record it as Story 4.7 scope and do not claim production rehearsal readiness from package tests.
+- [x] Close Transit failure and redaction matrix. (AC: 3, 4)
+  - [x] Cover write and read failures for Transit unavailable, auth denied, missing key, and minimum-version rejection.
+  - [x] Prove `internal/encryption/openbao.go` classifies provider failures without logging or returning Transit tokens, provider response bodies, wrapped-key ciphertext, plaintext data keys, raw Transaction IDs, raw Document names, cert/key material, raw paths, or dependency error strings that embed sensitive values.
+  - [x] Use deterministic fake Transit for Tier 1 crypto-path tests and existing OpenBao testcontainer integration for OpenBao adapter parity where the environment supports it.
+  - [x] If `make production-rehearsal-security` is skipped, record it as Story 4.7 scope and do not claim production rehearsal readiness from package tests.
 
-- [ ] Preserve package, authority, and storage boundaries. (AC: 1-4)
-  - [ ] Keep Transit and envelope helpers in `internal/encryption`; Shard orchestration in `internal/shard`; Block/Frame CRC and `.idx` envelope persistence shape in `internal/block`; production composition in `internal/cmd`; Backend bytes opaque in `internal/backend`.
-  - [ ] Do not move decryption into `internal/backend`, `internal/server`, `internal/peer`, `internal/admin`, `internal/scrapctl`, or test/evidence tooling.
-  - [ ] Do not change storage identity, Shard authority, Raft command semantics, Backend object keys, public/peer/admin protobuf contracts, or Pebble Projection authority for this story.
-  - [ ] Do not edit generated `gen/` files directly. If a proto/storage/envelope contract change becomes unavoidable, stop and justify the ADR/proto impact before proceeding.
+- [x] Preserve package, authority, and storage boundaries. (AC: 1-4)
+  - [x] Keep Transit and envelope helpers in `internal/encryption`; Shard orchestration in `internal/shard`; Block/Frame CRC and `.idx` envelope persistence shape in `internal/block`; production composition in `internal/cmd`; Backend bytes opaque in `internal/backend`.
+  - [x] Do not move decryption into `internal/backend`, `internal/server`, `internal/peer`, `internal/admin`, `internal/scrapctl`, or test/evidence tooling.
+  - [x] Do not change storage identity, Shard authority, Raft command semantics, Backend object keys, public/peer/admin protobuf contracts, or Pebble Projection authority for this story.
+  - [x] Do not edit generated `gen/` files directly. If a proto/storage/envelope contract change becomes unavoidable, stop and justify the ADR/proto impact before proceeding.
 
-- [ ] Update evidence and tracker artifacts. (AC: 1-4)
-  - [ ] Update this story with debug logs, completion notes, review findings, and file list.
-  - [ ] Update `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md` with final matrix rows and command evidence.
-  - [ ] Update any affected evidence-bundle signal only if Story 4.3 needs a current local crypto-path signal. Do not claim Story 4.7 production rehearsal closure.
-  - [ ] Move `sprint-status.yaml` to `review` only when implementation and local verification are complete.
+- [x] Update evidence and tracker artifacts. (AC: 1-4)
+  - [x] Update this story with debug logs, completion notes, review findings, and file list.
+  - [x] Update `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md` with final matrix rows and command evidence.
+  - [x] Update any affected evidence-bundle signal only if Story 4.3 needs a current local crypto-path signal. Do not claim Story 4.7 production rehearsal closure.
+  - [x] Move `sprint-status.yaml` to `review` only when implementation and local verification are complete.
 
-- [ ] Run verification and leak scans. (AC: 1-4)
-  - [ ] Run focused unit, package, and integration-adapter tests listed below.
-  - [ ] Run affected package regression listed below.
-  - [ ] Run `git diff --check`.
-  - [ ] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes or closes encryption/security evidence.
-  - [ ] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
-  - [ ] If a command is skipped, record the skip reason and closure impact in the evidence artifact. Do not mark an AC as pass from intent alone.
+- [x] Run verification and leak scans. (AC: 1-4)
+  - [x] Run focused unit, package, and integration-adapter tests listed below.
+  - [x] Run affected package regression listed below.
+  - [x] Run `git diff --check`.
+  - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before code review because this story changes or closes encryption/security evidence.
+  - [x] Run credential and identifier leak scans over the new evidence artifact, this story, and touched code. Classify matches as forbidden, allowed fixture/test vocabulary, allowed policy vocabulary, or artifact prose.
+  - [x] If a command is skipped, record the skip reason and closure impact in the evidence artifact. Do not mark an AC as pass from intent alone.
 
 ## Dev Notes
 
@@ -243,6 +243,36 @@ GPT-5 Codex
 
 ### Debug Log References
 
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run TestEncryptedShardReadFailsClosedWhenShardEncryptionDisabled -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/encryption -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'Encrypted|Encryption|Crypto|Transit|Envelope|Ciphertext|Plaintext|DataLoss|WriteDocumentAckAfterPeerReplicationRaftApplyAndVisibility|OpenlogWriteAttemptCommitCommand|ApplyCommitDocumentWritesCurrentBlockIndex|AppendDocumentIndexEntryReportsCurrentWriterError' -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/block ./internal/cmd -run 'Frame|CRC|AppendDocumentFrames|Encrypt|Encryption|Transit|OpenBao|Production|Startup|AppShard' -count=1 -v` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/encryption ./internal/block ./internal/shard ./internal/store ./internal/cmd ./internal/server -count=1` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test -tags integration ./test/integration -run TestIntegrationOpenBaoTransitContainerRoundTrip -count=1 -v` - PASS.
+- `git diff --check` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS.
+- Story 4.3 leak scans - PASS, with final counts recorded in `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`.
+
+### Implementation Plan
+
+1. Create the Story 4.3 evidence artifact first and record baseline/current source coverage before changing behavior.
+2. Run focused encryption, Shard, Block, and app-wiring tests to separate proven behavior from real gaps.
+3. Patch only missing crypto-path tests or narrow production code gaps required by AC-4.3.1 through AC-4.3.4.
+4. Update evidence/story status from current verification output, run leak scans plus `make check`, then move the story to review.
+
 ### Completion Notes List
 
+- Added a focused Shard test that proves an encrypted Document cannot be read after reopening the same Shard data without Shard encryption; the read returns `crypto_unavailable`, no reader, zero metadata, and the Block still omits plaintext.
+- Reused the existing ADR 0020 Transit/envelope path without adding a new crypto abstraction, dependency, envelope format, Backend decrypt path, or production-code behavior change.
+- Closed Story 4.3 through current package, integration-adapter, leak-scan, and broad `make check` evidence while leaving production outage rehearsal explicitly in Story 4.7 scope.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/4-3-openbao-backed-encrypted-write-and-read.md`
+- `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/shard/encryption_test.go`
+
+### Change Log
+
+- 2026-06-12: Added disabled Shard encryption read fail-closed coverage and finalized Story 4.3 encrypted write/read evidence for review.

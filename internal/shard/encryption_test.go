@@ -105,6 +105,41 @@ func TestEncryptedShardReadFailsClosedWhenKeyMaterialUnavailable(t *testing.T) {
 	}
 }
 
+func TestEncryptedShardReadFailsClosedWhenShardEncryptionDisabled(t *testing.T) {
+	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
+	dataDir := t.TempDir()
+	encrypted := openEncryptedTestShardInDir(t, dataDir, transit)
+	content := []byte("disabled encryption must not return plaintext")
+	if _, err := encrypted.WriteDocument(context.Background(), "tx-disabled-encryption", "doc.xml", "text/xml", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if err := encrypted.Close(); err != nil {
+		t.Fatalf("Close encrypted shard: %v", err)
+	}
+
+	plain := openPlainTestShardInDir(t, dataDir)
+	defer func() { _ = plain.Close() }()
+	rc, meta, err := plain.ReadDocument(context.Background(), "tx-disabled-encryption", "doc.xml")
+	if err == nil {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		t.Fatal("ReadDocument error = nil, want crypto unavailable")
+	}
+	if rc != nil {
+		_ = rc.Close()
+		t.Fatal("ReadDocument returned reader for encrypted Document without Shard encryption")
+	}
+	if meta != (storeapi.DocumentMeta{}) {
+		t.Fatalf("ReadDocument meta = %+v, want zero value", meta)
+	}
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("ReadDocument error = %v, want ErrUnavailable", err)
+	}
+	assertCryptoUnavailableReason(t, err)
+	assertBlockOmitsPlaintext(t, dataDir, content)
+}
+
 func TestEncryptedShardReadReportsDataLossOnCiphertextCorruption(t *testing.T) {
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	s, dataDir := openEncryptedTestShard(t, transit)
@@ -360,6 +395,13 @@ func TestEncryptedReplicationAuthenticatesCiphertext(t *testing.T) {
 func openEncryptedTestShard(t *testing.T, transit encryption.Transit) (*shard.Shard, string) {
 	t.Helper()
 	dir := t.TempDir()
+	s := openEncryptedTestShardInDir(t, dir, transit)
+	t.Cleanup(func() { _ = s.Close() })
+	return s, dir
+}
+
+func openEncryptedTestShardInDir(t *testing.T, dir string, transit encryption.Transit) *shard.Shard {
+	t.Helper()
 	s, err := shard.Open(shard.Config{
 		DataDir:      dir,
 		ShardID:      0,
@@ -375,17 +417,24 @@ func openEncryptedTestShard(t *testing.T, transit encryption.Transit) (*shard.Sh
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	waitForLeader(t, s)
+	return s
+}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if s.IsLeader() {
-			return s, dir
-		}
-		time.Sleep(10 * time.Millisecond)
+func openPlainTestShardInDir(t *testing.T, dir string) *shard.Shard {
+	t.Helper()
+	s, err := shard.Open(shard.Config{
+		DataDir:      dir,
+		ShardID:      0,
+		RaftID:       1,
+		Peers:        map[uint64]string{1: "localhost:9091"},
+		TickInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
 	}
-	t.Fatal("shard did not become leader")
-	return nil, ""
+	waitForLeader(t, s)
+	return s
 }
 
 func readOnlyIndexEntry(t *testing.T, dataDir, txID, docName string) block.IndexEntry {
