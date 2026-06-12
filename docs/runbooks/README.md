@@ -25,6 +25,7 @@ or unredacted dependency output.
 | [Block Quarantine repair](v2-block-quarantine-repair.md) | Epic 1/2, Deep Scrub | `scrapctl status`, `scrapctl fault block corrupt` |
 | [Content Quarantine response](v2-content-quarantine-response.md) | Epic 5, FR-11, FR-12 | `scrapctl quarantine list`, `inspect`, `confirm`, `release`, `evidence` |
 | [Multi-Shard routing health](v2-multi-shard-routing-health.md) | Epic 2, FR-5 | `scrapctl peers`, `leader`, `status` |
+| [Alert/query references](../observability/v2-alert-query-references.md) | Epic 6, FR-15, FR-16 | PromQL, TraceQL, LogQL, `scrapctl status`, `scrapctl evidence bundle` |
 | [Evidence collection](v2-evidence-collection.md) | Epic 6, FR-15, FR-16 | `scrapctl evidence bundle`, `make tier2-e2e-up`, `make tier3-evidence-up` |
 
 Every runbook uses these sections: purpose, owning feature epic or release gate,

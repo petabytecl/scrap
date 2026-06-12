@@ -1,5 +1,5 @@
 # generated: 2026-06-10T20:50:36-04:00
-# last_updated: 2026-06-12T18:49:33-04:00
+# last_updated: 2026-06-12T19:04:12-04:00
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-12T18:49:33-04:00"
+last_updated: "2026-06-12T19:04:12-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -87,7 +87,7 @@ development_status:
   epic-6: in-progress
   6-1-v2-release-evidence-matrix: done
   6-2-operator-runbooks-for-v2-failure-domains: done
-  6-3-alert-and-query-references: ready-for-dev
+  6-3-alert-and-query-references: review
   6-4-scrapctl-release-evidence-bundle: backlog
   6-5-tier-2-and-tier-3-release-evidence-gates: backlog
   6-6-real-s3-iam-production-rehearsal-closure: backlog

@@ -4,7 +4,7 @@ baseline_commit: 25042bca63662449a2a8803818e8fce8bb7222e4
 
 # Story 6.3: Alert and Query References
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -23,46 +23,46 @@ signals.
 
 ## Tasks / Subtasks
 
-- [ ] Create the durable alert/query reference documentation surface. (AC: 1, 2, 4)
-  - [ ] Create `docs/observability/v2-alert-query-references.md` as the release-facing index for Story 6.3.
-  - [ ] Link existing evidence-stack queries from `deploy/kustomize/components/evidence-stack/queries.md` instead of duplicating the whole Phase 3 query pack.
-  - [ ] Add the Story 6.3 reference from `docs/runbooks/README.md` or the most appropriate operator index so runbook readers can find alert/query guidance.
-  - [ ] Keep the docs as references and operator investigation guidance; do not create live notification routing or alert deployment policy in this story.
-- [ ] Cover every required release-risk domain with explicit references. (AC: 1, 2)
-  - [ ] Public availability: use public Document RPC request/error/latency signals and route to startup/security readiness or multi-Shard routing runbooks as appropriate.
-  - [ ] Peer availability and Shard peer health: use peer/authz/routing evidence if implemented; mark missing peer-specific alert telemetry as `CONCERNS` rather than inventing it.
-  - [ ] Admin availability: use implemented admin/status/evidence surfaces if available; mark missing admin-specific alert telemetry as `CONCERNS` rather than inventing it.
-  - [ ] Write ACK latency: use `scrap.rpc.server.duration`, `scrap.write.stage.duration`, and TraceQL write/apply spans where implemented.
-  - [ ] Read failures and restore failures: use bounded RPC status, eviction/restore metrics, and restore runbook links.
-  - [ ] Backend upload lag and upload pressure: use `scrap.upload.pending_bytes`, `scrap.upload.pending_blocks`, `scrap.upload.pressure_level`, `scrap.upload.total`, `scrap.upload.verify_total`, `scrap.upload.auth_paused`, and the Backend upload pressure runbook.
-  - [ ] Scrub and Block Quarantine: use `scrap.scrub.light.*`, `scrap.scrub.deep.*`, `scrap.eviction.quarantined_blocks`, and the Block Quarantine repair runbook.
-  - [ ] Content Scanner and Content Quarantine: use `scrap.avscan.*` where implemented and link Content Quarantine response runbook; mark any missing Content Quarantine metric as `CONCERNS`.
-  - [ ] Transit outage: link OpenBao and production security runbooks; mark missing direct Transit outage metric/query as a gap if only rehearsal/status evidence exists.
-  - [ ] Audit sink failure: link production security readiness; mark missing direct audit sink failure telemetry as a gap if only startup gate/rehearsal evidence exists.
-  - [ ] Rate-limit denials and authorization denials: use `scrap.security.rate_limit.denials` and `scrap.security.authorization.denials`.
-  - [ ] Evidence leak-scan status: link Story 6.1/6.2 evidence scan patterns and Story 6.4/6.5 future owners; mark final evidence-gate query references as pending if not implemented yet.
-- [ ] For each high-risk reference, include the operator triad. (AC: 2, 4)
-  - [ ] State what happened in operator language.
-  - [ ] State how to confirm it with PromQL, TraceQL, LogQL, `scrapctl`, make target, or evidence artifact.
-  - [ ] State what the operator does next and link the relevant runbook path.
-  - [ ] Record references with `PASS`, `CONCERNS`, or `FAIL`, owner, mitigation, and source path in `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`.
-- [ ] Validate telemetry privacy and cardinality before marking references `PASS`. (AC: 3)
-  - [ ] Allow only bounded labels/attributes such as `scrap.cell_id`, `scrap.member_slot_id`, `scrap.member_id`, `scrap.shard_id`, `scrap.raft_id`, `rpc.service`, `rpc.method`, `rpc.grpc.status_code`, `scrap.write.stage`, bounded `status`, bounded `reason`, `scrap.surface`, and `scrap.operation`.
-  - [ ] Do not add or recommend raw `transaction_id`, `document_name`, idempotency keys, Backend object keys, credential values, trace IDs, request IDs, auth claims, peer addresses, host paths, or dependency error strings as metric labels, log fields, alert labels, or public evidence text.
-  - [ ] If TraceQL examples use block correlation, keep them investigation-only with placeholders and do not turn high-cardinality Block IDs into alert labels.
-  - [ ] Use annotations/descriptions for changing values; do not put dynamic query values in alert labels.
-- [ ] Preserve Epic 6 aggregation-only scope. (AC: 5)
-  - [ ] Do not implement new production telemetry, new `scrapctl` commands, new admin endpoints, new dashboards, new alert deployment manifests, new collector components, or closure-policy changes in this story.
-  - [ ] Do not edit protobuf contracts, production Go packages, deployment manifests, or ADRs unless a docs-blocking contradiction is found and cannot be recorded honestly.
-  - [ ] Mark missing metrics, queries, runbook links, or evidence-gate owners as `CONCERNS` or `FAIL` with mitigation instead of fabricating names.
-- [ ] Run verification and update BMAD tracking. (AC: 1-5)
-  - [ ] `git diff --check`
-  - [ ] `make proto-check`
-  - [ ] `scripts/check-e2e-gates.sh`
-  - [ ] `env GOCACHE=/tmp/scrap-v2-go-build make check`
-  - [ ] Validate every documented metric/query name against existing code, existing evidence-stack query pack, or an explicit gap row.
-  - [ ] Run redaction/privacy scans over `docs/observability/`, `docs/runbooks/README.md`, this story, and `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`.
-  - [ ] Update this story's Dev Agent Record and move the story to `review`; leave `done` for BMAD code review.
+- [x] Create the durable alert/query reference documentation surface. (AC: 1, 2, 4)
+  - [x] Create `docs/observability/v2-alert-query-references.md` as the release-facing index for Story 6.3.
+  - [x] Link existing evidence-stack queries from `deploy/kustomize/components/evidence-stack/queries.md` instead of duplicating the whole Phase 3 query pack.
+  - [x] Add the Story 6.3 reference from `docs/runbooks/README.md` or the most appropriate operator index so runbook readers can find alert/query guidance.
+  - [x] Keep the docs as references and operator investigation guidance; do not create live notification routing or alert deployment policy in this story.
+- [x] Cover every required release-risk domain with explicit references. (AC: 1, 2)
+  - [x] Public availability: use public Document RPC request/error/latency signals and route to startup/security readiness or multi-Shard routing runbooks as appropriate.
+  - [x] Peer availability and Shard peer health: use peer/authz/routing evidence if implemented; mark missing peer-specific alert telemetry as `CONCERNS` rather than inventing it.
+  - [x] Admin availability: use implemented admin/status/evidence surfaces if available; mark missing admin-specific alert telemetry as `CONCERNS` rather than inventing it.
+  - [x] Write ACK latency: use `scrap.rpc.server.duration`, `scrap.write.stage.duration`, and TraceQL write/apply spans where implemented.
+  - [x] Read failures and restore failures: use bounded RPC status, eviction/restore metrics, and restore runbook links.
+  - [x] Backend upload lag and upload pressure: use `scrap.upload.pending_bytes`, `scrap.upload.pending_blocks`, `scrap.upload.pressure_level`, `scrap.upload.total`, `scrap.upload.verify_total`, `scrap.upload.auth_paused`, and the Backend upload pressure runbook.
+  - [x] Scrub and Block Quarantine: use `scrap.scrub.light.*`, `scrap.scrub.deep.*`, `scrap.eviction.quarantined_blocks`, and the Block Quarantine repair runbook.
+  - [x] Content Scanner and Content Quarantine: use `scrap.avscan.*` where implemented and link Content Quarantine response runbook; mark any missing Content Quarantine metric as `CONCERNS`.
+  - [x] Transit outage: link OpenBao and production security runbooks; mark missing direct Transit outage metric/query as a gap if only rehearsal/status evidence exists.
+  - [x] Audit sink failure: link production security readiness; mark missing direct audit sink failure telemetry as a gap if only startup gate/rehearsal evidence exists.
+  - [x] Rate-limit denials and authorization denials: use `scrap.security.rate_limit.denials` and `scrap.security.authorization.denials`.
+  - [x] Evidence leak-scan status: link Story 6.1/6.2 evidence scan patterns and Story 6.4/6.5 future owners; mark final evidence-gate query references as pending if not implemented yet.
+- [x] For each high-risk reference, include the operator triad. (AC: 2, 4)
+  - [x] State what happened in operator language.
+  - [x] State how to confirm it with PromQL, TraceQL, LogQL, `scrapctl`, make target, or evidence artifact.
+  - [x] State what the operator does next and link the relevant runbook path.
+  - [x] Record references with `PASS`, `CONCERNS`, or `FAIL`, owner, mitigation, and source path in `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`.
+- [x] Validate telemetry privacy and cardinality before marking references `PASS`. (AC: 3)
+  - [x] Allow only bounded labels/attributes such as `scrap.cell_id`, `scrap.member_slot_id`, `scrap.member_id`, `scrap.shard_id`, `scrap.raft_id`, `rpc.service`, `rpc.method`, `rpc.grpc.status_code`, `scrap.write.stage`, bounded `status`, bounded `reason`, `scrap.surface`, and `scrap.operation`.
+  - [x] Do not add or recommend raw `transaction_id`, `document_name`, idempotency keys, Backend object keys, credential values, trace IDs, request IDs, auth claims, peer addresses, host paths, or dependency error strings as metric labels, log fields, alert labels, or public evidence text.
+  - [x] If TraceQL examples use block correlation, keep them investigation-only with placeholders and do not turn high-cardinality Block IDs into alert labels.
+  - [x] Use annotations/descriptions for changing values; do not put dynamic query values in alert labels.
+- [x] Preserve Epic 6 aggregation-only scope. (AC: 5)
+  - [x] Do not implement new production telemetry, new `scrapctl` commands, new admin endpoints, new dashboards, new alert deployment manifests, new collector components, or closure-policy changes in this story.
+  - [x] Do not edit protobuf contracts, production Go packages, deployment manifests, or ADRs unless a docs-blocking contradiction is found and cannot be recorded honestly.
+  - [x] Mark missing metrics, queries, runbook links, or evidence-gate owners as `CONCERNS` or `FAIL` with mitigation instead of fabricating names.
+- [x] Run verification and update BMAD tracking. (AC: 1-5)
+  - [x] `git diff --check`
+  - [x] `make proto-check`
+  - [x] `scripts/check-e2e-gates.sh`
+  - [x] `env GOCACHE=/tmp/scrap-v2-go-build make check`
+  - [x] Validate every documented metric/query name against existing code, existing evidence-stack query pack, or an explicit gap row.
+  - [x] Run redaction/privacy scans over `docs/observability/`, `docs/runbooks/README.md`, this story, and `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`.
+  - [x] Update this story's Dev Agent Record and move the story to `review`; leave `done` for BMAD code review.
 
 ## Dev Notes
 
@@ -184,16 +184,40 @@ Classify every match as required negative guidance, a safe placeholder, or a bug
 
 ### Agent Model Used
 
+GPT-5 Codex
+
+### Implementation Plan
+
+- Create a release-facing alert/query reference that reuses existing evidence-stack queries and implemented OTel metric names.
+- Add a dedicated Story 6.3 evidence artifact with one row per required release-risk reference, including triad, runbook path, privacy decision, status, owner, and mitigation.
+- Keep missing peer/admin/Transit/audit/evidence-leak telemetry as explicit `CONCERNS` rows rather than inventing metrics.
+- Preserve docs/evidence scope only; do not edit production Go, protobuf, deployment manifests, ADRs, dashboards, or alert deployment policy.
+
 ### Debug Log References
 
 - 2026-06-12T18:49:33-04:00 - Story context created from Epic 6, FR-15, FR-16, DG-5, ADR 0012, ADR 0013, existing evidence-stack queries, implemented OTel metric inventory, Story 6.2 runbook/review lessons, and current sprint state.
+- 2026-06-12T18:55:19-04:00 - Story marked in-progress in story file and sprint status.
+- 2026-06-12T18:56:00-04:00 - Red checks confirmed alert/query docs, evidence artifact, and runbook index link were absent before implementation.
+- 2026-06-12T19:00:58-04:00 - Verification passed: `git diff --check`, `make proto-check`, `scripts/check-e2e-gates.sh`, `env GOCACHE=/tmp/scrap-v2-go-build make check`, source validation, status/runbook validation, placeholder scan, and release-sensitive scans.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- Created the Story 6.3 release-facing alert/query reference with 16 AQR rows covering public/peer/admin availability, write ACK latency, read and restore failures, upload lag/pressure, scrub/quarantine, scanner lag/outage, Transit, audit, rate-limit/authz denials, Shard health, and evidence leak-scan status.
+- Added a dedicated evidence artifact that records source metric/query or gap, operational question, operator triad, runbook link, privacy validation, status, owner, and mitigation for every required release-risk reference.
+- Linked the alert/query reference from the operator runbook index.
+- Preserved Epic 6 aggregation-only scope: no production telemetry, `scrapctl`, admin endpoint, dashboard, deployment manifest, protobuf, ADR, or closure-policy changes were made.
+- Missing peer/admin/Content Quarantine inventory/Transit/audit/evidence-leak telemetry remains visible as `CONCERNS`; no metric names were fabricated.
 
 ### File List
+
+- `_bmad-output/implementation-artifacts/6-3-alert-and-query-references.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`
+- `docs/observability/v2-alert-query-references.md`
+- `docs/runbooks/README.md`
 
 ## Change Log
 
 - 2026-06-12 - Created Story 6.3 context for alert and query references.
+- 2026-06-12 - Implemented Story 6.3 alert/query references and moved story to review.
