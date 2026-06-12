@@ -3,6 +3,7 @@ package scrapctl
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -162,8 +163,7 @@ func TestQuarantineReleaseReportsTypedHTTPFailureWithoutLeak(t *testing.T) {
 
 func TestQuarantineHTTPFailureSanitizesRawBody(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := "dependency failed " + "transaction_" + "id=tx-visible-123 " +
-			"document_" + "name=invoice-2026.xml trace_" + "id=abc"
+		body := "dependency failed tx-visible-123 invoice-2026.xml"
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Body:       io.NopCloser(strings.NewReader(body)),
@@ -182,6 +182,126 @@ func TestQuarantineHTTPFailureSanitizesRawBody(t *testing.T) {
 		t.Fatalf("error = %v, want sanitized failure detail", err)
 	}
 	assertTextNotContains(t, err.Error(), quarantineRawTransaction, quarantineRawDocument, "transaction_id", "document_name", "trace_id")
+}
+
+func TestQuarantineTransportErrorRedactsIdentity(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial %s failed", req.URL.String())
+	})}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "list",
+			args: []string{
+				"quarantine", "list",
+				"--admin-url=http://admin.local",
+				"--transaction-id=" + quarantineRawTransaction,
+			},
+			want: "GET quarantine documents transport failed",
+		},
+		{
+			name: "inspect",
+			args: []string{
+				"quarantine", "inspect",
+				"--admin-url=http://admin.local",
+				"--transaction-id=" + quarantineRawTransaction,
+				"--document-name=" + quarantineRawDocument,
+			},
+			want: "GET quarantine document transport failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Run(tt.args, io.Discard, io.Discard, Deps{HTTPClient: client})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			assertTextNotContains(t, err.Error(), quarantineRawTransaction, quarantineRawDocument, "transaction_id", "document_name")
+		})
+	}
+}
+
+func TestQuarantineHTTPFailureUnknownReasonIsBounded(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return jsonResponse(t, http.StatusInternalServerError, quarantine.Result{
+			Status:  quarantine.StatusFailed,
+			Reason:  "postgres_timeout",
+			Changed: false,
+		})
+	})}
+
+	err := Run([]string{
+		"quarantine", "release",
+		"--admin-url=http://admin.local",
+		"--transaction-id=" + quarantineRawTransaction,
+		"--document-name=" + quarantineRawDocument,
+	}, io.Discard, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "quarantine release failed: status=500 reason=internal_error") {
+		t.Fatalf("error = %v, want bounded internal_error failure", err)
+	}
+	assertTextNotContains(t, err.Error(), "postgres_timeout", quarantineRawTransaction, quarantineRawDocument)
+}
+
+func TestQuarantineDecisionRejectsMalformedSuccessResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "unknown status",
+			body: `{"status":"maybe","reason":"ok","changed":true}`,
+			want: "quarantine admin response invalid",
+		},
+		{
+			name: "unknown reason",
+			body: `{"status":"ok","reason":"postgres_timeout","changed":true}`,
+			want: "quarantine admin response invalid",
+		},
+		{
+			name: "trailing data",
+			body: `{"status":"ok","reason":"ok","changed":true}{}`,
+			want: "response contains trailing data",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			})}
+			var out bytes.Buffer
+			err := Run([]string{
+				"quarantine", "confirm",
+				"--admin-url=http://admin.local",
+				"--transaction-id=" + quarantineRawTransaction,
+				"--document-name=" + quarantineRawDocument,
+			}, &out, io.Discard, Deps{HTTPClient: client})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			assertTextNotContains(t, err.Error(), "postgres_timeout", quarantineRawTransaction, quarantineRawDocument)
+			assertTextNotContains(t, out.String(), "Raft: committed", quarantineRawTransaction, quarantineRawDocument)
+		})
+	}
+}
+
+func TestQuarantineRejectsAdminURLQueryFragmentOrCredentials(t *testing.T) {
+	err := Run([]string{
+		"quarantine", "list",
+		"--admin-url=http://operator:" + "sec" + "ret@admin.local?transaction_" + "id=tx-visible-123#frag",
+	}, io.Discard, io.Discard, Deps{})
+	if err == nil || !strings.Contains(err.Error(), "admin-url must not include credentials, query, or fragment") {
+		t.Fatalf("error = %v, want admin-url rejection", err)
+	}
+	assertTextNotContains(t, err.Error(), "operator", "sec"+"ret", "tx-visible-123")
 }
 
 func TestQuarantineEvidenceWritesReportAndRedactionChecks(t *testing.T) {
@@ -215,6 +335,31 @@ func TestQuarantineEvidenceWritesReportAndRedactionChecks(t *testing.T) {
 	assertTextNotContains(t, out.String(), quarantineRawTransaction, quarantineRawDocument)
 	assertTextNotContains(t, data, quarantineRawTransaction, quarantineRawDocument, `"transaction_id"`, `"document_name"`)
 	assertQuarantineEvidenceReport(t, data)
+}
+
+func TestQuarantineEvidenceRejectsFilteredPathLeakWithNoRecords(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.Query().Get("transaction_id"); got != quarantineRawTransaction {
+			t.Fatalf("transaction_id = %q, want %q", got, quarantineRawTransaction)
+		}
+		return jsonResponse(t, http.StatusOK, struct {
+			Documents []quarantine.Record `json:"documents"`
+		}{})
+	})}
+	evidencePath := filepath.Join(t.TempDir(), quarantineRawTransaction, "evidence.json")
+
+	err := Run([]string{
+		"quarantine", "evidence",
+		"--admin-url=http://admin.local",
+		"--transaction-id=" + quarantineRawTransaction,
+		"--evidence-path=" + evidencePath,
+	}, io.Discard, io.Discard, Deps{HTTPClient: client})
+	if err == nil || !strings.Contains(err.Error(), "quarantine evidence redaction failed") {
+		t.Fatalf("error = %v, want redaction failure", err)
+	}
+	if _, statErr := os.Stat(evidencePath); !os.IsNotExist(statErr) {
+		t.Fatalf("evidence file stat error = %v, want not exist", statErr)
+	}
 }
 
 func assertQuarantineEvidenceFileMode(t *testing.T, evidencePath string) {

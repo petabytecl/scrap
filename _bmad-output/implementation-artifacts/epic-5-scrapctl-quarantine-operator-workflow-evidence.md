@@ -29,27 +29,30 @@ Story 5.6 proves the operator CLI can list, inspect, confirm, release, and rende
 
 | AC | Evidence | Result |
 | --- | --- | --- |
-| AC-5.6.1 | `TestQuarantineListCallsAdminHTTPAndRedactsOutput`, `TestQuarantineInspectJSONRedactsRawIdentity`, changed-file leak scans. | PASS |
-| AC-5.6.2 | `TestQuarantineConfirmPostsIdentityAndReportsCommittedOutcome`, `TestQuarantineReleaseReportsTypedHTTPFailureWithoutLeak`, `TestQuarantineHTTPFailureSanitizesRawBody`. | PASS |
-| AC-5.6.3 | `TestQuarantineEvidenceWritesReportAndRedactionChecks`, evidence file mode assertion, report route proof, stdout/stderr/report redaction checks. | PASS |
+| AC-5.6.1 | `TestQuarantineListCallsAdminHTTPAndRedactsOutput`, `TestQuarantineInspectJSONRedactsRawIdentity`, `TestQuarantineTransportErrorRedactsIdentity`, changed-file leak scans. | PASS |
+| AC-5.6.2 | `TestQuarantineConfirmPostsIdentityAndReportsCommittedOutcome`, `TestQuarantineReleaseReportsTypedHTTPFailureWithoutLeak`, `TestQuarantineHTTPFailureSanitizesRawBody`, `TestQuarantineHTTPFailureUnknownReasonIsBounded`, `TestQuarantineDecisionRejectsMalformedSuccessResponse`, `TestQuarantineRejectsAdminURLQueryFragmentOrCredentials`. | PASS |
+| AC-5.6.3 | `TestQuarantineEvidenceWritesReportAndRedactionChecks`, `TestQuarantineEvidenceRejectsFilteredPathLeakWithNoRecords`, evidence file mode assertion, atomic evidence write path, report route proof, stdout/stderr/report redaction checks. | PASS |
 
 ## Verification Log
 
 - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl ./cmd/scrapctl -run 'Quarantine|Usage' -count=1` - PASS after implementation.
 - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/quarantine ./internal/scrapctl ./cmd/scrapctl -run 'Quarantine|Admin|Audit|Authorization|RateLimit|Evidence|Redact' -count=1` - PASS.
 - `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/quarantine ./internal/scrapctl ./cmd/scrapctl -count=1` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/scrapctl ./cmd/scrapctl -run 'Quarantine|Evidence|Redact|Usage' -count=1` - PASS after BMAD review fixes.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/quarantine ./internal/scrapctl ./cmd/scrapctl -run 'Quarantine|Admin|Audit|Authorization|RateLimit|Evidence|Redact' -count=1` - PASS after BMAD review fixes.
 - `git diff --check` - PASS.
 - `make proto-check` - PASS.
 - `scripts/check-e2e-gates.sh` - PASS.
-- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after BMAD review fixes.
 
 ## Redaction Checks
 
 - Credential-pattern scan over changed files - PASS, no matches.
 - Quarantine-sensitive output pattern scan over changed files - PASS, no matches.
 - CLI tests assert raw Transaction and Document identity values are present only in admin request inputs and absent from text, JSON, errors, and evidence reports.
+- Post-review tests assert transport errors, fallback HTTP bodies, unknown admin reasons, malformed success responses, and filtered empty evidence runs do not leak raw Transaction or Document identity values.
 - Evidence report includes redaction checks for stdout, stderr, and report surfaces.
 
 ## Final Gate
 
-PASS - Story 5.6 is ready for BMAD code review. This does not close Epic 5; Story 5.7 still owns content-safety closure evidence.
+PASS - Story 5.6 passed BMAD code review after review fixes. This does not close Epic 5; Story 5.7 still owns content-safety closure evidence.

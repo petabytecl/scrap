@@ -4,7 +4,7 @@ baseline_commit: 29ec066ae79f0d7692d82f4737d07432f5eb0e79
 
 # Story 5.6: `scrapctl` Quarantine Operator Workflow
 
-Status: review
+Status: done
 
 ## Story
 
@@ -68,6 +68,16 @@ so that operators can inspect, confirm, release, and collect evidence without ra
   - [x] Add tests that prove typed failures return non-zero command errors without leaking raw response bodies or dependency strings.
   - [x] Add tests for evidence report creation, file mode, sanitized args, stdout/stderr/report redaction checks, and route proof.
   - [x] Add parse/validation tests for missing identity, invalid limit, unsupported subcommand, unsupported output, and missing evidence path.
+
+### Review Findings
+
+- [x] [Review][Patch] Transport errors could leak raw quarantine identities [internal/scrapctl/quarantine.go] — fixed with bounded transport errors that do not wrap URL-bearing client errors, plus list/inspect regression coverage.
+- [x] [Review][Patch] Fallback HTTP failures could echo markerless raw identities [internal/scrapctl/quarantine_support.go] — fixed by checking forbidden identity values and returning bounded fallback text.
+- [x] [Review][Patch] Unknown admin reasons and success statuses were not constrained [internal/scrapctl/quarantine_support.go] — fixed with allowlisted status/reason/lifecycle/scan values and malformed-success regression coverage.
+- [x] [Review][Patch] Successful admin responses accepted trailing or oversized JSON [internal/scrapctl/quarantine_support.go] — fixed with bounded strict decode and trailing-data coverage.
+- [x] [Review][Patch] Evidence leak checks omitted the operator-supplied filter when no records were returned [internal/scrapctl/quarantine.go] — fixed by including the filter value in forbidden evidence values and adding empty-result leak coverage.
+- [x] [Review][Patch] Admin URLs with query, fragment, or credentials could diverge between request routing and evidence [internal/scrapctl/quarantine_support.go] — fixed by normalizing/rejecting unsafe admin base URLs before requests.
+- [x] [Review][Patch] Evidence writes could leave a partial final artifact on write/sync failure [internal/scrapctl/quarantine_support.go] — fixed by writing a same-directory temp file, syncing, renaming, and syncing the directory.
 
 ## Dev Notes
 
@@ -203,6 +213,8 @@ GPT-5 Codex
 - 2026-06-12T16:37:15-04:00 - Story moved to in-progress with baseline commit `29ec066ae79f0d7692d82f4737d07432f5eb0e79`.
 - 2026-06-12T16:40:00-04:00 - RED phase confirmed: focused quarantine tests failed because `scrapctl quarantine` was not registered.
 - 2026-06-12T16:46:57-04:00 - Final `make check` passed after formatter/lint fixes.
+- 2026-06-12T17:09:08-04:00 - BMAD code review findings patched: bounded transport/body errors, strict response validation, empty-result evidence leak proof, unsafe admin URL rejection, and atomic evidence writes.
+- 2026-06-12T17:13:27-04:00 - Final post-review `make check` passed on the current tree.
 
 ### Implementation Plan
 
@@ -217,6 +229,7 @@ GPT-5 Codex
 - CLI calls the Story 5.5 admin HTTP endpoints and decodes `internal/quarantine` DTOs without adding a new dependency or authority path.
 - Default text, JSON, error, and evidence output use bounded redacted Document identity values.
 - Evidence command writes a JSON report with artifact path, route proof, sanitized args, changed boundaries, and stdout/stderr/report redaction checks.
+- Post-review hardening validates admin result/status fields, bounds success JSON decoding, rejects unsafe admin URL forms, and prevents partial final evidence artifacts.
 - Full local verification passed, including `make check`.
 
 ### File List
@@ -228,8 +241,10 @@ GPT-5 Codex
 - `internal/scrapctl/doctor_test.go`
 - `internal/scrapctl/run.go`
 - `internal/scrapctl/quarantine.go`
+- `internal/scrapctl/quarantine_support.go`
 - `internal/scrapctl/quarantine_test.go`
 
 ### Change Log
 
 - 2026-06-12 - Added `scrapctl quarantine` operator workflow with redacted output, admin HTTP routing, evidence report generation, tests, and BMAD evidence updates.
+- 2026-06-12 - Addressed BMAD code review findings with bounded error handling, strict response validation, evidence leak-proof hardening, atomic evidence writes, and regression tests.
