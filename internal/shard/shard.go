@@ -57,6 +57,7 @@ type Config struct {
 	Replicator         DocumentReplicator
 	PeerAddrs          []string
 	Upload             UploadConfig
+	Scanner            ScannerConfig
 	Eviction           EvictionConfig
 	EvictionMetrics    EvictionMetrics
 	MemberHostname     string
@@ -122,6 +123,7 @@ type Shard struct {
 	proposals  map[string]chan error
 
 	scrubs         *scrubCoordinator
+	scanner        *scannerCoordinator
 	uploads        *uploadController
 	uploadPressure *uploadPressureCoordinator
 	blockUploads   *blockUploadLifecycle
@@ -253,6 +255,7 @@ func Open(cfg Config) (*Shard, error) {
 		bootstrapGrace:       cfg.BootstrapGrace,
 	}
 	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressure.ScrubPauseController())
+	s.scanner = newScannerCoordinator(s, blocksDir, cfg.ShardID, cfg.Scanner, s.uploadPressure.ScrubPauseController())
 	s.rebuilder = newProjectionRebuilder(s, cfg.DataDir, blocksDir, cfg.ShardID, cfg.Upload, logger)
 	// Raft Open starts its run loop before returning and can replay committed upload
 	// commands immediately. The apply path refreshes upload pressure, so the
@@ -300,6 +303,7 @@ func Open(cfg Config) (*Shard, error) {
 	s.uploads.setAuthPausedMetric(false)
 
 	s.scrubs.Start(cfg)
+	s.scanner.Start()
 	s.uploads.Start()
 	s.startLifecycleCleanup()
 
@@ -874,6 +878,7 @@ func (s *Shard) RaftStep(ctx context.Context, msg raftpb.Message) error {
 }
 
 func (s *Shard) Close() error {
+	s.scanner.Stop()
 	s.scrubs.Stop()
 	s.uploads.Stop()
 	s.raft.Stop()

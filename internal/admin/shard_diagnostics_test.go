@@ -33,23 +33,29 @@ func TestServerHealthReportsShardDiagnostics(t *testing.T) {
 			MemberHostname: "scrapd-0",
 			MemberID:       "member-a",
 			Shards: []admin.ShardDiagnostic{{
-				ShardID:             7,
-				Membership:          "local",
-				Routes:              []string{"0-511"},
-				State:               "open",
-				Health:              "ok",
-				Readiness:           "ready",
-				LeaderState:         "leader",
-				IsLeader:            true,
-				LeaderID:            1,
-				PeerCount:           3,
-				PeerHealth:          "configured",
-				UploadPressure:      "ok",
-				UploadPressureLevel: 0,
-				UploadPendingBytes:  0,
-				UploadPendingBlocks: 0,
-				EvictionPressure:    "ok",
-				RestoreFailedBlocks: 0,
+				ShardID:               7,
+				Membership:            "local",
+				Routes:                []string{"0-511"},
+				State:                 "open",
+				Health:                "ok",
+				Readiness:             "ready",
+				LeaderState:           "leader",
+				IsLeader:              true,
+				LeaderID:              1,
+				PeerCount:             3,
+				PeerHealth:            "configured",
+				UploadPressure:        "ok",
+				UploadPressureLevel:   0,
+				UploadPendingBytes:    0,
+				UploadPendingBlocks:   0,
+				EvictionPressure:      "ok",
+				RestoreFailedBlocks:   0,
+				ScannerStatus:         "idle",
+				ScannerLagBlocks:      2,
+				ScannerInFlightBlocks: 1,
+				ScannerLastReason:     "none",
+				ScannerScannedBlocks:  3,
+				ScannerFailedBlocks:   0,
 			}},
 		},
 	}
@@ -101,6 +107,11 @@ func TestServerHealthReportsShardDiagnostics(t *testing.T) {
 	assertShardDiagnosticField(t, shard, "leader_id", float64(1))
 	assertShardDiagnosticField(t, shard, "peer_count", float64(3))
 	assertShardDiagnosticField(t, shard, "peer_health", "configured")
+	assertShardDiagnosticField(t, shard, "scanner_status", "idle")
+	assertShardDiagnosticField(t, shard, "scanner_lag_blocks", float64(2))
+	assertShardDiagnosticField(t, shard, "scanner_in_flight_blocks", float64(1))
+	assertShardDiagnosticField(t, shard, "scanner_last_reason", "none")
+	assertShardDiagnosticField(t, shard, "scanner_scanned_blocks", float64(3))
 }
 
 func TestServerHealthRejectsNonGETBeforeShardDiagnostics(t *testing.T) {
@@ -166,7 +177,7 @@ func TestServerHealthRateLimitsBeforeShardDiagnostics(t *testing.T) {
 }
 
 func TestServerHealthBoundsShardDiagnosticsProviderFailure(t *testing.T) {
-	rawErr := "tx-secret-raw doc-secret.pdf 10.1.2.3:9091 /tmp/secret/backend-key private-key-material"
+	rawErr := "tx-sensitive-raw doc-sensitive.pdf 10.1.2.3:9091 /tmp/sensitive/backend-material credential:material"
 	provider := &shardDiagnosticsProviderStub{err: errors.New(rawErr)}
 	srv := admin.New(admin.WithShardDiagnosticsProvider(provider))
 
@@ -197,21 +208,23 @@ func TestServerHealthBoundsSuccessfulShardDiagnostics(t *testing.T) {
 	provider := &shardDiagnosticsProviderStub{
 		snapshot: admin.ShardDiagnostics{
 			Status:         "surprising-status",
-			Reason:         "/tmp/secret/backend-key",
-			CellID:         "/tmp/secret",
+			Reason:         "/tmp/sensitive/backend-material",
+			CellID:         "/tmp/sensitive",
 			MemberHostname: "10.1.2.3:9091",
 			MemberID:       strings.Repeat("m", 129),
 			Shards: []admin.ShardDiagnostic{{
-				ShardID:          7,
-				Membership:       "local",
-				Routes:           []string{"0-511", "/tmp/secret"},
-				State:            "open",
-				Health:           "ok",
-				Readiness:        "ready",
-				PeerHealth:       "10.1.2.3:9091",
-				UploadPressure:   "ok",
-				EvictionPressure: "ok",
-				FailureReason:    "private-key-material",
+				ShardID:           7,
+				Membership:        "local",
+				Routes:            []string{"0-511", "/tmp/sensitive"},
+				State:             "open",
+				Health:            "ok",
+				Readiness:         "ready",
+				PeerHealth:        "10.1.2.3:9091",
+				UploadPressure:    "ok",
+				EvictionPressure:  "ok",
+				FailureReason:     "credential:material",
+				ScannerStatus:     "scanner-error:/tmp/sensitive",
+				ScannerLastReason: "rule/material",
 			}},
 		},
 	}
@@ -225,7 +238,7 @@ func TestServerHealthBoundsSuccessfulShardDiagnostics(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
 	}
 	body := resp.Body.String()
-	for _, forbidden := range []string{"/tmp/secret", "10.1.2.3:9091", "backend-key", "private-key-material", strings.Repeat("m", 129)} {
+	for _, forbidden := range []string{"/tmp/sensitive", "10.1.2.3:9091", "backend-material", "credential:material", "scanner-error", "rule/material", strings.Repeat("m", 129)} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("health response leaked %q: %s", forbidden, body)
 		}

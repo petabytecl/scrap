@@ -151,13 +151,16 @@ func openLocalShard(openCfg shardSetOpenConfig, shardID uint64, dataDir string) 
 		Replicator:         openCfg.peerClient,
 		PeerAddrs:          peerAddrsExceptSelf(openCfg.peers, openCfg.raftID),
 		Upload:             uploadCfg,
-		Eviction:           openCfg.cfg.Eviction,
-		EvictionMetrics:    shardTel.evictionMetrics,
-		MemberHostname:     openCfg.telemetryRuntime.resourceConfig.MemberSlotID,
-		MemberID:           openCfg.telemetryRuntime.resourceConfig.MemberID,
-		WriteTelemetry:     shardTel.writeTelemetry,
-		IdentifierMode:     openCfg.identifierMode,
-		Encryption:         openCfg.encryption,
+		Scanner: shard.ScannerConfig{
+			Metrics: shardTel.scannerMetrics,
+		},
+		Eviction:        openCfg.cfg.Eviction,
+		EvictionMetrics: shardTel.evictionMetrics,
+		MemberHostname:  openCfg.telemetryRuntime.resourceConfig.MemberSlotID,
+		MemberID:        openCfg.telemetryRuntime.resourceConfig.MemberID,
+		WriteTelemetry:  shardTel.writeTelemetry,
+		IdentifierMode:  openCfg.identifierMode,
+		Encryption:      openCfg.encryption,
 	})
 	if err != nil {
 		return openedLocalShard{}, err

@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
 	"github.com/petabytecl/scrap/internal/server"
@@ -263,6 +264,7 @@ type shardTelemetryBundle struct {
 	evictionMetrics  *shard.EvictionOTelMetrics
 	scrubMetrics     *scrub.OTelMetrics
 	deepScrubMetrics *scrub.OTelDeepMetrics
+	scannerMetrics   *avscan.OTelMetrics
 	writeTelemetry   *shard.WriteTelemetry
 }
 
@@ -286,6 +288,10 @@ func (r *scrapdTelemetryRuntime) newShardTelemetry() (*shardTelemetryBundle, err
 	if err != nil {
 		return nil, fmt.Errorf("create deep scrub metrics: %w", err)
 	}
+	scannerMetrics, err := avscan.NewOTelMetrics(m)
+	if err != nil {
+		return nil, fmt.Errorf("create scanner metrics: %w", err)
+	}
 	wt, err := shard.NewWriteTelemetry(m, t)
 	if err != nil {
 		return nil, fmt.Errorf("create write telemetry: %w", err)
@@ -295,6 +301,7 @@ func (r *scrapdTelemetryRuntime) newShardTelemetry() (*shardTelemetryBundle, err
 		evictionMetrics:  em,
 		scrubMetrics:     sm,
 		deepScrubMetrics: dsm,
+		scannerMetrics:   scannerMetrics,
 		writeTelemetry:   wt,
 	}, nil
 }

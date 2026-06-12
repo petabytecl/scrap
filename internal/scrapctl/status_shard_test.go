@@ -46,7 +46,13 @@ const shardDiagnosticsHealthBody = `{
 			"upload_pending_bytes":0,
 			"upload_pending_blocks":0,
 			"eviction_pressure":"ok",
-			"restore_failed_blocks":0
+			"restore_failed_blocks":0,
+			"scanner_status":"idle",
+			"scanner_lag_blocks":2,
+			"scanner_in_flight_blocks":1,
+			"scanner_last_reason":"none",
+			"scanner_scanned_blocks":3,
+			"scanner_failed_blocks":0
 		}]
 	}
 }`
@@ -69,6 +75,10 @@ func TestStatusPrintsShardDiagnosticsJSON(t *testing.T) {
 		`"membership":"local"`,
 		`"routes":["0-511"]`,
 		`"leader_state":"leader"`,
+		`"scanner_status":"idle"`,
+		`"scanner_lag_blocks":2`,
+		`"scanner_in_flight_blocks":1`,
+		`"scanner_last_reason":"none"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s in output:\n%s", want, got)
@@ -97,6 +107,10 @@ func TestStatusTextOutputIncludesCellMemberShardTerms(t *testing.T) {
 		"leader_state=leader",
 		"leader=true",
 		"peer_health=configured",
+		"scanner_status=idle",
+		"scanner_lag_blocks=2",
+		"scanner_in_flight_blocks=1",
+		"scanner_reason=none",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in output:\n%s", want, got)
@@ -115,20 +129,22 @@ func TestStatusTextOutputBoundsShardDiagnosticFields(t *testing.T) {
 			"upload_pending_blocks":0,
 			"shard_diagnostics":{
 				"status":"ok",
-				"cell_id":"/tmp/secret",
+				"cell_id":"/tmp/sensitive",
 				"member_hostname":"10.1.2.3:9091",
-				"member_id":"private-key-material",
+				"member_id":"credential:material",
 				"shards":[{
 					"shard_id":7,
 					"membership":"local",
-					"routes":["0-511","/tmp/secret"],
+					"routes":["0-511","/tmp/sensitive"],
 					"state":"open",
 					"health":"ok",
 					"readiness":"ready",
 					"peer_health":"10.1.2.3:9091",
-					"upload_pressure":"backend-key",
+					"upload_pressure":"backend/material",
 					"eviction_pressure":"ok",
-					"failure_reason":"private-key-material"
+					"failure_reason":"credential:material",
+					"scanner_status":"scanner-error:/tmp/sensitive",
+					"scanner_last_reason":"rule/material"
 				}]
 			}
 		}`),
@@ -137,7 +153,7 @@ func TestStatusTextOutputBoundsShardDiagnosticFields(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 	got := out.String()
-	for _, forbidden := range []string{"/tmp/secret", "10.1.2.3:9091", "private-key-material", "backend-key"} {
+	for _, forbidden := range []string{"/tmp/sensitive", "10.1.2.3:9091", "credential:material", "backend/material", "scanner-error", "rule/material"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("status output leaked %q:\n%s", forbidden, got)
 		}
@@ -188,7 +204,7 @@ func TestStatusShardDiagnosticsOutputUsesBoundedEvidence(t *testing.T) {
 			t.Fatalf("missing %q in output:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"tx-secret-raw", "doc-secret.pdf", "10.1.2.3:9091", "/tmp/secret", "private-key-material"} {
+	for _, forbidden := range []string{"tx-sensitive-raw", "doc-sensitive.pdf", "10.1.2.3:9091", "/tmp/sensitive", "credential:material"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("status output leaked %q:\n%s", forbidden, got)
 		}

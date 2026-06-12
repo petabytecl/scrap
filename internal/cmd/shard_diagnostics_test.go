@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/shard"
 )
@@ -130,6 +131,39 @@ func TestShardDiagnosticsNoLeaderReportsBoundedFailure(t *testing.T) {
 	}
 	if shardDiag.Readiness != shardDiagnosticsReadinessReady {
 		t.Fatalf("readiness = %s, want ready", shardDiag.Readiness)
+	}
+}
+
+func TestShardDiagnosticsScannerDegradesSnapshot(t *testing.T) {
+	target := readyShardDiagnosticsTarget()
+	target.scanner = avscan.Snapshot{
+		Status:         avscan.StatusDegraded,
+		LastReason:     avscan.ReasonEngineUnavailable,
+		LagBlocks:      3,
+		InFlightBlocks: 1,
+		ScannedBlocks:  2,
+		FailedBlocks:   1,
+	}
+
+	got := snapshotFromFakeTarget(t, target)
+	if got.Status != admin.ShardDiagnosticsStatusDegraded {
+		t.Fatalf("status = %s, want degraded", got.Status)
+	}
+	shardDiag := shardDiagnosticByID(t, got.Shards, 7)
+	if shardDiag.Health != shardDiagnosticsHealthDegraded {
+		t.Fatalf("health = %s, want degraded", shardDiag.Health)
+	}
+	if shardDiag.FailureReason != string(avscan.ReasonEngineUnavailable) {
+		t.Fatalf("failure reason = %s, want %s", shardDiag.FailureReason, avscan.ReasonEngineUnavailable)
+	}
+	if shardDiag.ScannerStatus != string(avscan.StatusDegraded) {
+		t.Fatalf("scanner status = %s, want %s", shardDiag.ScannerStatus, avscan.StatusDegraded)
+	}
+	if shardDiag.ScannerLagBlocks != 3 || shardDiag.ScannerInFlightBlocks != 1 {
+		t.Fatalf("scanner lag/in-flight = %d/%d, want 3/1", shardDiag.ScannerLagBlocks, shardDiag.ScannerInFlightBlocks)
+	}
+	if shardDiag.ScannerScannedBlocks != 2 || shardDiag.ScannerFailedBlocks != 1 {
+		t.Fatalf("scanner scanned/failed = %d/%d, want 2/1", shardDiag.ScannerScannedBlocks, shardDiag.ScannerFailedBlocks)
 	}
 }
 
@@ -301,6 +335,7 @@ type fakeShardDiagnosticsTarget struct {
 	uploadName   string
 	eviction     eviction.HealthSnapshot
 	evictionErr  error
+	scanner      avscan.Snapshot
 
 	readinessCalls int
 	leaderCalls    int
@@ -332,4 +367,8 @@ func (t *fakeShardDiagnosticsTarget) UploadPressureSnapshot() (level int, levelN
 func (t *fakeShardDiagnosticsTarget) EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error) {
 	t.evictionCalls++
 	return t.eviction, t.evictionErr
+}
+
+func (t *fakeShardDiagnosticsTarget) ContentScannerSnapshot() avscan.Snapshot {
+	return t.scanner
 }

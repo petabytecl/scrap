@@ -34,24 +34,30 @@ type ShardDiagnostics struct {
 
 // ShardDiagnostic reports bounded read-only state for one Shard.
 type ShardDiagnostic struct {
-	ShardID             uint64   `json:"shard_id"`
-	Membership          string   `json:"membership,omitempty"`
-	Routes              []string `json:"routes,omitempty"`
-	State               string   `json:"state,omitempty"`
-	Health              string   `json:"health,omitempty"`
-	Readiness           string   `json:"readiness,omitempty"`
-	LeaderState         string   `json:"leader_state,omitempty"`
-	IsLeader            bool     `json:"is_leader"`
-	LeaderID            uint64   `json:"leader_id,omitempty"`
-	PeerCount           int      `json:"peer_count"`
-	PeerHealth          string   `json:"peer_health,omitempty"`
-	UploadPressure      string   `json:"upload_pressure,omitempty"`
-	UploadPressureLevel int      `json:"upload_pressure_level,omitempty"`
-	UploadPendingBytes  int64    `json:"upload_pending_bytes,omitempty"`
-	UploadPendingBlocks int      `json:"upload_pending_blocks,omitempty"`
-	EvictionPressure    string   `json:"eviction_pressure,omitempty"`
-	RestoreFailedBlocks int      `json:"restore_failed_blocks,omitempty"`
-	FailureReason       string   `json:"failure_reason,omitempty"`
+	ShardID               uint64   `json:"shard_id"`
+	Membership            string   `json:"membership,omitempty"`
+	Routes                []string `json:"routes,omitempty"`
+	State                 string   `json:"state,omitempty"`
+	Health                string   `json:"health,omitempty"`
+	Readiness             string   `json:"readiness,omitempty"`
+	LeaderState           string   `json:"leader_state,omitempty"`
+	IsLeader              bool     `json:"is_leader"`
+	LeaderID              uint64   `json:"leader_id,omitempty"`
+	PeerCount             int      `json:"peer_count"`
+	PeerHealth            string   `json:"peer_health,omitempty"`
+	UploadPressure        string   `json:"upload_pressure,omitempty"`
+	UploadPressureLevel   int      `json:"upload_pressure_level,omitempty"`
+	UploadPendingBytes    int64    `json:"upload_pending_bytes,omitempty"`
+	UploadPendingBlocks   int      `json:"upload_pending_blocks,omitempty"`
+	EvictionPressure      string   `json:"eviction_pressure,omitempty"`
+	RestoreFailedBlocks   int      `json:"restore_failed_blocks,omitempty"`
+	ScannerStatus         string   `json:"scanner_status,omitempty"`
+	ScannerLagBlocks      int      `json:"scanner_lag_blocks,omitempty"`
+	ScannerInFlightBlocks int      `json:"scanner_in_flight_blocks,omitempty"`
+	ScannerLastReason     string   `json:"scanner_last_reason,omitempty"`
+	ScannerScannedBlocks  uint64   `json:"scanner_scanned_blocks,omitempty"`
+	ScannerFailedBlocks   uint64   `json:"scanner_failed_blocks,omitempty"`
+	FailureReason         string   `json:"failure_reason,omitempty"`
 }
 
 func cloneShardDiagnostics(in ShardDiagnostics) ShardDiagnostics {
@@ -72,6 +78,8 @@ func cloneShardDiagnostics(in ShardDiagnostics) ShardDiagnostics {
 		shard.PeerHealth = boundedShardDiagnosticLabel(shard.PeerHealth)
 		shard.UploadPressure = boundedShardDiagnosticLabel(shard.UploadPressure)
 		shard.EvictionPressure = boundedShardDiagnosticLabel(shard.EvictionPressure)
+		shard.ScannerStatus = boundedShardDiagnosticLabel(shard.ScannerStatus)
+		shard.ScannerLastReason = boundedShardDiagnosticLabel(shard.ScannerLastReason)
 		shard.FailureReason = boundedShardDiagnosticLabel(shard.FailureReason)
 		out.Shards[i] = shard
 	}

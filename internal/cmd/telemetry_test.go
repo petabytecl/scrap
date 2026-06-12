@@ -312,6 +312,9 @@ func TestNewShardTelemetryIncludesEvictionMetrics(t *testing.T) {
 	if got.evictionMetrics == nil {
 		t.Fatal("eviction metrics is nil")
 	}
+	if got.scannerMetrics == nil {
+		t.Fatal("scanner metrics is nil")
+	}
 }
 
 func TestEvictionMetricsPrometheusNamesMatchEvidenceQueries(t *testing.T) {

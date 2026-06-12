@@ -5,7 +5,7 @@ created: 2026-06-12T12:02:09-04:00
 
 # Story 5.1: Content Scanner Engine Boundary and Scheduling
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -33,49 +33,49 @@ so that unsafe content detection does not block billing writes.
 
 ## Tasks / Subtasks
 
-- [ ] Create the Story 5.1 evidence artifact before code changes. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/epic-5-content-scanner-engine-boundary-evidence.md`.
-  - [ ] Record baseline commit, command evidence, changed-boundary list, scanner outage/status evidence, telemetry names/labels, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
-  - [ ] Keep closure scoped to Story 5.1. Do not claim persisted watermarks, detection-to-Raft, read denial, admin quarantine operations, or Epic 5 closure.
+- [x] Create the Story 5.1 evidence artifact before code changes. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/epic-5-content-scanner-engine-boundary-evidence.md`.
+  - [x] Record baseline commit, command evidence, changed-boundary list, scanner outage/status evidence, telemetry names/labels, redaction scans, and final `PASS`/`CONCERNS`/`FAIL` rows.
+  - [x] Keep closure scoped to Story 5.1. Do not claim persisted watermarks, detection-to-Raft, read denial, admin quarantine operations, or Epic 5 closure.
 
-- [ ] Add `internal/avscan` as the Content Scanner package. (AC: 1-4)
-  - [ ] Add a package comment in `internal/avscan/doc.go` explaining Content Scanner vs. Deep Scrub vs. Content Quarantine.
-  - [ ] Define small consumer-side interfaces for engine scans, sealed-Block discovery, I/O budget/pause, metrics, status reporting, and clock/ticker injection.
-  - [ ] Define immutable value types for scheduled Block work, scan result, bounded failure reason, and status snapshot.
-  - [ ] Include a fake engine for tests; do not add ClamAV, YARA, or native library dependencies in this story.
+- [x] Add `internal/avscan` as the Content Scanner package. (AC: 1-4)
+  - [x] Add a package comment in `internal/avscan/doc.go` explaining Content Scanner vs. Deep Scrub vs. Content Quarantine.
+  - [x] Define small consumer-side interfaces for engine scans, sealed-Block discovery, I/O budget/pause, metrics, status reporting, and clock/ticker injection.
+  - [x] Define immutable value types for scheduled Block work, scan result, bounded failure reason, and status snapshot.
+  - [x] Include a fake engine for tests; do not add ClamAV, YARA, or native library dependencies in this story.
 
-- [ ] Implement a leader-owned scanner scheduler with bounded lifecycle. (AC: 1, 2, 4)
-  - [ ] Poll and/or non-blockingly wake on sealed-Block eligibility using `block.ListSealedBlocks`; exclude the current open Block through the Shard-owned `currentOpenBlockID()` boundary.
-  - [ ] Run only while the owning Shard is leader. Follower state must not schedule scans or propose metadata.
-  - [ ] Make `Start` and `Stop` context-driven and join all owned goroutines. Do not close channels that Shard apply or notification paths may send to after shutdown.
-  - [ ] Protect worker loops with `recover()` so a panic from an engine adapter or poison fixture records a bounded status and does not leak a stuck goroutine or block writes.
-  - [ ] Keep duplicate scheduling idempotent. In-memory in-flight/completed tracking is allowed, but persisted watermarks are Story 5.2 and must not be added here.
+- [x] Implement a leader-owned scanner scheduler with bounded lifecycle. (AC: 1, 2, 4)
+  - [x] Poll and/or non-blockingly wake on sealed-Block eligibility using `block.ListSealedBlocks`; exclude the current open Block through the Shard-owned `currentOpenBlockID()` boundary.
+  - [x] Run only while the owning Shard is leader. Follower state must not schedule scans or propose metadata.
+  - [x] Make `Start` and `Stop` context-driven and join all owned goroutines. Do not close channels that Shard apply or notification paths may send to after shutdown.
+  - [x] Protect worker loops with `recover()` so a panic from an engine adapter or poison fixture records a bounded status and does not leak a stuck goroutine or block writes.
+  - [x] Keep duplicate scheduling idempotent. In-memory in-flight/completed tracking is allowed, but persisted watermarks are Story 5.2 and must not be added here.
 
-- [ ] Wire scanner lifecycle through `internal/shard` without entering the write ACK path. (AC: 1, 2, 4)
-  - [ ] Add narrow scanner config/dependency fields to `shard.Config` and construct the scanner coordinator near existing scrub/upload lifecycle wiring.
-  - [ ] Preserve `WriteDocument` durability ordering. It must not call scanner engine code, wait for scanner status, or fail because the scanner is unavailable.
-  - [ ] If the write/seal path wakes the scanner, the wake-up must be non-blocking and best-effort only.
-  - [ ] Reuse existing `scrub.TokenBucket` and `scrub.PauseController` concepts for shared I/O budget pressure instead of creating an unrelated throttling model.
+- [x] Wire scanner lifecycle through `internal/shard` without entering the write ACK path. (AC: 1, 2, 4)
+  - [x] Add narrow scanner config/dependency fields to `shard.Config` and construct the scanner coordinator near existing scrub/upload lifecycle wiring.
+  - [x] Preserve `WriteDocument` durability ordering. It must not call scanner engine code, wait for scanner status, or fail because the scanner is unavailable.
+  - [x] If the write/seal path wakes the scanner, the wake-up must be non-blocking and best-effort only.
+  - [x] Reuse existing `scrub.TokenBucket` and `scrub.PauseController` concepts for shared I/O budget pressure instead of creating an unrelated throttling model.
 
-- [ ] Expose bounded scanner health and lag to operators. (AC: 2, 3)
-  - [ ] Add scanner status fields to Shard diagnostics/admin health using bounded enum-like strings and counts, for example scanner status, lag Blocks, in-flight Blocks, last bounded reason, and last status update time.
-  - [ ] Update `internal/scrapctl status` JSON/text rendering only enough to show scanner status and lag from existing admin HTTP health output.
-  - [ ] Sanitize new admin fields through the existing Shard diagnostics bounding helpers. No raw Document identity, Block path, signature, rule payload, dependency diagnostic body, Unix socket path, or raw engine error may appear.
+- [x] Expose bounded scanner health and lag to operators. (AC: 2, 3)
+  - [x] Add scanner status fields to Shard diagnostics/admin health using bounded enum-like strings and counts, for example scanner status, lag Blocks, in-flight Blocks, last bounded reason, and last status update time.
+  - [x] Update `internal/scrapctl status` JSON/text rendering only enough to show scanner status and lag from existing admin HTTP health output.
+  - [x] Sanitize new admin fields through the existing Shard diagnostics bounding helpers. No raw Document identity, Block path, signature, rule payload, dependency diagnostic body, Unix socket path, or raw engine error may appear.
 
-- [ ] Add scanner telemetry with low-cardinality labels. (AC: 2, 3, 4)
-  - [ ] Use OpenTelemetry instruments, not new native Prometheus metrics.
-  - [ ] Candidate metrics: scan run duration, scanned Blocks, engine unavailable count, bounded failure count, scheduler lag Blocks, in-flight Blocks, and duplicate-schedule skips.
-  - [ ] Allowed labels: `shard_id`, bounded `status`, bounded `reason`, and bounded scan phase. Do not label by raw Transaction or Document identifiers, raw Block path, rule name, signature name, dependency error, trace identifier, or request identifier.
+- [x] Add scanner telemetry with low-cardinality labels. (AC: 2, 3, 4)
+  - [x] Use OpenTelemetry instruments, not new native Prometheus metrics.
+  - [x] Candidate metrics: scan run duration, scanned Blocks, engine unavailable count, bounded failure count, scheduler lag Blocks, in-flight Blocks, and duplicate-schedule skips.
+  - [x] Allowed labels: `shard_id`, bounded `status`, bounded `reason`, and bounded scan phase. Do not label by raw Transaction or Document identifiers, raw Block path, rule name, signature name, dependency error, trace identifier, or request identifier.
 
-- [ ] Add focused tests before broad gates. (AC: 1-4)
-  - [ ] `internal/avscan` unit tests prove post-ACK scheduler separation with a fake engine, engine unavailable status, bounded retry/backoff, cancellation, duplicate scheduling, panic recovery, and poison fixture behavior.
-  - [ ] `internal/shard` tests prove writes continue when the scanner is unavailable, scanner wake-up is non-blocking, and Stop waits for scanner workers.
-  - [ ] `internal/admin`, `internal/cmd`, and `internal/scrapctl` tests prove scanner health/lag fields are bounded and redacted.
-  - [ ] Do not use sleeps as synchronization. Use fake clocks, manual ticks, channels, contexts, and bounded polling with clear failure messages.
+- [x] Add focused tests before broad gates. (AC: 1-4)
+  - [x] `internal/avscan` unit tests prove post-ACK scheduler separation with a fake engine, engine unavailable status, bounded retry/backoff, cancellation, duplicate scheduling, panic recovery, and poison fixture behavior.
+  - [x] `internal/shard` tests prove writes continue when the scanner is unavailable, scanner wake-up is non-blocking, and Stop waits for scanner workers.
+  - [x] `internal/admin`, `internal/cmd`, and `internal/scrapctl` tests prove scanner health/lag fields are bounded and redacted.
+  - [x] Do not use sleeps as synchronization. Use fake clocks, manual ticks, channels, contexts, and bounded polling with clear failure messages.
 
 - [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
-  - [ ] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
-  - [ ] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
+  - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
+  - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
   - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
 
 ## Dev Notes
@@ -190,16 +190,69 @@ rg -n --pcre2 "$scanner_sensitive_pattern" $scan_scope
 
 ### Agent Model Used
 
-GPT-5 Codex for story creation.
+GPT-5 Codex for story creation and implementation.
 
 ### Debug Log References
 
 - 2026-06-12T12:02:09-04:00 - Story 5.1 created from sprint status after Story 4.7 implementation, review, commit, and push completed.
+- 2026-06-12T12:07:25-04:00 - Story 5.1 moved to in-progress after story creation checkpoint `cfe32e3b5f2f06726a6b9866762898fbe30e6bf0` was pushed.
+- `git diff --check` - PASS after creating the initial Story 5.1 evidence artifact.
+- Strict shaped-secret scan over Story 5.1, evidence artifact, and sprint status - PASS with no matches.
+- Scanner-sensitive pattern scan over Story 5.1 and evidence artifact - PASS with no matches.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -count=1` - RED before implementation; failed because the scheduler API was undefined.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -count=1` - PASS after adding scheduler types, lifecycle, bounded status, duplicate skipping, panic recovery, pause/budget hooks, and tests.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/cmd ./internal/scrapctl -run 'ShardDiagnostics|Status.*Shard' -count=1` - RED before diagnostics implementation; failed because scanner diagnostic fields and rendering were missing.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/admin ./internal/cmd ./internal/scrapctl -run 'ShardDiagnostics|Status.*Shard' -count=1` - PASS after adding bounded scanner diagnostics and `scrapctl status` rendering.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -count=1` - RED before OTel implementation; failed because `NewOTelMetrics` was undefined.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/cmd -run TestNewShardTelemetryIncludesEvictionMetrics -count=1` - RED before telemetry bundle wiring; failed because scanner metrics were missing from the Shard telemetry bundle.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestShardScanner' -count=1` - RED before Shard ID metric wiring; failed because scanner metrics recorded Shard ID `0` instead of the owning Shard ID.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan -count=1` - RED before ticker injection; failed because scheduler ticker injection interfaces were undefined.
+- `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/avscan ./internal/shard ./internal/admin ./internal/cmd ./internal/scrapctl -count=1` - PASS after scanner scheduler, Shard wiring, diagnostics, telemetry, ticker injection, and focused tests.
+- Scanner-sensitive pattern scan over exact Story 5.1 touched files - PASS with no matches after fixture cleanup.
+- `git diff --check` - PASS after implementation and artifact updates.
+- `scripts/check-e2e-gates.sh` - PASS after implementation and artifact updates.
+- `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS after implementation; covered formatter diff, package boundaries, buf lint/generate, generated diff check, golangci-lint, `go test ./...`, `go test -race ./...`, tagged integration tests, and `scrapd`/`scrapctl` builds.
 
 ### Completion Notes List
 
 - Story context created with Epic 5 scope boundaries, current code reuse points, external scanner research, and testing/redaction requirements.
+- Created the Story 5.1 evidence artifact before production code changes and kept all acceptance rows explicitly failing until implementation evidence exists.
+- Added `internal/avscan` scheduler boundary with leader-only RunOnce behavior, context-driven Start/Stop, non-blocking Notify, bounded status snapshots, duplicate-schedule skipping, panic recovery, pause and I/O budget hooks, and fake-engine tests.
+- Wired Shard-owned scanner lifecycle using sealed-Block discovery, current-open-Block exclusion, best-effort non-blocking seal notifications, shared Deep Scrub pause/I/O budget concepts, and write-path outage tests.
+- Added bounded scanner status, lag, in-flight, reason, scanned, and failed counts to admin Shard diagnostics and `scrapctl status` JSON/text output.
+- Added OpenTelemetry scanner metrics for runs, run duration, Block outcomes, bounded failures, engine-unavailable count, lag, in-flight Blocks, and duplicate schedule skips, with bounded low-cardinality attributes.
+- Local verification is complete and Story 5.1 is ready for BMAD code review; persisted watermarks, Raft quarantine authority, read denial, quarantine admin operations, and Epic 5 closure remain explicitly out of scope.
+
+### Change Log
+
+- 2026-06-12: Started Story 5.1 implementation and initialized scoped evidence artifact.
+- 2026-06-12: Added `internal/avscan` scheduler boundary and unit tests.
+- 2026-06-12: Wired scanner lifecycle through Shard startup/seal/close and added bounded operator diagnostics.
+- 2026-06-12: Added scanner OpenTelemetry metrics and Shard telemetry bundle wiring.
+- 2026-06-12: Completed local Story 5.1 verification and moved story to review.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-1-content-scanner-engine-boundary-and-scheduling.md`
+- `_bmad-output/implementation-artifacts/epic-5-content-scanner-engine-boundary-evidence.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `internal/avscan/doc.go`
+- `internal/avscan/metrics_otel.go`
+- `internal/avscan/metrics_otel_test.go`
+- `internal/avscan/scheduler.go`
+- `internal/avscan/scheduler_test.go`
+- `internal/avscan/types.go`
+- `internal/admin/shard_diagnostics.go`
+- `internal/admin/shard_diagnostics_test.go`
+- `internal/cmd/shard_diagnostics.go`
+- `internal/cmd/shard_diagnostics_test.go`
+- `internal/cmd/shard_set.go`
+- `internal/cmd/telemetry.go`
+- `internal/cmd/telemetry_test.go`
+- `internal/scrapctl/output.go`
+- `internal/scrapctl/status.go`
+- `internal/scrapctl/status_shard_test.go`
+- `internal/shard/blockfiles.go`
+- `internal/shard/scanner.go`
+- `internal/shard/scanner_wiring_test.go`
+- `internal/shard/shard.go`

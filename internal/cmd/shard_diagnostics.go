@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/petabytecl/scrap/internal/admin"
+	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -25,6 +26,7 @@ const (
 	shardDiagnosticsReasonReadiness   = "readiness_failed"
 	shardDiagnosticsReasonContext     = "context_canceled"
 	shardDiagnosticsReasonSnapshot    = "snapshot_unavailable"
+	shardDiagnosticsReasonScanner     = "scanner_degraded"
 )
 
 var errShardDiagnosticsUnavailable = errors.New("shard diagnostics unavailable")
@@ -35,6 +37,7 @@ type shardDiagnosticsTarget interface {
 	LeaderID() uint64
 	UploadPressureSnapshot() (level int, levelName string, pendingBytes int64, pendingBlocks int)
 	EvictionHealthSnapshot(context.Context) (eviction.HealthSnapshot, error)
+	ContentScannerSnapshot() avscan.Snapshot
 }
 
 type shardDiagnosticsSource interface {
@@ -146,10 +149,12 @@ func applyLiveShardDiagnostics(ctx context.Context, target shardDiagnosticsTarge
 	if level >= int(shard.UploadPressureLevelPressure) {
 		markShardDiagnosticDegraded(diag, diag.UploadPressure)
 	}
+	scanner := target.ContentScannerSnapshot()
 	evictionHealth, err := target.EvictionHealthSnapshot(ctx)
 	if err != nil {
 		diag.EvictionPressure = eviction.HealthPressureDegraded
 		markShardDiagnosticDegraded(diag, shardDiagnosticsReasonSnapshot)
+		applyScannerDiagnostics(scanner, diag)
 		return
 	}
 	diag.EvictionPressure = evictionHealth.Pressure
@@ -160,6 +165,27 @@ func applyLiveShardDiagnostics(ctx context.Context, target shardDiagnosticsTarge
 	if diag.EvictionPressure != eviction.HealthPressureOK {
 		markShardDiagnosticDegraded(diag, diag.EvictionPressure)
 	}
+	applyScannerDiagnostics(scanner, diag)
+}
+
+func applyScannerDiagnostics(snapshot avscan.Snapshot, diag *admin.ShardDiagnostic) {
+	if snapshot.Status == "" {
+		return
+	}
+	diag.ScannerStatus = string(snapshot.Status)
+	diag.ScannerLagBlocks = snapshot.LagBlocks
+	diag.ScannerInFlightBlocks = snapshot.InFlightBlocks
+	diag.ScannerLastReason = string(snapshot.LastReason)
+	diag.ScannerScannedBlocks = snapshot.ScannedBlocks
+	diag.ScannerFailedBlocks = snapshot.FailedBlocks
+	if snapshot.Status != avscan.StatusDegraded {
+		return
+	}
+	reason := string(snapshot.LastReason)
+	if reason == "" {
+		reason = shardDiagnosticsReasonScanner
+	}
+	markShardDiagnosticDegraded(diag, reason)
 }
 
 func markShardDiagnosticDegraded(diag *admin.ShardDiagnostic, reason string) {
