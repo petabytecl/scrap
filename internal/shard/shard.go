@@ -546,11 +546,20 @@ func (s *Shard) readDocumentFromProjection(
 			expectedBlockID,
 		)
 	}
-	if err := s.ensureContentReadAllowedLocked(txID, docName); err != nil {
+	scanStatus, err := s.contentScanStatusLocked(txID, docName)
+	if err != nil {
 		s.mu.Unlock()
 		return nil, storeapi.DocumentMeta{}, err
 	}
+	if scanStatus == storeapi.ScanStatusQuarantined {
+		s.mu.Unlock()
+		return nil, storeapi.DocumentMeta{}, contentQuarantinedPrecondition()
+	}
 	if err := s.ensureReadableBlockLockedForReason(ctx, entry.blockID, restoreReason); err != nil {
+		return nil, storeapi.DocumentMeta{}, err
+	}
+	if err := s.ensureContentReadAllowedLocked(txID, docName); err != nil {
+		s.mu.Unlock()
 		return nil, storeapi.DocumentMeta{}, err
 	}
 
@@ -563,7 +572,7 @@ func (s *Shard) readDocumentFromProjection(
 		Size:        entry.TotalBytes,
 		SHA256:      entry.SHA256,
 		CreatedAt:   entry.CreatedAt,
-		ScanStatus:  storeapi.ScanStatusUnscanned,
+		ScanStatus:  scanStatus,
 	}
 	s.mu.Unlock()
 
@@ -571,7 +580,12 @@ func (s *Shard) readDocumentFromProjection(
 	if err != nil {
 		return nil, storeapi.DocumentMeta{}, mapReadDocumentError(err)
 	}
-	return rc, meta, nil
+	return contentQuarantineReadCloser{
+		inner:   rc,
+		shard:   s,
+		txID:    txID,
+		docName: docName,
+	}, meta, nil
 }
 
 func (s *Shard) readDocumentBytes(ctx context.Context, blkPath string, blockID uint64, entry block.IndexEntry) (io.ReadCloser, error) {

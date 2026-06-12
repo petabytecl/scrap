@@ -5,7 +5,7 @@ created: 2026-06-12T14:44:19-04:00
 
 # Story 5.4: Quarantined Read Denial and Metadata Reconciliation
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -78,10 +78,16 @@ so that reconciliation can continue without serving quarantined bytes.
   - [x] Add corrupt quarantine Projection coverage showing reads do not serve bytes when quarantine state cannot be trusted.
   - [x] Do not use sleeps. Use direct apply, fake proposers, manual channels, contexts, or bounded polling with clear failure messages.
 
-- [ ] Update story, evidence, and sprint artifacts. (AC: 1-4)
+- [x] Update story, evidence, and sprint artifacts. (AC: 1-4)
   - [x] Move this story to `in-progress` when implementation starts and to `review` only after local verification is complete.
   - [x] Update the evidence artifact and this story with debug log references, completion notes, review findings, and file list.
-  - [ ] Run `bmad-code-review`; address critical/high findings before marking `done`.
+  - [x] Run `bmad-code-review`; address critical/high findings before marking `done`.
+
+### Review Findings
+
+- [x] [Review][Patch] Read/quarantine race can serve bytes after quarantine commits [internal/shard/shard.go:549]
+- [x] [Review][Patch] Quarantine precondition status message uses unbounded error text [internal/server/server.go:629]
+- [x] [Review][Patch] Reader-time quarantine precondition maps to Internal instead of FailedPrecondition [internal/server/server.go:416]
 
 ## Dev Notes
 
@@ -236,6 +242,8 @@ GPT-5 Codex for story creation.
 - 2026-06-12T14:50:00-04:00 - Added RED tests for public scan status, store precondition error, server `FAILED_PRECONDITION` mapping, Shard read denial, metadata reconciliation, replay, and corrupt quarantine fail-closed behavior.
 - 2026-06-12T14:54:00-04:00 - Implemented additive `ScanStatus` proto fields, store scan status/precondition types, server mapping, and Shard Content Quarantine read/metadata gates.
 - 2026-06-12T15:02:49-04:00 - Final implementation gates passed: focused store/server/shard tests, targeted package gate, `make proto-check`, `git diff --check`, `git diff --cached --check`, `scripts/check-e2e-gates.sh`, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T15:23:00-04:00 - BMAD code review found three patch findings; remediation added a streaming read-time quarantine recheck, bounded public precondition status messages, and `ErrFailedPrecondition` mapping for reader-time errors.
+- 2026-06-12T15:26:00-04:00 - Review remediation gates passed: focused server/shard/index quarantine tests, targeted package gate, redaction scans, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
@@ -246,7 +254,8 @@ GPT-5 Codex for story creation.
 - Added Shard read gating against committed Content Quarantine Projection state before Block restore/open/decrypt can serve bytes.
 - Preserved metadata availability for quarantined Documents through `HeadDocument` and `FindDocuments`.
 - Added server mapping to gRPC `FAILED_PRECONDITION` with bounded `ErrorInfo` and no stream metadata/chunks on denial.
-- Added replay and corrupt-quarantine fail-closed tests.
+- Added replay, streaming race, and corrupt quarantine decode coverage without production test-only corruption helpers.
+- Addressed BMAD code review findings and moved Story 5.4 to done.
 
 ### File List
 
@@ -274,3 +283,4 @@ GPT-5 Codex for story creation.
 | 2026-06-12 | 0.1 | Initial ready-for-dev story created from Epic 5 Story 5.4. | GPT-5 Codex |
 | 2026-06-12 | 0.2 | Started dev-story implementation. | GPT-5 Codex |
 | 2026-06-12 | 1.0 | Implemented quarantined read denial and metadata scan status; moved story to review. | GPT-5 Codex |
+| 2026-06-12 | 1.1 | Addressed BMAD code review findings and moved story to done. | GPT-5 Codex |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"google.golang.org/protobuf/proto"
 
@@ -223,6 +224,10 @@ func (s *Shard) ensureContentReadAllowedLocked(txID, docName string) error {
 	if scanStatus != storeapi.ScanStatusQuarantined {
 		return nil
 	}
+	return contentQuarantinedPrecondition()
+}
+
+func contentQuarantinedPrecondition() error {
 	return storeapi.NewPrecondition(storeapi.PreconditionReasonContentQuarantined, "content quarantined")
 }
 
@@ -239,6 +244,32 @@ func (s *Shard) contentScanStatusLocked(txID, docName string) (storeapi.ScanStat
 	default:
 		return storeapi.ScanStatusUnspecified, fmt.Errorf("%w: content quarantine lookup: %w", storeapi.ErrDataLoss, err)
 	}
+}
+
+type contentQuarantineReadCloser struct {
+	inner   io.ReadCloser
+	shard   *Shard
+	txID    string
+	docName string
+}
+
+func (r contentQuarantineReadCloser) Read(p []byte) (int, error) {
+	n, readErr := r.inner.Read(p)
+	if n <= 0 {
+		return n, readErr
+	}
+
+	r.shard.mu.Lock()
+	defer r.shard.mu.Unlock()
+
+	if err := r.shard.ensureContentReadAllowedLocked(r.txID, r.docName); err != nil {
+		return 0, err
+	}
+	return n, readErr
+}
+
+func (r contentQuarantineReadCloser) Close() error {
+	return r.inner.Close()
 }
 
 var _ avscan.DetectionReporter = (*Shard)(nil)

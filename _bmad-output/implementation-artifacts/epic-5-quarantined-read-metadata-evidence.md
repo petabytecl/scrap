@@ -32,7 +32,7 @@ Out of scope for this evidence:
 | `internal/store` | Add scan-status metadata and quarantine precondition error. |
 | `internal/server` | Map scan status and FailedPrecondition read denial. |
 | `internal/shard` | Gate reads and reconcile metadata from Content Quarantine Projection. |
-| `internal/index` | Add narrow corruption helper for fail-closed read-gate tests. |
+| `internal/index` | Preserve Content Quarantine corruption rejection coverage without production test-only helpers. |
 | BMAD artifacts | Track story evidence and local verification. |
 
 ## Public Contract Summary
@@ -57,6 +57,8 @@ Expected public behavior:
 | Static diff check | `git diff --check`; `git diff --cached --check` | PASS |
 | E2E gate policy | `scripts/check-e2e-gates.sh` | PASS |
 | Broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PASS |
+| Review remediation focused tests | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/server ./internal/shard ./internal/index -run 'Quarantine|Precondition|ReadDocument|ContentQuarantine' -count=1 -timeout 90s` | PASS |
+| Review remediation targeted packages | `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/store ./internal/server ./internal/shard ./internal/index ./internal/admin ./internal/cmd ./internal/scrapctl -count=1 -timeout 3m` | PASS |
 | Secret shape scan | `rg -n --pcre2 "$secret_shape_pattern" $scan_scope` | PASS - no matches |
 | Quarantine-sensitive scan | `rg -n --pcre2 "$quarantine_sensitive_pattern" $scan_scope` | PASS - no matches |
 
@@ -66,9 +68,9 @@ Expected public behavior:
 | --- | --- | --- |
 | Quarantine before read denies bytes | `TestReadDocumentDeniesQuarantinedDocument`, `TestReadDocumentQuarantinedReturnsFailedPreconditionWithoutSend`, `TestGRPCQuarantinedReadDeniedAndMetadataExposesScanStatus` | PASS |
 | Metadata remains available with scan status | `TestQuarantineMetadataScanStatusStaysAvailable`, `TestGRPCQuarantinedReadDeniedAndMetadataExposesScanStatus` | PASS |
-| Read/quarantine race fails closed | Shard read gate checks Content Quarantine under the Projection lock before `ensureReadableBlockLockedForReason`; `ReportDetections` waits for committed local apply from Story 5.3. | PASS |
+| Read/quarantine race fails closed | Shard read gate checks Content Quarantine under the Projection lock before `ensureReadableBlockLockedForReason`, rechecks before returning metadata, and wraps stream readers with a read-time quarantine guard; `TestContentQuarantineReadCloserDeniesBytesAfterConcurrentQuarantine`. | PASS |
 | Replayed quarantine Projection state denies reads | `TestReadDocumentDeniedAfterQuarantineRaftReplay` | PASS |
-| Corrupt quarantine state does not serve bytes | `TestReadDocumentFailsClosedForCorruptQuarantineState` | PASS |
+| Corrupt quarantine state is rejected | `TestContentQuarantineRejectsCorruptValues`; Shard maps corrupt quarantine lookup errors to `ErrDataLoss` and does not use corrupt state as permission to serve bytes. | PASS |
 
 ## Redaction Notes
 
@@ -83,5 +85,5 @@ metadata, or unbounded scanner payloads.
 | --- | --- | --- |
 | AC-5.4.1 | PASS | `TestReadDocumentDeniesQuarantinedDocument`, `TestReadDocumentQuarantinedReturnsFailedPreconditionWithoutSend`, `TestGRPCQuarantinedReadDeniedAndMetadataExposesScanStatus` |
 | AC-5.4.2 | PASS | `TestQuarantineMetadataScanStatusStaysAvailable`, `TestDocumentMetadataScanStatusRoundTrip`, `TestGRPCQuarantinedReadDeniedAndMetadataExposesScanStatus` |
-| AC-5.4.3 | PASS | Shard read gate before Block restore/open/decrypt; `TestReadDocumentFailsClosedForCorruptQuarantineState`; final `make check` |
+| AC-5.4.3 | PASS | Shard read gate before Block restore/open/decrypt; read-time stream recheck; `TestContentQuarantineReadCloserDeniesBytesAfterConcurrentQuarantine`; final `make check` |
 | AC-5.4.4 | PASS | `TestReadDocumentDeniedAfterQuarantineRaftReplay`, `TestQuarantineMetadataScanStatusStaysAvailable`, final `make check` |

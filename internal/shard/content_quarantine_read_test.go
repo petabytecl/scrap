@@ -14,18 +14,20 @@ import (
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
+const quarantineReadTestDocumentName = "unsafe.xml"
+
 func TestReadDocumentDeniesQuarantinedDocument(t *testing.T) {
 	ctx := context.Background()
 	s := openQuarantineReadShard(t)
 
-	if _, err := s.WriteDocument(ctx, "tx-read-quarantine", "unsafe.xml", "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
+	if _, err := s.WriteDocument(ctx, "tx-read-quarantine", quarantineReadTestDocumentName, "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
 		t.Fatalf("WriteDocument unsafe: %v", err)
 	}
-	if err := s.applyEntryCommand(quarantineRaftCommandForReadTest("tx-read-quarantine", "unsafe.xml", 1), 77); err != nil {
+	if err := s.applyEntryCommand(quarantineRaftCommandForReadTest("tx-read-quarantine"), 77); err != nil {
 		t.Fatalf("applyEntryCommand quarantine: %v", err)
 	}
 
-	rc, meta, err := s.ReadDocument(ctx, "tx-read-quarantine", "unsafe.xml")
+	rc, meta, err := s.ReadDocument(ctx, "tx-read-quarantine", quarantineReadTestDocumentName)
 	if !errors.Is(err, storeapi.ErrFailedPrecondition) {
 		t.Fatalf("ReadDocument error = %v, want ErrFailedPrecondition", err)
 	}
@@ -42,17 +44,17 @@ func TestQuarantineMetadataScanStatusStaysAvailable(t *testing.T) {
 	ctx := context.Background()
 	s := openQuarantineReadShard(t)
 
-	if _, err := s.WriteDocument(ctx, "tx-read-quarantine", "unsafe.xml", "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
+	if _, err := s.WriteDocument(ctx, "tx-read-quarantine", quarantineReadTestDocumentName, "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
 		t.Fatalf("WriteDocument unsafe: %v", err)
 	}
 	if _, err := s.WriteDocument(ctx, "tx-read-quarantine", "other.xml", "text/xml", "", bytes.NewReader([]byte("other payload"))); err != nil {
 		t.Fatalf("WriteDocument other: %v", err)
 	}
-	if err := s.applyEntryCommand(quarantineRaftCommandForReadTest("tx-read-quarantine", "unsafe.xml", 1), 77); err != nil {
+	if err := s.applyEntryCommand(quarantineRaftCommandForReadTest("tx-read-quarantine"), 77); err != nil {
 		t.Fatalf("applyEntryCommand quarantine: %v", err)
 	}
 
-	head, err := s.HeadDocument(ctx, "tx-read-quarantine", "unsafe.xml")
+	head, err := s.HeadDocument(ctx, "tx-read-quarantine", quarantineReadTestDocumentName)
 	if err != nil {
 		t.Fatalf("HeadDocument quarantined: %v", err)
 	}
@@ -65,8 +67,8 @@ func TestQuarantineMetadataScanStatusStaysAvailable(t *testing.T) {
 		t.Fatalf("FindDocuments: %v", err)
 	}
 	statuses := scanStatusesByDocument(docs)
-	if statuses["unsafe.xml"] != storeapi.ScanStatusQuarantined {
-		t.Fatalf("FindDocuments unsafe status = %v, want quarantined", statuses["unsafe.xml"])
+	if statuses[quarantineReadTestDocumentName] != storeapi.ScanStatusQuarantined {
+		t.Fatalf("FindDocuments unsafe status = %v, want quarantined", statuses[quarantineReadTestDocumentName])
 	}
 	if statuses["other.xml"] != storeapi.ScanStatusUnscanned {
 		t.Fatalf("FindDocuments other status = %v, want unscanned", statuses["other.xml"])
@@ -77,10 +79,10 @@ func TestReadDocumentDeniedAfterQuarantineRaftReplay(t *testing.T) {
 	ctx := context.Background()
 	s := openQuarantineReadShard(t)
 
-	if _, err := s.WriteDocument(ctx, "tx-replay-quarantine", "unsafe.xml", "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
+	if _, err := s.WriteDocument(ctx, "tx-replay-quarantine", quarantineReadTestDocumentName, "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
 		t.Fatalf("WriteDocument: %v", err)
 	}
-	data, err := proto.Marshal(quarantineRaftCommandForReadTest("tx-replay-quarantine", "unsafe.xml", 1))
+	data, err := proto.Marshal(quarantineRaftCommandForReadTest("tx-replay-quarantine"))
 	if err != nil {
 		t.Fatalf("marshal quarantine command: %v", err)
 	}
@@ -92,7 +94,7 @@ func TestReadDocumentDeniedAfterQuarantineRaftReplay(t *testing.T) {
 		t.Fatalf("applyEntries quarantine replay: %v", err)
 	}
 
-	rc, _, err := s.ReadDocument(ctx, "tx-replay-quarantine", "unsafe.xml")
+	rc, _, err := s.ReadDocument(ctx, "tx-replay-quarantine", quarantineReadTestDocumentName)
 	if !errors.Is(err, storeapi.ErrFailedPrecondition) {
 		t.Fatalf("ReadDocument error = %v, want ErrFailedPrecondition", err)
 	}
@@ -102,24 +104,31 @@ func TestReadDocumentDeniedAfterQuarantineRaftReplay(t *testing.T) {
 	}
 }
 
-func TestReadDocumentFailsClosedForCorruptQuarantineState(t *testing.T) {
-	ctx := context.Background()
-	s := openQuarantineReadShard(t)
+func TestContentQuarantineReadCloserDeniesBytesAfterConcurrentQuarantine(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	inner := &quarantiningReadCloser{
+		payload: []byte("unsafe payload"),
+		beforeReturn: func() {
+			if err := s.applyEntryCommand(quarantineRaftCommandForReadTest("tx-race-quarantine"), 77); err != nil {
+				t.Fatalf("applyEntryCommand quarantine: %v", err)
+			}
+		},
+	}
+	rc := contentQuarantineReadCloser{
+		inner:   inner,
+		shard:   s,
+		txID:    "tx-race-quarantine",
+		docName: quarantineReadTestDocumentName,
+	}
 
-	if _, err := s.WriteDocument(ctx, "tx-corrupt-quarantine", "unsafe.xml", "text/xml", "", bytes.NewReader([]byte("unsafe payload"))); err != nil {
-		t.Fatalf("WriteDocument: %v", err)
+	buf := make([]byte, len(inner.payload))
+	n, err := rc.Read(buf)
+	if !errors.Is(err, storeapi.ErrFailedPrecondition) {
+		t.Fatalf("Read error = %v, want ErrFailedPrecondition", err)
 	}
-	if err := s.idx.CorruptContentQuarantineForTest("tx-corrupt-quarantine", "unsafe.xml", nil); err != nil {
-		t.Fatalf("CorruptContentQuarantineForTest: %v", err)
-	}
-
-	rc, _, err := s.ReadDocument(ctx, "tx-corrupt-quarantine", "unsafe.xml")
-	if !errors.Is(err, storeapi.ErrDataLoss) {
-		t.Fatalf("ReadDocument error = %v, want ErrDataLoss", err)
-	}
-	if rc != nil {
-		_ = rc.Close()
-		t.Fatal("ReadDocument returned a reader for corrupt quarantine state")
+	if n != 0 {
+		t.Fatalf("Read returned n=%d bytes=%q, want no bytes", n, buf[:n])
 	}
 }
 
@@ -149,13 +158,29 @@ func openQuarantineReadShard(t *testing.T) *Shard {
 	return nil
 }
 
-func quarantineRaftCommandForReadTest(txID, docName string, blockID uint64) *scrapv1.RaftCommand {
+type quarantiningReadCloser struct {
+	payload      []byte
+	beforeReturn func()
+}
+
+func (r *quarantiningReadCloser) Read(dst []byte) (int, error) {
+	if r.beforeReturn != nil {
+		r.beforeReturn()
+	}
+	return copy(dst, r.payload), nil
+}
+
+func (r *quarantiningReadCloser) Close() error {
+	return nil
+}
+
+func quarantineRaftCommandForReadTest(txID string) *scrapv1.RaftCommand {
 	return &scrapv1.RaftCommand{
 		Command: &scrapv1.RaftCommand_QuarantineDoc{
 			QuarantineDoc: &scrapv1.QuarantineDocument{
 				TransactionId: txID,
-				DocumentName:  docName,
-				BlockId:       blockID,
+				DocumentName:  quarantineReadTestDocumentName,
+				BlockId:       1,
 				DetectedAtUs:  1716700001000000,
 				ScanType:      scrapv1.QuarantineScanType_QUARANTINE_SCAN_TYPE_INITIAL,
 				Reason:        scrapv1.QuarantineReason_QUARANTINE_REASON_SCANNER_DETECTION,

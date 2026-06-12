@@ -420,6 +420,7 @@ func mapStoreErrorForRead(err error) error {
 		errors.Is(err, storeapi.ErrTxNotFound),
 		errors.Is(err, storeapi.ErrInvalidArgument),
 		errors.Is(err, storeapi.ErrResourceExhausted),
+		errors.Is(err, storeapi.ErrFailedPrecondition),
 		errors.Is(err, storeapi.ErrRebuilding),
 		errors.Is(err, storeapi.ErrUnavailable),
 		errors.Is(err, storeapi.ErrDataLoss):
@@ -626,10 +627,10 @@ func preconditionStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, storeapi.ErrFailedPrecondition.Error())
 	}
 
-	st, detailErr := status.New(codes.FailedPrecondition, fmt.Sprintf("%v", err)).
+	st, detailErr := status.New(codes.FailedPrecondition, storeapi.ErrFailedPrecondition.Error()).
 		WithDetails(&errdetails.ErrorInfo{Reason: reason})
 	if detailErr != nil {
-		return status.Errorf(codes.FailedPrecondition, "%v", err)
+		return status.Error(codes.FailedPrecondition, storeapi.ErrFailedPrecondition.Error())
 	}
 	return st.Err()
 }
