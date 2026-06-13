@@ -1,0 +1,95 @@
+{
+  "status": "passed",
+  "command": "make production-rehearsal",
+  "commit_ref": "f615c7226173d6cc1804a1bba391209b6fee6b54",
+  "git_worktree_state": "clean",
+  "git_diff_sha256": "",
+  "timestamp": "2026-06-13T04:13:41Z",
+  "environment": "production-rehearsal",
+  "evidence_tier": "real-s3-iam",
+  "expected_result": "production mode with real OpenBao Transit, encrypted write/read, committed Backend upload confirmation, fail-closed drills, and redacted artifacts passes",
+  "actual_result": "production security rehearsal passed",
+  "artifact_path": "artifacts/production-rehearsal/report.json",
+  "report_path": "artifacts/production-rehearsal/report.json",
+  "work_dir": "artifacts/production-rehearsal",
+  "shard_placement": {
+    "file": "artifacts/production-rehearsal/runtime/shard-placement.json",
+    "slot_count": 1024,
+    "local_shards": [
+      7,
+      9
+    ],
+    "route_map": "0-511:shard=7,512-1023:shard=9"
+  },
+  "security_mode": "production",
+  "production_readiness_status": "ready",
+  "backend": "s3",
+  "local_overrides": {
+    "filesystem_backend": false,
+    "local_s3_endpoint_allowed": false,
+    "real_s3_iam": true
+  },
+  "openbao_image": "openbao/openbao:2.5.4",
+  "openbao_transit": "real",
+  "openbao_bootstrap": {
+    "command": "scrapctl openbao bootstrap",
+    "evidence_path": "artifacts/production-rehearsal/runtime/openbao-bootstrap-evidence.json"
+  },
+  "test_hooks_enabled": false,
+  "pprof_enabled": false,
+  "encrypted_write_read_ok": true,
+  "plaintext_leak_scan_ok": true,
+  "backend_upload_confirmed": true,
+  "confirmed_upload_count": 1,
+  "fail_closed_drills": [
+    {
+      "name": "auth_denied",
+      "status": "pass",
+      "expected_result": "write fails closed when OpenBao denies the configured token",
+      "actual_result": "write failed closed without plaintext fallback",
+      "artifact_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/auth_denied/result.json",
+      "log_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/auth_denied/scrapd.log",
+      "stdout_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/auth_denied/write-response.json",
+      "stderr_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/auth_denied/write-error.txt",
+      "plaintext_leak_scan_ok": true,
+      "secret_leak_scan_ok": true
+    },
+    {
+      "name": "missing_key",
+      "status": "pass",
+      "expected_result": "write fails closed when the configured Transit key is missing",
+      "actual_result": "write failed closed without plaintext fallback",
+      "artifact_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/missing_key/result.json",
+      "log_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/missing_key/scrapd.log",
+      "stdout_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/missing_key/write-response.json",
+      "stderr_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/missing_key/write-error.txt",
+      "plaintext_leak_scan_ok": true,
+      "secret_leak_scan_ok": true
+    },
+    {
+      "name": "transit_unavailable",
+      "status": "pass",
+      "expected_result": "write fails closed when OpenBao Transit is unavailable",
+      "actual_result": "write failed closed without plaintext fallback",
+      "artifact_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/transit_unavailable/result.json",
+      "log_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/transit_unavailable/scrapd.log",
+      "stdout_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/transit_unavailable/write-response.json",
+      "stderr_path": "artifacts/production-rehearsal/runtime/fail-closed-drills/transit_unavailable/write-error.txt",
+      "plaintext_leak_scan_ok": true,
+      "secret_leak_scan_ok": true
+    }
+  ],
+  "redaction_proof": {
+    "status": "passed",
+    "plaintext_leak_scan_ok": true,
+    "report_excludes_secret_material": true,
+    "tracker_ready_evidence_excludes_raw_logs": true,
+    "scan_artifact_path": "artifacts/production-rehearsal/runtime/redaction-scan.json",
+    "scan_scope": [
+      "artifacts/production-rehearsal/runtime/scrap-data",
+      "artifacts/production-rehearsal/report.json",
+      "artifacts/production-rehearsal/runtime/fail-closed-drills"
+    ]
+  },
+  "log_dir": "artifacts/production-rehearsal/runtime/logs"
+}
