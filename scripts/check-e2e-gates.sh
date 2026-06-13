@@ -10,6 +10,8 @@ PRODLIKE_OVERLAY=${PRODLIKE_OVERLAY:-deploy/kustomize/environments/prodlike}
 PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodlike-e2e}
 PRODUCTION_REHEARSAL_SCRIPT=${PRODUCTION_REHEARSAL_SCRIPT:-scripts/production-rehearsal.sh}
 PRD_CLOSURE_POLICY=${PRD_CLOSURE_POLICY:-docs/prd-closure-policy.md}
+TIER_GATES_CHECK=${TIER_GATES_CHECK:-scripts/check-release-tier-gates.sh}
+TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md}
 
 fail() {
 	echo "e2e gate check failed: $*" >&2
@@ -222,3 +224,6 @@ require_pattern '#312' "$PRD_CLOSURE_POLICY" "PRD #312 closure guard"
 require_pattern '#337' "$PRD_CLOSURE_POLICY" "PRD #337 closure guard"
 require_pattern 'green Tier 2' "$PRD_CLOSURE_POLICY" "green Tier 2 closure requirement"
 require_pattern 'GitHub Actions run link' "$PRD_CLOSURE_POLICY" "Tier 2 run link requirement"
+
+[ -x "$TIER_GATES_CHECK" ] || fail "missing executable Tier 2/Tier 3 evidence validator ${TIER_GATES_CHECK}"
+TIER_GATES_EVIDENCE="$TIER_GATES_EVIDENCE" "$TIER_GATES_CHECK"

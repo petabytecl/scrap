@@ -4,7 +4,7 @@ baseline_commit: 06f2b4f120a165f7034afe74e822d5e7f4ad294c
 
 # Story 6.5: Tier 2 and Tier 3 Release Evidence Gates
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -21,41 +21,41 @@ so that deployed behavior and telemetry privacy are proven before V2 release.
 
 ## Tasks / Subtasks
 
-- [ ] Add red-phase checks for the missing Story 6.5 evidence surface. (AC: 1-4)
-  - [ ] First assert that `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md` does not yet exist or does not contain required Tier 2/Tier 3 rows.
-  - [ ] Add a lightweight validation path that fails when a Tier 2 or Tier 3 row lacks command, commit/ref, environment, expected result, actual result, artifact path, timestamp, redaction proof, freshness decision, owner, mitigation, and retention decision.
-  - [ ] Make stale, local-only, screenshot-only, or unlinked evidence fail validation or appear as `CONCERNS`/`FAIL` in the evidence artifact.
-- [ ] Create the Tier 2/Tier 3 release evidence artifact. (AC: 1-4)
-  - [ ] Create `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md`.
-  - [ ] Record one row for Tier 2 prod-like Cilium evidence and one row for Tier 3 evidence bundle evidence using the full DG-5 evidence schema.
-  - [ ] For Tier 2, link the exact `make tier2-e2e-up` command or GitHub Actions run that executed it, the tested commit/ref, the artifact name/path, and the prod-like Kind/Cilium environment.
-  - [ ] For Tier 3, link the exact `make tier3-evidence-up STRESS_SCENARIO=<scenario>` command or `evidence-gate.yml` run, the generated bundle path, `manifest.json`, `gates.json`, `privacy-scan.json`, and the artifact name/path.
-  - [ ] Record artifact retention rules: GitHub Actions artifacts expire unless retained or copied to durable release evidence, and local ignored artifacts are not final release proof by themselves.
-- [ ] Review or collect current Tier 2 gate evidence. (AC: 1, 3, 4)
-  - [ ] Prefer a green GitHub Actions run for `.github/workflows/prodlike-e2e.yml` or a CI carrier run that executes the same `make tier2-e2e-up` gate if the dedicated workflow cannot be dispatched yet.
-  - [ ] If only local `make tier2-e2e-up` output is available, record it as local/prod-like development evidence and keep release status at `CONCERNS` unless a reviewable durable artifact is linked.
-  - [ ] Confirm the Tier 2 artifact contains `artifacts/tier2-e2e.log`, Kind diagnostics, the security evidence report path, and the tested commit/ref.
-  - [ ] Do not treat screenshots, copied terminal snippets, or unlinked local output as PASS evidence.
-- [ ] Review or collect current Tier 3 gate evidence. (AC: 2, 3, 4)
-  - [ ] Prefer a green `evidence-gate.yml` run because it runs Tier 2 first, resets the prod-like context, then runs `make tier3-evidence-up` and uploads `artifacts` plus `evidence`.
-  - [ ] If local `make tier3-evidence-up STRESS_SCENARIO=throughput` is used, record the generated bundle path and keep final release status below PASS unless the artifact is made reviewable and durable.
-  - [ ] Verify the linked bundle includes logs, metrics, traces, profiles, `manifest.json`, `gates.json`, `privacy-scan.json`, and a passing privacy/leak-scan status.
-  - [ ] Confirm `privacy-scan.json` was generated after final metadata exists, per Story 6.4 review fixes.
-- [ ] Update release-facing matrix rows without over-claiming closure. (AC: 1-4)
-  - [ ] Update `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` for FR-15, FR-16, Story 6.5, and any directly affected release-gate rows.
-  - [ ] Keep real S3/IAM proof as Story 6.6/issue `#429`; do not mark FR-6, real S3/IAM, or final V2 release PASS from Story 6.5.
-  - [ ] Keep Story 6.7 as the final closure-policy and gate-decision owner.
-- [ ] Preserve Epic 6 aggregation scope and redaction discipline. (AC: 2-4)
-  - [ ] Do not add production feature behavior, new storage authority, new telemetry instruments, new admin endpoints, or replacement `scrapctl` diagnostics unless a missing validator can be implemented as docs/evidence-only support.
-  - [ ] Do not paste raw workflow logs, credentials, private keys, generated certificate material, Document payloads, raw Document identifiers, Backend keys, trace IDs, request IDs, auth claims, host-absolute local paths, data keys, wrapped-key ciphertext, or raw dependency output into committed artifacts.
-  - [ ] Record missing proof honestly as `FAIL` or `CONCERNS` with owner and mitigation.
-- [ ] Run verification and update BMAD tracking. (AC: 1-4)
-  - [ ] `git diff --check`
-  - [ ] `scripts/check-e2e-gates.sh`
-  - [ ] Run any focused tests for changed validators, for example `go test ./scripts` if script tests are touched.
-  - [ ] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before moving the story to review if code, scripts, workflows, or validation policy changed.
-  - [ ] Run release-sensitive scans over this story, the Tier gates evidence artifact, the updated matrix, and any changed runbook/policy/script files.
-  - [ ] Move this story to `review`; leave `done` for BMAD code review.
+- [x] Add red-phase checks for the missing Story 6.5 evidence surface. (AC: 1-4)
+  - [x] First assert that `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md` does not yet exist or does not contain required Tier 2/Tier 3 rows.
+  - [x] Add a lightweight validation path that fails when a Tier 2 or Tier 3 row lacks command, commit/ref, environment, expected result, actual result, artifact path, timestamp, redaction proof, freshness decision, owner, mitigation, and retention decision.
+  - [x] Make stale, local-only, screenshot-only, or unlinked evidence fail validation or appear as `CONCERNS`/`FAIL` in the evidence artifact.
+- [x] Create the Tier 2/Tier 3 release evidence artifact. (AC: 1-4)
+  - [x] Create `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md`.
+  - [x] Record one row for Tier 2 prod-like Cilium evidence and one row for Tier 3 evidence bundle evidence using the full DG-5 evidence schema.
+  - [x] For Tier 2, link the exact `make tier2-e2e-up` command or GitHub Actions run that executed it, the tested commit/ref, the artifact name/path, and the prod-like Kind/Cilium environment.
+  - [x] For Tier 3, link the exact `make tier3-evidence-up STRESS_SCENARIO=<scenario>` command or `evidence-gate.yml` run, the generated bundle path, `manifest.json`, `gates.json`, `privacy-scan.json`, and the artifact name/path.
+  - [x] Record artifact retention rules: GitHub Actions artifacts expire unless retained or copied to durable release evidence, and local ignored artifacts are not final release proof by themselves.
+- [x] Review or collect current Tier 2 gate evidence. (AC: 1, 3, 4)
+  - [x] Prefer a green GitHub Actions run for `.github/workflows/prodlike-e2e.yml` or a CI carrier run that executes the same `make tier2-e2e-up` gate if the dedicated workflow cannot be dispatched yet.
+  - [x] If only local `make tier2-e2e-up` output is available, record it as local/prod-like development evidence and keep release status at `CONCERNS` unless a reviewable durable artifact is linked.
+  - [x] Confirm the Tier 2 artifact contains `artifacts/tier2-e2e.log`, Kind diagnostics, the security evidence report path, and the tested commit/ref.
+  - [x] Do not treat screenshots, copied terminal snippets, or unlinked local output as PASS evidence.
+- [x] Review or collect current Tier 3 gate evidence. (AC: 2, 3, 4)
+  - [x] Prefer a green `evidence-gate.yml` run because it runs Tier 2 first, resets the prod-like context, then runs `make tier3-evidence-up` and uploads `artifacts` plus `evidence`.
+  - [x] If local `make tier3-evidence-up STRESS_SCENARIO=throughput` is used, record the generated bundle path and keep final release status below PASS unless the artifact is made reviewable and durable.
+  - [x] Verify the linked bundle includes logs, metrics, traces, profiles, `manifest.json`, `gates.json`, `privacy-scan.json`, and a passing privacy/leak-scan status.
+  - [x] Confirm `privacy-scan.json` was generated after final metadata exists, per Story 6.4 review fixes.
+- [x] Update release-facing matrix rows without over-claiming closure. (AC: 1-4)
+  - [x] Update `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` for FR-15, FR-16, Story 6.5, and any directly affected release-gate rows.
+  - [x] Keep real S3/IAM proof as Story 6.6/issue `#429`; do not mark FR-6, real S3/IAM, or final V2 release PASS from Story 6.5.
+  - [x] Keep Story 6.7 as the final closure-policy and gate-decision owner.
+- [x] Preserve Epic 6 aggregation scope and redaction discipline. (AC: 2-4)
+  - [x] Do not add production feature behavior, new storage authority, new telemetry instruments, new admin endpoints, or replacement `scrapctl` diagnostics unless a missing validator can be implemented as docs/evidence-only support.
+  - [x] Do not paste raw workflow logs, credentials, private keys, generated certificate material, Document payloads, raw Document identifiers, Backend keys, trace IDs, request IDs, auth claims, host-absolute local paths, data keys, wrapped-key ciphertext, or raw dependency output into committed artifacts.
+  - [x] Record missing proof honestly as `FAIL` or `CONCERNS` with owner and mitigation.
+- [x] Run verification and update BMAD tracking. (AC: 1-4)
+  - [x] `git diff --check`
+  - [x] `scripts/check-e2e-gates.sh`
+  - [x] Run any focused tests for changed validators, for example `go test ./scripts` if script tests are touched.
+  - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before moving the story to review if code, scripts, workflows, or validation policy changed.
+  - [x] Run release-sensitive scans over this story, the Tier gates evidence artifact, the updated matrix, and any changed runbook/policy/script files.
+  - [x] Move this story to `review`; leave `done` for BMAD code review.
 
 ## Dev Notes
 
@@ -190,11 +190,29 @@ GPT-5 Codex
 ### Debug Log References
 
 - 2026-06-12T20:01:01-04:00 - Story context created from Epic 6, FR-15, FR-16, DG-5, existing Tier 2/Tier 3 Makefile targets, GitHub Actions workflows, closure policy, evidence runbook, Story 6.4 bundle/review lessons, current sprint status, GitHub code search, and GitHub Actions artifact docs.
+- 2026-06-12T20:05:25-04:00 - Story marked in-progress after creation commit `d2a9bcc`.
+- 2026-06-12T20:08:34-04:00 - Red phase confirmed: `scripts/check-release-tier-gates.sh` and `scripts/check-e2e-gates.sh` failed because `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md` was missing.
+- 2026-06-12T20:12:15-04:00 - Verification passed: `scripts/check-release-tier-gates.sh`, `scripts/check-e2e-gates.sh`, `go test -count=1 ./scripts`, `git diff --check`, release-sensitive scans with classified safe matches, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- Added `scripts/check-release-tier-gates.sh` and wired it into `scripts/check-e2e-gates.sh` so Tier 2/Tier 3 release evidence must exist and include hard DG-5 fields before gate wiring passes.
+- Added script tests proving missing evidence fails, complete evidence passes, and weak PASS evidence based on local-only proof fails.
+- Created `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md` with Tier 2/Tier 3 rows, live GitHub Actions state, artifact retention rules, and explicit `CONCERNS`/`FAIL` outcomes for missing current runtime evidence.
+- Updated the release matrix for Story 6.5, FR-15, FR-16, and the Epic 6 current release decision without marking final V2 release PASS.
+- Release-sensitive scans matched only negative guidance, existing validation-pattern text, and safe evidence-policy wording; no secrets or raw runtime artifact contents were committed.
+
+### Change Log
+
+- 2026-06-12 - Implemented Story 6.5 Tier 2/Tier 3 evidence validator, evidence artifact, and matrix updates.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-5-tier-2-and-tier-3-release-evidence-gates.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
+- `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md`
+- `scripts/check-e2e-gates.sh`
+- `scripts/check-release-tier-gates.sh`
+- `scripts/release_tier_gates_test.go`
