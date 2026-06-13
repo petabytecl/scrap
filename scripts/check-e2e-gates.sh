@@ -12,6 +12,8 @@ PRODUCTION_REHEARSAL_SCRIPT=${PRODUCTION_REHEARSAL_SCRIPT:-scripts/production-re
 PRD_CLOSURE_POLICY=${PRD_CLOSURE_POLICY:-docs/prd-closure-policy.md}
 TIER_GATES_CHECK=${TIER_GATES_CHECK:-scripts/check-release-tier-gates.sh}
 TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md}
+REAL_S3_IAM_GATE_CHECK=${REAL_S3_IAM_GATE_CHECK:-scripts/check-real-s3-iam-gate.sh}
+REAL_S3_IAM_EVIDENCE=${REAL_S3_IAM_EVIDENCE:-_bmad-output/implementation-artifacts/v2-real-s3-iam-production-rehearsal-evidence.md}
 
 fail() {
 	echo "e2e gate check failed: $*" >&2
@@ -227,3 +229,6 @@ require_pattern 'GitHub Actions run link' "$PRD_CLOSURE_POLICY" "Tier 2 run link
 
 [ -x "$TIER_GATES_CHECK" ] || fail "missing executable Tier 2/Tier 3 evidence validator ${TIER_GATES_CHECK}"
 TIER_GATES_EVIDENCE="$TIER_GATES_EVIDENCE" "$TIER_GATES_CHECK"
+
+[ -x "$REAL_S3_IAM_GATE_CHECK" ] || fail "missing executable real S3/IAM evidence validator ${REAL_S3_IAM_GATE_CHECK}"
+REAL_S3_IAM_EVIDENCE="$REAL_S3_IAM_EVIDENCE" "$REAL_S3_IAM_GATE_CHECK"
