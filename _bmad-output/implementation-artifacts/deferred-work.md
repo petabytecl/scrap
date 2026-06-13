@@ -1,3 +1,7 @@
+## Deferred from: quick-dev scope split "fix open github issues" (2026-06-13)
+
+- GitHub issue #438 — Validate Tier 3 evidence stack + stress/bundle phases end-to-end on CI. Blocked by #437 (Tier 3 `evidence-gate.yml` runs the full E2E suite before the stress/evidence-bundle phases). Deferred so #437 (flaky multi-member E2E suite) can be fixed first; resume #438 once a green E2E run is achievable. Remaining scope: confirm observability stack (loki/mimir/tempo/pyroscope/alloy/otel-collector/grafana/kube-state-metrics) reaches Ready on a hosted runner, validate the stress run + evidence-bundle generation (`manifest.json`, `gates.json`, `privacy-scan.json`, retention, privacy PASS), and consider readiness probes on monitoring deployments.
+
 ## Deferred from: code review of 1-4-transaction-scoped-document-discovery (2026-06-11)
 
 - Rebuilding Store errors still map to `INTERNAL` [internal/server/server.go:570]: `storeapi.ErrRebuilding` from Shard read gates is not handled by central server Store error mapping, so public read/discovery paths can report `INTERNAL` instead of a transient unavailable-style status during projection rebuild. Deferred as pre-existing because Story 1.4 did not introduce `mapStoreError` or the Shard rebuilding sentinel.

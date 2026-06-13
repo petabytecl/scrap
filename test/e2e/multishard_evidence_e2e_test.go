@@ -24,13 +24,14 @@ type e2eShardDiagnostics struct {
 }
 
 type e2eShardDiagnostic struct {
-	ShardID     uint64   `json:"shard_id"`
-	Membership  string   `json:"membership"`
-	Routes      []string `json:"routes"`
-	State       string   `json:"state"`
-	Health      string   `json:"health"`
-	Readiness   string   `json:"readiness"`
-	LeaderState string   `json:"leader_state"`
+	ShardID             uint64   `json:"shard_id"`
+	Membership          string   `json:"membership"`
+	Routes              []string `json:"routes"`
+	State               string   `json:"state"`
+	Health              string   `json:"health"`
+	Readiness           string   `json:"readiness"`
+	LeaderState         string   `json:"leader_state"`
+	UploadPendingBlocks int      `json:"upload_pending_blocks"`
 }
 
 func TestE2EMultiShardRestartDeterminism(t *testing.T) {
