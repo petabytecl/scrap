@@ -52,6 +52,9 @@ spec:
             - -distributor.ring.store=memberlist
             - -ingester.ring.store=memberlist
             - -store-gateway.sharding-ring.store=memberlist
+            # The activity tracker defaults to ./metrics-activity.log in the
+            # read-only root filesystem; write it under the writable /data PVC.
+            - -activity-tracker.filepath=/data/metrics-activity.log
           ports:
             - containerPort: 9009
           resources:

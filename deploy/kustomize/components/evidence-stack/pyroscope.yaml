@@ -15,6 +15,13 @@ spec:
       labels:
         app: pyroscope
     spec:
+      # grafana/pyroscope's image declares a non-numeric user ("pyroscope"),
+      # which runAsNonRoot cannot verify; pin a numeric non-root UID and
+      # fsGroup so the /data PVC is writable.
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
       containers:
         - name: pyroscope
           image: grafana/pyroscope:1.13.3@sha256:545ef78ff6ad3217b9c81e76bad2bcec947a6ac134c2ed3e6019b3165142292f
@@ -24,6 +31,10 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+          args:
+            # Default data path is ./data in the read-only root filesystem;
+            # use the writable /data PVC instead.
+            - -pyroscopedb.data-path=/data
           ports:
             - containerPort: 4040
           resources:
@@ -36,10 +47,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: pyroscope-data
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
