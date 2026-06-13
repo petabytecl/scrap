@@ -370,6 +370,7 @@ initialize_openbao() {
 	NO_PROXY="127.0.0.1,localhost" \
 		no_proxy="127.0.0.1,localhost" \
 		SSL_CERT_FILE="$combined_ca" \
+		BAO_CACERT="$combined_ca" \
 		OPENBAO_TOKEN="" \
 		"$scrapctl_bin" openbao bootstrap \
 		--address="$openbao_addr" \
@@ -432,6 +433,7 @@ scrapd_env() {
 		NO_PROXY="127.0.0.1,localhost" \
 		no_proxy="127.0.0.1,localhost" \
 		SSL_CERT_FILE="$combined_ca" \
+		BAO_CACERT="$combined_ca" \
 		SCRAP_SECURITY_MODE="production" \
 		SCRAP_CELL_ID="$cell_id" \
 		SCRAP_ENVIRONMENT="production-rehearsal" \
