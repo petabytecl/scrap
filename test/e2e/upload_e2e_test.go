@@ -588,51 +588,6 @@ func waitShardUploadPendingBlocks(t *testing.T, pod string, shardID uint64, want
 	t.Fatalf("pod %s Shard %d upload_pending_blocks did not become %d: %+v", pod, shardID, want, last.Shards)
 }
 
-// waitForShardConvergence blocks until every Cell pod reports the named Shard as
-// ready with a resolved leader state. It is a deterministic replication-readiness
-// gate: K8s pod readiness does not imply a replacement replica has caught up to
-// the leader's open Block, which otherwise surfaces as a transient
-// "replica block N is not open" on the next write.
-func waitForShardConvergence(t *testing.T, shardID uint64, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var detail string
-	for time.Now().Before(deadline) {
-		converged, d := shardReadyAcrossCell(t, shardID)
-		detail = d
-		if converged {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("Shard %d did not converge across the Cell within %s: %s", shardID, timeout, detail)
-}
-
-func shardReadyAcrossCell(t *testing.T, shardID uint64) (bool, string) {
-	t.Helper()
-	pods := podNames(t)
-	if len(pods) == 0 {
-		return false, "no pods discovered"
-	}
-	for _, pod := range pods {
-		diag, errText := fetchShardDiagnosticsFromPod(t, pod)
-		if errText != "" {
-			return false, fmt.Sprintf("pod %s diagnostics: %s", pod, errText)
-		}
-		shard, ok := findShardDiagnostic(diag, shardID)
-		if !ok {
-			return false, fmt.Sprintf("pod %s missing Shard %d", pod, shardID)
-		}
-		if shard.Readiness != "ready" {
-			return false, fmt.Sprintf("pod %s Shard %d readiness=%q", pod, shardID, shard.Readiness)
-		}
-		if shard.LeaderState != "leader" && shard.LeaderState != "follower" {
-			return false, fmt.Sprintf("pod %s Shard %d leader_state=%q", pod, shardID, shard.LeaderState)
-		}
-	}
-	return true, ""
-}
-
 func waitUploadPressureAtLeast(t *testing.T, pod string, minLevel int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

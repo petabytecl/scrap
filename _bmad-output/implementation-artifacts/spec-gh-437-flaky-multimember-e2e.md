@@ -2,8 +2,9 @@
 title: 'Fix flaky multi-member E2E: upload Shard-scoping + failover convergence gate (#437)'
 type: 'bugfix'
 created: '2026-06-13'
-status: 'in-progress'
+status: 'in-review'
 baseline_commit: 'b3fd781894914049df7e0a72c1ba9c514c41eaa8'
+pull_request: 'https://github.com/petabytecl/scrap/pull/440'
 context:
   - '{project-root}/CONTEXT.md'
   - '{project-root}/_bmad-output/project-context.md'
@@ -50,7 +51,7 @@ context:
 - [x] `internal/admin/shard_diagnostics.go` -- (read-only) confirmed per-Shard `upload_pending_blocks` is serialized into the `/healthz` `shard_diagnostics` payload (`shard_diagnostics.go:51`). No product change needed; Ask-First gate cleared.
 - [x] `test/e2e/multishard_evidence_e2e_test.go` -- added `UploadPendingBlocks int json:"upload_pending_blocks"` to `e2eShardDiagnostic`.
 - [x] `test/e2e/upload_e2e_test.go` -- added `e2eShardIDForTransaction`, `findShardDiagnostic`, `waitShardUploadPendingBlocks`, `waitForShardConvergence`, `shardReadyAcrossCell`; replaced the pod-aggregate `waitUploadPendingBlocks(leader, 0, ...)` in `TestE2EBackendUploadHappyPath` with the Shard-scoped wait. Reused `uploadE2ETimeout` (no increase).
-- [x] `test/e2e/e2e_test.go` -- in `TestE2ELeaderFailover`, added `waitForShardConvergence(t, e2eShardIDForTransaction(t, txID), failoverConvergeTimeout)` before the canary write; added `failoverConvergeTimeout` const. No retry past fail-closed guards.
+- [~] `test/e2e/e2e_test.go` -- **REVERTED.** Added a `waitForShardConvergence` gate before the canary write, but Tier 2 CI (run `27481325654`) proved it ineffective: the gate passed (Shard reported `ready` + resolved leader across the Cell) yet the canary write still failed with `replica block 3 is not open`. This confirms the failure is a **product** replica-convergence bug, not test timing, and diagnostics readiness does not reflect replica-Block alignment. Reverted to keep this PR to the one verified fix; the product bug is escalated in #439.
 - [x] GitHub -- filed investigation issue #439 for the `TestE2EMultiShardRestartDeterminism` `replica offset mismatch` (suspected product replication-convergence bug); labels `bug,e2e,production-readiness,v2,needs-triage`; references #437 and #438.
 - [ ] Verify both tests on the lima Linux VM (see Verification).
 
@@ -72,6 +73,15 @@ for time.Now().Before(deadline) {
 }
 t.Fatalf("Shard %d upload_pending_blocks did not reach 0: %+v", shardID, lastDiag)
 ```
+
+## Spec Change Log
+
+### 2026-06-13 — CI evidence narrowed scope to the upload fix only
+
+- **Finding (Tier 2 CI):** first gate run `27481016765` passed the whole suite, but rerun `27481325654` showed `TestE2EBackendUploadHappyPath` PASS while `TestE2ELeaderFailover` and `TestE2EMultiShardRestartDeterminism` both FAILED with `replica block 3 is not open` — including on a normal-operation write. The leader-failover `waitForShardConvergence` gate passed but did not prevent the canary-write failure.
+- **Amended:** kept the upload Shard-scoping fix (verified PASS in two runs); reverted the failover convergence-gate change.
+- **Known-bad avoided:** shipping a test "fix" (the convergence gate) that does not make the test pass and masks a real product bug behind a green-looking gate.
+- **KEEP:** the upload Shard-scoping approach (per-Shard `upload_pending_blocks`) is correct and verified. The `replica block not open` / offset-mismatch convergence failure is a **product** bug owned by #439, not fixable at the test layer.
 
 ## Verification
 
