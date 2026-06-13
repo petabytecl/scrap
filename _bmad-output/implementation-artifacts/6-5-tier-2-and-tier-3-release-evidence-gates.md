@@ -4,7 +4,7 @@ baseline_commit: 06f2b4f120a165f7034afe74e822d5e7f4ad294c
 
 # Story 6.5: Tier 2 and Tier 3 Release Evidence Gates
 
-Status: review
+Status: done
 
 ## Story
 
@@ -56,6 +56,14 @@ so that deployed behavior and telemetry privacy are proven before V2 release.
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before moving the story to review if code, scripts, workflows, or validation policy changed.
   - [x] Run release-sensitive scans over this story, the Tier gates evidence artifact, the updated matrix, and any changed runbook/policy/script files.
   - [x] Move this story to `review`; leave `done` for BMAD code review.
+
+### Review Findings
+
+- [x] [Review][Patch] Validator did not enforce DG-5 fields per Tier row [scripts/check-release-tier-gates.sh:29]
+- [x] [Review][Patch] Weak PASS rejection could be bypassed outside the freshness cell [scripts/check-release-tier-gates.sh:62]
+- [x] [Review][Patch] Release PASS was allowed even when Tier rows were failing [scripts/check-release-tier-gates.sh:31]
+- [x] [Review][Patch] Tier 2 PASS criteria omitted the prod-like security evidence report [v2-release-tier-gates-evidence.md:55]
+- [x] [Review][Patch] Evidence artifact referenced the story-creation CI run instead of the pushed implementation CI run [v2-release-tier-gates-evidence.md:31]
 
 ## Dev Notes
 
@@ -193,6 +201,7 @@ GPT-5 Codex
 - 2026-06-12T20:05:25-04:00 - Story marked in-progress after creation commit `d2a9bcc`.
 - 2026-06-12T20:08:34-04:00 - Red phase confirmed: `scripts/check-release-tier-gates.sh` and `scripts/check-e2e-gates.sh` failed because `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md` was missing.
 - 2026-06-12T20:12:15-04:00 - Verification passed: `scripts/check-release-tier-gates.sh`, `scripts/check-e2e-gates.sh`, `go test -count=1 ./scripts`, `git diff --check`, release-sensitive scans with classified safe matches, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
+- 2026-06-12T20:26:38-04:00 - BMAD code review patches resolved: per-row DG-5 validation is enforced, weak PASS rows are rejected across the row, release PASS requires both Tier rows to be PASS, Tier 2 PASS criteria require the prod-like security evidence report, and the evidence artifact references the pushed implementation CI/CodeQL runs. Verification passed: `scripts/check-release-tier-gates.sh`, `scripts/check-e2e-gates.sh`, `go test -count=1 ./scripts`, `git diff --check`, release-sensitive scans with classified safe matches, and `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
@@ -202,10 +211,12 @@ GPT-5 Codex
 - Created `_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md` with Tier 2/Tier 3 rows, live GitHub Actions state, artifact retention rules, and explicit `CONCERNS`/`FAIL` outcomes for missing current runtime evidence.
 - Updated the release matrix for Story 6.5, FR-15, FR-16, and the Epic 6 current release decision without marking final V2 release PASS.
 - Release-sensitive scans matched only negative guidance, existing validation-pattern text, and safe evidence-policy wording; no secrets or raw runtime artifact contents were committed.
+- Addressed BMAD code review findings by strengthening per-row validation, weak PASS rejection, release PASS consistency checks, Tier 2 security-report criteria, and current CI/CodeQL references.
 
 ### Change Log
 
 - 2026-06-12 - Implemented Story 6.5 Tier 2/Tier 3 evidence validator, evidence artifact, and matrix updates.
+- 2026-06-12 - Addressed Story 6.5 BMAD code review findings and marked story done.
 
 ### File List
 
