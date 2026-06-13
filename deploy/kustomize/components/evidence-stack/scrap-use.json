@@ -1,0 +1,200 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Raft apply pipeline",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "title": "Apply Lag (saturation: commit - applied)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "max(scrap_raft_commit_index) - max(scrap_raft_applied_index)",
+          "legendFormat": "apply lag (entries)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 2,
+      "title": "Applied Index Rate (throughput)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "rate(scrap_raft_applied_index[5m])", "legendFormat": "applied/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 200,
+      "title": "RPC concurrency",
+      "type": "row"
+    },
+    {
+      "id": 10,
+      "title": "In-Flight RPCs (utilization)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(scrap_rpc_server_in_flight) by (rpc_method)", "legendFormat": "{{rpc_method}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 11,
+      "title": "Rejections (saturation: RESOURCE_EXHAUSTED)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(scrap_rpc_server_requests_total{rpc_grpc_status_code=\"8\"}[5m])) by (rpc_method)",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 300,
+      "title": "Upload outbox",
+      "type": "row"
+    },
+    {
+      "id": 20,
+      "title": "Pending Upload (util vs budget)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "max(scrap_upload_pending_bytes)", "legendFormat": "pending_bytes" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 21,
+      "title": "Upload Rate by Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(rate(scrap_upload_total[5m])) by (status)", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 400,
+      "title": "Local storage",
+      "type": "row"
+    },
+    {
+      "id": 30,
+      "title": "Disk Used / Free / Pebble",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "max(scrap_disk_used_bytes)", "legendFormat": "disk used" },
+        { "expr": "min(scrap_disk_free_bytes)", "legendFormat": "disk free" },
+        { "expr": "max(scrap_pebble_disk_bytes)", "legendFormat": "pebble" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 500,
+      "title": "Process runtime",
+      "type": "row"
+    },
+    {
+      "id": 40,
+      "title": "Goroutines",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "process_runtime_go_goroutines", "legendFormat": "goroutines" }
+      ]
+    },
+    {
+      "id": 41,
+      "title": "Heap Allocated",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "process_runtime_go_mem_heap_alloc_bytes", "legendFormat": "heap_alloc" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 42,
+      "title": "GC Pause Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "rate(process_runtime_go_gc_pause_seconds_total[5m])", "legendFormat": "gc_pause/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "id": 600,
+      "title": "Scrub interference",
+      "type": "row"
+    },
+    {
+      "id": 50,
+      "title": "Deep Scrub Progress & Corruptions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "max(scrap_scrub_deep_progress_ratio)", "legendFormat": "progress" },
+        {
+          "expr": "sum(rate(scrap_scrub_deep_corruptions_total[5m])) by (type)",
+          "legendFormat": "corruption:{{type}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["scrap", "evidence", "use"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "Mimir", "value": "Mimir" },
+        "hide": 0,
+        "label": "Data Source",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "S.C.R.A.P. — USE (resources)",
+  "uid": "scrap-use"
+}

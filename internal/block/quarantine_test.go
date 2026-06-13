@@ -1,0 +1,151 @@
+package block_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/petabytecl/scrap/internal/block"
+)
+
+func TestQuarantine_RenamesBothFiles(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	blkPath := block.FilePath(dir, 5)
+	if err := block.Quarantine(blkPath); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	if _, err := os.Stat(blkPath); !os.IsNotExist(err) {
+		t.Fatal("expected .blk to be renamed")
+	}
+	if _, err := os.Stat(blkPath + ".quarantine"); err != nil {
+		t.Fatalf("expected .blk.quarantine to exist: %v", err)
+	}
+
+	idxPath := block.IdxFilePath(dir, 5)
+	if _, err := os.Stat(idxPath); !os.IsNotExist(err) {
+		t.Fatal("expected .idx to be renamed")
+	}
+	if _, err := os.Stat(idxPath + ".quarantine"); err != nil {
+		t.Fatalf("expected .idx.quarantine to exist: %v", err)
+	}
+}
+
+func TestListQuarantined(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 1)
+	createSealedBlock(t, dir, 1, 2)
+	createSealedBlock(t, dir, 1, 3)
+
+	if err := block.Quarantine(block.FilePath(dir, 2)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	if err := block.Quarantine(block.FilePath(dir, 3)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	q, err := block.ListQuarantined(dir)
+	if err != nil {
+		t.Fatalf("ListQuarantined: %v", err)
+	}
+	if len(q) != 2 {
+		t.Fatalf("expected 2 quarantined blocks, got %d", len(q))
+	}
+	if q[0] != 2 || q[1] != 3 {
+		t.Fatalf("expected [2,3], got %v", q)
+	}
+}
+
+func TestQuarantine_ListSealedExcludes(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 1)
+	createSealedBlock(t, dir, 1, 2)
+
+	if err := block.Quarantine(block.FilePath(dir, 2)); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	sealed, err := block.ListSealedBlocks(dir, 99)
+	if err != nil {
+		t.Fatalf("ListSealedBlocks: %v", err)
+	}
+	if len(sealed) != 1 {
+		t.Fatalf("expected 1 sealed block, got %d", len(sealed))
+	}
+
+	quarantined := filepath.Join(dir, blockFileName(2)+".quarantine")
+	if _, err := os.Stat(quarantined); err != nil {
+		t.Fatalf("quarantined file missing: %v", err)
+	}
+}
+
+func TestUnquarantine_RestoresFiles(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	blkPath := block.FilePath(dir, 5)
+	if err := block.Quarantine(blkPath); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	if err := block.Unquarantine(dir, 5); err != nil {
+		t.Fatalf("Unquarantine: %v", err)
+	}
+
+	if _, err := os.Stat(blkPath); err != nil {
+		t.Fatalf("expected .blk restored: %v", err)
+	}
+	idxPath := block.IdxFilePath(dir, 5)
+	if _, err := os.Stat(idxPath); err != nil {
+		t.Fatalf("expected .idx restored: %v", err)
+	}
+	if _, err := os.Stat(blkPath + ".quarantine"); !os.IsNotExist(err) {
+		t.Fatal("expected .blk.quarantine removed")
+	}
+	if _, err := os.Stat(idxPath + ".quarantine"); !os.IsNotExist(err) {
+		t.Fatal("expected .idx.quarantine removed")
+	}
+}
+
+func TestUnquarantine_NotQuarantinedReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	err := block.Unquarantine(dir, 5)
+	if err == nil {
+		t.Fatal("expected error when block is not quarantined")
+	}
+}
+
+func TestUnquarantine_RollsBackBlkOnIdxFailure(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 5)
+
+	blkPath := block.FilePath(dir, 5)
+	if err := block.Quarantine(blkPath); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	idxDest := block.IdxFilePath(dir, 5)
+	if err := os.MkdirAll(idxDest, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(idxDest, "blocker"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err := block.Unquarantine(dir, 5)
+	if err == nil {
+		t.Fatal("expected error when idx rename fails")
+	}
+
+	blkQ := blkPath + ".quarantine"
+	if _, statErr := os.Stat(blkQ); statErr != nil {
+		t.Fatalf("expected blk to be rolled back to quarantine: %v", statErr)
+	}
+	if _, statErr := os.Stat(blkPath); !os.IsNotExist(statErr) {
+		t.Fatal("expected blk not to exist after rollback")
+	}
+}

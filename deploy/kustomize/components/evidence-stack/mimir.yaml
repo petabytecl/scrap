@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mimir
+  namespace: monitoring
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mimir
+  template:
+    metadata:
+      labels:
+        app: mimir
+    spec:
+      containers:
+        - name: mimir
+          image: grafana/mimir:2.17.0@sha256:614146229384e3dd3367d98cbd9ddc195dffe13fdfb88d77520148f09735fa8f
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          args:
+            - -target=all
+            - -auth.multitenancy-enabled=false
+            # Single-node evidence backend: one ingester in the ring, so the
+            # default replication factor of 3 would reject every OTLP write.
+            - -ingester.ring.replication-factor=1
+            # Emit type/unit suffixes (_total, _seconds, _bytes) so the OTLP→Mimir
+            # names match the otelprom /metrics convention used by monitoring/scrapd.json.
+            - -distributor.otel-metric-suffixes-enabled=true
+            - -server.http-listen-port=9009
+            - -blocks-storage.backend=filesystem
+            - -blocks-storage.filesystem.dir=/data/blocks
+            - -compactor.data-dir=/data/compactor
+            - -alertmanager-storage.backend=filesystem
+            - -alertmanager-storage.filesystem.dir=/data/alertmanager
+            - -ruler-storage.backend=filesystem
+            - -ruler-storage.filesystem.dir=/data/ruler
+            - -compactor.ring.store=memberlist
+            - -distributor.ring.store=memberlist
+            - -ingester.ring.store=memberlist
+            - -store-gateway.sharding-ring.store=memberlist
+          ports:
+            - containerPort: 9009
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mimir-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mimir-data
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mimir
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: mimir
+  ports:
+    - port: 9009
+      targetPort: 9009

@@ -1,0 +1,194 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Cluster health",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "title": "KSM Target Up",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "max(up{job=\"kube-state-metrics\"})", "legendFormat": "up" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Ready Nodes",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "legendFormat": "ready" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Running Pods",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_pod_status_phase{phase=\"Running\"})", "legendFormat": "running" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "PVCs Not Bound",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_persistentvolumeclaim_status_phase{phase!=\"Bound\"})", "legendFormat": "not bound" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Scheduling and capacity",
+      "type": "row"
+    },
+    {
+      "id": 10,
+      "title": "Pods by Phase",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_pod_status_phase) by (phase)", "legendFormat": "{{phase}}" }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Running Pods by Namespace",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_pod_status_phase{phase=\"Running\"}) by (namespace)", "legendFormat": "{{namespace}}" }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Allocatable CPU",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_node_status_allocatable{resource=\"cpu\",unit=\"core\"})", "legendFormat": "cluster cores" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 13,
+      "title": "Allocatable Memory",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_node_status_allocatable{resource=\"memory\",unit=\"byte\"})", "legendFormat": "cluster memory" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 102,
+      "title": "Node runtime",
+      "type": "row"
+    },
+    {
+      "id": 20,
+      "title": "Container CPU by Namespace",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(rate(container_cpu_usage_seconds_total{container!=\"\",pod!=\"\"}[5m])) by (namespace)", "legendFormat": "{{namespace}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cores" } }
+    },
+    {
+      "id": 21,
+      "title": "Container Memory by Namespace",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(container_memory_working_set_bytes{container!=\"\",pod!=\"\"}) by (namespace)", "legendFormat": "{{namespace}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 22,
+      "title": "Node Conditions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_node_status_condition{status=\"true\"}) by (node, condition)", "legendFormat": "{{node}} {{condition}}" }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "PVC Phase",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(kube_persistentvolumeclaim_status_phase) by (namespace, phase)", "legendFormat": "{{namespace}} {{phase}}" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["scrap", "evidence", "kubernetes", "cluster"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "Mimir", "value": "Mimir" },
+        "hide": 0,
+        "label": "Data Source",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Kubernetes - Cluster",
+  "uid": "scrap-kubernetes-cluster"
+}

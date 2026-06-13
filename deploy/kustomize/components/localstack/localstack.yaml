@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: localstack
+  namespace: scrap
+  labels:
+    app: localstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: localstack
+  template:
+    metadata:
+      labels:
+        app: localstack
+    spec:
+      containers:
+        - name: localstack
+          image: localstack/localstack:4.4.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: edge
+              containerPort: 4566
+          env:
+            - name: SERVICES
+              value: s3
+            - name: DEBUG
+              value: "0"
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+          readinessProbe:
+            httpGet:
+              path: /_localstack/health
+              port: edge
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: localstack
+  namespace: scrap
+spec:
+  type: NodePort
+  selector:
+    app: localstack
+  ports:
+    - name: edge
+      port: 4566
+      targetPort: 4566
+      # Exposed on the host via the Kind cluster's 30566->18566 extraPortMapping
+      # so S3 tooling can reach LocalStack from outside the cluster
+      # (e.g. aws --endpoint-url http://127.0.0.1:18566 s3 ls).
+      nodePort: 30566

@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Disposable AWS resources for the S.C.R.A.P. real S3/IAM production rehearsal
+  (tracker issue #429). Provisions one isolated S3 bucket and one least-privilege
+  IAM role that the rehearsal operator assumes via AWS SSO. This stack is for
+  validation evidence only; it is not a S.C.R.A.P. production deployment.
+
+Parameters:
+  CreateValidationRole:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether to create the dedicated least-privilege IAM role. Set "false" when
+      the deploying identity cannot create IAM resources (e.g. an
+      AWSFullAccessNoIAM SSO permission set); the rehearsal then runs under the
+      deploying identity's own credentials. Requires CAPABILITY_IAM when "true".
+
+  TrustedPrincipalArnPattern:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:(iam|sts)::[0-9*]{0,12}:.+$"
+    ConstraintDescription: >-
+      must be empty or an IAM/STS ARN (e.g. arn:aws:iam::123456789012:role/...);
+      a bare wildcard is rejected to prevent account-wide assume-role trust.
+    Description: >-
+      ArnLike pattern for the principal allowed to assume the validation role.
+      Required only when CreateValidationRole=true. For AWS SSO, use the
+      permission-set role form, e.g.
+      arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_platform_*
+      Obtain a concrete value with: aws sts get-caller-identity --profile platform
+
+  CellPrefix:
+    Type: String
+    Default: scrap-v2-real-s3-iam
+    Description: >-
+      Stable prefix shared by every per-run Cell ID. IAM object access and the
+      list-bucket condition are scoped to "<CellPrefix>*". The rehearsal sets
+      SCRAP_PROD_REHEARSAL_CELL_ID to "<CellPrefix>-<timestamp>" per run.
+    AllowedPattern: "[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+    ConstraintDescription: lowercase alphanumeric and hyphens, 3-63 chars.
+
+  RetentionDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    MaxValue: 365
+    Description: Days after which validation objects expire via lifecycle rule.
+
+  BucketName:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional explicit bucket name. Leave empty to let CloudFormation generate
+      a unique name (recommended for a disposable validation bucket).
+
+Conditions:
+  HasExplicitBucketName: !Not [!Equals [!Ref BucketName, ""]]
+  CreateRole: !Equals [!Ref CreateValidationRole, "true"]
+
+Rules:
+  RequireTrustPatternWhenCreatingRole:
+    RuleCondition: !Equals [!Ref CreateValidationRole, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref TrustedPrincipalArnPattern, ""]]
+        AssertDescription: TrustedPrincipalArnPattern is required when CreateValidationRole=true.
+
+Resources:
+  ValidationBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !If [HasExplicitBucketName, !Ref BucketName, !Ref "AWS::NoValue"]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireValidationObjects
+            Status: Enabled
+            ExpirationInDays: !Ref RetentionDays
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  ValidationBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ValidationBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ValidationBucket.Arn
+              - !Sub "${ValidationBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  ValidationRole:
+    Type: AWS::IAM::Role
+    Condition: CreateRole
+    Properties:
+      Description: Least-privilege role for the S.C.R.A.P. real S3/IAM rehearsal (issue #429).
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "sts:AssumeRole"
+            Condition:
+              ArnLike:
+                aws:PrincipalArn: !Ref TrustedPrincipalArnPattern
+      Policies:
+        - PolicyName: scrap-real-s3-iam-validation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListValidationPrefix
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ValidationBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - !Sub "${CellPrefix}*"
+                      - !Sub "${CellPrefix}*/*"
+              - Sid: GetBucketLocation
+                Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !GetAtt ValidationBucket.Arn
+              - Sid: ReadWriteValidationBlocks
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "${ValidationBucket.Arn}/${CellPrefix}*/shards/*"
+
+Outputs:
+  ScrapS3Bucket:
+    Description: Set as SCRAP_S3_BUCKET for the rehearsal.
+    Value: !Ref ValidationBucket
+  ScrapS3Region:
+    Description: Set as SCRAP_S3_REGION for the rehearsal.
+    Value: !Ref "AWS::Region"
+  ValidationRoleArn:
+    Condition: CreateRole
+    Description: ARN of the role the rehearsal operator assumes (role_arn in the AWS profile).
+    Value: !GetAtt ValidationRole.Arn
+  CellPrefixHint:
+    Description: Use a unique SCRAP_PROD_REHEARSAL_CELL_ID under this prefix per run.
+    Value: !Sub "${CellPrefix}-<timestamp>"

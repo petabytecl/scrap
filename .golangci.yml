@@ -88,25 +88,22 @@ linters:
 
   exclusions:
     paths:
-      # Generated protobuf/gRPC code is verified by buf and generated-code
-      # cleanliness checks. Handwritten code must satisfy the lint baseline.
-      - ^internal/gen/
-      # Spike code is disposable evidence, not production storage-gateway code.
-      # Production code paths remain covered by the lint baseline.
+      - ^gen/
       - ^internal/spike/
     rules:
-      # The local filesystem backend package intentionally uses the domain name
-      # "fs"; it is clearer than inventing a longer package alias.
-      - path: ^internal/backend/fs/
+      - path: ^internal/raft/
         text: var-naming
         linters:
           - revive
-      # The api package is the repository's public/application API boundary,
-      # not a dumping-ground utility package.
-      - path: ^internal/api/
-        text: var-naming
-        linters:
+      # Keep only revive's no-stutter check from the `exported` rule; suppress its
+      # missing/malformed doc-comment findings (package comments are enforced by
+      # staticcheck ST1000, which exempts main packages).
+      - linters:
           - revive
+        text: should have comment
+      - linters:
+          - revive
+        text: comment on exported
 
   settings:
     cyclop:
@@ -120,11 +117,17 @@ linters:
           allow:
             - $gostd
             - github.com/petabytecl/scrap
-            - github.com/a-h/templ
+            - github.com/aws/aws-sdk-go-v2
+            - github.com/aws/smithy-go
             - github.com/cockroachdb/pebble
+            - github.com/openbao/openbao/api
             - github.com/prometheus/client_golang
-            - github.com/prometheus/client_model
+            - github.com/testcontainers/testcontainers-go
+            - go.etcd.io/etcd
             - go.etcd.io/raft/v3
+            - go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
+            - go.opentelemetry.io/otel
+            - go.uber.org/zap
             - google.golang.org/genproto
             - google.golang.org/grpc
             - google.golang.org/protobuf
@@ -136,7 +139,7 @@ linters:
             - "!$test"
           deny:
             - pkg: log$
-              desc: Use log/slog instead.
+              desc: Use go.uber.org/zap instead.
     exhaustive:
       check:
         - switch
@@ -155,15 +158,16 @@ linters:
     govet:
       enable-all: true
       disable:
-        # Field alignment is useful during memory-layout work, but too noisy as
-        # a repository-wide correctness gate.
         - fieldalignment
-        # The current codebase has many intentional short-scoped err/ok checks.
-        # Enable shadow later as a dedicated cleanup pass.
         - shadow
     mnd:
       checks:
+        - argument
+        - assign
+        - case
         - condition
+        - operation
+        - return
       ignored-functions:
         - args.Error
         - flag.Arg
@@ -181,10 +185,12 @@ linters:
     revive:
       enable-default-rules: true
       rules:
-        # Public documentation will be enforced once the storage API settles.
-        # For now, keep revive focused on code-shape problems.
+        # Enabled solely for its no-stutter check (forbids e.g. scrub.ScrubConfig,
+        # block.BlockWriter). The exported-symbol doc-comment findings this rule
+        # also emits are suppressed in linters.exclusions.rules below; package
+        # comments are enforced separately via staticcheck ST1000.
         - name: exported
-          disabled: true
+          disabled: false
         - name: package-comments
           disabled: true
     sloglint:
@@ -193,7 +199,7 @@ linters:
     staticcheck:
       checks:
         - all
-        - -ST1000
+        # ST1000 (package comments) is enforced; every package ships a doc comment.
         - -ST1016
         - -QF1008
     wrapcheck:
@@ -204,6 +210,8 @@ linters:
         - encoding/*
         - github.com/cockroachdb/pebble
         - github.com/petabytecl/scrap/internal/*
+        - go.etcd.io/raft/v3
+        - go.etcd.io/etcd/*
         - google.golang.org/grpc*
         - google.golang.org/protobuf*
         - io

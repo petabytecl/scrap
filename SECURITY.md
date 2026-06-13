@@ -7,10 +7,6 @@ Reporting:
 
 https://github.com/petabytecl/scrap/security/advisories/new
 
-This repository has private vulnerability reporting enabled. GitHub notifies
-repository administrators and security managers for private reports according to
-their GitHub security-alert notification settings.
-
 Do not open public issues, pull requests, or discussions for undisclosed
 vulnerabilities. If the advisory form is unavailable, open a public issue only
 to ask for an alternate private contact path; do not include exploit details,
@@ -19,8 +15,8 @@ request.
 
 ## Supported Versions
 
-S.C.R.A.P. has not reached a production release. Security fixes are accepted on
-the default branch until a versioned release line exists.
+S.C.R.A.P. V2 has not reached a production release. Security fixes are accepted
+on the default branch until a versioned release line exists.
 
 After the first production release, this policy will list supported release
 lines and their security maintenance windows.
@@ -32,8 +28,8 @@ In scope:
 - `scrapd` service binary and startup configuration gates
 - public and admin gRPC APIs
 - authentication and authorization policy enforcement
-- storage formats, block verification, metadata persistence, and Raft metadata
-- backend upload, restore, repair, and disaster-recovery workflows
+- storage formats, Block verification, metadata persistence, and Raft metadata
+- Backend upload, restore, repair, and disaster-recovery workflows
 - Kubernetes manifests shipped in this repository
 - `scrapctl` operator workflows
 

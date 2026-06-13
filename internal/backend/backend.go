@@ -2,40 +2,51 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"io"
 )
 
-var (
-	ErrThrottled        = errors.New("backend: throttled")
-	ErrTransient        = errors.New("backend: transient failure")
-	ErrAuth             = errors.New("backend: authentication or authorization failed")
-	ErrNotFound         = errors.New("backend: object not found")
-	ErrConflict         = errors.New("backend: object already exists with different content")
-	ErrChecksumMismatch = errors.New("backend: checksum mismatch")
-	ErrInvalidRange     = errors.New("backend: invalid range")
-	ErrRestorePending   = errors.New("backend: archive restore pending")
-	ErrPermanent        = errors.New("backend: permanent failure")
-)
+const DefaultContentType = "application/octet-stream"
 
-type Object struct {
-	Key    string
-	Length uint64
-	SHA256 [32]byte
+type Backend interface {
+	PutObject(ctx context.Context, key string, body io.Reader, size int64, opts PutOpts) (PutResult, error)
+	HeadObject(ctx context.Context, key string) (ObjectMeta, error)
+	GetObject(ctx context.Context, key string, opts GetOpts) (io.ReadCloser, ObjectMeta, error)
+	DeleteObject(ctx context.Context, key string) error
+	ListObjects(ctx context.Context, prefix string, opts ListOpts) (ObjectIterator, error)
 }
 
-type Range struct {
-	Offset uint64
-	Length *uint64
+type PutOpts struct{}
+
+type PutResult struct {
+	ETag string
+	Size int64
 }
 
-type Store interface {
-	PutObject(context.Context, string, io.Reader) (Object, error)
-	HeadObject(context.Context, string) (Object, error)
-	ReadObjectRange(context.Context, string, Range, io.Writer) error
+type ObjectMeta struct {
+	ETag        string
+	Size        int64
+	ContentType string
 }
 
-type MutableStore interface {
-	Store
-	PutMutableObject(context.Context, string, io.Reader) (Object, error)
+type ByteRange struct {
+	Enabled bool
+	Offset  int64
+	Length  int64
+}
+
+type GetOpts struct {
+	Range ByteRange
+}
+
+type ListOpts struct{}
+
+type ObjectInfo struct {
+	Key         string
+	ETag        string
+	Size        int64
+	ContentType string
+}
+
+type ObjectIterator interface {
+	Next() (ObjectInfo, error)
 }

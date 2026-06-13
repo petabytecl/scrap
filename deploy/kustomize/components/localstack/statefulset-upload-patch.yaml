@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  template:
+    spec:
+      containers:
+        - name: scrapd
+          env:
+            - name: SCRAP_BACKEND_TYPE
+              value: s3
+            - name: SCRAP_S3_BUCKET
+              value: scrap-e2e # keep in sync with SCRAP_E2E_S3_BUCKET in Makefile
+            - name: SCRAP_S3_REGION
+              value: us-east-1
+            - name: SCRAP_S3_ENDPOINT
+              value: http://localstack:4566
+            - name: SCRAP_S3_PATH_STYLE
+              value: "true"
+            - name: SCRAP_UPLOAD_BUDGET
+              value: "200000"
+            - name: SCRAP_UPLOAD_CONCURRENCY
+              value: "1"
+            - name: AWS_ACCESS_KEY_ID
+              value: test
+            - name: AWS_SECRET_ACCESS_KEY
+              value: test
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+          args:
+            - "--data-dir=/data"
+            - "--listen-addr=:9090"
+            - "--admin-addr=:9100"
+            - "--block-seal-size=65536"

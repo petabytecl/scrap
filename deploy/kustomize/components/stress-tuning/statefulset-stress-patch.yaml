@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  template:
+    spec:
+      containers:
+        - name: scrapd
+          env:
+            - name: SCRAP_BACKEND_TYPE
+              value: s3
+            - name: SCRAP_S3_BUCKET
+              value: scrap-e2e
+            - name: SCRAP_S3_REGION
+              value: us-east-1
+            - name: SCRAP_S3_ENDPOINT
+              value: http://localstack:4566
+            - name: SCRAP_S3_PATH_STYLE
+              value: "true"
+            - name: SCRAP_UPLOAD_BUDGET
+              value: "1073741824"
+            - name: SCRAP_UPLOAD_CONCURRENCY
+              value: "4"
+            - name: AWS_ACCESS_KEY_ID
+              value: test
+            - name: AWS_SECRET_ACCESS_KEY
+              value: test
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.monitoring.svc:4317
+            - name: SCRAP_ENVIRONMENT
+              value: stress
+            - name: SCRAP_CELL_ID
+              value: kind-stress
+            - name: SCRAP_SECURITY_MODE
+              value: development
+            - name: SCRAP_PPROF_ENABLED
+              value: "true"
+            - name: SCRAP_LOG_LEVEL
+              value: debug
+            - name: SCRAP_SCRUB_ENABLED
+              value: "true"
+            - name: SCRAP_LIGHT_SCRUB_INTERVAL
+              value: "2m"
+            - name: SCRAP_DEEP_SCRUB_INTERVAL
+              value: "2m"
+            - name: SCRAP_DEEP_SCRUB_IO_RATE
+              value: "25000000"
+            - name: SCRAP_SCRUB_JITTER
+              value: "0"
+          args:
+            - "--data-dir=/data"
+            - "--listen-addr=:9090"
+            - "--admin-addr=:9100"
+            - "--block-seal-size=4194304"

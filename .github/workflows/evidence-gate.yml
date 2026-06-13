@@ -1,0 +1,115 @@
+name: evidence-gate
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Tier 3 evidence scenario.
+        required: true
+        type: choice
+        default: throughput
+        options:
+          - throughput
+          - mixed
+          - pressure
+      duration:
+        description: Stress duration.
+        required: true
+        type: string
+        default: 60s
+      workers:
+        description: Stress worker count.
+        required: true
+        type: string
+        default: "8"
+      doc_size:
+        description: Document size in bytes.
+        required: true
+        type: string
+        default: "16384"
+      cleanup:
+        description: Delete the evidence Kind Cell after the run.
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: evidence-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tier3-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      GOCACHE: /tmp/scrap-v2-go-build
+      PRODLIKE_KIND_CLUSTER: scrap-prodlike
+      PRODLIKE_KUBE_CONTEXT: kind-scrap-prodlike
+      PRODLIKE_E2E_KUBE_CONTEXT: kind-scrap-prodlike
+      SCRAP_E2E_KUBE_CONTEXT: kind-scrap-prodlike
+      STRESS_KIND_CLUSTER: scrap-stress
+      STRESS_SCENARIO: ${{ inputs.scenario }}
+      STRESS_DURATION: ${{ inputs.duration }}
+      STRESS_WORKERS: ${{ inputs.workers }}
+      STRESS_DOC_SIZE: ${{ inputs.doc_size }}
+      BUNDLE_DIR: evidence
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            tools.go.sum
+
+      - name: Run Tier 3 evidence gate
+        shell: bash
+        run: |
+          mkdir -p artifacts evidence
+          set -o pipefail
+          make tier2-e2e-up 2>&1 | tee artifacts/tier2-e2e.log
+          make prodlike-kind-delete
+          unset PRODLIKE_KUBE_CONTEXT PRODLIKE_E2E_KUBE_CONTEXT SCRAP_E2E_KUBE_CONTEXT
+          make tier3-evidence-up 2>&1 | tee artifacts/tier3-evidence.log
+          find evidence -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1 > artifacts/tier3-bundle-path.txt
+
+      - name: Record missing bundle path
+        if: ${{ always() }}
+        run: |
+          mkdir -p artifacts
+          if [ ! -s artifacts/tier3-bundle-path.txt ]; then
+            printf 'no Tier 3 evidence bundle was created\n' > artifacts/tier3-bundle-path.txt
+          fi
+
+      - name: Collect Kind diagnostics
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          for context in kind-scrap-prodlike kind-scrap-stress; do
+            if kubectl config get-contexts "$context" >/dev/null 2>&1; then
+              ARTIFACT_DIR="artifacts/kind/$context" \
+              KUBE_CONTEXT="$context" \
+              scripts/collect-kind-artifacts.sh || true
+            fi
+          done
+
+      - name: Upload Tier 3 artifacts
+        if: ${{ always() && env.ACT != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: tier3-evidence-${{ inputs.scenario }}-${{ github.run_id }}
+          path: |
+            artifacts
+            evidence
+          if-no-files-found: warn
+
+      - name: Delete evidence Kind Cell
+        if: ${{ always() && inputs.cleanup }}
+        run: |
+          make prodlike-kind-delete || true
+          make stress-teardown || true

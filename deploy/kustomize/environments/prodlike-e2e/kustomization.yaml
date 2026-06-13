@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../prodlike
+
+configMapGenerator:
+  - name: scrap-shard-placement
+    namespace: scrap
+    files:
+      - placement.json=shard-placement.json
+    options:
+      disableNameSuffixHash: true
+
+patches:
+  - path: statefulset-test-hooks-patch.yaml
+  - path: statefulset-shard-placement-patch.yaml

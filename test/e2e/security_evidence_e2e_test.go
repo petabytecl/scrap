@@ -1,0 +1,562 @@
+package e2e_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/eviction"
+	"github.com/petabytecl/scrap/internal/rewrap"
+	"github.com/petabytecl/scrap/internal/security"
+)
+
+type securityEvidenceReport struct {
+	SecurityMode              string `json:"security_mode"`
+	ProductionReadinessStatus string `json:"production_readiness_status"`
+	ProductionReadinessReason string `json:"production_readiness_reason,omitempty"`
+	AuthorizationStatus       string `json:"authorization_status,omitempty"`
+	PublicUnauthorizedDenied  bool   `json:"public_unauthorized_denied"`
+	PeerUnauthorizedDenied    bool   `json:"peer_unauthorized_denied"`
+	AdminUnauthorizedDenied   bool   `json:"admin_unauthorized_denied"`
+	AuditSamplesRecorded      bool   `json:"audit_samples_recorded"`
+	EncryptedWriteReadOK      bool   `json:"encrypted_write_read_ok"`
+	EncryptedBackendUploadOK  bool   `json:"encrypted_backend_upload_ok"`
+	EncryptedRestoreOK        bool   `json:"encrypted_restore_ok"`
+	EncryptedRestoreConcern   string `json:"encrypted_restore_concern,omitempty"`
+	RewrapOK                  bool   `json:"rewrap_ok"`
+	Phase5EntryBlocked        bool   `json:"phase5_entry_blocked"`
+}
+
+type securityHealth struct {
+	Status                    string `json:"status"`
+	SecurityMode              string `json:"security_mode"`
+	ProductionReadinessStatus string `json:"production_readiness_status"`
+	ProductionReadinessReason string `json:"production_readiness_reason"`
+	AuthorizationStatus       string `json:"authorization_status"`
+}
+
+func TestE2EProdlikeSecurityEncryptionEvidence(t *testing.T) {
+	requireE2E(t)
+	if !e2eTLSConfigured() {
+		t.Skip("prod-like security evidence requires SCRAP_E2E_TLS_*")
+	}
+	restoreLocalStack(t)
+
+	health := fetchRequiredSecurityHealth(t)
+	endpoint, stopLocalStack := startLocalStackPortForward(t)
+	defer stopLocalStack()
+	s3Client := newE2ES3Client(t, "http://"+endpoint)
+	ensureE2ES3Bucket(t, s3Client)
+	before := listBackendObjects(t, s3Client)
+
+	client := connect(t)
+	txID := uniqueName("tx-e2e-security")
+	docName := writeUploadBlockE2E(t, client, txID, "encrypted", 'e')
+	content := bytes.Repeat([]byte{'e'}, uploadBlockPayloadLen)
+	readBack := readDocE2E(t, client, txID, docName)
+
+	pair := waitNewBackendPairForDocument(t, s3Client, before, txID, docName)
+	verifyS3ObjectMD5(t, s3Client, pair.blk)
+	verifyS3ObjectMD5(t, s3Client, pair.idx)
+	backendUploadOK := encryptedBackendUploadOK(t, s3Client, pair, txID, docName, content)
+
+	leader := findLeaderPod(t, txID, docName)
+	postTransitRotate(t, leader)
+	rewrapResult := postRewrapDocument(t, leader, txID, docName, 2)
+	restoreOK, restoreConcern := encryptedRestoreEvidence(t, leader, pair.blk.key, txID, docName, content)
+
+	report := buildSecurityEvidenceReport(t, health, leader, backendUploadOK, readBack, content, restoreOK, restoreConcern, rewrapResult)
+	writeSecurityEvidenceReport(t, report)
+	assertSecurityEvidenceReportComplete(t, report, rewrapResult)
+}
+
+func fetchRequiredSecurityHealth(t *testing.T) securityHealth {
+	t.Helper()
+	health := fetchSecurityHealth(t)
+	if health.SecurityMode != string(security.ModeTest) {
+		t.Fatalf("security_mode = %q, want test", health.SecurityMode)
+	}
+	if health.ProductionReadinessStatus == "" {
+		t.Fatal("production_readiness_status is empty")
+	}
+	return health
+}
+
+func buildSecurityEvidenceReport(
+	t *testing.T,
+	health securityHealth,
+	leader string,
+	backendUploadOK bool,
+	readBack []byte,
+	content []byte,
+	restoreOK bool,
+	restoreConcern string,
+	rewrapResult rewrap.Result,
+) securityEvidenceReport {
+	t.Helper()
+	return securityEvidenceReport{
+		SecurityMode:              health.SecurityMode,
+		ProductionReadinessStatus: health.ProductionReadinessStatus,
+		ProductionReadinessReason: health.ProductionReadinessReason,
+		AuthorizationStatus:       health.AuthorizationStatus,
+		PublicUnauthorizedDenied:  publicUnauthorizedDenied(t),
+		PeerUnauthorizedDenied:    peerUnauthorizedDenied(t),
+		AdminUnauthorizedDenied:   adminUnauthorizedDenied(t, leader),
+		AuditSamplesRecorded:      auditSamplesRecorded(t, leader),
+		EncryptedWriteReadOK:      bytes.Equal(readBack, content),
+		EncryptedBackendUploadOK:  backendUploadOK,
+		EncryptedRestoreOK:        restoreOK,
+		EncryptedRestoreConcern:   restoreConcern,
+		RewrapOK:                  securityRewrapChanged(rewrapResult),
+		Phase5EntryBlocked:        health.ProductionReadinessStatus != string(security.ReadinessStatusReady),
+	}
+}
+
+func encryptedBackendUploadOK(t *testing.T, client *awss3.Client, pair backendPair, txID, docName string, plaintext []byte) bool {
+	t.Helper()
+	if pair.blk.key == "" || pair.idx.key == "" {
+		return false
+	}
+
+	blockBody := readS3Object(t, client, pair.blk)
+	if bytes.Contains(blockBody, plaintext) {
+		t.Fatalf("backend Block %s contains plaintext Document bytes", pair.blk.key)
+	}
+
+	entry := backendIndexEntry(t, readS3Object(t, client, pair.idx), txID, docName)
+	envelope, err := encryption.ParseEnvelope(entry.EncryptionEnvelope)
+	if err != nil {
+		t.Fatalf("backend index encryption envelope: %v", err)
+	}
+	if envelope.PayloadAlgorithm != encryption.PayloadAlgorithmAES256GCM {
+		t.Fatalf("backend envelope payload algorithm = %q, want %q", envelope.PayloadAlgorithm, encryption.PayloadAlgorithmAES256GCM)
+	}
+	if envelope.PlaintextLength != int64(len(plaintext)) {
+		t.Fatalf("backend envelope plaintext length = %d, want %d", envelope.PlaintextLength, len(plaintext))
+	}
+	if envelope.CiphertextLength <= int64(len(plaintext)) {
+		t.Fatalf("backend envelope ciphertext length = %d, want > plaintext length %d", envelope.CiphertextLength, len(plaintext))
+	}
+
+	sum := sha256.Sum256(plaintext)
+	if entry.SHA256 != sum || !bytes.Equal(envelope.PlaintextSHA256, sum[:]) {
+		t.Fatalf("backend envelope plaintext digest does not match written Document")
+	}
+	return true
+}
+
+func backendIndexEntry(t *testing.T, body []byte, txID, docName string) block.IndexEntry {
+	t.Helper()
+	entry, ok := lookupBackendIndexEntry(t, body, txID, docName)
+	if !ok {
+		t.Fatalf("find backend index entry for %s/%s: block: document not found in index", txID, docName)
+	}
+	return entry
+}
+
+func waitNewBackendPairForDocument(
+	t *testing.T,
+	client *awss3.Client,
+	before map[string]backendObject,
+	txID string,
+	docName string,
+) backendPair {
+	t.Helper()
+	deadline := time.Now().Add(uploadE2ETimeout)
+	for time.Now().Before(deadline) {
+		for _, pair := range collectBackendPairs(listBackendObjects(t, client), before) {
+			if pair.blk.key == "" || pair.idx.key == "" {
+				continue
+			}
+			if _, ok := lookupBackendIndexEntry(t, readS3Object(t, client, pair.idx), txID, docName); ok {
+				return pair
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("timed out waiting for backend .blk/.idx pair containing %s/%s", txID, docName)
+	return backendPair{}
+}
+
+func lookupBackendIndexEntry(t *testing.T, body []byte, txID, docName string) (block.IndexEntry, bool) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "backend.idx")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write backend index fixture: %v", err)
+	}
+	reader, err := block.OpenIndexReader(path)
+	if err != nil {
+		t.Fatalf("open backend index: %v", err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close backend index: %v", err)
+		}
+	}()
+	entry, err := reader.Find(txID, docName)
+	if err != nil {
+		return block.IndexEntry{}, false
+	}
+	return entry, true
+}
+
+func assertSecurityEvidenceReportComplete(t *testing.T, report securityEvidenceReport, rewrapResult rewrap.Result) {
+	t.Helper()
+	if !securityDenialsRecorded(report) {
+		t.Fatalf("unauthorized denial report = %+v", report)
+	}
+	if !report.AuditSamplesRecorded {
+		t.Fatalf("audit sample report = %+v", report)
+	}
+	if !securityEncryptionRecorded(report) {
+		t.Fatalf("encryption evidence report = %+v, rewrap=%+v", report, rewrapResult)
+	}
+}
+
+func securityDenialsRecorded(report securityEvidenceReport) bool {
+	return report.PublicUnauthorizedDenied && report.PeerUnauthorizedDenied && report.AdminUnauthorizedDenied
+}
+
+func securityEncryptionRecorded(report securityEvidenceReport) bool {
+	return report.EncryptedWriteReadOK &&
+		report.EncryptedBackendUploadOK &&
+		report.RewrapOK &&
+		(report.EncryptedRestoreOK || report.EncryptedRestoreConcern != "")
+}
+
+func securityRewrapChanged(result rewrap.Result) bool {
+	return result.Status == rewrap.StatusOK &&
+		result.Changed &&
+		result.OldKeyVersion == 1 &&
+		result.NewKeyVersion == 2
+}
+
+func fetchSecurityHealth(t *testing.T) securityHealth {
+	t.Helper()
+	addr, stop := startPodPortForward(t, podNames(t)[0], 9100)
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2eAdminURL(addr, "/healthz"), nil)
+	if err != nil {
+		t.Fatalf("new health request: %v", err)
+	}
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("GET healthz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("healthz status: got %d, want 200: %s", resp.StatusCode, string(body))
+	}
+	var health securityHealth
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatalf("decode healthz: %v", err)
+	}
+	return health
+}
+
+func publicUnauthorizedDenied(t *testing.T) bool {
+	t.Helper()
+	conn, err := grpc.NewClient(scrapAddr(), grpc.WithTransportCredentials(e2eGRPCCredentialsWithoutCertificate(t)))
+	if err != nil {
+		t.Fatalf("Dial unauthorized public client: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = scrapv1.NewDocumentServiceClient(conn).HeadDocument(ctx, &scrapv1.HeadDocumentRequest{
+		TransactionId: "unauthorized",
+		DocumentName:  "probe.xml",
+	})
+	return deniedBeforeHandler(err)
+}
+
+func peerUnauthorizedDenied(t *testing.T) bool {
+	t.Helper()
+	pod := podNames(t)[0]
+	addr, stop := startPodPortForward(t, pod, 9091)
+	defer stop()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(e2eGRPCCredentialsWithoutCertificate(t)))
+	if err != nil {
+		t.Fatalf("Dial unauthorized peer client: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = scrapv1.NewPeerServiceClient(conn).ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{})
+	return deniedBeforeHandler(err)
+}
+
+func adminUnauthorizedDenied(t *testing.T, pod string) bool {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/admin/rewrap/document"), bytes.NewReader([]byte(`{"transaction_id":"unauthorized","document_name":"probe.xml"}`)))
+	if err != nil {
+		t.Fatalf("new unauthorized admin request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e2eHTTPClientWithoutCertificate(t).Do(req)
+	if err != nil {
+		return clientCertificateRejected(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return false
+}
+
+func deniedBeforeHandler(err error) bool {
+	if err == nil {
+		return false
+	}
+	return status.Code(err) == codes.Unavailable && clientCertificateRejected(err)
+}
+
+func clientCertificateRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "certificate required") ||
+		strings.Contains(msg, "client didn't provide a certificate") ||
+		strings.Contains(msg, "bad certificate")
+}
+
+func TestDeniedBeforeHandlerRequiresClientCertificateRejection(t *testing.T) {
+	if deniedBeforeHandler(status.Error(codes.Unauthenticated, "missing identity")) {
+		t.Fatal("Unauthenticated should not count as mTLS denial evidence")
+	}
+	if deniedBeforeHandler(status.Error(codes.PermissionDenied, "role denied")) {
+		t.Fatal("PermissionDenied should not count as mTLS denial evidence")
+	}
+	if !deniedBeforeHandler(status.Error(codes.Unavailable, "connection error: desc = \"transport: authentication handshake failed: remote error: tls: certificate required\"")) {
+		t.Fatal("client certificate rejection should count as mTLS denial evidence")
+	}
+	if deniedBeforeHandler(status.Error(codes.Unavailable, "connection refused")) {
+		t.Fatal("generic transport outage should not count as mTLS denial evidence")
+	}
+}
+
+func postTransitRotate(t *testing.T, pod string) {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/test-hooks/transit-rotate"), nil)
+	if err != nil {
+		t.Fatalf("new transit rotate request: %v", err)
+	}
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("POST transit rotate: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read transit rotate response: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("transit rotate status: got %d, want 204: %s", resp.StatusCode, string(data))
+	}
+}
+
+func postRewrapDocument(t *testing.T, pod, txID, docName string, keyVersion int) rewrap.Result {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+	body := bytes.NewReader([]byte(`{"transaction_id":` + quotedJSON(txID) + `,"document_name":` + quotedJSON(docName) + `,"key_version":` + strconv.Itoa(keyVersion) + `,"reason":"e2e_security_evidence"}`))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/admin/rewrap/document"), body)
+	if err != nil {
+		t.Fatalf("new rewrap request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("POST rewrap: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read rewrap response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rewrap status: got %d, want 200: %s", resp.StatusCode, string(data))
+	}
+	var result rewrap.Result
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode rewrap response: %v\n%s", err, data)
+	}
+	return result
+}
+
+func encryptedRestoreEvidence(t *testing.T, leaderPod, freshBackendKey, txID, docName string, want []byte) (bool, string) {
+	t.Helper()
+	unsupported := false
+	for _, pod := range podNames(t) {
+		if pod == leaderPod {
+			continue
+		}
+		plan, selectedFreshBlock, unsupportedPlan := postSecurityEvictionPlan(t, pod, freshBackendKey)
+		if unsupportedPlan {
+			unsupported = true
+			continue
+		}
+		if !selectedFreshBlock {
+			continue
+		}
+		result := postSecurityEvictionApply(t, pod, plan.PlanID)
+		if result.EvictedBlocks == 0 || result.FailedBlocks != 0 || result.ValidatedBlocks == 0 || result.ValidationFailedBlocks != 0 {
+			t.Fatalf("restore apply result = %+v, want successful validation and eviction", result)
+		}
+		addr, stop := startPodPortForward(t, pod, 9090)
+		readBack := readDocE2E(t, newDocumentClientAt(t, addr), txID, docName)
+		stop()
+		if !bytes.Equal(readBack, want) {
+			t.Fatalf("restored Document %s/%s bytes = %d, want %d", txID, docName, len(readBack), len(want))
+		}
+		return true, ""
+	}
+	return false, encryptedRestoreConcern(unsupported)
+}
+
+func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (eviction.Plan, bool, bool) {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+	maxBlocks := 10
+	body, err := json.Marshal(eviction.PlanRequest{
+		MemberHostname: pod,
+		MaxBlocks:      &maxBlocks,
+		Reason:         eviction.ReasonEvidenceRun,
+	})
+	if err != nil {
+		t.Fatalf("marshal eviction plan request: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/admin/eviction/plans"), bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new eviction plan request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("POST eviction plan: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read eviction plan response: %v", err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return eviction.Plan{}, false, true
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("eviction plan status: got %d, want 201: %s", resp.StatusCode, string(data))
+	}
+	var plan eviction.Plan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		t.Fatalf("decode eviction plan response: %v\n%s", err, data)
+	}
+	return plan, planSelectsBackendKey(plan, freshBackendKey), false
+}
+
+func encryptedRestoreConcern(unsupported bool) string {
+	if unsupported {
+		return "CONCERNS: restore evidence deferred to Epic 3 Stories 3.4 and 3.7; multi-Shard eviction admin route is not registered in Story 2.6"
+	}
+	return "CONCERNS: restore evidence deferred to Epic 3 Stories 3.4 and 3.7; no non-leader selected the fresh Backend Block"
+}
+
+func planSelectsBackendKey(plan eviction.Plan, backendKey string) bool {
+	for _, block := range plan.Selected {
+		if block.BackendKey == backendKey {
+			return true
+		}
+	}
+	return false
+}
+
+func postSecurityEvictionApply(t *testing.T, pod, planID string) eviction.ApplyResult {
+	t.Helper()
+	addr, stop := startPodPortForward(t, pod, 9100)
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2eAdminURL(addr, "/admin/eviction/plans/"+planID+"/apply"), bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatalf("new eviction apply request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e2eHTTPClient(t).Do(req)
+	if err != nil {
+		t.Fatalf("POST eviction apply: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read eviction apply response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("eviction apply status: got %d, want 200: %s", resp.StatusCode, string(data))
+	}
+	var result eviction.ApplyResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode eviction apply response: %v\n%s", err, data)
+	}
+	return result
+}
+
+func auditSamplesRecorded(t *testing.T, pod string) bool {
+	t.Helper()
+	out := runKubectl(t, kubectlCommandWait, "-n", namespace(), "logs", pod, "-c", "scrapd", "--tail=500")
+	return strings.Contains(out, "security audit event") &&
+		strings.Contains(out, `"audit.surface":"admin"`) &&
+		strings.Contains(out, `"audit.result":"allowed"`)
+}
+
+func quotedJSON(value string) string {
+	out, _ := json.Marshal(value)
+	return string(out)
+}
+
+func writeSecurityEvidenceReport(t *testing.T, report securityEvidenceReport) {
+	t.Helper()
+	path := os.Getenv("SCRAP_E2E_SECURITY_REPORT")
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil { //nolint:gosec // E2E harness selects the test-owned report path.
+		t.Fatalf("create security report dir: %v", err)
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal security evidence report: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil { //nolint:gosec // E2E harness selects the test-owned report path.
+		t.Fatalf("write security evidence report: %v", err)
+	}
+}

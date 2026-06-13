@@ -1,13 +1,10 @@
-# S.C.R.A.P. project Makefile.
+# S.C.R.A.P. V2 project Makefile.
 # Run `make help` to list common targets and selected overridable variables.
 # Override variables with environment values or `make VAR=value <target>`.
 .DEFAULT_GOAL := help
 
-# Values documented with ##? are shown by `make help`.
-
 ##@ Tool Variables
 
-# Go toolchain and module-managed tools.
 ##? GO Go command used by all Go targets.
 ##? TOOLS_MODFILE Go tool module file used by Go-managed tools.
 
@@ -20,44 +17,36 @@ GOLANGCI_LINT ?= $(GO_TOOL) golangci-lint
 GOTESTSUM ?= $(GO_TOOL) gotestsum
 GOVULNCHECK ?= $(GO_TOOL) govulncheck
 KUSTOMIZE ?= $(GO_TOOL) kustomize
-TEMPL ?= $(GO_TOOL) templ
 
-# External command-line tools.
+##? ACT act CLI used by local GitHub Actions validation targets.
+ACT ?= act
+
 ##? DOCKER Docker CLI used by local image targets.
 ##? KIND kind command used by local cluster targets.
 ##? KIND_VERSION kind version used by the default KIND command.
-##? KUBECTL kubectl CLI used by local release evidence targets.
+##? HELM_VERSION Helm version used by the default HELM command.
+##? KUBECTL kubectl CLI used by local cluster targets.
 
 DOCKER ?= docker
+HELM_VERSION ?= v3.21.0
+HELM ?= $(GO) run helm.sh/helm/v3/cmd/helm@$(HELM_VERSION)
 KIND_VERSION ?= v0.31.0
 KIND ?= $(GO) run sigs.k8s.io/kind@$(KIND_VERSION)
 KUBECTL ?= kubectl
 
 ##@ Verification Variables
 
-# Test package selection.
-##? COMPAT_PACKAGES Go packages used by compatibility tests.
-##? COVER_EXCLUDE_PATTERN Extended regex for packages excluded from coverage instrumentation.
-##? COVER_PACKAGES Go packages instrumented in coverage reports.
-##? COVER_TEST_PACKAGES Go packages whose tests run during coverage reports.
-##? COVERPKG Comma-separated Go packages passed to go test -coverpkg.
 ##? TEST_PACKAGES Go packages used by test and race targets.
+##? COVER_EXCLUDE_PATTERN Extended regex for packages excluded from coverage instrumentation.
 
-COMPAT_PACKAGES ?= ./internal/compat ./internal/metastore
 TEST_PACKAGES ?= ./...
-COVER_TEST_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/internal/gen/')
-COVER_EXCLUDE_PATTERN ?= (/cmd/scrap-spike$$|/internal/spike/|/internal/testutil$$)
+COVER_TEST_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/gen/')
+COVER_EXCLUDE_PATTERN ?= (/internal/spike/)
 COVER_PACKAGES ?= $(shell printf '%s\n' $(COVER_TEST_PACKAGES) | grep -Ev '$(COVER_EXCLUDE_PATTERN)')
 
-# Static analysis inputs.
 ##? LINT_TIMEOUT Timeout passed to golangci-lint run.
-##? PROTO_BREAKING_REF Git ref used by buf breaking checks.
-
 LINT_TIMEOUT ?= 5m
-PROTO_BREAKING_REF ?= main
-PROTO_BREAKING_AGAINST ?= .git#branch=$(PROTO_BREAKING_REF)
 
-# Test report outputs.
 ##? COVERMODE Coverage mode passed to go test.
 ##? COVERPROFILE Coverage profile output path.
 ##? JUNIT_REPORT JUnit XML report output path.
@@ -72,51 +61,62 @@ empty :=
 space := $(empty) $(empty)
 COVERPKG ?= $(subst $(space),$(comma),$(strip $(COVER_PACKAGES)))
 
-# Verification target groups.
 CHECK_TARGETS := \
 	static \
 	tests \
 	build
 STATIC_TARGETS := \
+	gates-check \
+	kind-cilium-check \
 	manifests-check \
 	fmt-check \
 	package-boundaries \
 	proto-check \
-	templ-check \
 	lint
 TEST_TARGETS := \
-	test-compat \
-	test-crashfault-catalog \
 	test \
-	test-race
+	test-race \
+	integration
 
-# Build package inputs.
-SCRAP_BINS := \
-	./cmd/scrapd \
-	./cmd/scrap-spike \
-	./cmd/scrapctl \
-	./cmd/scrap-local-prod-smoke \
-	./cmd/scrap-release-gate \
-	./cmd/scrap-crash-fault-evidence \
-	./cmd/scrap-openbao-smoke \
-	./cmd/scrap-local-soak-evidence \
-	./cmd/scrap-local-dr-drill-evidence \
-	./cmd/scrap-write-pipeline-evidence
+##@ GitHub Actions Variables
+
+##? ACT_ARGS Extra arguments appended to act commands.
+##? ACT_CI_WORKFLOW GitHub Actions workflow file used by act CI targets.
+##? ACT_EVENT GitHub event used by act CI targets.
+##? ACT_JOB Single job run by act-ci-job.
+##? ACT_CONCURRENT_JOBS Maximum concurrent act jobs for local CI runs.
+##? ACT_CLEANUP Whether act-ci-run removes local act CI resources on exit.
+##? ACT_PULL Whether act pulls mapped runner images before execution.
+##? ACT_RUNNER_BASE_IMAGE Base image used for the local act runner image.
+##? ACT_RUNNER_DOCKERFILE Dockerfile used for the local act runner image.
+##? ACT_RUNNER_IMAGE Local act runner image tag used by .actrc mappings.
+
+ACT_ARGS ?= --pull=$(ACT_PULL) --rm --concurrent-jobs=$(ACT_CONCURRENT_JOBS) --env=ACT=true
+ACT_CI_WORKFLOW ?= .github/workflows/ci.yml
+ACT_CLEANUP ?= false
+ACT_CONCURRENT_JOBS ?= 1
+ACT_EVENT ?= workflow_dispatch
+ACT_JOB ?= build
+ACT_PULL ?= false
+ACT_RUNNER_BASE_IMAGE ?= catthehacker/ubuntu:act-24.04
+ACT_RUNNER_DOCKERFILE ?= tools/act-runner/Dockerfile
+ACT_RUNNER_IMAGE ?= scrap-v2/act-ubuntu:24.04-varrun
 
 ##@ Release Metadata Variables
+
 ##? BUILD_TIME Release build timestamp embedded in local artifacts.
 ##? DIRTY_TREE Clean or dirty release metadata flag.
-##? PROFILE_ID Release profile identifier used by evidence targets.
 ##? RELEASE_SHA Release commit SHA embedded in local artifacts.
 ##? RELEASE_VERSION Release version embedded in local artifacts.
 
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY_TREE ?= $(shell git diff --quiet && git diff --cached --quiet && echo clean || echo dirty)
-PROFILE_ID ?= scrap-prod-v1
 RELEASE_SHA ?= $(shell git rev-parse HEAD)
 RELEASE_VERSION ?= dev
+SCRAPD_LDFLAGS = -X main.version=$(RELEASE_VERSION) -X main.buildSHA=$(RELEASE_SHA) -X main.buildTime=$(BUILD_TIME)
 
 ##@ Container Variables
+
 ##? IMAGE_GOARCH GOARCH used by local container builds.
 ##? IMAGE_GOOS GOOS used by local container builds.
 ##? IMAGE_NAME Local container image tag for image and local-kind targets.
@@ -129,147 +129,125 @@ IMAGE_NAME ?= localhost/scrapd:local
 IMAGE_PLATFORM ?= $(IMAGE_GOOS)/$(IMAGE_GOARCH)
 SCRAPD_IMAGE_BINARY ?= bin/scrapd-$(IMAGE_GOOS)-$(IMAGE_GOARCH)
 
+CROSS_BUILD_ENV = CGO_ENABLED=0 GOOS=$(IMAGE_GOOS) GOARCH=$(IMAGE_GOARCH)
+
 ##@ Local Kind Variables
+
 ##? KIND_CLUSTER Local kind cluster name used by local-kind targets.
-##? LOCAL_KIND_EVIDENCE_REPORT Output path for local kind evidence.
-##? LOCAL_KIND_OVERLAY Kustomize overlay used for local kind manifests.
+##? LOCAL_KIND_OVERLAY Kustomize environment used for local kind manifests.
 
 KIND_CLUSTER ?= scrap-local
-LOCAL_KIND_OVERLAY ?= deploy/kustomize/overlays/local-kind
-LOCAL_KIND_EVIDENCE_REPORT ?= local-kind-evidence.json
+LOCAL_KIND_OVERLAY ?= deploy/kustomize/environments/local
 
-##@ Endpoint Variables
-##? SCRAP_ADMIN_ADDR Local admin API address used by evidence targets.
-##? SCRAP_ADMIN_UI_ADDR Local admin UI HTTP address used by local scrapd runs.
-##? SCRAP_METRICS_ADDR Local metrics HTTP address used by local scrapd runs.
-##? SCRAP_PUBLIC_ADDR Local public API address used by evidence targets.
-##? SCRAP_PUBLIC_WORKLOAD_IDENTITY Local public workload identity.
-##? SCRAP_WORKLOAD_IDENTITY Local admin workload identity.
+##@ Prod-like Kind Variables
 
-SCRAP_ADMIN_ADDR ?= 127.0.0.1:18081
-SCRAP_ADMIN_UI_ADDR ?= 127.0.0.1:18083
-SCRAP_METRICS_ADDR ?= 127.0.0.1:18082
-SCRAP_PUBLIC_ADDR ?= 127.0.0.1:18080
-SCRAP_PUBLIC_WORKLOAD_IDENTITY ?= local-public-client
-SCRAP_WORKLOAD_IDENTITY ?= local-operator
+##? PRODLIKE_KIND_CLUSTER Kind cluster name used by prod-like Cell targets.
+##? PRODLIKE_KIND_CONFIG Kind config for the Cilium-backed prod-like Cell.
+##? PRODLIKE_OVERLAY Kustomize environment used for the prod-like Cell.
+##? PRODLIKE_E2E_OVERLAY Kustomize environment used for prod-like E2E test hooks.
+##? PRODLIKE_KUBE_CONTEXT kubectl context used by prod-like Kind targets.
+##? PRODUCTION_REHEARSAL_SCRIPT Script used by production-mode readiness rehearsal targets.
+##? PRODUCTION_REHEARSAL_DIR Directory for generated production rehearsal assets.
+##? PRODUCTION_REHEARSAL_OPENBAO_IMAGE OpenBao image used by production rehearsal.
+##? CILIUM_VERSION Cilium chart version used by prod-like Kind targets.
+##? CILIUM_CHART_DIR Vendored Cilium chart used by prod-like Kind targets.
+##? CILIUM_VALUES Helm values used for prod-like Cilium.
+##? CILIUM_SCRIPT Helper script used by prod-like Cilium targets.
 
-##@ Local Scrapd Variables
-##? LOCAL_SCRAPD_AUTHZ_POLICY Authorization policy JSON used by local-scrapd-run.
-##? LOCAL_SCRAPD_BACKEND_DIR Local filesystem backend directory used by local-scrapd-run.
-##? LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL Backend upload scan interval used by local-scrapd-run.
-##? LOCAL_SCRAPD_DATA_DIR Local storage directory used by local-scrapd-run.
-##? LOCAL_SCRAPD_OPERATION_RUN_INTERVAL Operation scan interval used by local-scrapd-run.
-##? LOCAL_SCRAPD_ROOT Local scratch root used by local-scrapd-run.
-##? LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES Local block seal threshold used by local-scrapd-run.
-
-LOCAL_SCRAPD_ROOT ?= tmp/local-scrapd
-LOCAL_SCRAPD_DATA_DIR ?= $(LOCAL_SCRAPD_ROOT)/data
-LOCAL_SCRAPD_BACKEND_DIR ?= $(LOCAL_SCRAPD_ROOT)/backend
-LOCAL_SCRAPD_AUTHZ_POLICY ?= deploy/kustomize/base/authz-policy.json
-LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL ?= 5s
-LOCAL_SCRAPD_OPERATION_RUN_INTERVAL ?= 5s
-LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES ?= 4096
+PRODLIKE_KIND_CLUSTER ?= scrap-prodlike
+PRODLIKE_KIND_CONFIG ?= deploy/kind/cluster-prodlike-cilium.yaml
+PRODLIKE_OVERLAY ?= deploy/kustomize/environments/prodlike
+PRODLIKE_E2E_OVERLAY ?= deploy/kustomize/environments/prodlike-e2e
+PRODLIKE_KUBE_CONTEXT ?= kind-$(PRODLIKE_KIND_CLUSTER)
+PRODUCTION_REHEARSAL_SCRIPT ?= scripts/production-rehearsal.sh
+PRODUCTION_REHEARSAL_DIR ?= artifacts/production-rehearsal
+PRODUCTION_REHEARSAL_OPENBAO_IMAGE ?= openbao/openbao:2.5.4
+CILIUM_VERSION ?= 1.19.4
+CILIUM_CHART_DIR ?= deploy/cilium/charts/cilium
+CILIUM_VALUES ?= deploy/cilium/prodlike-values.yaml
+CILIUM_SCRIPT ?= scripts/prodlike-cilium.sh
+PRODLIKE_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_KUBE_CONTEXT)"
 
 ##@ Local Dev Variables
+
 ##? LOCAL_DEV_SCRIPT Script used by local-dev targets.
 
 LOCAL_DEV_SCRIPT ?= scripts/local-dev-env.sh
 
-##@ Release Evidence Variables
-##? RELEASE_EVIDENCE_MANIFEST Manifest path consumed by release-check.
+##@ E2E Variables
 
-RELEASE_EVIDENCE_MANIFEST ?=
+##? SCRAP_E2E_ADDR gRPC address used by E2E tests.
+##? SCRAP_E2E_CELL_ID Cell ID prefix used by Backend upload E2E assertions.
+##? SCRAP_E2E_METRICS_URL HTTP metrics URL used by E2E tests.
+##? SCRAP_E2E_NAMESPACE Kubernetes namespace used by E2E tests.
+##? SCRAP_E2E_KUBE_CONTEXT kubectl context used by safety-gated E2E fault commands.
+##? SCRAP_E2E_S3_BUCKET LocalStack S3 bucket used by upload E2E tests.
+##? PRODLIKE_E2E_KUBE_CONTEXT kubectl context used by the prod-like Tier 2 E2E gate.
+##? PRODLIKE_SECURITY_ASSET_DIR Directory for generated prod-like E2E test TLS assets.
+##? TIER2_SECURITY_EVIDENCE_REPORT Prod-like security report written by the Tier 2 E2E gate.
+##? E2E_TEST_RUN Go test -run pattern used by the default E2E target.
+##? SCRUB_E2E_TEST_RUN Go test -run pattern used by the scrub E2E target.
+##? TIER2_E2E_TEST_RUN Go test -run pattern used by the prod-like Tier 2 E2E gate.
 
-##@ Capacity Sample Variables
-##? CAPACITY_SAMPLE_BACKEND_REGION Backend region recorded by capacity-sample.
-##? CAPACITY_SAMPLE_BACKEND_URL Backend URL recorded by capacity-sample.
-##? CAPACITY_SAMPLE_OPENBAO_ADDR OpenBao address used by local evidence targets.
-##? CAPACITY_SAMPLE_OPENBAO_KEY_PATH OpenBao transit key path used by capacity-sample.
-##? CAPACITY_SAMPLE_REPORT Output path for capacity-sample evidence.
+SCRAP_E2E_ADDR ?= 127.0.0.1:18090
+SCRAP_E2E_CELL_ID ?= kind-dev
+SCRAP_E2E_METRICS_URL ?= http://127.0.0.1:18100/metrics
+SCRAP_E2E_NAMESPACE ?= scrap
+SCRAP_E2E_KUBE_CONTEXT ?= kind-$(KIND_CLUSTER)
+SCRAP_E2E_S3_BUCKET ?= scrap-e2e
+ifndef PRODLIKE_E2E_KUBE_CONTEXT
+PRODLIKE_E2E_KUBE_CONTEXT := $(PRODLIKE_KUBE_CONTEXT)
+endif
+PRODLIKE_E2E_KUBECTL = $(KUBECTL) --context "$(PRODLIKE_E2E_KUBE_CONTEXT)"
+PRODLIKE_SECURITY_ASSET_DIR ?= artifacts/prodlike-security
+TIER2_SECURITY_EVIDENCE_REPORT ?= $(PRODLIKE_SECURITY_ASSET_DIR)/security-evidence.json
+E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUpload)
+SCRUB_E2E_TEST_RUN ?= TestE2E(DeepScrub|LightScrub)
+TIER2_E2E_TEST_RUN ?= TestE2E(WriteReadHead|LeaderFailover|BackendUploadHappyPath|BackendUploadLeaderChange|BackendUploadAdmissionPressure|MultiShardRestartDeterminism|MultiShardBackendUploadUsesNonZeroShard|LightScrub|ProdlikeSecurityEncryptionEvidence)
 
-CAPACITY_SAMPLE_BACKEND_REGION ?= us-east-1
-CAPACITY_SAMPLE_BACKEND_URL ?= http://127.0.0.1:4566/scrap-local
-CAPACITY_SAMPLE_OPENBAO_ADDR ?= http://127.0.0.1:8200
-CAPACITY_SAMPLE_OPENBAO_KEY_PATH ?= transit/keys/scrap-backend
-CAPACITY_SAMPLE_REPORT ?= capacity-sample-advisory.json
+##@ Stress Variables
 
-##@ OpenBao Smoke Variables
-##? OPENBAO_SMOKE_ADDR OpenBao address used by smoke evidence.
-##? OPENBAO_SMOKE_JWT_CMD Command used to mint the local OpenBao smoke JWT.
-##? OPENBAO_SMOKE_OUTAGE_ADDR OpenBao outage address used by smoke evidence.
-##? OPENBAO_SMOKE_REPORT Output path for OpenBao smoke evidence.
-##? OPENBAO_SMOKE_KEY_PATH OpenBao transit key path used by smoke evidence.
+##? STRESS_KIND_CLUSTER Kind cluster name used by stress targets.
+##? STRESS_KIND_CONFIG Kind cluster config with Grafana NodePort.
+##? STRESS_OVERLAY Kustomize environment used for stress/evidence workload manifests.
+##? EVIDENCE_OVERLAY Kustomize component for OTel evidence stack manifests.
+##? STRESS_ADDR gRPC address for the stress test binary.
+##? STRESS_SCENARIO Stress scenario to run: throughput, mixed, pressure.
+##? STRESS_WORKERS Concurrent worker goroutines for the stress test.
+##? STRESS_DURATION Duration of the stress test run.
+##? STRESS_DOC_SIZE Document payload size in bytes.
+##? BUNDLE_DIR Directory where evidence bundles are written.
+##? SECURITY_EVIDENCE_REPORT Prod-like security report copied into Tier 3 evidence bundles.
+##? EVIDENCE_BASELINE_SAMPLING Baseline % of normal traces the gateway keeps; errors + slow are always kept.
+##? EVIDENCE_LOWRATE_SAMPLING Baseline % used by the stress-setup-lowrate capture scenario.
 
-OPENBAO_SMOKE_ADDR ?= $(CAPACITY_SAMPLE_OPENBAO_ADDR)
-OPENBAO_SMOKE_JWT_CMD ?= $(KUBECTL) -n scrap-local create token openbao-transit-smoke --duration=10m
-OPENBAO_SMOKE_OUTAGE_ADDR ?= http://127.0.0.1:1
-OPENBAO_SMOKE_REPORT ?= openbao-transit-smoke-evidence.json
-OPENBAO_SMOKE_KEY_PATH ?= $(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)
-
-##@ Local DR Drill Variables
-##? LOCAL_DR_DRILL_IMAGE_IDENTITY Image identity recorded by local DR drill evidence.
-##? LOCAL_DR_DRILL_OPERATOR_OWNER Operator owner recorded by local DR drill evidence.
-##? LOCAL_DR_DRILL_REPORT Output path for local DR drill evidence.
-##? LOCAL_DR_DRILL_RUNNER Runner identifier recorded by local DR drill evidence.
-
-LOCAL_DR_DRILL_IMAGE_IDENTITY ?= $(IMAGE_NAME)
-LOCAL_DR_DRILL_OPERATOR_OWNER ?= @cotocisternas
-LOCAL_DR_DRILL_REPORT ?= local-dr-drill-evidence.json
-LOCAL_DR_DRILL_RUNNER ?= local-kind
-
-##@ Local Soak Variables
-##? LOCAL_SOAK_IMAGE_IDENTITY Image identity recorded by local soak evidence.
-##? LOCAL_SOAK_REPORT Output path for local soak evidence.
-##? LOCAL_SOAK_RUNNER Runner identifier recorded by local soak evidence.
-
-LOCAL_SOAK_IMAGE_IDENTITY ?= $(IMAGE_NAME)
-LOCAL_SOAK_REPORT ?= local-soak-evidence.json
-LOCAL_SOAK_RUNNER ?= local-kind
-
-##@ Write Pipeline Variables
-##? WRITE_PIPELINE_CONCURRENCY Concurrent writers used by write-pipeline evidence.
-##? WRITE_PIPELINE_DOCUMENT_SIZE Document size used by write-pipeline evidence.
-##? WRITE_PIPELINE_DURATION Run duration used by write-pipeline evidence.
-##? WRITE_PIPELINE_MAX_P99_ACK_LATENCY Maximum accepted p99 ACK latency.
-##? WRITE_PIPELINE_MIN_WRITES_PER_SECOND Minimum accepted writes per second.
-##? WRITE_PIPELINE_REPORT Output path for write-pipeline evidence.
-##? WRITE_PIPELINE_RUNNER Runner identifier recorded by write-pipeline evidence.
-##? WRITE_PIPELINE_SAMPLES Sample count used by write-pipeline evidence.
-
-WRITE_PIPELINE_CONCURRENCY ?= 8
-WRITE_PIPELINE_DOCUMENT_SIZE ?= 4096
-WRITE_PIPELINE_DURATION ?= 30s
-WRITE_PIPELINE_MAX_P99_ACK_LATENCY ?= 0s
-WRITE_PIPELINE_MIN_WRITES_PER_SECOND ?= 0
-WRITE_PIPELINE_REPORT ?= write-pipeline-performance-evidence.json
-WRITE_PIPELINE_RUNNER ?= local-application
-WRITE_PIPELINE_SAMPLES ?= 128
-
-# -----------------------------------------------------------------------------
-# Recipe fragments
-# -----------------------------------------------------------------------------
-
-ADMIN_CLIENT_FLAGS = \
-	--admin-addr "$(SCRAP_ADMIN_ADDR)" \
-	--workload-identity "$(SCRAP_WORKLOAD_IDENTITY)"
-CROSS_BUILD_ENV = CGO_ENABLED=0 GOOS=$(IMAGE_GOOS) GOARCH=$(IMAGE_GOARCH)
-LOCAL_ENDPOINT_FLAGS = \
-	--public-addr "$(SCRAP_PUBLIC_ADDR)" \
-	--admin-addr "$(SCRAP_ADMIN_ADDR)" \
-	--public-workload-identity "$(SCRAP_PUBLIC_WORKLOAD_IDENTITY)" \
-	--admin-workload-identity "$(SCRAP_WORKLOAD_IDENTITY)"
-RELEASE_EVIDENCE_FLAGS = \
-	--release-sha "$(RELEASE_SHA)" \
-	--dirty-tree "$(DIRTY_TREE)"
-PROFILE_EVIDENCE_FLAGS = \
-	$(RELEASE_EVIDENCE_FLAGS) \
-	--profile-id "$(PROFILE_ID)"
+STRESS_KIND_CLUSTER ?= scrap-stress
+STRESS_KIND_CONFIG ?= deploy/kind/cluster-stress.yaml
+STRESS_OVERLAY ?= deploy/kustomize/environments/evidence
+EVIDENCE_OVERLAY ?= deploy/kustomize/components/evidence-stack
+STRESS_ADDR ?= 127.0.0.1:18090
+STRESS_SCENARIO ?= throughput
+STRESS_WORKERS ?= 8
+STRESS_DURATION ?= 60s
+STRESS_DOC_SIZE ?= 16384
+BUNDLE_DIR ?= evidence
+SECURITY_EVIDENCE_REPORT ?= $(TIER2_SECURITY_EVIDENCE_REPORT)
+EVIDENCE_BASELINE_SAMPLING ?= 100
+EVIDENCE_LOWRATE_SAMPLING ?= 10
 
 ##@ Help
 
 .PHONY: help
-help: ## Show this help.
+help: ## Show public targets.
 	@awk -f scripts/make-help.awk $(MAKEFILE_LIST)
+
+.PHONY: help-vars
+help-vars: ## Show overridable Make variables.
+	@MAKE_HELP_MODE=variables awk -f scripts/make-help.awk $(MAKEFILE_LIST)
+
+.PHONY: help-all
+help-all: ## Show public targets and overridable Make variables.
+	@MAKE_HELP_MODE=all awk -f scripts/make-help.awk $(MAKEFILE_LIST)
 
 ##@ Protobuf
 
@@ -277,31 +255,11 @@ help: ## Show this help.
 proto: ## Generate protobuf and gRPC code.
 	$(BUF) generate
 
-.PHONY: generate
-generate: proto generate-templ ## Generate all checked-in code.
-
 .PHONY: proto-check
-proto-check: ## Lint schemas, check breaking changes, and verify generated code.
+proto-check: ## Lint schemas and verify generated code.
 	$(BUF) lint
-	@if git cat-file -e "$(PROTO_BREAKING_REF):buf.yaml" 2>/dev/null && \
-		git cat-file -e "$(PROTO_BREAKING_REF):proto" 2>/dev/null; then \
-		$(BUF) breaking --against "$(PROTO_BREAKING_AGAINST)"; \
-	else \
-		echo "buf breaking skipped: $(PROTO_BREAKING_REF) has no proto module yet"; \
-	fi
 	$(BUF) generate
-	git diff --exit-code -- internal/gen
-
-.PHONY: generate-templ
-generate-templ: ## Generate templ admin UI code.
-	$(TEMPL) generate ./internal/adminui/templates/...
-	$(GO) run ./scripts/clean-templ-generated.go -- internal/adminui/templates/*_templ.go
-
-.PHONY: templ-check
-templ-check: ## Verify generated templ admin UI code is current.
-	$(TEMPL) generate ./internal/adminui/templates/...
-	$(GO) run ./scripts/clean-templ-generated.go -- internal/adminui/templates/*_templ.go
-	git diff --exit-code -- internal/adminui/templates/*_templ.go
+	git diff --exit-code -- gen
 
 ##@ Development
 
@@ -310,7 +268,7 @@ fmt: ## Format Go source using configured golangci formatters.
 	$(GOLANGCI_LINT) fmt
 
 .PHONY: fmt-check
-fmt-check: ## Check formatter drift using configured golangci formatters.
+fmt-check:
 	$(GOLANGCI_LINT) fmt --diff
 
 .PHONY: lint
@@ -318,7 +276,7 @@ lint: ## Run the golangci-lint baseline.
 	$(GOLANGCI_LINT) run --timeout=$(LINT_TIMEOUT)
 
 .PHONY: package-boundaries
-package-boundaries: ## Check package dependency boundaries.
+package-boundaries:
 	GO="$(GO)" scripts/check-package-boundaries.sh
 
 .PHONY: vuln
@@ -328,14 +286,6 @@ vuln: ## Run govulncheck against the module graph.
 .PHONY: test
 test: ## Run package tests.
 	$(GO) test $(TEST_PACKAGES)
-
-.PHONY: test-compat
-test-compat: ## Run compatibility tests for stored data and metadata boundaries.
-	$(GO) test $(COMPAT_PACKAGES)
-
-.PHONY: test-crashfault-catalog
-test-crashfault-catalog: ## Verify crash/fault catalog patterns match real tests.
-	$(GO) test -tags=integration ./internal/crashfault
 
 .PHONY: test-race
 test-race: ## Run package tests with the Go race detector.
@@ -354,66 +304,14 @@ test-cover: ## Run tests producing both coverage profile and JUnit XML in one pa
 		$(COVER_TEST_PACKAGES)
 	$(GO) tool cover -func="$(COVERPROFILE)" | tail -n 1
 
+.PHONY: integration
+integration: ## Run integration tests.
+	$(GO) test -tags=integration ./test/integration/... -v -timeout 5m
+
 .PHONY: build
 build: ## Build all supported command binaries.
-	$(GO) build $(SCRAP_BINS)
-
-.PHONY: local-scrapd-run
-local-scrapd-run: ## Run scrapd locally with non-production storage for manual testing.
-	@test -f "$(LOCAL_SCRAPD_AUTHZ_POLICY)" || \
-		(echo "LOCAL_SCRAPD_AUTHZ_POLICY does not exist: $(LOCAL_SCRAPD_AUTHZ_POLICY)" >&2; exit 2)
-	mkdir -p "$(LOCAL_SCRAPD_DATA_DIR)" "$(LOCAL_SCRAPD_BACKEND_DIR)"
-	$(GO) run ./cmd/scrapd \
-		--public-listen="$(SCRAP_PUBLIC_ADDR)" \
-		--admin-listen="$(SCRAP_ADMIN_ADDR)" \
-		--metrics-listen="$(SCRAP_METRICS_ADDR)" \
-		--admin-ui-listen="$(SCRAP_ADMIN_UI_ADDR)" \
-		--authorization-policy="$(LOCAL_SCRAPD_AUTHZ_POLICY)" \
-		--enable-local-non-production-storage \
-		--local-data-dir="$(LOCAL_SCRAPD_DATA_DIR)" \
-		--enable-local-filesystem-backend \
-		--local-backend-data-dir="$(LOCAL_SCRAPD_BACKEND_DIR)" \
-		--backend-upload-interval="$(LOCAL_SCRAPD_BACKEND_UPLOAD_INTERVAL)" \
-		--operation-run-interval="$(LOCAL_SCRAPD_OPERATION_RUN_INTERVAL)" \
-		--local-seal-block-at-bytes="$(LOCAL_SCRAPD_SEAL_BLOCK_AT_BYTES)"
-
-##@ Local Dev
-
-.PHONY: local-dev-up
-local-dev-up: ## Start the full local dev environment: scrapd, admin UI, LocalStack, and OpenBao.
-	@$(LOCAL_DEV_SCRIPT) up
-
-.PHONY: local-dev-prod-up
-local-dev-prod-up: ## Start a production-like local dev environment with multiple scrapd nodes.
-	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) up
-
-.PHONY: local-dev-down
-local-dev-down: ## Stop the full local dev environment and delete its kind cluster.
-	@$(LOCAL_DEV_SCRIPT) down
-
-.PHONY: local-dev-prod-down
-local-dev-prod-down: ## Stop the production-like local dev environment and delete its kind cluster.
-	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) down
-
-.PHONY: local-dev-status
-local-dev-status: ## Show local dev Kubernetes resources and port-forwards.
-	@$(LOCAL_DEV_SCRIPT) status
-
-.PHONY: local-dev-prod-status
-local-dev-prod-status: ## Show production-like local dev Kubernetes resources and port-forwards.
-	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) status
-
-.PHONY: local-dev-prod-smoke
-local-dev-prod-smoke: ## Validate replicated ACK success and fail-closed behavior in local production-like dev.
-	@./scripts/local-dev-prod-smoke.sh
-
-.PHONY: local-dev-stop-forwards
-local-dev-stop-forwards: ## Stop only local dev port-forwards.
-	@$(LOCAL_DEV_SCRIPT) stop-forwards
-
-.PHONY: local-dev-prod-stop-forwards
-local-dev-prod-stop-forwards: ## Stop only production-like local dev port-forwards.
-	@SCRAP_LOCAL_DEV_PROFILE=prod-like $(LOCAL_DEV_SCRIPT) stop-forwards
+	$(GO) build -ldflags "$(SCRAPD_LDFLAGS)" ./cmd/scrapd
+	$(GO) build ./cmd/scrapctl
 
 .PHONY: static
 static: $(STATIC_TARGETS) ## Run all static analysis and format checks.
@@ -424,6 +322,66 @@ tests: $(TEST_TARGETS) ## Run all test suites including race detector.
 .PHONY: check
 check: $(CHECK_TARGETS) ## Run the full local verification gate.
 
+##@ GitHub Actions
+
+.PHONY: act-runner-image
+act-runner-image: ## Build the local act runner image used by .actrc.
+	$(DOCKER) build \
+		--build-arg ACT_RUNNER_BASE_IMAGE="$(ACT_RUNNER_BASE_IMAGE)" \
+		-f "$(ACT_RUNNER_DOCKERFILE)" \
+		-t "$(ACT_RUNNER_IMAGE)" \
+		.
+
+.PHONY: act-ci-list
+act-ci-list: ## List jobs in the CI workflow through act.
+	$(ACT) --list -W "$(ACT_CI_WORKFLOW)"
+
+.PHONY: act-ci-validate
+act-ci-validate: ## Validate the CI workflow through act.
+	$(ACT) --validate -W "$(ACT_CI_WORKFLOW)"
+
+.PHONY: act-ci-dry-run
+act-ci-dry-run: act-runner-image ## Dry-run the CI workflow_dispatch path through act.
+	@$(MAKE) --no-print-directory act-ci-run ACT_RUN_ARGS="-n"
+
+.PHONY: act-ci
+act-ci: ACT_CLEANUP=true
+act-ci: act-runner-image ## Run the CI workflow_dispatch path through act, including Tier 2 E2E.
+	@$(MAKE) --no-print-directory act-ci-run
+
+.PHONY: act-ci-job
+act-ci-job: act-runner-image ## Run one CI job through act, e.g. make act-ci-job ACT_JOB=build.
+	@test -n "$(ACT_JOB)" || { printf 'ACT_JOB is required\n' >&2; exit 1; }
+	@$(MAKE) --no-print-directory act-ci-run ACT_RUN_ARGS="-j $(ACT_JOB)"
+
+.PHONY: act-ci-e2e
+act-ci-e2e: ACT_JOB=e2e
+act-ci-e2e: ACT_CLEANUP=true
+act-ci-e2e: act-ci-job ## Run only the Tier 2 E2E CI job through act.
+
+.PHONY: act-ci-clean
+act-ci-clean: ## Remove local act CI containers and the prod-like Kind Cell.
+	@containers="$$( $(DOCKER) ps -aq --filter 'name=act-ci-' )"; \
+	if [ -n "$$containers" ]; then \
+		$(DOCKER) rm -f $$containers; \
+	else \
+		printf 'no act CI containers found\n'; \
+	fi
+	@$(MAKE) --no-print-directory prodlike-kind-delete || true
+
+.PHONY: act-ci-run
+act-ci-run:
+	@tmp="$$(mktemp)"; \
+	trap 'status="$$?"; rm -f "$$tmp"; if [ "$(ACT_CLEANUP)" = "true" ]; then $(MAKE) --no-print-directory act-ci-clean || true; fi; exit "$$status"' EXIT; \
+	if command -v gh >/dev/null 2>&1 && token="$$(gh auth token 2>/dev/null)" && [ -n "$$token" ]; then \
+		printf 'GITHUB_TOKEN=%s\nGH_TOKEN=%s\n' "$$token" "$$token" > "$$tmp"; \
+		secret_args="--secret-file $$tmp"; \
+	else \
+		printf 'warning: gh auth token unavailable; running act without GITHUB_TOKEN/GH_TOKEN\n' >&2; \
+		secret_args=""; \
+	fi; \
+	$(ACT) "$(ACT_EVENT)" -W "$(ACT_CI_WORKFLOW)" $(ACT_ARGS) $(ACT_RUN_ARGS) $$secret_args
+
 ##@ Release Artifacts
 
 .PHONY: image
@@ -431,7 +389,7 @@ image: ## Build the local scrapd container image.
 	mkdir -p "$(dir $(SCRAPD_IMAGE_BINARY))"
 	$(CROSS_BUILD_ENV) $(GO) build \
 		-trimpath \
-		-ldflags "-s -w" \
+		-ldflags "-s -w $(SCRAPD_LDFLAGS)" \
 		-o "$(SCRAPD_IMAGE_BINARY)" \
 		./cmd/scrapd
 	$(DOCKER) build \
@@ -444,139 +402,403 @@ image: ## Build the local scrapd container image.
 		-t "$(IMAGE_NAME)" .
 
 .PHONY: manifests-render
-manifests-render: ## Render the local-kind GitOps manifests.
+manifests-render: ## Render the local-kind kustomize manifests.
 	@$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)"
 
 .PHONY: manifests-check
-manifests-check: ## Validate rendered GitOps manifests and deployment hardening invariants.
+manifests-check: ## Validate rendered manifests and deployment hardening invariants.
 	@KUSTOMIZE_CMD='$(KUSTOMIZE)' \
 		LOCAL_KIND_OVERLAY='$(LOCAL_KIND_OVERLAY)' \
 		sh ./scripts/check-kustomize-manifests.sh
 
+.PHONY: gates-check
+gates-check:
+	@bash ./scripts/check-e2e-gates.sh
+
+.PHONY: e2e-gates-check
+e2e-gates-check: gates-check
+
+.PHONY: kind-cilium-check
+kind-cilium-check:
+	@PRODLIKE_KIND_CONFIG='$(PRODLIKE_KIND_CONFIG)' \
+		STRESS_KIND_CONFIG='$(STRESS_KIND_CONFIG)' \
+		PRODLIKE_OVERLAY='$(PRODLIKE_OVERLAY)' \
+		PRODLIKE_E2E_OVERLAY='$(PRODLIKE_E2E_OVERLAY)' \
+		CILIUM_VALUES='$(CILIUM_VALUES)' \
+		CILIUM_CHART_DIR='$(CILIUM_CHART_DIR)' \
+		CILIUM_SCRIPT='$(CILIUM_SCRIPT)' \
+		sh ./scripts/check-kind-cilium.sh
+
+# Internal Local Kind helpers. Public local E2E workflows live under `##@ E2E`.
+
 .PHONY: local-kind-create
-local-kind-create: ## Create the local kind cluster for release rehearsal.
+local-kind-create:
 	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml
 
-.PHONY: local-kind-clean
-local-kind-clean: ## Clean up the local kind cluster.
-	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
-
-.PHONY: local-kind-cleanup
-local-kind-cleanup: local-kind-clean ## Alias for local-kind-clean.
+.PHONY: local-kind-ensure
+local-kind-ensure:
+	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(KIND_CLUSTER)" >/dev/null 2>&1; then \
+		printf 'kind cluster already exists: %s\n' "$(KIND_CLUSTER)"; \
+	else \
+		$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml; \
+	fi
+	$(KIND) export kubeconfig --name "$(KIND_CLUSTER)" >/dev/null
 
 .PHONY: local-kind-delete
-local-kind-delete: local-kind-clean ## Alias for local-kind-clean.
+local-kind-delete:
+	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
 
 .PHONY: local-kind-load
-local-kind-load: image ## Load the scrapd image into the local kind cluster.
+local-kind-load: image
 	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(KIND_CLUSTER)"
 
 .PHONY: local-kind-deploy
-local-kind-deploy: manifests-check ## Apply the local-kind release rehearsal manifests.
+local-kind-deploy: manifests-check
 	$(KUSTOMIZE) build "$(LOCAL_KIND_OVERLAY)" | $(KUBECTL) apply -f -
 
-.PHONY: local-kind-smoke
-local-kind-smoke: ## Run a local kind admin smoke check.
-	@./scripts/local-kind-smoke.sh
+##@ Prod-like
 
-.PHONY: local-kind-evidence
-local-kind-evidence: manifests-check ## Emit a local kind release rehearsal evidence report.
-	@./scripts/local-kind-evidence.sh > "$(LOCAL_KIND_EVIDENCE_REPORT)"
+.PHONY: prodlike-kind-create
+prodlike-kind-create:
+	$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"
 
-##@ Release Evidence
+.PHONY: prodlike-kind-ensure
+prodlike-kind-ensure:
+	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(PRODLIKE_KIND_CLUSTER)" >/dev/null 2>&1; then \
+		printf 'kind cluster already exists: %s\n' "$(PRODLIKE_KIND_CLUSTER)"; \
+	else \
+		$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"; \
+	fi
+	$(KIND) export kubeconfig --name "$(PRODLIKE_KIND_CLUSTER)" >/dev/null
+	$(MAKE) prodlike-cilium-install
+	$(MAKE) prodlike-cilium-wait
 
-.PHONY: release-check
-release-check: ## Verify release evidence from RELEASE_EVIDENCE_MANIFEST.
-	@test -n "$(RELEASE_EVIDENCE_MANIFEST)" || \
-		(echo "RELEASE_EVIDENCE_MANIFEST is required" >&2; exit 2)
-	$(GO) run ./cmd/scrap-release-gate --tier release --manifest "$(RELEASE_EVIDENCE_MANIFEST)"
+.PHONY: prodlike-kind-delete
+prodlike-kind-delete:
+	$(KIND) delete cluster --name "$(PRODLIKE_KIND_CLUSTER)"
 
-.PHONY: crash-fault-evidence
-crash-fault-evidence: ## Emit crash/fault evidence JSON for dedicated runners.
-	$(GO) run ./cmd/scrap-crash-fault-evidence \
-		--out "$${SCRAP_CRASH_FAULT_EVIDENCE_REPORT:-crash-fault-evidence.json}"
+.PHONY: prodlike-cilium-install
+prodlike-cilium-install:
+	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		CILIUM_VERSION="$(CILIUM_VERSION)" \
+		CILIUM_VALUES="$(CILIUM_VALUES)" \
+		DOCKER="$(DOCKER)" \
+		HELM="$(HELM)" \
+		KUBECTL="$(KUBECTL)" \
+		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
+		CILIUM_CHART_DIR="$(CILIUM_CHART_DIR)" \
+		"$(CILIUM_SCRIPT)" install
 
-.PHONY: capacity-sample
-capacity-sample: ## Emit advisory local capacity sample evidence.
-	@AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
-	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
-	BAO_TOKEN="$${BAO_TOKEN:-local-root}" \
-	$(GO) run ./cmd/scrapctl \
-		$(ADMIN_CLIENT_FLAGS) \
-		capacity sample \
-		--profile-id "$(PROFILE_ID)" \
-		--backend-url "$(CAPACITY_SAMPLE_BACKEND_URL)" \
-		--backend-region "$(CAPACITY_SAMPLE_BACKEND_REGION)" \
-		--openbao-addr "$(CAPACITY_SAMPLE_OPENBAO_ADDR)" \
-		--openbao-transit-key-path "$(CAPACITY_SAMPLE_OPENBAO_KEY_PATH)" \
-		$(RELEASE_EVIDENCE_FLAGS) \
-		> "$(CAPACITY_SAMPLE_REPORT)"
+.PHONY: prodlike-cilium-wait
+prodlike-cilium-wait:
+	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		KUBECTL="$(KUBECTL)" \
+		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
+		"$(CILIUM_SCRIPT)" wait
 
-.PHONY: openbao-smoke-evidence
-openbao-smoke-evidence: ## Emit local OpenBao Transit smoke evidence.
-	@BAO_TOKEN="$${BAO_TOKEN:-local-root}" \
-	BAO_KUBERNETES_JWT="$${BAO_KUBERNETES_JWT:-$$($(OPENBAO_SMOKE_JWT_CMD))}" \
-	$(GO) run ./cmd/scrap-openbao-smoke \
-		--out "$(OPENBAO_SMOKE_REPORT)" \
-		$(PROFILE_EVIDENCE_FLAGS) \
-		--environment-id "local-kind" \
-		--namespace "scrap-local" \
-		--deployment "openbao" \
-		--openbao-addr "$(OPENBAO_SMOKE_ADDR)" \
-		--outage-addr "$(OPENBAO_SMOKE_OUTAGE_ADDR)" \
-		--transit-key-path "$(OPENBAO_SMOKE_KEY_PATH)"
+.PHONY: prodlike-kind-load
+prodlike-kind-load: image
+	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(PRODLIKE_KIND_CLUSTER)"
 
-.PHONY: local-soak-evidence
-local-soak-evidence: ## Emit local release soak and capacity rehearsal evidence.
-	$(GO) run ./cmd/scrap-local-soak-evidence \
-		--out "$(LOCAL_SOAK_REPORT)" \
-		$(PROFILE_EVIDENCE_FLAGS) \
-		--environment-id "local-kind" \
-		--runner-id "$(LOCAL_SOAK_RUNNER)" \
-		--image-identity "$(LOCAL_SOAK_IMAGE_IDENTITY)" \
-		$(LOCAL_ENDPOINT_FLAGS) \
-		--capacity-sample-report "$(CAPACITY_SAMPLE_REPORT)"
+.PHONY: prodlike-kind-deploy
+prodlike-kind-deploy: LOCAL_KIND_OVERLAY=$(PRODLIKE_OVERLAY)
+prodlike-kind-deploy: manifests-check
+	$(KUSTOMIZE) build "$(PRODLIKE_OVERLAY)" | $(PRODLIKE_KUBECTL) apply -f -
+	$(PRODLIKE_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(PRODLIKE_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(PRODLIKE_KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(PRODLIKE_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(PRODLIKE_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
-.PHONY: local-dr-drill-evidence
-local-dr-drill-evidence: capacity-sample openbao-smoke-evidence ## Emit local release-artifact DR drill evidence.
-	$(GO) run ./cmd/scrap-local-dr-drill-evidence \
-		--out "$(LOCAL_DR_DRILL_REPORT)" \
-		$(PROFILE_EVIDENCE_FLAGS) \
-		--environment-id "local-kind" \
-		--runner-id "$(LOCAL_DR_DRILL_RUNNER)" \
-		--image-identity "$(LOCAL_DR_DRILL_IMAGE_IDENTITY)" \
-		$(LOCAL_ENDPOINT_FLAGS) \
-		--capacity-sample-report "$(CAPACITY_SAMPLE_REPORT)" \
-		--openbao-smoke-report "$(OPENBAO_SMOKE_REPORT)" \
-		--operator-owner "$(LOCAL_DR_DRILL_OPERATOR_OWNER)"
+.PHONY: prodlike-kind-deploy-e2e
+prodlike-kind-deploy-e2e: prodlike-test-security-assets manifests-check
+	$(KUSTOMIZE) build "$(PRODLIKE_E2E_OVERLAY)" | $(PRODLIKE_E2E_KUBECTL) apply -f -
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout restart statefulset/scrapd
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
-.PHONY: write-pipeline-evidence
-write-pipeline-evidence: ## Emit local write-pipeline performance-smoke evidence.
-	$(GO) run ./cmd/scrap-write-pipeline-evidence \
-		--out "$(WRITE_PIPELINE_REPORT)" \
-		$(RELEASE_EVIDENCE_FLAGS) \
-		--runner-id "$(WRITE_PIPELINE_RUNNER)" \
-		--samples "$(WRITE_PIPELINE_SAMPLES)" \
-		--concurrency "$(WRITE_PIPELINE_CONCURRENCY)" \
-		--document-size "$(WRITE_PIPELINE_DOCUMENT_SIZE)" \
-		--duration "$(WRITE_PIPELINE_DURATION)" \
-		--min-writes-per-second "$(WRITE_PIPELINE_MIN_WRITES_PER_SECOND)" \
-		--max-p99-ack-latency "$(WRITE_PIPELINE_MAX_P99_ACK_LATENCY)"
+.PHONY: prodlike-test-security-assets
+prodlike-test-security-assets:
+	PRODLIKE_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		KUBECTL="$(KUBECTL)" \
+		scripts/prodlike-test-security-assets.sh "$(PRODLIKE_SECURITY_ASSET_DIR)"
 
-##@ Spikes
+.PHONY: prodlike-test-security-rollout
+prodlike-test-security-rollout: prodlike-doctor prodlike-test-security-assets
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout restart statefulset/scrapd
+	$(PRODLIKE_E2E_KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(PRODLIKE_E2E_KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
 
-.PHONY: spike-write-path
-spike-write-path: ## Run the local write-path spike.
-	$(GO) run ./cmd/scrap-spike
+.PHONY: prodlike-cell-doctor
+prodlike-cell-doctor:
+	PRODLIKE_KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		SCRAP_PRODLIKE_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		DOCKER="$(DOCKER)" \
+		KUBECTL="$(KUBECTL)" \
+		PRODLIKE_KUBE_CONTEXT="$(PRODLIKE_KUBE_CONTEXT)" \
+		"$(CILIUM_SCRIPT)" doctor
 
-.PHONY: spike-write-path-raft
-spike-write-path-raft: ## Run the write-path spike with Raft commit barriers.
-	$(GO) run ./cmd/scrap-spike -raft-barrier
+.PHONY: prodlike-cell-up
+prodlike-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy prodlike-cell-doctor
 
-.PHONY: spike-write-path-raft-durable
-spike-write-path-raft-durable: ## Run the write-path spike with durable Raft barriers.
-	$(GO) run ./cmd/scrap-spike -raft-durable-barrier
+.PHONY: prodlike-e2e-cell-up
+prodlike-e2e-cell-up: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
+prodlike-e2e-cell-up: prodlike-kind-ensure prodlike-kind-load prodlike-kind-deploy-e2e prodlike-cell-doctor
 
-.PHONY: spike-write-path-raft-cluster
-spike-write-path-raft-cluster: ## Run the write-path spike with clustered Raft barriers.
-	$(GO) run ./cmd/scrap-spike -raft-cluster-barrier
+.PHONY: prodlike-up
+prodlike-up: prodlike-cell-up ## Bring up and verify the prod-like Kind Cell.
+
+.PHONY: prodlike-down
+prodlike-down: prodlike-kind-delete ## Delete the prod-like Kind Cell.
+
+.PHONY: prodlike-doctor
+prodlike-doctor: prodlike-cell-doctor ## Check the prod-like Cell without creating or deleting infrastructure.
+
+.PHONY: cell-doctor
+cell-doctor: prodlike-cell-doctor
+
+.PHONY: tier2-e2e-hooks-check
+tier2-e2e-hooks-check:
+	@hooks="$$( $(PRODLIKE_E2E_KUBECTL) -n "$(SCRAP_E2E_NAMESPACE)" get statefulset scrapd -o jsonpath='{.spec.template.spec.containers[?(@.name=="scrapd")].env[?(@.name=="SCRAP_TEST_HOOKS")].value}' )"; \
+	if [ "$$hooks" != "1" ]; then \
+		printf 'Tier 2 E2E requires SCRAP_TEST_HOOKS=1; run make tier2-e2e-up or deploy %s\n' "$(PRODLIKE_E2E_OVERLAY)" >&2; \
+		exit 1; \
+	fi
+
+.PHONY: prodlike-e2e-smoke
+prodlike-e2e-smoke: tier2-e2e
+
+.PHONY: production-rehearsal-security
+production-rehearsal-security: build ## Run local production-mode security rehearsal with real OpenBao Transit and FS Backend.
+	SCRAP_PROD_REHEARSAL_BACKEND=fs \
+		SCRAP_PROD_REHEARSAL_DIR="$(PRODUCTION_REHEARSAL_DIR)" \
+		SCRAP_PROD_REHEARSAL_OPENBAO_IMAGE="$(PRODUCTION_REHEARSAL_OPENBAO_IMAGE)" \
+		SCRAPD_BIN="$(abspath scrapd)" \
+		SCRAPCTL_BIN="$(abspath scrapctl)" \
+		"$(PRODUCTION_REHEARSAL_SCRIPT)" run
+
+.PHONY: production-rehearsal
+production-rehearsal: build ## Run production-mode rehearsal with real OpenBao Transit and real S3/IAM-style Backend config.
+	SCRAP_PROD_REHEARSAL_BACKEND=s3 \
+		SCRAP_PROD_REHEARSAL_DIR="$(PRODUCTION_REHEARSAL_DIR)" \
+		SCRAP_PROD_REHEARSAL_OPENBAO_IMAGE="$(PRODUCTION_REHEARSAL_OPENBAO_IMAGE)" \
+		SCRAPD_BIN="$(abspath scrapd)" \
+		SCRAPCTL_BIN="$(abspath scrapctl)" \
+		"$(PRODUCTION_REHEARSAL_SCRIPT)" run
+
+.PHONY: production-rehearsal-down
+production-rehearsal-down: ## Stop production rehearsal processes.
+	SCRAP_PROD_REHEARSAL_DIR="$(PRODUCTION_REHEARSAL_DIR)" \
+		"$(PRODUCTION_REHEARSAL_SCRIPT)" down
+
+##@ Local Dev
+
+.PHONY: local-dev-up
+local-dev-up: ## Start the local dev environment.
+	@$(LOCAL_DEV_SCRIPT) up
+
+.PHONY: local-dev-down
+local-dev-down: ## Stop the local dev environment and delete its kind cluster.
+	@$(LOCAL_DEV_SCRIPT) down
+
+.PHONY: local-dev-status
+local-dev-status: ## Show local dev Kubernetes resources and port-forwards.
+	@$(LOCAL_DEV_SCRIPT) status
+
+.PHONY: local-dev-stop-forwards
+local-dev-stop-forwards: ## Stop only local dev port-forwards.
+	@$(LOCAL_DEV_SCRIPT) stop-forwards
+
+##@ E2E
+
+.PHONY: e2e-setup
+e2e-setup: local-kind-ensure local-kind-load local-kind-deploy ## Create Kind cluster, load image, and deploy manifests.
+	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+
+.PHONY: e2e
+e2e: ## Run E2E tests against an existing Cell.
+	SCRAP_E2E=1 \
+		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
+		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(SCRAP_E2E_KUBE_CONTEXT)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
+		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
+		KIND_CLUSTER="$(KIND_CLUSTER)" \
+		$(GO) test ./test/e2e/ -run '$(E2E_TEST_RUN)' -count=1 -v -timeout 300s
+
+.PHONY: e2e-up
+e2e-up: e2e-setup e2e ## Create/update local Kind, then run E2E tests.
+
+.PHONY: e2e-down
+e2e-down: local-kind-delete ## Delete the local Kind E2E Cell.
+
+.PHONY: e2e-scrub
+e2e-scrub: ## Run scrub E2E tests against an existing scrub-enabled Cell.
+	SCRAP_E2E=1 \
+		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="$(SCRAP_E2E_CELL_ID)" \
+		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(SCRAP_E2E_KUBE_CONTEXT)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
+		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
+		KIND_CLUSTER="$(KIND_CLUSTER)" \
+		$(GO) test ./test/e2e/ -run '$(SCRUB_E2E_TEST_RUN)' -count=1 -v -timeout 600s
+
+.PHONY: e2e-scrub-up
+e2e-scrub-up: LOCAL_KIND_OVERLAY=deploy/kustomize/environments/local-scrub
+e2e-scrub-up: e2e-setup e2e-scrub ## Create/update scrub-enabled local Kind, then run scrub E2E tests.
+
+##@ Gates
+
+.PHONY: tier1-check
+tier1-check: check vuln ## Run the Tier 1 commit gate.
+
+.PHONY: tier2-e2e
+tier2-e2e: PRODLIKE_KUBE_CONTEXT=$(PRODLIKE_E2E_KUBE_CONTEXT)
+tier2-e2e: prodlike-test-security-assets prodlike-test-security-rollout tier2-e2e-hooks-check ## Run the Tier 2 prod-like E2E gate against an existing E2E Cell.
+	@printf 'TIER2_E2E_STATUS=running\n'
+	SCRAP_E2E=1 \
+		SCRAP_E2E_ADDR="$(SCRAP_E2E_ADDR)" \
+		SCRAP_E2E_CELL_ID="kind-prodlike" \
+		SCRAP_E2E_METRICS_URL="$(SCRAP_E2E_METRICS_URL)" \
+		SCRAP_E2E_NAMESPACE="$(SCRAP_E2E_NAMESPACE)" \
+		SCRAP_E2E_KUBE_CONTEXT="$(PRODLIKE_E2E_KUBE_CONTEXT)" \
+		SCRAP_E2E_S3_BUCKET="$(SCRAP_E2E_S3_BUCKET)" \
+		SCRAP_E2E_KUBECTL="$(KUBECTL)" \
+		SCRAP_SECURITY_MODE="test" \
+		SCRAP_TLS_SCRAPCTL_CERT="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.pem)" \
+		SCRAP_TLS_SCRAPCTL_KEY="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.key)" \
+		SCRAP_TLS_SCRAPCTL_CLIENT_CA="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/ca.pem)" \
+		SCRAP_TLS_SCRAPCTL_SERVER_NAME="scrap.local" \
+		SCRAP_E2E_TLS_CERT="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.pem)" \
+		SCRAP_E2E_TLS_KEY="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/scrap.key)" \
+		SCRAP_E2E_TLS_CA="$(abspath $(PRODLIKE_SECURITY_ASSET_DIR)/ca.pem)" \
+		SCRAP_E2E_TLS_SERVER_NAME="scrap.local" \
+		SCRAP_E2E_SECURITY_REPORT="$(abspath $(TIER2_SECURITY_EVIDENCE_REPORT))" \
+		KIND_CLUSTER="$(PRODLIKE_KIND_CLUSTER)" \
+		$(GO) test ./test/e2e/ -run '$(TIER2_E2E_TEST_RUN)' -count=1 -v -timeout 600s
+	@printf 'TIER2_E2E_STATUS=passed\n'
+
+.PHONY: tier2-e2e-up
+tier2-e2e-up: prodlike-e2e-cell-up tier2-e2e ## Bring up prod-like Kind with E2E hooks, then run the Tier 2 gate.
+
+.PHONY: tier3-evidence
+tier3-evidence: evidence-bundle ## Run the Tier 3 evidence gate against an existing evidence Cell.
+
+.PHONY: tier3-evidence-up
+tier3-evidence-up: evidence-up tier3-evidence ## Bring up the evidence Cell, then run the Tier 3 evidence gate.
+
+##@ Evidence / Stress
+
+.PHONY: evidence-up
+evidence-up: stress-setup ## Bring up the evidence Cell.
+
+.PHONY: evidence-up-lowrate
+evidence-up-lowrate: stress-setup-lowrate ## Bring up the evidence Cell with production-like low trace sampling.
+
+.PHONY: evidence-down
+evidence-down: stress-teardown ## Delete the evidence Kind Cell.
+
+.PHONY: stress-setup
+stress-setup:
+	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(STRESS_KIND_CLUSTER)" >/dev/null 2>&1; then \
+		printf 'kind cluster already exists: %s\n' "$(STRESS_KIND_CLUSTER)"; \
+	else \
+		$(KIND) create cluster --name "$(STRESS_KIND_CLUSTER)" --config "$(STRESS_KIND_CONFIG)"; \
+	fi
+	$(KIND) export kubeconfig --name "$(STRESS_KIND_CLUSTER)" >/dev/null
+	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
+		KUBECTL="$(KUBECTL)" \
+		"$(CILIUM_SCRIPT)" baseline
+	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
+		CILIUM_VERSION="$(CILIUM_VERSION)" \
+		CILIUM_VALUES="$(CILIUM_VALUES)" \
+		DOCKER="$(DOCKER)" \
+		HELM="$(HELM)" \
+		KUBECTL="$(KUBECTL)" \
+		CILIUM_CHART_DIR="$(CILIUM_CHART_DIR)" \
+		"$(CILIUM_SCRIPT)" install
+	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \
+		KUBECTL="$(KUBECTL)" \
+		"$(CILIUM_SCRIPT)" wait
+	$(MAKE) image
+	$(KIND) load docker-image "$(IMAGE_NAME)" --name "$(STRESS_KIND_CLUSTER)"
+	@printf '\n== Phase 1: observability stack (log pipeline up before any app starts) ==\n'
+	# Ensure the scrap namespace exists so the evidence overlay's scrap-namespace
+	# NetworkPolicy applies; the app workload (Phase 2) re-applies it idempotently.
+	$(KUBECTL) create namespace scrap --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	# Render the evidence stack, overriding only the baseline trace-sampling rate.
+	# Default 100 keeps the sed a no-op; stress-setup-lowrate lowers it to model a
+	# production capture where errors + slow traces are still kept (ADR 0013).
+	$(KUSTOMIZE) build "$(EVIDENCE_OVERLAY)" \
+		| sed 's/sampling_percentage: 100/sampling_percentage: $(EVIDENCE_BASELINE_SAMPLING)/' \
+		| $(KUBECTL) apply -f -
+	# A reused cluster keeps the previously-running otel-collector pod, whose
+	# tail_sampling rate is read from config only at process start. kubectl apply
+	# updates the ConfigMap in place but does not roll the Deployment, so without
+	# this the collector would keep its old in-memory sampling (e.g. 100%) while
+	# the rendered config claims the low rate — a misleading low-rate scenario.
+	# Force the collector to reload the freshly-applied config before gating on it
+	# (no-op-cost first rollout on a fresh cluster; the status gate below waits).
+	$(KUBECTL) -n monitoring rollout restart deployment/otel-collector
+	# Gate on the log pipeline first (Loki sink, gateway, per-node agent) so that
+	# when apps deploy in Phase 2 their logs are captured from the first line.
+	$(KUBECTL) -n monitoring rollout status deployment/loki --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/otel-collector --timeout=120s
+	$(KUBECTL) -n monitoring rollout status daemonset/otel-agent --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/kube-state-metrics --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/mimir --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/tempo --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/pyroscope --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/alloy --timeout=120s
+	$(KUBECTL) -n monitoring rollout status deployment/grafana --timeout=120s
+	@printf '\n== Phase 2: application workload (logs captured from startup) ==\n'
+	$(KUSTOMIZE) build "$(STRESS_OVERLAY)" | $(KUBECTL) apply -f -
+	$(KUBECTL) -n scrap rollout status deployment/localstack --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=localstack --timeout=120s
+	$(KUBECTL) -n scrap exec deploy/localstack -- sh -c 'awslocal s3api head-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null 2>&1 || awslocal s3api create-bucket --bucket "$(SCRAP_E2E_S3_BUCKET)" >/dev/null'
+	$(KUBECTL) -n scrap rollout status statefulset/scrapd --timeout=180s
+	$(KUBECTL) -n scrap wait --for=condition=Ready pod -l app=scrap --timeout=120s
+	@printf '\nStress environment ready.\n'
+	@printf '  gRPC:       127.0.0.1:18090\n'
+	@printf '  Grafana:    http://127.0.0.1:13000\n'
+	@printf '  Collector:  127.0.0.1:14317 (OTLP gRPC)\n'
+	@printf '  LocalStack: http://127.0.0.1:18566 (S3, e.g. aws --endpoint-url http://127.0.0.1:18566 s3 ls)\n\n'
+
+.PHONY: stress-setup-lowrate
+stress-setup-lowrate:
+	$(MAKE) stress-setup EVIDENCE_BASELINE_SAMPLING=$(EVIDENCE_LOWRATE_SAMPLING)
+
+.PHONY: stress
+stress: ## Run the stress test binary against the Kind cluster.
+	$(GO) run ./test/stress/ \
+		-addr="$(STRESS_ADDR)" \
+		-scenario="$(STRESS_SCENARIO)" \
+		-workers=$(STRESS_WORKERS) \
+		-duration=$(STRESS_DURATION) \
+		-doc-size=$(STRESS_DOC_SIZE)
+
+.PHONY: evidence-bundle
+evidence-bundle: ## Generate a timestamped evidence bundle from a stress run.
+	BUNDLE_DIR="$(BUNDLE_DIR)" \
+	STRESS_ADDR="$(STRESS_ADDR)" \
+	STRESS_WORKERS="$(STRESS_WORKERS)" \
+	STRESS_DURATION="$(STRESS_DURATION)" \
+	STRESS_DOC_SIZE="$(STRESS_DOC_SIZE)" \
+	SECURITY_EVIDENCE_REPORT="$(SECURITY_EVIDENCE_REPORT)" \
+	scripts/evidence-bundle.sh "$(STRESS_SCENARIO)"
+
+.PHONY: stress-teardown
+stress-teardown:
+	$(KIND) delete cluster --name "$(STRESS_KIND_CLUSTER)"

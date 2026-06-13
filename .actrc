@@ -1,0 +1,5 @@
+-P ubuntu-latest=scrap-v2/act-ubuntu:24.04-varrun
+-P ubuntu-24.04=scrap-v2/act-ubuntu:24.04-varrun
+-P blacksmith-8vcpu-ubuntu-2404=scrap-v2/act-ubuntu:24.04-varrun
+-P blacksmith-4vcpu-ubuntu-2404=scrap-v2/act-ubuntu:24.04-varrun
+-P blacksmith-2vcpu-ubuntu-2404=scrap-v2/act-ubuntu:24.04-varrun

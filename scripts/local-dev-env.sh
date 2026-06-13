@@ -13,7 +13,7 @@ KIND_CMD=${KIND:-}
 KUBECTL=${KUBECTL:-kubectl}
 MAKE_CMD=${MAKE:-make}
 TOOLS_MODFILE=${TOOLS_MODFILE:-tools.go.mod}
-NAMESPACE=${SCRAP_LOCAL_DEV_NAMESPACE:-scrap-local}
+NAMESPACE=${SCRAP_LOCAL_DEV_NAMESPACE:-scrap}
 IMAGE_NAME=${IMAGE_NAME:-localhost/scrapd:local}
 ROLLOUT_TIMEOUT=${SCRAP_ROLLOUT_TIMEOUT:-180s}
 STATE_DIR=${SCRAP_LOCAL_DEV_STATE_DIR:-tmp/local-dev}
@@ -21,23 +21,20 @@ PID_DIR="$STATE_DIR/pids"
 LOG_DIR="$STATE_DIR/logs"
 KIND_CONFIG=${SCRAP_LOCAL_DEV_KIND_CONFIG:-$STATE_DIR/kind.yaml}
 
-PUBLIC_GRPC_PORT=${SCRAP_PUBLIC_PORT:-18080}
-ADMIN_GRPC_PORT=${SCRAP_ADMIN_PORT:-18081}
-ADMIN_UI_PORT=${SCRAP_ADMIN_UI_PORT:-18083}
-LOCALSTACK_PORT=${LOCALSTACK_PORT:-4566}
-OPENBAO_PORT=${OPENBAO_PORT:-8200}
-FORWARD_NAMES="public-grpc admin-grpc admin-ui localstack openbao"
+CLIENT_GRPC_PORT=${SCRAP_CLIENT_PORT:-18090}
+METRICS_PORT=${SCRAP_METRICS_PORT:-18100}
+FORWARD_NAMES="client-grpc metrics"
 
 case "$PROFILE" in
 	dev)
 		DEFAULT_CLUSTER=scrap-dev
-		DEFAULT_OVERLAY=deploy/kustomize/overlays/local-dev
-		DEFAULT_NODE_COUNT=1
+		DEFAULT_OVERLAY=deploy/kustomize/environments/local
+		DEFAULT_NODE_COUNT=4
 		;;
 	prod-like)
 		DEFAULT_CLUSTER=scrap-prod-dev
-		DEFAULT_OVERLAY=deploy/kustomize/overlays/local-prod-dev
-		DEFAULT_NODE_COUNT=4
+		DEFAULT_OVERLAY=deploy/kustomize/environments/local
+		DEFAULT_NODE_COUNT=5
 		;;
 	*)
 		printf 'unknown SCRAP_LOCAL_DEV_PROFILE: %s\n' "$PROFILE" >&2
@@ -54,7 +51,7 @@ usage() {
 Usage: scripts/local-dev-env.sh [up|down|status|stop-forwards]
 
 Commands:
-  up             Build, create/update kind, deploy scrapd/localstack/openbao, and start port-forwards.
+  up             Build, create/update kind, deploy scrapd, and start port-forwards.
   down           Stop port-forwards and delete the local kind cluster.
   status         Show local Kubernetes resources and port-forward state.
   stop-forwards  Stop only port-forwards started by this script.
@@ -65,9 +62,6 @@ Useful overrides:
   IMAGE_NAME=$IMAGE_NAME
   LOCAL_KIND_OVERLAY=$LOCAL_KIND_OVERLAY
   SCRAP_LOCAL_DEV_KIND_NODES=$KIND_NODE_COUNT
-  SCRAP_ADMIN_UI_PORT=$ADMIN_UI_PORT
-  LOCALSTACK_PORT=$LOCALSTACK_PORT
-  OPENBAO_PORT=$OPENBAO_PORT
   SCRAP_LOCAL_DEV_DETACH=1
   SKIP_IMAGE_BUILD=1
 EOF
@@ -86,7 +80,6 @@ require_command() {
 
 kind_cmd() {
 	if [ -n "$KIND_CMD" ]; then
-		# KIND may include arguments, matching the Makefile's overridable command style.
 		# shellcheck disable=SC2086
 		$KIND_CMD "$@"
 		return
@@ -96,7 +89,6 @@ kind_cmd() {
 
 kustomize_build() {
 	if [ -n "${KUSTOMIZE:-}" ]; then
-		# KUSTOMIZE may include arguments, matching the Makefile's overridable command style.
 		# shellcheck disable=SC2086
 		$KUSTOMIZE build "$LOCAL_KIND_OVERLAY"
 		return
@@ -124,6 +116,13 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: $KIND_CLUSTER
 nodes:
   - role: control-plane
+    extraPortMappings:
+      - containerPort: 30090
+        hostPort: $CLIENT_GRPC_PORT
+        protocol: TCP
+      - containerPort: 30100
+        hostPort: $METRICS_PORT
+        protocol: TCP
 EOF
 		node_index=1
 		while [ "$node_index" -lt "$KIND_NODE_COUNT" ]; do
@@ -135,7 +134,7 @@ EOF
 
 ensure_cluster() {
 	if cluster_exists; then
-	log "kind cluster already exists: $KIND_CLUSTER"
+		log "kind cluster already exists: $KIND_CLUSTER"
 	else
 		write_default_kind_config
 		log "creating kind cluster: $KIND_CLUSTER profile=$PROFILE nodes=$KIND_NODE_COUNT"
@@ -158,31 +157,14 @@ load_image() {
 	kind_cmd load docker-image "$IMAGE_NAME" --name "$KIND_CLUSTER"
 }
 
-reset_recreated_workloads() {
-	if "$KUBECTL" get namespace "$NAMESPACE" >/dev/null 2>&1; then
-		log "resetting recreated local dev workloads"
-		"$KUBECTL" -n "$NAMESPACE" delete job \
-			localstack-s3-bootstrap \
-			openbao-transit-bootstrap \
-			--ignore-not-found=true >/dev/null
-		"$KUBECTL" -n "$NAMESPACE" delete statefulset scrapd \
-			--ignore-not-found=true \
-			--wait=true >/dev/null
-	fi
-}
-
 apply_manifests() {
 	log "applying local dev manifests profile=$PROFILE overlay=$LOCAL_KIND_OVERLAY"
 	kustomize_build | "$KUBECTL" apply -f -
 }
 
 wait_for_cluster() {
-	log "waiting for scrapd, localstack, and openbao"
+	log "waiting for scrapd pods"
 	"$KUBECTL" -n "$NAMESPACE" rollout status statefulset/scrapd --timeout="$ROLLOUT_TIMEOUT"
-	"$KUBECTL" -n "$NAMESPACE" rollout status deployment/localstack --timeout="$ROLLOUT_TIMEOUT"
-	"$KUBECTL" -n "$NAMESPACE" rollout status deployment/openbao --timeout="$ROLLOUT_TIMEOUT"
-	"$KUBECTL" -n "$NAMESPACE" wait --for=condition=complete job/localstack-s3-bootstrap --timeout="$ROLLOUT_TIMEOUT"
-	"$KUBECTL" -n "$NAMESPACE" wait --for=condition=complete job/openbao-transit-bootstrap --timeout="$ROLLOUT_TIMEOUT"
 }
 
 pid_file_for() {
@@ -230,56 +212,27 @@ start_forward() {
 	fi
 }
 
-wait_url() {
-	name=$1
-	url=$2
-	attempt=1
-	while [ "$attempt" -le 60 ]; do
-		if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
-			log "$name is reachable: $url"
-			return
-		fi
-		attempt=$((attempt + 1))
-		sleep 1
-	done
-	printf '%s did not become reachable: %s\n' "$name" "$url" >&2
-	exit 1
-}
-
 start_forwards() {
-	start_forward public-grpc svc/scrapd-public "$PUBLIC_GRPC_PORT" 18080
-	start_forward admin-grpc svc/scrapd-admin "$ADMIN_GRPC_PORT" 18081
-	start_forward admin-ui pod/scrapd-0 "$ADMIN_UI_PORT" 18083
-	start_forward localstack svc/localstack "$LOCALSTACK_PORT" 4566
-	start_forward openbao svc/openbao "$OPENBAO_PORT" 8200
-	wait_url "admin UI" "http://127.0.0.1:$ADMIN_UI_PORT/admin/"
-	wait_url "LocalStack" "http://127.0.0.1:$LOCALSTACK_PORT/_localstack/health"
-	wait_url "OpenBao" "http://127.0.0.1:$OPENBAO_PORT/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+	start_forward client-grpc svc/scrap "$CLIENT_GRPC_PORT" 9090
+	start_forward metrics svc/scrap "$METRICS_PORT" 9100
 }
 
 print_endpoints() {
-	down_command="scripts/local-dev-env.sh down"
-	if [ "$PROFILE" = "prod-like" ]; then
-		down_command="make local-dev-prod-down"
-	fi
 	cat <<EOF
 
 Local dev environment is ready.
 
-  Profile:     $PROFILE
-  Cluster:     $KIND_CLUSTER
-  Admin UI:    http://127.0.0.1:$ADMIN_UI_PORT/admin/
-  Public gRPC: 127.0.0.1:$PUBLIC_GRPC_PORT
-  Admin gRPC:  127.0.0.1:$ADMIN_GRPC_PORT
-  LocalStack:  http://127.0.0.1:$LOCALSTACK_PORT
-  OpenBao:     http://127.0.0.1:$OPENBAO_PORT
+  Profile:      $PROFILE
+  Cluster:      $KIND_CLUSTER
+  Client gRPC:  127.0.0.1:$CLIENT_GRPC_PORT
+  Metrics:      http://127.0.0.1:$METRICS_PORT/metrics
 
 Port-forward logs:
   $LOG_DIR
 
 Keep this command running while you use the environment.
 Press Ctrl-C to stop port-forwards. Delete the cluster with:
-  $down_command
+  make local-dev-down
 EOF
 }
 
@@ -305,13 +258,11 @@ monitor_forwards() {
 up() {
 	require_command docker
 	require_command go
-	require_command curl
 	require_command "$KUBECTL"
 	ensure_dirs
 	build_image
 	ensure_cluster
 	load_image
-	reset_recreated_workloads
 	apply_manifests
 	wait_for_cluster
 	start_forwards
@@ -341,7 +292,7 @@ status() {
 	ensure_dirs
 	if cluster_exists; then
 		kind_cmd export kubeconfig --name "$KIND_CLUSTER" >/dev/null
-		"$KUBECTL" -n "$NAMESPACE" get pods,svc,job
+		"$KUBECTL" -n "$NAMESPACE" get pods,svc
 	else
 		log "kind cluster does not exist: $KIND_CLUSTER"
 	fi

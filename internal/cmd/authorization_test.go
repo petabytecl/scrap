@@ -1,0 +1,229 @@
+package cmd
+
+import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/security"
+	securityfixture "github.com/petabytecl/scrap/test/fixtures/security"
+)
+
+func TestAppSecurityRuntimeLoadsProductionAuthorizer(t *testing.T) {
+	bundle := securityfixture.WriteCertBundle(t, t.TempDir(), securityfixture.CertOptions{
+		ServerName: "scrap.local",
+	})
+	cfg := Config{
+		SecurityMode: security.ModeProduction,
+		ProductionGates: security.StartupGateConfig{
+			Mode: security.ModeProduction,
+			TLS: security.TLSConfig{
+				Public:   productionTLSFiles(bundle),
+				Peer:     productionTLSFiles(bundle),
+				Admin:    productionTLSFiles(bundle),
+				Scrapctl: productionTLSFiles(bundle),
+			},
+			RolePolicyPath: writeRolePolicy(t, t.TempDir()),
+			Transit: security.TransitConfig{
+				Address:      "https://openbao.example.invalid",
+				MountPath:    "transit",
+				KeyName:      "scrap-documents",
+				TokenEnv:     "OPENBAO_TOKEN",
+				TokenPresent: true,
+			},
+			AuditSink:  security.AuditSinkConfig{PolicyPath: writeAuditPolicy(t, t.TempDir())},
+			RateLimits: security.RateLimitConfig{PolicyPath: writeRateLimitPolicy(t, t.TempDir())},
+		},
+	}
+	t.Setenv("OPENBAO_TOKEN", "test-token")
+
+	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil, nil)
+	if err != nil {
+		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
+	}
+	if runtime.authorizer == nil {
+		t.Fatal("production runtime authorizer is nil")
+	}
+	if len(runtime.publicGRPCOptions) == 0 || len(runtime.peerGRPCOptions) == 0 || !runtime.adminTLS.enabled {
+		t.Fatalf("runtime TLS/authz options not configured: %+v", runtime)
+	}
+	if runtime.auditSink == nil || runtime.rateLimiter == nil {
+		t.Fatalf("runtime audit/rate controls not configured: %+v", runtime)
+	}
+	if runtime.transit == nil || !encryption.ProductionCapable(runtime.transit) {
+		t.Fatalf("runtime transit not configured as production capable: %+v", runtime.transit)
+	}
+}
+
+func TestAppSecurityRuntimeLeavesDevelopmentAuthorizerUnset(t *testing.T) {
+	runtime, err := newAppSecurityRuntimeOptions(Config{SecurityMode: security.ModeDevelopment}, slog.Default(), nil, nil)
+	if err != nil {
+		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
+	}
+	if runtime.authorizer != nil {
+		t.Fatal("development runtime authorizer should be nil")
+	}
+	if runtime.transit == nil || encryption.ProductionCapable(runtime.transit) {
+		t.Fatalf("development runtime transit = %+v, want test-only fake", runtime.transit)
+	}
+}
+
+func TestAppSecurityRuntimeEnforcesExplicitTestControls(t *testing.T) {
+	bundle := securityfixture.WriteCertBundle(t, t.TempDir(), securityfixture.CertOptions{
+		ServerName: "scrap.local",
+	})
+	cfg := Config{
+		SecurityMode: security.ModeTest,
+		ProductionGates: security.StartupGateConfig{
+			TLS: security.TLSConfig{
+				Public:   productionTLSFiles(bundle),
+				Peer:     productionTLSFiles(bundle),
+				Admin:    productionTLSFiles(bundle),
+				Scrapctl: productionTLSFiles(bundle),
+			},
+			RolePolicyPath: writeRolePolicy(t, t.TempDir()),
+		},
+	}
+
+	runtime, err := newAppSecurityRuntimeOptions(cfg, slog.Default(), nil, nil)
+	if err != nil {
+		t.Fatalf("newAppSecurityRuntimeOptions: %v", err)
+	}
+	if runtime.authorizer == nil {
+		t.Fatal("test runtime authorizer is nil")
+	}
+	if len(runtime.publicGRPCOptions) == 0 || len(runtime.peerGRPCOptions) == 0 || !runtime.adminTLS.enabled {
+		t.Fatalf("test runtime TLS/authz options not configured: %+v", runtime)
+	}
+}
+
+func TestAppSecurityRuntimeRejectsProductionFakeTransit(t *testing.T) {
+	cfg := Config{
+		SecurityMode: security.ModeProduction,
+		ProductionGates: security.StartupGateConfig{
+			Transit: security.TransitConfig{
+				Address:      "https://openbao.example.invalid",
+				MountPath:    "transit",
+				KeyName:      "scrap-documents",
+				TokenEnv:     "OPENBAO_TOKEN",
+				TokenPresent: true,
+				Fake:         true,
+			},
+		},
+	}
+	t.Setenv("OPENBAO_TOKEN", "test-token")
+
+	_, err := newAppTransit(cfg)
+	if err == nil {
+		t.Fatal("newAppTransit succeeded, want fake Transit rejection")
+	}
+	if !errors.Is(err, encryption.ErrInvalidConfig) {
+		t.Fatalf("newAppTransit error = %v, want invalid config", err)
+	}
+}
+
+func TestAppShardEncryptionConfigSkipsDevelopmentFakeTransit(t *testing.T) {
+	cfg := Config{
+		SecurityMode: security.ModeDevelopment,
+		ProductionGates: security.StartupGateConfig{
+			Transit: security.TransitConfig{
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+			},
+		},
+	}
+	got := appShardEncryptionConfig(cfg, encryption.NewFakeTransit(encryption.FakeConfig{KeyName: "scrap-documents"}))
+	if got.Transit != nil || got.TransitMount != "" || got.TransitKey != "" {
+		t.Fatalf("development fake Transit enabled shard encryption: %+v", got)
+	}
+}
+
+func TestAppShardEncryptionConfigAllowsExplicitTestFakeTransit(t *testing.T) {
+	cfg := Config{
+		SecurityMode: security.ModeTest,
+		ProductionGates: security.StartupGateConfig{
+			Transit: security.TransitConfig{
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Fake:      true,
+			},
+		},
+	}
+	got := appShardEncryptionConfig(cfg, encryption.NewFakeTransit(encryption.FakeConfig{KeyName: "scrap-documents"}))
+	if got.Transit == nil || got.TransitMount != "transit" || got.TransitKey != "scrap-documents" {
+		t.Fatalf("test fake Transit encryption disabled: %+v", got)
+	}
+}
+
+func writeAuditPolicy(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "audit.json")
+	data, err := json.Marshal(map[string]any{"sink": "stderr"})
+	if err != nil {
+		t.Fatalf("marshal audit policy: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write audit policy: %v", err)
+	}
+	return path
+}
+
+func writeRateLimitPolicy(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "rate-limit.json")
+	data, err := json.Marshal(map[string]any{
+		"surfaces": []map[string]any{
+			{"surface": "public", "limit": 100, "window": "1m"},
+			{"surface": "peer", "limit": 100, "window": "1m"},
+			{"surface": "admin", "limit": 100, "window": "1m"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal rate-limit policy: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write rate-limit policy: %v", err)
+	}
+	return path
+}
+
+func productionTLSFiles(bundle securityfixture.CertBundle) security.TLSFiles {
+	return security.TLSFiles{
+		ServerCertPath: bundle.ServerCertPath,
+		ServerKeyPath:  bundle.ServerKeyPath,
+		ClientCAPath:   bundle.CACertPath,
+		ServerName:     "scrap.local",
+	}
+}
+
+func writeRolePolicy(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "roles.json")
+	data, err := json.Marshal(map[string]any{
+		"roles": []string{
+			"document_writer",
+			"document_reader",
+			"peer_member",
+			"admin_reader",
+			"admin_operator",
+			"admin_break_glass",
+		},
+		"principals": []map[string]any{
+			{
+				"id":    "spiffe://scrap/cell/cell-a/member/member-a/member-1",
+				"roles": []string{"document_writer", "document_reader", "peer_member", "admin_reader", "admin_operator"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal role policy: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write role policy: %v", err)
+	}
+	return path
+}

@@ -1,0 +1,1362 @@
+{
+  "generated_at": "2026-06-12T18:01:45-04:00",
+  "source_ref": "3f76e56857ec555f0f6fd824cc5b8f9780d869ec",
+  "redaction_note": "Sanitized tracker metadata only; issue bodies and comments are excluded.",
+  "queries": {
+    "storage_gateway_v2_milestone": "gh issue list --repo petabytecl/scrap --milestone storage-gateway-v2 --state all --json number,title,state,labels,milestone,url,updatedAt --limit 200",
+    "real_s3_iam_gate": "gh issue view 429 --repo petabytecl/scrap --json number,title,state,body,comments,labels,milestone,url,updatedAt"
+  },
+  "milestone": {
+    "name": "storage-gateway-v2",
+    "total_count": 104,
+    "closed_count": 104,
+    "open_count": 0,
+    "issues": [
+      {
+        "number": 250,
+        "title": "Phase 1.1: Foundation — Go module, proto definitions, Store interface",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/250",
+        "updatedAt": "2026-05-27T06:47:03Z"
+      },
+      {
+        "number": 251,
+        "title": "Phase 1.2: Tracer bullet — Write + Read a Document through gRPC",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/251",
+        "updatedAt": "2026-05-27T06:47:05Z"
+      },
+      {
+        "number": 252,
+        "title": "Phase 1.3: Block format review gate",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/252",
+        "updatedAt": "2026-05-27T06:47:07Z"
+      },
+      {
+        "number": 253,
+        "title": "Phase 1.4: HeadDocument + FindDocuments RPCs",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/253",
+        "updatedAt": "2026-05-27T06:46:28Z"
+      },
+      {
+        "number": 254,
+        "title": "Phase 1.5: Block sealing + large Document support",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/254",
+        "updatedAt": "2026-05-27T06:46:30Z"
+      },
+      {
+        "number": 255,
+        "title": "Phase 1.6: All-or-error integrity verification",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/255",
+        "updatedAt": "2026-05-27T06:46:31Z"
+      },
+      {
+        "number": 256,
+        "title": "Phase 1.7: Main binary + integration test suite",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/256",
+        "updatedAt": "2026-05-27T06:46:33Z"
+      },
+      {
+        "number": 257,
+        "title": "Phase 2a.1: Proto definitions — Raft commands, peer service, openlog",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/257",
+        "updatedAt": "2026-05-27T06:46:35Z"
+      },
+      {
+        "number": 258,
+        "title": "Phase 2a.2: Raft node wrapper + K8s bootstrap",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/258",
+        "updatedAt": "2026-05-27T06:46:37Z"
+      },
+      {
+        "number": 259,
+        "title": "Phase 2a.3: Shard orchestrator — single-voter tracer bullet",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/259",
+        "updatedAt": "2026-05-27T06:46:39Z"
+      },
+      {
+        "number": 260,
+        "title": "Phase 2a.4: Multi-voter writes — peer byte replication",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/260",
+        "updatedAt": "2026-05-27T06:46:41Z"
+      },
+      {
+        "number": 261,
+        "title": "Phase 2a.5: Leader-only reads + client routing",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/261",
+        "updatedAt": "2026-05-27T06:46:42Z"
+      },
+      {
+        "number": 262,
+        "title": "Phase 2a.6: Block transfer + member recovery",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/262",
+        "updatedAt": "2026-05-27T06:46:44Z"
+      },
+      {
+        "number": 263,
+        "title": "Phase 2a.7: Kind E2E harness",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/263",
+        "updatedAt": "2026-05-27T06:46:46Z"
+      },
+      {
+        "number": 264,
+        "title": "feat: implement internal/ulid package — zero-dep monotonic ULID generator",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/264",
+        "updatedAt": "2026-05-27T06:46:06Z"
+      },
+      {
+        "number": 265,
+        "title": "refactor: replace oklog/ulid/v2 with internal/ulid",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/265",
+        "updatedAt": "2026-05-27T06:46:07Z"
+      },
+      {
+        "number": 266,
+        "title": "fix: Raft bootstrap deadlock — scrapd-0 never healthy in StatefulSet",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/266",
+        "updatedAt": "2026-05-27T06:46:26Z"
+      },
+      {
+        "number": 267,
+        "title": "PRD: Phase 2b — Scrubbing + Hardening",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "prd",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/267",
+        "updatedAt": "2026-05-27T07:44:27Z"
+      },
+      {
+        "number": 268,
+        "title": "Phase 2b.1: Proto definitions + Prometheus bootstrap + scrub config",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/268",
+        "updatedAt": "2026-05-27T06:45:43Z"
+      },
+      {
+        "number": 269,
+        "title": "Phase 2b.2: Light scrub — detection tracer bullet",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/269",
+        "updatedAt": "2026-05-27T06:45:44Z"
+      },
+      {
+        "number": 270,
+        "title": "Phase 2b.3: Light scrub — projection rebuild remediation",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/270",
+        "updatedAt": "2026-05-27T06:45:45Z"
+      },
+      {
+        "number": 271,
+        "title": "Phase 2b.4: Deep scrub — block verification, quarantine + I/O budget",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/271",
+        "updatedAt": "2026-05-27T06:45:46Z"
+      },
+      {
+        "number": 272,
+        "title": "Phase 2b.5: Deep scrub — auto-repair from peer",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/272",
+        "updatedAt": "2026-05-27T06:45:47Z"
+      },
+      {
+        "number": 273,
+        "title": "Phase 2b.6: Kind E2E scrub harness",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/273",
+        "updatedAt": "2026-05-27T07:44:03Z"
+      },
+      {
+        "number": 274,
+        "title": "Phase 2a gap: implement gRPC Raft transport for inter-node messaging",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/274",
+        "updatedAt": "2026-05-27T06:46:08Z"
+      },
+      {
+        "number": 275,
+        "title": "chore: adopt slog for structured logging",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/275",
+        "updatedAt": "2026-05-27T06:46:48Z"
+      },
+      {
+        "number": 276,
+        "title": "PRD: Phase 3 — Backend Upload",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "prd",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/276",
+        "updatedAt": "2026-05-27T10:30:56Z"
+      },
+      {
+        "number": 277,
+        "title": "Phase 3.1: Proto definitions + Backend interface + error taxonomy",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/277",
+        "updatedAt": "2026-05-27T08:06:14Z"
+      },
+      {
+        "number": 278,
+        "title": "Phase 3.2: Upload pipeline — seal → outbox → upload → confirm",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/278",
+        "updatedAt": "2026-05-27T08:43:17Z"
+      },
+      {
+        "number": 279,
+        "title": "Phase 3.3: Admission pressure + Prometheus metrics",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/279",
+        "updatedAt": "2026-05-27T09:05:51Z"
+      },
+      {
+        "number": 280,
+        "title": "Phase 3.4: S3 adapter",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/280",
+        "updatedAt": "2026-05-27T09:46:22Z"
+      },
+      {
+        "number": 281,
+        "title": "Phase 3.5: Kind E2E upload harness",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/281",
+        "updatedAt": "2026-05-27T10:30:21Z"
+      },
+      {
+        "number": 282,
+        "title": "PRD: Phase 1 — Spike Store",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "prd",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/282",
+        "updatedAt": "2026-05-27T06:47:09Z"
+      },
+      {
+        "number": 283,
+        "title": "PRD: Phase 2a — Core Replicated Path",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "prd",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/283",
+        "updatedAt": "2026-05-27T06:47:11Z"
+      },
+      {
+        "number": 284,
+        "title": "ADR 0001: Bytes separate from Raft",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/284",
+        "updatedAt": "2026-05-27T06:50:24Z"
+      },
+      {
+        "number": 285,
+        "title": "ADR 0002: Dual checksum architecture",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/285",
+        "updatedAt": "2026-05-27T06:50:25Z"
+      },
+      {
+        "number": 286,
+        "title": "ADR 0003: Mirror block layout across replicas",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/286",
+        "updatedAt": "2026-05-27T06:50:25Z"
+      },
+      {
+        "number": 287,
+        "title": "ADR 0004: Lean Pebble projection with metadata tiering",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/287",
+        "updatedAt": "2026-05-27T06:50:26Z"
+      },
+      {
+        "number": 288,
+        "title": "ADR 0005: Phase 1 spike-store contract boundary",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/288",
+        "updatedAt": "2026-05-27T06:50:27Z"
+      },
+      {
+        "number": 289,
+        "title": "ADR 0006: Build system and CI structure",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/289",
+        "updatedAt": "2026-05-27T06:50:28Z"
+      },
+      {
+        "number": 290,
+        "title": "ADR 0007: Custom ULID implementation",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/290",
+        "updatedAt": "2026-05-27T06:50:29Z"
+      },
+      {
+        "number": 291,
+        "title": "ADR 0008: Async content scanning with ClamAV + YARA",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/291",
+        "updatedAt": "2026-05-27T06:50:30Z"
+      },
+      {
+        "number": 292,
+        "title": "ADR 0009: Backend object key format",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/292",
+        "updatedAt": "2026-05-27T06:50:31Z"
+      },
+      {
+        "number": 293,
+        "title": "ADR 0010: Upload outbox via Raft commands",
+        "state": "CLOSED",
+        "labels": [
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/293",
+        "updatedAt": "2026-05-27T06:50:31Z"
+      },
+      {
+        "number": 301,
+        "title": "ADR-0011: Pebble projection key prefixes",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/301",
+        "updatedAt": "2026-05-28T00:09:51Z"
+      },
+      {
+        "number": 302,
+        "title": "fix: validate replica StartOffset before append and clean up failed writes",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "severity:high",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/302",
+        "updatedAt": "2026-05-28T00:09:54Z"
+      },
+      {
+        "number": 303,
+        "title": "fix: close follower block on SealBlock apply and retry orphaned seals",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "severity:high",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/303",
+        "updatedAt": "2026-05-28T00:09:57Z"
+      },
+      {
+        "number": 304,
+        "title": "fix: add Pebble key prefixes for transactions and bound outbox scan",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/304",
+        "updatedAt": "2026-05-28T00:09:59Z"
+      },
+      {
+        "number": 305,
+        "title": "fix: reconstruct pending uploads on projection rebuild",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "severity:high",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/305",
+        "updatedAt": "2026-05-28T00:10:03Z"
+      },
+      {
+        "number": 306,
+        "title": "fix: harden filesystem and S3 backend adapters",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/306",
+        "updatedAt": "2026-05-28T00:10:06Z"
+      },
+      {
+        "number": 307,
+        "title": "fix: upload config gating, pressure percentage parsing, and scrub repair pause",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/307",
+        "updatedAt": "2026-05-28T00:10:09Z"
+      },
+      {
+        "number": 308,
+        "title": "fix: E2E infrastructure — S3 bucket variable and LocalStack in local-dev",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/308",
+        "updatedAt": "2026-05-28T00:10:12Z"
+      },
+      {
+        "number": 312,
+        "title": "PRD: Phase 3.6 - OTel Evidence Plane",
+        "state": "CLOSED",
+        "labels": [
+          "prd",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/312",
+        "updatedAt": "2026-05-31T06:42:45Z"
+      },
+      {
+        "number": 313,
+        "title": "Phase 3.6: scrapd OTel telemetry cutover",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/313",
+        "updatedAt": "2026-05-28T05:47:25Z"
+      },
+      {
+        "number": 314,
+        "title": "Phase 3.6: self-hosted OTel evidence stack",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/314",
+        "updatedAt": "2026-05-28T06:03:02Z"
+      },
+      {
+        "number": 315,
+        "title": "Phase 3.6: admin-gated pprof profiling",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/315",
+        "updatedAt": "2026-05-28T06:11:13Z"
+      },
+      {
+        "number": 316,
+        "title": "Phase 3.6: stress evidence bundle generator",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/316",
+        "updatedAt": "2026-05-28T06:15:39Z"
+      },
+      {
+        "number": 317,
+        "title": "Phase 3.6: dashboards and query pack",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/317",
+        "updatedAt": "2026-05-28T06:19:28Z"
+      },
+      {
+        "number": 318,
+        "title": "Phase 3.6: migrate E2E evidence checks from metrics",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/318",
+        "updatedAt": "2026-05-28T06:26:31Z"
+      },
+      {
+        "number": 327,
+        "title": "fix(peer): flush block and index writers on graceful shutdown",
+        "state": "CLOSED",
+        "labels": [
+          "bug",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/327",
+        "updatedAt": "2026-05-29T16:38:41Z"
+      },
+      {
+        "number": 328,
+        "title": "docs(context): correct scrub dependency-direction claim",
+        "state": "CLOSED",
+        "labels": [
+          "documentation",
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/328",
+        "updatedAt": "2026-05-29T16:31:55Z"
+      },
+      {
+        "number": 329,
+        "title": "refactor(scrapd): centralize configuration into a validated Config loader",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/329",
+        "updatedAt": "2026-05-29T17:04:29Z"
+      },
+      {
+        "number": 330,
+        "title": "refactor: de-stutter names and enforce package comments via lint",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/330",
+        "updatedAt": "2026-05-29T16:17:47Z"
+      },
+      {
+        "number": 331,
+        "title": "docs(shard): design god-object decomposition seams",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-human",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/331",
+        "updatedAt": "2026-05-29T07:24:48Z"
+      },
+      {
+        "number": 332,
+        "title": "refactor(scrapd): introduce App lifecycle with Run and Shutdown",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/332",
+        "updatedAt": "2026-05-29T17:20:02Z"
+      },
+      {
+        "number": 333,
+        "title": "refactor(shard): extract upload controller",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/333",
+        "updatedAt": "2026-05-29T17:36:23Z"
+      },
+      {
+        "number": 334,
+        "title": "refactor(shard): extract scrub coordinator",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/334",
+        "updatedAt": "2026-05-29T18:51:52Z"
+      },
+      {
+        "number": 335,
+        "title": "refactor(shard): extract projection rebuilder",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/335",
+        "updatedAt": "2026-05-29T19:02:31Z"
+      },
+      {
+        "number": 336,
+        "title": "refactor(shard): split write-path core into cohesive files",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/336",
+        "updatedAt": "2026-05-29T19:12:31Z"
+      },
+      {
+        "number": 337,
+        "title": "PRD: Architecture remediation — wiring & Shard decomposition",
+        "state": "CLOSED",
+        "labels": [
+          "prd",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/337",
+        "updatedAt": "2026-05-31T06:43:03Z"
+      },
+      {
+        "number": 350,
+        "title": "PRD: Prod-like Kind Cell with Cilium and scrapctl gates",
+        "state": "CLOSED",
+        "labels": [
+          "prd",
+          "production-readiness",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/350",
+        "updatedAt": "2026-05-31T06:43:26Z"
+      },
+      {
+        "number": 351,
+        "title": "test(e2e): make Tier 2 prod-like gate explicit",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/351",
+        "updatedAt": "2026-05-31T00:24:39Z"
+      },
+      {
+        "number": 353,
+        "title": "feat(deploy): bootstrap Cilium-backed prod-like Kind Cell",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/353",
+        "updatedAt": "2026-05-30T21:51:40Z"
+      },
+      {
+        "number": 355,
+        "title": "refactor(deploy): organize local prod-like and evidence environments",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/355",
+        "updatedAt": "2026-05-31T00:39:17Z"
+      },
+      {
+        "number": 356,
+        "title": "feat(scrapctl): add safety-gated fault and evidence commands",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/356",
+        "updatedAt": "2026-05-31T02:24:46Z"
+      },
+      {
+        "number": 357,
+        "title": "feat(scrapctl): add read-only Cell doctor commands",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/357",
+        "updatedAt": "2026-05-31T01:24:34Z"
+      },
+      {
+        "number": 358,
+        "title": "ci: add prod-like E2E and evidence gates",
+        "state": "CLOSED",
+        "labels": [
+          "enhancement",
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/358",
+        "updatedAt": "2026-05-31T02:50:23Z"
+      },
+      {
+        "number": 359,
+        "title": "docs(adr): record prod-like Kind Cilium and gate contract",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "adr",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/359",
+        "updatedAt": "2026-05-30T21:01:17Z"
+      },
+      {
+        "number": 372,
+        "title": "Phase 4: split upload confirmation metadata and catalog confirmed uploads",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/372",
+        "updatedAt": "2026-06-01T13:57:49Z"
+      },
+      {
+        "number": 373,
+        "title": "Phase 4: add eviction configuration and local lifecycle classification",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/373",
+        "updatedAt": "2026-06-01T13:57:51Z"
+      },
+      {
+        "number": 374,
+        "title": "Phase 4: expose catalog-backed eviction dry-run plans",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/374",
+        "updatedAt": "2026-06-01T13:57:54Z"
+      },
+      {
+        "number": 375,
+        "title": "Phase 4: implement Backend block restore before eviction",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/375",
+        "updatedAt": "2026-06-01T13:57:57Z"
+      },
+      {
+        "number": 376,
+        "title": "Phase 4: keep metadata reads local and make loss states fail closed",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/376",
+        "updatedAt": "2026-06-01T13:57:59Z"
+      },
+      {
+        "number": 377,
+        "title": "Phase 4: apply bounded eviction campaigns with crash-safe marker unlink",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/377",
+        "updatedAt": "2026-06-01T13:58:02Z"
+      },
+      {
+        "number": 378,
+        "title": "Phase 4: add sampled restore read validation for evidence campaigns",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/378",
+        "updatedAt": "2026-06-01T13:58:05Z"
+      },
+      {
+        "number": 379,
+        "title": "Phase 4: teach scrub repair about evicted peers and Backend fallback",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/379",
+        "updatedAt": "2026-06-01T13:58:08Z"
+      },
+      {
+        "number": 380,
+        "title": "Phase 4: wire eviction evidence health and operator output",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/380",
+        "updatedAt": "2026-06-01T13:58:10Z"
+      },
+      {
+        "number": 381,
+        "title": "ADR 0016: Phase 4 partial local eviction boundary",
+        "state": "CLOSED",
+        "labels": [
+          "production-readiness",
+          "adr",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/381",
+        "updatedAt": "2026-06-01T13:58:13Z"
+      },
+      {
+        "number": 398,
+        "title": "PRD: Phase 4.5 production security and encryption bridge",
+        "state": "CLOSED",
+        "labels": [
+          "prd",
+          "production-readiness",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/398",
+        "updatedAt": "2026-06-09T17:56:09Z"
+      },
+      {
+        "number": 399,
+        "title": "ADR 0019: production security boundary",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "adr",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/399",
+        "updatedAt": "2026-06-08T17:21:00Z"
+      },
+      {
+        "number": 400,
+        "title": "ADR 0020: OpenBao envelope encryption contract",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "adr",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/400",
+        "updatedAt": "2026-06-08T17:27:51Z"
+      },
+      {
+        "number": 401,
+        "title": "Phase 4.5: add production security mode and startup gates",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/401",
+        "updatedAt": "2026-06-08T17:26:35Z"
+      },
+      {
+        "number": 402,
+        "title": "Phase 4.5: add mTLS credentials for public peer admin and scrapctl paths",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/402",
+        "updatedAt": "2026-06-08T18:35:48Z"
+      },
+      {
+        "number": 403,
+        "title": "Phase 4.5: enforce role authorization and peer identity checks",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/403",
+        "updatedAt": "2026-06-08T19:40:14Z"
+      },
+      {
+        "number": 404,
+        "title": "Phase 4.5: add audit events and rate limits for security operations",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/404",
+        "updatedAt": "2026-06-08T21:13:06Z"
+      },
+      {
+        "number": 405,
+        "title": "Phase 4.5: add OpenBao Transit client and fake Transit boundary",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/405",
+        "updatedAt": "2026-06-08T22:08:55Z"
+      },
+      {
+        "number": 406,
+        "title": "Phase 4.5: encrypt new Document writes and decrypt reads",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/406",
+        "updatedAt": "2026-06-08T23:08:48Z"
+      },
+      {
+        "number": 407,
+        "title": "Phase 4.5: add durable rewrap workflow and evidence",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/407",
+        "updatedAt": "2026-06-08T23:49:18Z"
+      },
+      {
+        "number": 408,
+        "title": "Phase 4.5: add prod-like security and encryption evidence gates",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "v2",
+          "e2e"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/408",
+        "updatedAt": "2026-06-09T15:31:16Z"
+      },
+      {
+        "number": 420,
+        "title": "Phase 4.5 follow-up: define OpenBao deployment contract",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "production-readiness",
+          "architecture",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/420",
+        "updatedAt": "2026-06-09T21:48:54Z"
+      },
+      {
+        "number": 421,
+        "title": "Phase 4.5 follow-up: capture S3/IAM production rehearsal evidence",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-human",
+          "production-readiness",
+          "v2",
+          "e2e"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/421",
+        "updatedAt": "2026-06-10T02:56:52Z"
+      },
+      {
+        "number": 430,
+        "title": "Upload Outbox event boundary and characterization harness",
+        "state": "CLOSED",
+        "labels": [
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/430",
+        "updatedAt": "2026-06-10T16:07:53Z"
+      },
+      {
+        "number": 431,
+        "title": "Replay-safe upload confirmation and Backend failure handling",
+        "state": "CLOSED",
+        "labels": [
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/431",
+        "updatedAt": "2026-06-10T16:08:36Z"
+      },
+      {
+        "number": 432,
+        "title": "Upload pressure pause gate and scrub coordination ownership",
+        "state": "CLOSED",
+        "labels": [
+          "ready-for-agent",
+          "v2"
+        ],
+        "milestone": "storage-gateway-v2",
+        "url": "https://github.com/petabytecl/scrap/issues/432",
+        "updatedAt": "2026-06-10T16:26:06Z"
+      }
+    ]
+  },
+  "out_of_milestone_release_gates": [
+    {
+      "number": 429,
+      "title": "Pre-v2 release: capture real S3/IAM production rehearsal evidence",
+      "state": "OPEN",
+      "labels": [
+        "ready-for-human",
+        "production-readiness",
+        "v2",
+        "e2e"
+      ],
+      "milestone": "NONE",
+      "url": "https://github.com/petabytecl/scrap/issues/429",
+      "updatedAt": "2026-06-10T02:56:17Z"
+    }
+  ]
+}

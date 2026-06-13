@@ -1,0 +1,27 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: scrap-stress
+networking:
+  disableDefaultCNI: true
+  kubeProxyMode: "none"
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30090
+        hostPort: 18090
+        protocol: TCP
+      - containerPort: 30100
+        hostPort: 18100
+        protocol: TCP
+      - containerPort: 30566
+        hostPort: 18566
+        protocol: TCP
+      - containerPort: 30300
+        hostPort: 13000
+        protocol: TCP
+      - containerPort: 30317
+        hostPort: 14317
+        protocol: TCP
+  - role: worker
+  - role: worker
+  - role: worker

@@ -1,0 +1,68 @@
+name: prodlike-e2e
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup:
+        description: Delete the Kind Cell after the run.
+        required: true
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 8 * * 1"
+
+concurrency:
+  group: prodlike-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tier2-prodlike-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GOCACHE: /tmp/scrap-v2-go-build
+      PRODLIKE_KIND_CLUSTER: scrap-prodlike
+      PRODLIKE_KUBE_CONTEXT: kind-scrap-prodlike
+      PRODLIKE_E2E_KUBE_CONTEXT: kind-scrap-prodlike
+      SCRAP_E2E_KUBE_CONTEXT: kind-scrap-prodlike
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'v2' || github.ref }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            tools.go.sum
+
+      - name: Run Tier 2 prod-like E2E gate
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          make tier2-e2e-up 2>&1 | tee artifacts/tier2-e2e.log
+
+      - name: Collect Kind diagnostics
+        if: ${{ always() }}
+        run: |
+          ARTIFACT_DIR=artifacts/kind \
+          KUBE_CONTEXT=kind-scrap-prodlike \
+          scripts/collect-kind-artifacts.sh
+
+      - name: Upload Tier 2 artifacts
+        if: ${{ always() && env.ACT != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: tier2-prodlike-e2e-${{ github.run_id }}
+          path: artifacts
+          if-no-files-found: warn
+
+      - name: Delete prod-like Kind Cell
+        if: ${{ always() && (github.event_name == 'schedule' || inputs.cleanup) }}
+        run: make prodlike-kind-delete || true

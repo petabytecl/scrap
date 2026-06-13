@@ -1,156 +1,49 @@
 package backend
 
-import (
-	"context"
-	"errors"
-	"fmt"
-	"os"
-)
+import "errors"
 
-type ErrorClass string
+// Class is a provider-neutral backend error class.
+type Class string
 
 const (
-	ErrorClassThrottled ErrorClass = "throttled"
-	ErrorClassTransient ErrorClass = "transient"
-	ErrorClassAuth      ErrorClass = "auth"
-	ErrorClassNotFound  ErrorClass = "not_found"
-	ErrorClassConflict  ErrorClass = "conflict"
-	ErrorClassCorrupt   ErrorClass = "corrupt"
-	ErrorClassPermanent ErrorClass = "permanent"
+	ClassThrottled Class = "throttled"
+	ClassTransient Class = "transient"
+	ClassAuth      Class = "auth"
+	ClassNotFound  Class = "not-found"
+	ClassConflict  Class = "conflict"
+	ClassCorrupt   Class = "corrupt"
+	ClassPermanent Class = "permanent"
 )
 
-type Error struct {
-	Class     ErrorClass
-	Operation string
-	Key       string
-	Err       error
-}
+var (
+	ErrThrottled = errors.New("backend throttled")
+	ErrTransient = errors.New("backend transient")
+	ErrAuth      = errors.New("backend auth")
+	ErrNotFound  = errors.New("backend not found")
+	ErrConflict  = errors.New("backend conflict")
+	ErrCorrupt   = errors.New("backend corrupt")
+	ErrPermanent = errors.New("backend permanent")
+)
 
-func (e *Error) Error() string {
-	if e == nil {
-		return "<nil>"
-	}
-	message := "backend"
-	if e.Operation != "" {
-		message += " " + e.Operation
-	}
-	if e.Key != "" {
-		message += " " + e.Key
-	}
-	if e.Class != "" {
-		message += " " + string(e.Class)
-	}
-	if e.Err != nil {
-		message += ": " + e.Err.Error()
-	}
-	return message
-}
-
-func (e *Error) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Err
-}
-
-func (e *Error) Is(target error) bool {
-	if e == nil {
-		return false
-	}
-	return classSentinel(e.Class) == target
-}
-
-func NewError(class ErrorClass, operation, key string, err error) error {
-	if err == nil {
-		err = classSentinel(class)
-	}
-	return &Error{
-		Class:     class,
-		Operation: operation,
-		Key:       key,
-		Err:       err,
-	}
-}
-
-func ClassifyError(err error) ErrorClass {
-	if err == nil {
-		return ""
-	}
-	var classified *Error
-	if errors.As(err, &classified) && classified.Class.Valid() {
-		return classified.Class
-	}
-
-	if class := classifyKnownError(err); class != "" {
-		return class
-	}
-	return ErrorClassPermanent
-}
-
-func classifyKnownError(err error) ErrorClass {
+// ErrorClass returns the provider-neutral class for err, or the empty class when
+// err is nil or was not wrapped with one of the backend sentinels.
+func ErrorClass(err error) Class {
 	switch {
 	case errors.Is(err, ErrThrottled):
-		return ErrorClassThrottled
-	case isAnyError(err, ErrTransient, ErrRestorePending, context.Canceled, context.DeadlineExceeded):
-		return ErrorClassTransient
-	case isAnyError(err, ErrAuth, os.ErrPermission):
-		return ErrorClassAuth
-	case isAnyError(err, ErrNotFound, os.ErrNotExist):
-		return ErrorClassNotFound
+		return ClassThrottled
+	case errors.Is(err, ErrTransient):
+		return ClassTransient
+	case errors.Is(err, ErrAuth):
+		return ClassAuth
+	case errors.Is(err, ErrNotFound):
+		return ClassNotFound
 	case errors.Is(err, ErrConflict):
-		return ErrorClassConflict
-	case errors.Is(err, ErrChecksumMismatch):
-		return ErrorClassCorrupt
+		return ClassConflict
+	case errors.Is(err, ErrCorrupt):
+		return ClassCorrupt
+	case errors.Is(err, ErrPermanent):
+		return ClassPermanent
 	default:
 		return ""
-	}
-}
-
-func isAnyError(err error, targets ...error) bool {
-	for _, target := range targets {
-		if errors.Is(err, target) {
-			return true
-		}
-	}
-	return false
-}
-
-func IsErrorClass(err error, class ErrorClass) bool {
-	return ClassifyError(err) == class
-}
-
-func (c ErrorClass) Valid() bool {
-	switch c {
-	case ErrorClassThrottled,
-		ErrorClassTransient,
-		ErrorClassAuth,
-		ErrorClassNotFound,
-		ErrorClassConflict,
-		ErrorClassCorrupt,
-		ErrorClassPermanent:
-		return true
-	default:
-		return false
-	}
-}
-
-func classSentinel(class ErrorClass) error {
-	switch class {
-	case ErrorClassThrottled:
-		return ErrThrottled
-	case ErrorClassTransient:
-		return ErrTransient
-	case ErrorClassAuth:
-		return ErrAuth
-	case ErrorClassNotFound:
-		return ErrNotFound
-	case ErrorClassConflict:
-		return ErrConflict
-	case ErrorClassCorrupt:
-		return ErrChecksumMismatch
-	case ErrorClassPermanent:
-		return ErrPermanent
-	default:
-		return fmt.Errorf("backend: unknown error class %q", class)
 	}
 }

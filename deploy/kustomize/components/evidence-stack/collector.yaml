@@ -1,0 +1,345 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes/proxy, nodes/metrics]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [replicasets, deployments, statefulsets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: monitoring
+---
+# Gateway: single instance so tail_sampling sees whole traces. Receives OTLP
+# metrics/traces from scrapd and forwards to Mimir/Tempo. (Logs are handled by
+# the per-node agent DaemonSet below, since /var/log/pods is node-local.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+      prometheus/kubernetes:
+        config:
+          scrape_configs:
+            - job_name: kube-state-metrics
+              scrape_interval: 30s
+              scrape_timeout: 10s
+              sample_limit: 20000
+              static_configs:
+                - targets:
+                    - kube-state-metrics.monitoring.svc:8080
+              metric_relabel_configs:
+                - action: labeldrop
+                  regex: "uid|pod_uid|container_id|image_id"
+            - job_name: kube-state-metrics-telemetry
+              scrape_interval: 30s
+              scrape_timeout: 10s
+              sample_limit: 2000
+              static_configs:
+                - targets:
+                    - kube-state-metrics.monitoring.svc:8081
+            - job_name: kubernetes-nodes
+              scrape_interval: 30s
+              scrape_timeout: 10s
+              scheme: https
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: node
+                - target_label: __address__
+                  replacement: kubernetes.default.svc:443
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: __metrics_path__
+                  replacement: /api/v1/nodes/$1/proxy/metrics
+            - job_name: kubernetes-cadvisor
+              scrape_interval: 30s
+              scrape_timeout: 10s
+              sample_limit: 30000
+              scheme: https
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: node
+                - target_label: __address__
+                  replacement: kubernetes.default.svc:443
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: __metrics_path__
+                  replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+              metric_relabel_configs:
+                - action: labeldrop
+                  regex: "id|uid|container_id|image_id"
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+      k8sattributes:
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.namespace.name
+            - k8s.node.name
+            - k8s.deployment.name
+            - k8s.statefulset.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: connection
+
+      # Strip per-transaction/per-block ids from metric datapoints so they never
+      # become Mimir series labels (issue #314 high-cardinality guard).
+      transform/strip_high_cardinality:
+        error_mode: ignore
+        metric_statements:
+          - context: datapoint
+            statements:
+              - delete_key(datapoint.attributes, "scrap.transaction_id")
+              - delete_key(datapoint.attributes, "scrap.block_id")
+
+      tail_sampling:
+        decision_wait: 10s
+        policies:
+          - name: errors
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: slow
+            type: latency
+            latency:
+              threshold_ms: 500
+          - name: baseline
+            type: probabilistic
+            probabilistic:
+              # Evidence env keeps everything (ADR 0013 / showcase): the whole point
+              # is maximum trace resolution. `make stress-setup-lowrate` overrides this
+              # baseline (via EVIDENCE_BASELINE_SAMPLING) to model a production capture
+              # where errors + slow traces are still kept. Production overlays lower this.
+              sampling_percentage: 100
+
+    exporters:
+      otlphttp/mimir:
+        endpoint: http://mimir.monitoring.svc:9009/otlp
+        tls:
+          insecure: true
+
+      otlp/tempo:
+        endpoint: tempo.monitoring.svc:4317
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp, prometheus/kubernetes]
+          processors: [transform/strip_high_cardinality, k8sattributes, batch]
+          exporters: [otlphttp/mimir]
+        traces:
+          receivers: [otlp]
+          processors: [k8sattributes, tail_sampling, batch]
+          exporters: [otlp/tempo]
+---
+# Agent: per-node DaemonSet. Tails the node-local /var/log/pods so scrapd logs
+# are collected from every node (a single Deployment would only see logs on its
+# own node). Logs-only; no OTLP receiver.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    receivers:
+      filelog:
+        include: [/var/log/pods/scrap_*/*/*.log]
+        include_file_path: true
+        # beginning, not end: the agent is deployed before any scrap-namespace app
+        # (phased rollout), so there are no pre-existing logs to re-ingest, and
+        # reading new files from line 1 captures app startup logs without the
+        # sub-second discovery race that start_at:end would skip.
+        start_at: beginning
+        operators:
+          # The container operator parses the CRI/containerd format and sets
+          # k8s.pod.name / k8s.namespace.name / k8s.container.name from the path.
+          - type: container
+            id: container-parser
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+      # Give filelog-sourced logs a service.name (from the container name set by
+      # the container operator) so Loki indexes them like OTLP-sourced telemetry.
+      transform/log_service_name:
+        error_mode: ignore
+        log_statements:
+          - context: resource
+            statements:
+              - set(resource.attributes["service.name"], resource.attributes["k8s.container.name"]) where resource.attributes["service.name"] == nil
+
+    exporters:
+      otlphttp/loki:
+        endpoint: http://loki.monitoring.svc:3100/otlp
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [transform/log_service_name, batch]
+          exporters: [otlphttp/loki]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.122.1@sha256:0076e6c250bef16968e29e8f94177b87b5a851c79ce14b270e657f5f655b9e04
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+    spec:
+      # Read root-owned node pod logs for the filelog receiver.
+      securityContext:
+        runAsUser: 0
+      # Cover every node, including a tainted control-plane, so no scrapd pod's
+      # logs are missed regardless of scheduling.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: agent
+          image: otel/opentelemetry-collector-contrib:0.122.1@sha256:0076e6c250bef16968e29e8f94177b87b5a851c79ce14b270e657f5f655b9e04
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          args: ["--config=/etc/otel/config.yaml"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: otel-agent-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: monitoring
+spec:
+  type: NodePort
+  selector:
+    app: otel-collector
+  ports:
+    - port: 4317
+      targetPort: 4317
+      nodePort: 30317
+      name: otlp-grpc

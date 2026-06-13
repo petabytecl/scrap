@@ -2,53 +2,63 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: scrapd
+  namespace: scrap
 spec:
-  serviceName: scrapd
-  replicas: 1
+  serviceName: scrap-headless
+  replicas: 3
   selector:
     matchLabels:
-      app.kubernetes.io/component: scrapd
+      app: scrap
   template:
     metadata:
       labels:
-        app.kubernetes.io/component: scrapd
+        app: scrap
     spec:
-      serviceAccountName: scrapd
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
+      terminationGracePeriodSeconds: 30
       containers:
         - name: scrapd
           image: ghcr.io/petabytecl/scrap/scrapd:dev
           imagePullPolicy: IfNotPresent
-          args:
-            - --public-listen=0.0.0.0:18080
-            - --admin-listen=0.0.0.0:18081
-            - --metrics-listen=0.0.0.0:18082
-            - --authorization-policy=/etc/scrap/authz-policy.json
-            - --enable-local-non-production-storage
-            - --local-data-dir=/var/lib/scrap/local
-            - --enable-local-filesystem-backend
-            - --local-backend-data-dir=/var/lib/scrap/backend
-            - --backend-upload-interval=5s
-            - --operation-run-interval=5s
-            - --local-seal-block-at-bytes=4096
           ports:
-            - name: public-grpc
-              containerPort: 18080
-            - name: admin-grpc
-              containerPort: 18081
-            - name: metrics
-              containerPort: 18082
+            - containerPort: 9090
+              name: client
+            - containerPort: 9091
+              name: peer
+            - containerPort: 9100
+              name: metrics
+          env:
+            - name: SCRAP_REPLICAS
+              value: "3"
+            - name: SCRAP_HEADLESS_SERVICE
+              value: "scrap-headless"
+            - name: SCRAP_CELL_ID
+              value: "kind-dev"
+            - name: SCRAP_PEER_PORT
+              value: "9091"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          args:
+            - "--data-dir=/data"
+            - "--listen-addr=:9090"
+            - "--admin-addr=:9100"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
           readinessProbe:
             exec:
               command:
                 - /scrapd
                 - healthcheck
-                - --address=127.0.0.1:18081
-                - --service=scrap.admin.v1-readiness
+                - --address=127.0.0.1:9090
+                - --service=scrap.v1-readiness
                 - --timeout=1s
             initialDelaySeconds: 2
             periodSeconds: 5
@@ -58,40 +68,32 @@ spec:
               command:
                 - /scrapd
                 - healthcheck
-                - --address=127.0.0.1:18081
+                - --address=127.0.0.1:9090
                 - --timeout=1s
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 2
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
           resources:
             requests:
-              cpu: "250m"
-              memory: "256Mi"
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: "1000m"
-              memory: "512Mi"
-          volumeMounts:
-            - name: authz-policy
-              mountPath: /etc/scrap
-              readOnly: true
-            - name: data
-              mountPath: /var/lib/scrap
-      volumes:
-        - name: authz-policy
-          configMap:
-            name: scrapd-authz-policy
+              cpu: 500m
+              memory: 512Mi
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: scrap
+                topologyKey: kubernetes.io/hostname
   volumeClaimTemplates:
     - metadata:
         name: data
       spec:
-        accessModes:
-          - ReadWriteOnce
+        accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 2Gi
+            storage: 1Gi

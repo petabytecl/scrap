@@ -1,0 +1,61 @@
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "gomod"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+      semver-major-days: 21
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      security-patches:
+        applies-to: security-updates
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+
+      # Grouping direct patch updates into one PR
+      direct-patch:
+        dependency-type: "direct"
+        update-types:
+          - "patch"
+
+      # Grouping indirect minor and patch updates
+      indirect-minor-and-patch:
+        dependency-type: "indirect"
+        update-types:
+          - "minor"
+          - "patch"

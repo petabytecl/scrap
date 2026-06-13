@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  template:
+    spec:
+      containers:
+        - name: scrapd
+          env:
+            - name: SCRAP_TRANSIT_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: scrap-openbao-transit-config
+                  key: address
+            - name: SCRAP_TRANSIT_MOUNT
+              valueFrom:
+                configMapKeyRef:
+                  name: scrap-openbao-transit-config
+                  key: mount
+            - name: SCRAP_TRANSIT_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: scrap-openbao-transit-config
+                  key: key
+            - name: SCRAP_TRANSIT_TOKEN_ENV
+              value: OPENBAO_TOKEN
+            - name: OPENBAO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: scrap-openbao-transit-token
+                  key: token

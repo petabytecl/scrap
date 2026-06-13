@@ -4,9 +4,15 @@ name: scrap-local
 nodes:
   - role: control-plane
     extraPortMappings:
-      - containerPort: 30080
-        hostPort: 18080
+      - containerPort: 30090
+        hostPort: 18090
         protocol: TCP
-      - containerPort: 30081
-        hostPort: 18081
+      - containerPort: 30100
+        hostPort: 18100
         protocol: TCP
+      - containerPort: 30566
+        hostPort: 18566
+        protocol: TCP
+  - role: worker
+  - role: worker
+  - role: worker

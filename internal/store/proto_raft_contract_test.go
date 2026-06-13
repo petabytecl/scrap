@@ -1,0 +1,365 @@
+package store_test
+
+import (
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+)
+
+func TestRaftCommandOneofCommitDocument(t *testing.T) {
+	cmd := &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_CommitDoc{
+			CommitDoc: &scrapv1.CommitDocument{
+				TransactionId:  "tx-001",
+				DocumentName:   "invoice.xml",
+				ContentType:    "application/xml",
+				IdempotencyKey: "idem-001",
+				BlockId:        42,
+				FirstFrameOff:  40,
+				FrameCount:     3,
+				TotalBytes:     16384,
+				Sha256:         make([]byte, 32),
+				CreatedAtUs:    1716700000000000,
+				EncryptionEnvelope: []byte(
+					`{"version":1,"wrapped_data_key":"vault:v1:test"}`,
+				),
+			},
+		},
+	}
+
+	doc := cmd.GetCommitDoc()
+	if doc == nil {
+		t.Fatal("CommitDoc should not be nil")
+	}
+	assertCommitDocumentCore(t, doc)
+	if len(doc.GetSha256()) != 32 {
+		t.Fatalf("SHA256 should be 32 raw bytes, got %d", len(doc.GetSha256()))
+	}
+	if string(doc.GetEncryptionEnvelope()) != `{"version":1,"wrapped_data_key":"vault:v1:test"}` {
+		t.Fatalf("EncryptionEnvelope: got %q", doc.GetEncryptionEnvelope())
+	}
+}
+
+func assertCommitDocumentCore(t *testing.T, doc *scrapv1.CommitDocument) {
+	t.Helper()
+	want := &scrapv1.CommitDocument{
+		TransactionId:  "tx-001",
+		DocumentName:   "invoice.xml",
+		ContentType:    "application/xml",
+		IdempotencyKey: "idem-001",
+		BlockId:        42,
+		FirstFrameOff:  40,
+		FrameCount:     3,
+		TotalBytes:     16384,
+		CreatedAtUs:    1716700000000000,
+	}
+	got := proto.Clone(doc).(*scrapv1.CommitDocument)
+	got.Sha256 = nil
+	got.EncryptionEnvelope = nil
+	if !proto.Equal(got, want) {
+		t.Fatalf("CommitDocument core mismatch\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestRaftCommandOneofNilArms(t *testing.T) {
+	cmd := &scrapv1.RaftCommand{}
+	if cmd.GetCommitDoc() != nil {
+		t.Fatal("empty RaftCommand should have nil CommitDoc")
+	}
+}
+
+func TestRaftCommandRoundTrip(t *testing.T) {
+	original := &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_CommitDoc{
+			CommitDoc: &scrapv1.CommitDocument{
+				TransactionId: "tx-rt",
+				DocumentName:  "doc.pdf",
+				BlockId:       7,
+				TotalBytes:    999,
+				Sha256:        []byte("0123456789abcdef0123456789abcdef"),
+			},
+		},
+	}
+
+	data, err := proto.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	decoded := &scrapv1.RaftCommand{}
+	if err := proto.Unmarshal(data, decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	doc := decoded.GetCommitDoc()
+	if doc == nil {
+		t.Fatal("decoded CommitDoc should not be nil")
+	}
+	if doc.GetTransactionId() != "tx-rt" {
+		t.Fatalf("TransactionId: got %q", doc.GetTransactionId())
+	}
+	if doc.GetBlockId() != 7 {
+		t.Fatalf("BlockId: got %d", doc.GetBlockId())
+	}
+}
+
+func TestRaftCommandSealBlockRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_SealBlock{
+			SealBlock: &scrapv1.SealBlock{
+				BlockId:         42,
+				ShardId:         7,
+				SealedSizeBytes: 67108864,
+				SealedAtUs:      1716700000000000,
+			},
+		},
+	})
+
+	seal := decoded.GetSealBlock()
+	if seal == nil {
+		t.Fatal("decoded SealBlock should not be nil")
+	}
+	if seal.GetBlockId() != 42 {
+		t.Fatalf("BlockId: got %d", seal.GetBlockId())
+	}
+	if seal.GetShardId() != 7 {
+		t.Fatalf("ShardId: got %d", seal.GetShardId())
+	}
+	if seal.GetSealedSizeBytes() != 67108864 {
+		t.Fatalf("SealedSizeBytes: got %d", seal.GetSealedSizeBytes())
+	}
+	if seal.GetSealedAtUs() != 1716700000000000 {
+		t.Fatalf("SealedAtUs: got %d", seal.GetSealedAtUs())
+	}
+}
+
+func TestRaftCommandConfirmUploadRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ConfirmUpload{
+			ConfirmUpload: &scrapv1.ConfirmUpload{
+				BlockId: 42,
+				ShardId: 7,
+				BlockObject: &scrapv1.BackendObjectMetadata{
+					Key:             "cell-a/shards/0000000000000007/000000000000002a.blk",
+					SizeBytes:       67108864,
+					ValidationToken: protoValidationValue("block"),
+				},
+				IndexObject: &scrapv1.BackendObjectMetadata{
+					Key:             "cell-a/shards/0000000000000007/000000000000002a.idx",
+					SizeBytes:       4096,
+					ValidationToken: protoValidationValue("index"),
+				},
+				ConfirmedAtUs:    1716700001000000,
+				UploadGeneration: 1716700002000000,
+			},
+		},
+	})
+
+	confirm := decoded.GetConfirmUpload()
+	if confirm == nil {
+		t.Fatal("decoded ConfirmUpload should not be nil")
+	}
+	if confirm.GetBlockId() != 42 {
+		t.Fatalf("BlockId: got %d", confirm.GetBlockId())
+	}
+	if confirm.GetShardId() != 7 {
+		t.Fatalf("ShardId: got %d", confirm.GetShardId())
+	}
+	assertRaftBackendObject(t, "BlockObject", confirm.GetBlockObject(), "cell-a/shards/0000000000000007/000000000000002a.blk", 67108864, protoValidationValue("block"))
+	assertRaftBackendObject(t, "IndexObject", confirm.GetIndexObject(), "cell-a/shards/0000000000000007/000000000000002a.idx", 4096, protoValidationValue("index"))
+	if confirm.GetConfirmedAtUs() != 1716700001000000 {
+		t.Fatalf("ConfirmedAtUs: got %d", confirm.GetConfirmedAtUs())
+	}
+	if confirm.GetUploadGeneration() != 1716700002000000 {
+		t.Fatalf("UploadGeneration: got %d", confirm.GetUploadGeneration())
+	}
+}
+
+func TestRaftCommandRewrapDocumentEnvelopeRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_RewrapDoc{
+			RewrapDoc: &scrapv1.RewrapDocumentEnvelope{
+				TransactionId:      "tx-rewrap",
+				DocumentName:       "invoice.xml",
+				BlockId:            42,
+				EncryptionEnvelope: []byte(`{"version":1,"key_version":2}`),
+				OldKeyVersion:      1,
+				NewKeyVersion:      2,
+				RewrappedAtUs:      1716700003000000,
+				ProposalId:         "proposal-001",
+			},
+		},
+	})
+
+	rewrap := decoded.GetRewrapDoc()
+	if rewrap == nil {
+		t.Fatal("decoded RewrapDocumentEnvelope should not be nil")
+	}
+	if rewrap.GetTransactionId() != "tx-rewrap" {
+		t.Fatalf("TransactionId: got %q", rewrap.GetTransactionId())
+	}
+	if rewrap.GetDocumentName() != "invoice.xml" {
+		t.Fatalf("DocumentName: got %q", rewrap.GetDocumentName())
+	}
+	if rewrap.GetBlockId() != 42 {
+		t.Fatalf("BlockId: got %d", rewrap.GetBlockId())
+	}
+	if string(rewrap.GetEncryptionEnvelope()) != `{"version":1,"key_version":2}` {
+		t.Fatalf("EncryptionEnvelope: got %q", rewrap.GetEncryptionEnvelope())
+	}
+	if rewrap.GetOldKeyVersion() != 1 {
+		t.Fatalf("OldKeyVersion: got %d", rewrap.GetOldKeyVersion())
+	}
+	if rewrap.GetNewKeyVersion() != 2 {
+		t.Fatalf("NewKeyVersion: got %d", rewrap.GetNewKeyVersion())
+	}
+	if rewrap.GetRewrappedAtUs() != 1716700003000000 {
+		t.Fatalf("RewrappedAtUs: got %d", rewrap.GetRewrappedAtUs())
+	}
+	if rewrap.GetProposalId() != "proposal-001" {
+		t.Fatalf("ProposalId: got %q", rewrap.GetProposalId())
+	}
+}
+
+func TestRaftCommandConfirmQuarantineRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ConfirmQuarantine{
+			ConfirmQuarantine: &scrapv1.ConfirmQuarantine{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "invoice.xml",
+				ConfirmedAtUs: 1716700004000000,
+				ProposalId:    "proposal-confirm",
+			},
+		},
+	})
+	confirm := decoded.GetConfirmQuarantine()
+	if confirm == nil {
+		t.Fatal("decoded ConfirmQuarantine should not be nil")
+	}
+	if confirm.GetTransactionId() != "tx-quarantine" || confirm.GetDocumentName() != "invoice.xml" {
+		t.Fatalf("ConfirmQuarantine identity = %q/%q", confirm.GetTransactionId(), confirm.GetDocumentName())
+	}
+	if confirm.GetConfirmedAtUs() != 1716700004000000 || confirm.GetProposalId() != "proposal-confirm" {
+		t.Fatalf("ConfirmQuarantine metadata = %d/%q", confirm.GetConfirmedAtUs(), confirm.GetProposalId())
+	}
+}
+
+func TestRaftCommandReleaseQuarantineRoundTrip(t *testing.T) {
+	decoded := roundTripRaftCommand(t, &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_ReleaseQuarantine{
+			ReleaseQuarantine: &scrapv1.ReleaseQuarantine{
+				TransactionId: "tx-quarantine",
+				DocumentName:  "invoice.xml",
+				ReleasedAtUs:  1716700005000000,
+				ProposalId:    "proposal-release",
+			},
+		},
+	})
+	release := decoded.GetReleaseQuarantine()
+	if release == nil {
+		t.Fatal("decoded ReleaseQuarantine should not be nil")
+	}
+	if release.GetTransactionId() != "tx-quarantine" || release.GetDocumentName() != "invoice.xml" {
+		t.Fatalf("ReleaseQuarantine identity = %q/%q", release.GetTransactionId(), release.GetDocumentName())
+	}
+	if release.GetReleasedAtUs() != 1716700005000000 || release.GetProposalId() != "proposal-release" {
+		t.Fatalf("ReleaseQuarantine metadata = %d/%q", release.GetReleasedAtUs(), release.GetProposalId())
+	}
+}
+
+func assertRaftBackendObject(t *testing.T, label string, got *scrapv1.BackendObjectMetadata, key string, size int64, validation string) {
+	t.Helper()
+
+	if got.GetKey() != key {
+		t.Fatalf("%s.Key: got %q", label, got.GetKey())
+	}
+	if got.GetSizeBytes() != size {
+		t.Fatalf("%s.SizeBytes: got %d", label, got.GetSizeBytes())
+	}
+	if got.GetValidationToken() != validation {
+		t.Fatalf("%s.ValidationToken: got %q", label, got.GetValidationToken())
+	}
+}
+
+func protoValidationValue(kind string) string {
+	return kind + "-validation"
+}
+
+func roundTripRaftCommand(t *testing.T, original *scrapv1.RaftCommand) *scrapv1.RaftCommand {
+	t.Helper()
+
+	data, err := proto.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	decoded := &scrapv1.RaftCommand{}
+	if err := proto.Unmarshal(data, decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	return decoded
+}
+
+func TestOpenlogEntryRoundTrip(t *testing.T) {
+	original := &scrapv1.OpenlogEntry{
+		TransactionId:  "tx-prep",
+		DocumentName:   "receipt.xml",
+		BlockId:        5,
+		StartOffset:    1024,
+		ContentType:    "text/xml",
+		IdempotencyKey: "idem-prep",
+	}
+
+	data, err := proto.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	decoded := &scrapv1.OpenlogEntry{}
+	if err := proto.Unmarshal(data, decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if decoded.GetTransactionId() != "tx-prep" {
+		t.Fatalf("TransactionId: got %q", decoded.GetTransactionId())
+	}
+	if decoded.GetBlockId() != 5 {
+		t.Fatalf("BlockId: got %d", decoded.GetBlockId())
+	}
+	if decoded.GetStartOffset() != 1024 {
+		t.Fatalf("StartOffset: got %d", decoded.GetStartOffset())
+	}
+}
+
+func TestCommitDocumentSize(t *testing.T) {
+	cmd := &scrapv1.RaftCommand{
+		Command: &scrapv1.RaftCommand_CommitDoc{
+			CommitDoc: &scrapv1.CommitDocument{
+				TransactionId:  "tx-00000000-0000-0000-0000-000000000001",
+				DocumentName:   "billing/2026/05/invoice-00001.xml",
+				ContentType:    "application/xml",
+				IdempotencyKey: "idem-00000000-0000-0000-0000-000000000001",
+				BlockId:        999999,
+				FirstFrameOff:  67108864,
+				FrameCount:     256,
+				TotalBytes:     1048576,
+				Sha256:         make([]byte, 32),
+				CreatedAtUs:    1716700000000000,
+				EncryptionEnvelope: []byte(
+					`{"version":1,"transit_mount":"transit","transit_key":"scrap-documents","key_version":1,"wrapped_data_key":"vault:v1:example","payload_algorithm":"AES-256-GCM","nonce_prefix":"AAAAAAAAAAA=","plaintext_sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","plaintext_length":1048576,"ciphertext_length":1048848}`,
+				),
+			},
+		},
+	}
+
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if len(data) > 900 {
+		t.Fatalf("RaftCommand too large for log entry: %d bytes (target <900 with envelope)", len(data))
+	}
+}

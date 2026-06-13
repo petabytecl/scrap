@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package scrap.v1;
+
+message RaftCommand {
+  oneof command {
+    CommitDocument              commit_doc        = 1;
+    RequestConsistencyCheck     consistency_check = 2;
+    SealBlock                   seal_block        = 3;
+    ConfirmUpload               confirm_upload    = 4;
+    RewrapDocumentEnvelope      rewrap_doc        = 7;
+    QuarantineDocument          quarantine_doc    = 8;
+    ConfirmQuarantine           confirm_quarantine = 9;
+    ReleaseQuarantine           release_quarantine = 10;
+  }
+
+  // W3C trace context, injected by the proposing leader and extracted by every
+  // voter at apply time so the state-machine apply is traceable on all replicas.
+  // Additive and optional: entries written without these fields apply unchanged
+  // (empty context -> a root apply span). See ADR 0013.
+  string traceparent = 5;
+  string tracestate  = 6;
+}
+
+enum QuarantineScanType {
+  QUARANTINE_SCAN_TYPE_UNSPECIFIED = 0;
+  QUARANTINE_SCAN_TYPE_INITIAL     = 1;
+  QUARANTINE_SCAN_TYPE_RESCAN      = 2;
+}
+
+enum QuarantineReason {
+  QUARANTINE_REASON_UNSPECIFIED       = 0;
+  QUARANTINE_REASON_SCANNER_DETECTION = 1;
+}
+
+message QuarantineDocument {
+  string transaction_id = 1;
+  string document_name  = 2;
+  uint64 block_id       = 3;
+  int64  detected_at_us = 4;
+  QuarantineScanType scan_type = 5;
+  QuarantineReason   reason    = 6;
+}
+
+message ConfirmQuarantine {
+  string transaction_id  = 1;
+  string document_name   = 2;
+  int64  confirmed_at_us = 3;
+  string proposal_id     = 4;
+}
+
+message ReleaseQuarantine {
+  string transaction_id = 1;
+  string document_name  = 2;
+  int64  released_at_us = 3;
+  string proposal_id    = 4;
+}
+
+message RequestConsistencyCheck {
+  string scrub_id        = 1;
+  int64  requested_at_us = 2;
+}
+
+message SealBlock {
+  uint64 block_id          = 1;
+  uint64 shard_id          = 2;
+  int64  sealed_size_bytes = 3;
+  int64  sealed_at_us      = 4;
+}
+
+message BackendObjectMetadata {
+  string key              = 1;
+  int64  size_bytes       = 2;
+  string validation_token = 3;
+}
+
+message ConfirmUpload {
+  reserved 3, 5;
+  reserved "backend_key_prefix", "etag";
+
+  uint64                block_id        = 1;
+  uint64                shard_id        = 2;
+  int64                 confirmed_at_us = 4;
+  BackendObjectMetadata block_object    = 6;
+  BackendObjectMetadata index_object    = 7;
+  int64                 upload_generation = 8;
+}
+
+message RewrapDocumentEnvelope {
+  string transaction_id      = 1;
+  string document_name       = 2;
+  uint64 block_id            = 3;
+  bytes  encryption_envelope = 4;
+  int32  old_key_version     = 5;
+  int32  new_key_version     = 6;
+  int64  rewrapped_at_us     = 7;
+  string proposal_id         = 8;
+}
+
+message CommitDocument {
+  string transaction_id  = 1;
+  string document_name   = 2;
+  string content_type    = 3;
+  string idempotency_key = 4;
+  uint64 block_id        = 5;
+  uint64 first_frame_off = 6;
+  uint32 frame_count     = 7;
+  int64  total_bytes     = 8;
+  bytes  sha256          = 9;
+  int64  created_at_us   = 10;
+  bytes  encryption_envelope = 11;
+}
+
+message OpenlogEntry {
+  string transaction_id  = 1;
+  string document_name   = 2;
+  uint64 block_id        = 3;
+  uint64 start_offset    = 4;
+  string content_type    = 5;
+  string idempotency_key = 6;
+}

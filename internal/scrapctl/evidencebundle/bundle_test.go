@@ -1,0 +1,810 @@
+package evidencebundle
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{})
+
+	if !result.Gate.Pass {
+		t.Fatalf("gate pass = false, checks = %+v", result.Gate.Checks)
+	}
+	for _, rel := range []string{
+		"config.json",
+		"run-window.json",
+		"stress-results.json",
+		"queries.json",
+		"gates.json",
+		"manifest.json",
+		"privacy-scan.json",
+		"metrics/rpc_requests_baseline.json",
+		"metrics/rpc_requests_cumulative_after.json",
+		"metrics/rpc_requests.json",
+		"traces/scrapd.json",
+		"logs/evidence-probe-health.json",
+		"logs/scrapd.json",
+		"profiles/cpu.json",
+		"profiles/heap_inuse_space.json",
+		"security/health.json",
+		"security/e2e-report.json",
+	} {
+		if _, err := os.Stat(filepath.Join(result.BundlePath, rel)); err != nil {
+			t.Fatalf("expected bundle file %s: %v", rel, err)
+		}
+	}
+	assertBundleCheck(t, result.Gate, "metrics_captured", true)
+	assertBundleCheck(t, result.Gate, "traces_captured", true)
+	assertBundleCheck(t, result.Gate, "logs_captured", true)
+	assertBundleCheck(t, result.Gate, "cpu_profile_captured", true)
+	assertBundleCheck(t, result.Gate, "heap_profile_captured", true)
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", true)
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", true)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", true)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", true)
+	assertBundleCheck(t, result.Gate, "rewrap_outcomes_recorded", true)
+	assertBundleCheck(t, result.Gate, "phase5_gate_recorded", true)
+	assertBundleCheck(t, result.Gate, "privacy_scan_passed", true)
+	assertEvidenceProbeHealthIncludesSecurityMode(t, result.BundlePath)
+	assertSecurityEvidenceReport(t, result.BundlePath)
+	assertTraceEvidenceRedacted(t, result.BundlePath)
+	assertBundlePrivacyScan(t, result.BundlePath, "PASS")
+	assertBundleManifest(t, result.BundlePath)
+}
+
+func assertEvidenceProbeHealthIncludesSecurityMode(t *testing.T, root string) {
+	t.Helper()
+
+	var health struct {
+		SecurityMode              string `json:"security_mode"`
+		ProductionReadinessStatus string `json:"production_readiness_status"`
+		ProductionReadinessReason string `json:"production_readiness_reason"`
+	}
+	readBundleJSON(t, root, "logs/evidence-probe-health.json", &health)
+	if health.SecurityMode != "test" {
+		t.Fatalf("security_mode = %q, want test", health.SecurityMode)
+	}
+	if health.ProductionReadinessStatus != "not_ready" {
+		t.Fatalf("production_readiness_status = %q, want not_ready", health.ProductionReadinessStatus)
+	}
+	if health.ProductionReadinessReason != "non_production_security_mode" {
+		t.Fatalf("production_readiness_reason = %q, want non_production_security_mode", health.ProductionReadinessReason)
+	}
+}
+
+func assertSecurityEvidenceReport(t *testing.T, root string) {
+	t.Helper()
+
+	var report securityReportEvidence
+	readBundleJSON(t, root, "security/e2e-report.json", &report)
+	if !report.PublicUnauthorizedDenied || !report.PeerUnauthorizedDenied || !report.AdminUnauthorizedDenied {
+		t.Fatalf("unauthorized denial report = %+v, want all true", report)
+	}
+	if !report.EncryptedWriteReadOK || !report.EncryptedBackendUploadOK || !report.EncryptedRestoreOK {
+		t.Fatalf("encryption report = %+v, want write/read/upload/restore true", report)
+	}
+}
+
+func assertTraceEvidenceRedacted(t *testing.T, root string) {
+	t.Helper()
+
+	var trace struct {
+		Query      string `json:"query"`
+		TraceCount int    `json:"trace_count"`
+		Redacted   bool   `json:"redacted"`
+		TraceID    string `json:"traceID"`
+	}
+	readBundleJSON(t, root, "traces/scrapd.json", &trace)
+	if trace.Query != "service.name=scrapd" || trace.TraceCount == 0 || !trace.Redacted {
+		t.Fatalf("trace evidence = %+v, want redacted count summary", trace)
+	}
+	if trace.TraceID != "" {
+		t.Fatalf("trace evidence leaked traceID: %+v", trace)
+	}
+}
+
+func TestGenerateWritesEvictionCampaignEvidence(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{
+		evictionPlanID:                     "plan-123",
+		requireEvictionHealthBeforeMetrics: true,
+	})
+
+	assertEvictionEvidenceFiles(t, result.BundlePath)
+	assertEvictionCandidateEvidence(t, result.BundlePath)
+	assertEvictionValidationEvidence(t, result.BundlePath)
+	assertEvictionHealthEvidence(t, result.BundlePath)
+}
+
+func assertEvictionEvidenceFiles(t *testing.T, root string) {
+	t.Helper()
+
+	for _, rel := range []string{
+		"eviction/status.json",
+		"eviction/candidate-plan.json",
+		"eviction/apply-result.json",
+		"eviction/validation-result.json",
+		"eviction/health.json",
+		"metrics/eviction_plans.json",
+		"metrics/eviction_apply_total.json",
+		"metrics/eviction_restore_total.json",
+		"metrics/eviction_evicted_blocks.json",
+		"metrics/eviction_restore_failed_blocks.json",
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Fatalf("expected eviction evidence file %s: %v", rel, err)
+		}
+	}
+}
+
+func assertEvictionCandidateEvidence(t *testing.T, root string) {
+	t.Helper()
+
+	var candidate struct {
+		PlanID          string `json:"plan_id"`
+		CandidateBlocks int    `json:"candidate_blocks"`
+		SelectedBytes   int64  `json:"selected_bytes"`
+	}
+	readBundleJSON(t, root, "eviction/candidate-plan.json", &candidate)
+	if candidate.PlanID != "plan-123" || candidate.CandidateBlocks != 3 || candidate.SelectedBytes != 4096 {
+		t.Fatalf("candidate plan = %+v, want plan-123 with candidate evidence", candidate)
+	}
+}
+
+func assertEvictionValidationEvidence(t *testing.T, root string) {
+	t.Helper()
+
+	var validation struct {
+		ValidatedBlocks        int `json:"validated_blocks"`
+		ValidationFailedBlocks int `json:"validation_failed_blocks"`
+		Validations            []struct {
+			BlockID uint64 `json:"block_id"`
+			Status  string `json:"status"`
+		} `json:"validations"`
+	}
+	readBundleJSON(t, root, "eviction/validation-result.json", &validation)
+	if validation.ValidatedBlocks != 1 || validation.ValidationFailedBlocks != 0 || len(validation.Validations) != 1 {
+		t.Fatalf("validation result = %+v, want one successful validation", validation)
+	}
+}
+
+func assertEvictionHealthEvidence(t *testing.T, root string) {
+	t.Helper()
+
+	var health struct {
+		EvictedBlocks          int `json:"evicted_blocks"`
+		HotCleanupNeededBlocks int `json:"hot_cleanup_needed_blocks"`
+		RestoreFailedBlocks    int `json:"restore_failed_blocks"`
+	}
+	readBundleJSON(t, root, "eviction/health.json", &health)
+	if health.EvictedBlocks != 2 || health.HotCleanupNeededBlocks != 1 || health.RestoreFailedBlocks != 0 {
+		t.Fatalf("health = %+v, want eviction lifecycle snapshot", health)
+	}
+}
+
+func TestGenerateFailsWhenCurrentRunMetricProofIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingMetricDelta: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "metrics_captured", false)
+}
+
+func TestGenerateFailsWhenLogMarkerIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingLog: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "logs_captured", false)
+}
+
+func TestGenerateFailsWhenAdminLogProbeFails(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{adminProbeFailed: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "logs_captured", false)
+}
+
+func TestGenerateFailsWhenTraceEvidenceIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingTrace: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "traces_captured", false)
+}
+
+func TestGenerateFailsWhenCPUProfileIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingCPUProfile: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "cpu_profile_captured", false)
+	assertBundleCheck(t, result.Gate, "heap_profile_captured", true)
+}
+
+func TestGenerateFailsWhenHeapProfileIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingHeapProfile: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "cpu_profile_captured", true)
+	assertBundleCheck(t, result.Gate, "heap_profile_captured", false)
+}
+
+func TestGenerateFailsWhenSecurityReportIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingSecurityReport: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", false)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", false)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
+}
+
+func TestGenerateFailsWhenSecurityReportIsNotConfigured(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{securityReportNotConfigured: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", false)
+	assertBundleCheck(t, result.Gate, "authorization_denials_recorded", false)
+	assertBundleCheck(t, result.Gate, "audit_samples_recorded", false)
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
+	assertSecurityEvidenceReportNotConfigured(t, result.BundlePath)
+}
+
+func TestGenerateFailsWhenSecurityReportUsesDevelopmentMode(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{developmentSecurityMode: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", false)
+}
+
+func TestGeneratePassesWhenReportIsProdlikeAndHealthIsDevelopment(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{developmentHealthWithSecurityReport: true})
+
+	if !result.Gate.Pass {
+		t.Fatalf("gate pass = false, checks = %+v", result.Gate.Checks)
+	}
+	assertBundleCheck(t, result.Gate, "security_mode_recorded", true)
+}
+
+func TestGenerateFailsWhenEncryptedRestoreProofIsMissing(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "encryption_outcomes_recorded", false)
+}
+
+func TestGenerateFailsWhenPrivacyScanFindsSensitiveOutput(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{leakStressStderr: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "privacy_scan_passed", false)
+	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
+}
+
+func TestGenerateFailsWhenManifestContainsSensitiveEnvironment(t *testing.T) {
+	result := generateTestBundle(t, fakeSignals{leakKubeContext: true})
+
+	if result.Gate.Pass {
+		t.Fatalf("gate pass = true, want false")
+	}
+	assertBundleCheck(t, result.Gate, "privacy_scan_passed", false)
+	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
+}
+
+func TestManifestBroadRowsFailWhenSubEvidenceIsMissing(t *testing.T) {
+	profileResult := generateTestBundle(t, fakeSignals{missingHeapProfile: true})
+	assertManifestEvidenceStatus(t, profileResult.BundlePath, "profiles", "FAIL")
+
+	securityResult := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
+	assertManifestEvidenceStatus(t, securityResult.BundlePath, "security", "FAIL")
+	assertManifestEvidenceStatus(t, securityResult.BundlePath, "openbao_readiness", "FAIL")
+}
+
+func generateTestBundle(t *testing.T, signals fakeSignals) Result {
+	t.Helper()
+
+	bundleDir := t.TempDir()
+	securityReportPath := writeSecurityReportFixture(t, signals)
+	clock := &sequenceClock{values: []time.Time{
+		time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 29, 12, 1, 0, 0, time.UTC),
+		time.Date(2026, 5, 29, 12, 1, 15, 0, time.UTC),
+	}}
+
+	transport := &fakeEvidenceTransport{signals: signals}
+	result, err := Generate(context.Background(), Options{
+		Config: Config{
+			RepoRoot:           "/repo",
+			BundleDir:          bundleDir,
+			GrafanaURL:         "http://grafana.local",
+			AdminURL:           "http://admin.local",
+			KubeContext:        testKubeContext(signals),
+			MimirProxy:         "http://grafana.local/mimir",
+			TempoProxy:         "http://grafana.local/tempo",
+			LokiProxy:          "http://grafana.local/loki",
+			PyroscopeURL:       "http://grafana.local/pyroscope",
+			EvictionPlanID:     signals.evictionPlanID,
+			SecurityReportPath: securityReportPath,
+			Scenario:           "throughput",
+			StressAddr:         "127.0.0.1:18090",
+			Workers:            8,
+			Duration:           "60s",
+			DocSizeBytes:       16384,
+			Settle:             0,
+		},
+		Clock:        clock,
+		Sleeper:      noSleep,
+		Command:      fakeMetadataCommand{},
+		StressRunner: fakeStressRunner{scenario: "throughput", signals: signals},
+		AdminProbe:   fakeAdminProbe{signals: signals},
+		HTTPClient:   &http.Client{Transport: transport},
+		Logf:         func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if signals.requireEvictionHealthBeforeMetrics && transport.evictionMetricBeforeHealth {
+		t.Fatalf("queried eviction metrics before fetching eviction health")
+	}
+	if !strings.HasPrefix(result.BundlePath, bundleDir+string(os.PathSeparator)) {
+		t.Fatalf("bundle path %q escaped %q", result.BundlePath, bundleDir)
+	}
+
+	data, err := os.ReadFile(filepath.Join(result.BundlePath, "gates.json"))
+	if err != nil {
+		t.Fatalf("read gates.json: %v", err)
+	}
+	var gate Gate
+	if err := json.Unmarshal(data, &gate); err != nil {
+		t.Fatalf("parse gates.json: %v\n%s", err, data)
+	}
+	if fmt.Sprintf("%+v", gate) != fmt.Sprintf("%+v", result.Gate) {
+		t.Fatalf("written gate = %+v, result gate = %+v", gate, result.Gate)
+	}
+	return result
+}
+
+type fakeSignals struct {
+	missingMetricDelta                  bool
+	missingLog                          bool
+	missingTrace                        bool
+	missingCPUProfile                   bool
+	missingHeapProfile                  bool
+	missingSecurityReport               bool
+	securityReportNotConfigured         bool
+	developmentSecurityMode             bool
+	developmentHealthWithSecurityReport bool
+	missingSecurityRestore              bool
+	adminProbeFailed                    bool
+	leakStressStderr                    bool
+	leakKubeContext                     bool
+	evictionPlanID                      string
+	requireEvictionHealthBeforeMetrics  bool
+}
+
+func testKubeContext(signals fakeSignals) string {
+	if signals.leakKubeContext {
+		return "/tmp/leaked-context"
+	}
+	return ""
+}
+
+func writeSecurityReportFixture(t *testing.T, signals fakeSignals) string {
+	t.Helper()
+	if signals.securityReportNotConfigured {
+		return ""
+	}
+	if signals.missingSecurityReport {
+		return filepath.Join(t.TempDir(), "missing-security.json")
+	}
+	report := securityReportEvidence{
+		SecurityMode:              "test",
+		ProductionReadinessStatus: "not_ready",
+		ProductionReadinessReason: "non_production_security_mode",
+		AuthorizationStatus:       "configured",
+		PublicUnauthorizedDenied:  true,
+		PeerUnauthorizedDenied:    true,
+		AdminUnauthorizedDenied:   true,
+		AuditSamplesRecorded:      true,
+		EncryptedWriteReadOK:      true,
+		EncryptedBackendUploadOK:  true,
+		EncryptedRestoreOK:        !signals.missingSecurityRestore,
+		RewrapOK:                  true,
+		Phase5EntryBlocked:        true,
+	}
+	if signals.developmentSecurityMode {
+		report.SecurityMode = "development"
+	}
+	path := filepath.Join(t.TempDir(), "security-evidence.json")
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal security report fixture: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write security report fixture: %v", err)
+	}
+	return path
+}
+
+func assertSecurityEvidenceReportNotConfigured(t *testing.T, root string) {
+	t.Helper()
+
+	var report struct {
+		Error string `json:"error"`
+	}
+	readBundleJSON(t, root, "security/e2e-report.json", &report)
+	if report.Error == "" {
+		t.Fatalf("security report placeholder = %+v, want error", report)
+	}
+}
+
+type sequenceClock struct {
+	values []time.Time
+	index  int
+}
+
+func (c *sequenceClock) Now() time.Time {
+	if c.index >= len(c.values) {
+		return c.values[len(c.values)-1]
+	}
+	out := c.values[c.index]
+	c.index++
+	return out
+}
+
+func noSleep(context.Context, time.Duration) error {
+	return nil
+}
+
+type fakeMetadataCommand struct{}
+
+func (fakeMetadataCommand) Run(_ context.Context, name string, args ...string) (string, error) {
+	command := name + " " + strings.Join(args, " ")
+	switch {
+	case strings.Contains(command, "rev-parse --short HEAD"):
+		return "abc1234\n", nil
+	case strings.Contains(command, "rev-parse HEAD"):
+		return "abc1234567890\n", nil
+	case strings.Contains(command, "diff --quiet"):
+		return "", nil
+	case strings.Contains(command, "jsonpath={.spec.template.spec.containers[0].image}"):
+		return "localhost/scrapd:test\n", nil
+	case strings.Contains(command, "jsonpath={.spec.replicas}"):
+		return "3\n", nil
+	case strings.Contains(command, "current-context"):
+		return "kind-scrap-evidence\n", nil
+	default:
+		return "", fmt.Errorf("unexpected command: %s", command)
+	}
+}
+
+type fakeStressRunner struct {
+	scenario string
+	signals  fakeSignals
+}
+
+func (r fakeStressRunner) RunStress(context.Context, StressRequest) (StressResult, error) {
+	stderr := ""
+	if r.signals.leakStressStderr {
+		stderr = "Bearer shaped-secret-token transaction_id=tx-leak /tmp/leak\n"
+	}
+	switch r.scenario {
+	case "mixed":
+		return StressResult{Stdout: `{"scenario":"mixed","write":{"total_ops":10,"failed_ops":0},"read":{"total_ops":5,"failed_ops":0},"head":{"total_ops":5,"failed_ops":0}}`, Stderr: stderr}, nil
+	case "pressure":
+		return StressResult{Stdout: `{"scenario":"pressure","total_writes":10,"other_errors":0,"pressure_rejections":3}`, Stderr: stderr}, nil
+	default:
+		return StressResult{Stdout: `{"scenario":"throughput","total_ops":20,"failed_ops":0}`, Stderr: stderr}, nil
+	}
+}
+
+type fakeAdminProbe struct {
+	signals fakeSignals
+}
+
+func (p fakeAdminProbe) Emit(context.Context, AdminProbeRequest) (AdminProbeResult, error) {
+	if p.signals.adminProbeFailed {
+		return AdminProbeResult{Body: []byte(`{"error":"admin evidence log probe failed"}`)}, errors.New("probe failed")
+	}
+	if p.signals.securityReportNotConfigured || p.signals.developmentSecurityMode || p.signals.developmentHealthWithSecurityReport {
+		return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"development","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
+	}
+	return AdminProbeResult{Body: []byte(`{"status":"ok","security_mode":"test","production_readiness_status":"not_ready","production_readiness_reason":"non_production_security_mode","authorization_status":"configured","rewrap_status":"ok","rewrap_last_result":"ok","rewrap_last_reason":"ok"}`)}, nil
+}
+
+type fakeEvidenceTransport struct {
+	signals                    fakeSignals
+	healthSeen                 bool
+	evictionMetricBeforeHealth bool
+}
+
+func (t *fakeEvidenceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := t.responseBody(req)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
+func (t *fakeEvidenceTransport) responseBody(req *http.Request) string {
+	path := req.URL.Path
+	raw := req.URL.RawQuery
+	switch {
+	case strings.Contains(path, "/healthz"):
+		t.healthSeen = true
+		return `{"status":"ok","eviction_pressure":"degraded","evicted_blocks":2,"evicted_bytes":4096,"hot_cleanup_needed_blocks":1,"metadata_loss_blocks":0,"restore_failed_blocks":0}`
+	case strings.Contains(path, "/admin/eviction/plans/plan-123"):
+		return `{"plan_id":"plan-123","status":"completed","plan":{"plan_id":"plan-123","reason":"evidence_run","candidate_blocks":3,"candidate_bytes":8192,"eligible_blocks":2,"eligible_bytes":4096,"selected_bytes":4096,"selected_blocks":[{"block_id":1,"shard_id":7,"size_bytes":4096}],"skip_counts_by_reason":{"hot_residency_window":1}},"apply_result":{"plan_id":"plan-123","status":"completed","selected_blocks":1,"evicted_blocks":1,"validated_blocks":1,"validation_failed_blocks":0,"bytes_freed":4096,"blocks":[{"block_id":1,"shard_id":7,"size_bytes":4096,"status":"evicted","bytes_freed":4096}],"validations":[{"block_id":1,"shard_id":7,"status":"passed"}]}}`
+	case strings.Contains(path, "/loki/api/v1/query_range"):
+		return t.logResponse()
+	case strings.Contains(path, "/api/v1/query"):
+		if strings.Contains(raw, "scrap_eviction_") && !t.healthSeen {
+			t.evictionMetricBeforeHealth = true
+		}
+		return t.metricResponse(raw)
+	case strings.Contains(path, "/api/search"):
+		return t.traceResponse()
+	case strings.Contains(path, "/pyroscope/render"):
+		return t.profileResponse(raw)
+	default:
+		return `{}`
+	}
+}
+
+func readBundleJSON(t *testing.T, root, rel string, target any) {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(root, rel)) //nolint:gosec // rel is a test-owned bundle path selected by the test.
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	if err := json.Unmarshal(data, target); err != nil {
+		t.Fatalf("parse %s: %v\n%s", rel, err, data)
+	}
+}
+
+func (t fakeEvidenceTransport) logResponse() string {
+	if t.signals.missingLog {
+		return `{"status":"success","data":{"resultType":"streams","result":[]}}`
+	}
+	return `{"status":"success","data":{"resultType":"streams","result":[{"stream":{"service_name":"scrapd"},"values":[["1780056000000000000","evidence_marker=scrap-evidence-20260529T120000Z-abc1234"]]}]}}`
+}
+
+func (t fakeEvidenceTransport) metricResponse(rawQuery string) string {
+	if strings.Contains(rawQuery, "scrap_rpc_server_requests_total") && strings.Contains(rawQuery, "time=1780056000") {
+		return `{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056000,"100"]}]}}`
+	}
+	if strings.Contains(rawQuery, "scrap_rpc_server_requests_total") {
+		return t.rpcAfterResponse()
+	}
+	return `{"status":"success","data":{"result":[{"metric":{"name":"sample"},"value":[1780056075,"1"]}]}}`
+}
+
+func (t fakeEvidenceTransport) rpcAfterResponse() string {
+	if t.signals.missingMetricDelta {
+		return `{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056075,"100"]}]}}`
+	}
+	return `{"status":"success","data":{"result":[{"metric":{"rpc_method":"WriteDocument","rpc_grpc_status_code":"0"},"value":[1780056075,"120"]}]}}`
+}
+
+func (t fakeEvidenceTransport) traceResponse() string {
+	if t.signals.missingTrace {
+		return `{"traces":[]}`
+	}
+	return `{"traces":[{"traceID":"abc"}]}`
+}
+
+func (t fakeEvidenceTransport) profileResponse(rawQuery string) string {
+	if strings.Contains(rawQuery, "process_cpu") && t.signals.missingCPUProfile {
+		return `{"timeline":{"samples":[]}}`
+	}
+	if !strings.Contains(rawQuery, "process_cpu") && t.signals.missingHeapProfile {
+		return `{"timeline":{"samples":[]}}`
+	}
+	return `{"timeline":{"samples":[1]}}`
+}
+
+func assertBundleCheck(t *testing.T, gate Gate, name string, want bool) {
+	t.Helper()
+
+	for _, check := range gate.Checks {
+		if check.Name == name {
+			if check.Pass != want {
+				t.Fatalf("check %s pass=%v, want %v; reason=%s", name, check.Pass, want, check.Reason)
+			}
+			return
+		}
+	}
+	t.Fatalf("check %s not found in %+v", name, gate.Checks)
+}
+
+func assertBundlePrivacyScan(t *testing.T, root, want string) {
+	t.Helper()
+
+	var report struct {
+		Status           string   `json:"status"`
+		ArtifactCount    int      `json:"artifact_count"`
+		FindingsCount    int      `json:"findings_count"`
+		SkippedArtifacts []string `json:"skipped_artifacts"`
+	}
+	readBundleJSON(t, root, "privacy-scan.json", &report)
+	if report.Status != want {
+		t.Fatalf("privacy scan status = %q, want %q", report.Status, want)
+	}
+	if report.ArtifactCount == 0 {
+		t.Fatal("privacy scan artifact_count = 0, want scanned artifacts")
+	}
+	if !stringSliceContains(report.SkippedArtifacts, "privacy-scan.json") {
+		t.Fatalf("privacy scan skipped artifacts = %+v, want privacy-scan.json skipped", report.SkippedArtifacts)
+	}
+	if want == "PASS" && report.FindingsCount != 0 {
+		t.Fatalf("privacy scan findings = %d, want 0", report.FindingsCount)
+	}
+	if want == "FAIL" && report.FindingsCount == 0 {
+		t.Fatal("privacy scan findings = 0, want at least one finding")
+	}
+}
+
+func assertBundleManifest(t *testing.T, root string) {
+	t.Helper()
+
+	var manifest testBundleManifest
+	readBundleJSON(t, root, "manifest.json", &manifest)
+	assertBundleManifestSummary(t, manifest)
+	assertBundleManifestRunParameters(t, manifest.RunParameters)
+	assertBundleManifestCommands(t, manifest.Commands)
+	assertBundleManifestArtifacts(t, manifest.Artifacts)
+	assertBundleManifestEvidence(t, manifest.Evidence)
+}
+
+type testBundleManifest struct {
+	SchemaVersion string                    `json:"schema_version"`
+	BundleName    string                    `json:"bundle_name"`
+	Scenario      string                    `json:"scenario"`
+	PrivacyStatus string                    `json:"privacy_status"`
+	RunParameters testManifestRunParameters `json:"run_parameters"`
+	Commands      []testManifestCommand     `json:"commands"`
+	Artifacts     []testManifestArtifact    `json:"artifacts"`
+	Evidence      []testManifestEvidence    `json:"evidence"`
+}
+
+type testManifestRunParameters struct {
+	Workers                  int    `json:"workers"`
+	Duration                 string `json:"duration"`
+	DocSizeBytes             int    `json:"doc_size_bytes"`
+	StressAddr               string `json:"stress_addr"`
+	SecurityReportConfigured bool   `json:"security_report_configured"`
+	SecurityReportPresent    bool   `json:"security_report_present"`
+}
+
+type testManifestCommand struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+}
+
+type testManifestArtifact struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size_bytes"`
+}
+
+type testManifestEvidence struct {
+	Area   string `json:"area"`
+	Status string `json:"status"`
+}
+
+func assertBundleManifestSummary(t *testing.T, manifest testBundleManifest) {
+	t.Helper()
+
+	if manifest.SchemaVersion != "scrap.evidence.bundle/v1" {
+		t.Fatalf("schema version = %q", manifest.SchemaVersion)
+	}
+	if manifest.BundleName == "" || manifest.Scenario != "throughput" || manifest.PrivacyStatus != "PASS" {
+		t.Fatalf("manifest summary = %+v, want populated throughput PASS", manifest)
+	}
+}
+
+func assertBundleManifestRunParameters(t *testing.T, params testManifestRunParameters) {
+	t.Helper()
+
+	if params.Workers != 8 || params.Duration != "60s" || params.DocSizeBytes != 16384 || params.StressAddr != "127.0.0.1:18090" {
+		t.Fatalf("manifest run parameters = %+v, want configured stress parameters", params)
+	}
+	if !params.SecurityReportConfigured || !params.SecurityReportPresent {
+		t.Fatalf("manifest security report flags = %+v, want configured and present", params)
+	}
+}
+
+func assertBundleManifestCommands(t *testing.T, commands []testManifestCommand) {
+	t.Helper()
+
+	for _, command := range commands {
+		if command.Name != "stress" {
+			continue
+		}
+		if !strings.Contains(command.Command, "-workers=8") || !strings.Contains(command.Command, "-duration=60s") || !strings.Contains(command.Command, "-doc-size=16384") {
+			t.Fatalf("stress manifest command = %q, want configured parameters", command.Command)
+		}
+		return
+	}
+	t.Fatalf("stress manifest command missing from %+v", commands)
+}
+
+func assertBundleManifestArtifacts(t *testing.T, artifacts []testManifestArtifact) {
+	t.Helper()
+
+	if len(artifacts) == 0 {
+		t.Fatal("manifest artifacts empty")
+	}
+	for _, artifact := range artifacts {
+		if artifact.Path == "" || artifact.SHA256 == "" || artifact.Size <= 0 {
+			t.Fatalf("manifest artifact incomplete: %+v", artifact)
+		}
+		if filepath.IsAbs(artifact.Path) {
+			t.Fatalf("manifest artifact path is absolute: %q", artifact.Path)
+		}
+	}
+}
+
+func assertBundleManifestEvidence(t *testing.T, evidence []testManifestEvidence) {
+	t.Helper()
+
+	if len(evidence) == 0 {
+		t.Fatal("manifest evidence status rows empty")
+	}
+}
+
+func assertManifestEvidenceStatus(t *testing.T, root, area, want string) {
+	t.Helper()
+
+	var manifest testBundleManifest
+	readBundleJSON(t, root, "manifest.json", &manifest)
+	for _, evidence := range manifest.Evidence {
+		if evidence.Area == area {
+			if evidence.Status != want {
+				t.Fatalf("manifest evidence %s status = %q, want %q", area, evidence.Status, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("manifest evidence %s missing from %+v", area, manifest.Evidence)
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

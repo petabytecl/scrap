@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: scrapd
+  namespace: scrap
+spec:
+  template:
+    spec:
+      volumes:
+        - name: scrap-shard-placement
+          configMap:
+            name: scrap-shard-placement
+      containers:
+        - name: scrapd
+          env:
+            - name: SCRAP_SHARD_PLACEMENT_FILE
+              value: /etc/scrap/shard-placement/placement.json
+          volumeMounts:
+            - name: scrap-shard-placement
+              mountPath: /etc/scrap/shard-placement
+              readOnly: true

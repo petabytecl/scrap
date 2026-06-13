@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - collector.yaml
+  - kube-state-metrics.yaml
+  - mimir.yaml
+  - loki.yaml
+  - tempo.yaml
+  - pyroscope.yaml
+  - alloy.yaml
+  - grafana.yaml
+  - grafana-datasources.yaml
+  - grafana-dashboard-provider.yaml
+  - networkpolicy-pprof.yaml
+  - ciliumnetworkpolicy-admin-host.yaml
+
+configMapGenerator:
+  - name: grafana-evidence-dashboard
+    namespace: monitoring
+    files:
+      - scrap-overview.json
+      - scrap-red.json
+      - scrap-use.json
+      - kubernetes-cluster.json
+      - kubernetes-workloads.json
+    options:
+      disableNameSuffixHash: true

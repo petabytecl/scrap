@@ -1,0 +1,95 @@
+# generated: 2026-06-10T20:50:36-04:00
+# last_updated: 2026-06-12T20:26:38-04:00
+# project: scrap
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: "2026-06-10T20:50:36-04:00"
+last_updated: "2026-06-12T21:33:22-04:00"
+project: scrap
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-durable-document-write-ack: done
+  1-2-immutable-replay-and-conflict-handling: done
+  1-3-verified-read-and-metadata-inspection: done
+  1-4-transaction-scoped-document-discovery: done
+  1-5-core-gateway-restart-and-rebuild-evidence: done
+  epic-1-retrospective: optional
+  epic-2: in-progress
+  2-1-shard-routing-boundary-and-placement-validation: done
+  2-2-multi-shard-cell-startup-composition: done
+  2-3-public-api-routes-by-transaction: done
+  2-4-peer-rpc-shard-scope-authorization: done
+  2-5-shard-aware-admin-and-scrapctl-diagnostics: done
+  2-6-multi-shard-evidence-closure: done
+  epic-2-retrospective: optional
+  epic-3: in-progress
+  3-1-committed-backend-upload-confirmation: done
+  3-2-upload-pressure-and-safe-admission-evidence: done
+  3-3-policy-gated-local-block-eviction: done
+  3-4-restore-first-cold-read-path: done
+  3-5-restore-failure-and-corruption-semantics: done
+  3-6-encryption-compatible-restore-evidence: done
+  3-7-backend-durability-and-cold-read-closure-evidence: done
+  epic-3-retrospective: optional
+  epic-4: in-progress
+  4-1-production-security-startup-gate: done
+  4-2-surface-authorization-audit-and-rate-limits: done
+  4-3-openbao-backed-encrypted-write-and-read: done
+  4-4-durable-envelope-rewrap-workflow: done
+  4-5-scrapctl-openbao-bootstrap-fresh-setup: done
+  4-6-scrapctl-openbao-bootstrap-idempotency-and-incompatible-state: done
+  4-7-production-security-rehearsal-evidence-closure: done
+  epic-4-retrospective: optional
+  epic-5: in-progress
+  5-1-content-scanner-engine-boundary-and-scheduling: done
+  5-2-scanner-watermarks-and-rescan-priority: done
+  5-3-quarantinedocument-raft-command-and-projection-state: done
+  5-4-quarantined-read-denial-and-metadata-reconciliation: done
+  5-5-admin-http-quarantine-operations: done
+  5-6-scrapctl-quarantine-operator-workflow: done
+  5-7-content-safety-closure-evidence: done
+  epic-5-retrospective: optional
+  epic-6: in-progress
+  6-1-v2-release-evidence-matrix: done
+  6-2-operator-runbooks-for-v2-failure-domains: done
+  6-3-alert-and-query-references: done
+  6-4-scrapctl-release-evidence-bundle: done
+  6-5-tier-2-and-tier-3-release-evidence-gates: done
+  6-6-real-s3-iam-production-rehearsal-closure: done
+  6-7-v2-closure-policy-and-final-gate-decision: done
+  epic-6-retrospective: optional
