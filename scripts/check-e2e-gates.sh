@@ -14,6 +14,8 @@ TIER_GATES_CHECK=${TIER_GATES_CHECK:-scripts/check-release-tier-gates.sh}
 TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md}
 REAL_S3_IAM_GATE_CHECK=${REAL_S3_IAM_GATE_CHECK:-scripts/check-real-s3-iam-gate.sh}
 REAL_S3_IAM_EVIDENCE=${REAL_S3_IAM_EVIDENCE:-_bmad-output/implementation-artifacts/v2-real-s3-iam-production-rehearsal-evidence.md}
+V2_CLOSURE_GATE_CHECK=${V2_CLOSURE_GATE_CHECK:-scripts/check-v2-closure-gate.sh}
+V2_CLOSURE_EVIDENCE=${V2_CLOSURE_EVIDENCE:-_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md}
 
 fail() {
 	echo "e2e gate check failed: $*" >&2
@@ -232,3 +234,6 @@ TIER_GATES_EVIDENCE="$TIER_GATES_EVIDENCE" "$TIER_GATES_CHECK"
 
 [ -x "$REAL_S3_IAM_GATE_CHECK" ] || fail "missing executable real S3/IAM evidence validator ${REAL_S3_IAM_GATE_CHECK}"
 REAL_S3_IAM_EVIDENCE="$REAL_S3_IAM_EVIDENCE" "$REAL_S3_IAM_GATE_CHECK"
+
+[ -x "$V2_CLOSURE_GATE_CHECK" ] || fail "missing executable final V2 closure evidence validator ${V2_CLOSURE_GATE_CHECK}"
+V2_CLOSURE_EVIDENCE="$V2_CLOSURE_EVIDENCE" "$V2_CLOSURE_GATE_CHECK"

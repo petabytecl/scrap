@@ -1,6 +1,10 @@
+---
+baseline_commit: 9efe29ccc318d0645c9249bd0c1e67eb522e2078
+---
+
 # Story 6.7: V2 Closure Policy and Final Gate Decision
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -20,39 +24,39 @@ so that V2 is not called release-ready until every required feature and evidence
 
 ## Tasks / Subtasks
 
-- [ ] Update the durable closure policy. (AC: 1, 2)
-  - [ ] Update `docs/prd-closure-policy.md` with the V2 no-intermediate-release rule and the distinction between progress evidence and release evidence.
-  - [ ] Add a non-waivable blocker section covering required P0 feature evidence, production security evidence, Tier 2/Tier 3 release evidence, real S3/IAM proof or explicit accepted waiver, redaction proof, and current linked artifacts.
-  - [ ] State that closed issues, merged PRs, closed milestones, local-only output, screenshots, stale artifacts, and unlinked terminal snippets cannot produce release `PASS`.
-  - [ ] Preserve existing Tier 2, Tier 3, and production rehearsal guidance; do not weaken Story 6.5 or Story 6.6 gate language.
-- [ ] Create the final V2 closure decision artifact. (AC: 1-5)
-  - [ ] Add `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md`.
-  - [ ] Record current branch, commit/ref, live issue `#429` state, latest `ci` and `CodeQL Advanced` run URLs for the tested head, and the exact source artifacts reviewed.
-  - [ ] Record the final gate decision as `FAIL` or `CONCERNS` unless every required blocker is closed with current linked evidence.
-  - [ ] Include a gap table with owner, mitigation, next action, freshness, and release status for every unresolved release blocker.
-  - [ ] Include a non-goal review table so explicitly out-of-scope items are visible and cannot be confused with missing required scope.
-- [ ] Add a static final-closure validator. (AC: 1-5)
-  - [ ] Prefer a focused script such as `scripts/check-v2-closure-gate.sh` plus Go tests in `scripts/v2_closure_gate_test.go`.
-  - [ ] Accept final `PASS` only when the closure artifact has no open non-waivable blockers, links current Tier 2/Tier 3 evidence, links production security rehearsal evidence, links real S3/IAM evidence or an explicit accepted waiver, and shows redaction proof.
-  - [ ] Reject final `PASS` when issue `#429` is open, Tier 2/Tier 3 runtime evidence is missing, CodeQL/CI are not green for the tested ref, redaction proof is missing, or any row relies only on closed issues/merged PRs/local-only output.
-  - [ ] Allow honest `FAIL` and `CONCERNS` decisions when every gap is ownered with mitigation and next action.
-  - [ ] Wire the validator into `scripts/check-e2e-gates.sh` so static evidence gates protect future edits.
-- [ ] Update the release matrix and BMAD tracking without over-claiming. (AC: 1-5)
-  - [ ] Update `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` current release decision, FR-16 row, Story 6.7 row, final gate row, and issue `#429` linkage.
-  - [ ] Keep Story 6.6 / issue `#429` as `FAIL` while real non-local S3/IAM evidence is unavailable.
-  - [ ] Keep Story 6.5 Tier 2/Tier 3 runtime evidence gaps visible unless current durable artifacts are linked.
-  - [ ] Mark this story and sprint status accurately; do not mark Epic 6 or V2 release `done`/`PASS` from policy work alone.
-- [ ] Preserve Epic 6 aggregation scope and redaction discipline. (AC: 1-5)
-  - [ ] Do not add product behavior, storage authority, admin endpoints, new telemetry instruments, new release dependencies, or substitute feature evidence in Story 6.7.
-  - [ ] Do not paste raw workflow logs, credentials, private keys, generated certificate material, Document payloads, raw Document identifiers, Backend keys, trace IDs, request IDs, auth claims, host-absolute local paths, data keys, wrapped-key ciphertext, raw dependency output, or raw Backend object keys into committed artifacts.
-  - [ ] Any waiver language must be explicit, ownered, dated, scoped, and incapable of converting a non-waivable blocker into release `PASS`.
-- [ ] Verify and close out safely. (AC: 1-5)
-  - [ ] Run the final-closure validator and its tests.
-  - [ ] Run `scripts/check-e2e-gates.sh`.
-  - [ ] Run `git diff --check`.
-  - [ ] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before review if scripts or release policy validators changed.
-  - [ ] Run release-sensitive scans over the story, policy, closure artifact, matrix, validator, tests, and any changed runbook files.
-  - [ ] Move this story to `review`; leave `done` for BMAD code review after review findings are addressed.
+- [x] Update the durable closure policy. (AC: 1, 2)
+  - [x] Update `docs/prd-closure-policy.md` with the V2 no-intermediate-release rule and the distinction between progress evidence and release evidence.
+  - [x] Add a non-waivable blocker section covering required P0 feature evidence, production security evidence, Tier 2/Tier 3 release evidence, real S3/IAM proof or explicit accepted waiver, redaction proof, and current linked artifacts.
+  - [x] State that closed issues, merged PRs, closed milestones, local-only output, screenshots, stale artifacts, and unlinked terminal snippets cannot produce release `PASS`.
+  - [x] Preserve existing Tier 2, Tier 3, and production rehearsal guidance; do not weaken Story 6.5 or Story 6.6 gate language.
+- [x] Create the final V2 closure decision artifact. (AC: 1-5)
+  - [x] Add `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md`.
+  - [x] Record current branch, commit/ref, live issue `#429` state, latest `ci` and `CodeQL Advanced` run URLs for the tested head, and the exact source artifacts reviewed.
+  - [x] Record the final gate decision as `FAIL` or `CONCERNS` unless every required blocker is closed with current linked evidence.
+  - [x] Include a gap table with owner, mitigation, next action, freshness, and release status for every unresolved release blocker.
+  - [x] Include a non-goal review table so explicitly out-of-scope items are visible and cannot be confused with missing required scope.
+- [x] Add a static final-closure validator. (AC: 1-5)
+  - [x] Prefer a focused script such as `scripts/check-v2-closure-gate.sh` plus Go tests in `scripts/v2_closure_gate_test.go`.
+  - [x] Accept final `PASS` only when the closure artifact has no open non-waivable blockers, links current Tier 2/Tier 3 evidence, links production security rehearsal evidence, links real S3/IAM evidence or an explicit accepted waiver, and shows redaction proof.
+  - [x] Reject final `PASS` when issue `#429` is open, Tier 2/Tier 3 runtime evidence is missing, CodeQL/CI are not green for the tested ref, redaction proof is missing, or any row relies only on closed issues/merged PRs/local-only output.
+  - [x] Allow honest `FAIL` and `CONCERNS` decisions when every gap is ownered with mitigation and next action.
+  - [x] Wire the validator into `scripts/check-e2e-gates.sh` so static evidence gates protect future edits.
+- [x] Update the release matrix and BMAD tracking without over-claiming. (AC: 1-5)
+  - [x] Update `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` current release decision, FR-16 row, Story 6.7 row, final gate row, and issue `#429` linkage.
+  - [x] Keep Story 6.6 / issue `#429` as `FAIL` while real non-local S3/IAM evidence is unavailable.
+  - [x] Keep Story 6.5 Tier 2/Tier 3 runtime evidence gaps visible unless current durable artifacts are linked.
+  - [x] Mark this story and sprint status accurately; do not mark Epic 6 or V2 release `done`/`PASS` from policy work alone.
+- [x] Preserve Epic 6 aggregation scope and redaction discipline. (AC: 1-5)
+  - [x] Do not add product behavior, storage authority, admin endpoints, new telemetry instruments, new release dependencies, or substitute feature evidence in Story 6.7.
+  - [x] Do not paste raw workflow logs, credentials, private keys, generated certificate material, Document payloads, raw Document identifiers, Backend keys, trace IDs, request IDs, auth claims, host-absolute local paths, data keys, wrapped-key ciphertext, raw dependency output, or raw Backend object keys into committed artifacts.
+  - [x] Any waiver language must be explicit, ownered, dated, scoped, and incapable of converting a non-waivable blocker into release `PASS`.
+- [x] Verify and close out safely. (AC: 1-5)
+  - [x] Run the final-closure validator and its tests.
+  - [x] Run `scripts/check-e2e-gates.sh`.
+  - [x] Run `git diff --check`.
+  - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before review if scripts or release policy validators changed.
+  - [x] Run release-sensitive scans over the story, policy, closure artifact, matrix, validator, tests, and any changed runbook files.
+  - [x] Move this story to `review`; leave `done` for BMAD code review after review findings are addressed.
 
 ## Dev Notes
 
@@ -197,8 +201,38 @@ Avoid:
 
 ### Agent Model Used
 
+GPT-5 Codex
+
 ### Debug Log References
+
+- Red phase: `go test -count=1 ./scripts -run V2ClosureGate` initially failed because `scripts/check-v2-closure-gate.sh` was absent.
+- Green focused tests: `go test -count=1 ./scripts -run V2ClosureGate` passed.
+- Final closure validator: `scripts/check-v2-closure-gate.sh` passed.
+- Aggregated static gate: `scripts/check-e2e-gates.sh` passed.
+- Shell syntax: `bash -n scripts/check-v2-closure-gate.sh scripts/check-e2e-gates.sh` passed.
+- Broad scripts tests: `go test -count=1 ./scripts` passed.
+- Whitespace check: `git diff --check` passed.
+- Release-sensitive scan over changed Story 6.7 files matched only the matrix's documented scanner regex definitions, not committed secret or raw-evidence values.
+- Full local gate: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed.
 
 ### Completion Notes List
 
+- Added durable V2 closure policy language that separates progress evidence from release evidence and makes required blockers non-waivable for final `PASS`.
+- Added the final V2 closure decision artifact with current honest status `FAIL`, live issue `#429` state, green baseline CI/CodeQL references, ownered gaps, redaction proof, and explicit non-goal review.
+- Added a row-aware static closure validator and Go fixture tests for honest `FAIL`, complete `PASS`, and invalid `PASS` cases.
+- Wired the closure validator into `scripts/check-e2e-gates.sh` and updated the release matrix without marking Epic 6 or V2 release as `PASS`.
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/6-7-v2-closure-policy-and-final-gate-decision.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md`
+- `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
+- `docs/prd-closure-policy.md`
+- `scripts/check-e2e-gates.sh`
+- `scripts/check-v2-closure-gate.sh`
+- `scripts/v2_closure_gate_test.go`
+
+## Change Log
+
+- 2026-06-12: Implemented Story 6.7 closure policy, final gate decision artifact, validator, release matrix updates, and verification gates.

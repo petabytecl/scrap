@@ -3,6 +3,49 @@
 PRDs that are gated by production-readiness work stay open until their closing
 evidence is current, linked, and reviewable.
 
+## V2 major release closure
+
+V2 has no intermediate releases. A closed phase, closed milestone, merged PR, or
+closed implementation issue is progress evidence only. V2 release readiness
+requires current linked evidence for every required feature, ADR gate, operator
+document, and release gate.
+
+Final V2 release `PASS` is allowed only when the release evidence matrix links
+reviewable artifacts for:
+
+- required P0 feature evidence across the accepted V2 FR and ADR gates;
+- production security evidence, including current green CI and CodeQL for the
+  tested release ref;
+- Tier 2 prod-like evidence when closure policy requires the Cilium-backed Kind
+  Cell gate;
+- Tier 3 telemetry/evidence bundle output with privacy proof;
+- production security rehearsal evidence;
+- real S3/IAM production rehearsal evidence for Backend S3 claims, or an
+  explicit accepted waiver that keeps the final release decision below `PASS`;
+- redaction proof for public/tracker-safe artifacts.
+
+The following blockers are non-waivable for a final V2 release `PASS`:
+
+- missing required P0 feature evidence;
+- missing production security evidence;
+- missing Tier 2 or Tier 3 release evidence required by this policy;
+- missing real S3/IAM proof for Backend S3 claims while issue `#429` remains
+  open;
+- missing redaction proof, or evidence that exposes credential values, private
+  keys, generated certificate material, Document payloads, raw Backend keys, raw
+  logs, trace IDs, request IDs, auth claims, data keys, or wrapped-key
+  ciphertext;
+- ownerless or mitigation-free release blockers.
+
+Waivers must be explicit, dated, ownered, scoped, and linked from the release
+matrix. A waiver can record risk acceptance or explain why a row remains
+`CONCERNS` or `FAIL`; it cannot convert a non-waivable blocker into final
+release `PASS`.
+
+Local-only output, screenshots, stale artifacts, unlinked terminal snippets,
+and copied logs are useful during development, but they are not final V2 release
+evidence.
+
 ## Cilium-backed Tier 2 guard
 
 PRDs #312 and #337 were gated on a green Tier 2 prod-like E2E run from the

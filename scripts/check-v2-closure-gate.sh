@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+V2_CLOSURE_EVIDENCE=${V2_CLOSURE_EVIDENCE:-_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md}
+
+fail() {
+	echo "v2 closure gate check failed: $*" >&2
+	exit 1
+}
+
+[ -s "$V2_CLOSURE_EVIDENCE" ] || fail "missing non-empty closure evidence artifact ${V2_CLOSURE_EVIDENCE}"
+
+python3 - "$V2_CLOSURE_EVIDENCE" <<'PY'
+import re
+import sys
+
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as fh:
+    text = fh.read()
+
+
+def fail(message):
+    print(f"v2 closure gate check failed: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def require(pattern, description):
+    if not re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
+        fail(f"missing {description} in {path}")
+
+
+def split_markdown_row(row):
+    row = row.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|"):
+        row = row[:-1]
+
+    cells = []
+    current = []
+    escaped = False
+    in_code = False
+    for char in row:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            current.append(char)
+            escaped = True
+            continue
+        if char == "`":
+            in_code = not in_code
+            current.append(char)
+            continue
+        if char == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    cells.append("".join(current).strip())
+    return cells
+
+
+def is_separator(cells):
+    return all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
+
+
+def table_rows():
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = split_markdown_row(line)
+        if len(cells) < 2 or is_separator(cells):
+            continue
+        yield line, cells
+
+
+def find_row(pattern, description):
+    matcher = re.compile(pattern, re.IGNORECASE)
+    for line, cells in table_rows():
+        if matcher.search(cells[0].replace("`", "")):
+            return line, [cell.replace("`", "").strip() for cell in cells]
+    fail(f"missing {description} in {path}")
+
+
+def require_cell_count(cells, expected, description):
+    if len(cells) != expected:
+        fail(f"{description} has {len(cells)} cells, want {expected}")
+    for cell in cells:
+        if cell in {"", "N/A"}:
+            fail(f"{description} has an empty required cell")
+
+
+def require_status(status, description):
+    if status not in {"PASS", "CONCERNS", "FAIL"}:
+        fail(f"{description} has invalid status {status}")
+
+
+def require_row(pattern, line, description):
+    if not re.search(pattern, line, re.IGNORECASE):
+        fail(f"missing {description}")
+
+
+status_match = re.search(r"^Final gate status: (PASS|CONCERNS|FAIL)$", text, re.MULTILINE)
+if not status_match:
+    fail(f"missing final gate status in {path}")
+release_status = status_match.group(1)
+
+require(r"^# V2 Closure Policy Final Gate Decision$", "title")
+require(r"^Artifact status:", "artifact status")
+require(r"^Story: 6\.7 - V2 Closure Policy and Final Gate Decision$", "story identity")
+require(r"no intermediate releases", "no-intermediate-release policy")
+require(r"closed issues", "closed issue progress-evidence warning")
+require(r"merged PRs", "merged PR progress-evidence warning")
+require(r"closed phase", "closed phase progress-evidence warning")
+require(r"current linked evidence", "current linked evidence requirement")
+require(r"non-waivable", "non-waivable blocker policy")
+require(r"P0", "P0 evidence blocker")
+require(r"production\s+security", "production security blocker")
+require(r"Tier 2", "Tier 2 blocker")
+require(r"Tier 3", "Tier 3 blocker")
+require(r"real S3/IAM", "real S3/IAM blocker")
+require(r"redaction proof", "redaction proof blocker")
+require(r"issue\s+`?#429`?|petabytecl/scrap/issues/429", "issue #429 linkage")
+require(r"\bci\b", "CI run linkage")
+require(r"CodeQL", "CodeQL run linkage")
+require(r"owner", "owner field")
+require(r"mitigation", "mitigation field")
+require(r"next action", "next action field")
+require(r"non-goal", "non-goal review")
+require(r"local-only", "local-only rejection")
+require(r"screenshot", "screenshot rejection")
+require(r"stale", "stale evidence rejection")
+require(r"unlinked", "unlinked evidence rejection")
+require(r"waiver", "waiver policy")
+
+summary_line, summary = find_row(r"^Final V2 release gate$", "Final V2 release gate summary row")
+full_line, full = find_row(r"^AC-6\.7 Final V2 release gate$", "Final V2 release gate full row")
+epic_line, epic = find_row(r"^Epic 1 through Epic 6$", "Epic rollup row")
+non_goal_line, non_goal = find_row(r"^S3-compatible API$", "non-goal review row")
+
+require_cell_count(summary, 4, "Final V2 release gate summary row")
+require_cell_count(full, 15, "Final V2 release gate full row")
+require_cell_count(epic, 6, "Epic rollup row")
+require_cell_count(non_goal, 4, "Non-goal review row")
+
+summary_status = summary[1]
+full_status = full[11]
+epic_status = epic[1]
+
+require_status(release_status, "Final gate")
+require_status(summary_status, "Final V2 release gate summary row")
+require_status(full_status, "Final V2 release gate full row")
+require_status(epic_status, "Epic rollup row")
+
+require_row(r"scripts/check-v2-closure-gate\.sh", full_line, "validator command in full evidence row")
+require_row(r"#429|petabytecl/scrap/issues/429", full_line, "issue #429 in full evidence row")
+require_row(r"\bci\b", full_line, "CI run in full evidence row")
+require_row(r"CodeQL", full_line, "CodeQL run in full evidence row")
+require_row(r"redaction proof", full_line, "redaction proof in full evidence row")
+require_row(r"owner|Release owner", full_line, "owner in full evidence row")
+require_row(r"Release evidence/docs", full_line, "release evidence environment in full evidence row")
+require_row(r"v2-closure-policy-final-gate-decision\.md", full_line, "closure artifact path in full evidence row")
+require_row(r"out of scope|not a release blocker", non_goal_line, "non-goal release impact")
+
+any_pass = release_status == "PASS" or summary_status == "PASS" or full_status == "PASS"
+if any_pass:
+    if release_status != "PASS":
+        fail("Final gate PASS required when any final closure row is PASS")
+    if summary_status != "PASS":
+        fail("Final PASS requires summary status PASS")
+    if full_status != "PASS":
+        fail("Final PASS requires full evidence status PASS")
+    if epic_status != "PASS":
+        fail("Final PASS requires Epic rollup status PASS")
+    if re.search(r"#429[^|.\n]*(open)|issue\s+`?#429`?[^|.\n]*(open)", text, re.IGNORECASE):
+        fail("Final PASS cannot cite issue #429 as open")
+
+    pass_text = "\n".join([summary_line, full_line, epic_line])
+    weak_patterns = (
+        r"missing Tier",
+        r"Tier 2/Tier 3 runtime artifacts (are )?missing",
+        r"missing real S3/IAM",
+        r"real S3/IAM proof .*missing",
+        r"missing redaction",
+        r"Redaction proof missing",
+        r"local-only",
+        r"screenshot",
+        r"stale",
+        r"unlinked terminal",
+        r"closed issues? (only|alone)",
+        r"merged PRs? (only|alone)",
+        r"closed phase",
+        r"waiver bypass",
+    )
+    if any(re.search(pattern, pass_text, re.IGNORECASE) for pattern in weak_patterns):
+        fail("Final PASS from weak or missing evidence")
+
+    required_pass_patterns = (
+        r"issue\s+`?#429`?\s+closed|#429[^|.\n]*closed",
+        r"Tier 2",
+        r"Tier 3",
+        r"production security",
+        r"real S3/IAM",
+        r"Redaction proof PASS",
+        r"ci[^|.\n]*green|green[^|.\n]*ci",
+        r"CodeQL[^|.\n]*green|green[^|.\n]*CodeQL",
+        r"artifacts/tier2-e2e\.log",
+        r"artifacts/tier3-bundle-path\.txt",
+        r"artifacts/production-rehearsal/report\.json",
+    )
+    for pattern in required_pass_patterns:
+        if not re.search(pattern, pass_text, re.IGNORECASE):
+            fail("Final PASS from weak or missing evidence")
+elif release_status == "FAIL":
+    if full[12] == "" or full[13] == "" or full[14] == "":
+        fail("Final FAIL requires owner, mitigation, and next action")
+PY
