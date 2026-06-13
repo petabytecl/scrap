@@ -1,6 +1,6 @@
 # V2 Closure Policy Final Gate Decision
 
-Artifact status: complete for Story 6.7 validation
+Artifact status: updated 2026-06-13 after V2 landed on main; real S3/IAM gate resolved
 Final gate status: FAIL
 
 Story: 6.7 - V2 Closure Policy and Final Gate Decision
@@ -11,48 +11,49 @@ V2 has no intermediate releases. Closed issues, merged PRs, and closed phase
 milestones are progress evidence, not release PASS proof without current linked
 evidence.
 
-`docs/prd-closure-policy.md` now records the V2 major-release closure rule,
-the distinction between progress evidence and release evidence, and the
-non-waivable blocker list. Non-waivable blockers include required P0 feature
-evidence, production security evidence, Tier 2/Tier 3 release evidence, real
-S3/IAM evidence, redaction proof, and ownered mitigation for every release
-blocker.
+`docs/prd-closure-policy.md` records the V2 major-release closure rule, the
+distinction between progress evidence and release evidence, and the non-waivable
+blocker list. Non-waivable blockers include required P0 feature evidence,
+production security evidence, Tier 2/Tier 3 release evidence, real S3/IAM
+evidence, redaction proof, and ownered mitigation for every release blocker.
 
 ## Source Inputs
 
 | Input | Command or path | Result |
 | --- | --- | --- |
-| Branch | `git branch --show-current` | `v2`. |
-| Reviewed/tested head | `git rev-parse HEAD` before review fixes | `e14aed7e306115426d223a736c8fb0c1dcd5861f`. |
-| Story | `_bmad-output/implementation-artifacts/6-7-v2-closure-policy-and-final-gate-decision.md` | Story 6.7 implementation from baseline `9efe29ccc318d0645c9249bd0c1e67eb522e2078`. |
-| Closure policy | `docs/prd-closure-policy.md` | Updated with V2 no-intermediate-release and non-waivable blocker policy. |
-| Release matrix | `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` | Updated with Story 6.7 closure decision and remaining blockers. |
-| Issue `#429` | `gh issue view 429 --repo petabytecl/scrap --json number,title,state,labels,milestone,url,updatedAt` | `OPEN`; labels `ready-for-human`, `production-readiness`, `v2`, `e2e`; milestone `NONE`; updated `2026-06-10T02:56:17Z`. |
-| Latest pushed CI | `gh run list --branch v2 --limit 8 --json ...` | `ci` run `27452343988` green for `e14aed7e306115426d223a736c8fb0c1dcd5861f`: https://github.com/petabytecl/scrap/actions/runs/27452343988. |
-| Latest pushed CodeQL | `gh run list --branch v2 --limit 8 --json ...` | `CodeQL Advanced` run `27452343998` green for `e14aed7e306115426d223a736c8fb0c1dcd5861f`: https://github.com/petabytecl/scrap/actions/runs/27452343998. |
+| Branch | `git branch --show-current` | `v2`, now merged into `main` (the V2 rewrite replaced main's content). |
+| Reviewed/tested head | `git rev-parse HEAD` | `89cbc50` on `main`. |
+| Closure policy | `docs/prd-closure-policy.md` | V2 no-intermediate-release and non-waivable blocker policy. |
+| Release matrix | `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` | Feature scope through Epic 5 current; Epic 6 evidence gates tracked here. |
+| Issue `#429` (real S3/IAM) | `gh issue view 429 --repo petabytecl/scrap` | `CLOSED` (completed) via PR #435; real S3/IAM rehearsal evidence accepted. |
+| Real S3/IAM report | `artifacts/production-rehearsal/report.json` | `status=passed`, `evidence_tier=real-s3-iam`, `confirmed_upload_count=1`; gate `scripts/check-real-s3-iam-gate.sh` PASS. |
+| Tier 2 prod-like E2E run | `gh run view 27457877436` | PASS once: https://github.com/petabytecl/scrap/actions/runs/27457877436 (suite is flaky under load — see issue #437). |
+| Tier 3 evidence-gate runs | `gh run list --workflow evidence-gate.yml` | FAIL: blocked by flaky E2E suite (#437) and unvalidated evidence stack/stress phases (#438). |
+| Latest pushed CI | `gh run list --branch main --workflow ci` | `ci` run green for `89cbc50`: https://github.com/petabytecl/scrap/actions/runs/27459061473. |
+| Latest pushed CodeQL | `gh run list --branch main` | `CodeQL` run green for `89cbc50`: https://github.com/petabytecl/scrap/actions/runs/27459061343. |
+| Follow-up issues | `gh issue view 437 / 438` | #437 flaky multi-member E2E suite; #438 Tier 3 evidence-stack/stress validation. |
 | Non-goal source | `docs/v2-scope-reconciliation.md` | Confirms explicit non-goals and final gate ordering. |
-| Domain source | `CONTEXT.md` | Confirms S.C.R.A.P. is not an S3-compatible API and `tenant_id` is not storage identity. |
-| Restore scope source | `docs/adr/0027-phase-5-restore-first-cold-reads.md` | Confirms direct Backend ciphertext streaming is rejected for V2 unless re-chartered. |
+| Domain source | `CONTEXT.md` | S.C.R.A.P. is not an S3-compatible API; `tenant_id` is not storage identity. |
 
 ## Gate Summary
 
 | Gate | Status | Evidence | Owner / next action |
 | --- | --- | --- | --- |
-| Final V2 release gate | FAIL | issue `#429` open; missing real S3/IAM proof; Tier 2/Tier 3 runtime artifacts not linked; latest ci run `27452343988` and CodeQL run `27452343998` green for commit `e14aed7`; closure policy updated with non-waivable blockers. | Release owner: link required runtime evidence and close blockers before PASS. |
+| Final V2 release gate | FAIL | Real S3/IAM resolved (issue `#429` closed, report linked); Tier 2 passed once (run 27459061473 ci green for `89cbc50`, CodeQL green); but the multi-member E2E suite is flaky under load (#437) and Tier 3 evidence-stack/stress phases are unvalidated (#438), so no reliable green Tier 3 runtime evidence exists. | Release owner: stabilize the flaky E2E suite (#437), complete Tier 3 evidence validation (#438), then re-decide. |
 
 ## Full Blocker Rows
 
 | Requirement | Source | Evidence command | Commit/ref | Environment | Evidence artifact | Issue/Run | Expected result | Actual result | Redaction proof | Freshness | Status | Owner | Mitigation | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | `scripts/check-v2-closure-gate.sh` | `e14aed7` | Release evidence/docs | `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md` | issue `#429` open; ci `27452343988` green; CodeQL `27452343998` green | Final V2 release PASS only with current linked evidence for every required gate. | FAIL: real S3/IAM proof and Tier 2/Tier 3 runtime artifacts are missing. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, auth claims, data keys, wrapped-key ciphertext, and host-absolute paths. | Current live check. | FAIL | Release owner | Run/link Tier 2, Tier 3, and real S3/IAM evidence; close issue `#429`. | Keep V2 release below PASS. |
+| AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | `scripts/check-v2-closure-gate.sh` | `89cbc50` | Release evidence/docs | `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md` | issues `#429` closed, `#437`/`#438` open; ci green https://github.com/petabytecl/scrap/actions/runs/27459061473; CodeQL green https://github.com/petabytecl/scrap/actions/runs/27459061343 | Final V2 release PASS only with current linked evidence for every required gate. | FAIL: real S3/IAM is resolved and Tier 2 passed once, but the multi-member E2E suite is flaky under CI load (#437) and the Tier 3 evidence stack/stress phases are not yet validated end-to-end (#438), so reliable green Tier 3 runtime evidence is missing. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, auth claims, data keys, wrapped-key ciphertext, and host-absolute paths. | Current live check. | FAIL | Release owner | Stabilize flaky multi-member E2E tests (#437) and validate the Tier 3 evidence stack + stress/bundle phases (#438). | Land #437 and #438, capture a green Tier 3 run, then re-run this gate. |
 
 ## Gap Table
 
 | Gap | Status | Owner | Mitigation | Next action | Freshness | Release status |
 | --- | --- | --- | --- | --- | --- | --- |
-| Tier 2 prod-like runtime evidence | CONCERNS | Release owner | Link a current durable Tier 2 artifact that includes tested commit/ref, run URL, Kind diagnostics, E2E log, and security evidence. | Run or attach the required Tier 2 evidence before final PASS. | Static gate contract is current; runtime artifact is missing. | CONCERNS |
-| Tier 3 telemetry/evidence bundle | FAIL | Release owner | Link a current durable Tier 3 bundle with `manifest.json`, `gates.json`, `privacy-scan.json`, logs, metrics, traces, profiles, retention, and privacy PASS. | Run `evidence-gate.yml` when available on the default branch or promote durable sanitized local evidence. | Static gate contract is current; runtime bundle is missing. | FAIL |
-| Real S3/IAM production rehearsal | FAIL | Release owner / issue `#429` | Run real non-local `make production-rehearsal`, link sanitized `artifacts/production-rehearsal/report.json`, and keep issue `#429` open until evidence is accepted. | Run/link real S3/IAM rehearsal; no waiver can convert this blocker into final PASS. | Issue `#429` remains open and no real non-local report is linked. | FAIL |
+| Real S3/IAM production rehearsal | PASS | Release owner | Real non-local `make production-rehearsal` run under a least-privilege IAM role; sanitized `artifacts/production-rehearsal/report.json` committed; issue `#429` closed. | None; gate satisfied and tracked in `v2-real-s3-iam-production-rehearsal-evidence.md`. | Current: report timestamp 2026-06-13, gate checker PASS. | PASS |
+| Tier 2 prod-like runtime evidence | CONCERNS | Release owner | Tier 2 `prodlike-e2e` passed once on Linux CI (run 27457877436), but the multi-member E2E suite is flaky under load. | Stabilize the flaky suite (#437) so Tier 2 is reliably green and link a durable artifact. | Current: one green run exists; reliability blocked by #437. | CONCERNS |
+| Tier 3 telemetry/evidence bundle | FAIL | Release owner | Evidence-stack non-root/read-only-rootfs bugs fixed (mimir, alloy, pyroscope); E2E gate flakiness (#437) and unexercised stress/bundle phases (#438) still block a green run. | Land #437 and #438, then capture a durable Tier 3 bundle (`manifest.json`, `gates.json`, `privacy-scan.json`, logs/metrics/traces/profiles, retention, privacy PASS). | Current: stack fixes committed at `89cbc50`; runtime bundle missing. | FAIL |
 
 ## Epic Rollup
 
