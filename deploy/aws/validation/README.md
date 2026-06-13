@@ -39,10 +39,21 @@ Note the `Arn` from `get-caller-identity`. For SSO it looks like:
 arn:aws:sts::<account-id>:assumed-role/AWSReservedSSO_platform_<hash>/<you>
 ```
 
-The trust pattern uses the IAM role form (session-independent):
+The trust pattern uses the IAM role form (session-independent). The `*` before
+`AWSReservedSSO_` absorbs the optional region path segment, which some accounts
+include (`.../sso.amazonaws.com/<region>/AWSReservedSSO_...`) and others omit
+(`.../sso.amazonaws.com/AWSReservedSSO_...`):
 
 ```text
-arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_platform_*
+arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_<permission-set>_<hash>
+```
+
+Find the exact permission-set role ARN with:
+
+```sh
+aws iam list-roles --profile platform \
+  --path-prefix /aws-reserved/sso.amazonaws.com/ \
+  --query "Roles[?contains(RoleName, '<permission-set>')].Arn" --output text
 ```
 
 ## Deploy
@@ -55,7 +66,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM \
   --template-file deploy/aws/validation/scrap-real-aws-validation.yaml \
   --parameter-overrides \
-    TrustedPrincipalArnPattern='arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_platform_*' \
+    TrustedPrincipalArnPattern='arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_<permission-set>_<hash>' \
     CellPrefix=scrap-v2-real-s3-iam \
     RetentionDays=14
 ```
