@@ -579,13 +579,29 @@ func waitShardUploadPendingBlocks(t *testing.T, pod string, shardID uint64, want
 		diag, errText := fetchShardDiagnosticsFromPod(t, pod)
 		if errText == "" {
 			last = diag
-			if shard, ok := findShardDiagnostic(diag, shardID); ok && shard.UploadPendingBlocks == want {
+			if pending, ok := shardPendingBlocks(diag, shardID); ok && pending == want {
 				return
 			}
 		}
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("pod %s Shard %d upload_pending_blocks did not become %d: %+v", pod, shardID, want, last.Shards)
+}
+
+// shardPendingBlocks resolves the pending upload Block count for the target
+// Shard from a pod's live diagnostics. On the prod-like multi-Shard Cell it
+// reads the matching Shard's per-Shard counter so unrelated pending uploads on
+// the Cell's other Shard are ignored. On a single-Shard local Cell — where the
+// Transaction's prod-like Shard ID is absent because the Cell falls back to
+// Shard 0 — the only Shard's counter is already the Member total, so use it.
+func shardPendingBlocks(diag e2eShardDiagnostics, shardID uint64) (int, bool) {
+	if shard, ok := findShardDiagnostic(diag, shardID); ok {
+		return shard.UploadPendingBlocks, true
+	}
+	if len(diag.Shards) == 1 {
+		return diag.Shards[0].UploadPendingBlocks, true
+	}
+	return 0, false
 }
 
 func waitUploadPressureAtLeast(t *testing.T, pod string, minLevel int, timeout time.Duration) {
