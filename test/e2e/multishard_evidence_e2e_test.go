@@ -59,7 +59,11 @@ func TestE2EMultiShardRestartDeterminism(t *testing.T) {
 	assertE2ETransactionRoutesToShard(t, placement, tx9, 9)
 	assertReadDocumentE2E(t, client, tx7, doc7, body7)
 	assertReadDocumentE2E(t, client, tx9, doc9, body9)
-	afterDiag := fetchAnyShardDiagnostics(t)
+	// After a rollout restart, a follower briefly reports leader_state="unknown"
+	// (LeaderID==0) until Raft heartbeats let it learn the new leader. Reads
+	// above already prove a leader exists; poll diagnostics until every Shard's
+	// leader state has converged before asserting determinism.
+	afterDiag := fetchShardDiagnosticsWithResolvedLeaders(t, 60*time.Second)
 	assertE2EDiagnosticsCoverTwoShards(t, afterDiag)
 	assertShardDiagnosticsStable(t, beforeDiag, afterDiag)
 }
@@ -116,6 +120,51 @@ func fetchAnyShardDiagnostics(t *testing.T) e2eShardDiagnostics {
 	}
 	t.Fatalf("no pod returned Shard diagnostics: %s", lastErr)
 	return e2eShardDiagnostics{}
+}
+
+func tryFetchAnyShardDiagnostics(t *testing.T) (e2eShardDiagnostics, bool) {
+	t.Helper()
+	for _, pod := range podNames(t) {
+		diag, errText := fetchShardDiagnosticsFromPod(t, pod)
+		if errText == "" {
+			return diag, true
+		}
+	}
+	return e2eShardDiagnostics{}, false
+}
+
+func shardLeaderStatesResolved(diag e2eShardDiagnostics) bool {
+	if len(diag.Shards) == 0 {
+		return false
+	}
+	for _, shard := range diag.Shards {
+		if shard.LeaderState != "leader" && shard.LeaderState != "follower" {
+			return false
+		}
+	}
+	return true
+}
+
+// fetchShardDiagnosticsWithResolvedLeaders polls Shard diagnostics until every
+// local Shard reports a resolved leader state (leader or follower), tolerating
+// the transient post-restart window where a follower has not yet learned the
+// current leader. It fails closed if leadership never converges in time.
+func fetchShardDiagnosticsWithResolvedLeaders(t *testing.T, timeout time.Duration) e2eShardDiagnostics {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last e2eShardDiagnostics
+	for time.Now().Before(deadline) {
+		diag, ok := tryFetchAnyShardDiagnostics(t)
+		if ok {
+			last = diag
+			if shardLeaderStatesResolved(diag) {
+				return diag
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("Shard leader states did not resolve within %s: %+v", timeout, last.Shards)
+	return last
 }
 
 func fetchShardDiagnosticsFromPod(t *testing.T, pod string) (e2eShardDiagnostics, string) {
