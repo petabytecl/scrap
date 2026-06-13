@@ -15,6 +15,13 @@ spec:
       labels:
         app: mimir
     spec:
+      # grafana/mimir runs as root by default; pin a non-root UID so the
+      # runAsNonRoot guard admits the pod, and fsGroup so the /data PVC is
+      # group-writable for that UID.
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
       containers:
         - name: mimir
           image: grafana/mimir:2.17.0@sha256:614146229384e3dd3367d98cbd9ddc195dffe13fdfb88d77520148f09735fa8f
@@ -57,10 +64,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: mimir-data
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -107,6 +107,13 @@ spec:
         app: alloy
     spec:
       serviceAccountName: alloy
+      # grafana/alloy runs as root by default; pin a non-root UID so the
+      # runAsNonRoot guard admits the pod. Alloy writes only to the /tmp
+      # emptyDir (storage.path), which fsGroup makes group-writable.
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
       containers:
         - name: alloy
           image: grafana/alloy:v1.7.5@sha256:b92703c13c32c20d629ffd89f40287ed385c12a335a7c9f31c720a5f912f9d6f
