@@ -26,16 +26,71 @@ table_row() {
 	printf '%s\n' "$row"
 }
 
+markdown_row() {
+	local mode=$1
+	local row=$2
+	local arg=${3:-}
+
+	python3 - "$mode" "$row" "$arg" <<'PY'
+import sys
+
+
+def split_markdown_row(row):
+    row = row.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|"):
+        row = row[:-1]
+
+    cells = []
+    current = []
+    escaped = False
+    in_code = False
+    for char in row:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            current.append(char)
+            escaped = True
+            continue
+        if char == "`":
+            in_code = not in_code
+            current.append(char)
+            continue
+        if char == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    cells.append("".join(current).strip())
+    return cells
+
+
+mode = sys.argv[1]
+cells = split_markdown_row(sys.argv[2])
+if mode == "count":
+    print(len(cells))
+elif mode == "cell":
+    cell = int(sys.argv[3]) - 1
+    if cell < 0 or cell >= len(cells):
+        sys.exit(1)
+    print(cells[cell].replace("`", ""))
+elif mode == "nonempty":
+    for value in cells:
+        if value == "" or value == "N/A":
+            sys.exit(1)
+else:
+    sys.exit(1)
+PY
+}
+
 cell_value() {
 	local row=$1
 	local cell=$2
 
-	awk -F '|' -v cell="$cell" '{
-		value = $(cell + 1)
-		gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-		gsub(/`/, "", value)
-		print value
-	}' <<<"$row"
+	markdown_row cell "$row" "$cell"
 }
 
 require_cell_count() {
@@ -44,18 +99,10 @@ require_cell_count() {
 	local description=$3
 	local count
 
-	count=$(awk -F '|' '{print NF - 2}' <<<"$row")
+	count=$(markdown_row count "$row")
 	[ "$count" -eq "$expected" ] || fail "${description} has ${count} cells, want ${expected}"
 
-	awk -F '|' '{
-		for (i = 2; i < NF; i++) {
-			value = $i
-			gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-			if (value == "" || value == "N/A") {
-				exit 1
-			}
-		}
-	}' <<<"$row" || fail "${description} has an empty required cell"
+	markdown_row nonempty "$row" || fail "${description} has an empty required cell"
 }
 
 require_row_pattern() {
@@ -89,18 +136,70 @@ reject_weak_pass() {
 report_proves_real_s3_iam() {
 	[ -s "$REAL_S3_IAM_REPORT" ] || fail "release PASS requires non-empty report ${REAL_S3_IAM_REPORT}"
 
-	python3 - "$REAL_S3_IAM_REPORT" <<'PY' || fail "release PASS report does not prove real S3/IAM"
+	python3 - "$REAL_S3_IAM_REPORT" "$REAL_S3_IAM_REPORT" <<'PY' || fail "release PASS report does not prove real S3/IAM"
 import json
+import re
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as fh:
     report = json.load(fh)
 
+expected_report_path = sys.argv[2]
+upload_count = report.get("confirmed_upload_count")
+worktree_state = report.get("git_worktree_state")
+forbidden_key_parts = (
+    "aws_secret_access_key",
+    "secret_access_key",
+    "aws_access_key_id",
+    "aws_session_token",
+    "raw_backend_object_key",
+    "backend_object_key",
+    "validation_token",
+    "root_token",
+    "client_token",
+    "unseal_keys",
+    "keys_base64",
+    "x-vault-token",
+    "authorization",
+)
+forbidden_value = re.compile(
+    r"AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|aws_secret_access_key|"
+    r"AWS_SECRET_ACCESS_KEY=|xox[baprs]-|ghp_[A-Za-z0-9_]{36,}|"
+    r"-----BEGIN (RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----|"
+    r"X-Vault-Token|Authorization:\s*Bearer|validation_token|"
+    r"raw_backend_object_key",
+    re.IGNORECASE,
+)
+
+
+def report_excludes_forbidden_shapes(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = key.lower().replace("-", "_")
+            if any(part.replace("-", "_") in normalized for part in forbidden_key_parts):
+                return False
+            if not report_excludes_forbidden_shapes(child):
+                return False
+    elif isinstance(value, list):
+        return all(report_excludes_forbidden_shapes(child) for child in value)
+    elif isinstance(value, str):
+        return forbidden_value.search(value) is None
+    return True
+
+
 checks = [
     report.get("status") == "passed",
     report.get("command") == "make production-rehearsal",
+    report.get("commit_ref", "") != "",
+    worktree_state in {"clean", "dirty", "unknown"},
+    worktree_state != "dirty" or report.get("git_diff_sha256", "") != "",
+    report.get("timestamp", "") != "",
     report.get("environment") == "production-rehearsal",
     report.get("evidence_tier") == "real-s3-iam",
+    report.get("expected_result", "") != "",
+    report.get("actual_result", "") != "",
+    report.get("artifact_path") == expected_report_path,
+    report.get("report_path") == expected_report_path,
     report.get("security_mode") == "production",
     report.get("production_readiness_status") == "ready",
     report.get("backend") == "s3",
@@ -113,9 +212,13 @@ checks = [
     report.get("encrypted_write_read_ok") is True,
     report.get("plaintext_leak_scan_ok") is True,
     report.get("backend_upload_confirmed") is True,
-    isinstance(report.get("confirmed_upload_count"), int) and report.get("confirmed_upload_count") >= 1,
+    type(upload_count) is int and upload_count >= 1,
     report.get("redaction_proof", {}).get("status") == "passed",
+    report.get("redaction_proof", {}).get("plaintext_leak_scan_ok") is True,
+    report.get("redaction_proof", {}).get("report_excludes_secret_material") is True,
+    report.get("redaction_proof", {}).get("tracker_ready_evidence_excludes_raw_logs") is True,
     report.get("redaction_proof", {}).get("scan_artifact_path", "") != "",
+    report_excludes_forbidden_shapes(report),
 ]
 
 if not all(checks):
@@ -176,9 +279,14 @@ require_row_pattern "$full_row" 'confirmed_upload_count[[:space:]]*>=[[:space:]]
 reject_weak_pass "$summary_row" "$summary_status" "Real S3/IAM PASS"
 reject_weak_pass "$full_row" "$full_status" "Real S3/IAM PASS"
 
-if [ "$release_status" = "PASS" ]; then
+if [ "$release_status" = "PASS" ] || [ "$summary_status" = "PASS" ] || [ "$full_status" = "PASS" ]; then
+	[ "$release_status" = "PASS" ] || fail "Release gate PASS required when any Real S3/IAM row is PASS"
 	[ "$summary_status" = "PASS" ] || fail "Release PASS requires Real S3/IAM summary status PASS"
 	[ "$full_status" = "PASS" ] || fail "Release PASS requires Real S3/IAM full evidence status PASS"
+	if grep -Eiq '#429[^|[:cntrl:]]*open|issue[[:space:]]*`?#429`?[^|[:cntrl:]]*open' "$REAL_S3_IAM_EVIDENCE"; then
+		fail "Release PASS cannot cite issue #429 as open"
+	fi
+	grep -Eiq '#429[^|[:cntrl:]]*(closed|waived)|issue[[:space:]]*`?#429`?[^|[:cntrl:]]*(closed|waived)' "$REAL_S3_IAM_EVIDENCE" || fail "Release PASS requires issue #429 closed or explicitly waived"
 	grep -Fq "$REAL_S3_IAM_REPORT" "$REAL_S3_IAM_EVIDENCE" || fail "Release PASS evidence must reference ${REAL_S3_IAM_REPORT}"
 	report_proves_real_s3_iam
 fi

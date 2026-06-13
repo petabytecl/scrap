@@ -4,7 +4,7 @@ baseline_commit: 794c0f16e951c2186aeea573a448c39123736ed8
 
 # Story 6.6: Real S3/IAM Production Rehearsal Closure
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -50,6 +50,14 @@ so that Backend production claims do not rely only on LocalStack or local filesy
   - [x] Run `scripts/check-e2e-gates.sh`, `git diff --check`, and the narrowest relevant Go/package gates. Use `env GOCACHE=/tmp/scrap-v2-go-build make check` before broad review if scripts or release evidence gates changed.
   - [x] Run release-sensitive scans over the committed Story 6.6 artifacts, matrix, validator, and tests for credentials, tokens, raw Document identifiers, raw Backend keys, raw logs, private material, data keys, wrapped-key ciphertext, and host-absolute paths.
   - [x] Update this story status and sprint status only after verification reflects the actual gate state.
+
+### Review Findings
+
+- [x] [Review][Patch] Row-level PASS bypassed release-level report validation [scripts/check-real-s3-iam-gate.sh] — fixed by requiring release PASS whenever any Real S3/IAM row is PASS and validating the real report in that path.
+- [x] [Review][Patch] `confirmed_upload_count` accepted JSON booleans [scripts/check-real-s3-iam-gate.sh] — fixed by requiring exact JSON integer type and count `>= 1`.
+- [x] [Review][Patch] PASS report provenance, path, and redaction checks were incomplete [scripts/check-real-s3-iam-gate.sh] — fixed by requiring commit/ref, timestamp, worktree state, dirty diff attribution, expected/actual result, report path consistency, explicit redaction booleans, and forbidden-shape scanning.
+- [x] [Review][Patch] Markdown pipe parsing could reject valid code-span pipes [scripts/check-real-s3-iam-gate.sh] — fixed with a markdown table row parser that ignores pipes inside code spans and escaped pipes.
+- [x] [Review][Patch] PASS evidence could still cite issue `#429` as open [scripts/check-real-s3-iam-gate.sh] — fixed by rejecting open issue language on PASS and requiring issue `#429` to be closed or explicitly waived.
 
 ## Dev Notes
 
@@ -153,6 +161,7 @@ so that Backend production claims do not rely only on LocalStack or local filesy
 ## Change Log
 
 - 2026-06-12: Added real S3/IAM release gate validator, tests, evidence artifact, matrix updates, and wired the validator into the E2E static gate.
+- 2026-06-12: Addressed BMAD code review findings for row/release PASS consistency, JSON type checks, report provenance/redaction checks, markdown pipe parsing, and issue `#429` PASS semantics.
 
 ## Dev Agent Record
 
@@ -170,6 +179,9 @@ GPT-5 Codex
 - Release-sensitive secret-shape scan - PASS; only negative policy/fixture text matched in the explanatory redaction scan.
 - `env GOCACHE=/tmp/scrap-v2-go-build make check` - PASS.
 - Real S3/IAM env presence check - `SCRAP_S3_BUCKET`, `SCRAP_S3_REGION`, `AWS_PROFILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` absent; real rehearsal not run.
+- BMAD Blind Hunter, Edge Case Hunter, and Acceptance Auditor review layers found five patch areas; all Review Findings above are fixed.
+- Post-review `go test -count=1 ./scripts` - PASS.
+- Post-review `scripts/check-real-s3-iam-gate.sh`, `scripts/check-e2e-gates.sh`, and `git diff --check` - PASS.
 
 ### Completion Notes List
 
@@ -179,6 +191,7 @@ GPT-5 Codex
 - Added `scripts/check-real-s3-iam-gate.sh` to validate the Story 6.6 evidence artifact and reject any `PASS` without a real S3 report proving `backend=s3`, `evidence_tier=real-s3-iam`, no local S3 override, upload confirmation, and redaction proof.
 - Added deterministic Go tests for valid PASS, honest missing-proof FAIL, weak PASS, local override, zero upload count, missing evidence, and prose-only evidence.
 - Updated the release matrix and evidence artifact to keep issue `#429` and final real S3/IAM proof as `FAIL` until a real non-local `make production-rehearsal` report is linked.
+- Review fixes hardened the validator against row-level PASS bypass, JSON boolean upload counts, report path mismatch, missing provenance, failed redaction proof, leaked report fields, issue `#429` still-open PASS evidence, and markdown code-span pipes.
 
 ### File List
 
