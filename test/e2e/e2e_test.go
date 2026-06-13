@@ -223,6 +223,10 @@ func TestE2EWriteReadHead(t *testing.T) {
 	}
 }
 
+// failoverConvergeTimeout bounds the deterministic Shard-readiness gate after a
+// leader pod is replaced, before the post-failover canary write.
+const failoverConvergeTimeout = 2 * time.Minute
+
 func TestE2ELeaderFailover(t *testing.T) {
 	if os.Getenv("SCRAP_E2E") == "" {
 		t.Skip("set SCRAP_E2E=1 to run E2E tests")
@@ -236,6 +240,7 @@ func TestE2ELeaderFailover(t *testing.T) {
 
 	leader := findLeaderPod(t, txID, "doc.xml")
 	deletePodAndWaitReady(t, leader)
+	waitForShardConvergence(t, e2eShardIDForTransaction(t, txID), failoverConvergeTimeout)
 	waitForCellWriteQuorumForTransaction(t, txID)
 
 	headResp := headDocE2E(t, client, txID, "doc.xml")

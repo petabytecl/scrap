@@ -56,7 +56,7 @@ func TestE2EBackendUploadHappyPath(t *testing.T) {
 	verifyS3ObjectMD5(t, s3Client, pair.idx)
 
 	leader := findLeaderPod(t, txID, docName)
-	waitUploadPendingBlocks(t, leader, 0, uploadE2ETimeout)
+	waitShardUploadPendingBlocks(t, leader, e2eShardIDForTransaction(t, txID), 0, uploadE2ETimeout)
 	waitCellMetricAbove(t, "scrap_upload_total", []string{`status="success"`}, 0, uploadE2ETimeout)
 	waitCellMetricAbove(t, "scrap_upload_verify_total", []string{`status="pass"`}, 0, uploadE2ETimeout)
 }
@@ -543,6 +543,94 @@ func waitUploadPendingBlocks(t *testing.T, pod string, want int, timeout time.Du
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("pod %s upload_pending_blocks did not become %d", pod, want)
+}
+
+// e2eShardIDForTransaction resolves the Shard that owns a Transaction under the
+// prod-like two-Shard placement.
+func e2eShardIDForTransaction(t *testing.T, txID string) uint64 {
+	t.Helper()
+	route, err := e2eTwoShardPlacement(t).Lookup(txID)
+	if err != nil {
+		t.Fatalf("lookup Shard for %q: %v", txID, err)
+	}
+	return route.ShardID
+}
+
+// findShardDiagnostic returns the diagnostic entry for one Shard, if the pod
+// reports it.
+func findShardDiagnostic(diag e2eShardDiagnostics, shardID uint64) (e2eShardDiagnostic, bool) {
+	for _, shard := range diag.Shards {
+		if shard.ShardID == shardID {
+			return shard, true
+		}
+	}
+	return e2eShardDiagnostic{}, false
+}
+
+// waitShardUploadPendingBlocks polls one pod's per-Shard diagnostics until the
+// named Shard drains to want pending Blocks. Unlike the pod-aggregated
+// /healthz counter, this ignores unrelated pending uploads on the Cell's other
+// Shard so the wait reflects only the Transaction under test.
+func waitShardUploadPendingBlocks(t *testing.T, pod string, shardID uint64, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last e2eShardDiagnostics
+	for time.Now().Before(deadline) {
+		diag, errText := fetchShardDiagnosticsFromPod(t, pod)
+		if errText == "" {
+			last = diag
+			if shard, ok := findShardDiagnostic(diag, shardID); ok && shard.UploadPendingBlocks == want {
+				return
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("pod %s Shard %d upload_pending_blocks did not become %d: %+v", pod, shardID, want, last.Shards)
+}
+
+// waitForShardConvergence blocks until every Cell pod reports the named Shard as
+// ready with a resolved leader state. It is a deterministic replication-readiness
+// gate: K8s pod readiness does not imply a replacement replica has caught up to
+// the leader's open Block, which otherwise surfaces as a transient
+// "replica block N is not open" on the next write.
+func waitForShardConvergence(t *testing.T, shardID uint64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var detail string
+	for time.Now().Before(deadline) {
+		converged, d := shardReadyAcrossCell(t, shardID)
+		detail = d
+		if converged {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("Shard %d did not converge across the Cell within %s: %s", shardID, timeout, detail)
+}
+
+func shardReadyAcrossCell(t *testing.T, shardID uint64) (bool, string) {
+	t.Helper()
+	pods := podNames(t)
+	if len(pods) == 0 {
+		return false, "no pods discovered"
+	}
+	for _, pod := range pods {
+		diag, errText := fetchShardDiagnosticsFromPod(t, pod)
+		if errText != "" {
+			return false, fmt.Sprintf("pod %s diagnostics: %s", pod, errText)
+		}
+		shard, ok := findShardDiagnostic(diag, shardID)
+		if !ok {
+			return false, fmt.Sprintf("pod %s missing Shard %d", pod, shardID)
+		}
+		if shard.Readiness != "ready" {
+			return false, fmt.Sprintf("pod %s Shard %d readiness=%q", pod, shardID, shard.Readiness)
+		}
+		if shard.LeaderState != "leader" && shard.LeaderState != "follower" {
+			return false, fmt.Sprintf("pod %s Shard %d leader_state=%q", pod, shardID, shard.LeaderState)
+		}
+	}
+	return true, ""
 }
 
 func waitUploadPressureAtLeast(t *testing.T, pod string, minLevel int, timeout time.Duration) {
