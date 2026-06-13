@@ -20,8 +20,7 @@ reviewable artifacts for:
   Cell gate;
 - Tier 3 telemetry/evidence bundle output with privacy proof;
 - production security rehearsal evidence;
-- real S3/IAM production rehearsal evidence for Backend S3 claims, or an
-  explicit accepted waiver that keeps the final release decision below `PASS`;
+- real S3/IAM production rehearsal evidence for Backend S3 claims;
 - redaction proof for public/tracker-safe artifacts.
 
 The following blockers are non-waivable for a final V2 release `PASS`:
@@ -39,8 +38,8 @@ The following blockers are non-waivable for a final V2 release `PASS`:
 
 Waivers must be explicit, dated, ownered, scoped, and linked from the release
 matrix. A waiver can record risk acceptance or explain why a row remains
-`CONCERNS` or `FAIL`; it cannot convert a non-waivable blocker into final
-release `PASS`.
+`CONCERNS` or `FAIL`; it cannot satisfy the final `PASS` allow-list or convert
+a non-waivable blocker into final release `PASS`.
 
 Local-only output, screenshots, stale artifacts, unlinked terminal snippets,
 and copied logs are useful during development, but they are not final V2 release

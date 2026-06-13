@@ -22,32 +22,37 @@ blocker.
 
 | Input | Command or path | Result |
 | --- | --- | --- |
+| Branch | `git branch --show-current` | `v2`. |
+| Reviewed/tested head | `git rev-parse HEAD` before review fixes | `e14aed7e306115426d223a736c8fb0c1dcd5861f`. |
 | Story | `_bmad-output/implementation-artifacts/6-7-v2-closure-policy-and-final-gate-decision.md` | Story 6.7 implementation from baseline `9efe29ccc318d0645c9249bd0c1e67eb522e2078`. |
 | Closure policy | `docs/prd-closure-policy.md` | Updated with V2 no-intermediate-release and non-waivable blocker policy. |
 | Release matrix | `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` | Updated with Story 6.7 closure decision and remaining blockers. |
 | Issue `#429` | `gh issue view 429 --repo petabytecl/scrap --json number,title,state,labels,milestone,url,updatedAt` | `OPEN`; labels `ready-for-human`, `production-readiness`, `v2`, `e2e`; milestone `NONE`; updated `2026-06-10T02:56:17Z`. |
-| Latest pushed CI | `gh run list --branch v2 --limit 8 --json ...` | `ci` run `27451981266` green for `9efe29ccc318d0645c9249bd0c1e67eb522e2078`. |
-| Latest pushed CodeQL | `gh run list --branch v2 --limit 8 --json ...` | `CodeQL Advanced` run `27451981267` green for `9efe29ccc318d0645c9249bd0c1e67eb522e2078`. |
+| Latest pushed CI | `gh run list --branch v2 --limit 8 --json ...` | `ci` run `27452343988` green for `e14aed7e306115426d223a736c8fb0c1dcd5861f`: https://github.com/petabytecl/scrap/actions/runs/27452343988. |
+| Latest pushed CodeQL | `gh run list --branch v2 --limit 8 --json ...` | `CodeQL Advanced` run `27452343998` green for `e14aed7e306115426d223a736c8fb0c1dcd5861f`: https://github.com/petabytecl/scrap/actions/runs/27452343998. |
+| Non-goal source | `docs/v2-scope-reconciliation.md` | Confirms explicit non-goals and final gate ordering. |
+| Domain source | `CONTEXT.md` | Confirms S.C.R.A.P. is not an S3-compatible API and `tenant_id` is not storage identity. |
+| Restore scope source | `docs/adr/0027-phase-5-restore-first-cold-reads.md` | Confirms direct Backend ciphertext streaming is rejected for V2 unless re-chartered. |
 
 ## Gate Summary
 
 | Gate | Status | Evidence | Owner / next action |
 | --- | --- | --- | --- |
-| Final V2 release gate | FAIL | issue `#429` open; missing real S3/IAM proof; Tier 2/Tier 3 runtime artifacts not linked; latest ci run `27451981266` and CodeQL run `27451981267` green for commit `9efe29c`; closure policy updated with non-waivable blockers. | Release owner: link required runtime evidence and close or explicitly waive blockers before PASS. |
+| Final V2 release gate | FAIL | issue `#429` open; missing real S3/IAM proof; Tier 2/Tier 3 runtime artifacts not linked; latest ci run `27452343988` and CodeQL run `27452343998` green for commit `e14aed7`; closure policy updated with non-waivable blockers. | Release owner: link required runtime evidence and close blockers before PASS. |
 
 ## Full Blocker Rows
 
 | Requirement | Source | Evidence command | Commit/ref | Environment | Evidence artifact | Issue/Run | Expected result | Actual result | Redaction proof | Freshness | Status | Owner | Mitigation | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | `scripts/check-v2-closure-gate.sh` | `9efe29c` | Release evidence/docs | `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md` | issue `#429` open; ci `27451981266` green; CodeQL `27451981267` green | Final V2 release PASS only with current linked evidence for every required gate. | FAIL: real S3/IAM proof and Tier 2/Tier 3 runtime artifacts are missing. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, auth claims, data keys, wrapped-key ciphertext, and host-absolute paths. | Current live check. | FAIL | Release owner | Run/link Tier 2, Tier 3, and real S3/IAM evidence; close issue `#429`. | Keep V2 release below PASS. |
+| AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | `scripts/check-v2-closure-gate.sh` | `e14aed7` | Release evidence/docs | `_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md` | issue `#429` open; ci `27452343988` green; CodeQL `27452343998` green | Final V2 release PASS only with current linked evidence for every required gate. | FAIL: real S3/IAM proof and Tier 2/Tier 3 runtime artifacts are missing. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, auth claims, data keys, wrapped-key ciphertext, and host-absolute paths. | Current live check. | FAIL | Release owner | Run/link Tier 2, Tier 3, and real S3/IAM evidence; close issue `#429`. | Keep V2 release below PASS. |
 
 ## Gap Table
 
-| Gap | Status | Owner | Mitigation | Next action |
-| --- | --- | --- | --- | --- |
-| Tier 2 prod-like runtime evidence | CONCERNS | Release owner | Link a current durable Tier 2 artifact that includes tested commit/ref, run URL, Kind diagnostics, E2E log, and security evidence. | Run or attach the required Tier 2 evidence before final PASS. |
-| Tier 3 telemetry/evidence bundle | FAIL | Release owner | Link a current durable Tier 3 bundle with `manifest.json`, `gates.json`, `privacy-scan.json`, logs, metrics, traces, profiles, retention, and privacy PASS. | Run `evidence-gate.yml` when available on the default branch or promote durable sanitized local evidence. |
-| Real S3/IAM production rehearsal | FAIL | Release owner / issue `#429` | Run real non-local `make production-rehearsal`, link sanitized `artifacts/production-rehearsal/report.json`, and keep issue `#429` open until evidence is accepted. | Run/link real S3/IAM rehearsal or record an explicit waiver that keeps final release below PASS. |
+| Gap | Status | Owner | Mitigation | Next action | Freshness | Release status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Tier 2 prod-like runtime evidence | CONCERNS | Release owner | Link a current durable Tier 2 artifact that includes tested commit/ref, run URL, Kind diagnostics, E2E log, and security evidence. | Run or attach the required Tier 2 evidence before final PASS. | Static gate contract is current; runtime artifact is missing. | CONCERNS |
+| Tier 3 telemetry/evidence bundle | FAIL | Release owner | Link a current durable Tier 3 bundle with `manifest.json`, `gates.json`, `privacy-scan.json`, logs, metrics, traces, profiles, retention, and privacy PASS. | Run `evidence-gate.yml` when available on the default branch or promote durable sanitized local evidence. | Static gate contract is current; runtime bundle is missing. | FAIL |
+| Real S3/IAM production rehearsal | FAIL | Release owner / issue `#429` | Run real non-local `make production-rehearsal`, link sanitized `artifacts/production-rehearsal/report.json`, and keep issue `#429` open until evidence is accepted. | Run/link real S3/IAM rehearsal; no waiver can convert this blocker into final PASS. | Issue `#429` remains open and no real non-local report is linked. | FAIL |
 
 ## Epic Rollup
 

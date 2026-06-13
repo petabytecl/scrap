@@ -82,6 +82,48 @@ func TestV2ClosureGateScriptRejectsPassWithMissingRedactionProof(t *testing.T) {
 	}
 }
 
+func TestV2ClosureGateScriptRejectsPassWithUnresolvedGapRows(t *testing.T) {
+	evidence := filepath.Join(t.TempDir(), "closure.md")
+	content := strings.Replace(validV2ClosurePassEvidence(), "| Tier 2 prod-like runtime evidence | PASS |", "| Tier 2 prod-like runtime evidence | FAIL |", 1)
+	writeEvidence(t, evidence, content)
+
+	output, err := runV2ClosureGateCheck(t, evidence)
+	if err == nil {
+		t.Fatalf("check unexpectedly passed:\n%s", output)
+	}
+	if !strings.Contains(output, "Final PASS with unresolved blockers") {
+		t.Fatalf("output = %q, want unresolved gap failure", output)
+	}
+}
+
+func TestV2ClosureGateScriptRejectsPassWithWaiverBackedEvidence(t *testing.T) {
+	evidence := filepath.Join(t.TempDir(), "closure.md")
+	content := strings.Replace(validV2ClosurePassEvidence(), "real S3/IAM report linked", "explicit accepted waiver linked", 1)
+	writeEvidence(t, evidence, content)
+
+	output, err := runV2ClosureGateCheck(t, evidence)
+	if err == nil {
+		t.Fatalf("check unexpectedly passed:\n%s", output)
+	}
+	if !strings.Contains(output, "Final PASS from weak or missing evidence") {
+		t.Fatalf("output = %q, want waiver-backed PASS failure", output)
+	}
+}
+
+func TestV2ClosureGateScriptRejectsInconsistentFinalStatuses(t *testing.T) {
+	evidence := filepath.Join(t.TempDir(), "closure.md")
+	content := strings.Replace(validV2ClosureFailEvidence(), "Final V2 release gate | FAIL", "Final V2 release gate | CONCERNS", 1)
+	writeEvidence(t, evidence, content)
+
+	output, err := runV2ClosureGateCheck(t, evidence)
+	if err == nil {
+		t.Fatalf("check unexpectedly passed:\n%s", output)
+	}
+	if !strings.Contains(output, "inconsistent final statuses") {
+		t.Fatalf("output = %q, want inconsistent status failure", output)
+	}
+}
+
 func TestV2ClosureGateScriptRejectsFieldsOnlyInProse(t *testing.T) {
 	evidence := filepath.Join(t.TempDir(), "closure.md")
 	writeEvidence(t, evidence, proseOnlyV2ClosureEvidence())
@@ -118,6 +160,15 @@ Final gate status: FAIL
 
 Story: 6.7 - V2 Closure Policy and Final Gate Decision
 
+## Source Inputs
+
+| Input | Command or path | Result |
+| --- | --- | --- |
+| Branch | ` + "`v2`" + ` | Current branch for the reviewed closure evidence. |
+| Tested head | ` + "`e14aed7e306115426d223a736c8fb0c1dcd5861f`" + ` | Story 6.7 implementation head. |
+| Latest pushed CI | ` + "`https://github.com/petabytecl/scrap/actions/runs/27452343988`" + ` | ci run green for tested head. |
+| Latest pushed CodeQL | ` + "`https://github.com/petabytecl/scrap/actions/runs/27452343998`" + ` | CodeQL run green for tested head. |
+
 ## Policy Review
 
 V2 has no intermediate releases. Closed issues, merged PRs, and closed phase
@@ -137,6 +188,14 @@ proof.
 | Requirement | Source | Evidence command | Commit/ref | Environment | Evidence artifact | Issue/Run | Expected result | Actual result | Redaction proof | Freshness | Status | Owner | Mitigation | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | ` + "`scripts/check-v2-closure-gate.sh`" + ` | ` + "`9efe29c`" + ` | Release evidence/docs | ` + "`_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md`" + ` | issue ` + "`#429`" + ` open; ci ` + "`27451981266`" + ` green; CodeQL ` + "`27451981267`" + ` green | Final V2 release PASS only with current linked evidence for every required gate. | FAIL: real S3/IAM proof and Tier 2/Tier 3 runtime artifacts are missing. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, and host-absolute paths. | Current live check. | FAIL | Release owner | Run/link Tier 2, Tier 3, and real S3/IAM evidence; close issue ` + "`#429`" + `. | Keep V2 release below PASS. |
+
+## Gap Table
+
+| Gap | Status | Owner | Mitigation | Next action | Freshness | Release status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Tier 2 prod-like runtime evidence | CONCERNS | Release owner | Link current Tier 2 artifact. | Run or attach Tier 2 evidence. | Missing current runtime artifact. | CONCERNS |
+| Tier 3 telemetry/evidence bundle | FAIL | Release owner | Link current Tier 3 bundle. | Run or attach Tier 3 evidence. | Missing current runtime artifact. | FAIL |
+| Real S3/IAM production rehearsal | FAIL | Release owner | Run real non-local rehearsal. | Link sanitized report and close issue ` + "`#429`" + `. | Issue ` + "`#429`" + ` remains open. | FAIL |
 
 ## Epic Rollup
 
@@ -163,6 +222,15 @@ Final gate status: PASS
 
 Story: 6.7 - V2 Closure Policy and Final Gate Decision
 
+## Source Inputs
+
+| Input | Command or path | Result |
+| --- | --- | --- |
+| Branch | ` + "`v2`" + ` | Current branch for the reviewed closure evidence. |
+| Tested head | ` + "`e14aed7e306115426d223a736c8fb0c1dcd5861f`" + ` | Story 6.7 implementation head. |
+| Latest pushed CI | ` + "`https://github.com/petabytecl/scrap/actions/runs/27452343988`" + ` | ci run green for tested head. |
+| Latest pushed CodeQL | ` + "`https://github.com/petabytecl/scrap/actions/runs/27452343998`" + ` | CodeQL run green for tested head. |
+
 ## Policy Review
 
 V2 has no intermediate releases. Closed issues, merged PRs, and closed phase
@@ -181,7 +249,15 @@ proof.
 
 | Requirement | Source | Evidence command | Commit/ref | Environment | Evidence artifact | Issue/Run | Expected result | Actual result | Redaction proof | Freshness | Status | Owner | Mitigation | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | ` + "`scripts/check-v2-closure-gate.sh`" + ` | ` + "`9efe29c`" + ` | Release evidence/docs | ` + "`_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md`" + `; ` + "`artifacts/tier2-e2e.log`" + `; ` + "`artifacts/tier3-bundle-path.txt`" + `; ` + "`artifacts/production-rehearsal/report.json`" + ` | issue ` + "`#429`" + ` closed; ci ` + "`27451981266`" + ` green; CodeQL ` + "`27451981267`" + ` green | Final V2 release PASS only with current linked evidence for every required gate. | PASS: all required release evidence is current and linked. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, and host-absolute paths. | Current linked Tier 2/Tier 3 and real S3/IAM evidence. | PASS | Release owner | None. | Release can proceed. |
+| AC-6.7 Final V2 release gate | Story 6.7 / FR-16 / DG-5 | ` + "`scripts/check-v2-closure-gate.sh`" + ` | ` + "`9efe29c`" + ` | Release evidence/docs | ` + "`_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md`" + `; ` + "`artifacts/tier2-e2e.log`" + `; ` + "`artifacts/tier3-bundle-path.txt`" + `; ` + "`artifacts/production-rehearsal/report.json`" + `; ` + "`_bmad-output/implementation-artifacts/epic-4-production-security-rehearsal-closure-evidence.md`" + ` | issue ` + "`#429`" + ` closed; ci ` + "`27451981266`" + ` green; CodeQL ` + "`27451981267`" + ` green | Final V2 release PASS only with current linked evidence for every required gate. | PASS: all required release evidence is current and linked. | Redaction proof PASS: artifact excludes secrets, raw Backend keys, raw logs, Document payloads, private material, trace IDs, request IDs, and host-absolute paths. | Current linked Tier 2/Tier 3 and real S3/IAM evidence. | PASS | Release owner | None. | Release can proceed. |
+
+## Gap Table
+
+| Gap | Status | Owner | Mitigation | Next action | Freshness | Release status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Tier 2 prod-like runtime evidence | PASS | Release owner | None. | Release can proceed. | Current linked Tier 2 artifact. | PASS |
+| Tier 3 telemetry/evidence bundle | PASS | Release owner | None. | Release can proceed. | Current linked Tier 3 artifact. | PASS |
+| Real S3/IAM production rehearsal | PASS | Release owner | None. | Release can proceed. | Issue ` + "`#429`" + ` closed with linked report. | PASS |
 
 ## Epic Rollup
 
@@ -207,6 +283,15 @@ Artifact status: incomplete validation fixture
 Final gate status: FAIL
 
 Story: 6.7 - V2 Closure Policy and Final Gate Decision
+
+## Source Inputs
+
+| Input | Command or path | Result |
+| --- | --- | --- |
+| Branch | ` + "`v2`" + ` | Current branch for the reviewed closure evidence. |
+| Tested head | ` + "`e14aed7e306115426d223a736c8fb0c1dcd5861f`" + ` | Story 6.7 implementation head. |
+| Latest pushed CI | ` + "`https://github.com/petabytecl/scrap/actions/runs/27452343988`" + ` | ci run green for tested head. |
+| Latest pushed CodeQL | ` + "`https://github.com/petabytecl/scrap/actions/runs/27452343998`" + ` | CodeQL run green for tested head. |
 
 This prose mentions V2 has no intermediate releases, closed issues, merged PRs,
 closed phase milestones, current linked evidence, non-waivable blockers, P0

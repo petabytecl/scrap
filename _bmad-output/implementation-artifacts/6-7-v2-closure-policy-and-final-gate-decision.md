@@ -4,7 +4,7 @@ baseline_commit: 9efe29ccc318d0645c9249bd0c1e67eb522e2078
 
 # Story 6.7: V2 Closure Policy and Final Gate Decision
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -57,6 +57,14 @@ so that V2 is not called release-ready until every required feature and evidence
   - [x] Run `env GOCACHE=/tmp/scrap-v2-go-build make check` before review if scripts or release policy validators changed.
   - [x] Run release-sensitive scans over the story, policy, closure artifact, matrix, validator, tests, and any changed runbook files.
   - [x] Move this story to `review`; leave `done` for BMAD code review after review findings are addressed.
+
+### Review Findings
+
+- [x] [Review][Patch] Separate waiver language from the final PASS allow-list and reject waiver-backed PASS evidence.
+- [x] [Review][Patch] Add branch, reviewed head, and GitHub Actions run URLs to the final closure artifact.
+- [x] [Review][Patch] Add freshness and release-status fields to the gap table and enforce them in the validator.
+- [x] [Review][Patch] Align release-matrix Story 6.2, Story 6.3, and Story 6.7 rows with current BMAD tracking.
+- [x] [Review][Patch] Harden final-closure validation for inconsistent statuses, unresolved PASS gaps, non-PASS ownership, unreadable evidence, and prose-only production-security proof.
 
 ## Dev Notes
 
@@ -214,6 +222,9 @@ GPT-5 Codex
 - Whitespace check: `git diff --check` passed.
 - Release-sensitive scan over changed Story 6.7 files matched only the matrix's documented scanner regex definitions, not committed secret or raw-evidence values.
 - Full local gate: `env GOCACHE=/tmp/scrap-v2-go-build make check` passed.
+- BMAD code review ran three layers: Blind Hunter, Edge Case Hunter, and Acceptance Auditor.
+- Review-fix focused gates passed: `go test -count=1 ./scripts`, `bash -n scripts/check-v2-closure-gate.sh scripts/check-e2e-gates.sh`, `scripts/check-v2-closure-gate.sh`, `scripts/check-e2e-gates.sh`, and `git diff --check`.
+- Review-fix broad local gate passed: `env GOCACHE=/tmp/scrap-v2-go-build make check`.
 
 ### Completion Notes List
 
@@ -221,6 +232,7 @@ GPT-5 Codex
 - Added the final V2 closure decision artifact with current honest status `FAIL`, live issue `#429` state, green baseline CI/CodeQL references, ownered gaps, redaction proof, and explicit non-goal review.
 - Added a row-aware static closure validator and Go fixture tests for honest `FAIL`, complete `PASS`, and invalid `PASS` cases.
 - Wired the closure validator into `scripts/check-e2e-gates.sh` and updated the release matrix without marking Epic 6 or V2 release as `PASS`.
+- Addressed BMAD code-review findings for closure policy waiver wording, required artifact metadata, gap-table structure, matrix drift, and validator coverage.
 
 ### File List
 
@@ -236,3 +248,4 @@ GPT-5 Codex
 ## Change Log
 
 - 2026-06-12: Implemented Story 6.7 closure policy, final gate decision artifact, validator, release matrix updates, and verification gates.
+- 2026-06-12: Addressed Story 6.7 BMAD code-review findings and moved Story 6.7 to done.

@@ -16,13 +16,16 @@ import sys
 
 
 path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as fh:
-    text = fh.read()
-
-
 def fail(message):
     print(f"v2 closure gate check failed: {message}", file=sys.stderr)
     sys.exit(1)
+
+
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        text = fh.read()
+except (OSError, UnicodeDecodeError) as exc:
+    fail(f"unreadable closure evidence artifact {path}: {exc}")
 
 
 def require(pattern, description):
@@ -85,6 +88,36 @@ def find_row(pattern, description):
     fail(f"missing {description} in {path}")
 
 
+def section_rows(heading):
+    rows = []
+    in_section = False
+    heading_re = re.compile(rf"^##\s+{re.escape(heading)}\s*$", re.IGNORECASE)
+    for line in text.splitlines():
+        if line.startswith("## "):
+            in_section = bool(heading_re.match(line))
+            continue
+        if not in_section or not line.lstrip().startswith("|"):
+            continue
+        cells = split_markdown_row(line)
+        if len(cells) < 2 or is_separator(cells):
+            continue
+        rows.append((line, [cell.replace("`", "").strip() for cell in cells]))
+    return rows
+
+
+def table_body(heading, expected_columns):
+    rows = section_rows(heading)
+    if len(rows) < 2:
+        fail(f"missing {heading} table rows in {path}")
+    _, header = rows[0]
+    if len(header) != expected_columns:
+        fail(f"{heading} table has {len(header)} columns, want {expected_columns}")
+    body = rows[1:]
+    for _, cells in body:
+        require_cell_count(cells, expected_columns, f"{heading} row")
+    return body
+
+
 def require_cell_count(cells, expected, description):
     if len(cells) != expected:
         fail(f"{description} has {len(cells)} cells, want {expected}")
@@ -96,6 +129,11 @@ def require_cell_count(cells, expected, description):
 def require_status(status, description):
     if status not in {"PASS", "CONCERNS", "FAIL"}:
         fail(f"{description} has invalid status {status}")
+
+
+def require_meaningful(cell, description):
+    if re.fullmatch(r"(?i)(|N/A|none|tbd|todo|unknown|unowned)", cell.strip()):
+        fail(f"{description} is not meaningful")
 
 
 def require_row(pattern, line, description):
@@ -111,6 +149,11 @@ release_status = status_match.group(1)
 require(r"^# V2 Closure Policy Final Gate Decision$", "title")
 require(r"^Artifact status:", "artifact status")
 require(r"^Story: 6\.7 - V2 Closure Policy and Final Gate Decision$", "story identity")
+require(r"^## Source Inputs$", "Source Inputs section")
+require(r"\|\s*(Current\s+)?Branch\s*\|[^\n]*`?v2`?[^\n]*\|", "current branch")
+require(r"https://github\.com/petabytecl/scrap/actions/runs/[0-9]+", "GitHub Actions run URL")
+require(r"\|\s*Latest pushed CI\s*\|[^\n]*https://github\.com/petabytecl/scrap/actions/runs/[0-9]+[^\n]*\|", "CI run URL")
+require(r"\|\s*Latest pushed CodeQL\s*\|[^\n]*https://github\.com/petabytecl/scrap/actions/runs/[0-9]+[^\n]*\|", "CodeQL run URL")
 require(r"no intermediate releases", "no-intermediate-release policy")
 require(r"closed issues", "closed issue progress-evidence warning")
 require(r"merged PRs", "merged PR progress-evidence warning")
@@ -165,6 +208,26 @@ require_row(r"Release evidence/docs", full_line, "release evidence environment i
 require_row(r"v2-closure-policy-final-gate-decision\.md", full_line, "closure artifact path in full evidence row")
 require_row(r"out of scope|not a release blocker", non_goal_line, "non-goal release impact")
 
+if release_status != summary_status or release_status != full_status:
+    fail("inconsistent final statuses")
+
+gap_rows = table_body("Gap Table", 7)
+required_gap_patterns = (
+    r"Tier 2",
+    r"Tier 3",
+    r"real S3/IAM",
+)
+for pattern in required_gap_patterns:
+    if not any(re.search(pattern, cells[0], re.IGNORECASE) for _, cells in gap_rows):
+        fail(f"missing {pattern} gap row")
+for _, cells in gap_rows:
+    require_status(cells[1], "Gap row")
+    require_status(cells[6], "Gap row release status")
+    require_meaningful(cells[2], "Gap row owner")
+    require_meaningful(cells[3], "Gap row mitigation")
+    require_meaningful(cells[4], "Gap row next action")
+    require_meaningful(cells[5], "Gap row freshness")
+
 any_pass = release_status == "PASS" or summary_status == "PASS" or full_status == "PASS"
 if any_pass:
     if release_status != "PASS":
@@ -177,6 +240,8 @@ if any_pass:
         fail("Final PASS requires Epic rollup status PASS")
     if re.search(r"#429[^|.\n]*(open)|issue\s+`?#429`?[^|.\n]*(open)", text, re.IGNORECASE):
         fail("Final PASS cannot cite issue #429 as open")
+    if any(cells[1] != "PASS" or cells[6] != "PASS" for _, cells in gap_rows):
+        fail("Final PASS with unresolved blockers")
 
     pass_text = "\n".join([summary_line, full_line, epic_line])
     weak_patterns = (
@@ -194,6 +259,7 @@ if any_pass:
         r"merged PRs? (only|alone)",
         r"closed phase",
         r"waiver bypass",
+        r"waiver",
     )
     if any(re.search(pattern, pass_text, re.IGNORECASE) for pattern in weak_patterns):
         fail("Final PASS from weak or missing evidence")
@@ -210,11 +276,13 @@ if any_pass:
         r"artifacts/tier2-e2e\.log",
         r"artifacts/tier3-bundle-path\.txt",
         r"artifacts/production-rehearsal/report\.json",
+        r"epic-4-production-security-rehearsal-closure-evidence\.md",
     )
     for pattern in required_pass_patterns:
         if not re.search(pattern, pass_text, re.IGNORECASE):
             fail("Final PASS from weak or missing evidence")
-elif release_status == "FAIL":
-    if full[12] == "" or full[13] == "" or full[14] == "":
-        fail("Final FAIL requires owner, mitigation, and next action")
+elif release_status in {"FAIL", "CONCERNS"}:
+    require_meaningful(full[12], "Final non-PASS owner")
+    require_meaningful(full[13], "Final non-PASS mitigation")
+    require_meaningful(full[14], "Final non-PASS next action")
 PY
