@@ -10,7 +10,7 @@ Phase 1 is a single-node spike-store milestone. It exists to prove the local
 read/write path before Raft, replication, backend upload, TLS/auth, full idempotent
 retry, and repair/quarantine workflow are added.
 
-The risky failure mode is the one V2 is explicitly trying to avoid: disposable spike
+The risky failure mode is the one SCRAP is explicitly trying to avoid: disposable spike
 code silently becoming production contract. Some Phase 1 pieces are intentionally
 temporary, while other pieces write data or expose API semantics that future phases
 must preserve.

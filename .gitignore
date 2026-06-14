@@ -42,6 +42,7 @@ test-results/
 *.json
 !deploy/**/*.json
 !codecov.yml
+!/_bmad-output/implementation-artifacts/release-issue-snapshot.json
 # Sanitized real S3/IAM release rehearsal report; verified by
 # scripts/check-real-s3-iam-gate.sh on a PASS evidence state (must follow *.json).
 !/artifacts/production-rehearsal/report.json

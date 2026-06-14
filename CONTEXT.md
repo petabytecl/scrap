@@ -1,8 +1,8 @@
-# S.C.R.A.P. — V2 Context
+# S.C.R.A.P. — Context
 
 > Session-restoration document for AI-assisted development.
 > Read this at the start of every session. Intentionally short.
-> This is V2's starting point, not its spec.
+> This is SCRAP's current domain and architecture baseline.
 
 ---
 
@@ -13,7 +13,7 @@ S.C.R.A.P. is a transaction-scoped document storage gateway for billing ETL work
 Billing services write and read immutable documents (XML, PDF, etc.) through a gRPC API.
 S.C.R.A.P. hides whether bytes come from local hot storage, peer replicas, or a backend
 object store (S3, GCS, Azure Blob, etc.). The corpus may reach billions of relatively small
-files. V2 Documents are addressed by `(transaction_id, document_name)`; `tenant_id`
+files. Documents are addressed by `(transaction_id, document_name)`; `tenant_id`
 may appear on API requests for future routing but is not part of storage identity.
 
 This is not an S3-compatible API. It is a purpose-built gateway with strong consistency
@@ -155,13 +155,13 @@ _Avoid_: AV scanner, virus scanner, malware scanner
 > **Expert:** "7 years. They live in local Blocks initially, then the Shard leader
 > uploads sealed Blocks to the Backend. After upload, the Block can be evicted locally."
 
-## What V2 Is
+## Reset Context
 
-V2 is a full restart from scratch. V1 produced extensive documentation and a spike,
+SCRAP was restarted from scratch after V1 produced extensive documentation and a spike,
 but the spike gradually blurred into production code without a conscious decision, and
 the spec was never finished before implementation began.
 
-**V2 philosophy:** Re-derive everything from first principles. Use V1 reasoning as a
+**Project philosophy:** Re-derive everything from first principles. Use V1 reasoning as a
 reference — not as a constraint. The design may land in the same place on many decisions,
 but nothing is assumed correct until re-derived and questioned.
 
@@ -175,10 +175,11 @@ but nothing is assumed correct until re-derived and questioned.
 - Observability: OpenTelemetry producer contract (OTLP telemetry, collector-routed
   metrics/logs/traces/profiles, self-hosted evidence stack for stress runs)
 
-Everything else — replica count, block format, sharding model, cell federation, write ACK
-contract, scope, phasing — is an open question for V2 to re-derive.
+Everything else started as open for re-derivation: replica count, block format,
+sharding model, Cell federation, write ACK contract, scope, and phasing. Resolved
+decisions are recorded below and in ADRs.
 
-## V2 Process Rules
+## Process Rules
 
 These rules prevent the V1 failure mode (spike → production blur):
 
@@ -187,7 +188,7 @@ These rules prevent the V1 failure mode (spike → production blur):
 2. **Hard spike boundary.** Spike code lives in `cmd/scrap-spike` / `internal/spike`.
    It cannot graduate to production packages without an explicit documented decision.
 3. **Re-derive, don't assume.** Before accepting a V1 decision, ask: does this still
-   make sense? The burden of proof is on the V2 design.
+   make sense? The burden of proof is on the SCRAP design.
 4. **Short docs over long docs.** If a design document takes more than 30 minutes to
    read, it has failed. Distill decisions into ADRs.
 5. **ADRs are the output.** Every hard-to-reverse decision must produce a dated ADR
@@ -211,7 +212,7 @@ These anchor every design decision:
 ## Member Identity Model (V1 Multi-Member Contract)
 
 V1 landed on a 3-level identity model because conflating any two of these created
-silent-divergence bugs. V2 should accept this as the starting point.
+silent-divergence bugs. SCRAP should accept this as the starting point.
 
 | Level             | Source                                      | Lifetime                         | Purpose                                                                      |
 | ----------------- | ------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- |
@@ -238,13 +239,13 @@ separate public/admin/peer listener ports, NetworkPolicies restricting peer +
 admin traffic. DNS form:
 `<member_hostname>.<headless_service>.<namespace>.svc.<cluster_domain>:<peer_port>`.
 
-Implementation note: older V2 code and telemetry may still use
+Implementation note: older SCRAP code and telemetry may still use
 `member_slot_id` until a compatibility pass renames those identifiers.
 
 ## V1 Spike Evidence (Empirically Validated)
 
 The V1 spike ran 6 evidence rounds with **zero invariant errors** across all runs.
-This is tested evidence, not design intent. V2 should accept or explicitly challenge it.
+This is tested evidence, not design intent. SCRAP should accept or explicitly challenge it.
 
 ### The Write State Machine
 
@@ -309,7 +310,7 @@ Implementation ordering (spike-validated, preserves the state machine above):
 ### Schema Evolution (V1 Long-Lived Contracts)
 
 7-year retention forced V1 to commit to explicit compatibility rules across
-three serialized layers. Any V2 design that wants to ship before establishing
+three serialized layers. Any SCRAP design that wants to ship before establishing
 equivalent rules should expect to repay this debt later.
 
 **Compatibility guarantee:** a document written with schema version N must be
@@ -337,9 +338,9 @@ gc_cycles:        526 over ~1 GiB of writes
 These are orientation numbers only. Authoritative performance gates require pinned
 hardware with known disk class, kernel, GOMEMLIMIT, and container settings.
 
-## V2 API Contract (Resolved Phase 1 Boundary)
+## SCRAP API Contract (Resolved Phase 1 Boundary)
 
-V2 keeps the DocumentService surface and deliberately excludes TransactionService from
+SCRAP keeps the DocumentService surface and deliberately excludes TransactionService from
 the Phase 1 spike-store milestone:
 
 ```
@@ -397,7 +398,7 @@ ascending Block ID, then append order within each `.idx`.
 
 ## V1 ADR Reasoning Summary
 
-The _reasoning_ behind V1 decisions, for use when re-deriving V2. These are the _why_,
+The _reasoning_ behind V1 decisions, for use when re-deriving SCRAP. These are the _why_,
 not locked answers.
 
 | Topic                                   | V1 Reasoning                                                                                                                                                                                                                                                       |
@@ -414,7 +415,7 @@ not locked answers.
 ## V1 Hard-Won Lessons (Bug-Derived Constraints)
 
 These are invariants V1 violated _after_ the spike, during the production
-refactor. Each one is a concrete metadata-authority failure mode that V2 should
+refactor. Each one is a concrete metadata-authority failure mode that SCRAP should
 prevent structurally — they are not derivable from reading clean code.
 
 **1. Separate logical errors from infrastructure errors.**
@@ -461,7 +462,7 @@ failures as a separate signal.
 
 **7. Pebble is a derived projection — Raft is the authority.**
 Reaffirmed: if Pebble is poisoned, deleted, or behind, the rebuild path is
-"replay Raft + verified block bytes." Any V2 design that lets Pebble become
+"replay Raft + verified block bytes." Any SCRAP design that lets Pebble become
 load-bearing for visibility breaks this invariant.
 
 ## Other V1 Decisions Worth Remembering
@@ -501,7 +502,7 @@ Each is the _what_; the _why_ is in the V1 ADR reasoning table.
   timing/fencing assumptions need explicit evidence first. ReadIndex protocol
   is the read freshness mechanism.
 
-## V2 Phasing — Resolved Design Decisions
+## SCRAP Phasing — Resolved Design Decisions
 
 Resolved through structured design sessions (2026-05-25 and 2026-05-26). See
 `docs/adr/` for hard-to-reverse decisions with full rationale.
@@ -516,7 +517,7 @@ are contract-grade. `internal/spike` is replaceable Phase 2 scaffolding.
 Phase 1 deliberately excludes Raft, byte replication, quorum ACK semantics, backend
 upload, TLS/auth, full idempotent retry, and repair/quarantine workflow.
 
-Phase 2 is the first V2 safety milestone: single Shard, multi-voter Raft, full
+Phase 2 is the first SCRAP safety milestone: single Shard, multi-voter Raft, full
 write-through-ACK + read path. Deferred beyond that: backend upload, cell federation,
 multi-tier write ACK, encryption (OpenBao).
 
@@ -624,7 +625,7 @@ Leader-only reads for the Phase 2 safety milestone. ReadIndex from followers is 
 Client routing: smart Go client library with redirect-on-leader-change, no gateway.
 Non-leader members return `UNAVAILABLE` with a `LeaderHint` gRPC status detail containing
 the current leader's address. The client extracts the hint and retries directly.
-This direct address remains the authenticated V2 redirect contract; changing it to an
+This direct address remains the authenticated SCRAP redirect contract; changing it to an
 opaque route hint or gateway token requires a new wire-contract ADR. See ADR 0024.
 Document resolution: the projection maps Transaction → Block IDs; .idx file resolves
 per-Document metadata (offset, size, checksum). See ADR 0004.

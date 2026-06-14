@@ -5,11 +5,11 @@ Date: 2026-06-13
 Status: Documentation-only handoff. Do not treat this as implemented
 infrastructure.
 
-Repo: `/home/coto/dev/petabyte/scrap-v2`
+Repo: `/home/coto/dev/petabyte/scrap`
 
-Branch at handoff creation: `v2`
+Branch at handoff creation: `main`
 
-Tracker: issue `#429`, "Pre-v2 release: capture real S3/IAM production
+Tracker: issue `#429`, "Pre-release release: capture real S3/IAM production
 rehearsal evidence"
 
 ## Purpose
@@ -31,7 +31,7 @@ to this repo.
 Read these before running the AWS validation:
 
 - `docs/production-rehearsal.md` defines the rehearsal target and evidence use.
-- `_bmad-output/implementation-artifacts/v2-real-s3-iam-production-rehearsal-evidence.md`
+- `_bmad-output/implementation-artifacts/real-s3-iam-production-rehearsal-evidence.md`
   records the real S3/IAM release gate.
 - `scripts/production-rehearsal.sh` creates the machine-readable report and
   enforces rehearsal invariants.
@@ -46,7 +46,7 @@ gh issue view 429 --repo petabytecl/scrap --json number,title,state,labels,url,u
 ```
 
 Result summary: issue `#429` is `OPEN`, labeled `ready-for-human`,
-`production-readiness`, `v2`, and `e2e`, updated at
+`production-readiness`, `main`, and `e2e`, updated at
 `2026-06-10T02:56:17Z`.
 
 Refresh this issue before using the handoff. Tracker state can change.
@@ -92,7 +92,7 @@ unset SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3
 Recommended:
 
 ```sh
-export SCRAP_PROD_REHEARSAL_CELL_ID="scrap-v2-real-s3-iam-$(date -u +%Y%m%dT%H%M%SZ)"
+export SCRAP_PROD_REHEARSAL_CELL_ID="scrap-real-s3-iam-$(date -u +%Y%m%dT%H%M%SZ)"
 export AWS_PROFILE="<profile-that-assumes-validation-role>"
 export AWS_EC2_METADATA_DISABLED=true
 ```
@@ -150,7 +150,7 @@ Backend object keys follow:
 Use a unique Cell prefix for each run, for example:
 
 ```text
-scrap-v2-real-s3-iam-20260613T022141Z/
+scrap-real-s3-iam-20260613T022141Z/
 ```
 
 Do not publish raw object keys in the tracker evidence.
@@ -356,11 +356,11 @@ Keep that account-specific decision outside this handoff.
 
 ## Run Procedure On The AWS-Enabled Machine
 
-1. Sync the repo and check out the intended `v2` commit.
+1. Sync the repo and check out the intended `main` commit.
 
    ```sh
    git fetch origin
-   git checkout v2
+   git checkout main
    git pull --ff-only
    git status --short --branch
    ```
@@ -383,7 +383,7 @@ Keep that account-specific decision outside this handoff.
    ```sh
    export SCRAP_S3_BUCKET="<bucket-name>"
    export SCRAP_S3_REGION="<bucket-region>"
-   export SCRAP_PROD_REHEARSAL_CELL_ID="scrap-v2-real-s3-iam-$(date -u +%Y%m%dT%H%M%SZ)"
+   export SCRAP_PROD_REHEARSAL_CELL_ID="scrap-real-s3-iam-$(date -u +%Y%m%dT%H%M%SZ)"
    unset SCRAP_S3_ENDPOINT
    unset SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3
    ```
@@ -522,4 +522,4 @@ This handoff does not ask for:
 - [ ] `scripts/check-real-s3-iam-gate.sh` passes at the appropriate release
   stage.
 - [ ] Sanitized evidence is linked to issue `#429`.
-- [ ] Issue `#429` is closed or explicitly waived before final v2 release PASS.
+- [ ] Issue `#429` is closed or explicitly waived before final SCRAP release PASS.

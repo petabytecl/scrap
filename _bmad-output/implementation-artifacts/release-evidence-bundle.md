@@ -1,7 +1,7 @@
-# V2 Release Evidence Bundle
+# SCRAP Release Evidence Bundle
 
 Story: 6.4 - `scrapctl` Release Evidence Bundle
-Status: implemented for story scope; final V2 release remains blocked by Stories 6.5-6.7 and issue `#429`
+Status: implemented for story scope; final SCRAP release remains blocked by Stories 6.5-6.7 and issue `#429`
 Updated: 2026-06-12T19:32:03-04:00
 
 ## Scope
@@ -31,7 +31,7 @@ manifest as `CONCERNS` or `FAIL`.
 | `internal/scrapctl/evidencebundle` | Added manifest generation, bundle-relative checksum inventory, privacy scan generation, privacy gate input, additional scanner/security/scrub metric snapshots, and redacted trace-summary output. |
 | `internal/scrapctl` CLI tests | Assert `scrapctl evidence bundle` writes `manifest.json` and `privacy-scan.json` through the CLI path. |
 | `docs/runbooks/v2-evidence-collection.md` | Documents the manifest/privacy scan outputs and failure handling. |
-| `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` | Updates Story 6.4, FR-13, FR-14, and FR-16 bundle status without changing final release gate status. |
+| `_bmad-output/implementation-artifacts/release-evidence-matrix.md` | Updates Story 6.4, FR-13, FR-14, and FR-16 bundle status without changing final release gate status. |
 
 ## Command Evidence
 
@@ -150,7 +150,7 @@ Raw Tempo trace IDs are not written into `traces/scrapd.json`.
 
 ## Release Status
 
-Story 6.4 scope is `PASS` when focused and broad gates pass. Final V2 release
+Story 6.4 scope is `PASS` when focused and broad gates pass. Final SCRAP release
 status remains `FAIL` until:
 
 - Story 6.5 links current Tier 2 and Tier 3 evidence gates.

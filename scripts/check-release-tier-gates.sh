@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md}
+TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/release-tier-gates-evidence.md}
 
 fail() {
 	echo "release tier gate check failed: $*" >&2
@@ -87,7 +87,7 @@ reject_weak_pass() {
 
 [ -s "$TIER_GATES_EVIDENCE" ] || fail "missing non-empty evidence artifact ${TIER_GATES_EVIDENCE}"
 
-require_pattern '^# V2 Release Tier Gates Evidence$' "title"
+require_pattern '^# SCRAP Release Tier Gates Evidence$' "title"
 require_pattern '^Artifact status:' "artifact status"
 require_pattern '^Release gate status: (PASS|CONCERNS|FAIL)$' "release gate status"
 require_pattern '^Story: 6\.5 - Tier 2 and Tier 3 Release Evidence Gates$' "story identity"

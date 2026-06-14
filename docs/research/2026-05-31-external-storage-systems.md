@@ -4,7 +4,7 @@ Date: 2026-05-31
 
 ## Purpose
 
-This note compares five external repositories against S.C.R.A.P. V2 and records
+This note compares five external repositories against S.C.R.A.P. and records
 which ideas are worth carrying into Phase 4 planning. It is research input, not
 an accepted architecture decision. Hard decisions still belong in ADRs.
 

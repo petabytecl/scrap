@@ -3,6 +3,7 @@ package evidencebundle
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 )
 
 const gateRateScale = 10000
@@ -211,7 +212,7 @@ func formatRate(rate float64) string {
 
 func formatNumber(value float64) string {
 	if value == math.Trunc(value) {
-		return strconvFormatInt(int64(value))
+		return strconv.FormatInt(int64(value), 10)
 	}
-	return strconvFormatFloat(value)
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }

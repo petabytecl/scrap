@@ -1,4 +1,4 @@
-# S.C.R.A.P. V2 project Makefile.
+# S.C.R.A.P. project Makefile.
 # Run `make help` to list common targets and selected overridable variables.
 # Override variables with environment values or `make VAR=value <target>`.
 .DEFAULT_GOAL := help
@@ -100,7 +100,7 @@ ACT_JOB ?= build
 ACT_PULL ?= false
 ACT_RUNNER_BASE_IMAGE ?= catthehacker/ubuntu:act-24.04
 ACT_RUNNER_DOCKERFILE ?= tools/act-runner/Dockerfile
-ACT_RUNNER_IMAGE ?= scrap-v2/act-ubuntu:24.04-varrun
+ACT_RUNNER_IMAGE ?= scrap/act-ubuntu:24.04-varrun
 
 ##@ Release Metadata Variables
 

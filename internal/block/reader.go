@@ -69,7 +69,7 @@ func verifyPass(blkPath string, entry IndexEntry) error {
 	if err != nil {
 		return fmt.Errorf("block: open %s: %w", blkPath, err)
 	}
-	defer func() { _ = f.Close() }() // read-only verify pass; close error is non-critical
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
 		return fmt.Errorf("block: seek: %w", err)

@@ -3,17 +3,17 @@
 PRDs that are gated by production-readiness work stay open until their closing
 evidence is current, linked, and reviewable.
 
-## V2 major release closure
+## SCRAP major release closure
 
-V2 has no intermediate releases. A closed phase, closed milestone, merged PR, or
-closed implementation issue is progress evidence only. V2 release readiness
+SCRAP has no intermediate releases. A closed phase, closed milestone, merged PR, or
+closed implementation issue is progress evidence only. SCRAP release readiness
 requires current linked evidence for every required feature, ADR gate, operator
 document, and release gate.
 
-Final V2 release `PASS` is allowed only when the release evidence matrix links
+Final SCRAP release `PASS` is allowed only when the release evidence matrix links
 reviewable artifacts for:
 
-- required P0 feature evidence across the accepted V2 FR and ADR gates;
+- required P0 feature evidence across the accepted SCRAP FR and ADR gates;
 - production security evidence, including current green CI and CodeQL for the
   tested release ref;
 - Tier 2 prod-like evidence when closure policy requires the Cilium-backed Kind
@@ -23,7 +23,7 @@ reviewable artifacts for:
 - real S3/IAM production rehearsal evidence for Backend S3 claims;
 - redaction proof for public/tracker-safe artifacts.
 
-The following blockers are non-waivable for a final V2 release `PASS`:
+The following blockers are non-waivable for a final SCRAP release `PASS`:
 
 - missing required P0 feature evidence;
 - missing production security evidence;
@@ -42,7 +42,7 @@ matrix. A waiver can record risk acceptance or explain why a row remains
 a non-waivable blocker into final release `PASS`.
 
 Local-only output, screenshots, stale artifacts, unlinked terminal snippets,
-and copied logs are useful during development, but they are not final V2 release
+and copied logs are useful during development, but they are not final SCRAP release
 evidence.
 
 ## Cilium-backed Tier 2 guard
@@ -63,7 +63,7 @@ The closure comment for each PRD must include:
 
 Manual local Tier 2 output is useful while developing, but it is not enough to
 close #312 or #337. The durable proof is a green GitHub Actions run that executes
-the Tier 2 gate. Dedicated workflow files added on `v2` cannot be dispatched from
+the Tier 2 gate. Dedicated workflow files added on `main` cannot be dispatched from
 GitHub Actions until they exist on the default branch, so the `ci` workflow is an
 acceptable temporary carrier when it runs the same `make tier2-e2e-up` gate.
 
@@ -72,7 +72,7 @@ acceptable temporary carrier when it runs the same `make tier2-e2e-up` gate.
 Tier 3 evidence can be produced from GitHub Actions:
 
 ```sh
-gh workflow run evidence-gate.yml --ref v2 -f scenario=throughput
+gh workflow run evidence-gate.yml --ref main -f scenario=throughput
 ```
 
 The workflow uploads the evidence bundle directory and writes the selected bundle

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REAL_S3_IAM_EVIDENCE=${REAL_S3_IAM_EVIDENCE:-_bmad-output/implementation-artifacts/v2-real-s3-iam-production-rehearsal-evidence.md}
+REAL_S3_IAM_EVIDENCE=${REAL_S3_IAM_EVIDENCE:-_bmad-output/implementation-artifacts/real-s3-iam-production-rehearsal-evidence.md}
 REAL_S3_IAM_REPORT=${REAL_S3_IAM_REPORT:-artifacts/production-rehearsal/report.json}
 
 fail() {
@@ -228,7 +228,7 @@ PY
 
 [ -s "$REAL_S3_IAM_EVIDENCE" ] || fail "missing non-empty evidence artifact ${REAL_S3_IAM_EVIDENCE}"
 
-require_pattern '^# V2 Real S3/IAM Production Rehearsal Evidence$' "title"
+require_pattern '^# SCRAP Real S3/IAM Production Rehearsal Evidence$' "title"
 require_pattern '^Artifact status:' "artifact status"
 require_pattern '^Release gate status: (PASS|CONCERNS|FAIL)$' "release gate status"
 require_pattern '^Story: 6\.6 - Real S3/IAM Production Rehearsal Closure$' "story identity"

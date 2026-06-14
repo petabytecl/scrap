@@ -1,4 +1,4 @@
-# V2 OpenBao Transit Dependency Runbook
+# SCRAP OpenBao Transit Dependency Runbook
 
 ## Purpose
 

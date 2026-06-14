@@ -6,7 +6,7 @@ Date: 2026-05-26
 
 ## Context
 
-V2 uses `github.com/oklog/ulid/v2` for a single call site: generating ephemeral
+SCRAP uses `github.com/oklog/ulid/v2` for a single call site: generating ephemeral
 write IDs for prep files in the shard openlog (`internal/shard/shard.go`). The prep
 file is created before a document write, deleted on commit, and replayed on crash
 recovery. The ID never leaves the local shard directory.
@@ -29,7 +29,7 @@ implemented in `internal/ulid/` with zero external dependencies.
 Considered UUIDv7 (RFC 9562). Rejected because: longer string representation (36
 chars vs 26), fewer entropy bits (62 vs 80 after version/variant overhead), hex
 encoding is less human-friendly than Crockford Base32, and the main UUIDv7 advantage
-— ecosystem recognition by databases and ORMs — is irrelevant since V2 uses Pebble
+— ecosystem recognition by databases and ORMs — is irrelevant since SCRAP uses Pebble
 with custom binary formats, not SQL.
 
 **Monotonicity.** Within the same millisecond, the random portion increments (+1)

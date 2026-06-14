@@ -68,6 +68,8 @@ func (s *scrubCoordinatorCoreStub) RestoreBlockForRepair(context.Context, uint64
 	return nil
 }
 
+func (s *scrubCoordinatorCoreStub) recordEvictionHealthBlockBestEffort(uint64) {}
+
 func TestScrubCoordinatorProposeApplyAndCache(t *testing.T) {
 	core := &scrubCoordinatorCoreStub{
 		leader:   true,

@@ -11,11 +11,11 @@ PRODLIKE_E2E_OVERLAY=${PRODLIKE_E2E_OVERLAY:-deploy/kustomize/environments/prodl
 PRODUCTION_REHEARSAL_SCRIPT=${PRODUCTION_REHEARSAL_SCRIPT:-scripts/production-rehearsal.sh}
 PRD_CLOSURE_POLICY=${PRD_CLOSURE_POLICY:-docs/prd-closure-policy.md}
 TIER_GATES_CHECK=${TIER_GATES_CHECK:-scripts/check-release-tier-gates.sh}
-TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/v2-release-tier-gates-evidence.md}
+TIER_GATES_EVIDENCE=${TIER_GATES_EVIDENCE:-_bmad-output/implementation-artifacts/release-tier-gates-evidence.md}
 REAL_S3_IAM_GATE_CHECK=${REAL_S3_IAM_GATE_CHECK:-scripts/check-real-s3-iam-gate.sh}
-REAL_S3_IAM_EVIDENCE=${REAL_S3_IAM_EVIDENCE:-_bmad-output/implementation-artifacts/v2-real-s3-iam-production-rehearsal-evidence.md}
-V2_CLOSURE_GATE_CHECK=${V2_CLOSURE_GATE_CHECK:-scripts/check-v2-closure-gate.sh}
-V2_CLOSURE_EVIDENCE=${V2_CLOSURE_EVIDENCE:-_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md}
+REAL_S3_IAM_EVIDENCE=${REAL_S3_IAM_EVIDENCE:-_bmad-output/implementation-artifacts/real-s3-iam-production-rehearsal-evidence.md}
+CLOSURE_GATE_CHECK=${CLOSURE_GATE_CHECK:-scripts/check-closure-gate.sh}
+CLOSURE_EVIDENCE=${CLOSURE_EVIDENCE:-_bmad-output/implementation-artifacts/closure-policy-final-gate-decision.md}
 
 fail() {
 	echo "e2e gate check failed: $*" >&2
@@ -235,5 +235,5 @@ TIER_GATES_EVIDENCE="$TIER_GATES_EVIDENCE" "$TIER_GATES_CHECK"
 [ -x "$REAL_S3_IAM_GATE_CHECK" ] || fail "missing executable real S3/IAM evidence validator ${REAL_S3_IAM_GATE_CHECK}"
 REAL_S3_IAM_EVIDENCE="$REAL_S3_IAM_EVIDENCE" "$REAL_S3_IAM_GATE_CHECK"
 
-[ -x "$V2_CLOSURE_GATE_CHECK" ] || fail "missing executable final V2 closure evidence validator ${V2_CLOSURE_GATE_CHECK}"
-V2_CLOSURE_EVIDENCE="$V2_CLOSURE_EVIDENCE" "$V2_CLOSURE_GATE_CHECK"
+[ -x "$CLOSURE_GATE_CHECK" ] || fail "missing executable final SCRAP closure evidence validator ${CLOSURE_GATE_CHECK}"
+CLOSURE_EVIDENCE="$CLOSURE_EVIDENCE" "$CLOSURE_GATE_CHECK"

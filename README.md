@@ -1,14 +1,13 @@
-# S.C.R.A.P. V2
+# S.C.R.A.P.
 
 S.C.R.A.P. is a transaction-scoped document storage gateway for billing ETL
 workflows. Services write immutable Documents through a gRPC API and read them
 back by `(transaction_id, document_name)` without needing to know whether bytes
 are served from hot local storage, peer replicas, or a Backend object store.
 
-V2 is a restart from first principles. The repository is still pre-production:
-design decisions are captured in `CONTEXT.md` and `docs/adr/`, and release
-readiness is proven through local and CI verification evidence rather than an
-announced stable release line.
+SCRAP is the stable project line. Design decisions are captured in `CONTEXT.md`
+and `docs/adr/`, and release readiness is proven through local and CI
+verification evidence.
 
 ## Core Model
 

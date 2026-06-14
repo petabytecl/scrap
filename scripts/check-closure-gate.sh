@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-V2_CLOSURE_EVIDENCE=${V2_CLOSURE_EVIDENCE:-_bmad-output/implementation-artifacts/v2-closure-policy-final-gate-decision.md}
+CLOSURE_EVIDENCE=${CLOSURE_EVIDENCE:-_bmad-output/implementation-artifacts/closure-policy-final-gate-decision.md}
 
 fail() {
-	echo "v2 closure gate check failed: $*" >&2
+	echo "closure gate check failed: $*" >&2
 	exit 1
 }
 
-[ -s "$V2_CLOSURE_EVIDENCE" ] || fail "missing non-empty closure evidence artifact ${V2_CLOSURE_EVIDENCE}"
+[ -s "$CLOSURE_EVIDENCE" ] || fail "missing non-empty closure evidence artifact ${CLOSURE_EVIDENCE}"
 
-python3 - "$V2_CLOSURE_EVIDENCE" <<'PY'
+python3 - "$CLOSURE_EVIDENCE" <<'PY'
 import re
 import sys
 
 
 path = sys.argv[1]
 def fail(message):
-    print(f"v2 closure gate check failed: {message}", file=sys.stderr)
+    print(f"closure gate check failed: {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -146,11 +146,11 @@ if not status_match:
     fail(f"missing final gate status in {path}")
 release_status = status_match.group(1)
 
-require(r"^# V2 Closure Policy Final Gate Decision$", "title")
+require(r"^# SCRAP Closure Policy Final Gate Decision$", "title")
 require(r"^Artifact status:", "artifact status")
-require(r"^Story: 6\.7 - V2 Closure Policy and Final Gate Decision$", "story identity")
+require(r"^Story: 6\.7 - SCRAP Closure Policy and Final Gate Decision$", "story identity")
 require(r"^## Source Inputs$", "Source Inputs section")
-require(r"\|\s*(Current\s+)?Branch\s*\|[^\n]*`?v2`?[^\n]*\|", "current branch")
+require(r"\|\s*(Current\s+)?Branch\s*\|[^\n]*\|", "current branch")
 require(r"https://github\.com/petabytecl/scrap/actions/runs/[0-9]+", "GitHub Actions run URL")
 require(r"\|\s*Latest pushed CI\s*\|[^\n]*https://github\.com/petabytecl/scrap/actions/runs/[0-9]+[^\n]*\|", "CI run URL")
 require(r"\|\s*Latest pushed CodeQL\s*\|[^\n]*https://github\.com/petabytecl/scrap/actions/runs/[0-9]+[^\n]*\|", "CodeQL run URL")
@@ -179,13 +179,13 @@ require(r"stale", "stale evidence rejection")
 require(r"unlinked", "unlinked evidence rejection")
 require(r"waiver", "waiver policy")
 
-summary_line, summary = find_row(r"^Final V2 release gate$", "Final V2 release gate summary row")
-full_line, full = find_row(r"^AC-6\.7 Final V2 release gate$", "Final V2 release gate full row")
+summary_line, summary = find_row(r"^Final SCRAP release gate$", "Final SCRAP release gate summary row")
+full_line, full = find_row(r"^AC-6\.7 Final SCRAP release gate$", "Final SCRAP release gate full row")
 epic_line, epic = find_row(r"^Epic 1 through Epic 6$", "Epic rollup row")
 non_goal_line, non_goal = find_row(r"^S3-compatible API$", "non-goal review row")
 
-require_cell_count(summary, 4, "Final V2 release gate summary row")
-require_cell_count(full, 15, "Final V2 release gate full row")
+require_cell_count(summary, 4, "Final SCRAP release gate summary row")
+require_cell_count(full, 15, "Final SCRAP release gate full row")
 require_cell_count(epic, 6, "Epic rollup row")
 require_cell_count(non_goal, 4, "Non-goal review row")
 
@@ -194,18 +194,18 @@ full_status = full[11]
 epic_status = epic[1]
 
 require_status(release_status, "Final gate")
-require_status(summary_status, "Final V2 release gate summary row")
-require_status(full_status, "Final V2 release gate full row")
+require_status(summary_status, "Final SCRAP release gate summary row")
+require_status(full_status, "Final SCRAP release gate full row")
 require_status(epic_status, "Epic rollup row")
 
-require_row(r"scripts/check-v2-closure-gate\.sh", full_line, "validator command in full evidence row")
+require_row(r"scripts/check-closure-gate\.sh", full_line, "validator command in full evidence row")
 require_row(r"#429|petabytecl/scrap/issues/429", full_line, "issue #429 in full evidence row")
 require_row(r"\bci\b", full_line, "CI run in full evidence row")
 require_row(r"CodeQL", full_line, "CodeQL run in full evidence row")
 require_row(r"redaction proof", full_line, "redaction proof in full evidence row")
 require_row(r"owner|Release owner", full_line, "owner in full evidence row")
 require_row(r"Release evidence/docs", full_line, "release evidence environment in full evidence row")
-require_row(r"v2-closure-policy-final-gate-decision\.md", full_line, "closure artifact path in full evidence row")
+require_row(r"closure-policy-final-gate-decision\.md", full_line, "closure artifact path in full evidence row")
 require_row(r"out of scope|not a release blocker", non_goal_line, "non-goal release impact")
 
 if release_status != summary_status or release_status != full_status:

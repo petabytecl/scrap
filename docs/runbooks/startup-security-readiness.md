@@ -1,4 +1,4 @@
-# V2 Startup and Security Readiness Runbook
+# SCRAP Startup and Security Readiness Runbook
 
 ## Purpose
 
@@ -76,4 +76,4 @@ replace committed Shard state or prove Backend durability by themselves.
 
 - `docs/production-rehearsal.md`
 - `_bmad-output/implementation-artifacts/epic-4-production-security-rehearsal-closure-evidence.md`
-- `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
+- `_bmad-output/implementation-artifacts/release-evidence-matrix.md`

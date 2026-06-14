@@ -32,7 +32,7 @@ Parameters:
 
   CellPrefix:
     Type: String
-    Default: scrap-v2-real-s3-iam
+    Default: scrap-real-s3-iam
     Description: >-
       Stable prefix shared by every per-run Cell ID. IAM object access and the
       list-bucket condition are scoped to "<CellPrefix>*". The rehearsal sets

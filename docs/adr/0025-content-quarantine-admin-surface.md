@@ -6,11 +6,11 @@ Date: 2026-06-10
 
 ## Context
 
-ADR 0008 accepted asynchronous Content Scanner and Content Quarantine as V2
+ADR 0008 accepted asynchronous Content Scanner and Content Quarantine as SCRAP
 architecture. It also named a new gRPC AdminService on a separate admin port for
 quarantine management operations: list, inspect, confirm, and release.
 
-Since ADR 0008, V2 production security work established a concrete operator
+Since ADR 0008, SCRAP production security work established a concrete operator
 surface:
 
 - public client gRPC remains the Document API;
@@ -25,11 +25,11 @@ operations require authentication, authorization, audit, rate limits, and
 network exposure controls. It explicitly includes Content Quarantine release in
 the dangerous-operation class.
 
-The V2 master PRD and architecture reconciliation keep Content Scanner and
-Content Quarantine in V2 scope unless ADR 0008 is explicitly superseded. The
+The SCRAP master PRD and architecture reconciliation keep Content Scanner and
+Content Quarantine in SCRAP scope unless ADR 0008 is explicitly superseded. The
 open question is not whether Content Quarantine exists. The open question is
 whether the original gRPC AdminService shape should still be introduced now
-that V2 already has an HTTP admin surface and `scrapctl` operator path.
+that SCRAP already has an HTTP admin surface and `scrapctl` operator path.
 
 ## Decision
 
@@ -37,8 +37,8 @@ ADR 0008 remains accepted for the scanner, quarantine, Raft command, Projection
 state, scan status, and read behavior. This ADR amends only the admin surface
 portion of ADR 0008.
 
-V2 Content Quarantine management uses the existing admin HTTP surface in
-`internal/admin`, with `scrapctl` commands as the supported operator UX. V2 does
+SCRAP Content Quarantine management uses the existing admin HTTP surface in
+`internal/admin`, with `scrapctl` commands as the supported operator UX. SCRAP does
 not add a new gRPC AdminService for quarantine management.
 
 The admin HTTP surface must support, either directly or through `scrapctl`,
@@ -78,8 +78,8 @@ decision with its own ADR, proto changes, security model, and evidence gates.
 
 Positive:
 
-- Content Scanner and Content Quarantine stay in V2 scope.
-- V2 avoids adding a second admin protocol surface only for quarantine.
+- Content Scanner and Content Quarantine stay in SCRAP scope.
+- SCRAP avoids adding a second admin protocol surface only for quarantine.
 - Operator workflows stay consistent with existing `internal/admin` and
   `scrapctl` patterns.
 - The dangerous-operation security and audit model from ADR 0019 applies
@@ -89,7 +89,7 @@ Negative:
 
 - ADR 0008 readers must know that the gRPC AdminService paragraph is amended by
   this later ADR.
-- If a future admin gRPC surface is needed, V2 will need an additional design
+- If a future admin gRPC surface is needed, SCRAP will need an additional design
   and migration story.
 
 Implementation guidance:

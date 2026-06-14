@@ -1,4 +1,4 @@
-# V2 Operator Runbook Evidence
+# SCRAP Operator Runbook Evidence
 
 Status: complete-with-release-scope-concerns
 Generated: 2026-06-12T18:25:26-04:00
@@ -7,14 +7,14 @@ Branch: v2
 
 ## Scope
 
-Story 6.2 creates the V2 operator runbook surface and validates that the docs
+Story 6.2 creates the SCRAP operator runbook surface and validates that the docs
 use implemented commands, preserve authority boundaries, and keep public
 evidence redacted. It does not implement new `scrapctl` commands, admin
 endpoints, alert/query references, release evidence bundle behavior, Tier 2 or
-Tier 3 final evidence, real S3/IAM closure, or final V2 closure policy.
+Tier 3 final evidence, real S3/IAM closure, or final SCRAP closure policy.
 
-Overall V2 release readiness remains blocked by later Epic 6 stories and issue
-`#429`. This artifact is a Story 6.2 runbook decision, not a final V2 release
+Overall SCRAP release readiness remains blocked by later Epic 6 stories and issue
+`#429`. This artifact is a Story 6.2 runbook decision, not a final SCRAP release
 decision.
 
 ## Source Inputs
@@ -22,7 +22,7 @@ decision.
 | Source | Use |
 | --- | --- |
 | `_bmad-output/planning-artifacts/epics.md` | Story 6.2 ACs and required runbook domains |
-| `_bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md` | FR-16 evidence and documentation closure |
+| `_bmad-output/planning-artifacts/prds/prd-scrap-master-2026-06-10/prd.md` | FR-16 evidence and documentation closure |
 | `_bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md` | DG-5 runbook scope and docs placement |
 | `CONTEXT.md` | glossary and authority boundaries |
 | `docs/prd-closure-policy.md` | Tier 2, Tier 3, production rehearsal, and public evidence rules |
@@ -31,7 +31,7 @@ decision.
 | `docs/adr/0025-content-quarantine-admin-surface.md` | Content Quarantine admin and `scrapctl` surface |
 | `docs/adr/0026-multi-shard-v2-release-boundary.md` | multi-Shard release boundary |
 | `docs/adr/0027-phase-5-restore-first-cold-reads.md` | restore-first cold-read boundary |
-| `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md` | release evidence row schema and remaining gaps |
+| `_bmad-output/implementation-artifacts/release-evidence-matrix.md` | release evidence row schema and remaining gaps |
 
 ## Runbook Checklist
 
@@ -91,13 +91,13 @@ False-positive scan classification:
 | Location | Pattern class | Classification |
 | --- | --- | --- |
 | `docs/runbooks/v2-openbao-transit-dependency.md` | credential-shaped word | Safe implemented flag name `--[t]oken-env`; no credential value present |
-| `_bmad-output/implementation-artifacts/6-2-operator-runbooks-for-v2-failure-domains.md` | authority-boundary wording | Required AC/source prose and bracket-split scan pattern; no instruction uses those surfaces as authority |
+| `_bmad-output/implementation-artifacts/6-2-operator-runbooks-for-failure-domains.md` | authority-boundary wording | Required AC/source prose and bracket-split scan pattern; no instruction uses those surfaces as authority |
 
 ## Current Verification
 
 | Command | Environment | Result | Notes |
 | --- | --- | --- | --- |
-| `go run ./cmd/scrapctl --help` | local checkout, branch `v2`, baseline `cb5bfbf` | PASS | Validated top-level command list before writing runbooks |
+| `go run ./cmd/scrapctl --help` | local checkout, branch `main`, baseline `cb5bfbf` | PASS | Validated top-level command list before writing runbooks |
 | `rg -n "usage:|case \"" internal/scrapctl` | local checkout | PASS | Validated documented subcommands against source |
 | `rg -n "production-rehearsal|tier2-e2e-up|tier3-evidence-up|evidence-bundle|local-dev-status" Makefile docs scripts` | local checkout | PASS | Validated referenced make targets and docs |
 | `rg -n "^e2e-up:" Makefile` | local checkout | PASS | Validated the restore runbook `make e2e-up` target |
@@ -106,7 +106,7 @@ False-positive scan classification:
 | `git diff --check` | local checkout | PASS | No whitespace errors |
 | `make proto-check` | local checkout | PASS | Buf lint/generate left `gen/` clean |
 | `scripts/check-e2e-gates.sh` | local checkout | PASS | E2E gate wiring checks passed |
-| `env GOCACHE=/tmp/scrap-v2-go-build make check` | local checkout | PASS | Format, package-boundary, lint, all Go tests, race tests, integration-tagged tests, and builds passed |
+| `env GOCACHE=/tmp/scrap-go-build make check` | local checkout | PASS | Format, package-boundary, lint, all Go tests, race tests, integration-tagged tests, and builds passed |
 | Release-sensitive scans | local checkout | PASS with classified safe matches | Safe matches: implemented `--[t]oken-env` flag name and required authority-boundary AC/source prose |
 
 ## Remaining Release Scope
@@ -115,4 +115,4 @@ False-positive scan classification:
 - Story 6.4 owns the release evidence bundle behavior.
 - Story 6.5 owns Tier 2 and Tier 3 release evidence gates.
 - Story 6.6 and issue `#429` own real S3/IAM production rehearsal closure.
-- Story 6.7 owns final V2 closure policy and final gate decision.
+- Story 6.7 owns final SCRAP closure policy and final gate decision.

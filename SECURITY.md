@@ -15,7 +15,7 @@ request.
 
 ## Supported Versions
 
-S.C.R.A.P. V2 has not reached a production release. Security fixes are accepted
+S.C.R.A.P. has not reached a production release. Security fixes are accepted
 on the default branch until a versioned release line exists.
 
 After the first production release, this policy will list supported release

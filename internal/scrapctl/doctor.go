@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	doctorCheckCapacity = 32
-	minKernelMajor      = 5
-	minKernelMinor      = 14
+	minKernelMajor = 5
+	minKernelMinor = 14
 )
 
 func runDoctor(args []string, stdout io.Writer, deps Deps) error {
@@ -22,7 +21,7 @@ func runDoctor(args []string, stdout io.Writer, deps Deps) error {
 	if err != nil {
 		return err
 	}
-	checks := make([]Check, 0, doctorCheckCapacity)
+	var checks []Check
 	checks = append(checks, hostChecks(context.Background(), opts, deps)...)
 	checks = append(checks, kubernetesChecks(context.Background(), opts, deps)...)
 	checks = append(checks, nodePortChecks(context.Background(), opts, deps)...)

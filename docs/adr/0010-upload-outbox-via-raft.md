@@ -27,7 +27,7 @@ Two new `RaftCommand` variants track the upload lifecycle:
   (key, size, and provider validation token).
 
 Phase 4 hard-cut the original combined key-prefix/ETag `ConfirmUpload` shape
-because restore and eviction need per-object metadata. V2 is pre-production, so
+because restore and eviction need per-object metadata. SCRAP is pre-production, so
 no compatibility migration is required for older local Raft logs.
 
 The upload outbox is derived state: any committed `SealBlock` without a matching

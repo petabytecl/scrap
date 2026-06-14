@@ -1,9 +1,9 @@
-# V2 Evidence Collection Runbook
+# SCRAP Evidence Collection Runbook
 
 ## Purpose
 
 Use this runbook to collect release-relevant operator evidence without leaking
-sensitive material or over-claiming final V2 readiness.
+sensitive material or over-claiming final SCRAP readiness.
 
 ## Owning Feature Epic or Release Gate
 
@@ -87,7 +87,7 @@ feature-specific failure behavior.
 
 ## References
 
-- `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
+- `_bmad-output/implementation-artifacts/release-evidence-matrix.md`
 - `docs/prd-closure-policy.md`
 - `docs/production-rehearsal.md`
 - `internal/scrapctl/evidence.go`

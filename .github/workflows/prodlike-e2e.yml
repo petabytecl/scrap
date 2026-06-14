@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      GOCACHE: /tmp/scrap-v2-go-build
+      GOCACHE: /tmp/scrap-go-build
       PRODLIKE_KIND_CLUSTER: scrap-prodlike
       PRODLIKE_KUBE_CONTEXT: kind-scrap-prodlike
       PRODLIKE_E2E_KUBE_CONTEXT: kind-scrap-prodlike
@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'schedule' && 'v2' || github.ref }}
+          ref: ${{ github.event_name == 'schedule' && 'main' || github.ref }}
 
       - uses: actions/setup-go@v6
         with:

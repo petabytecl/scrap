@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
-      GOCACHE: /tmp/scrap-v2-go-build
+      GOCACHE: /tmp/scrap-go-build
       PRODLIKE_KIND_CLUSTER: scrap-prodlike
       PRODLIKE_KUBE_CONTEXT: kind-scrap-prodlike
       PRODLIKE_E2E_KUBE_CONTEXT: kind-scrap-prodlike

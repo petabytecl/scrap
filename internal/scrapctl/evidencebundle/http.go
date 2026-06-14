@@ -59,7 +59,7 @@ func rpcCounterDelta(before, after []metricSample, at int64) []metricSample {
 		}
 		out = append(out, metricSample{
 			Metric: cloneMetric(sample.Metric),
-			Value:  []any{at, strconvFormatFloat(delta)},
+			Value:  []any{at, strconv.FormatFloat(delta, 'f', -1, 64)},
 		})
 	}
 	return out

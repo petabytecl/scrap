@@ -33,11 +33,10 @@ func (c *scrubCoordinator) Quarantine(blkPath string) error {
 		return err
 	}
 	blockID, ok := blockIDFromBlockPath(blkPath)
-	if ok {
-		if recorder, ok := c.core.(interface{ recordEvictionHealthBlockBestEffort(uint64) }); ok {
-			recorder.recordEvictionHealthBlockBestEffort(blockID)
-		}
+	if !ok {
+		return nil
 	}
+	c.core.recordEvictionHealthBlockBestEffort(blockID)
 	return nil
 }
 

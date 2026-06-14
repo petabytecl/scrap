@@ -11,7 +11,7 @@ requires throughput, mixed read/write/head, and upload-pressure evidence before
 Phase 4 begins because Phase 4 removes some local `.blk` data copies and
 therefore turns Backend restore into part of the read-availability story.
 
-The V2 lifecycle in `CONTEXT.md` names Phase 4 as "Partial eviction" where
+The SCRAP lifecycle in `CONTEXT.md` names Phase 4 as "Partial eviction" where
 followers evict uploaded Block data. Phase 5 is the separate future state where
 all local copies may be evicted and reads become Backend-only.
 
@@ -71,7 +71,7 @@ too weak for restore and repair contracts. `ConfirmUpload` should carry separate
 `.blk` and `.idx` provider validation tokens and sizes so the Confirmed Upload
 Catalog does not need brittle string parsing.
 
-Because V2 is not production yet, this is a hard proto/Raft-log cut rather than
+Because SCRAP is not production yet, this is a hard proto/Raft-log cut rather than
 a backward-compatible migration. New Phase 4 code may require the split
 `ConfirmUpload` shape and does not need to treat older combined-ETag
 `ConfirmUpload` entries as evictable or restore-capable.

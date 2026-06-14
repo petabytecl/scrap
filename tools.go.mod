@@ -6,6 +6,8 @@ tool (
 	github.com/bufbuild/buf/cmd/buf
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	golang.org/x/vuln/cmd/govulncheck
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc
+	google.golang.org/protobuf/cmd/protoc-gen-go
 	gotest.tools/gotestsum
 	sigs.k8s.io/kustomize/kustomize/v5
 )
@@ -15,7 +17,7 @@ require (
 	go.etcd.io/etcd/server/v3 v3.6.11
 	go.etcd.io/raft/v3 v3.6.0
 	go.uber.org/zap v1.28.0
-	google.golang.org/grpc v1.79.3
+	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -328,6 +330,7 @@ require (
 	golang.org/x/vuln v1.3.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260523011958-0a33c5d7ca68 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260523011958-0a33c5d7ca68 // indirect
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect

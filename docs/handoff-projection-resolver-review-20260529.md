@@ -1,6 +1,6 @@
 # Handoff — "The Review": projection-resolution refactor (`internal/index.Resolver`)
 
-**Date:** 2026-05-29 · **Repo:** `/home/coto/dev/petabyte/scrap-v2` · **Branch:** `v2` (HEAD `4e0d3e3`, up to date with `origin/v2`)
+**Date:** 2026-05-29 · **Repo:** `/home/coto/dev/petabyte/scrap` · **Branch:** `main` (HEAD `4e0d3e3`, up to date with `origin/main`)
 **Prior session:** ran `/code-review xhigh` over the **uncommitted working-tree diff**. This doc captures the verified review so a fresh agent can act on it (apply fixes / open issues).
 
 > ⚠️ The review findings live ONLY in the prior chat transcript and in this file. No issue/PR/commit captures them yet. The diff itself is uncommitted (see below) — do not assume it's pushed.
@@ -80,7 +80,7 @@ The prior session ended by offering to apply fixes. Nothing has been changed/com
 - **C. File issues** for the lot via the issue tracker (GitHub Issues on `petabytecl/scrap`, see `docs/agents/issue-tracker.md`) and let them be picked up later.
 - **D. Decide whether fail-closed-in-recovery is actually intended** — confirm with user/owner before "fixing", since CONTEXT.md scopes fail-closed to reads but someone may have wanted recovery strict too.
 
-⚠️ Per the user's standing rules: **always use `AskUserQuestion`** (never plain-text questions), and **V2 only** (this is `v2` branch — V1/main out of scope). User is in **explanatory** output style and wants deep explanations with concrete numbers.
+⚠️ Per the user's standing rules: **always use `AskUserQuestion`** (never plain-text questions), and **SCRAP only** (this is `main` branch — V1/main out of scope). User is in **explanatory** output style and wants deep explanations with concrete numbers.
 
 ---
 
@@ -97,7 +97,7 @@ The prior session ended by offering to apply fixes. Nothing has been changed/com
 ---
 
 ## 7. Key references (don't duplicate — read these)
-- Diff: `git diff HEAD` in `/home/coto/dev/petabyte/scrap-v2`
+- Diff: `git diff HEAD` in `/home/coto/dev/petabyte/scrap`
 - New code: `internal/index/resolution.go`
 - Glossary: `CONTEXT.md` ("Projection Resolution", "Openlog" entries)
 - Project rules / package map: `AGENTS.md`

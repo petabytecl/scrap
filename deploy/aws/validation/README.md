@@ -67,7 +67,7 @@ aws cloudformation deploy \
   --template-file deploy/aws/validation/scrap-real-aws-validation.yaml \
   --parameter-overrides \
     TrustedPrincipalArnPattern='arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_<permission-set>_<hash>' \
-    CellPrefix=scrap-v2-real-s3-iam \
+    CellPrefix=scrap-real-s3-iam \
     RetentionDays=14
 ```
 
@@ -105,7 +105,7 @@ export AWS_PROFILE=scrap-validation
 export AWS_EC2_METADATA_DISABLED=true
 export SCRAP_S3_BUCKET="<ScrapS3Bucket output>"
 export SCRAP_S3_REGION="<ScrapS3Region output>"
-export SCRAP_PROD_REHEARSAL_CELL_ID="scrap-v2-real-s3-iam-$(date -u +%Y%m%dT%H%M%SZ)"
+export SCRAP_PROD_REHEARSAL_CELL_ID="scrap-real-s3-iam-$(date -u +%Y%m%dT%H%M%SZ)"
 unset SCRAP_S3_ENDPOINT
 unset SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3
 

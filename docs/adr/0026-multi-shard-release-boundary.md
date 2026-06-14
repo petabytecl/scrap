@@ -1,4 +1,4 @@
-# Multi-Shard V2 release boundary
+# Multi-Shard SCRAP release boundary
 
 Status: Accepted
 
@@ -10,26 +10,26 @@ Date: 2026-06-10
 Transactions. Transactions are assigned to Shards through fixed hash slots.
 One Cell contains multiple Members forming one or more Shard groups.
 
-Current V2 implementation work has carried Shard identifiers through Block,
+Current SCRAP implementation work has carried Shard identifiers through Block,
 Backend, peer, Raft, telemetry, and operator contracts. ADR 0024 also added
 explicit peer authorization by Shard scope and states that future multi-Shard
 startup must derive the authorized Shard set from placement membership, not from
 caller address.
 
 The current `scrapd` composition still wires a single application Shard ID `0`.
-That was acceptable for earlier implementation phases, but the clarified V2
-release rule says V2 is not release-ready until all required V2 features are
+That was acceptable for earlier implementation phases, but the clarified SCRAP
+release rule says SCRAP is not release-ready until all required SCRAP features are
 complete. A release that still hardcodes one Shard would conflict with the
 glossary, fixed-slot routing model, peer Shard-scope policy, and product
 expectation that a Transaction is routed to an owning Shard.
 
 ## Decision
 
-V2 release-ready status requires multi-Shard startup and routing. Single-Shard
+SCRAP release-ready status requires multi-Shard startup and routing. Single-Shard
 composition remains acceptable for focused tests and development profiles, but
-it is not the V2 production release contract.
+it is not the SCRAP production release contract.
 
-V2 must add a Shard routing boundary that owns:
+SCRAP must add a Shard routing boundary that owns:
 
 - the fixed hash-slot count;
 - the Transaction-to-slot hash function;
@@ -64,7 +64,7 @@ Content Scanner, and Content Quarantine remain Shard-local authority flows.
 
 Positive:
 
-- V2 release scope matches the glossary and fixed hash-slot model.
+- SCRAP release scope matches the glossary and fixed hash-slot model.
 - Peer Shard-scope authorization from ADR 0024 becomes production-useful.
 - Public API routing is explicit instead of hidden in one hardcoded Shard.
 - Admin, telemetry, evidence, and `scrapctl` can report per-Shard health.

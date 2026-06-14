@@ -3,7 +3,7 @@
 # project: scrap
 # project_key: NOKEY
 # tracking_system: file-system
-# story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-artifacts
+# story_location: /home/coto/dev/petabyte/scrap/_bmad-output/implementation-artifacts
 
 # STATUS DEFINITIONS:
 # ==================
@@ -39,7 +39,7 @@ last_updated: "2026-06-12T21:33:22-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
-story_location: /home/coto/dev/petabyte/scrap-v2/_bmad-output/implementation-artifacts
+story_location: /home/coto/dev/petabyte/scrap/_bmad-output/implementation-artifacts
 
 development_status:
   epic-1: in-progress
@@ -85,11 +85,11 @@ development_status:
   5-7-content-safety-closure-evidence: done
   epic-5-retrospective: optional
   epic-6: in-progress
-  6-1-v2-release-evidence-matrix: done
-  6-2-operator-runbooks-for-v2-failure-domains: done
+  6-1-release-evidence-matrix: done
+  6-2-operator-runbooks-for-failure-domains: done
   6-3-alert-and-query-references: done
   6-4-scrapctl-release-evidence-bundle: done
   6-5-tier-2-and-tier-3-release-evidence-gates: done
   6-6-real-s3-iam-production-rehearsal-closure: done
-  6-7-v2-closure-policy-and-final-gate-decision: done
+  6-7-closure-policy-and-final-gate-decision: done
   epic-6-retrospective: optional

@@ -1,4 +1,4 @@
-# V2 Block Quarantine Repair Runbook
+# SCRAP Block Quarantine Repair Runbook
 
 ## Purpose
 
@@ -73,4 +73,4 @@ not Content Quarantine, and it is not a manual Document lifecycle state.
 - `CONTEXT.md`
 - `docs/adr/0002-dual-checksum-architecture.md`
 - `docs/adr/0003-mirror-block-layout.md`
-- `_bmad-output/implementation-artifacts/v2-release-evidence-matrix.md`
+- `_bmad-output/implementation-artifacts/release-evidence-matrix.md`

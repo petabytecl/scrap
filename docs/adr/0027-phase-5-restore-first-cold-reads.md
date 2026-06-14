@@ -13,7 +13,7 @@ Block in Phase 4, it restores the full `.blk` from the Backend before using the
 normal local Block reader.
 
 ADR 0016 and ADR 0020 both deferred direct Backend ciphertext streaming to
-Phase 5. The V2 master PRD identified Phase 5 cold-read shape as a blocking
+Phase 5. The SCRAP master PRD identified Phase 5 cold-read shape as a blocking
 decision: restore-first cold reads, direct Backend ciphertext streaming, or
 both.
 
@@ -35,9 +35,9 @@ access becomes an implicit read oracle.
 
 ## Decision
 
-V2 Phase 5 cold reads use restore-first full-Block restore. Direct Backend
+SCRAP Phase 5 cold reads use restore-first full-Block restore. Direct Backend
 ciphertext streaming, range streaming from Backend, and per-Frame remote reads
-are not part of V2 release scope.
+are not part of SCRAP release scope.
 
 Phase 5 extends eviction so every local `.blk` copy of an uploaded sealed Block
 may be intentionally evicted when policy allows. A later `ReadDocument` restores
@@ -80,12 +80,12 @@ Encryption behavior remains unchanged:
 
 Positive:
 
-- V2 keeps one read implementation after local Block bytes are present.
+- SCRAP keeps one read implementation after local Block bytes are present.
 - All-or-error read behavior and existing Block/Frame verification are
   preserved.
 - Backend access stays behind committed metadata and explicit restore workflow.
 - Direct Backend streaming remains available for future research without
-  blocking V2.
+  blocking SCRAP.
 
 Negative:
 

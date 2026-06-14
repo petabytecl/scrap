@@ -15,7 +15,7 @@ sensitive.
 `SECURITY.md` already states the intended production posture: production
 `scrapd` startup fails closed unless TLS is enabled, public and admin RPCs
 require client certificates when TLS is enabled, and workload identity plus
-tenant isolation are enforced by the gRPC authorization layer. The current V2
+tenant isolation are enforced by the gRPC authorization layer. The current SCRAP
 implementation has NetworkPolicy and prod-like evidence scaffolding, but those
 are deployment defenses, not an application security boundary.
 

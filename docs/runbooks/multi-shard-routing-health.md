@@ -1,4 +1,4 @@
-# V2 Multi-Shard Routing Health Runbook
+# SCRAP Multi-Shard Routing Health Runbook
 
 ## Purpose
 
@@ -71,7 +71,7 @@ authoritative routing and membership path.
 
 ## References
 
-- `docs/adr/0026-multi-shard-v2-release-boundary.md`
+- `docs/adr/0026-multi-shard-release-boundary.md`
 - `_bmad-output/implementation-artifacts/2-6-multi-shard-evidence-closure.md`
 - `internal/scrapctl/run.go`
 - `internal/admin/server.go`

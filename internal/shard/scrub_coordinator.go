@@ -14,7 +14,7 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
-// scrubCore is the narrow seam the scrub coordinator uses to reach the Shard's
+// scrubCore is the narrow interface the scrub coordinator uses to reach the Shard's
 // projection-authority core. Projection hashing stays under Shard.mu; scrub
 // proposal tracking, result caching, and scrubber lifecycle live here.
 type scrubCore interface {
@@ -24,6 +24,7 @@ type scrubCore interface {
 	scrubProjectionResult(scrubID string, entryIndex uint64) scrub.Result
 	currentOpenBlockID() uint64
 	RestoreBlockForRepair(ctx context.Context, blockID uint64) error
+	recordEvictionHealthBlockBestEffort(blockID uint64)
 }
 
 type scrubCoordinator struct {

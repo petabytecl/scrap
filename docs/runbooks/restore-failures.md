@@ -1,4 +1,4 @@
-# V2 Restore Failures Runbook
+# SCRAP Restore Failures Runbook
 
 ## Purpose
 

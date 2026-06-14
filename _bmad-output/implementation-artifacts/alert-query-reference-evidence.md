@@ -1,4 +1,4 @@
-# V2 Alert and Query Reference Evidence
+# SCRAP Alert and Query Reference Evidence
 
 Artifact status: complete for Story 6.3 implementation
 Release gate status: CONCERNS
@@ -7,13 +7,13 @@ Story: 6.3 - Alert and Query References
 Story baseline commit: `25042bca63662449a2a8803818e8fce8bb7222e4`
 Story creation commit: `fc21cb8`
 Implementation base commit: `fc21cb8`
-Branch: `v2`
+Branch: `main`
 Generated: 2026-06-12T18:55:19-04:00
 Last updated: 2026-06-12T19:16:48-04:00
 
 ## Scope
 
-This artifact proves that Story 6.3 created alert/query references tied to V2
+This artifact proves that Story 6.3 created alert/query references tied to SCRAP
 release risks without adding new product behavior, telemetry, dashboards,
 alert deployment manifests, or closure policy.
 
@@ -78,24 +78,24 @@ telemetry.
 
 | Gate | Command | Result | Notes |
 | --- | --- | --- | --- |
-| Missing-artifact red phase | `test -f docs/observability/v2-alert-query-references.md`; `test -f _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md`; `rg -n "v2-alert-query-references\|alert/query" docs/runbooks/README.md` | PASS | All three checks failed before implementation, proving the story surfaces were absent. |
+| Missing-artifact red phase | `test -f docs/observability/v2-alert-query-references.md`; `test -f _bmad-output/implementation-artifacts/alert-query-reference-evidence.md`; `rg -n "v2-alert-query-references\|alert/query" docs/runbooks/README.md` | PASS | All three checks failed before implementation, proving the story surfaces were absent. |
 | Whitespace check | `git diff --check` | PASS | No whitespace errors. |
-| Placeholder scan | `rg -n "TO[D]O\|T[B]D\|FI[X]ME\|\{\{|\}\}" docs/observability/v2-alert-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md` | PASS | No matches. |
-| Reference-row count | `rg -n "AQR-00[1-9]\|AQR-01[0-6]" docs/observability/v2-alert-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md` | PASS | All 16 required release-risk references appear in both artifacts. |
+| Placeholder scan | `rg -n "TO[D]O\|T[B]D\|FI[X]ME\|\{\{|\}\}" docs/observability/v2-alert-query-references.md _bmad-output/implementation-artifacts/alert-query-reference-evidence.md` | PASS | No matches. |
+| Reference-row count | `rg -n "AQR-00[1-9]\|AQR-01[0-6]" docs/observability/v2-alert-query-references.md _bmad-output/implementation-artifacts/alert-query-reference-evidence.md` | PASS | All 16 required release-risk references appear in both artifacts. |
 | Metric source validation | `rg -n "scrap_rpc_server_duration_seconds_bucket\|scrap_write_stage_duration_seconds_bucket\|scrap_eviction_restore_total_total\|scrap_upload_total_total\|scrap_scrub_deep_corruptions_total\|scrap_avscan_failures_total\|scrap_security_rate_limit_denials_total\|scrap_raft_is_leader" deploy internal test docs/observability/v2-alert-query-references.md` plus source checks for the corresponding dotted OTel names | PASS | PromQL-normalized names resolve to existing query pack, metric tests, evidence-bundle queries, or this Story 6.3 reference with dotted source names present in `internal/**`; missing peer/admin/Transit/audit/evidence metrics stay as `CONCERNS` gaps. |
-| Runbook/status validation | `test -f docs/runbooks/v2-startup-security-readiness.md`; `test -f docs/runbooks/v2-evidence-collection.md`; `test -f docs/runbooks/v2-multi-shard-routing-health.md`; `test -f docs/runbooks/v2-restore-failures.md`; `test -f docs/runbooks/v2-block-quarantine-repair.md`; `test -f docs/runbooks/v2-content-quarantine-response.md`; `test -f docs/runbooks/v2-backend-upload-pressure.md`; `test -f docs/runbooks/v2-openbao-transit-dependency.md`; `rg -n "PASS\|CONCERNS\|FAIL" _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md docs/observability/v2-alert-query-references.md` | PASS | Every high-risk reference has an existing runbook path or explicit gap status. |
+| Runbook/status validation | `test -f docs/runbooks/v2-startup-security-readiness.md`; `test -f docs/runbooks/v2-evidence-collection.md`; `test -f docs/runbooks/v2-multi-shard-routing-health.md`; `test -f docs/runbooks/v2-restore-failures.md`; `test -f docs/runbooks/v2-block-quarantine-repair.md`; `test -f docs/runbooks/v2-content-quarantine-response.md`; `test -f docs/runbooks/v2-backend-upload-pressure.md`; `test -f docs/runbooks/v2-openbao-transit-dependency.md`; `rg -n "PASS\|CONCERNS\|FAIL" _bmad-output/implementation-artifacts/alert-query-reference-evidence.md docs/observability/v2-alert-query-references.md` | PASS | Every high-risk reference has an existing runbook path or explicit gap status. |
 | Command surface validation | `go run ./cmd/scrapctl --help`; `rg -n "peers|status|doctor|quarantine|evidence bundle" docs/runbooks internal/scrapctl cmd/scrapctl` | PASS | Story 6.3 references only command families that exist in runbooks or scrapctl sources; no new command behavior is introduced. |
-| Secret-shape scan | `rg -n --pcre2 "(?i)([a]ccess[_-]?[k]ey\|[p]assword\|[t]oken\|Bearer[[:space:]]+\|AKIA[0-9A-Z]{16}\|eyJ[A-Za-z0-9_-]+\\.\|PRIVATE [K]EY\|BEGIN [A-Z ]*KEY)" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md` | PASS with classified safe matches | Matches are negative guidance about OpenBao credentials/key material and the story's required redaction criteria. No credential values, bearer/JWT values, cloud keys, or private-key material appear. |
-| Identifier/privacy scan | `rg -n --pcre2 "(?i)(transaction[_-]?[i]d\|transactionId\|document[_-]?[n]ame\|documentName\|trace[_-]?[i]d\|traceID\|request[_-]?[i]d\|requestID\|x-request-id)[[:space:]]*[:=]\|Backend [k]ey\|raw [l]og\|auth [c]laim" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md` | PASS with classified safe matches | Matches are negative guidance, privacy validation text, or explicit gap decisions. No unredacted identifiers, Backend object references, authorization claims, request identifiers, trace identifiers, or unredacted log output appear. |
-| Path-shape scan | `rg -n --pcre2 "(^|[[:space:]])(/(home|Users|var|opt|private|tmp)/\|[A-Za-z]:\\\\)\|host-[a]bsolute" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/v2-alert-query-reference-evidence.md` | PASS with classified safe matches | Matches are the repo's safe cache command path and negative host-path guidance. No local-machine evidence path is introduced. |
+| Secret-shape scan | `rg -n --pcre2 "(?i)([a]ccess[_-]?[k]ey\|[p]assword\|[t]oken\|Bearer[[:space:]]+\|AKIA[0-9A-Z]{16}\|eyJ[A-Za-z0-9_-]+\\.\|PRIVATE [K]EY\|BEGIN [A-Z ]*KEY)" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/alert-query-reference-evidence.md` | PASS with classified safe matches | Matches are negative guidance about OpenBao credentials/key material and the story's required redaction criteria. No credential values, bearer/JWT values, cloud keys, or private-key material appear. |
+| Identifier/privacy scan | `rg -n --pcre2 "(?i)(transaction[_-]?[i]d\|transactionId\|document[_-]?[n]ame\|documentName\|trace[_-]?[i]d\|traceID\|request[_-]?[i]d\|requestID\|x-request-id)[[:space:]]*[:=]\|Backend [k]ey\|raw [l]og\|auth [c]laim" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/alert-query-reference-evidence.md` | PASS with classified safe matches | Matches are negative guidance, privacy validation text, or explicit gap decisions. No unredacted identifiers, Backend object references, authorization claims, request identifiers, trace identifiers, or unredacted log output appear. |
+| Path-shape scan | `rg -n --pcre2 "(^|[[:space:]])(/(home|Users|var|opt|private|tmp)/\|[A-Za-z]:\\\\)\|host-[a]bsolute" docs/observability docs/runbooks/README.md _bmad-output/implementation-artifacts/6-3-alert-and-query-references.md _bmad-output/implementation-artifacts/alert-query-reference-evidence.md` | PASS with classified safe matches | Matches are the repo's safe cache command path and negative host-path guidance. No local-machine evidence path is introduced. |
 | Proto compatibility | `make proto-check` | PASS | Buf lint/generate completed and `gen/` stayed clean. |
 | E2E gate policy | `scripts/check-e2e-gates.sh` | PASS | No output; policy passed. |
-| Broad local gate | `env GOCACHE=/tmp/scrap-v2-go-build make check` | PASS | Formatting, package boundaries, proto check, lint, `go test ./...`, race tests, integration-tagged tests, and `scrapd`/`scrapctl` builds passed. Output contained transient Testcontainers IDs and temp paths only. |
+| Broad local gate | `env GOCACHE=/tmp/scrap-go-build make check` | PASS | Formatting, package boundaries, proto check, lint, `go test ./...`, race tests, integration-tagged tests, and `scrapd`/`scrapctl` builds passed. Output contained transient Testcontainers IDs and temp paths only. |
 
 ## Final Story 6.3 Decision
 
 Story 6.3 satisfies its docs/evidence scope. Required release-risk references
 exist, high-risk rows include the operator triad, runbook links are present
 where implemented, and missing telemetry is recorded as `CONCERNS` rather than
-invented. Final V2 release status remains below PASS until Stories 6.4-6.7 and
+invented. Final SCRAP release status remains below PASS until Stories 6.4-6.7 and
 real S3/IAM evidence complete.

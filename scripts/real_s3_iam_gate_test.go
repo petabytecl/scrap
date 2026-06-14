@@ -265,7 +265,7 @@ func writeRealS3IAMReport(t *testing.T, path, content string) {
 }
 
 func validRealS3IAMMissingProofEvidence() string {
-	return `# V2 Real S3/IAM Production Rehearsal Evidence
+	return `# SCRAP Real S3/IAM Production Rehearsal Evidence
 
 Artifact status: complete for Story 6.6 validation
 Release gate status: FAIL
@@ -289,7 +289,7 @@ Hard pass/fail criteria reject vague, screenshot-only, localhost-only, LocalStac
 }
 
 func validRealS3IAMPassEvidence(reportPath string) string {
-	return `# V2 Real S3/IAM Production Rehearsal Evidence
+	return `# SCRAP Real S3/IAM Production Rehearsal Evidence
 
 Artifact status: complete for Story 6.6 validation
 Release gate status: PASS
@@ -313,7 +313,7 @@ Hard pass/fail criteria reject vague, screenshot-only, localhost-only, LocalStac
 }
 
 func proseOnlyRealS3IAMEvidence() string {
-	return `# V2 Real S3/IAM Production Rehearsal Evidence
+	return `# SCRAP Real S3/IAM Production Rehearsal Evidence
 
 Artifact status: incomplete validation fixture
 Release gate status: FAIL

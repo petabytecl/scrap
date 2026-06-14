@@ -21,7 +21,7 @@ Tracking issue: #433.
 
 ## Decision
 
-`LeaderHint.leader_addr` remains the V2 client redirect contract. Non-leader
+`LeaderHint.leader_addr` remains the SCRAP client redirect contract. Non-leader
 public RPCs may return the current leader address in a `LeaderHint` status
 detail so the smart client can retry directly. This is topology disclosure, but
 it is accepted only behind the production public surface: mTLS, authorization,
@@ -35,7 +35,7 @@ that, Shard-carrying peer RPCs must match the server's configured authorized
 Shard set before reaching Raft routing, byte replication sinks, or Block
 transfer handlers. `ReplicateDocumentInit` carries `shard_id` so byte
 replication is covered by the same Shard policy as `ForwardRaft` and
-`TransferBlock`. The current `scrapd` application wires the single V2 Shard ID
+`TransferBlock`. The current `scrapd` application wires the single SCRAP Shard ID
 `0`; future multi-Shard startup must derive the authorized Shard set from
 placement membership, not caller address.
 

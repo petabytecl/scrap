@@ -35,7 +35,7 @@ The upload outbox iterator uses `pebble.IterOptions` with `LowerBound` and
 `UpperBound` set to the upload prefix range, so the iterator only visits SST
 blocks that overlap the upload keyspace.
 
-V2 is pre-release. Existing Pebble databases (dev/test only) require a clean
+SCRAP is pre-release. Existing Pebble databases (dev/test only) require a clean
 rebuild after this change — no migration path is provided.
 
 ## Consequences

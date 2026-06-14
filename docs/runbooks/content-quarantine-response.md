@@ -1,4 +1,4 @@
-# V2 Content Quarantine Response Runbook
+# SCRAP Content Quarantine Response Runbook
 
 ## Purpose
 

@@ -12,7 +12,7 @@ behavior is observable under sustained load. The system needs evidence about
 client latency, write-path stages, Raft health, peer replication, upload lag,
 scrub interference, and resource saturation.
 
-The earlier V2 substrate named Prometheus (`client_golang`, service-local
+The earlier SCRAP substrate named Prometheus (`client_golang`, service-local
 registry, `/metrics`) as the observability contract. That was sufficient for
 early upload and scrub counters, but it is too narrow for Phase 3 stress
 evidence. Metrics alone cannot correlate slow requests with Raft proposals,

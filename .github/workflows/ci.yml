@@ -15,7 +15,6 @@ on:
   push:
     branches:
       - main
-      - v2
 
 jobs:
   static:
@@ -90,7 +89,7 @@ jobs:
         with:
           files: ./coverage.out
           flags: go
-          name: scrap-v2-go
+          name: scrap-go
           use_oidc: true
           fail_ci_if_error: true
           disable_search: true
@@ -102,7 +101,7 @@ jobs:
           report_type: test_results
           files: ./test-results/junit.xml
           flags: go
-          name: scrap-v2-go-tests
+          name: scrap-go-tests
           use_oidc: true
           fail_ci_if_error: true
           disable_search: true

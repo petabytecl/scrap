@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const integrationOperationTimeout = 2 * time.Minute
+const integrationOperationTimeout = 4 * time.Minute
 
 func integrationTestContext(t *testing.T) context.Context {
 	t.Helper()

@@ -6,7 +6,7 @@ Date: 2026-06-10
 
 ## Context
 
-OpenBao Transit is the V2 cryptographic substrate, and ADR 0020 defines the
+OpenBao Transit is the SCRAP cryptographic substrate, and ADR 0020 defines the
 envelope encryption contract. The first implementation used direct HTTP request
 construction inside the Transit adapter, while the new Testcontainers OpenBao
 fixture also needed to configure mounts and keys.

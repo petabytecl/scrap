@@ -6,7 +6,7 @@ Date: 2026-06-02
 
 ## Context
 
-OpenBao Transit is a locked V2 substrate in `CONTEXT.md`, but encryption has
+OpenBao Transit is a locked SCRAP substrate in `CONTEXT.md`, but encryption has
 been deferred through Phase 4. Phase 4 now allows local Block data to disappear
 from some Members after Backend upload, and Phase 5 will consider cold-only
 reads. That makes encryption metadata a long-lived storage compatibility

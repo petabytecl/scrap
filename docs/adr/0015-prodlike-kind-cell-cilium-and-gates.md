@@ -6,7 +6,7 @@ Date: 2026-05-30
 
 ## Context
 
-V2 uses Kind for local and CI-adjacent production-like validation. The current
+SCRAP uses Kind for local and CI-adjacent production-like validation. The current
 local deployment path is Kubernetes-shaped, but it still leaves several
 confidence gaps:
 
@@ -83,5 +83,5 @@ the new Cilium-backed prod-like Kind path.
 - Kustomize remains the deployment renderer, but `deploy/` should be reorganized
   around bases, reusable components, and named environments instead of scattered
   workflow-specific overlays.
-- Docker Compose is not added as a parallel harness for the current V2
+- Docker Compose is not added as a parallel harness for the current SCRAP
   confidence work.

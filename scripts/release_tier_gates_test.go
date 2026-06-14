@@ -121,7 +121,7 @@ func writeEvidence(t *testing.T, path, content string) {
 }
 
 func validTierGateEvidence() string {
-	return `# V2 Release Tier Gates Evidence
+	return `# SCRAP Release Tier Gates Evidence
 
 Artifact status: complete for Story 6.5 validation
 Release gate status: CONCERNS
@@ -158,7 +158,7 @@ final release proof unless copied to durable reviewable storage.
 }
 
 func proseOnlyTierGateEvidence() string {
-	return `# V2 Release Tier Gates Evidence
+	return `# SCRAP Release Tier Gates Evidence
 
 Artifact status: incomplete validation fixture
 Release gate status: CONCERNS

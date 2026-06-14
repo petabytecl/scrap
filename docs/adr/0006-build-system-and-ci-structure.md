@@ -8,13 +8,13 @@ Superseded by: ADR-0015 for the prod-like Kind Cell and verification gates.
 
 ## Context
 
-V2 launched with a minimal 6-target Makefile, a multi-stage alpine Dockerfile, a
+SCRAP launched with a minimal 6-target Makefile, a multi-stage alpine Dockerfile, a
 single raw K8s YAML, and no CI pipeline. This was adequate for Phase 1 spike-store
 work but does not support the quality gates, reproducibility, or multi-environment
 deployment that Phase 2+ requires.
 
 V1 has a battle-tested build system with 40+ Makefile targets, strict linting,
-kustomize manifests, Kind orchestration, and a 6-job CI pipeline. V2 can adopt the
+kustomize manifests, Kind orchestration, and a 6-job CI pipeline. SCRAP can adopt the
 proven patterns while adjusting for its different dependency surface and phasing.
 
 ## Decision
@@ -30,7 +30,7 @@ is Go binaries; mise would add an external dependency without benefit. Non-Go to
 
 **Container image.** `scratch` base with cross-compiled static binary, same as V1.
 The Makefile cross-compiles to `bin/scrapd-${GOOS}-${GOARCH}`, then `docker build`
-copies the binary into a scratch image with OCI labels. V2 already uses binary-based
+copies the binary into a scratch image with OCI labels. SCRAP already uses binary-based
 healthchecks (`scrapd healthcheck`), so no shell is needed.
 
 Considered keeping alpine (debuggability). Rejected because exec-into-pod debugging is
@@ -53,7 +53,7 @@ speed. E2E runs on `e2e` label or manual dispatch to avoid slow Kind-in-CI on ev
 PR. Codecov for coverage, CodeQL for security scanning.
 
 **Linting.** V1's `.golangci.yml` ported wholesale (36+ linters), with depguard
-allowlist adjusted for V2's dependency surface (add zap, ulid, etcd; drop templ).
+allowlist adjusted for SCRAP's dependency surface (add zap, ulid, etcd; drop templ).
 Package boundary enforcement via script: storage core and consensus packages
 (`block`, `index`, `store`, `raft`, `shard`) must not import `grpc/status` or
 `grpc/codes`.

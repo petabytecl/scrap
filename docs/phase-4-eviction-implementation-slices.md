@@ -9,7 +9,7 @@ ADR tracking issue: #381
 ## Purpose
 
 Break Phase 4 partial local eviction into independently reviewable slices. These
-are published GitHub issues under the `storage-gateway-v2` milestone.
+are published GitHub issues under the `storage-gateway` milestone.
 
 ## Published Issues
 
@@ -34,7 +34,7 @@ Type: AFK
 Blocked by: None
 
 What to build:
-Hard-cut the V2 `ConfirmUpload` contract so committed upload confirmation carries
+Hard-cut the SCRAP `ConfirmUpload` contract so committed upload confirmation carries
 separate `.blk` and `.idx` Backend metadata. Materialize a rebuildable Confirmed
 Upload Catalog from Raft apply so later restore and eviction planning can use
 committed Backend metadata without Backend listing.

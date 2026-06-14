@@ -44,7 +44,6 @@ type App struct {
 	clientLis  net.Listener
 	peerLis    net.Listener
 
-	// Retained for the startup log line.
 	backendType string
 	peers       map[uint64]string
 	raftID      uint64
@@ -246,17 +245,17 @@ func appendShardAdminOptions(opts []admin.Option, cfg Config, topology startupTo
 				admin.WithQuarantineService(localShard),
 			)
 		}
-	} else {
-		opts = append(opts,
-			admin.WithUploadPressureProvider(adapter),
-			admin.WithEvictionPlanner(adapter),
-			admin.WithEvictionApplier(adapter),
-			admin.WithEvictionPlanStatusProvider(adapter),
-			admin.WithEvictionHealthProvider(adapter),
-			admin.WithRewrapService(adapter),
-			admin.WithQuarantineService(adapter),
-		)
+		return appendTestHookAdminOptions(opts, cfg, adapter, transit)
 	}
+	opts = append(opts,
+		admin.WithUploadPressureProvider(adapter),
+		admin.WithEvictionPlanner(adapter),
+		admin.WithEvictionApplier(adapter),
+		admin.WithEvictionPlanStatusProvider(adapter),
+		admin.WithEvictionHealthProvider(adapter),
+		admin.WithRewrapService(adapter),
+		admin.WithQuarantineService(adapter),
+	)
 	return appendTestHookAdminOptions(opts, cfg, adapter, transit)
 }
 

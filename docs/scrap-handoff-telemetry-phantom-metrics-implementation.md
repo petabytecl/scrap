@@ -3,13 +3,13 @@
 **Status:** Code is implemented and verified locally + against the live Kind
 stress cluster. It is **not committed**.
 
-**Implementation worktree:** `/tmp/scrap-v2-phantom-metrics`
+**Implementation worktree:** `/tmp/scrap-phantom-metrics`
 
 **Branch:** `fix/telemetry-phantom-metrics`
 
-**Base:** `v2` at `4e0d3e31e34796f123cde09dcb0e3cf4e3f845ab`
+**Base:** `main` at `4e0d3e31e34796f123cde09dcb0e3cf4e3f845ab`
 
-**Original checkout:** `/home/coto/dev/petabyte/scrap-v2` still has unrelated
+**Original checkout:** `/home/coto/dev/petabyte/scrap` still has unrelated
 dirty shard/index changes. Leave them alone unless the user explicitly redirects.
 
 ## What changed
@@ -91,7 +91,7 @@ upload pressure, and the run ended with all operations failed
 ## Important gotchas
 
 - No commit has been made.
-- The implementation is in `/tmp/scrap-v2-phantom-metrics`, not the original
+- The implementation is in `/tmp/scrap-phantom-metrics`, not the original
   dirty checkout.
 - `.worktrees/` is not gitignored in the repo, so the implementation was isolated
   under `/tmp` instead of an in-repo worktree.
@@ -104,7 +104,7 @@ upload pressure, and the run ended with all operations failed
 
 - `scrap-git-commit` — commit the current patch intentionally with a conventional
   message, likely `fix(telemetry): disambiguate scrapd metric series`.
-- `scrap-yeet` — push the branch and open a draft PR against `v2`.
+- `scrap-yeet` — push the branch and open a draft PR against `main`.
 - `scrap-gh-fix-ci` — use if GitHub checks fail after the PR is opened.
 - `scrap-tdd` — use only if extending the fix or adding a fresh healthy loaded
   p99 regression harness.

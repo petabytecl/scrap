@@ -1,4 +1,4 @@
-# V2 mTLS Certificate Rotation Runbook
+# SCRAP mTLS Certificate Rotation Runbook
 
 ## Purpose
 
