@@ -121,8 +121,7 @@ func checkDocIntegrity(acc *docAccumulator, docSeq uint32, entries []IndexEntry,
 func checkDocSHA(h hash.Hash, expected [32]byte, offset int64, result *VerifyResult) {
 	var computed [32]byte
 	copy(computed[:], h.Sum(nil))
-	var empty [32]byte
-	if expected != empty && computed != expected {
+	if isZeroSHA256(expected) || computed != expected {
 		result.CorruptFrames = append(result.CorruptFrames, CorruptFrame{Offset: offset, Type: CorruptionDocSHA256})
 	}
 }

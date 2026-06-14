@@ -175,6 +175,12 @@ When sources conflict, downstream workflows must apply this order:
 - Closed issues and a closed milestone do not prove release completeness.
 - Release-ready requires all required V2 features, documentation, and evidence
   gates to be complete.
+- Any confirmed or plausible data-integrity bug is a non-waivable release
+  blocker until fixed or explicitly disproven with current evidence. This
+  includes bugs that can return unverified Document bytes, ACK unsafe state,
+  corrupt or fork replicated state, silently drop Raft authority messages,
+  bypass committed metadata authority, publish partial restored Blocks, or let
+  release evidence contradict the actual data-integrity status.
 - Accepted ADR scope is required unless explicitly superseded.
 
 ## 5. Current Tracker Snapshot
@@ -520,6 +526,10 @@ that required durable ADRs.
 - **NFR-7 Test coverage by risk:** Required features need positive path,
   fail-closed path, restart/rebuild or recovery path where relevant, and the
   narrowest local/deployed gate that proves the claim.
+- **NFR-8 Data-integrity blocker discipline:** Any unresolved data-integrity
+  defect or contradictory data-integrity release evidence blocks final V2 PASS.
+  Release closure must link the fix, regression test, affected requirement,
+  verification command, and artifact before returning to PASS.
 
 ## 9. Non-Goals
 

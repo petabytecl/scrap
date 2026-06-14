@@ -13,6 +13,7 @@ Runtime evidence status: PASS.
 - PASS: Story 1.3 Verified Read and Metadata Inspection. Evidence: `_bmad-output/implementation-artifacts/1-3-verified-read-and-metadata-inspection.md` records red/green cancellation and corruption tests, block/index/server/shard gates, race gates, package-boundary checks, and full `make check` passes.
 - PASS: Story 1.4 Transaction-Scoped Document Discovery. Evidence: `_bmad-output/implementation-artifacts/1-4-transaction-scoped-document-discovery.md` records red/green discovery cancellation tests, index/server/shard gates, race gates, package-boundary checks, leak-scan evidence, and full `make check` passes.
 - PASS: Story 1.5 Core Gateway Restart and Rebuild Evidence. Evidence: `_bmad-output/implementation-artifacts/1-5-core-gateway-restart-and-rebuild-evidence.md` records current restart, rebuild, rebuilding-status, package, race, boundary, leak-scan, and full-check gates.
+- PASS: Story 1.6 Fail Closed on Missing Document SHA-256 Verification. Evidence: `_bmad-output/implementation-artifacts/1-6-fail-closed-on-missing-document-sha256-verification.md` records red/green zero-SHA256 tests for Block reads, `VerifyBlock`, and Shard `ReadDocument` fail-closed behavior.
 - CONCERNS: GitHub issue linkage is still not assigned in the BMAD story artifact. Owner: release owner before implementation PR. This is tracker hygiene, not missing P0 runtime evidence.
 - FAIL: none.
 
@@ -25,13 +26,25 @@ Runtime evidence status: PASS.
 - PASS: `env GOCACHE=/tmp/scrap-v2-go-build make package-boundaries` passed.
 - FAIL then PASS: `env GOCACHE=/tmp/scrap-v2-go-build make check` first failed only on lint shape, then passed after helper cleanup and mapper complexity reduction.
 
+## Current Story 1.6 Evidence
+
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/block -run 'TestP0.*ZeroSHA256|TestP0VerifyBlock' -count=1` failed before implementation because `ReadDocumentTwoPass` accepted all-zero SHA-256 metadata and `VerifyBlock` reported no `doc_sha256` corruption.
+- RED: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestP0.*ZeroSHA256' -count=1` failed before implementation because `ReadDocument` returned nil error for visible zero-digest metadata.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/block -run 'TestP0.*ZeroSHA256|TestP0VerifyBlock|TestTwoPassCorruptSHA256|TestVerifyBlock_DocSHA256Mismatch|TestVerifyBlock_EncryptedEntryVerifiesStoredCiphertext' -count=1`.
+- PASS: `env GOCACHE=/tmp/scrap-v2-go-build go test ./internal/shard -run 'TestP0.*ZeroSHA256|ReadDocument.*FailsClosed|TestReadDocumentReturnsCommittedMetadataAndBytes' -count=1`.
+
 ## Boundary Summary
 
 - `internal/store/errors.go`: added a stable unavailable reason for projection rebuild state. Store remains a domain package and still has no gRPC dependency.
 - `internal/server/server.go`: central Store error mapping now maps rebuild-in-progress to public `Unavailable` with stable ErrorInfo details.
 - `internal/server/restart_rebuild_test.go`: added public gRPC evidence for rebuild status mapping and a registered real Shard-backed restart test.
 - `internal/shard/restart_rebuild_test.go`: added direct Shard restart, exact replay, conflict, stale Projection rebuild, and corrupt metadata fail-closed evidence.
+- `internal/block/reader.go`: zero SHA-256 metadata now fails Block read verification instead of skipping the Document SHA-256 check.
+- `internal/block/verify.go`: zero SHA-256 metadata now records `CorruptionDocSHA256` in Block verification used by scrub/restore paths.
+- `internal/block/zero_sha256_test.go`: added P0 Block read and Block verification regression tests for all-zero SHA-256.
+- `internal/shard/zero_sha256_read_test.go`: added P0 Shard read fail-closed regression test for visible all-zero SHA-256 metadata.
 - `_bmad-output/implementation-artifacts/1-5-core-gateway-restart-and-rebuild-evidence.md`: records Story 1.5 development evidence.
+- `_bmad-output/implementation-artifacts/1-6-fail-closed-on-missing-document-sha256-verification.md`: records Story 1.6 development evidence.
 - `_bmad-output/implementation-artifacts/epic-1-evidence-rollup.md`: records this Epic 1 closure rollup.
 
 ## Routing And Privacy

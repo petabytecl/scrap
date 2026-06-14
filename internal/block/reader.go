@@ -87,16 +87,20 @@ func verifyPass(blkPath string, entry IndexEntry) error {
 		hasher.Write(payload)
 	}
 
-	var emptyDigest [32]byte
-	if entry.SHA256 != emptyDigest {
-		var gotDigest [32]byte
-		copy(gotDigest[:], hasher.Sum(nil))
-		if gotDigest != entry.SHA256 {
-			return fmt.Errorf("%w: document integrity check failed", ErrSHA256Mismatch)
-		}
+	if isZeroSHA256(entry.SHA256) {
+		return fmt.Errorf("%w: document integrity check missing SHA-256", ErrSHA256Mismatch)
+	}
+	var gotDigest [32]byte
+	copy(gotDigest[:], hasher.Sum(nil))
+	if gotDigest != entry.SHA256 {
+		return fmt.Errorf("%w: document integrity check failed", ErrSHA256Mismatch)
 	}
 
 	return nil
+}
+
+func isZeroSHA256(digest [32]byte) bool {
+	return digest == [32]byte{}
 }
 
 func validateReadFrameSequence(hdr FrameHeader, frameSeq uint32) error {

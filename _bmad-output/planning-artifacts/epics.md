@@ -392,6 +392,10 @@ S3/IAM `make production-rehearsal`, and final PASS/CONCERNS/FAIL release gate.
   evidence artifacts are introduced or changed.
 - Any missing P0 evidence is FAIL. Any high-risk evidence gap with an owner and
   mitigation is CONCERNS. Silent waivers are not allowed.
+- Any confirmed or plausible data-integrity bug discovered after story closure
+  reopens the owning feature or evidence epic and blocks final release PASS
+  until a fix, regression test, verification command, and release artifact are
+  linked.
 - Stories should touch one primary boundary when practical: proto contract,
   `internal/cmd` composition, `internal/server` routing, store/router,
   `internal/peer`, `internal/shard`, `internal/index`, `internal/backend`,
@@ -585,6 +589,40 @@ language.
 **Then** storage identity remains `(transaction_id, document_name)` while Shard
 authority and route context remain recoverable.
 **And** AC-1.5.4 evidence records the Shard-context fixture used by Epic 2.
+
+### Story 1.6: Fail Closed on Missing Document SHA-256 Verification
+
+**Requirements:** FR-3, NFR-1, NFR-7, NFR-8.
+
+As a release owner,
+I want visible Document reads to fail closed when committed metadata lacks a
+valid SHA-256 digest,
+So that S.C.R.A.P. never serves unverified bytes.
+
+**Acceptance Criteria:**
+
+**Given** a Block reader entry with an all-zero SHA-256 digest
+**When** read verification runs
+**Then** the read fails closed instead of skipping Document digest verification.
+**And** AC-1.6.1 evidence includes the targeted `internal/block` regression test.
+
+**Given** valid historical fixtures
+**When** read verification runs
+**Then** the implementation either proves all production metadata has non-zero
+SHA-256 or maps zero digest entries to a typed corruption failure.
+**And** AC-1.6.2 evidence records the compatibility decision and affected
+boundary.
+
+**Given** shard-level read verification is exercised
+**When** a zero-digest metadata fixture is visible
+**Then** S.C.R.A.P. returns a typed failure and no partial or unverified bytes.
+**And** AC-1.6.3 evidence records the shard-level read verification command.
+
+**Given** release evidence is updated
+**When** final closure is evaluated
+**Then** the affected FR-3 row records PASS, CONCERNS, or FAIL with the fix,
+test, command, and artifact linked.
+**And** AC-1.6.4 evidence proves the data-integrity blocker is no longer open.
 
 ## Epic 2: Operators Can Run a Shard-Aware Cell
 
@@ -781,6 +819,79 @@ authority.
 diagnostics, restart/rebuild, and redaction evidence are linked.
 **And** AC-2.6.3 records PASS, CONCERNS, or FAIL using the V2 release gate
 language.
+
+### Story 2.7: Bound Peer `ReplicateDocument` Input Before Side Effects
+
+**Requirements:** FR-4, FR-5, NFR-2, NFR-3, NFR-8.
+
+As a platform operator,
+I want peer Document replication to enforce the same input bounds as public
+writes before allocation-heavy work or side effects,
+So that a buggy or compromised peer cannot pressure memory, disk, or replica
+state outside the Document contract.
+
+**Acceptance Criteria:**
+
+**Given** a peer replication init has invalid transaction ID, Document name, or
+content type
+**When** `ReplicateDocument` receives it
+**Then** the request is rejected before Block writer or replication sink side
+effects.
+**And** AC-2.7.1 evidence records the validation test and changed-boundary list.
+
+**Given** a peer stream sends a chunk larger than `MaxClientChunkBytes`
+**When** the chunk is received
+**Then** replication fails with a bounded typed error before buffering the full
+Document.
+**And** AC-2.7.2 evidence records the peer transport test.
+
+**Given** total replicated bytes exceed `MaxDocumentBytes`
+**When** the stream continues
+**Then** replication fails without publishing accepted state.
+**And** AC-2.7.3 evidence proves no committed metadata or visible Document is
+created.
+
+**Given** the `replicationSink` path is configured
+**When** oversized input arrives
+**Then** input is bounded before `bytes.Buffer` can grow without limit.
+**And** AC-2.7.4 evidence covers the sink path.
+
+**Given** the fix is reviewed
+**When** package boundaries are checked
+**Then** `internal/peer` remains a transport boundary connected to Shard
+behavior through narrow interfaces.
+**And** AC-2.7.5 evidence records `go test ./internal/peer/... ./internal/cmd/...`.
+
+### Story 2.8: Reject Malformed `ForwardRaftStream` Messages
+
+**Requirements:** FR-4, FR-5, NFR-3, NFR-8.
+
+As a platform operator,
+I want malformed streamed Raft messages to fail visibly,
+So that peer transport bugs cannot silently drop authority messages.
+
+**Acceptance Criteria:**
+
+**Given** malformed protobuf bytes arrive on `ForwardRaftStream`
+**When** the peer server handles the message
+**Then** the stream returns an observable error instead of `nil`.
+**And** AC-2.8.1 evidence records the malformed-stream regression test.
+
+**Given** a malformed message is received
+**When** handling fails
+**Then** no Raft route side effect occurs.
+**And** AC-2.8.2 evidence records the no-route assertion.
+
+**Given** malformed input is audited
+**When** evidence is reviewed
+**Then** audit and log output remains bounded and redacted.
+**And** AC-2.8.3 evidence records the redaction review result.
+
+**Given** unary `ForwardRaft` and streaming `ForwardRaftStream` receive malformed
+messages
+**When** errors are mapped
+**Then** both paths have consistent observable rejection semantics.
+**And** AC-2.8.4 evidence records `go test ./internal/peer/...`.
 
 ## Epic 3: Operators Can Prove Backend Durability and Restore-First Cold Reads
 
@@ -1027,6 +1138,46 @@ explicit restore verification.
 **Then** closure is FAIL, not deferred to Epic 6.
 **And** AC-3.7.3 records PASS, CONCERNS, or FAIL using the V2 release gate
 language.
+
+### Story 3.8: Make Scrub Coordination Concurrency Deterministic
+
+**Requirements:** FR-3, FR-6, FR-8, NFR-1, NFR-7, NFR-8.
+
+As a storage operator,
+I want scrub coordination to behave deterministically under duplicate and
+overlapping requests,
+So that integrity verification and repair workflows cannot hang or lose results.
+
+**Acceptance Criteria:**
+
+**Given** a duplicate `scrubID`
+**When** a second consistency check is proposed
+**Then** behavior is deterministic and the first waiter cannot hang
+indefinitely.
+**And** AC-3.8.1 evidence records the duplicate-ID regression test.
+
+**Given** overlapping scrubs with different IDs
+**When** results apply
+**Then** each result remains retrievable by ID for the defined retention window
+or is explicitly rejected with a documented policy.
+**And** AC-3.8.2 evidence records cache behavior by scrub ID.
+
+**Given** `applyConsistencyCheck` notifies a waiter
+**When** the send occurs
+**Then** the coordinator does not hold the mutex across a potentially blocking
+send.
+**And** AC-3.8.3 evidence records a deterministic lock/send regression test.
+
+**Given** concurrency tests run
+**When** cancellation, timeout, cleanup, and race-sensitive paths are exercised
+**Then** tests use channels, contexts, or bounded polling, not sleeps.
+**And** AC-3.8.4 evidence records the synchronization strategy.
+
+**Given** the scrub coordinator fix is complete
+**When** verification runs
+**Then** `go test ./internal/shard/...` and `go test -race ./internal/shard/...`
+pass.
+**And** AC-3.8.5 evidence links both commands.
 
 ## Epic 4: Operators Can Run Fail-Closed Security and OpenBao Workflows
 
@@ -1797,3 +1948,74 @@ explicitly out of scope.
 **Then** every PASS traces back to a feature epic, artifact, command, owner,
 timestamp, and commit/ref.
 **And** AC-6.7.4 evidence records the rollup from Epic 1 through Epic 6.
+
+### Story 6.8: Reconcile Release Evidence and Fail Closed on Contradictions
+
+**Requirements:** FR-16, NFR-5, NFR-8.
+
+As a release owner,
+I want release artifacts and gate scripts to fail closed when evidence
+contradicts itself,
+So that SCRAP cannot report final PASS while required data-integrity or tier gate
+evidence still reports FAIL.
+
+**Acceptance Criteria:**
+
+**Given** `closure-policy-final-gate-decision.md` says final PASS while
+`release-tier-gates-evidence.md` or `release-evidence-matrix.md` says FAIL
+**When** gate validation runs
+**Then** final closure fails.
+**And** AC-6.8.1 evidence records a fixture test for the contradiction.
+
+**Given** Tier 2 or Tier 3 evidence has current PASS runs
+**When** Story 6.5 artifacts are updated
+**Then** all release artifacts cite the same commit/ref, run links, artifact
+names, retention, and redaction proof.
+**And** AC-6.8.2 evidence records the reconciled release artifact paths.
+
+**Given** a release artifact references stale or local-only evidence
+**When** final closure is evaluated
+**Then** the result is FAIL or CONCERNS, never PASS.
+**And** AC-6.8.3 evidence records weak-proof rejection coverage.
+
+**Given** gate script fixture tests run
+**When** `check-e2e-gates.sh` and the release tier/closure validator path are
+exercised
+**Then** contradictory PASS/FAIL state is rejected.
+**And** AC-6.8.4 evidence records `go test ./scripts/...` and `make gates-check`.
+
+### Story 6.9: Add Vertical Data-Integrity Evidence Across Shard, Raft, Backend, Encryption, and Scrub
+
+**Requirements:** FR-3, FR-4, FR-6, FR-8, FR-10, FR-16, NFR-7, NFR-8.
+
+As a release owner,
+I want one vertical data-integrity test path covering Shard authority, Raft
+metadata, Backend storage, encryption, and scrub verification,
+So that final release closure is not based only on isolated adapter tests.
+
+**Acceptance Criteria:**
+
+**Given** an encrypted Document is written through a Shard-backed path
+**When** metadata commits and Backend upload or restore behavior is exercised
+**Then** reads return verified bytes or a typed failure.
+**And** AC-6.9.1 evidence records the integration command and covered boundaries.
+
+**Given** corruption is introduced in the Block, Backend object, or committed
+metadata fixture
+**When** read, scrub, or restore runs
+**Then** S.C.R.A.P. fails closed without returning partial or unverified bytes.
+**And** AC-6.9.2 evidence records the corruption fixtures and typed outcomes.
+
+**Given** scrub or repair evidence is collected
+**When** artifacts are reviewed
+**Then** raw Document identifiers, Backend keys, key material, and Document bytes
+are absent.
+**And** AC-6.9.3 evidence records the redaction proof.
+
+**Given** final release evidence is reviewed
+**When** this vertical test has local-only, Tier 2, or Tier 3 limits
+**Then** the artifact states which boundaries are covered locally, which require
+Tier 2/Tier 3, and which are explicitly deferred with owner and mitigation.
+**And** AC-6.9.4 evidence records `go test ./test/integration/...`,
+`make tier2-e2e-up`, and `make tier3-evidence-up STRESS_SCENARIO=throughput`
+where applicable.
