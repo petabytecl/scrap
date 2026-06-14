@@ -101,6 +101,7 @@ func (s *Shard) beginRestore(blockID uint64) (*blockRestoreCall, bool) {
 	defer s.restoreMu.Unlock()
 
 	if call, ok := s.restores[blockID]; ok {
+		s.notifyRestoreWaiterEnteredForTestLocked(blockID)
 		return call, false
 	}
 	if s.restores == nil {
@@ -109,6 +110,24 @@ func (s *Shard) beginRestore(blockID uint64) (*blockRestoreCall, bool) {
 	call := &blockRestoreCall{done: make(chan struct{})}
 	s.restores[blockID] = call
 	return call, true
+}
+
+func (s *Shard) notifyRestoreWaiterEnteredForTestLocked(blockID uint64) {
+	ch := s.restoreWaiterEnteredForTest
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- blockID:
+	default:
+	}
+}
+
+func (s *Shard) SetRestoreWaiterEnteredForTest(ch chan uint64) {
+	s.restoreMu.Lock()
+	defer s.restoreMu.Unlock()
+
+	s.restoreWaiterEnteredForTest = ch
 }
 
 func waitRestore(ctx context.Context, call *blockRestoreCall) error {

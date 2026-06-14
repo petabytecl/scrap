@@ -102,7 +102,7 @@ func TestNewAppBuildsTwoShardTopology(t *testing.T) {
 	}
 }
 
-func TestNewAppLeavesSingleShardAdminRoutesDisabledForMultiShardSingleLocalMember(t *testing.T) {
+func TestNewAppRegistersShardScopedAdminRoutesForMultiShardSingleLocalMember(t *testing.T) {
 	cfg := testAppConfig(t)
 	cfg.TestHooks = true
 	cfg.ShardPlacementFile = writePlacementFile(t, `{
@@ -130,8 +130,8 @@ func TestNewAppLeavesSingleShardAdminRoutesDisabledForMultiShardSingleLocalMembe
 	} {
 		rec := httptest.NewRecorder()
 		app.adminSrv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s %s status = %d, want 404", req.Method, req.URL.Path, rec.Code)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s %s status = %d, want 400", req.Method, req.URL.Path, rec.Code)
 		}
 	}
 
@@ -168,6 +168,7 @@ func TestNewAppRegistersMultiShardTestHooks(t *testing.T) {
 		"doc_count": 1,
 		"completed": true
 	}`, http.StatusNoContent)
+	assertAdminPostStatus(t, app, "/admin/eviction/plans", `{}`, http.StatusBadRequest)
 	assertAdminPostStatus(t, app, "/admin/rewrap/document", `{}`, http.StatusBadRequest)
 	assertAdminPostStatus(t, app, "/admin/quarantine/confirm", `{}`, http.StatusBadRequest)
 	assertAppHealthUploadPressure(t, app, "ok", 0)

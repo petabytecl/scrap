@@ -662,6 +662,10 @@ func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
 	stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
 
 	const readers = 5
+	waiters := make(chan uint64, readers)
+	s.SetRestoreWaiterEnteredForTest(waiters)
+	t.Cleanup(func() { s.SetRestoreWaiterEnteredForTest(nil) })
+
 	var ready sync.WaitGroup
 	ready.Add(readers)
 	start := make(chan struct{})
@@ -691,7 +695,7 @@ func TestReadDocumentJoinsConcurrentBlockRestore(t *testing.T) {
 	ready.Wait()
 	close(start)
 	waitRestoreBackendStarted(t, countingBackend.started)
-	time.Sleep(25 * time.Millisecond)
+	waitRestoreWaitersEntered(t, waiters, 1, readers-1)
 	releaseBackend()
 
 	for range readers {
@@ -720,6 +724,10 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 
 	content := bytes.Repeat([]byte("cancelled leader restore "), 4)
 	stageEvictedConfirmedBlock(ctx, t, s, countingBackend.Backend, content)
+
+	waiters := make(chan uint64, 1)
+	s.SetRestoreWaiterEnteredForTest(waiters)
+	t.Cleanup(func() { s.SetRestoreWaiterEnteredForTest(nil) })
 
 	leaderCtx, cancelLeader := context.WithCancel(ctx)
 	leaderResult := make(chan readResult, 1)
@@ -752,7 +760,7 @@ func TestReadDocumentSharedRestoreSurvivesLeaderReaderCancellation(t *testing.T)
 		followerErr <- nil
 	}()
 
-	time.Sleep(25 * time.Millisecond)
+	waitRestoreWaitersEntered(t, waiters, 1, 1)
 	cancelLeader()
 	releaseBackend()
 
@@ -1483,6 +1491,21 @@ func waitRestoreBackendStarted(t *testing.T, started <-chan struct{}) {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for restore Backend GetObject")
+	}
+}
+
+func waitRestoreWaitersEntered(t *testing.T, waiters <-chan uint64, blockID uint64, want int) {
+	t.Helper()
+
+	for range want {
+		select {
+		case got := <-waiters:
+			if got != blockID {
+				t.Fatalf("restore waiter block ID = %d, want %d", got, blockID)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %d restore waiters to join Block %d", want, blockID)
+		}
 	}
 }
 

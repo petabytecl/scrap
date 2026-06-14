@@ -58,6 +58,7 @@ func TestGenerateWritesEvidenceBundleAndPassesWithCurrentRunProof(t *testing.T) 
 	assertEvidenceProbeHealthIncludesSecurityMode(t, result.BundlePath)
 	assertSecurityEvidenceReport(t, result.BundlePath)
 	assertTraceEvidenceRedacted(t, result.BundlePath)
+	assertLogEvidenceRedacted(t, result.BundlePath)
 	assertBundlePrivacyScan(t, result.BundlePath, "PASS")
 	assertBundleManifest(t, result.BundlePath)
 }
@@ -110,6 +111,34 @@ func assertTraceEvidenceRedacted(t *testing.T, root string) {
 	}
 	if trace.TraceID != "" {
 		t.Fatalf("trace evidence leaked traceID: %+v", trace)
+	}
+}
+
+func assertLogEvidenceRedacted(t *testing.T, root string) {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(root, "logs/scrapd.json")) //nolint:gosec // test reads its own bundle artifact.
+	if err != nil {
+		t.Fatalf("read logs/scrapd.json: %v", err)
+	}
+	var logEvidence struct {
+		Query   string `json:"query"`
+		Logs    int    `json:"log_count"`
+		Redact  bool   `json:"redacted"`
+		Marker  string `json:"marker"`
+		Payload struct {
+			Status string `json:"status"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &logEvidence); err != nil {
+		t.Fatalf("parse logs/scrapd.json: %v\n%s", err, data)
+	}
+	if logEvidence.Query == "" || logEvidence.Logs == 0 || !logEvidence.Redact || logEvidence.Marker == "" || logEvidence.Payload.Status != "success" {
+		t.Fatalf("log evidence = %+v, want redacted Loki response with log count", logEvidence)
+	}
+	text := string(data)
+	if strings.Contains(text, "log_file_path") || strings.Contains(text, "/var/log/containers") {
+		t.Fatalf("log evidence leaked sensitive path metadata: %s", text)
 	}
 }
 
@@ -597,7 +626,7 @@ func (t fakeEvidenceTransport) logResponse() string {
 	if t.signals.missingLog {
 		return `{"status":"success","data":{"resultType":"streams","result":[]}}`
 	}
-	return `{"status":"success","data":{"resultType":"streams","result":[{"stream":{"service_name":"scrapd"},"values":[["1780056000000000000","evidence_marker=scrap-evidence-20260529T120000Z-abc1234"]]}]}}`
+	return `{"status":"success","data":{"resultType":"streams","result":[{"stream":{"service_name":"scrapd","log_file_path":"/var/log/containers/scrapd.log"},"values":[["1780056000000000000","evidence_marker=scrap-evidence-20260529T120000Z-abc1234"]]}]}}`
 }
 
 func (t fakeEvidenceTransport) metricResponse(rawQuery string) string {

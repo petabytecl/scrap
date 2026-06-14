@@ -72,6 +72,91 @@ func NewWriter(path string, shardID, blockID uint64) (*Writer, error) {
 	}, nil
 }
 
+// OpenWriter opens an existing Block for appending after validating its header
+// and recovering the next document sequence from existing Frames.
+func OpenWriter(path string, shardID, blockID uint64) (*Writer, error) {
+	if err := VerifyHeader(path, shardID, blockID); err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	if err != nil {
+		return nil, fmt.Errorf("block: open writer %s: %w", path, err)
+	}
+
+	offset, docSeq, docCount, err := scanWriterState(f, path)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("block: seek append offset %s: %w", path, err)
+	}
+
+	return &Writer{
+		f:        f,
+		path:     path,
+		shardID:  shardID,
+		blockID:  blockID,
+		offset:   offset,
+		docSeq:   docSeq,
+		docCount: docCount,
+	}, nil
+}
+
+func scanWriterState(f *os.File, path string) (int64, uint32, uint32, error) {
+	if _, err := f.Seek(HeaderSize, io.SeekStart); err != nil {
+		return 0, 0, 0, fmt.Errorf("block: scan writer seek %s: %w", path, err)
+	}
+
+	offset := int64(HeaderSize)
+	var docSeq uint32
+	var frameSeq uint32
+	var docCount uint32
+	for {
+		hdr, payload, err := ReadFrame(f)
+		if errors.Is(err, io.EOF) {
+			if frameSeq != 0 {
+				return 0, 0, 0, fmt.Errorf("block: open writer %s: incomplete document at EOF", path)
+			}
+			return offset, docSeq, docCount, nil
+		}
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("block: scan writer %s: %w", path, err)
+		}
+		if err := validateWriterScanFrame(hdr, docSeq, frameSeq); err != nil {
+			return 0, 0, 0, fmt.Errorf("block: scan writer %s: %w", path, err)
+		}
+
+		offset += int64(FrameHeaderSize) + int64(len(payload))
+		if isLastFrame(hdr.Flags) {
+			docSeq++
+			docCount++
+			frameSeq = 0
+			continue
+		}
+		frameSeq++
+	}
+}
+
+func validateWriterScanFrame(hdr FrameHeader, docSeq, frameSeq uint32) error {
+	if hdr.DocSeq != docSeq {
+		return fmt.Errorf("doc_seq %d, want %d", hdr.DocSeq, docSeq)
+	}
+	if hdr.FrameSeq != frameSeq {
+		return fmt.Errorf("frame_seq %d, want %d", hdr.FrameSeq, frameSeq)
+	}
+	return validateWriterScanFrameFlags(hdr.Flags, frameSeq)
+}
+
+func validateWriterScanFrameFlags(flags byte, frameSeq uint32) error {
+	if flags != frameFlags(frameSeq, isLastFrame(flags)) {
+		return fmt.Errorf("invalid frame flags 0x%02x for frame_seq %d", flags, frameSeq)
+	}
+	return nil
+}
+
 //nolint:revive // txID, docName, contentType are part of the public API contract; callers pass document metadata
 func (w *Writer) AppendDocument(txID, docName, contentType string, body io.Reader) (AppendResult, error) {
 	if w.closed {

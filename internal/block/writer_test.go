@@ -140,3 +140,36 @@ func TestBlockWriterMultiFrameDocument(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestOpenWriterRejectsInvalidFrameFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.blk")
+
+	w, err := block.NewWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // test-owned temp file.
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if err := block.WriteFrame(f, block.FrameHeader{
+		DocSeq:   0,
+		FrameSeq: 0,
+		Flags:    0,
+	}, []byte("bad flags")); err != nil {
+		_ = f.Close()
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close corrupt writer: %v", err)
+	}
+
+	if _, err := block.OpenWriter(path, 1, 100); err == nil {
+		t.Fatal("OpenWriter succeeded, want invalid frame flags error")
+	}
+}

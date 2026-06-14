@@ -357,6 +357,7 @@ type parsedBackendObjectKey struct {
 	base    string
 	ext     string
 	shardID uint64
+	blockID uint64
 }
 
 func parseBackendObjectKey(key string) (parsedBackendObjectKey, bool) {
@@ -377,10 +378,15 @@ func parseBackendObjectKey(key string) (parsedBackendObjectKey, bool) {
 	if !ok {
 		return parsedBackendObjectKey{}, false
 	}
+	blockID, ok := parseFixedHexUint64(block)
+	if !ok {
+		return parsedBackendObjectKey{}, false
+	}
 	return parsedBackendObjectKey{
 		base:    prefix + parts[0] + "/" + block,
 		ext:     ext,
 		shardID: shardID,
+		blockID: blockID,
 	}, true
 }
 

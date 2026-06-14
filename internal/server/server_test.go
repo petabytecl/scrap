@@ -209,6 +209,13 @@ func writeDocumentWithMessages(ctx context.Context, client scrapv1.DocumentServi
 	}
 	for _, msg := range messages {
 		if err := stream.Send(msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				_, err = stream.CloseAndRecv()
+				if err != nil {
+					return fmt.Errorf("close write document stream: %w", err)
+				}
+				return nil
+			}
 			return fmt.Errorf("send write document message: %w", err)
 		}
 	}

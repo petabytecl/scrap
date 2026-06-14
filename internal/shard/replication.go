@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"os"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
@@ -115,6 +116,12 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 	// Validate offset before appending to prevent poisoning the follower block with data at the wrong position.
 	currentOffset := s.blockWriter.Offset()
 	wantOffset := safeUint64ToInt64(init.GetStartOffset())
+	if currentOffset < wantOffset {
+		if err := s.repairReplicaOffsetLocked(ctx, init.GetBlockId(), wantOffset); err != nil {
+			return nil, fmt.Errorf("shard: replica offset %d, want %d: repair failed: %w", currentOffset, wantOffset, err)
+		}
+		currentOffset = s.blockWriter.Offset()
+	}
 	if currentOffset != wantOffset {
 		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
 	}
@@ -234,6 +241,9 @@ func splitReplicatedStoredFrames(data []byte, frameCount uint32) ([][]byte, erro
 }
 
 func (s *Shard) advanceReplicaBlockLocked(targetBlockID uint64) error {
+	if s.blockWriter != nil && s.blockWriter.BlockID() > targetBlockID {
+		return s.reopenPreviousReplicaBlockLocked(targetBlockID)
+	}
 	for s.blockWriter != nil && s.blockWriter.BlockID() < targetBlockID {
 		if err := s.idxWriter.Close(); err != nil {
 			return fmt.Errorf("shard: close replica index: %w", err)
@@ -243,6 +253,53 @@ func (s *Shard) advanceReplicaBlockLocked(targetBlockID uint64) error {
 		}
 		if err := s.openNewBlock(); err != nil {
 			return fmt.Errorf("shard: open replica block: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Shard) reopenPreviousReplicaBlockLocked(targetBlockID uint64) error {
+	currentBlockID := s.blockWriter.BlockID()
+	if currentBlockID != targetBlockID+1 {
+		return fmt.Errorf("shard: replica block %d is ahead of target block %d", currentBlockID, targetBlockID)
+	}
+	if s.blockWriter.Offset() != block.HeaderSize {
+		return fmt.Errorf("shard: replica block %d is ahead of target block %d and is not empty", currentBlockID, targetBlockID)
+	}
+	bw, err := block.OpenWriter(s.blockPath(targetBlockID), s.shardID, targetBlockID)
+	if err != nil {
+		return fmt.Errorf("shard: reopen replica block %d: %w", targetBlockID, err)
+	}
+	iw, err := block.OpenIndexWriter(s.idxPath(targetBlockID))
+	if err != nil {
+		_ = bw.Close()
+		return fmt.Errorf("shard: reopen replica index %d: %w", targetBlockID, err)
+	}
+
+	if err := s.idxWriter.Close(); err != nil {
+		_ = iw.Close()
+		_ = bw.Close()
+		return fmt.Errorf("shard: close empty replica index: %w", err)
+	}
+	if err := s.blockWriter.Close(); err != nil {
+		_ = iw.Close()
+		_ = bw.Close()
+		return fmt.Errorf("shard: close empty replica block: %w", err)
+	}
+	s.blockWriter = bw
+	s.idxWriter = iw
+	s.nextBlockID = currentBlockID
+
+	if err := removeEmptyReplicaBlockFiles(s.blockPath(currentBlockID), s.idxPath(currentBlockID)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeEmptyReplicaBlockFiles(paths ...string) error {
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("shard: remove empty replica block file %s: %w", path, err)
 		}
 	}
 	return nil

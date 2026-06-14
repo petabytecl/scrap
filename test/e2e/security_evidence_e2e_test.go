@@ -444,11 +444,16 @@ func encryptedRestoreEvidence(t *testing.T, leaderPod, freshBackendKey, txID, do
 
 func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (eviction.Plan, bool, bool) {
 	t.Helper()
+	parsedFreshBlock, ok := parseBackendObjectKey(freshBackendKey)
+	if !ok {
+		t.Fatalf("parse fresh Backend key %q", freshBackendKey)
+	}
 	addr, stop := startPodPortForward(t, pod, 9100)
 	defer stop()
 	maxBlocks := 10
 	body, err := json.Marshal(eviction.PlanRequest{
 		MemberHostname: pod,
+		ShardID:        &parsedFreshBlock.shardID,
 		MaxBlocks:      &maxBlocks,
 		Reason:         eviction.ReasonEvidenceRun,
 	})
@@ -481,7 +486,7 @@ func postSecurityEvictionPlan(t *testing.T, pod, freshBackendKey string) (evicti
 	if err := json.Unmarshal(data, &plan); err != nil {
 		t.Fatalf("decode eviction plan response: %v\n%s", err, data)
 	}
-	return plan, planSelectsBackendKey(plan, freshBackendKey), false
+	return plan, planSelectsBackendBlock(plan, parsedFreshBlock), false
 }
 
 func encryptedRestoreConcern(unsupported bool) string {
@@ -491,9 +496,9 @@ func encryptedRestoreConcern(unsupported bool) string {
 	return "CONCERNS: restore evidence deferred to Epic 3 Stories 3.4 and 3.7; no non-leader selected the fresh Backend Block"
 }
 
-func planSelectsBackendKey(plan eviction.Plan, backendKey string) bool {
+func planSelectsBackendBlock(plan eviction.Plan, backendBlock parsedBackendObjectKey) bool {
 	for _, block := range plan.Selected {
-		if block.BackendKey == backendKey {
+		if block.ShardID == backendBlock.shardID && block.BlockID == backendBlock.blockID {
 			return true
 		}
 	}

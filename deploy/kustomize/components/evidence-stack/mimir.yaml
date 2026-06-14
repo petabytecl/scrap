@@ -43,11 +43,15 @@ spec:
             - -server.http-listen-port=9009
             - -blocks-storage.backend=filesystem
             - -blocks-storage.filesystem.dir=/data/blocks
+            - -blocks-storage.tsdb.dir=/data/tsdb
+            - -blocks-storage.bucket-store.sync-dir=/data/tsdb-sync
             - -compactor.data-dir=/data/compactor
             - -alertmanager-storage.backend=filesystem
             - -alertmanager-storage.filesystem.dir=/data/alertmanager
+            - -alertmanager.storage.path=/data/alertmanager-state
             - -ruler-storage.backend=filesystem
             - -ruler-storage.filesystem.dir=/data/ruler
+            - -ruler.rule-path=/data/ruler-rule-path
             - -compactor.ring.store=memberlist
             - -distributor.ring.store=memberlist
             - -ingester.ring.store=memberlist

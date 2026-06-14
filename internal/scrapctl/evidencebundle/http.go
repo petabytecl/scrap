@@ -140,17 +140,91 @@ func captureLogEvidence(ctx context.Context, client *http.Client, cfg Config, di
 	if !ok || !jsonHasNestedKeys(body, "data", "result") {
 		body = []byte(`{"status":"error","data":{"result":[]}}`)
 	}
-	if err := writeRawJSONFile(filepath.Join(dir, "scrapd.json"), body); err != nil {
-		return false, "", err
-	}
 	if probeFailed {
+		if err := writeLogEvidence(dir, marker, body, 0); err != nil {
+			return false, "", err
+		}
 		return false, "admin evidence log probe failed before Loki query", nil
 	}
 	count := logLineCount(body)
+	if err := writeLogEvidence(dir, marker, body, count); err != nil {
+		return false, "", err
+	}
 	if count > 0 {
 		return true, strconv.Itoa(count) + " log line(s) found for evidence marker " + marker, nil
 	}
 	return false, "no Loki log line found for evidence marker " + marker + " in current run window", nil
+}
+
+func writeLogEvidence(dir, marker string, body []byte, count int) error {
+	evidence := map[string]any{
+		"query":     `{service_name="scrapd"} |= "` + marker + `"`,
+		"log_count": count,
+		"redacted":  true,
+		"marker":    marker,
+		"response":  redactedLogResponse(body),
+	}
+	return writeJSONFile(filepath.Join(dir, "scrapd.json"), evidence)
+}
+
+func redactedLogResponse(body []byte) any {
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return map[string]any{
+			"status":      "error",
+			"parse_error": "invalid_json",
+		}
+	}
+	return redactLogValue(value)
+}
+
+func redactLogValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if shouldRedactLogField(key, child) {
+				continue
+			}
+			out[key] = redactLogValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = redactLogValue(child)
+		}
+		return out
+	case string:
+		if containsSensitiveLogString(typed) {
+			return "redacted"
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+func shouldRedactLogField(key string, value any) bool {
+	lowerKey := strings.ToLower(key)
+	if lowerKey == "log_file_path" || lowerKey == "filename" || lowerKey == "file_path" || lowerKey == "__path__" {
+		return true
+	}
+	if lowerKey == "path" {
+		if text, ok := value.(string); ok {
+			return containsSensitiveLogString(text)
+		}
+	}
+	return false
+}
+
+func containsSensitiveLogString(text string) bool {
+	for _, fragment := range []string{"/home/", "/Users/", "/var/", "/opt/", "/private/", "/tmp/"} {
+		if strings.Contains(text, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func captureCPUProfile(ctx context.Context, client *http.Client, cfg Config, dir string, window runWindow) (bool, string, error) {

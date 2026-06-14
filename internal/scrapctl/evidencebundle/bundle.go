@@ -604,7 +604,9 @@ func securityReportAuthzOK(report securityReportEvidence) bool {
 }
 
 func securityReportEncryptionOK(report securityReportEvidence) bool {
-	return report.EncryptedWriteReadOK && report.EncryptedBackendUploadOK && report.EncryptedRestoreOK
+	return report.EncryptedWriteReadOK &&
+		report.EncryptedBackendUploadOK &&
+		report.EncryptedRestoreOK
 }
 
 func securityReportRewrapOK(report securityReportEvidence) bool {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/petabytecl/scrap/internal/admin"
 	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/quarantine"
 	"github.com/petabytecl/scrap/internal/rewrap"
@@ -248,6 +249,10 @@ func appendShardAdminOptions(opts []admin.Option, cfg Config, topology startupTo
 	} else {
 		opts = append(opts,
 			admin.WithUploadPressureProvider(adapter),
+			admin.WithEvictionPlanner(adapter),
+			admin.WithEvictionApplier(adapter),
+			admin.WithEvictionPlanStatusProvider(adapter),
+			admin.WithEvictionHealthProvider(adapter),
 			admin.WithRewrapService(adapter),
 			admin.WithQuarantineService(adapter),
 		)
@@ -337,6 +342,103 @@ func (a appShardSetAdminAdapter) RewrapHealthSnapshot() rewrap.HealthSnapshot {
 		snapshot.Status = rewrap.StatusOK
 	}
 	return snapshot
+}
+
+func (a appShardSetAdminAdapter) CreateEvictionPlan(ctx context.Context, req eviction.PlanRequest) (eviction.Plan, error) {
+	localShard, err := a.localShardForEvictionRequest(req)
+	if err != nil {
+		return eviction.Plan{}, err
+	}
+	return localShard.CreateEvictionPlan(ctx, req)
+}
+
+func (a appShardSetAdminAdapter) ApplyEvictionPlan(ctx context.Context, req eviction.ApplyRequest) (eviction.ApplyResult, error) {
+	for _, shardID := range a.shards.IDs() {
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			continue
+		}
+		result, err := localShard.ApplyEvictionPlan(ctx, req)
+		if errors.Is(err, eviction.ErrPlanNotFound) {
+			continue
+		}
+		return result, err
+	}
+	return eviction.ApplyResult{}, eviction.ErrPlanNotFound
+}
+
+func (a appShardSetAdminAdapter) EvictionPlanStatus(ctx context.Context, planID string) (eviction.PlanStatus, error) {
+	for _, shardID := range a.shards.IDs() {
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			continue
+		}
+		status, err := localShard.EvictionPlanStatus(ctx, planID)
+		if errors.Is(err, eviction.ErrPlanNotFound) {
+			continue
+		}
+		return status, err
+	}
+	return eviction.PlanStatus{}, eviction.ErrPlanNotFound
+}
+
+func (a appShardSetAdminAdapter) EvictionHealthSnapshot(ctx context.Context) (eviction.HealthSnapshot, error) {
+	snapshot := eviction.HealthSnapshot{Pressure: eviction.HealthPressureOK}
+	failures := map[string]int{}
+	for _, shardID := range a.shards.IDs() {
+		localShard, ok := a.localShard(shardID)
+		if !ok {
+			failures[eviction.RestoreFailureUnknown]++
+			continue
+		}
+		next, err := localShard.EvictionHealthSnapshot(ctx)
+		if err != nil {
+			failures[eviction.RestoreFailureUnknown]++
+			continue
+		}
+		snapshot = mergeEvictionHealthSnapshot(snapshot, next, failures)
+	}
+	if len(failures) > 0 {
+		snapshot.RestoreFailuresByReason = failures
+		snapshot.Pressure = eviction.HealthPressureDegraded
+	}
+	if snapshot.Pressure == "" {
+		snapshot.Pressure = eviction.HealthPressureOK
+	}
+	return snapshot, nil
+}
+
+func (a appShardSetAdminAdapter) localShardForEvictionRequest(req eviction.PlanRequest) (*shard.Shard, error) {
+	shardID := req.ShardID
+	if shardID == nil {
+		ids := a.shards.IDs()
+		if len(ids) != 1 {
+			return nil, fmt.Errorf("%w: shard_id is required for multi-Shard eviction plan", eviction.ErrInvalidPlanRequest)
+		}
+		shardID = &ids[0]
+	}
+	localShard, ok := a.localShard(*shardID)
+	if !ok {
+		return nil, fmt.Errorf("%w: shard_id %d is not local", eviction.ErrInvalidPlanRequest, *shardID)
+	}
+	return localShard, nil
+}
+
+func mergeEvictionHealthSnapshot(current, next eviction.HealthSnapshot, failures map[string]int) eviction.HealthSnapshot {
+	if next.Pressure != "" && next.Pressure != eviction.HealthPressureOK {
+		current.Pressure = next.Pressure
+	}
+	current.EvictedBlocks += next.EvictedBlocks
+	current.EvictedBytes += next.EvictedBytes
+	current.HotCleanupNeededBlocks += next.HotCleanupNeededBlocks
+	current.MetadataLossBlocks += next.MetadataLossBlocks
+	current.UnexpectedLossBlocks += next.UnexpectedLossBlocks
+	current.QuarantinedBlocks += next.QuarantinedBlocks
+	current.RestoreFailedBlocks += next.RestoreFailedBlocks
+	for reason, count := range next.RestoreFailuresByReason {
+		failures[reason] += count
+	}
+	return current
 }
 
 func (a appShardSetAdminAdapter) ListContentQuarantines(ctx context.Context, filter quarantine.ListFilter) ([]quarantine.Record, error) {

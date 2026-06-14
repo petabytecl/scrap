@@ -96,6 +96,7 @@ type Shard struct {
 	idx             *index.Index
 	raft            raftNode
 	replicator      DocumentReplicator
+	blockTransferer scrub.BlockTransferer
 	upload          UploadConfig
 	eviction        EvictionConfig
 	evictionMetrics EvictionMetrics
@@ -142,8 +143,9 @@ type Shard struct {
 	rewrapHealthMu       sync.Mutex
 	rewrapHealthSnapshot rewrap.HealthSnapshot
 
-	restoreMu sync.Mutex
-	restores  map[uint64]*blockRestoreCall
+	restoreMu                   sync.Mutex
+	restores                    map[uint64]*blockRestoreCall
+	restoreWaiterEnteredForTest chan uint64
 }
 
 func (c *Config) applyDefaults() {
@@ -235,6 +237,7 @@ func Open(cfg Config) (*Shard, error) {
 		baseLogger:           baseLogger,
 		logger:               logger,
 		replicator:           cfg.Replicator,
+		blockTransferer:      cfg.BlockTransferer,
 		upload:               cfg.Upload,
 		eviction:             cfg.Eviction,
 		evictionMetrics:      cfg.EvictionMetrics,
