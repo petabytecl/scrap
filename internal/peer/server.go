@@ -487,7 +487,7 @@ func (s *Server) handleForwardRaftStreamRequest(ctx context.Context, router *Raf
 	var msg raftpb.Message
 	if err := msg.Unmarshal(req.Message); err != nil {
 		s.recordMalformedRaftMessage(ctx, audit.OperationForwardRaftStream, req.ShardId, err)
-		return recordAllowed, nil
+		return recordAllowed, status.Errorf(codes.InvalidArgument, "unmarshal raft message: %v", err)
 	}
 	if err := (*router).RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
 		s.recordRaftRouteError(ctx, audit.OperationForwardRaftStream, req.ShardId, err)

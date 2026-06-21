@@ -14,6 +14,16 @@ import (
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
+// maxRetainedScrubResults bounds the per-coordinator scrub result cache. The
+// most recent results are retained by scrub ID; the oldest is evicted first
+// once the cap is exceeded (bounded memory per NFR-1).
+const maxRetainedScrubResults = 16
+
+// ErrScrubInProgress is returned when a consistency check is proposed for a
+// scrub ID that already has an in-flight proposal. The raw scrub ID is not
+// embedded to keep operator-facing errors free of raw identifiers.
+var ErrScrubInProgress = errors.New("shard: consistency check already in progress")
+
 // scrubCore is the narrow interface the scrub coordinator uses to reach the Shard's
 // projection-authority core. Projection hashing stays under Shard.mu; scrub
 // proposal tracking, result caching, and scrubber lifecycle live here.
@@ -38,7 +48,8 @@ type scrubCoordinator struct {
 	deepScrub   *scrub.Deep
 	mu          sync.RWMutex
 	proposals   map[string]chan scrub.Result
-	scrubResult *scrub.Result
+	results     map[string]scrub.Result
+	resultOrder []string
 }
 
 func newScrubCoordinator(core scrubCore, blocksDir string, baseLogger *slog.Logger, pauseController scrub.PauseController) *scrubCoordinator {
@@ -51,6 +62,7 @@ func newScrubCoordinator(core scrubCore, blocksDir string, baseLogger *slog.Logg
 		baseLogger:      baseLogger,
 		pauseController: pauseController,
 		proposals:       make(map[string]chan scrub.Result),
+		results:         make(map[string]scrub.Result),
 	}
 }
 
@@ -174,6 +186,10 @@ func (c *scrubCoordinator) ProposeConsistencyCheck(ctx context.Context, scrubID 
 
 	doneCh := make(chan scrub.Result, 1)
 	c.mu.Lock()
+	if _, inFlight := c.proposals[scrubID]; inFlight {
+		c.mu.Unlock()
+		return scrub.Result{}, ErrScrubInProgress
+	}
 	c.proposals[scrubID] = doneCh
 	c.mu.Unlock()
 
@@ -195,22 +211,39 @@ func (c *scrubCoordinator) applyConsistencyCheck(cc *scrapv1.RequestConsistencyC
 	result := c.core.scrubProjectionResult(cc.GetScrubId(), entryIndex)
 
 	c.mu.Lock()
-	c.scrubResult = &result
-	if ch, ok := c.proposals[result.ScrubID]; ok {
-		ch <- result
-		delete(c.proposals, result.ScrubID)
-	}
+	c.storeResultLocked(result)
+	ch := c.proposals[result.ScrubID]
+	delete(c.proposals, result.ScrubID)
 	c.mu.Unlock()
+
+	// Send outside the lock: the coordinator must never hold c.mu across a
+	// potentially blocking channel send.
+	if ch != nil {
+		ch <- result
+	}
+}
+
+// storeResultLocked records a scrub result keyed by scrub ID, retaining at most
+// maxRetainedScrubResults most-recent results and evicting the oldest first.
+// Callers must hold c.mu.
+func (c *scrubCoordinator) storeResultLocked(result scrub.Result) {
+	if _, exists := c.results[result.ScrubID]; !exists {
+		c.resultOrder = append(c.resultOrder, result.ScrubID)
+		for len(c.resultOrder) > maxRetainedScrubResults {
+			oldest := c.resultOrder[0]
+			c.resultOrder = c.resultOrder[1:]
+			delete(c.results, oldest)
+		}
+	}
+	c.results[result.ScrubID] = result
 }
 
 func (c *scrubCoordinator) GetScrubResult(scrubID string) (scrub.Result, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.scrubResult == nil || c.scrubResult.ScrubID != scrubID {
-		return scrub.Result{}, false
-	}
-	return *c.scrubResult, true
+	result, ok := c.results[scrubID]
+	return result, ok
 }
 
 func (c *scrubCoordinator) removeProposal(scrubID string) {
