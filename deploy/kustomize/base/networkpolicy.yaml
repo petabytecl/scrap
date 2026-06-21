@@ -1,38 +1,56 @@
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: scrapd-ingress
   namespace: scrap
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       app: scrap
-  policyTypes:
-    - Ingress
   ingress:
-    - ports:
-        - port: 9090
-          protocol: TCP
-    - from:
-        - podSelector:
-            matchLabels:
-              app: scrap
-      ports:
-        - port: 9091
-          protocol: TCP
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-          podSelector:
-            matchLabels:
-              app: otel-collector
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-          podSelector:
-            matchLabels:
-              app: alloy
-      ports:
-        - port: 9100
-          protocol: TCP
+    - toPorts:
+        - ports:
+            - port: 9090
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            app: scrap
+      toPorts:
+        - ports:
+            - port: 9091
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            app: otel-collector
+            io.kubernetes.pod.namespace.labels.kubernetes.io/metadata.name: monitoring
+      toPorts:
+        - ports:
+            - port: 9100
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEndpoints:
+        - matchLabels:
+            kubernetes.io/metadata.name: monitoring
+            io.kubernetes.pod.namespace: "kubernetes.io/metadata.name: monitoring"
+      toPorts:
+        - ports:
+            - port: "4317"
+              protocol: TCP
+    - toFQDNs:
+        - matchPattern: "*.s3.*.amazonaws.com"
+        - matchPattern: "*.s3.amazonaws.com"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
