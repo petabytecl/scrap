@@ -93,10 +93,10 @@ func TestPeerServerAuditsUnauthorizedReplicationShardWithoutAllowedEvent(t *test
 		}),
 		requests: []*scrapv1.ReplicateDocumentRequest{{
 			Part: &scrapv1.ReplicateDocumentRequest_Init{
-				Init: &scrapv1.ReplicateDocumentInit{
-					ShardId: 8,
-					BlockId: 1,
-				},
+				Init: validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+					init.ShardId = 8
+					init.BlockId = 1
+				}),
 			},
 		}},
 	}
@@ -258,12 +258,12 @@ func wrongShardAuditCases(t *testing.T) []wrongShardAuditCase {
 					ctx: ctx,
 					requests: []*scrapv1.ReplicateDocumentRequest{{
 						Part: &scrapv1.ReplicateDocumentRequest_Init{
-							Init: &scrapv1.ReplicateDocumentInit{
-								ShardId:       8,
-								BlockId:       1,
-								TransactionId: wrongShardTransactionFixture,
-								DocumentName:  wrongShardDocumentFixture,
-							},
+							Init: validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+								init.ShardId = 8
+								init.BlockId = 1
+								init.TransactionId = wrongShardTransactionFixture
+								init.DocumentName = wrongShardDocumentFixture
+							}),
 						},
 					}},
 				})

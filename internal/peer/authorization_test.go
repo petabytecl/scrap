@@ -193,10 +193,10 @@ func TestPeerServerDeniesUnauthorizedShardBeforeReplicationSink(t *testing.T) {
 		}),
 		requests: []*scrapv1.ReplicateDocumentRequest{{
 			Part: &scrapv1.ReplicateDocumentRequest_Init{
-				Init: &scrapv1.ReplicateDocumentInit{
-					ShardId: 8,
-					BlockId: 1,
-				},
+				Init: validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+					init.ShardId = 8
+					init.BlockId = 1
+				}),
 			},
 		}},
 	}
@@ -224,13 +224,13 @@ func TestPeerServerDeniesUnauthorizedShardBeforeLocalReplicationFiles(t *testing
 		}),
 		requests: []*scrapv1.ReplicateDocumentRequest{{
 			Part: &scrapv1.ReplicateDocumentRequest_Init{
-				Init: &scrapv1.ReplicateDocumentInit{
-					ShardId:      8,
-					BlockId:      1,
-					TotalBytes:   6,
-					FrameCount:   1,
-					DocumentName: "invoice.xml",
-				},
+				Init: validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+					init.ShardId = 8
+					init.BlockId = 1
+					init.TotalBytes = 6
+					init.FrameCount = 1
+					init.DocumentName = "invoice.xml"
+				}),
 			},
 		}, {
 			Part: &scrapv1.ReplicateDocumentRequest_ChunkData{
@@ -401,7 +401,15 @@ func assertMultipleShardReplicationAllowed(ctx context.Context, t *testing.T, sr
 			ctx: ctx,
 			requests: []*scrapv1.ReplicateDocumentRequest{{
 				Part: &scrapv1.ReplicateDocumentRequest_Init{
-					Init: &scrapv1.ReplicateDocumentInit{ShardId: shardID, BlockId: shardID},
+					Init: validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+						init.ShardId = shardID
+						init.BlockId = shardID
+						init.TotalBytes = 7
+					}),
+				},
+			}, {
+				Part: &scrapv1.ReplicateDocumentRequest_ChunkData{
+					ChunkData: []byte("payload"),
 				},
 			}},
 		})

@@ -1,3 +1,11 @@
+## Deferred from: code review of 2-7-bound-peer-replicatedocument-input-before-side-effects (2026-06-15)
+
+- Local (no-sink) `ReplicateDocument` path appends to the Block before SHA-256 verification and does not roll back on mismatch [internal/peer/server.go:replicateToLocalBlock]. Pre-existing (the prior implementation appended then compared); the production sink path validates and aborts via `internal/shard.validateReplicatedAppend`, and the local path is a test/legacy fallback.
+- SHA-256 verification is skipped when `init.Sha256` length != 32 on the local path [internal/peer/server.go:replicateToLocalBlock]. Pre-existing condition; the production sink path enforces SHA-256 downstream in `internal/shard`.
+- Internal gRPC error messages embed raw os/dependency error strings (possible temp-path leak) on the peer surface [internal/peer/server.go]. Partially pre-existing peer transport error-mapping hardening; the peer surface is authenticated (mTLS + peer identity), limiting blast radius. Aligns with existing deferred peer transport error-mapping hardening.
+- Context cancellation/deadline and `ENOSPC` during peer receive map to `codes.Internal` instead of `Canceled`/`DeadlineExceeded`/`ResourceExhausted` [internal/peer/server.go:receive]. Pre-existing peer transport mapping gap that also affects other peer streams.
+- Over-limit unit test writes ~128 MiB/subtest to disk [internal/peer/replicate_bounds_test.go:TestReplicateDocumentRejectsDocumentOverLimitBeforeAcceptedState]. Real test-cost concern tied to the temp-file design decision; would disappear if streaming-with-inline-validation is adopted.
+
 ## Deferred from: code review of 1-6-fail-closed-on-missing-document-sha256-verification.md (2026-06-14)
 
 - `VerifyBlock` can report clean when an index entry has `FrameCount == 0` and all-zero SHA-256. This appears pre-existing and outside the immediate Story 1.6 changed hunks, but it is a data-integrity hardening candidate for follow-up.

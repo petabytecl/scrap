@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-14T18:17:00-04:00"
+last_updated: "2026-06-15T20:34:00-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -57,7 +57,7 @@ development_status:
   2-4-peer-rpc-shard-scope-authorization: done
   2-5-shard-aware-admin-and-scrapctl-diagnostics: done
   2-6-multi-shard-evidence-closure: done
-  2-7-bound-peer-replicatedocument-input-before-side-effects: backlog
+  2-7-bound-peer-replicatedocument-input-before-side-effects: done
   2-8-reject-malformed-forwardraftstream-messages: backlog
   epic-2-retrospective: optional
   epic-3: in-progress
