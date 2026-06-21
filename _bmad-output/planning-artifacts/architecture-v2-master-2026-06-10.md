@@ -14,7 +14,7 @@ inputDocuments:
   - _bmad-output/planning-artifacts/architecture.md
   - _bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md
   - _bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/.decision-log.md
-  - docs/v2-scope-reconciliation.md
+  - docs/archive/obsolete-pre-bmad/scope-reconciliation.md
   - docs/adr/0008-async-content-scanning-architecture.md
   - docs/adr/0012-otel-evidence-plane.md
   - docs/adr/0016-phase-4-partial-eviction-boundary.md
@@ -24,7 +24,7 @@ inputDocuments:
   - docs/adr/0025-content-quarantine-admin-surface.md
   - docs/adr/0026-multi-shard-v2-release-boundary.md
   - docs/adr/0027-phase-5-restore-first-cold-reads.md
-  - docs/phase-4.5-security-implementation-slices.md
+  - docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md
   - docs/prd-closure-policy.md
   - docs/production-rehearsal.md
 workflowType: architecture
@@ -668,7 +668,7 @@ Run `bmad-create-epics-and-stories` using:
 - the V2 master PRD;
 - this master V2 architecture artifact;
 - ADR 0025, ADR 0026, and ADR 0027;
-- `docs/v2-scope-reconciliation.md`;
+- `docs/archive/obsolete-pre-bmad/scope-reconciliation.md`;
 - current GitHub tracker state.
 
 ### First Backlog Slices

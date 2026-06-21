@@ -28,7 +28,7 @@ Story 4.5 does not claim full idempotent rerun behavior, incompatible-state fail
 - `_bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md`
 - `_bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md`
 - `_bmad-output/planning-artifacts/architecture.md`
-- `docs/phase-4.5-security-implementation-slices.md`
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
 - `docs/adr/0015-prodlike-kind-cell-cilium-and-gates.md`
 - `docs/adr/0019-production-security-boundary.md`
 - `docs/adr/0023-openbao-api-client.md`

@@ -1,7 +1,14 @@
 # SCRAP Scope Reconciliation
 
-Status: Draft
+Status: Superseded
 Date: 2026-06-10
+
+Superseded by BMAD master planning artifacts:
+
+- `_bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md`
+- `_bmad-output/implementation-artifacts/release-evidence-matrix.md`
+
+This file is retained only as archived historical context.
 
 ## Purpose
 

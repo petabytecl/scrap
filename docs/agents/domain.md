@@ -6,9 +6,12 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`CONTEXT.md`** at the repo root — the single-context domain document for S.C.R.A.P.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
-- **GitHub issues** — PRDs and task-level acceptance criteria live in GitHub issues,
-  not local PRD files. Query the `storage-gateway` milestone for current scope:
-  `gh issue list --state open --milestone "storage-gateway"`.
+- **`_bmad-output/planning-artifacts/prds/`** — BMAD PRDs are the planning source of
+  truth.
+- **`_bmad-output/implementation-artifacts/`** — BMAD stories, implementation status,
+  pending/deferred work, and release evidence artifacts.
+- **GitHub issues** — external publication mirror for BMAD-tracked work when needed;
+  do not treat issue bodies as the primary planning source.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The producer skill (`/grill-with-docs`) creates them lazily when terms or decisions actually get resolved.
 

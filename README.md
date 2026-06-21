@@ -9,6 +9,13 @@ SCRAP is the stable project line. Design decisions are captured in `CONTEXT.md`
 and `docs/adr/`, and release readiness is proven through local and CI
 verification evidence.
 
+Planning and execution workflow is BMAD-first:
+
+- PRDs and planning artifacts: `_bmad-output/planning-artifacts/`
+- Stories, deferred work, and evidence artifacts:
+  `_bmad-output/implementation-artifacts/`
+- GitHub issues are the external publication mirror for BMAD-tracked work.
+
 ## Core Model
 
 - **Document**: immutable file stored under a Transaction.

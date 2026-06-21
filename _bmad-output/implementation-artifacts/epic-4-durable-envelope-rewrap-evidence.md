@@ -29,7 +29,7 @@ Story 4.4 does not claim OpenBao bootstrap UX, real production outage rehearsal,
 - `_bmad-output/planning-artifacts/architecture.md`
 - `docs/adr/0020-openbao-envelope-encryption-contract.md`
 - `docs/adr/0021-durable-rewrap-raft-command.md`
-- `docs/phase-4.5-security-implementation-slices.md`
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
 - `_bmad-output/implementation-artifacts/4-3-openbao-backed-encrypted-write-and-read.md`
 - `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`
 - `_bmad-output/implementation-artifacts/4-4-durable-envelope-rewrap-workflow.md`

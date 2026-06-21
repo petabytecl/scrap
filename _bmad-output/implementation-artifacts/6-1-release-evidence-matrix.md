@@ -175,7 +175,7 @@ If only BMAD artifacts change, the broad local gate is still required because th
 - `_bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md` - DG-5 release documentation/evidence standard.
 - `docs/prd-closure-policy.md` - Tier 2, Tier 3, production rehearsal, and real S3/IAM closure policy.
 - `docs/production-rehearsal.md` - production security and real S3/IAM rehearsal target semantics and report fields.
-- `docs/v2-scope-reconciliation.md` - release scope reconciliation and issue `#429` final-gate context.
+- `docs/archive/obsolete-pre-bmad/scope-reconciliation.md` - release scope reconciliation and issue `#429` final-gate context.
 - `docs/adr/0025-content-quarantine-admin-surface.md` - Content Quarantine admin surface gate.
 - `docs/adr/0026-multi-shard-v2-release-boundary.md` - multi-Shard release boundary gate.
 - `docs/adr/0027-phase-5-restore-first-cold-reads.md` - restore-first cold-read release gate.

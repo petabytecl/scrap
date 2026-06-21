@@ -167,7 +167,7 @@ so that every Transaction maps deterministically to one owning Shard.
 - `CONTEXT.md` - glossary, Member identity model, 1024 fixed hash slots, and Transaction routing rule.
 - `docs/adr/0024-production-topology-and-peer-scope-policy.md` - peer Shard-scope policy and placement-derived future authorized Shard set.
 - `docs/adr/0026-multi-shard-v2-release-boundary.md` - accepted multi-Shard routing/startup release boundary.
-- `docs/v2-scope-reconciliation.md` - current-state note that `scrapd` wires Shard ID `0` and multi-Shard routing is required V2 scope.
+- `docs/archive/obsolete-pre-bmad/scope-reconciliation.md` - current-state note that `scrapd` wires Shard ID `0` and multi-Shard routing is required V2 scope.
 - `_bmad-output/implementation-artifacts/1-4-transaction-scoped-document-discovery.md` - prior routing-boundary warnings and redaction test patterns.
 - `_bmad-output/implementation-artifacts/1-5-core-gateway-restart-and-rebuild-evidence.md` - latest Epic 1 boundary/evidence learnings.
 - `_bmad-output/implementation-artifacts/epic-1-evidence-rollup.md` - current Epic 1 runtime evidence status and tracker-linkage concern.

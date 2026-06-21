@@ -1,7 +1,8 @@
 # Real AWS Validation Infrastructure
 
 Disposable AWS resources for the S.C.R.A.P. real S3/IAM production rehearsal
-(tracker issue `#429`). See `docs/handoff-real-aws-validation-20260613.md` for
+(tracker issue `#429`). See
+`docs/archive/obsolete-pre-bmad/handoff-real-aws-validation-20260613.md` for
 the full gate context and `docs/production-rehearsal.md` for the rehearsal
 contract.
 

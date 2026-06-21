@@ -197,7 +197,7 @@ Minimum focused tests:
 - [Architecture: Authentication and Security](../planning-artifacts/architecture.md#authentication--security)
 - [Architecture: Requirements to Structure Mapping](../planning-artifacts/architecture.md#requirements-to-structure-mapping)
 - [ADR 0019: Production security boundary](../../docs/adr/0019-production-security-boundary.md)
-- [Phase 4.5 implementation slices](../../docs/phase-4.5-security-implementation-slices.md)
+- [Phase 4.5 implementation slices](../../docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md)
 - [Project context](../project-context.md)
 - [GitHub issue #403](https://github.com/petabytecl/scrap/issues/403)
 - [PR #412](https://github.com/petabytecl/scrap/pull/412)

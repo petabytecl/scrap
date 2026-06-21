@@ -195,7 +195,7 @@ No ADR is required if the implementation follows ADR 0019. Create or update an A
 - [Architecture: Requirements to Structure Mapping](../planning-artifacts/architecture.md#requirements-to-structure-mapping)
 - [ADR 0019: Production security boundary](../../docs/adr/0019-production-security-boundary.md)
 - [ADR 0020: OpenBao envelope encryption contract](../../docs/adr/0020-openbao-envelope-encryption-contract.md)
-- [Phase 4.5 implementation slices](../../docs/phase-4.5-security-implementation-slices.md)
+- [Phase 4.5 implementation slices](../../docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md)
 - [Project context](../project-context.md)
 - [GitHub issue #402](https://github.com/petabytecl/scrap/issues/402)
 - [grpc-go encryption examples](https://github.com/grpc/grpc-go/blob/master/examples/features/encryption/README.md)

@@ -72,7 +72,7 @@ so that production security decisions are attributable and noisy callers cannot 
 - [PRD: FR-4 security operations are auditable and rate-limited](../planning-artifacts/prds/prd-scrap-2026-06-07/prd.md#fr-4-security-operations-are-auditable-and-rate-limited)
 - [Architecture: Audit and rate limits](../planning-artifacts/architecture.md#authentication--security)
 - [ADR 0019: Production security boundary](../../docs/adr/0019-production-security-boundary.md)
-- [Phase 4.5 implementation slices](../../docs/phase-4.5-security-implementation-slices.md)
+- [Phase 4.5 implementation slices](../../docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md)
 - [GitHub issue #404](https://github.com/petabytecl/scrap/issues/404)
 
 ## Dev Agent Record

@@ -204,7 +204,7 @@ Runtime evidence is not required to create the story. If deployed restore eviden
 - `docs/adr/0019-production-security-boundary.md` - Phase 5 production security entry and fail-closed gates.
 - `docs/adr/0020-openbao-envelope-encryption-contract.md` - encrypted Backend-resident Block contract and direct streaming deferral.
 - `docs/adr/0027-phase-5-restore-first-cold-reads.md` - governing cold-read decision.
-- `docs/phase-4-eviction-implementation-slices.md` - Phase 4 restore/read validation slice notes.
+- `docs/archive/obsolete-pre-bmad/phase-4-eviction-implementation-slices.md` - Phase 4 restore/read validation slice notes.
 - `internal/shard/shard.go`
 - `internal/shard/restore.go`
 - `internal/shard/restore_test.go`

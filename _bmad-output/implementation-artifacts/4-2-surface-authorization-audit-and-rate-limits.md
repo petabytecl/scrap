@@ -246,7 +246,7 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - `_bmad-output/planning-artifacts/architecture.md` - Security Mode and Startup Gates, Surface Ownership, Identity/Authorization/Audit/Rate Limits, Security Mode and Enforcement, canonical security fixture matrix, and requirements-to-structure mapping.
 - `docs/adr/0019-production-security-boundary.md` - production security boundary and role/audit/rate-limit contracts.
 - `docs/adr/0024-production-topology-and-peer-scope-policy.md` - peer Shard-scope authorization, TLS 1.3, and restart-based certificate rotation.
-- `docs/phase-4.5-security-implementation-slices.md` - #403 and #404 implementation slices.
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` - #403 and #404 implementation slices.
 - `_bmad-output/implementation-artifacts/4-1-production-security-startup-gate.md` - previous story implementation and review intelligence.
 - `_bmad-output/implementation-artifacts/epic-4-production-security-startup-gate-evidence.md` - evidence style, command recording, and scan classification pattern.
 - `internal/security/authorization.go`

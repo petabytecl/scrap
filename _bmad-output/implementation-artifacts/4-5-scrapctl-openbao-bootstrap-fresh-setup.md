@@ -19,7 +19,7 @@ so that rehearsals do not depend on undocumented scripts.
 
 - Epic: Epic 4 - Operators Can Run Fail-Closed Security and OpenBao Workflows.
 - Requirement: FR-14 - `scrapctl` OpenBao bootstrap for local/prod-like operator workflows.
-- Source slice: `docs/phase-4.5-security-implementation-slices.md` deferred OpenBao bootstrap follow-up.
+- Source slice: `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` deferred OpenBao bootstrap follow-up.
 - Governing decision: DG-4 in the master architecture - `scrapctl` owns OpenBao bootstrap helper workflows only, not production OpenBao deployment, secret custody, storage backend setup, HA topology, or lifecycle.
 - Governing ADR: ADR 0023 - use `github.com/openbao/openbao/api` as the only application-level OpenBao client; do not add raw OpenBao HTTP calls or shell out to undocumented scripts.
 - Current baseline: Story 4.4 is done at `e9148db5f9769a4f04876e94a1aaa4cf6d28326c`; durable rewrap implementation, review fixes, leak scans, `make check`, and OpenBao adapter integration were committed and pushed before this story was created.
@@ -102,7 +102,7 @@ so that rehearsals do not depend on undocumented scripts.
 
 - `CONTEXT.md` defines OpenBao Transit as the encryption substrate and keeps S.C.R.A.P. a Document gateway, not an S3-compatible object store. Use Document, Transaction, Block, Frame, Shard, Cell, Member, Backend, and OpenBao Transit terms exactly.
 - FR-14 requires `scrapctl` OpenBao bootstrap for local/prod-like operator workflows. Production OpenBao deployment, secret custody, storage backend setup, HA topology, and lifecycle remain platform-owned.
-- `docs/phase-4.5-security-implementation-slices.md` explicitly says the bootstrap command must initialize, unseal, mount Transit, create the S.C.R.A.P. key through the official OpenBao Go API client, emit redacted evidence, and stay separate from Testcontainers integration fixtures.
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` explicitly says the bootstrap command must initialize, unseal, mount Transit, create the S.C.R.A.P. key through the official OpenBao Go API client, emit redacted evidence, and stay separate from Testcontainers integration fixtures.
 - ADR 0023 requires `github.com/openbao/openbao/api` as the only application-level OpenBao client and forbids raw OpenBao HTTP calls unless a future ADR explains why the official client cannot model an operation.
 - Architecture says `internal/scrapctl` owns operator CLI UX, request construction, evidence display, and client credential loading; it must not become server-side enforcement, storage authority, or Shard/Backend/encryption lifecycle authority.
 
@@ -221,7 +221,7 @@ rg -n --pcre2 "$strict_value_pattern" $scan_scope
 - `_bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md` - FR-14 and operator-surface consequences.
 - `_bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md` - DG-4, package boundary map, and `internal/scrapctl` OpenBao bootstrap ownership.
 - `_bmad-output/planning-artifacts/architecture.md` - Phase 4.5 security, evidence, and redaction requirements.
-- `docs/phase-4.5-security-implementation-slices.md` - deferred bootstrap follow-up language.
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` - deferred bootstrap follow-up language.
 - `docs/adr/0023-openbao-api-client.md` - official OpenBao Go API client boundary.
 - `docs/adr/0015-prodlike-kind-cell-cilium-and-gates.md` - `scrapctl` operator tool role in prod-like evidence.
 - `docs/adr/0019-production-security-boundary.md` - `scrapctl` security mode, TLS, authz, and evidence expectations.

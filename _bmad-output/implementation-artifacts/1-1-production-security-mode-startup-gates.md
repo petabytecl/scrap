@@ -202,7 +202,7 @@ No ADR is required if the implementation follows ADR 0019. Create or update an A
 - [PRD: Production Security Mode and Startup Gates](../planning-artifacts/prds/prd-scrap-2026-06-07/prd.md#41-production-security-mode-and-startup-gates)
 - [ADR 0019: Production security boundary](../../docs/adr/0019-production-security-boundary.md)
 - [ADR 0020: OpenBao envelope encryption contract](../../docs/adr/0020-openbao-envelope-encryption-contract.md)
-- [Phase 4.5 implementation slices](../../docs/phase-4.5-security-implementation-slices.md)
+- [Phase 4.5 implementation slices](../../docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md)
 - [Project context](../project-context.md)
 - [GitHub issue #401](https://github.com/petabytecl/scrap/issues/401)
 - [OpenBao 2.5.x release notes](https://openbao.org/community/release-notes/2-5-0/)

@@ -28,7 +28,7 @@ Source inputs:
 - `CONTEXT.md`
 - `docs/adr/0019-production-security-boundary.md`
 - `docs/adr/0020-openbao-envelope-encryption-contract.md`
-- `docs/phase-4.5-security-implementation-slices.md`
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
 - GitHub issues #398 through #408
 - `_bmad-output/project-context.md`
 

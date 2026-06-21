@@ -7,7 +7,7 @@ stepsCompleted:
 inputDocuments:
   - _bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md
   - _bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md
-  - docs/v2-scope-reconciliation.md
+  - docs/archive/obsolete-pre-bmad/scope-reconciliation.md
   - docs/adr/0025-content-quarantine-admin-surface.md
   - docs/adr/0026-multi-shard-v2-release-boundary.md
   - docs/adr/0027-phase-5-restore-first-cold-reads.md

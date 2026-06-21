@@ -7,7 +7,7 @@ project: scrap
 release_line: v2
 github_repository: petabytecl/scrap
 github_milestone: storage-gateway-v2
-source_reconciliation: docs/v2-scope-reconciliation.md
+source_reconciliation: docs/archive/obsolete-pre-bmad/scope-reconciliation.md
 labels:
   - prd
   - v2
@@ -21,7 +21,7 @@ labels:
 
 This PRD is the canonical planning baseline for the S.C.R.A.P. V2 major
 release. It reconciles `CONTEXT.md`, accepted ADRs, prior BMAD artifacts,
-current GitHub tracker state, and `docs/v2-scope-reconciliation.md` after the
+current GitHub tracker state, and `docs/archive/obsolete-pre-bmad/scope-reconciliation.md` after the
 release rule was clarified: V2 has no intermediate releases, and V2 is not
 release-ready until all required V2 features and evidence gates are complete.
 
@@ -162,7 +162,7 @@ When sources conflict, downstream workflows must apply this order:
 
 1. `CONTEXT.md` glossary and durable V2 constraints.
 2. Accepted ADRs in `docs/adr/`, unless superseded by a later accepted ADR.
-3. This master PRD and `docs/v2-scope-reconciliation.md`.
+3. This master PRD and `docs/archive/obsolete-pre-bmad/scope-reconciliation.md`.
 4. GitHub Issues and milestones.
 5. Older BMAD artifacts and historical phase documents.
 6. V1 materials as reference only.
@@ -194,7 +194,7 @@ Verified on 2026-06-10:
   rehearsal evidence`.
 - Local working tree before this PRD creation included a deleted
   `_bmad-output/planning-artifacts/epics.md` and untracked
-  `docs/v2-scope-reconciliation.md`.
+  `docs/archive/obsolete-pre-bmad/scope-reconciliation.md`.
 
 The tracker snapshot is progress evidence, not closure evidence.
 
@@ -445,7 +445,7 @@ operator workflows.
 - Production OpenBao deployment, secret custody, storage backend setup,
   high-availability topology, and lifecycle remain platform-owned.
 
-**Traceability:** `docs/phase-4.5-security-implementation-slices.md`, ADR 0023.
+**Traceability:** `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`, ADR 0023.
 
 **Decision Gate:** DG-4.
 

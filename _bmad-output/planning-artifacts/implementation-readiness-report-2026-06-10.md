@@ -259,7 +259,7 @@ Consequences:
 
 - Commands initialize, unseal, mount Transit, create the S.C.R.A.P. Transit key through the official OpenBao Go API client, and emit redacted evidence suitable for rehearsal notes.
 - Production OpenBao deployment, secret custody, storage backend setup, high-availability topology, and lifecycle remain platform-owned.
-- Traceability: `docs/phase-4.5-security-implementation-slices.md`, ADR 0023.
+- Traceability: `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`, ADR 0023.
 - Decision Gate: DG-4.
 
 FR-15: OTel evidence plane
@@ -323,7 +323,7 @@ Total NFRs: 7.
 
 Source precedence:
 
-- Apply source precedence in this order when sources conflict: `CONTEXT.md`, accepted ADRs, master PRD and `docs/v2-scope-reconciliation.md`, GitHub Issues/milestones, older BMAD artifacts/historical phase documents, then V1 reference materials.
+- Apply source precedence in this order when sources conflict: `CONTEXT.md`, accepted ADRs, master PRD and `docs/archive/obsolete-pre-bmad/scope-reconciliation.md`, GitHub Issues/milestones, older BMAD artifacts/historical phase documents, then V1 reference materials.
 
 Release rules:
 
@@ -455,7 +455,7 @@ None. The epics document repeats the same FR-1 through FR-16 inventory as the se
 
 ### Coverage Notes
 
-- The current `epics.md` is the regenerated master V2 artifact: its frontmatter identifies the master PRD, master V2 architecture artifact, `docs/v2-scope-reconciliation.md`, and ADR 0025 through ADR 0027 as inputs.
+- The current `epics.md` is the regenerated master V2 artifact: its frontmatter identifies the master PRD, master V2 architecture artifact, `docs/archive/obsolete-pre-bmad/scope-reconciliation.md`, and ADR 0025 through ADR 0027 as inputs.
 - This step confirms traceability presence only. Story quality, vertical slicing, dependency order, and acceptance criteria quality remain for later steps.
 
 ## Step 4: UX Alignment Assessment

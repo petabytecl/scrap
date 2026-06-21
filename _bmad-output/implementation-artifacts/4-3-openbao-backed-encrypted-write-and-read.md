@@ -223,7 +223,7 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - `_bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md` - FR-10 and production encryption consequences.
 - `_bmad-output/planning-artifacts/architecture.md` - Transit-encrypted Document lifecycle, surface ownership, evidence requirements, package boundaries, and anti-patterns.
 - `docs/adr/0020-openbao-envelope-encryption-contract.md` - authoritative envelope encryption contract.
-- `docs/phase-4.5-security-implementation-slices.md` - #405 and #406 implementation slices.
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` - #405 and #406 implementation slices.
 - `_bmad-output/implementation-artifacts/4-2-surface-authorization-audit-and-rate-limits.md` - previous story implementation and review intelligence.
 - `_bmad-output/implementation-artifacts/epic-4-surface-authorization-audit-rate-limit-evidence.md` - evidence style, command recording, and scan classification pattern.
 - `internal/encryption/transit.go`

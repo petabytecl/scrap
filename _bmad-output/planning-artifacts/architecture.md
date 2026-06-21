@@ -39,9 +39,9 @@ inputDocuments:
   - docs/adr/0019-production-security-boundary.md
   - docs/adr/0020-openbao-envelope-encryption-contract.md
   - docs/go-style-guide.md
-  - docs/handoff-projection-resolver-review-20260529.md
-  - docs/phase-4-eviction-implementation-slices.md
-  - docs/phase-4.5-security-implementation-slices.md
+  - docs/archive/obsolete-pre-bmad/handoff-projection-resolver-review-20260529.md
+  - docs/archive/obsolete-pre-bmad/phase-4-eviction-implementation-slices.md
+  - docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md
   - docs/prd-closure-policy.md
   - docs/research/2026-05-31-external-storage-systems.md
   - docs/scrap-handoff-telemetry-phantom-metrics-implementation.md
@@ -493,7 +493,7 @@ Pattern wording uses:
 | Domain language | `CONTEXT.md` | Use exact glossary terms. Do not invent near-synonyms. |
 | Go design and style | `docs/go-style-guide.md` | Follow before relying on generic Go preferences. |
 | Durable architecture decisions | `docs/adr/` | Change storage format, wire protocol, dependency choices, security/encryption/auth contracts, or cross-package boundaries only through ADR-backed work. |
-| Phase 4.5 requirements | Phase 4.5 PRD and `docs/phase-4.5-security-implementation-slices.md` | Tie implementation to FR and issue. |
+| Phase 4.5 requirements | Phase 4.5 PRD and `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` | Tie implementation to FR and issue. |
 | API/wire shape | `proto/` | Edit source proto, regenerate generated code, and verify transport mapping. |
 | Generated code | `gen/` | Treat as mechanical output only. |
 | BMAD work products | `_bmad-output/planning-artifacts` and `_bmad-output/implementation-artifacts` | Keep generated planning/implementation artifacts here unless promoted to durable docs. |

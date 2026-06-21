@@ -37,7 +37,7 @@ Sources:
 - `_bmad-output/planning-artifacts/architecture.md`
 - `docs/adr/0019-production-security-boundary.md`
 - `docs/adr/0024-production-topology-and-peer-scope-policy.md`
-- `docs/phase-4.5-security-implementation-slices.md`
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
 - `_bmad-output/implementation-artifacts/4-1-production-security-startup-gate.md`
 - `internal/security/authorization.go`
 - `internal/security/grpc_authorization.go`

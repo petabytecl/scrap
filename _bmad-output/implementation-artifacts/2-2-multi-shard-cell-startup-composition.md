@@ -154,7 +154,7 @@ so that one Cell can run the required V2 multi-Shard topology.
 - `_bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md` - DG-2 architecture, `internal/cmd` Shard set composition, `internal/routing` boundary, peer authorized Shard set, and boundary map.
 - `docs/adr/0026-multi-shard-v2-release-boundary.md` - accepted multi-Shard startup/routing boundary and implementation guidance.
 - `docs/adr/0024-production-topology-and-peer-scope-policy.md` - peer Shard-scope policy and placement-derived authorized Shard set.
-- `docs/v2-scope-reconciliation.md` - current-state note that `scrapd` wires Shard ID `0` and multi-Shard routing/startup remains required V2 scope.
+- `docs/archive/obsolete-pre-bmad/scope-reconciliation.md` - current-state note that `scrapd` wires Shard ID `0` and multi-Shard routing/startup remains required V2 scope.
 - `CONTEXT.md` - glossary definitions for Cell, Member, Shard, fixed hash slots, and routing identity.
 - `_bmad-output/implementation-artifacts/2-1-shard-routing-boundary-and-placement-validation.md` - previous story implementation notes, review findings, and handoff constraints.
 

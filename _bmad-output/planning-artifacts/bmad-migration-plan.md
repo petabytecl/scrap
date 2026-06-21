@@ -1,8 +1,8 @@
 ---
 title: BMAD Migration Plan
-status: draft
+status: completed
 created: 2026-06-07
-updated: 2026-06-07
+updated: 2026-06-20
 project: scrap
 source_of_truth: planning-migration
 ---
@@ -17,6 +17,18 @@ already exists.
 
 BMAD should become the planning workspace. GitHub Issues should remain the
 published execution tracker.
+
+## Migration Status
+
+Completed. BMAD is the planning source of truth in this repository.
+
+- Active planning and requirement artifacts are under
+  `_bmad-output/planning-artifacts/`.
+- Active stories, deferred/pending work, and evidence are under
+  `_bmad-output/implementation-artifacts/`.
+- Legacy pre-BMAD planning and handoff docs are archived under
+  `docs/archive/obsolete-pre-bmad/`.
+- GitHub issues remain an external publication mirror for BMAD-tracked work.
 
 ## Current Inventory
 
@@ -34,8 +46,8 @@ published execution tracker.
 - Domain vocabulary and project constraints: `CONTEXT.md`
 - ADRs: `docs/adr/0001-*.md` through `docs/adr/0020-*.md`
 - Current phase slice docs:
-  - `docs/phase-4-eviction-implementation-slices.md`
-  - `docs/phase-4.5-security-implementation-slices.md`
+  - `docs/archive/obsolete-pre-bmad/phase-4-eviction-implementation-slices.md`
+  - `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
 - PRD closure evidence policy: `docs/prd-closure-policy.md`
 - Issue tracker conventions: `docs/agents/issue-tracker.md`
 - Triage labels: `docs/agents/triage-labels.md`
@@ -105,7 +117,7 @@ Keep GitHub Issues as the execution ledger:
 | `CONTEXT.md` | Domain source of truth | Reference from project context; do not duplicate wholesale |
 | `docs/go-style-guide.md` | Implementation standard | Reference from project context |
 | `docs/adr/*.md` | Architecture decisions | Keep in place; summarize or reference from architecture artifact |
-| `docs/phase-4.5-security-implementation-slices.md` | Existing epics/stories input | Convert into BMAD epics/stories or validate against generated stories |
+| `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` | Existing epics/stories input | Convert into BMAD epics/stories or validate against generated stories |
 | Issue `#398` | Published PRD tracker | Convert body into BMAD PRD update/validation input |
 | Issues `#399`-`#400` | ADR execution records | Keep as tracker issues linked from architecture artifact |
 | Issues `#401`-`#408` | Implementation slices | Treat as existing story candidates |
@@ -119,7 +131,7 @@ Keep GitHub Issues as the execution ledger:
      `docs/adr/*.md`, and current repository structure.
 
 2. Run `bmad-prd` in update or validate mode for Phase 4.5.
-   - Goal: turn issue `#398` plus `docs/phase-4.5-security-implementation-slices.md`
+   - Goal: turn issue `#398` plus `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
      into a BMAD-native PRD workspace under `_bmad-output/planning-artifacts/prds/`.
    - Keep the GitHub issue open until closure evidence is current and linked.
 

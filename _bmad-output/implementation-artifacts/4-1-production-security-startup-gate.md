@@ -181,7 +181,7 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - `_bmad-output/planning-artifacts/architecture-v2-master-2026-06-10.md` - package ownership, evidence, privacy, and OpenBao bootstrap scope.
 - `docs/adr/0019-production-security-boundary.md` - production security boundary.
 - `docs/adr/0024-production-topology-and-peer-scope-policy.md` - TLS 1.3, peer Shard scope, and restart-based certificate rotation.
-- `docs/phase-4.5-security-implementation-slices.md` - #401 startup gate slice context.
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` - #401 startup gate slice context.
 - `docs/production-rehearsal.md` - production security rehearsal scope and artifact handling.
 - `_bmad-output/implementation-artifacts/1-1-production-security-mode-startup-gates.md` - old implementation intelligence and review traps.
 - `_bmad-output/implementation-artifacts/3-7-backend-durability-and-cold-read-closure-evidence.md` - recent closure artifact quality pattern.

@@ -28,7 +28,7 @@ Story 4.3 does not claim production security rehearsal closure, OpenBao bootstra
 - `_bmad-output/planning-artifacts/prds/prd-scrap-v2-master-2026-06-10/prd.md`
 - `_bmad-output/planning-artifacts/architecture.md`
 - `docs/adr/0020-openbao-envelope-encryption-contract.md`
-- `docs/phase-4.5-security-implementation-slices.md`
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md`
 - `_bmad-output/implementation-artifacts/4-2-surface-authorization-audit-and-rate-limits.md`
 - `_bmad-output/implementation-artifacts/4-3-openbao-backed-encrypted-write-and-read.md`
 - `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md`

@@ -243,7 +243,7 @@ If a command is skipped, record the skip reason and closure impact in the eviden
 - `_bmad-output/planning-artifacts/architecture.md` - Raft-owned rewrap lifecycle, package boundaries, evidence gates, and anti-patterns.
 - `docs/adr/0020-openbao-envelope-encryption-contract.md` - authoritative envelope encryption and rewrap contract.
 - `docs/adr/0021-durable-rewrap-raft-command.md` - authoritative durable rewrap Raft command, proposal ID, stale command, and upload-generation contract.
-- `docs/phase-4.5-security-implementation-slices.md` - #407 durable rewrap workflow and evidence.
+- `docs/archive/obsolete-pre-bmad/phase-4.5-security-implementation-slices.md` - #407 durable rewrap workflow and evidence.
 - `_bmad-output/implementation-artifacts/4-3-openbao-backed-encrypted-write-and-read.md` - previous story implementation/review intelligence.
 - `_bmad-output/implementation-artifacts/epic-4-openbao-encrypted-write-read-evidence.md` - evidence style, command recording, and scan classification pattern.
 - `internal/shard/rewrap.go`
