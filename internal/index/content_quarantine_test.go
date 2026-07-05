@@ -175,7 +175,7 @@ func TestContentQuarantineRejectsInvalidState(t *testing.T) {
 			if !errors.Is(err, ErrInvalidContentQuarantine) {
 				t.Fatalf("PutContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
 			}
-			if got := err.Error(); !contains(got, tt.wantErrMsg) {
+			if got := err.Error(); !strings.Contains(got, tt.wantErrMsg) {
 				t.Fatalf("error = %q, want to contain %q", got, tt.wantErrMsg)
 			}
 		})
@@ -246,7 +246,7 @@ func TestContentQuarantineRejectsMissingDetectedTime(t *testing.T) {
 	if !errors.Is(err, ErrInvalidContentQuarantine) {
 		t.Fatalf("PutContentQuarantine error = %v, want ErrInvalidContentQuarantine", err)
 	}
-	if got := err.Error(); !contains(got, "detected_at_us is required") {
+	if got := err.Error(); !strings.Contains(got, "detected_at_us is required") {
 		t.Fatalf("error = %q, want detected_at_us is required", got)
 	}
 }
@@ -537,13 +537,4 @@ func contentQuarantineValueWithDetectedTimeForTest(
 	value := contentQuarantineValueHeaderForTest(scanType, reason)
 	putNonNegativeInt64(value[9:17], detectedAtUs)
 	return value
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return substr == ""
 }

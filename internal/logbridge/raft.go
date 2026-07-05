@@ -16,7 +16,12 @@ type raftLogger struct {
 }
 
 // NewRaftLogger creates a raft.Logger that delegates to the given slog.Logger.
+// A nil logger falls back to slog.Default() so a misconfigured caller cannot
+// turn the first raft log line into a nil-pointer panic.
 func NewRaftLogger(logger *slog.Logger) raft.Logger {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &raftLogger{log: logger}
 }
 

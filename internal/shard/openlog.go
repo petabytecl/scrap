@@ -5,6 +5,7 @@ package shard
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -79,6 +80,10 @@ func (s *Shard) recoverPrepFile(name string) error {
 	entry := &scrapv1.OpenlogEntry{}
 	if err := proto.Unmarshal(data, entry); err != nil {
 		return fmt.Errorf("shard: unmarshal prep %s: %w", name, err)
+	}
+
+	if entry.StartOffset > math.MaxInt64 {
+		return fmt.Errorf("shard: prep %s: start offset %d overflows int64", name, entry.StartOffset)
 	}
 
 	exists, err := s.documentVisibleInProjectionLenient(entry.TransactionId, entry.DocumentName)

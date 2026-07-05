@@ -316,6 +316,7 @@ func openReplicaRepairTestShard(t *testing.T, transferer *replicaRepairTransfere
 		Peers:           map[uint64]string{1: "self:9091", 2: "leader:9091"},
 		BlockTransferer: transferer,
 		TickInterval:    10 * time.Millisecond,
+		Replicator:      noopTestReplicator{},
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

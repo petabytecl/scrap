@@ -62,9 +62,13 @@ func (s *Shard) applyEntryTraced(cmd *scrapv1.RaftCommand, entryIndex uint64, li
 	ctx := extractTraceContext(context.Background(), cmd)
 	ctx, applyEnd := s.writeTelemetry.StartSpan(ctx, "scrap.apply/"+operation, opts...)
 	err := s.applyEntryCommand(cmd, entryIndex)
-	// DEBUG (Tier-1) on the apply span's context: the log line carries the same
+	// Logged on the apply span's context: the log line carries the same
 	// trace_id/span_id, so Grafana can jump trace <-> logs for this apply (ADR 0013).
-	s.logger.DebugContext(ctx, "applied raft command", "op", operation, "index", entryIndex)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "raft command apply failed", "op", operation, "index", entryIndex, "err", err)
+	} else {
+		s.logger.DebugContext(ctx, "applied raft command", "op", operation, "index", entryIndex)
+	}
 	applyEnd.End(err)
 	return err
 }
@@ -160,10 +164,18 @@ func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument, entryInd
 	applyErr := s.applyCommitDocument(doc, entryIndex)
 
 	s.proposalMu.Lock()
-	defer s.proposalMu.Unlock()
-
-	if ch, ok := s.proposals[key]; ok {
-		ch <- applyErr
+	waiter, hasWaiter := s.proposals[key]
+	if hasWaiter {
+		waiter <- applyErr
 		delete(s.proposals, key)
+	}
+	s.proposalMu.Unlock()
+
+	// A commit apply error with no local waiter is a replica silently missing a
+	// committed Document. The applied index still advances (see the apply-error
+	// taxonomy deferral), so this log line is the only divergence evidence.
+	if applyErr != nil && !hasWaiter {
+		s.logger.Error("shard: commit document apply failed with no local waiter; replica diverged from committed state",
+			"index", entryIndex, "block_id", doc.GetBlockId(), "err", applyErr)
 	}
 }

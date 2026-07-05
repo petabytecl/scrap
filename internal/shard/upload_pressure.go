@@ -2,6 +2,7 @@ package shard
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"sync"
@@ -38,13 +39,38 @@ type UploadPressureSnapshot struct {
 	PendingBlocks int
 }
 
-func ParseUploadPressureConfigFromEnv() UploadPressureConfig {
-	return normalizeUploadPressureConfig(UploadPressureConfig{
-		BudgetBytes: envInt64("SCRAP_UPLOAD_BUDGET", DefaultUploadBudgetBytes),
-		WarnPct:     envFloat64("SCRAP_UPLOAD_WARN_PCT", DefaultUploadWarnPct),
-		PressurePct: envFloat64("SCRAP_UPLOAD_PRESSURE_PCT", DefaultUploadPressurePct),
-		CriticalPct: envFloat64("SCRAP_UPLOAD_CRITICAL_PCT", DefaultUploadCriticalPct),
-	})
+func ParseUploadPressureConfigFromEnv() (UploadPressureConfig, error) {
+	budget, err := envInt64("SCRAP_UPLOAD_BUDGET", DefaultUploadBudgetBytes)
+	if err != nil {
+		return UploadPressureConfig{}, err
+	}
+	if budget <= 0 {
+		return UploadPressureConfig{}, fmt.Errorf("shard: invalid SCRAP_UPLOAD_BUDGET: %d must be positive", budget)
+	}
+	warn, err := envPct("SCRAP_UPLOAD_WARN_PCT", DefaultUploadWarnPct)
+	if err != nil {
+		return UploadPressureConfig{}, err
+	}
+	pressure, err := envPct("SCRAP_UPLOAD_PRESSURE_PCT", DefaultUploadPressurePct)
+	if err != nil {
+		return UploadPressureConfig{}, err
+	}
+	critical, err := envPct("SCRAP_UPLOAD_CRITICAL_PCT", DefaultUploadCriticalPct)
+	if err != nil {
+		return UploadPressureConfig{}, err
+	}
+	if !(warn < pressure && pressure < critical) {
+		return UploadPressureConfig{}, fmt.Errorf(
+			"shard: SCRAP_UPLOAD_WARN_PCT (%v) < SCRAP_UPLOAD_PRESSURE_PCT (%v) < SCRAP_UPLOAD_CRITICAL_PCT (%v) ordering violated",
+			warn, pressure, critical,
+		)
+	}
+	return UploadPressureConfig{
+		BudgetBytes: budget,
+		WarnPct:     warn,
+		PressurePct: pressure,
+		CriticalPct: critical,
+	}, nil
 }
 
 func (l UploadPressureLevel) String() string {
@@ -211,26 +237,31 @@ func (g *pressurePauseGate) Wait(ctx context.Context) error {
 	}
 }
 
-func envInt64(key string, fallback int64) int64 {
+func envInt64(key string, fallback int64) (int64, error) {
 	v := os.Getenv(key)
 	if v == "" {
-		return fallback
+		return fallback, nil
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("shard: invalid %s: %w", key, err)
 	}
-	return n
+	return n, nil
 }
 
-func envFloat64(key string, fallback float64) float64 {
+// envPct reads a fractional threshold in (0, 1]. Malformed or out-of-range
+// explicit input is a startup error naming the key, never a silent fallback.
+func envPct(key string, fallback float64) (float64, error) {
 	v := os.Getenv(key)
 	if v == "" {
-		return fallback
+		return fallback, nil
 	}
 	n, err := strconv.ParseFloat(v, 64)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("shard: invalid %s: %w", key, err)
 	}
-	return n
+	if !validPct(n) {
+		return 0, fmt.Errorf("shard: invalid %s: %v is not in (0, 1]", key, n)
+	}
+	return n, nil
 }

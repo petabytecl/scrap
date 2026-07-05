@@ -112,3 +112,15 @@ func TestListSealedBlocks_EmptyDir(t *testing.T) {
 		t.Fatalf("expected 0 blocks, got %d", len(blocks))
 	}
 }
+
+func TestListSealedBlocks_MalformedFilenameFails(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 1)
+	if err := os.WriteFile(filepath.Join(dir, "1.blk"), []byte("junk"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := block.ListSealedBlocks(dir, 99); err == nil {
+		t.Fatal("ListSealedBlocks with malformed filename succeeded, want error")
+	}
+}

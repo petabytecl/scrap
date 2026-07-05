@@ -34,7 +34,7 @@ func (s *Shard) CreateEvictionPlan(ctx context.Context, req eviction.PlanRequest
 		Member:     s.evictionMember(),
 		Now:        time.Now().UTC(),
 		PlanID:     ulid.New().String(),
-		IsLeader:   s.raft.IsLeader(),
+		IsLeader:   s.raft != nil && s.raft.IsLeader(),
 		Candidates: candidates,
 	})
 	if err != nil {
@@ -71,22 +71,40 @@ func (s *Shard) evictionCandidatesLocked() ([]eviction.PlanCandidate, error) {
 	var candidates []eviction.PlanCandidate
 	for {
 		upload, err := iter.Next()
-		if err == nil {
-			if _, pending := pendingByBlockID[upload.BlockID]; pending {
-				continue
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return candidates, nil
 			}
-			lifecycle, err := localblock.Classify(s.blocksDir, upload.BlockID)
-			if err != nil {
-				return nil, fmt.Errorf("shard: classify local Block %d: %w", upload.BlockID, err)
-			}
-			candidates = append(candidates, evictionPlanCandidate(upload, lifecycle))
+			return nil, err
+		}
+		if _, pending := pendingByBlockID[upload.BlockID]; pending {
 			continue
 		}
-		if errors.Is(err, io.EOF) {
-			return candidates, nil
+		candidate, eligible, err := s.evictionCandidateLocked(upload)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		if eligible {
+			candidates = append(candidates, candidate)
+		}
 	}
+}
+
+func (s *Shard) evictionCandidateLocked(upload index.ConfirmedUpload) (eviction.PlanCandidate, bool, error) {
+	lifecycle, err := localblock.Classify(s.blocksDir, upload.BlockID)
+	if err != nil {
+		return eviction.PlanCandidate{}, false, fmt.Errorf("shard: classify local Block %d: %w", upload.BlockID, err)
+	}
+	// ADR 0016 eligibility: quarantined Blocks are not eviction candidates.
+	// Classify is quarantine-blind, so check explicitly.
+	quarantined, err := quarantinedBlockExists(s.blocksDir, upload.BlockID)
+	if err != nil {
+		return eviction.PlanCandidate{}, false, err
+	}
+	if quarantined {
+		return eviction.PlanCandidate{}, false, nil
+	}
+	return evictionPlanCandidate(upload, lifecycle), true, nil
 }
 
 func evictionPlanCandidate(upload index.ConfirmedUpload, lifecycle localblock.Lifecycle) eviction.PlanCandidate {

@@ -28,6 +28,9 @@ const (
 	// time.Time.MarshalJSON accepts years through 9999. Projection values above
 	// this bound are corrupt for the admin evidence surface and must fail closed.
 	maxContentQuarantineUnixMicro = 253402300799999999
+	// contentQuarantineListPrealloc caps the initial allocation so a large
+	// caller-supplied limit cannot drive an oversized make.
+	contentQuarantineListPrealloc = 64
 )
 
 type ContentQuarantineScanType byte
@@ -98,7 +101,7 @@ func (idx *Index) ListContentQuarantines(txID string, limit int) ([]ContentQuara
 	}
 	defer func() { _ = iter.Close() }()
 
-	records := make([]ContentQuarantine, 0, limit)
+	records := make([]ContentQuarantine, 0, min(limit, contentQuarantineListPrealloc))
 	for iter.First(); iter.Valid() && len(records) < limit; iter.Next() {
 		val, err := iter.ValueAndErr()
 		if err != nil {
@@ -142,9 +145,6 @@ func (idx *Index) ReleaseContentQuarantine(txID, docName string) error {
 		return err
 	}
 	if err := idx.db.Delete(key, pebble.Sync); err != nil {
-		if errors.Is(err, pebble.ErrNotFound) {
-			return ErrContentQuarantineNotFound
-		}
 		return fmt.Errorf("index: release content quarantine: %w", err)
 	}
 	return nil

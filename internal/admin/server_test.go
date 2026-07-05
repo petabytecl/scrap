@@ -979,3 +979,22 @@ func TestServer_MetricsAbsentByDefault(t *testing.T) {
 		t.Fatalf("/metrics should be 404 without WithMetrics, got %d", resp.StatusCode)
 	}
 }
+
+func TestServer_ShutdownBeforeServePreventsUnstoppableServer(t *testing.T) {
+	srv := admin.New()
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- srv.ListenAndServe("127.0.0.1:0") }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ListenAndServe after Shutdown: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListenAndServe kept serving after Shutdown was already requested")
+	}
+}

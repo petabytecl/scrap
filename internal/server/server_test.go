@@ -116,6 +116,24 @@ func TestGRPCWriteRejectsInvalidMetadata(t *testing.T) {
 	}
 }
 
+func TestGRPCWriteRejectsDuplicateInitMidStream(t *testing.T) {
+	client := startTestServer(t)
+	ctx := context.Background()
+
+	init := &scrapv1.WriteDocumentInit{
+		TransactionId: "tx-dup-init",
+		DocumentName:  "doc.xml",
+		ContentType:   "text/xml",
+	}
+	err := writeDocumentWithMessages(ctx, client, []*scrapv1.WriteDocumentRequest{
+		{Part: &scrapv1.WriteDocumentRequest_Init{Init: init}},
+		{Part: &scrapv1.WriteDocumentRequest_ChunkData{ChunkData: []byte("pay")}},
+		{Part: &scrapv1.WriteDocumentRequest_Init{Init: init}},
+		{Part: &scrapv1.WriteDocumentRequest_ChunkData{ChunkData: []byte("load")}},
+	})
+	assertStatusCode(t, err, codes.InvalidArgument)
+}
+
 func TestGRPCWriteRejectsZeroByteDocument(t *testing.T) {
 	client := startTestServer(t)
 	ctx := context.Background()

@@ -88,8 +88,13 @@ func loadConfig(args []string) (Config, error) {
 		HeadlessService:    os.Getenv("SCRAP_HEADLESS_SERVICE"),
 		Namespace:          envString("POD_NAMESPACE", "default"),
 		Scrub:              scrub.ParseConfig(),
-		UploadPressure:     shard.ParseUploadPressureConfigFromEnv(),
 	}
+
+	uploadPressure, err := shard.ParseUploadPressureConfigFromEnv()
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.UploadPressure = uploadPressure
 
 	if err := loadCheckedEnv(&cfg); err != nil {
 		return Config{}, err

@@ -77,6 +77,7 @@ type Server struct {
 	auditSink          audit.Sink
 	rateLimiter        *security.RateLimiter
 	logger             *slog.Logger
+	shutdown           bool
 }
 
 func WithProjectionInjector(injector ProjectionInjector) Option {
@@ -570,6 +571,13 @@ func (s *Server) serveListener(ln net.Listener, cfg *tls.Config) error {
 	}
 
 	s.mu.Lock()
+	if s.shutdown {
+		// Shutdown was requested before the listener was installed; do not
+		// start a server that nothing can stop anymore.
+		s.mu.Unlock()
+		_ = ln.Close()
+		return nil
+	}
 	s.httpSrv = srv
 	s.mu.Unlock()
 
@@ -587,6 +595,7 @@ func (s *Server) serveListener(ln net.Listener, cfg *tls.Config) error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
+	s.shutdown = true
 	srv := s.httpSrv
 	s.mu.Unlock()
 

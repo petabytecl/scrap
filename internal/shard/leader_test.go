@@ -23,6 +23,7 @@ func TestNonLeaderWriteReturnsNotLeaderError(t *testing.T) {
 			3: "localhost:9093",
 		},
 		TickInterval: 50 * time.Millisecond,
+		Replicator:   noopTestReplicator{},
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -57,6 +58,7 @@ func TestNonLeaderHeadReturnsNotLeaderError(t *testing.T) {
 			3: "localhost:9093",
 		},
 		TickInterval: 50 * time.Millisecond,
+		Replicator:   noopTestReplicator{},
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

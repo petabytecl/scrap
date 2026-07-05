@@ -220,3 +220,26 @@ func TestStreamingHash_DifferentData(t *testing.T) {
 		t.Fatal("different data should produce different hashes")
 	}
 }
+
+func TestIncrementDocCountRejectsOverflow(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(filepath.Join(dir, "pebble"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	if err := idx.Put("tx-full", 1, 65535, false); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := idx.IncrementDocCount("tx-full"); err == nil {
+		t.Fatal("IncrementDocCount at 65535 succeeded, want overflow error")
+	}
+	entry, err := idx.Get("tx-full")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.DocCount != 65535 {
+		t.Fatalf("DocCount after rejected increment: got %d, want 65535", entry.DocCount)
+	}
+}

@@ -229,8 +229,10 @@ func TestFSBackendClassifiesMissingObjects(t *testing.T) {
 	if _, _, err := store.GetObject(ctx, key, backend.GetOpts{}); !errors.Is(err, backend.ErrNotFound) {
 		t.Fatalf("GetObject missing error = %v, want ErrNotFound", err)
 	}
-	if err := store.DeleteObject(ctx, key); !errors.Is(err, backend.ErrNotFound) {
-		t.Fatalf("DeleteObject missing error = %v, want ErrNotFound", err)
+	// DeleteObject is idempotent: deleting an absent key is a no-op, matching S3
+	// semantics so retried/concurrent deletes behave identically across backends.
+	if err := store.DeleteObject(ctx, key); err != nil {
+		t.Fatalf("DeleteObject missing error = %v, want nil (idempotent)", err)
 	}
 }
 

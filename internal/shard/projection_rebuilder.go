@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,10 @@ type projectionRebuilder struct {
 	upload    UploadConfig
 	logger    *slog.Logger
 
+	// stateMu orders rebuilding/rebuildDone updates so Wait never observes the
+	// stale (closed) done channel of a previous rebuild after Trigger has
+	// already marked a new rebuild in progress.
+	stateMu     sync.Mutex
 	rebuilding  atomic.Bool
 	rebuildDone atomic.Pointer[chan struct{}]
 }
@@ -60,11 +65,14 @@ func (r *projectionRebuilder) InProgress() bool {
 }
 
 func (r *projectionRebuilder) Trigger(ctx context.Context) (alreadyInProgress bool, err error) {
+	r.stateMu.Lock()
 	if !r.rebuilding.CompareAndSwap(false, true) {
+		r.stateMu.Unlock()
 		return true, nil
 	}
 	done := make(chan struct{})
 	r.rebuildDone.Store(&done)
+	r.stateMu.Unlock()
 	// The rebuild is detached: it outlives the triggering RPC. WithoutCancel keeps
 	// the caller's trace/values for log correlation while dropping cancellation and
 	// any deadline, so returning from this RPC does not abort the rebuild.
@@ -73,12 +81,17 @@ func (r *projectionRebuilder) Trigger(ctx context.Context) (alreadyInProgress bo
 }
 
 func (r *projectionRebuilder) Wait() {
-	if p := r.rebuildDone.Load(); p != nil {
+	r.stateMu.Lock()
+	p := r.rebuildDone.Load()
+	r.stateMu.Unlock()
+	if p != nil {
 		<-*p
 	}
 }
 
 func (r *projectionRebuilder) setInProgressForTest(v bool) {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
 	r.rebuilding.Store(v)
 	if v {
 		done := make(chan struct{})
@@ -88,6 +101,47 @@ func (r *projectionRebuilder) setInProgressForTest(v bool) {
 	done := make(chan struct{})
 	close(done)
 	r.rebuildDone.Store(&done)
+}
+
+// recoverProjectionSwapDirs cleans up after a crash during a projection swap.
+// If the live projection directory vanished mid-swap, the newest
+// pebble.previous-* directory is the pre-rebuild projection and is restored;
+// all remaining timestamped rebuild/previous directories are stale and removed
+// so they do not accumulate forever.
+func recoverProjectionSwapDirs(dataDir, pebbleDir string) error {
+	previous, err := filepath.Glob(filepath.Join(dataDir, "pebble.previous-*"))
+	if err != nil {
+		return fmt.Errorf("shard: glob previous projections: %w", err)
+	}
+	sort.Strings(previous)
+
+	if len(previous) > 0 && projectionDirMissingOrEmpty(pebbleDir) {
+		newest := previous[len(previous)-1]
+		_ = os.RemoveAll(pebbleDir)
+		if err := os.Rename(newest, pebbleDir); err != nil {
+			return fmt.Errorf("shard: restore projection from %s: %w", newest, err)
+		}
+		previous = previous[:len(previous)-1]
+	}
+
+	rebuilds, err := filepath.Glob(filepath.Join(dataDir, "pebble.rebuild-*"))
+	if err != nil {
+		return fmt.Errorf("shard: glob rebuild projections: %w", err)
+	}
+	for _, dir := range append(previous, rebuilds...) {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("shard: remove stale projection dir %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+func projectionDirMissingOrEmpty(pebbleDir string) bool {
+	entries, err := os.ReadDir(pebbleDir)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return len(entries) == 0
 }
 
 func (r *projectionRebuilder) doRebuild(ctx context.Context, done chan struct{}) {

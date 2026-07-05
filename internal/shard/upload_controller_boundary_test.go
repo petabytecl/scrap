@@ -25,7 +25,7 @@ func TestUploadObjectVerificationErrorDoesNotLeakBackendKey(t *testing.T) {
 	})
 	controller := newUploadBoundaryController(core, &mismatchingHeadBackend{})
 
-	_, err := controller.uploadObject(context.Background(), uploadApplyTestBlockID, prefix, uploadObjectBlock)
+	_, err := controller.uploadObject(context.Background(), uploadApplyTestBlockID, prefix, uploadObjectBlock, uploadSizeUnchecked)
 	if !errors.Is(err, backend.ErrCorrupt) {
 		t.Fatalf("uploadObject error = %v, want ErrCorrupt", err)
 	}

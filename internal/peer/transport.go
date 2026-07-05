@@ -3,7 +3,9 @@ package peer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.etcd.io/raft/v3/raftpb"
@@ -40,9 +42,13 @@ type peerSender struct {
 	conn   *grpc.ClientConn
 	cancel context.CancelFunc
 	done   chan struct{}
+	logger *slog.Logger
+
+	drops          atomic.Uint64
+	streamFailures atomic.Uint64
 }
 
-func newPeerSender(addr string, conn *grpc.ClientConn) *peerSender {
+func newPeerSender(addr string, conn *grpc.ClientConn, logger *slog.Logger) *peerSender {
 	ctx, cancel := context.WithCancel(context.Background())
 	ps := &peerSender{
 		addr:   addr,
@@ -50,6 +56,7 @@ func newPeerSender(addr string, conn *grpc.ClientConn) *peerSender {
 		conn:   conn,
 		cancel: cancel,
 		done:   make(chan struct{}),
+		logger: logger,
 	}
 	go ps.run(ctx)
 	return ps
@@ -59,6 +66,13 @@ func (ps *peerSender) send(msg outbound) {
 	select {
 	case ps.ch <- msg:
 	default:
+		count := ps.drops.Add(1)
+		if shouldLogPowerOfTwoCount(count) {
+			ps.logger.Warn("peer transport: raft outbound buffer full, dropping message",
+				"peer_addr", ps.addr,
+				"dropped_total", count,
+			)
+		}
 	}
 }
 
@@ -76,19 +90,61 @@ func (ps *peerSender) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			ps.logStreamFailure(ctx, "open", err)
 			ps.drain(ctx)
-			select {
-			case <-time.After(reconnectBackoff):
-			case <-ctx.Done():
+			if !ps.backoff(ctx) {
 				return
 			}
 			continue
 		}
 
+		go ps.observeStream(ctx, stream)
 		if !ps.sendLoop(ctx, stream) {
 			return
 		}
+		// The stream broke mid-send; back off before redialing so a peer that
+		// rejects every stream does not drive a message-rate reconnect loop.
+		if !ps.backoff(ctx) {
+			return
+		}
 	}
+}
+
+func (ps *peerSender) backoff(ctx context.Context) bool {
+	select {
+	case <-time.After(reconnectBackoff):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// observeStream surfaces the server's terminal status for the stream — e.g.
+// an authorization denial that would otherwise leave a permanently mute raft
+// link with no sender-side evidence. Receiving until error also releases the
+// abandoned stream's resources, per the gRPC client stream contract.
+func (ps *peerSender) observeStream(ctx context.Context, stream grpc.BidiStreamingClient[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse]) {
+	for {
+		if _, err := stream.Recv(); err != nil {
+			if ctx.Err() == nil {
+				ps.logStreamFailure(ctx, "recv", err)
+			}
+			return
+		}
+	}
+}
+
+func (ps *peerSender) logStreamFailure(ctx context.Context, op string, err error) {
+	count := ps.streamFailures.Add(1)
+	if !shouldLogPowerOfTwoCount(count) {
+		return
+	}
+	ps.logger.WarnContext(ctx, "peer transport: raft stream failed",
+		"peer_addr", ps.addr,
+		"op", op,
+		"failures_total", count,
+		"err", err,
+	)
 }
 
 func (ps *peerSender) openStream(ctx context.Context) (grpc.BidiStreamingClient[scrapv1.ForwardRaftStreamRequest, scrapv1.ForwardRaftStreamResponse], error) {
@@ -111,7 +167,11 @@ func (ps *peerSender) sendLoop(ctx context.Context, stream grpc.BidiStreamingCli
 				ShardId: msg.shardID,
 				Message: msg.data,
 			}); err != nil {
-				return ctx.Err() == nil
+				if ctx.Err() == nil {
+					ps.logStreamFailure(ctx, "send", err)
+					return true
+				}
+				return false
 			}
 		case <-ctx.Done():
 			return false
@@ -137,6 +197,7 @@ type SharedTransport struct {
 	conns     map[string]*grpc.ClientConn
 	senders   map[string]*peerSender
 	transport credentials.TransportCredentials
+	logger    *slog.Logger
 	closed    bool
 }
 
@@ -150,12 +211,21 @@ func WithSharedTransportCredentials(creds credentials.TransportCredentials) Shar
 	}
 }
 
+func WithSharedTransportLogger(logger *slog.Logger) SharedTransportOption {
+	return func(t *SharedTransport) {
+		if logger != nil {
+			t.logger = logger
+		}
+	}
+}
+
 func NewSharedTransport(peers map[uint64]string, opts ...SharedTransportOption) *SharedTransport {
 	t := &SharedTransport{
 		peers:     peers,
 		conns:     make(map[string]*grpc.ClientConn),
 		senders:   make(map[string]*peerSender),
 		transport: insecure.NewCredentials(),
+		logger:    slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -189,11 +259,12 @@ func (t *SharedTransport) getSender(addr string) *peerSender {
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
+		t.logger.Warn("peer transport: dial failed", "peer_addr", addr, "err", err)
 		return nil
 	}
 	t.conns[addr] = conn
 
-	sender := newPeerSender(addr, conn)
+	sender := newPeerSender(addr, conn, t.logger)
 	t.senders[addr] = sender
 	return sender
 }
@@ -201,6 +272,10 @@ func (t *SharedTransport) getSender(addr string) *peerSender {
 func (t *SharedTransport) enqueue(shardID uint64, addr string, msg raftpb.Message) {
 	data, err := msg.Marshal()
 	if err != nil {
+		t.logger.Warn("peer transport: marshal raft message failed",
+			"scrap.shard_id", shardID,
+			"err", err,
+		)
 		return
 	}
 

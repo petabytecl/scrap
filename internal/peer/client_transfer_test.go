@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -129,18 +130,59 @@ func TestRecvBlockData_SplitChunk(t *testing.T) {
 	}
 }
 
+func TestRecvBlockData_RejectsIndexBytesBeyondDeclaredSize(t *testing.T) {
+	// A peer that keeps streaming after the declared sizes must be cut off
+	// immediately, not buffered until it stops on its own.
+	stream := &mockTransferStream{
+		msgs: []*scrapv1.TransferBlockResponse{
+			chunkMsg([]byte("BBBBB")),
+			chunkMsg([]byte("iii")),
+			chunkMsg([]byte("unbounded-extra-data")),
+		},
+	}
+	_, _, err := recvBlockData(stream, 5, 3)
+	if err == nil {
+		t.Fatal("expected error for index bytes beyond declared size")
+	}
+	if got := stream.idx; got != 3 {
+		t.Fatalf("stream messages consumed = %d, want 3 (stop at first excess chunk)", got)
+	}
+}
+
+func TestRecvBlockData_RejectsSplitChunkOverflowingIndex(t *testing.T) {
+	stream := &mockTransferStream{
+		msgs: []*scrapv1.TransferBlockResponse{chunkMsg([]byte("BBBBBiiiiiii"))},
+	}
+	_, _, err := recvBlockData(stream, 5, 3)
+	if err == nil {
+		t.Fatal("expected error for spill bytes exceeding declared index size")
+	}
+}
+
+func transferStatusWithReason(t *testing.T, code codes.Code, reason, msg string) error {
+	t.Helper()
+	st, err := status.New(code, reason+": "+msg).WithDetails(&errdetails.ErrorInfo{Reason: reason})
+	if err != nil {
+		t.Fatalf("status with details: %v", err)
+	}
+	return st.Err()
+}
+
 func TestMapTransferError(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
 		want error
 	}{
-		{name: "evicted", err: status.Error(codes.FailedPrecondition, transferReasonEvicted+": local"), want: scrub.ErrPeerBlockEvicted},
-		{name: "metadata loss", err: status.Error(codes.DataLoss, transferReasonMetadataLoss+": missing idx"), want: scrub.ErrPeerBlockMetadataLoss},
-		{name: "unexpected loss", err: status.Error(codes.DataLoss, transferReasonUnexpectedLoss+": missing blk"), want: scrub.ErrPeerBlockUnexpectedLoss},
-		{name: "quarantined", err: status.Error(codes.DataLoss, transferReasonQuarantined+": corrupt"), want: scrub.ErrPeerBlockQuarantined},
+		{name: "evicted", err: transferStatusWithReason(t, codes.FailedPrecondition, transferReasonEvicted, "local"), want: scrub.ErrPeerBlockEvicted},
+		{name: "metadata loss", err: transferStatusWithReason(t, codes.DataLoss, transferReasonMetadataLoss, "missing idx"), want: scrub.ErrPeerBlockMetadataLoss},
+		{name: "unexpected loss", err: transferStatusWithReason(t, codes.DataLoss, transferReasonUnexpectedLoss, "missing blk"), want: scrub.ErrPeerBlockUnexpectedLoss},
+		{name: "quarantined", err: transferStatusWithReason(t, codes.DataLoss, transferReasonQuarantined, "corrupt"), want: scrub.ErrPeerBlockQuarantined},
 		{name: "unmatched status", err: status.Error(codes.NotFound, "missing"), want: nil},
 		{name: "non status", err: io.ErrUnexpectedEOF, want: nil},
+		// A reason mentioned only in the message text must not classify:
+		// substring-based error mapping is forbidden (CONTEXT.md).
+		{name: "reason in message only", err: status.Error(codes.DataLoss, transferReasonQuarantined+": corrupt"), want: nil},
 	}
 
 	for _, tt := range tests {

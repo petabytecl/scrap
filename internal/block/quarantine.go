@@ -3,6 +3,7 @@ package block
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ func Quarantine(blkPath string) error {
 		if err := os.Rename(idxPath, idxPath+QuarantineSuffix); err != nil {
 			return fmt.Errorf("block: quarantine idx: %w", err)
 		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("block: quarantine stat idx: %w", err)
 	}
 
 	if err := os.Rename(blkPath, blkPath+QuarantineSuffix); err != nil {
@@ -28,7 +31,7 @@ func Quarantine(blkPath string) error {
 		return fmt.Errorf("block: quarantine blk: %w", err)
 	}
 
-	return nil
+	return syncIndexDir(filepath.Dir(blkPath))
 }
 
 func Unquarantine(dir string, blockID uint64) error {
@@ -39,14 +42,35 @@ func Unquarantine(dir string, blockID uint64) error {
 	idxQ := IdxFilePath(dir, blockID) + QuarantineSuffix
 
 	blkDest := FilePath(dir, blockID)
+	if err := requireAbsent(blkDest); err != nil {
+		return err
+	}
+	idxDest := IdxFilePath(dir, blockID)
+	if err := requireAbsent(idxDest); err != nil {
+		return err
+	}
+
 	if err := os.Rename(blkQ, blkDest); err != nil {
 		return fmt.Errorf("block: unquarantine blk: %w", err)
 	}
 	if _, err := os.Stat(idxQ); err == nil {
-		if err := os.Rename(idxQ, IdxFilePath(dir, blockID)); err != nil {
+		if err := os.Rename(idxQ, idxDest); err != nil {
 			_ = os.Rename(blkDest, blkQ)
 			return fmt.Errorf("block: unquarantine idx: %w", err)
 		}
+	}
+	return syncIndexDir(dir)
+}
+
+// requireAbsent stops Unquarantine from renaming a known-corrupt copy over a
+// Block that was re-created or restored while the original sat in quarantine.
+func requireAbsent(path string) error {
+	_, err := os.Stat(path)
+	if err == nil {
+		return fmt.Errorf("block: unquarantine: %s already exists", path)
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("block: unquarantine stat %s: %w", path, err)
 	}
 	return nil
 }

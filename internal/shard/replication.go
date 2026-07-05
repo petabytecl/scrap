@@ -214,12 +214,20 @@ func (s *Shard) appendReplicatedPayload(ctx context.Context, init *scrapv1.Repli
 	})
 }
 
+// maxReplicatedFrameCount bounds a peer-declared frame count by the largest
+// frame count a maximum-size Document can produce, so a malformed init message
+// cannot drive the frames allocation below.
+const maxReplicatedFrameCount = storeapi.MaxDocumentBytes/block.MaxFramePayload + 1
+
 func splitReplicatedStoredFrames(data []byte, frameCount uint32) ([][]byte, error) {
 	if frameCount == 0 {
 		if len(data) != 0 {
 			return nil, fmt.Errorf("shard: replicated payload has %d bytes for zero frames", len(data))
 		}
 		return nil, nil
+	}
+	if frameCount > maxReplicatedFrameCount {
+		return nil, fmt.Errorf("shard: replicated frame count %d exceeds max %d", frameCount, maxReplicatedFrameCount)
 	}
 	frames := make([][]byte, 0, frameCount)
 	remaining := data

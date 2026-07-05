@@ -135,3 +135,15 @@ func markerExpectationForTest(blockID uint64) localblock.EvictionMarkerExpectati
 		ValidationToken: validationValueForTest(blockID),
 	}
 }
+
+func TestUnlinkBlockDataMissingBlockIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+
+	removed, err := localblock.UnlinkBlockData(dir, 42)
+	if err != nil {
+		t.Fatalf("UnlinkBlockData on missing block: %v", err)
+	}
+	if removed {
+		t.Fatal("removed: got true, want false for already-missing block")
+	}
+}

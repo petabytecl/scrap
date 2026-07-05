@@ -320,12 +320,6 @@ func TestDeepScrubber_LifecycleFailuresMarkRunError(t *testing.T) {
 			classifier: &stubScrubBlockClassifier{err: errors.New("marker invalid")},
 		},
 		{
-			name: "metadata loss",
-			classifier: &stubScrubBlockClassifier{
-				states: map[uint64]scrub.BlockLocalState{1: scrub.BlockLocalStateMetadataLoss},
-			},
-		},
-		{
 			name: "unknown state",
 			classifier: &stubScrubBlockClassifier{
 				states: map[uint64]scrub.BlockLocalState{1: scrub.BlockLocalState("mystery")},
@@ -357,6 +351,56 @@ func TestDeepScrubber_LifecycleFailuresMarkRunError(t *testing.T) {
 				t.Fatalf("error runs = %d, want 1", metrics.runsError)
 			}
 		})
+	}
+}
+
+func TestDeepScrubber_LossStateBlocksSkipAndContinue(t *testing.T) {
+	// A metadata_loss/unexpected_loss block has no verifiable index, so it must
+	// be skipped (with an observable reason) and the run must keep verifying the
+	// higher-ID blocks — never abort the whole run.
+	t.Run("metadata_loss", func(t *testing.T) {
+		assertLossStateSkipped(t, scrub.BlockLocalStateMetadataLoss, "metadata_loss")
+	})
+	t.Run("unexpected_loss", func(t *testing.T) {
+		assertLossStateSkipped(t, scrub.BlockLocalStateUnexpectedLoss, "unexpected_loss")
+	})
+}
+
+func assertLossStateSkipped(t *testing.T, state scrub.BlockLocalState, reason string) {
+	t.Helper()
+	verifier := &recordingVerifier{}
+	metrics := &deepScrubMetrics{}
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister: &stubBlockLister{blocks: []block.Info{
+			{BlockID: 1, BlkPath: "/tmp/1.blk", IdxPath: "/tmp/1.idx"},
+			{BlockID: 2, BlkPath: "/tmp/2.blk", IdxPath: "/tmp/2.idx"},
+		}},
+		BlockVerifier:     verifier,
+		QuarantineManager: &stubQuarantineManager{},
+		Metrics:           metrics,
+		Checkpoint:        &stubCheckpointStore{},
+		BlockStateClassifier: &stubScrubBlockClassifier{states: map[uint64]scrub.BlockLocalState{
+			1: state,
+			2: scrub.BlockLocalStateHot,
+		}},
+		OpenBlockID: 99,
+		CorruptCap:  5,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("VerifyBlock calls = %d, want 1 (block 2 still verified)", verifier.calls)
+	}
+	if metrics.skips[reason] != 1 {
+		t.Fatalf("%s skips = %d, want 1", reason, metrics.skips[reason])
+	}
+	if metrics.runsError != 0 {
+		t.Fatalf("error runs = %d, want 0", metrics.runsError)
+	}
+	if metrics.runsOK != 1 {
+		t.Fatalf("ok runs = %d, want 1", metrics.runsOK)
 	}
 }
 

@@ -32,6 +32,8 @@ import (
 const (
 	DefaultBlockSealSize  = 64 * 1024 * 1024
 	DefaultBootstrapGrace = 60 * time.Second
+
+	readIndexApplyPollInterval = time.Millisecond
 )
 
 type Config struct {
@@ -196,10 +198,20 @@ func (c EncryptionConfig) documentConfig() encryption.DocumentConfig {
 	}
 }
 
+func validateOpenConfig(cfg Config) error {
+	if err := cfg.Eviction.Validate(); err != nil {
+		return fmt.Errorf("shard: eviction config: %w", err)
+	}
+	if cfg.Replicator == nil && len(cfg.Peers) > 1 {
+		return errors.New("shard: replicator is required for multi-member cells: byte replication must not be silently skipped")
+	}
+	return nil
+}
+
 func Open(cfg Config) (*Shard, error) {
 	cfg.applyDefaults()
-	if err := cfg.Eviction.Validate(); err != nil {
-		return nil, fmt.Errorf("shard: eviction config: %w", err)
+	if err := validateOpenConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	baseLogger := openLogger(cfg.Logger)
@@ -213,15 +225,11 @@ func Open(cfg Config) (*Shard, error) {
 	if err := ensureShardDirs(blocksDir, pebbleDir, openlogDir, raftDir); err != nil {
 		return nil, err
 	}
-
-	idx, err := index.Open(pebbleDir)
-	if err != nil {
-		return nil, fmt.Errorf("shard: open index: %w", err)
+	if err := sweepOrphanedStagingFiles(blocksDir); err != nil {
+		return nil, err
 	}
-
-	nextID, err := scanMaxBlockID(blocksDir)
+	idx, nextID, err := openShardStorage(cfg.DataDir, pebbleDir, blocksDir)
 	if err != nil {
-		_ = idx.Close()
 		return nil, err
 	}
 
@@ -333,6 +341,22 @@ func (s *Shard) refreshRuntimeStateAfterRaftOpen() error {
 	return nil
 }
 
+func openShardStorage(dataDir, pebbleDir, blocksDir string) (*index.Index, uint64, error) {
+	if err := recoverProjectionSwapDirs(dataDir, pebbleDir); err != nil {
+		return nil, 0, err
+	}
+	idx, err := index.Open(pebbleDir)
+	if err != nil {
+		return nil, 0, fmt.Errorf("shard: open index: %w", err)
+	}
+	nextID, err := scanMaxBlockID(blocksDir)
+	if err != nil {
+		_ = idx.Close()
+		return nil, 0, err
+	}
+	return idx, nextID, nil
+}
+
 func openLogger(logger *slog.Logger) *slog.Logger {
 	if logger == nil {
 		return slog.Default()
@@ -407,7 +431,6 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, err
 	}
-	defer attempt.cleanupOnAbort()
 
 	now := time.UnixMicro(time.Now().UnixMicro())
 
@@ -417,9 +440,16 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	if err != nil {
 		if truncateErr := s.blockWriter.Truncate(startOffset); truncateErr != nil {
 			err = errors.Join(err, truncateErr)
+		} else {
+			attempt.cleanupOnAbort()
 		}
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, mapEncryptionError(fmt.Errorf("shard: append document: %w", err))
+	}
+	if result.FirstFrameOffset != startOffset {
+		s.abortWriteAttemptLocked(attempt, startOffset)
+		s.mu.Unlock()
+		return storeapi.WriteResult{}, fmt.Errorf("shard: append first frame offset %d, want %d", result.FirstFrameOffset, startOffset)
 	}
 
 	s.mu.Unlock()
@@ -428,6 +458,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	err = s.replicateDocument(ctx, attempt.prepEntry(), contentType, result, replicationData, envelope)
 	replicateStage.End(err)
 	if err != nil {
+		s.abortWriteAttempt(attempt, startOffset)
 		return storeapi.WriteResult{}, err
 	}
 
@@ -447,6 +478,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.proposalMu.Lock()
 		delete(s.proposals, key)
 		s.proposalMu.Unlock()
+		s.abortWriteAttempt(attempt, startOffset)
 		return storeapi.WriteResult{}, fmt.Errorf("shard: marshal command: %w", err)
 	}
 	proposeErr := s.raft.Propose(ctx, data)
@@ -455,6 +487,12 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.proposalMu.Lock()
 		delete(s.proposals, key)
 		s.proposalMu.Unlock()
+		// A context error is ambiguous: the proposal may still be in the Raft
+		// pipeline and commit later, so the bytes and prep must survive for
+		// apply-time cleanup or Openlog recovery to resolve.
+		if !errors.Is(proposeErr, context.Canceled) && !errors.Is(proposeErr, context.DeadlineExceeded) {
+			s.abortWriteAttempt(attempt, startOffset)
+		}
 		return storeapi.WriteResult{}, fmt.Errorf("shard: propose: %w", proposeErr)
 	}
 
@@ -463,10 +501,17 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	case applyErr := <-doneCh:
 		applyStage.End(applyErr)
 		if applyErr != nil {
+			s.abortWriteAttempt(attempt, startOffset)
 			return storeapi.WriteResult{}, applyErr
 		}
 	case <-ctx.Done():
 		applyStage.End(ctx.Err())
+		// The committed command may still apply after cancellation: keep the
+		// bytes and the prep so apply-time cleanup or Openlog recovery resolves
+		// them, and drop the waiter so the channel entry does not leak.
+		s.proposalMu.Lock()
+		delete(s.proposals, key)
+		s.proposalMu.Unlock()
 		return storeapi.WriteResult{}, ctx.Err()
 	}
 
@@ -477,6 +522,27 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		Size:      result.Size,
 		CreatedAt: now,
 	}, nil
+}
+
+// abortWriteAttempt reclaims the Block bytes of a write whose command was never
+// committed: truncate first, then drop the prep. Orphan unindexed Frames must
+// not survive — VerifyBlock maps index entries to documents by position, so a
+// leaked doc_seq makes deep scrub misattribute every later document in the
+// Block. If the truncate fails the prep is kept so Openlog recovery retries the
+// truncation at the next startup.
+func (s *Shard) abortWriteAttempt(attempt *openlogWriteAttempt, startOffset int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.abortWriteAttemptLocked(attempt, startOffset)
+}
+
+func (s *Shard) abortWriteAttemptLocked(attempt *openlogWriteAttempt, startOffset int64) {
+	if err := s.blockWriter.Truncate(startOffset); err != nil {
+		s.logger.Error("shard: abort write truncate failed; prep retained for recovery",
+			"block_id", s.blockWriter.BlockID(), "err", err)
+		return
+	}
+	attempt.cleanupOnAbort()
 }
 
 func (s *Shard) HeadDocument(ctx context.Context, txID, docName string) (storeapi.DocumentMeta, error) {
@@ -737,11 +803,33 @@ func (s *Shard) requireLeaderRead(ctx context.Context) error {
 	if !s.raft.IsLeader() {
 		return s.notLeaderError()
 	}
-	_, err := s.raft.ReadIndex(ctx)
+	readIndex, err := s.raft.ReadIndex(ctx)
 	if err != nil {
 		return fmt.Errorf("shard: read index: %w", err)
 	}
-	return nil
+	return s.waitForReadIndexApply(ctx, readIndex)
+}
+
+// waitForReadIndexApply blocks until the applied index covers the ReadIndex —
+// the linearizable-read gate etcd/raft requires before serving. Without it a
+// freshly elected leader with committed-but-unapplied entries serves reads
+// that miss Documents ACKed through the previous leader.
+func (s *Shard) waitForReadIndexApply(ctx context.Context, readIndex uint64) error {
+	if s.raft.AppliedIndex() >= readIndex {
+		return nil
+	}
+	ticker := time.NewTicker(readIndexApplyPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("shard: wait for read index %d apply: %w", readIndex, ctx.Err())
+		case <-ticker.C:
+			if s.raft.AppliedIndex() >= readIndex {
+				return nil
+			}
+		}
+	}
 }
 
 func (s *Shard) TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error) {
@@ -760,6 +848,8 @@ func (s *Shard) RunLightScrub(ctx context.Context) error {
 
 func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) error {
 	if err := s.idx.Close(); err != nil {
+		// Fail closed: a half-closed Pebble handle must never serve reads.
+		s.idx = nil
 		return fmt.Errorf("shard: close current index: %w", err)
 	}
 	s.idx = nil
@@ -968,6 +1058,3 @@ var (
 	_ scrub.ResultCache   = (*Shard)(nil)
 	_ scrub.LeaderChecker = (*Shard)(nil)
 )
-
-// Suppress unused import.
-var _ = bytes.NewReader

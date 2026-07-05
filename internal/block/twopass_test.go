@@ -75,6 +75,17 @@ func TestTwoPassReadCorrect(t *testing.T) {
 	}
 }
 
+func TestTwoPassRejectsEncryptedEntry(t *testing.T) {
+	dir := t.TempDir()
+	data := bytes.Repeat([]byte("secret"), 128)
+	blkPath, _, entry := writeSingleDocBlock(t, dir, data)
+	entry.EncryptionEnvelope = []byte(`{"ciphertext_length":768}`)
+
+	if _, err := block.ReadDocumentTwoPass(blkPath, entry); !errors.Is(err, block.ErrEncryptedEntry) {
+		t.Fatalf("ReadDocumentTwoPass error: got %v, want ErrEncryptedEntry", err)
+	}
+}
+
 func TestTwoPassCorruptPayload(t *testing.T) {
 	dir := t.TempDir()
 	data := bytes.Repeat([]byte("A"), 512)

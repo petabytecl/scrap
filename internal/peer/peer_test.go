@@ -2,6 +2,7 @@ package peer_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"net"
 	"testing"
 
@@ -35,6 +36,11 @@ func startPeerServer(t *testing.T, blocksDir string, opts ...peer.ServerOption) 
 	return lis.Addr().String()
 }
 
+func testBodySHA256(body string) []byte {
+	sha := sha256.Sum256([]byte(body))
+	return sha[:]
+}
+
 func TestReplicateDocumentSinglePeer(t *testing.T) {
 	dir := t.TempDir()
 	addr := startPeerServer(t, dir)
@@ -59,6 +65,7 @@ func TestReplicateDocumentSinglePeer(t *testing.T) {
 				ContentType:   "text/xml",
 				BlockId:       1,
 				TotalBytes:    11,
+				Sha256:        testBodySHA256("hello world"),
 			},
 		},
 	}); err != nil {
@@ -98,6 +105,7 @@ func TestFanOutQuorum(t *testing.T) {
 		ContentType:   "text/xml",
 		BlockId:       1,
 		TotalBytes:    4,
+		Sha256:        testBodySHA256("data"),
 	}
 
 	results := c.FanOut(context.Background(), []string{addr1, addr2}, init, [][]byte{[]byte("data")})
@@ -145,6 +153,7 @@ func TestFanOutWithDeadPeer(t *testing.T) {
 		ContentType:   "text/xml",
 		BlockId:       2,
 		TotalBytes:    4,
+		Sha256:        testBodySHA256("data"),
 	}
 
 	results := c.FanOut(context.Background(),

@@ -100,8 +100,8 @@ func TestShouldLogMalformedRaftCountSamplesPowersOfTwo(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := shouldLogMalformedRaftCount(tt.count); got != tt.want {
-			t.Fatalf("shouldLogMalformedRaftCount(%d) = %v, want %v", tt.count, got, tt.want)
+		if got := shouldLogPowerOfTwoCount(tt.count); got != tt.want {
+			t.Fatalf("shouldLogPowerOfTwoCount(%d) = %v, want %v", tt.count, got, tt.want)
 		}
 	}
 }

@@ -273,3 +273,44 @@ func TestVerifyBlock_OversizedPayloadLen(t *testing.T) {
 		t.Fatal("expected oversized payload to be reported as corruption")
 	}
 }
+
+func TestVerifyBlock_CorruptHeaderReported(t *testing.T) {
+	dir := t.TempDir()
+	blkPath := filepath.Join(dir, "0000000000000064.blk")
+	idxPath := filepath.Join(dir, "0000000000000064.idx")
+
+	bw, err := block.NewWriter(blkPath, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close block: %v", err)
+	}
+	iw, err := block.NewIndexWriter(idxPath)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index: %v", err)
+	}
+
+	raw, err := os.ReadFile(blkPath) //nolint:gosec // test file path from temp dir
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	raw[0] ^= 0xFF                                            // break the header magic
+	if err := os.WriteFile(blkPath, raw, 0o600); err != nil { //nolint:gosec // test file path from temp dir
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := block.VerifyBlock(blkPath, idxPath)
+	if err != nil {
+		t.Fatalf("VerifyBlock: %v", err)
+	}
+	if len(result.CorruptFrames) != 1 {
+		t.Fatalf("CorruptFrames: got %d, want 1", len(result.CorruptFrames))
+	}
+	if result.CorruptFrames[0].Type != block.CorruptionHeader {
+		t.Fatalf("corruption type: got %s, want %s", result.CorruptFrames[0].Type, block.CorruptionHeader)
+	}
+}

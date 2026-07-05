@@ -42,8 +42,12 @@ func TestAppRunCleanShutdown(t *testing.T) {
 		Namespace:         "default",
 		SecurityMode:      security.ModeTest,
 		Scrub:             scrub.ParseConfig(),
-		UploadPressure:    shard.ParseUploadPressureConfigFromEnv(),
 	}
+	uploadPressure, err := shard.ParseUploadPressureConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ParseUploadPressureConfigFromEnv: %v", err)
+	}
+	cfg.UploadPressure = uploadPressure
 	logger := slog.New(slog.DiscardHandler)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolvePeersDefaultSingleNode(t *testing.T) {
 	peers, raftID, err := resolvePeers(Config{})
@@ -29,6 +32,29 @@ func TestResolvePeersInvalidFlag(t *testing.T) {
 	if _, _, err := resolvePeers(Config{PeersFlag: "not-valid"}); err == nil {
 		t.Fatal("expected error for invalid --peers, got nil")
 	}
+}
+
+func TestResolvePeersRejectsHalfSpecifiedClusterIdentity(t *testing.T) {
+	// A pod that is meant to be clustered must not silently fall through to the
+	// lone-node default when only one of the pair is set.
+	t.Run("replicas without headless service", func(t *testing.T) {
+		_, _, err := resolvePeers(Config{Replicas: 5})
+		if err == nil {
+			t.Fatal("expected error for SCRAP_REPLICAS without SCRAP_HEADLESS_SERVICE, got nil")
+		}
+		if !strings.Contains(err.Error(), "SCRAP_HEADLESS_SERVICE") {
+			t.Fatalf("error = %v, want it to name SCRAP_HEADLESS_SERVICE", err)
+		}
+	})
+	t.Run("headless service without replicas", func(t *testing.T) {
+		_, _, err := resolvePeers(Config{HeadlessService: "scrap-headless"})
+		if err == nil {
+			t.Fatal("expected error for SCRAP_HEADLESS_SERVICE without SCRAP_REPLICAS, got nil")
+		}
+		if !strings.Contains(err.Error(), "SCRAP_REPLICAS") {
+			t.Fatalf("error = %v, want it to name SCRAP_REPLICAS", err)
+		}
+	})
 }
 
 func TestResolveClientAddrsForK8sUseClientPort(t *testing.T) {

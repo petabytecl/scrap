@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,6 +22,12 @@ const (
 	idxMinEntryLen    = 2  // version + reserved
 	idxLenPrefixSize  = 2  // uint16 length prefix for strings
 	idxFixedFieldSize = 60 // created_at(8) + first_frame_off(8) + frame_count(4) + total_bytes(8) + sha256(32)
+
+	// idxMaxEntryLen bounds the length prefix of a stored entry. A maximal
+	// entry (all string fields at their API limits plus a uint16-prefixed
+	// envelope) stays under 68 KiB, so anything larger is corruption and must
+	// not drive the payload allocation.
+	idxMaxEntryLen = 1 << 17
 
 	sha256Size = 32 // SHA-256 digest length in bytes
 	uint64Size = 8  // encoded uint64 length in bytes
@@ -211,6 +218,9 @@ func truncateIncompleteIndexTail(f *os.File, path string, validEnd int64, readEr
 
 // Append writes a CRC-protected entry: entry_len(4) + payload + entry_crc32c(4)
 func (w *IndexWriter) Append(e IndexEntry) error {
+	if err := validateEntryFieldLens(e); err != nil {
+		return err
+	}
 	payload := encodeIndexEntry(e)
 
 	var lenBuf [4]byte
@@ -306,6 +316,9 @@ func readNextEntry(f *os.File) (IndexEntry, bool, error) {
 	}
 
 	payloadLen := binary.LittleEndian.Uint32(lenBuf[:])
+	if payloadLen > idxMaxEntryLen {
+		return IndexEntry{}, false, classifyOversizedEntryLen(f, payloadLen)
+	}
 	payload := make([]byte, payloadLen)
 	if _, err := io.ReadFull(f, payload); err != nil {
 		return IndexEntry{}, false, fmt.Errorf("%w: read entry payload: %w", ErrIdxCorrupt, err)
@@ -327,6 +340,26 @@ func readNextEntry(f *os.File) (IndexEntry, bool, error) {
 	}
 
 	return entry, false, nil
+}
+
+// classifyOversizedEntryLen reports an over-limit length prefix without
+// allocating the claimed size. When the file cannot hold the claimed payload
+// and CRC the prefix itself is a torn tail, which must stay repairable, so
+// the error wraps io.ErrUnexpectedEOF exactly like a short payload read.
+func classifyOversizedEntryLen(f *os.File, payloadLen uint32) error {
+	oversized := fmt.Errorf("%w: entry len %d exceeds max %d", ErrIdxCorrupt, payloadLen, idxMaxEntryLen)
+	cur, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return oversized
+	}
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return oversized
+	}
+	if int64(payloadLen)+4 > end-cur {
+		return fmt.Errorf("%w: read entry payload: %w", ErrIdxCorrupt, io.ErrUnexpectedEOF)
+	}
+	return oversized
 }
 
 func (r *IndexReader) Find(txID, docName string) (IndexEntry, error) {
@@ -354,6 +387,26 @@ func (r *IndexReader) Entries() []IndexEntry {
 
 func (r *IndexReader) Close() error {
 	return r.f.Close()
+}
+
+// validateEntryFieldLens rejects fields that would wrap the uint16 length
+// prefix in appendLenPrefixed and write a CRC-valid but undecodable entry.
+func validateEntryFieldLens(e IndexEntry) error {
+	fields := []struct {
+		name string
+		n    int
+	}{
+		{"transaction_id", len(e.TransactionID)},
+		{"document_name", len(e.DocName)},
+		{"content_type", len(e.ContentType)},
+		{"encryption_envelope", len(e.EncryptionEnvelope)},
+	}
+	for _, field := range fields {
+		if field.n > math.MaxUint16 {
+			return fmt.Errorf("block: index entry %s length %d exceeds %d", field.name, field.n, math.MaxUint16)
+		}
+	}
+	return nil
 }
 
 func encodeIndexEntry(e IndexEntry) []byte {

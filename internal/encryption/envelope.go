@@ -112,8 +112,10 @@ func EncryptDocument(ctx context.Context, cfg DocumentConfig, identity DocumentI
 	}
 
 	return EncryptedDocument{
-		Envelope:        envelope,
-		Frames:          cloneFrames(frames),
+		Envelope: envelope,
+		// encryptFrames returns freshly sealed frames that alias nothing, so
+		// they can be handed back directly without a defensive deep copy.
+		Frames:          frames,
 		PlaintextSHA256: plaintextSHA,
 		PlaintextSize:   plaintextSize,
 		CiphertextSize:  ciphertextSize,
@@ -379,17 +381,6 @@ func framePayloadBytes(frames [][]byte) int64 {
 		total += int64(len(frame))
 	}
 	return total
-}
-
-func cloneFrames(frames [][]byte) [][]byte {
-	if len(frames) == 0 {
-		return nil
-	}
-	out := make([][]byte, len(frames))
-	for i, frame := range frames {
-		out[i] = cloneBytes(frame)
-	}
-	return out
 }
 
 func zeroBytes(data []byte) {

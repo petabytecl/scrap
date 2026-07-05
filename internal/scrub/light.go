@@ -3,6 +3,7 @@ package scrub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
@@ -108,7 +109,7 @@ func (ls *Light) jitteredInterval() time.Duration {
 	return ls.cfg.Interval + time.Duration(offset)
 }
 
-func (ls *Light) RunOnce(ctx context.Context) error { //nolint:gocognit // rebuild error handling adds necessary branches
+func (ls *Light) RunOnce(ctx context.Context) error {
 	if !ls.cfg.LeaderChecker.IsLeader() {
 		return nil
 	}
@@ -123,17 +124,19 @@ func (ls *Light) RunOnce(ctx context.Context) error { //nolint:gocognit // rebui
 		return err
 	}
 
-	var divergent []string
-	for _, addr := range ls.cfg.PeerAddrs {
-		peerResult, err := ls.checkPeerConsistency(ctx, addr, scrubID)
-		if err != nil {
-			ls.cfg.Logger.WarnContext(ctx, "scrub: peer consistency check failed", "addr", addr, "scrub_id", scrubID, "err", err)
-			ls.cfg.Metrics.RecordRun("error", time.Since(start).Seconds())
-			return err
-		}
-		if peerResult.SHA256 != leaderResult.SHA256 {
-			divergent = append(divergent, addr)
-		}
+	// A zero hash is impossible for a real SHA-256 and means the voter failed
+	// to compute one. Comparing zero hashes would either mark every healthy
+	// peer divergent (triggering projection rebuilds off a transient local
+	// failure) or mask real divergence when two voters fail together.
+	if leaderResult.SHA256 == [32]byte{} {
+		ls.cfg.Metrics.RecordRun("error", time.Since(start).Seconds())
+		return fmt.Errorf("scrub: leader projection hash missing for scrub %s", scrubID)
+	}
+
+	divergent, err := ls.collectDivergentPeers(ctx, scrubID, leaderResult.SHA256)
+	if err != nil {
+		ls.cfg.Metrics.RecordRun("error", time.Since(start).Seconds())
+		return err
 	}
 
 	duration := time.Since(start).Seconds()
@@ -150,6 +153,34 @@ func (ls *Light) RunOnce(ctx context.Context) error { //nolint:gocognit // rebui
 		ls.cfg.Metrics.RecordRun("ok", duration)
 	}
 	return nil
+}
+
+func (ls *Light) collectDivergentPeers(ctx context.Context, scrubID string, leaderHash [32]byte) ([]string, error) {
+	var divergent []string
+	for _, addr := range ls.cfg.PeerAddrs {
+		peerResult, err := ls.checkPeerConsistency(ctx, addr, scrubID)
+		if errors.Is(err, ErrConsistencyResultNotReady) {
+			// The peer has not published its result for this scrub yet; abort so
+			// the whole check retries next cycle rather than reporting against a
+			// partial peer set.
+			ls.cfg.Logger.WarnContext(ctx, "scrub: peer consistency result not ready", "addr", addr, "scrub_id", scrubID)
+			return nil, err
+		}
+		if err != nil {
+			// An unreachable or errored peer is inconclusive, not divergent: skip
+			// it and keep evaluating the reachable peers instead of aborting the
+			// entire run on one down voter.
+			ls.cfg.Logger.WarnContext(ctx, "scrub: peer consistency check inconclusive", "addr", addr, "scrub_id", scrubID, "err", err)
+			continue
+		}
+		if peerResult.SHA256 == [32]byte{} {
+			return nil, fmt.Errorf("scrub: peer %s projection hash missing for scrub %s", addr, scrubID)
+		}
+		if peerResult.SHA256 != leaderHash {
+			divergent = append(divergent, addr)
+		}
+	}
+	return divergent, nil
 }
 
 func (ls *Light) checkPeerConsistency(ctx context.Context, addr, scrubID string) (Result, error) {

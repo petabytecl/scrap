@@ -642,7 +642,11 @@ func TestSchedulerRejectsDetectionsWhenResultIsClean(t *testing.T) {
 	}
 }
 
-func TestSchedulerRejectsUnboundedDetectionList(t *testing.T) {
+func TestSchedulerChunksOverCapDetectionList(t *testing.T) {
+	// A Block whose detection count exceeds MaxDetectionsPerBlock must still
+	// quarantine every detection — reporting in capped chunks — rather than
+	// rejecting the Block wholesale (which would leave known malware served and
+	// wedge the scan frontier on that Block forever).
 	store := &memoryProgressStore{}
 	reporter := &recordingDetectionReporter{}
 	detections := make([]Detection, MaxDetectionsPerBlock+1)
@@ -666,12 +670,24 @@ func TestSchedulerRejectsUnboundedDetectionList(t *testing.T) {
 		Interval:                 time.Hour,
 	})
 
-	err := scheduler.RunOnce(context.Background())
-	if !errors.Is(err, ErrInvalidDetection) {
-		t.Fatalf("RunOnce error = %v, want ErrInvalidDetection", err)
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce error = %v, want nil", err)
 	}
-	if len(reporter.reports) != 0 {
-		t.Fatalf("reports = %d, want 0", len(reporter.reports))
+	if len(reporter.reports) != 2 {
+		t.Fatalf("reports = %d, want 2 (one full cap chunk plus the remainder)", len(reporter.reports))
+	}
+	var reported int
+	for _, report := range reporter.reports {
+		if len(report.detections) > MaxDetectionsPerBlock {
+			t.Fatalf("chunk size = %d, want <= %d", len(report.detections), MaxDetectionsPerBlock)
+		}
+		reported += len(report.detections)
+	}
+	if reported != len(detections) {
+		t.Fatalf("reported detections = %d, want %d", reported, len(detections))
+	}
+	if got := store.lastSaved().LastScannedBlockID; got != 1 {
+		t.Fatalf("saved progress BlockID = %d, want 1 (frontier advanced past the Block)", got)
 	}
 }
 

@@ -114,6 +114,11 @@ func (b *fsBackend) DeleteObject(ctx context.Context, key string) error {
 		return err
 	}
 	if err := os.Remove(path); err != nil {
+		// Deleting an absent key is a no-op, matching S3's idempotent DeleteObject
+		// so retried/concurrent deletes behave identically across backends.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return classifyFSError("delete object", err)
 	}
 	return syncDirectory(filepath.Dir(path))

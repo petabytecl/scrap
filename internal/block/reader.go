@@ -1,10 +1,10 @@
 package block
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 )
@@ -12,8 +12,13 @@ import (
 var (
 	ErrSHA256Mismatch = errors.New("block: SHA-256 mismatch")
 	ErrFrameSequence  = errors.New("block: frame sequence corrupt")
+	ErrEncryptedEntry = errors.New("block: entry is encrypted")
 )
 
+// ReadDocument reads a plaintext Document via the two-pass path. Encrypted
+// entries are rejected: their index SHA-256 covers the plaintext while the
+// stored Frames hold ciphertext, so callers must use ReadDocumentFrames and
+// decrypt.
 func ReadDocument(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
 	return ReadDocumentTwoPass(blkPath, entry)
 }
@@ -26,6 +31,9 @@ func ReadDocumentFromBlock(blkPath string, shardID, blockID uint64, entry IndexE
 }
 
 func ReadDocumentTwoPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
+	if len(entry.EncryptionEnvelope) > 0 {
+		return nil, fmt.Errorf("%w: use ReadDocumentFrames and decrypt", ErrEncryptedEntry)
+	}
 	if err := verifyPass(blkPath, entry); err != nil {
 		return nil, err
 	}
@@ -111,13 +119,72 @@ func validateReadFrameSequence(hdr FrameHeader, frameSeq uint32) error {
 }
 
 func streamPass(blkPath string, entry IndexEntry) (io.ReadCloser, error) {
-	frames, err := ReadDocumentFrames(blkPath, entry)
+	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("block: open %s for frame read: %w", blkPath, err)
 	}
-	var combined []byte
-	for _, payload := range frames {
-		combined = append(combined, payload...)
+	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("block: seek for frame read: %w", err)
 	}
-	return io.NopCloser(bytes.NewReader(combined)), nil
+	return &frameStreamReader{f: f, entry: entry, hasher: sha256.New()}, nil
+}
+
+// frameStreamReader streams one Frame payload at a time so the read path
+// never buffers a whole Document, and re-hashes what it serves: the stream
+// pass re-reads the file after the verify pass, so the bytes handed to the
+// client must independently match the index SHA-256.
+type frameStreamReader struct {
+	f        *os.File
+	entry    IndexEntry
+	hasher   hash.Hash
+	buf      []byte
+	frameIdx uint32
+	err      error
+}
+
+func (r *frameStreamReader) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	for len(r.buf) == 0 {
+		if r.frameIdx == r.entry.FrameCount {
+			r.err = r.finish()
+			return 0, r.err
+		}
+		if err := r.nextFrame(); err != nil {
+			r.err = err
+			return 0, r.err
+		}
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func (r *frameStreamReader) nextFrame() error {
+	hdr, payload, err := ReadFrame(r.f)
+	if err != nil {
+		return fmt.Errorf("block: read stored frame %d: %w", r.frameIdx, err)
+	}
+	if err := validateReadFrameSequence(hdr, r.frameIdx); err != nil {
+		return fmt.Errorf("block: read stored frame %d: %w", r.frameIdx, err)
+	}
+	r.hasher.Write(payload)
+	r.buf = payload
+	r.frameIdx++
+	return nil
+}
+
+func (r *frameStreamReader) finish() error {
+	var gotDigest [32]byte
+	copy(gotDigest[:], r.hasher.Sum(nil))
+	if gotDigest != r.entry.SHA256 {
+		return fmt.Errorf("%w: document changed between verify and stream passes", ErrSHA256Mismatch)
+	}
+	return io.EOF
+}
+
+func (r *frameStreamReader) Close() error {
+	return r.f.Close()
 }

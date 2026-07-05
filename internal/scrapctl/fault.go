@@ -269,6 +269,12 @@ func runFaultBlockCorrupt(args []string, stdout io.Writer, deps Deps) error {
 	if len(opts.byteValue) != 1 {
 		return errors.New("byte must be a single character")
 	}
+	if !isSafeFaultByte(opts.byteValue[0]) {
+		// The byte is interpolated into a sh -c script, so restrict it to an
+		// unambiguous alphanumeric that needs no shell quoting. Any such byte
+		// still corrupts the target Block.
+		return errors.New("byte must be a single ASCII letter or digit")
+	}
 	script := fmt.Sprintf(`set -eu
 blk=$(ls /proc/1/root/data/blocks/*.blk | sort | head -n 1)
 printf %q | dd of="$blk" bs=1 seek=%d conv=notrunc
@@ -277,6 +283,10 @@ printf %q | dd of="$blk" bs=1 seek=%d conv=notrunc
 		return err
 	}
 	return writeOperationReport(stdout, opts.common.output, opts.safety, "fault.block.corrupt", operationReport{Status: "ok"})
+}
+
+func isSafeFaultByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 func parseFaultOptions(name string, args []string, configure func(*flag.FlagSet, *faultOptions)) (faultOptions, error) {

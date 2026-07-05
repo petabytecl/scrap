@@ -153,13 +153,21 @@ func validateReplicaRepairIndexTail(idxPath string, wantOffset int64) error {
 	return nil
 }
 
-func (s *Shard) promoteReplicaRepairLocked(paths replicaRepairPaths, blockID uint64, wantOffset int64) error {
+func (s *Shard) promoteReplicaRepairLocked(paths replicaRepairPaths, blockID uint64, wantOffset int64) (err error) {
 	if err := s.idxWriter.Close(); err != nil {
 		return fmt.Errorf("close replica index before repair: %w", err)
 	}
 	if err := s.blockWriter.Close(); err != nil {
 		return fmt.Errorf("close replica Block before repair: %w", err)
 	}
+	// Both live writers are closed from here on. Any failure below must
+	// reinstall writers over whatever now sits at the final paths, or the
+	// Shard keeps closed handles and every subsequent append fails.
+	defer func() {
+		if err != nil {
+			s.reopenReplicaWritersBestEffort(paths, blockID)
+		}
+	}()
 
 	if err := os.Rename(paths.blkStaged, paths.blkFinal); err != nil {
 		return fmt.Errorf("promote replacement Block: %w", err)
@@ -189,6 +197,27 @@ func (s *Shard) promoteReplicaRepairLocked(paths replicaRepairPaths, blockID uin
 	s.blockWriter = bw
 	s.idxWriter = iw
 	return nil
+}
+
+// reopenReplicaWritersBestEffort restores usable writers after a failed
+// promotion. If reopening also fails, the writers are left nil so later
+// appends fail loudly on the nil check instead of on closed file handles.
+func (s *Shard) reopenReplicaWritersBestEffort(paths replicaRepairPaths, blockID uint64) {
+	s.blockWriter = nil
+	s.idxWriter = nil
+	bw, err := block.OpenWriter(paths.blkFinal, s.shardID, blockID)
+	if err != nil {
+		s.logger.Error("shard: reopen replica block after failed repair promotion", "block_id", blockID, "err", err)
+		return
+	}
+	iw, err := block.OpenIndexWriter(paths.idxFinal)
+	if err != nil {
+		_ = bw.Close()
+		s.logger.Error("shard: reopen replica index after failed repair promotion", "block_id", blockID, "err", err)
+		return
+	}
+	s.blockWriter = bw
+	s.idxWriter = iw
 }
 
 func cleanupReplicaRepairStaging(paths replicaRepairPaths) error {

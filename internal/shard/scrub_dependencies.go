@@ -13,6 +13,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/localblock"
 	"github.com/petabytecl/scrap/internal/scrub"
+	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
 func (c *scrubCoordinator) ListSealedBlocks(_ uint64) ([]block.Info, error) {
@@ -115,6 +116,9 @@ func (s *Shard) InjectProjectionKey(_ context.Context, txID string, blockID uint
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.idx == nil {
+		return fmt.Errorf("%w: projection is nil", storeapi.ErrDataLoss)
+	}
 	if err := s.idx.Put(txID, blockID, docCount, completed); err != nil {
 		return fmt.Errorf("shard: inject projection key: %w", err)
 	}

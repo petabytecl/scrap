@@ -552,3 +552,26 @@ func assertBlockSize(t *testing.T, blocksDir string, blockID uint64, want int64)
 func isMissingDocumentOrTransaction(err error) bool {
 	return errors.Is(err, storeapi.ErrNotFound) || errors.Is(err, storeapi.ErrTxNotFound)
 }
+
+func TestWriteDocumentPeerFailureLeavesNoOrphanBytesOrPrep(t *testing.T) {
+	ctx := context.Background()
+	replicator := newWriteAckReplicator()
+	replicator.fail = true
+	cluster := openWriteAckCluster(t, replicator, &recordingWriteTelemetry{})
+	leader := cluster.waitForLeader(t)
+
+	if _, err := leader.WriteDocument(ctx, "tx-orphan", "doc.xml", "text/xml", "", bytes.NewReader([]byte("orphan payload"))); err == nil {
+		t.Fatal("expected replication failure")
+	}
+
+	// The aborted write must leave neither a prep nor orphan bytes in the open
+	// Block: the next write starts at the same offset (replica appends would
+	// otherwise diverge) and the openlog is empty after it commits.
+	replicator.fail = false
+	payload := []byte("post-abort payload")
+	if _, err := leader.WriteDocument(ctx, "tx-clean", "doc.xml", "text/xml", "", bytes.NewReader(payload)); err != nil {
+		t.Fatalf("WriteDocument after aborted write: %v", err)
+	}
+	assertReadDocumentContent(ctx, t, leader, "tx-clean", payload)
+	assertClusterOpenlogsEmpty(t, cluster)
+}

@@ -225,7 +225,13 @@ func readPutBody(body io.Reader, size int64) ([]byte, string, string, error) {
 
 	var buf bytes.Buffer
 	hash := md5.New() //nolint:gosec // S3 Content-MD5 is required for transport integrity, not password hashing.
-	written, err := io.Copy(io.MultiWriter(&buf, hash), body)
+	// Bound the copy to size+1 so an over-long body is rejected as ErrCorrupt
+	// without buffering past the declared size — matching the FS backend.
+	limit := size + 1
+	if size == math.MaxInt64 {
+		limit = size
+	}
+	written, err := io.Copy(io.MultiWriter(&buf, hash), io.LimitReader(body, limit))
 	if err != nil {
 		return nil, "", "", fmt.Errorf("put object: read body: %w: %w", ErrTransient, err)
 	}

@@ -3,15 +3,16 @@ package routing
 import (
 	"fmt"
 	"hash/fnv"
-	"strings"
 )
 
 // SlotCount is the fixed Shard routing slot count.
 const SlotCount = 1024
 
 // SlotForTransaction returns the fixed hash slot for a Transaction identifier.
+// Only the truly empty string is rejected: identifiers must not be trimmed or
+// normalized (CONTEXT.md), and the API boundary accepts whitespace-only IDs.
 func SlotForTransaction(transactionID string) (uint16, error) {
-	if strings.TrimSpace(transactionID) == "" {
+	if transactionID == "" {
 		return 0, fmt.Errorf("%w: transaction_id is required", ErrInvalidTransaction)
 	}
 

@@ -282,6 +282,10 @@ func TestOpenBaoTransitClassifiesAndRedactsProviderFailures(t *testing.T) {
 		{name: "minimum version", statusCode: http.StatusBadRequest, body: `{"errors":["ciphertext below minimum decryption version"]}`, want: encryption.ErrMinimumVersion},
 		{name: "too old version", statusCode: http.StatusBadRequest, body: `{"errors":["ciphertext or signature version is disallowed by policy (too old)"]}`, want: encryption.ErrMinimumVersion},
 		{name: "outage", statusCode: http.StatusServiceUnavailable, body: `{"errors":["sealed"]}`, want: encryption.ErrUnavailable},
+		// A 5xx whose body coincidentally mentions minimum+version is a transient
+		// outage, not the terminal min-version condition: the body heuristic only
+		// applies on a 400.
+		{name: "outage mentioning minimum version", statusCode: http.StatusServiceUnavailable, body: `{"errors":["minimum decryption version cache unavailable"]}`, want: encryption.ErrUnavailable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -342,6 +346,47 @@ func TestOpenBaoTransitPreservesContextFailures(t *testing.T) {
 				t.Fatalf("Readiness error = %v, want context error without unavailable classification", err)
 			}
 		})
+	}
+}
+
+func TestOpenBaoTransitRejectsInsecureSkipVerifyEnv(t *testing.T) {
+	for _, key := range []string{"VAULT_SKIP_VERIFY", "BAO_SKIP_VERIFY"} {
+		t.Run(key+" truthy", func(t *testing.T) {
+			t.Setenv(key, "true")
+			_, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+				Address:   "https://vault.example:8200",
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Token:     "test-token",
+			})
+			if !errors.Is(err, encryption.ErrInvalidConfig) {
+				t.Fatalf("NewOpenBaoTransit with %s=true = %v, want ErrInvalidConfig", key, err)
+			}
+		})
+		t.Run(key+" malformed", func(t *testing.T) {
+			t.Setenv(key, "not-a-bool")
+			_, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+				Address:   "https://vault.example:8200",
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Token:     "test-token",
+			})
+			if !errors.Is(err, encryption.ErrInvalidConfig) {
+				t.Fatalf("NewOpenBaoTransit with malformed %s = %v, want ErrInvalidConfig", key, err)
+			}
+		})
+	}
+}
+
+func TestOpenBaoTransitAcceptsExplicitlyDisabledSkipVerify(t *testing.T) {
+	t.Setenv("VAULT_SKIP_VERIFY", "false")
+	if _, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+		Address:   "https://vault.example:8200",
+		MountPath: "transit",
+		KeyName:   "scrap-documents",
+		Token:     "test-token",
+	}); err != nil {
+		t.Fatalf("NewOpenBaoTransit with VAULT_SKIP_VERIFY=false = %v, want nil", err)
 	}
 }
 

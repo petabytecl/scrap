@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,6 +78,7 @@ type Node struct {
 	stateMu  sync.RWMutex
 	readMu   sync.Mutex
 	readMap  map[string]chan uint64
+	readSeq  atomic.Uint64
 
 	stopc chan struct{}
 	donec chan struct{}
@@ -129,6 +131,9 @@ func Open(cfg Config) (*Node, error) {
 	snapshotter := snap.New(lg, snapDir)
 
 	walExists := wal.Exist(walDir)
+	if !walExists && len(cfg.Peers) == 0 {
+		return nil, errors.New("raft: at least one peer is required to bootstrap a new node")
+	}
 
 	n := &Node{
 		cfg:       cfg,
@@ -181,7 +186,6 @@ func (n *Node) startNode(lg *zap.Logger, walDir string) error {
 	return nil
 }
 
-//nolint:gocognit,cyclop // restart orchestrates snapshot load, WAL replay, and storage reconstruction
 func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	snapshot, err := n.snap.Load()
 	if err != nil && !errors.Is(err, snap.ErrNoSnapshot) {
@@ -206,23 +210,35 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	}
 	n.wal = w
 
+	if err := n.rebuildStorageFromWAL(snapshot, hardState, entries); err != nil {
+		// Release the WAL file locks so a retried Open does not fail on them.
+		_ = w.Close()
+		n.wal = nil
+		return err
+	}
+
+	c := &raft.Config{
+		ID:              n.cfg.ID,
+		ElectionTick:    n.cfg.ElectionTick,
+		HeartbeatTick:   n.cfg.HeartbeatTick,
+		Storage:         n.storage,
+		MaxSizePerMsg:   n.cfg.MaxSizePerMsg,
+		MaxInflightMsgs: n.cfg.MaxInflightMsgs,
+		Applied:         n.appliedIndex,
+		Logger:          logbridge.NewRaftLogger(n.logger),
+	}
+
+	n.node = raft.RestartNode(c)
+	return nil
+}
+
+func (n *Node) rebuildStorageFromWAL(snapshot *raftpb.Snapshot, hardState raftpb.HardState, entries []raftpb.Entry) error {
 	baseStorage := raft.NewMemoryStorage()
 	n.storage = baseStorage
 
 	if snapshot != nil {
-		if err := n.storage.ApplySnapshot(*snapshot); err != nil {
-			return fmt.Errorf("raft: apply snapshot to storage: %w", err)
-		}
-		n.snapshotIndex = snapshot.Metadata.Index
-		n.appliedIndex = snapshot.Metadata.Index
-		if hardState.Commit < snapshot.Metadata.Index {
-			hardState.Commit = snapshot.Metadata.Index
-		}
-
-		if n.cfg.Restore != nil {
-			if err := n.cfg.Restore(snapshot.Data); err != nil {
-				return fmt.Errorf("raft: restore snapshot: %w", err)
-			}
+		if err := n.restoreSnapshotToStorage(snapshot, &hardState); err != nil {
+			return err
 		}
 	}
 
@@ -230,7 +246,7 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 		return fmt.Errorf("raft: set hard state: %w", err)
 	}
 	if snapshot == nil {
-		if cs := deriveCommittedConfState(entries, hardState.Commit); cs != nil {
+		if cs := n.restartConfState(entries, hardState.Commit); cs != nil {
 			n.storage = &initialConfStateStorage{
 				MemoryStorage: baseStorage,
 				confState:     *cs,
@@ -248,20 +264,53 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	if err := n.storage.Append(entries); err != nil {
 		return fmt.Errorf("raft: append entries: %w", err)
 	}
+	return nil
+}
 
-	c := &raft.Config{
-		ID:              n.cfg.ID,
-		ElectionTick:    n.cfg.ElectionTick,
-		HeartbeatTick:   n.cfg.HeartbeatTick,
-		Storage:         n.storage,
-		MaxSizePerMsg:   n.cfg.MaxSizePerMsg,
-		MaxInflightMsgs: n.cfg.MaxInflightMsgs,
-		Applied:         n.appliedIndex,
-		Logger:          logbridge.NewRaftLogger(n.logger),
+func (n *Node) restoreSnapshotToStorage(snapshot *raftpb.Snapshot, hardState *raftpb.HardState) error {
+	if err := n.storage.ApplySnapshot(*snapshot); err != nil {
+		return fmt.Errorf("raft: apply snapshot to storage: %w", err)
+	}
+	n.snapshotIndex = snapshot.Metadata.Index
+	n.appliedIndex = snapshot.Metadata.Index
+	if hardState.Commit < snapshot.Metadata.Index {
+		hardState.Commit = snapshot.Metadata.Index
 	}
 
-	n.node = raft.RestartNode(c)
+	if n.cfg.Restore != nil {
+		if err := n.cfg.Restore(snapshot.Data); err != nil {
+			return fmt.Errorf("raft: restore snapshot: %w", err)
+		}
+	}
 	return nil
+}
+
+// restartConfState picks the voter set for a snapshot-less restart. When no
+// committed conf state exists in the WAL (crash before the bootstrap
+// ConfChange entries committed), it falls back to the static peer
+// configuration: restarting with an empty voter set would leave the node
+// permanently unable to campaign, and membership is static (there is no
+// ProposeConfChange path), so cfg.Peers is authoritative.
+func (n *Node) restartConfState(entries []raftpb.Entry, commit uint64) *raftpb.ConfState {
+	if cs := deriveCommittedConfState(entries, commit); cs != nil {
+		return cs
+	}
+	if commit == 0 {
+		return bootstrapConfStateFromPeers(n.cfg.Peers)
+	}
+	return nil
+}
+
+func bootstrapConfStateFromPeers(peers map[uint64]string) *raftpb.ConfState {
+	if len(peers) == 0 {
+		return nil
+	}
+	voters := make([]uint64, 0, len(peers))
+	for id := range peers {
+		voters = append(voters, id)
+	}
+	slices.Sort(voters)
+	return &raftpb.ConfState{Voters: voters}
 }
 
 type durableStorage interface {
@@ -366,12 +415,31 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 		if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
 			panic(fmt.Sprintf("raft: apply: %v", err))
 		}
+		n.applyCommittedConfChangesLocked(rd.CommittedEntries)
 		atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
 	}
 
 	n.publishReadStates(rd.ReadStates)
 
 	n.node.Advance()
+}
+
+// applyCommittedConfChangesLocked feeds committed membership entries to the
+// raft state machine, as the etcd raft contract requires. The application
+// apply path skips ConfChange entries, so without this the node's live voter
+// tracker never reflects committed membership (e.g. after a restart that
+// found no committed conf state in the WAL).
+func (n *Node) applyCommittedConfChangesLocked(entries []raftpb.Entry) {
+	for _, e := range entries {
+		if e.Type != raftpb.EntryConfChange {
+			continue
+		}
+		var cc raftpb.ConfChange
+		if err := cc.Unmarshal(e.Data); err != nil {
+			continue
+		}
+		n.node.ApplyConfChange(cc)
+	}
 }
 
 func walSnapshotFromReadySnapshot(snapshot raftpb.Snapshot) walpb.Snapshot {
@@ -400,7 +468,7 @@ func (n *Node) Propose(ctx context.Context, data []byte) error {
 }
 
 func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
-	rctx := fmt.Sprintf("ri-%d-%d", n.cfg.ID, time.Now().UnixNano())
+	rctx := n.nextReadContext()
 	ch := make(chan uint64, 1)
 
 	n.readMu.Lock()
@@ -423,6 +491,13 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 		n.readMu.Unlock()
 		return 0, ctx.Err()
 	}
+}
+
+// nextReadContext returns a process-unique ReadIndex request key. A
+// wall-clock key can collide when two reads land on the same nanosecond,
+// overwriting the first waiter's channel and stranding it until its deadline.
+func (n *Node) nextReadContext() string {
+	return fmt.Sprintf("ri-%d-%d", n.cfg.ID, n.readSeq.Add(1))
 }
 
 func (n *Node) Step(ctx context.Context, msg raftpb.Message) error {

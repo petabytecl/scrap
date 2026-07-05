@@ -41,7 +41,7 @@ type appAuthorizerConfig struct {
 }
 
 func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Logger, rateObserver security.RateLimitObserver, authorizationObserver security.AuthorizationObserver) (appSecurityRuntime, error) {
-	transport, err := newSharedTransport(cfg, peers)
+	transport, err := newSharedTransport(cfg, peers, logger)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
@@ -171,15 +171,18 @@ func newAppTransit(cfg Config) (encryption.Transit, error) {
 	return transit, nil
 }
 
-func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransport, error) {
+func newSharedTransport(cfg Config, peers map[uint64]string, logger *slog.Logger) (*peer.SharedTransport, error) {
 	if !appSecurityControlsEnabled(cfg) {
-		return peer.NewSharedTransport(peers), nil
+		return peer.NewSharedTransport(peers, peer.WithSharedTransportLogger(logger)), nil
 	}
 	clientTLS, err := security.BuildMTLSClientConfig("SCRAP_TLS_PEER", security.ClientTLSFilesFromSurface(cfg.ProductionGates.TLS.Peer))
 	if err != nil {
 		return nil, fmt.Errorf("peer transport TLS: %w", err)
 	}
-	return peer.NewSharedTransport(peers, peer.WithSharedTransportCredentials(credentials.NewTLS(clientTLS))), nil
+	return peer.NewSharedTransport(peers,
+		peer.WithSharedTransportCredentials(credentials.NewTLS(clientTLS)),
+		peer.WithSharedTransportLogger(logger),
+	), nil
 }
 
 func newPeerClient(cfg Config) (*peer.Client, error) {

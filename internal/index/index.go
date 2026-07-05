@@ -94,6 +94,9 @@ func (idx *Index) IncrementDocCount(txID string) error {
 	if err != nil {
 		return err
 	}
+	if entry.DocCount == math.MaxUint16 {
+		return fmt.Errorf("index: doc count at maximum %d", math.MaxUint16)
+	}
 	entry.DocCount++
 	return idx.put(txID, entry)
 }
@@ -191,8 +194,8 @@ func decodeEntry(val []byte) (Entry, error) {
 
 	blockCount := binary.LittleEndian.Uint16(val[sizeVersion:headerLen])
 	expected := headerLen + sizeBlockID*int(blockCount) + trailerLen
-	if len(val) < expected {
-		return Entry{}, fmt.Errorf("index: value truncated: need %d, got %d", expected, len(val))
+	if len(val) != expected {
+		return Entry{}, fmt.Errorf("index: value length mismatch: need %d, got %d", expected, len(val))
 	}
 
 	blockIDs := make([]uint64, blockCount)

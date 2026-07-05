@@ -6,7 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
+
+// sensitiveHostPathRoots are top-level host directories whose appearance in an
+// evidence artifact signals a leaked host-absolute path — notably "data", the
+// default --data-dir that roots every Block/openlog/pebble path. Kept in one
+// place so the log-redaction denylist (http.go) and the privacy-scan gate below
+// cannot drift apart.
+var sensitiveHostPathRoots = []string{
+	"home", "Users", "var", "opt", "private", "tmp", "data", "etc", "root", "mnt", "srv",
+}
+
+func hostPathShapeExpr() string {
+	return `(?i)(^|[[:space:]":=])(/(` + strings.Join(sensitiveHostPathRoots, "|") + `)/|[A-Za-z]:\\|host-absolute)`
+}
 
 const (
 	privacyScanSchemaVersion = "scrap.evidence.privacy/v1"
@@ -114,7 +128,7 @@ func bundlePrivacyPatterns() []privacyScanPattern {
 		newPrivacyPattern("credential_shape", "credential, bearer token, private key, JWT, or cloud access key shape", `(?i)(access[_-]?key|password|token|Bearer[[:space:]]+|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]+\.|PRIVATE KEY|BEGIN [A-Z ]*KEY)`),
 		newPrivacyPattern("raw_identifier_shape", "raw Document, Transaction, trace, or request identifier field", `(?i)(transaction[_-]?id|transactionId|document[_-]?name|documentName|trace[_-]?id|traceID|request[_-]?id|requestID|x-request-id)[[:space:]":=]+`),
 		newPrivacyPattern("backend_key_shape", "raw Backend object key or auth claim marker", `(?i)(backend[_ -]?key|object[_ -]?key|auth claim|Authorization:)`),
-		newPrivacyPattern("host_path_shape", "host-absolute path intended for public evidence", `(?i)(^|[[:space:]":=])(/(home|Users|var|opt|private|tmp)/|[A-Za-z]:\\|host-absolute)`),
+		newPrivacyPattern("host_path_shape", "host-absolute path intended for public evidence", hostPathShapeExpr()),
 		newPrivacyPattern("payload_or_key_material", "Document payload, data key, wrapped key, or ciphertext marker", `(?i)(document payload|data[_ -]?key|wrapped[_ -]?key|ciphertext|<\?xml|<Invoice)`),
 	}
 }

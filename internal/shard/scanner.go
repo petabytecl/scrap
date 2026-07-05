@@ -117,6 +117,11 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 		}
 		size, err := blockSize(info.BlkPath)
 		if err != nil {
+			// A Block evicted between the listing and this stat is not an
+			// error for the scan cycle; it simply has no local bytes to scan.
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf("shard: stat scanner Block %d: %w", info.BlockID, err)
 		}
 		out = append(out, avscan.Block{
@@ -143,7 +148,7 @@ func scannerBlockOpener(blockID uint64, path string) func(context.Context) (io.R
 		}
 		file, err := os.Open(path) //nolint:gosec // path comes from Shard-owned sealed Block discovery under blocksDir.
 		if err != nil {
-			return nil, fmt.Errorf("shard: open scanner Block %d: %w", blockID, avscan.ErrBlockSource)
+			return nil, fmt.Errorf("shard: open scanner Block %d: %w: %w", blockID, avscan.ErrBlockSource, fsErrCause(err))
 		}
 		return file, nil
 	}

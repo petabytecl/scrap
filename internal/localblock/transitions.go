@@ -66,6 +66,9 @@ func RemoveEvictionMarker(blocksDir string, blockID uint64) error {
 
 func UnlinkBlockData(blocksDir string, blockID uint64) (bool, error) {
 	if err := os.Remove(block.FilePath(blocksDir, blockID)); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
 		return false, fmt.Errorf("remove Block: %w", err)
 	}
 	if err := SyncDirectory(blocksDir); err != nil {

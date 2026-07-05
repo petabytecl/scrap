@@ -215,23 +215,38 @@ func CleanupHotMarkers(blocksDir string) error {
 		return fmt.Errorf("localblock: read lifecycle markers: %w", err)
 	}
 
+	removed := false
 	for _, entry := range entries {
-		blockID, ok := parseEvictionMarkerBlockID(entry.Name())
-		if !ok {
-			continue
-		}
-		lifecycle, err := Classify(blocksDir, blockID)
+		markerRemoved, err := cleanupHotMarker(blocksDir, entry.Name())
 		if err != nil {
 			return err
 		}
-		if lifecycle.State != StateHotCleanupNeeded {
-			continue
-		}
-		if err := os.Remove(EvictionMarkerPath(blocksDir, blockID)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("localblock: remove stale eviction marker for Block %d: %w", blockID, err)
+		removed = removed || markerRemoved
+	}
+	if removed {
+		if err := SyncDirectory(blocksDir); err != nil {
+			return fmt.Errorf("localblock: sync marker cleanup: %w", err)
 		}
 	}
 	return nil
+}
+
+func cleanupHotMarker(blocksDir, name string) (bool, error) {
+	blockID, ok := parseEvictionMarkerBlockID(name)
+	if !ok {
+		return false, nil
+	}
+	lifecycle, err := Classify(blocksDir, blockID)
+	if err != nil {
+		return false, err
+	}
+	if lifecycle.State != StateHotCleanupNeeded {
+		return false, nil
+	}
+	if err := os.Remove(EvictionMarkerPath(blocksDir, blockID)); err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("localblock: remove stale eviction marker for Block %d: %w", blockID, err)
+	}
+	return true, nil
 }
 
 func fileExists(path string) (bool, error) {

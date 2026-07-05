@@ -281,13 +281,19 @@ func (s *Server) appendReplicatedDocumentLocally(init *scrapv1.ReplicateDocument
 		return nil, status.Errorf(codes.Internal, "block: %v", err)
 	}
 
+	startOffset := bs.writer.Offset()
 	tee := io.TeeReader(body, hasher)
 	if _, err := bs.writer.AppendDocument(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), tee); err != nil {
 		return nil, status.Errorf(codes.Internal, "append: %v", err)
 	}
 
 	computedSHA := hasher.Sum(nil)
-	if len(init.GetSha256()) == sha256DigestLen && string(computedSHA) != string(init.GetSha256()) {
+	if string(computedSHA) != string(init.GetSha256()) {
+		// Roll back the appended frames so the mirror Block does not
+		// permanently diverge from the leader's layout (ADR 0003).
+		if terr := bs.writer.Truncate(startOffset); terr != nil {
+			return nil, status.Errorf(codes.DataLoss, "SHA-256 mismatch: expected %x, got %x (rollback failed: %v)", init.GetSha256(), computedSHA, terr)
+		}
 		return nil, status.Errorf(codes.DataLoss, "SHA-256 mismatch: expected %x, got %x", init.GetSha256(), computedSHA)
 	}
 	return computedSHA, nil
@@ -306,13 +312,23 @@ func (s *Server) receiveReplicateDocumentInit(stream grpc.ClientStreamingServer[
 }
 
 func validateReplicateDocumentInit(init *scrapv1.ReplicateDocumentInit) error {
-	return storeapi.ValidateWriteMetadata(
+	if err := storeapi.ValidateWriteMetadata(
 		init.GetTransactionId(),
 		init.GetDocumentName(),
 		init.GetContentType(),
 		"",
 		"",
-	)
+	); err != nil {
+		return err
+	}
+	// A missing or wrong-length digest must fail closed instead of silently
+	// disabling integrity verification (write-state 3: peer bytes are
+	// checksum-validated).
+	if len(init.GetSha256()) != sha256DigestLen {
+		return fmt.Errorf("%w: sha256 digest must be %d bytes, got %d",
+			storeapi.ErrInvalidArgument, sha256DigestLen, len(init.GetSha256()))
+	}
+	return nil
 }
 
 // validateReplicateDocumentDeclaredSize rejects a Document whose declared size
@@ -338,6 +354,9 @@ func receiveFirstReplicateChunk(stream grpc.ClientStreamingServer[scrapv1.Replic
 		case err != nil:
 			return nil, 0, status.Errorf(codes.Internal, "receive chunk: %v", err)
 		}
+		if msg.GetInit() != nil {
+			return nil, 0, peerStoreStatus(errDuplicateReplicateInit())
+		}
 		chunk := msg.GetChunkData()
 		if len(chunk) == 0 {
 			continue
@@ -348,6 +367,10 @@ func receiveFirstReplicateChunk(stream grpc.ClientStreamingServer[scrapv1.Replic
 		}
 		return chunk, total, nil
 	}
+}
+
+func errDuplicateReplicateInit() error {
+	return fmt.Errorf("%w: duplicate init message", storeapi.ErrInvalidArgument)
 }
 
 // streamReplicateChunks writes the already-validated first chunk, then bounds
@@ -366,6 +389,11 @@ func streamReplicateChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDo
 		case err != nil:
 			_ = pw.CloseWithError(err)
 			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+		}
+		if msg.GetInit() != nil {
+			verr := errDuplicateReplicateInit()
+			_ = pw.CloseWithError(verr)
+			return peerStoreStatus(verr)
 		}
 		chunk := msg.GetChunkData()
 		if len(chunk) == 0 {
@@ -497,7 +525,7 @@ func (s *Server) handleForwardRaftStreamRequest(ctx context.Context, router *Raf
 
 func (s *Server) recordMalformedRaftMessage(ctx context.Context, operation string, shardID uint64, err error) {
 	count := s.malformedRaftMsgs.Add(1)
-	if s.logger == nil || !shouldLogMalformedRaftCount(count) {
+	if s.logger == nil || !shouldLogPowerOfTwoCount(count) {
 		return
 	}
 	s.logger.WarnContext(ctx, "peer received malformed raft message",
@@ -521,7 +549,7 @@ func (s *Server) recordRaftRouteError(ctx context.Context, operation string, sha
 	)
 }
 
-func shouldLogMalformedRaftCount(count uint64) bool {
+func shouldLogPowerOfTwoCount(count uint64) bool {
 	return count == 1 || count&(count-1) == 0
 }
 

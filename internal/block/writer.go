@@ -168,6 +168,9 @@ func (w *Writer) AppendDocument(txID, docName, contentType string, body io.Reade
 	if err != nil {
 		return AppendResult{}, err
 	}
+	if frameSeq == 0 {
+		return AppendResult{}, errors.New("block: document body is empty")
+	}
 
 	if err := w.f.Sync(); err != nil {
 		return AppendResult{}, fmt.Errorf("block: fsync after document: %w", err)
@@ -194,6 +197,9 @@ func (w *Writer) AppendDocumentFrames(txID, docName, contentType string, frames 
 	}
 	if frames.Size < 0 {
 		return AppendResult{}, errors.New("block: document size is negative")
+	}
+	if len(frames.Payloads) == 0 {
+		return AppendResult{}, errors.New("block: document has no frames")
 	}
 
 	firstOffset := w.offset
@@ -225,42 +231,56 @@ func (w *Writer) AppendDocumentFrames(txID, docName, contentType string, frames 
 	}, nil
 }
 
+// writeDocFrames reads one frame ahead of what it writes so the final frame
+// is known before its header is emitted: io.ReadFull returns nil (not io.EOF)
+// when a read exactly fills the buffer, so bodies sized an exact multiple of
+// MaxFramePayload only reveal EOF on the read after the last payload.
 func (w *Writer) writeDocFrames(body io.Reader) (uint32, int64, hash.Hash, error) {
 	hasher := sha256.New()
-	buf := make([]byte, MaxFramePayload)
+	cur := make([]byte, MaxFramePayload)
+	next := make([]byte, MaxFramePayload)
 	var frameSeq uint32
 	var totalSize int64
 
+	curN, curErr := io.ReadFull(body, cur)
 	for {
-		n, readErr := io.ReadFull(body, buf)
-		if n > 0 {
-			payload := buf[:n]
-			hasher.Write(payload)
-			totalSize += int64(n)
-
-			isLast := errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF)
-			flags := frameFlags(frameSeq, isLast)
-
-			err := WriteFrame(w.f, FrameHeader{
-				DocSeq:   w.docSeq,
-				FrameSeq: frameSeq,
-				Flags:    flags,
-			}, payload)
-			if err != nil {
-				return 0, 0, nil, fmt.Errorf("block: write frame %d: %w", frameSeq, err)
-			}
-
-			w.offset += int64(FrameHeaderSize + n)
-			frameSeq++
+		if curErr != nil && !isBodyEOF(curErr) {
+			return 0, 0, nil, fmt.Errorf("block: read body: %w", curErr)
 		}
-		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
-			break
+		if curN == 0 {
+			return frameSeq, totalSize, hasher, nil
 		}
-		if readErr != nil {
-			return 0, 0, nil, fmt.Errorf("block: read body: %w", readErr)
+
+		nextN := 0
+		var nextErr error
+		if curErr == nil {
+			nextN, nextErr = io.ReadFull(body, next)
 		}
+		isLast := isBodyEOF(curErr) || nextN == 0
+
+		payload := cur[:curN]
+		hasher.Write(payload)
+		totalSize += int64(curN)
+
+		err := WriteFrame(w.f, FrameHeader{
+			DocSeq:   w.docSeq,
+			FrameSeq: frameSeq,
+			Flags:    frameFlags(frameSeq, isLast),
+		}, payload)
+		if err != nil {
+			return 0, 0, nil, fmt.Errorf("block: write frame %d: %w", frameSeq, err)
+		}
+
+		w.offset += int64(FrameHeaderSize + curN)
+		frameSeq++
+
+		cur, next = next, cur
+		curN, curErr = nextN, nextErr
 	}
-	return frameSeq, totalSize, hasher, nil
+}
+
+func isBodyEOF(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func frameFlags(seq uint32, isLast bool) byte {
@@ -287,6 +307,9 @@ func (w *Writer) Offset() int64 {
 func (w *Writer) Truncate(offset int64) error {
 	if offset < HeaderSize {
 		return fmt.Errorf("block: truncate offset %d before header", offset)
+	}
+	if offset > w.offset {
+		return fmt.Errorf("block: truncate offset %d beyond end %d", offset, w.offset)
 	}
 	if err := w.f.Truncate(offset); err != nil {
 		return fmt.Errorf("block: truncate: %w", err)

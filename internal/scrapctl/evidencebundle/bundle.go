@@ -776,7 +776,9 @@ func captureEvictionCampaign(ctx context.Context, client *http.Client, cfg Confi
 	endpoint := strings.TrimRight(cfg.AdminURL, "/") + "/admin/eviction/plans/" + url.PathEscape(cfg.EvictionPlanID)
 	body, ok := getJSON(ctx, client, endpoint, nil)
 	if !ok {
-		return fmt.Errorf("capture eviction status for plan %s", cfg.EvictionPlanID)
+		// Optional evidence: record the gap and continue rather than aborting the
+		// whole bundle, and do not echo the raw plan ID (redacted elsewhere).
+		return writeRawJSONFile(filepath.Join(dir, "status.json"), []byte(`{"error":"eviction plan status unavailable"}`))
 	}
 	if err := writeRawJSONFile(filepath.Join(dir, "status.json"), body); err != nil {
 		return err

@@ -1,6 +1,7 @@
 package block
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,14 +36,10 @@ func ListSealedBlocks(dir string, openBlockID uint64) ([]Info, error) {
 		if !strings.HasSuffix(name, ".blk") {
 			continue
 		}
-		if strings.HasSuffix(name, ".quarantine") {
-			continue
-		}
 
-		hexPart := strings.TrimSuffix(name, ".blk")
-		id, err := strconv.ParseUint(hexPart, 16, 64)
+		id, err := parseCanonicalBlockID(strings.TrimSuffix(name, ".blk"))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("block: malformed block filename %q: %w", name, err)
 		}
 		if id == openBlockID {
 			continue
@@ -60,4 +57,20 @@ func ListSealedBlocks(dir string, openBlockID uint64) ([]Info, error) {
 	})
 
 	return blocks, nil
+}
+
+// blockIDHexWidth is the fixed digit count of the %016x Block file names.
+const blockIDHexWidth = 16
+
+// parseCanonicalBlockID accepts only the fixed-width lowercase hex form that
+// FilePath produces. Anything else in the Blocks directory is evidence of
+// tampering or corruption and must fail the listing, not vanish from it.
+func parseCanonicalBlockID(hexPart string) (uint64, error) {
+	if len(hexPart) != blockIDHexWidth {
+		return 0, fmt.Errorf("expected %d hex digits, got %d", blockIDHexWidth, len(hexPart))
+	}
+	if hexPart != strings.ToLower(hexPart) {
+		return 0, errors.New("expected lowercase hex digits")
+	}
+	return strconv.ParseUint(hexPart, 16, 64)
 }

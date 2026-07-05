@@ -631,11 +631,20 @@ func (s *Scheduler) reportDetections(ctx context.Context, block Block, result Re
 	if s.cfg.DetectionReporter == nil {
 		return ErrDetectionReporterUnavailable
 	}
-	if err := s.cfg.DetectionReporter.ReportDetections(ctx, block, append([]Detection(nil), result.Detections...)); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
+	// MaxDetectionsPerBlock bounds the size of a single quarantine report, not
+	// the number of detections a Block may carry: report in chunks so a Block
+	// whose detection count exceeds the cap still quarantines every hit instead
+	// of being rejected wholesale (which would leave known malware served and
+	// wedge the scan frontier on that Block forever).
+	for start := 0; start < len(result.Detections); start += MaxDetectionsPerBlock {
+		end := min(start+MaxDetectionsPerBlock, len(result.Detections))
+		batch := append([]Detection(nil), result.Detections[start:end]...)
+		if err := s.cfg.DetectionReporter.ReportDetections(ctx, block, batch); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			return fmt.Errorf("%w: %w", ErrQuarantineFailed, err)
 		}
-		return fmt.Errorf("%w: %w", ErrQuarantineFailed, err)
 	}
 	return nil
 }
@@ -649,9 +658,6 @@ func validateDetectionResult(result Result) error {
 	}
 	if result.Status != ResultDetected {
 		return fmt.Errorf("%w: detections require detected result", ErrInvalidDetection)
-	}
-	if len(result.Detections) > MaxDetectionsPerBlock {
-		return fmt.Errorf("%w: detection count %d exceeds %d", ErrInvalidDetection, len(result.Detections), MaxDetectionsPerBlock)
 	}
 	for _, detection := range result.Detections {
 		if err := validateDetection(detection); err != nil {

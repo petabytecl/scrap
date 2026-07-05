@@ -1,8 +1,11 @@
 package peer
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -102,6 +106,84 @@ func TestReplicateDocumentRejectsInvalidInitBeforeSideEffects(t *testing.T) {
 	}
 }
 
+func TestReplicateDocumentRejectsMalformedDigestBeforeSideEffects(t *testing.T) {
+	tests := []struct {
+		name string
+		sha  []byte
+	}{
+		{name: "missing digest", sha: nil},
+		{name: "truncated digest", sha: make([]byte, 31)},
+		{name: "oversized digest", sha: make([]byte, 33)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			init := validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+				init.Sha256 = tt.sha
+			})
+
+			dir := t.TempDir()
+			srv := NewServer(dir)
+			defer func() { _ = srv.Close() }()
+
+			err := srv.ReplicateDocument(replicateStreamWithInitAndChunks(init, []byte("payload")))
+
+			assertReplicateInvalidArgument(t, err)
+			assertNoLocalReplicationSideEffects(t, srv, dir)
+		})
+	}
+}
+
+func TestReplicateDocumentDuplicateInitMidStreamRejected(t *testing.T) {
+	init := validReplicateDocumentInit()
+	stream := &replicateDocumentStream{
+		ctx: peerAuthContext(security.NewRoleSet(security.RolePeerMember), peerAuthExpectedIdentity()),
+		requests: []*scrapv1.ReplicateDocumentRequest{
+			{Part: &scrapv1.ReplicateDocumentRequest_Init{Init: init}},
+			{Part: &scrapv1.ReplicateDocumentRequest_ChunkData{ChunkData: []byte("pay")}},
+			{Part: &scrapv1.ReplicateDocumentRequest_Init{Init: init}},
+			{Part: &scrapv1.ReplicateDocumentRequest_ChunkData{ChunkData: []byte("load")}},
+		},
+	}
+
+	dir := t.TempDir()
+	srv := NewServer(dir)
+	defer func() { _ = srv.Close() }()
+
+	err := srv.ReplicateDocument(stream)
+	assertReplicateInvalidArgument(t, err)
+}
+
+func TestReplicateDocumentLocalShaMismatchRollsBackAppendedBytes(t *testing.T) {
+	dir := t.TempDir()
+	srv := NewServer(dir)
+	defer func() { _ = srv.Close() }()
+
+	wrong := sha256.Sum256([]byte("different"))
+	init := validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+		init.Sha256 = wrong[:]
+	})
+	err := srv.ReplicateDocument(replicateStreamWithInitAndChunks(init, []byte("payload")))
+	if status.Code(err) != codes.DataLoss {
+		t.Fatalf("ReplicateDocument error = %v (%s), want data loss", err, status.Code(err))
+	}
+
+	// The mismatched frames must not remain in the mirror Block.
+	blkPath := filepath.Join(dir, fmt.Sprintf("%016x.blk", uint64(1)))
+	info, statErr := os.Stat(blkPath)
+	if statErr != nil {
+		t.Fatalf("stat block: %v", statErr)
+	}
+	if got, want := info.Size(), int64(block.HeaderSize); got != want {
+		t.Fatalf("block size after rollback = %d, want header-only %d", got, want)
+	}
+
+	// A correct retry must verify end-to-end at the same offset.
+	if err := srv.ReplicateDocument(replicateStreamWithInitAndChunks(validReplicateDocumentInit(), []byte("payload"))); err != nil {
+		t.Fatalf("ReplicateDocument retry after rollback: %v", err)
+	}
+}
+
 func TestReplicateDocumentRejectsOversizedChunkBeforeBuffering(t *testing.T) {
 	chunk := make([]byte, storeapi.MaxClientChunkBytes+1)
 	assertReplicateDocumentBodyRejectedBeforeSideEffects(t, validReplicateDocumentInit(), codes.ResourceExhausted, chunk)
@@ -135,6 +217,7 @@ func TestValidateReplicateDocumentChunkBounds(t *testing.T) {
 }
 
 func validReplicateDocumentInit(mutators ...func(*scrapv1.ReplicateDocumentInit)) *scrapv1.ReplicateDocumentInit {
+	sha := sha256.Sum256([]byte("payload"))
 	init := &scrapv1.ReplicateDocumentInit{
 		TransactionId: "tx-peer-bounds",
 		DocumentName:  "invoice.xml",
@@ -143,6 +226,7 @@ func validReplicateDocumentInit(mutators ...func(*scrapv1.ReplicateDocumentInit)
 		TotalBytes:    7,
 		FrameCount:    1,
 		ShardId:       7,
+		Sha256:        sha[:],
 	}
 	for _, mutate := range mutators {
 		mutate(init)

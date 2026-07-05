@@ -460,3 +460,115 @@ func TestIndexCorruptEntryCRC(t *testing.T) {
 		t.Fatal("expected repair to reject committed entry CRC corruption")
 	}
 }
+
+func TestIndexOversizedEntryLenMidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+
+	iw, err := block.NewIndexWriter(path)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// A corrupt length prefix whose claimed payload still fits in the file is
+	// mid-file corruption: it must fail hard without allocating the claim.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // test-owned temp file.
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	corrupt := make([]byte, 4+300008)
+	corrupt[0] = 0xE0 // entry_len = 300000, above the sanity cap
+	corrupt[1] = 0x93
+	corrupt[2] = 0x04
+	if _, err := f.Write(corrupt); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close corrupt file: %v", err)
+	}
+
+	if _, err := block.OpenIndexReader(path); !errors.Is(err, block.ErrIdxCorrupt) {
+		t.Fatalf("OpenIndexReader error: got %v, want ErrIdxCorrupt", err)
+	}
+	if err := block.RepairIndexTail(path); err == nil {
+		t.Fatal("RepairIndexTail repaired mid-file corruption, want error")
+	}
+}
+
+func TestIndexOversizedEntryLenTornTailRepairable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+
+	iw, err := block.NewIndexWriter(path)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	entry := block.IndexEntry{
+		TransactionID: "tx-torn",
+		DocName:       "doc.bin",
+		ContentType:   "application/octet-stream",
+		CreatedAt:     time.Now(),
+		FrameCount:    1,
+		TotalBytes:    4,
+		SHA256:        [32]byte{1},
+	}
+	if err := iw.Append(entry); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// A garbage length prefix at EOF with no payload behind it is a torn
+	// tail and must stay repairable, without a giant allocation.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // test-owned temp file.
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.Write([]byte{0xFF, 0xFF, 0xFF, 0xFF}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close torn file: %v", err)
+	}
+
+	if err := block.RepairIndexTail(path); err != nil {
+		t.Fatalf("RepairIndexTail: %v", err)
+	}
+	ir, err := block.OpenIndexReader(path)
+	if err != nil {
+		t.Fatalf("OpenIndexReader after repair: %v", err)
+	}
+	defer func() { _ = ir.Close() }()
+	if got := len(ir.Entries()); got != 1 {
+		t.Fatalf("entries after repair: got %d, want 1", got)
+	}
+}
+
+func TestIndexAppendRejectsOversizedEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.idx")
+
+	iw, err := block.NewIndexWriter(path)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	defer func() { _ = iw.Close() }()
+
+	err = iw.Append(block.IndexEntry{
+		TransactionID:      "tx-big",
+		DocName:            "doc.bin",
+		ContentType:        "application/octet-stream",
+		CreatedAt:          time.Now(),
+		FrameCount:         1,
+		TotalBytes:         1,
+		SHA256:             [32]byte{1},
+		EncryptionEnvelope: make([]byte, 65536),
+	})
+	if err == nil {
+		t.Fatal("Append with 64 KiB envelope succeeded, want error")
+	}
+}

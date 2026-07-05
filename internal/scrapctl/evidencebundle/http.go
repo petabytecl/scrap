@@ -219,8 +219,8 @@ func shouldRedactLogField(key string, value any) bool {
 }
 
 func containsSensitiveLogString(text string) bool {
-	for _, fragment := range []string{"/home/", "/Users/", "/var/", "/opt/", "/private/", "/tmp/"} {
-		if strings.Contains(text, fragment) {
+	for _, root := range sensitiveHostPathRoots {
+		if strings.Contains(text, "/"+root+"/") {
 			return true
 		}
 	}
