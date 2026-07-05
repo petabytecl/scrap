@@ -12,8 +12,8 @@ import (
 // sensitiveHostPathRoots are top-level host directories whose appearance in an
 // evidence artifact signals a leaked host-absolute path — notably "data", the
 // default --data-dir that roots every Block/openlog/pebble path. Kept in one
-// place so the log-redaction denylist (http.go) and the privacy-scan gate below
-// cannot drift apart.
+// place; the log redaction in http.go is a positive allowlist that never
+// copies free text, so this scan is the independent second net over the bundle.
 var sensitiveHostPathRoots = []string{
 	"home", "Users", "var", "opt", "private", "tmp", "data", "etc", "root", "mnt", "srv",
 }
