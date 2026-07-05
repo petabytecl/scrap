@@ -257,21 +257,7 @@ func (s *Scheduler) prepareScanRun(ctx context.Context) (runProgressState, []Blo
 func (s *Scheduler) scanBlocks(ctx context.Context, blocks, listing []Block, progress runProgressState) (Reason, error) {
 	var firstReason Reason
 	var firstErr error
-	state := scanRunState{
-		remaining: len(blocks),
-		progress:  progress,
-	}
-	state.listed = make(map[uint64]struct{}, len(listing))
-	state.restored = make(map[uint64]struct{})
-	for _, block := range listing {
-		state.listed[block.BlockID] = struct{}{}
-		if block.Restored {
-			state.restored[block.BlockID] = struct{}{}
-		}
-		if block.BlockID > state.maxListed {
-			state.maxListed = block.BlockID
-		}
-	}
+	state := newScanRunState(blocks, listing, progress)
 	// Advance through leading gaps before scanning: a quarantined or evicted
 	// Block at frontier+1 must not pin the durable watermark when everything
 	// still listed is already completed or absent.
@@ -295,6 +281,25 @@ func (s *Scheduler) scanBlocks(ctx context.Context, blocks, listing []Block, pro
 		}
 	}
 	return s.finishScanBlocks(firstReason, firstErr)
+}
+
+func newScanRunState(blocks, listing []Block, progress runProgressState) scanRunState {
+	state := scanRunState{
+		remaining: len(blocks),
+		progress:  progress,
+		listed:    make(map[uint64]struct{}, len(listing)),
+		restored:  make(map[uint64]struct{}),
+	}
+	for _, block := range listing {
+		state.listed[block.BlockID] = struct{}{}
+		if block.Restored {
+			state.restored[block.BlockID] = struct{}{}
+		}
+		if block.BlockID > state.maxListed {
+			state.maxListed = block.BlockID
+		}
+	}
+	return state
 }
 
 func (s *Scheduler) tryScanBlock(ctx context.Context, block Block, state *scanRunState) (Reason, error) {
