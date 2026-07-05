@@ -282,6 +282,67 @@ func TestFSBackendListNoMatchIsEmpty(t *testing.T) {
 	}
 }
 
+func TestFSBackendListMatchesS3BytePrefixSemantics(t *testing.T) {
+	ctx := context.Background()
+	store := backend.NewFS(t.TempDir())
+
+	putObject(ctx, t, store, "cell-a/shards/00ab/000000000000002b.blk", []byte("in-dir"))
+	putObject(ctx, t, store, "cell-a/shards/00abc.blk", []byte("sibling"))
+	putObject(ctx, t, store, "cell-a/shards/00zz.blk", []byte("other"))
+
+	cases := map[string][]string{
+		// A partial trailing segment that also names an existing directory
+		// must still match sibling keys byte-wise, exactly as S3 does.
+		"cell-a/shards/00ab": {
+			"cell-a/shards/00ab/000000000000002b.blk",
+			"cell-a/shards/00abc.blk",
+		},
+		"cell-a/sh": {
+			"cell-a/shards/00ab/000000000000002b.blk",
+			"cell-a/shards/00abc.blk",
+			"cell-a/shards/00zz.blk",
+		},
+		"cell-a/shards/00ab/": {
+			"cell-a/shards/00ab/000000000000002b.blk",
+		},
+		"cell": {
+			"cell-a/shards/00ab/000000000000002b.blk",
+			"cell-a/shards/00abc.blk",
+			"cell-a/shards/00zz.blk",
+		},
+	}
+	for prefix, want := range cases {
+		got := listKeys(ctx, t, store, prefix)
+		if len(got) != len(want) {
+			t.Fatalf("ListObjects(%q) keys = %v, want %v", prefix, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("ListObjects(%q) keys = %v, want %v", prefix, got, want)
+			}
+		}
+	}
+}
+
+func listKeys(ctx context.Context, t *testing.T, store backend.Backend, prefix string) []string {
+	t.Helper()
+	iter, err := store.ListObjects(ctx, prefix, backend.ListOpts{})
+	if err != nil {
+		t.Fatalf("ListObjects(%q): %v", prefix, err)
+	}
+	var keys []string
+	for {
+		info, err := iter.Next()
+		if errors.Is(err, io.EOF) {
+			return keys
+		}
+		if err != nil {
+			t.Fatalf("Next(%q): %v", prefix, err)
+		}
+		keys = append(keys, info.Key)
+	}
+}
+
 func TestFSBackendRejectsDirectoryObjects(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
