@@ -205,6 +205,34 @@ func TestLightScrubber_ReportsPeerResultTimeout(t *testing.T) {
 	}
 }
 
+func TestLightScrubber_AllPeersUnreachableIsNotOK(t *testing.T) {
+	// Every peer errors with a non-NotReady failure (e.g. unreachable), so no
+	// peer result is ever compared against the leader hash.
+	checker := &mockConsistencyChecker{err: errors.New("dial peer: connection refused")}
+	metrics := &mockMetrics{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           &mockProposer{result: scrub.Result{SHA256: [32]byte{1}}},
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+		PeerResultTimeout:  5 * time.Millisecond,
+		PeerResultPoll:     time.Millisecond,
+	})
+
+	err := ls.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce reported success when every peer check failed, want a degraded error")
+	}
+	if metrics.recorded.ok != 0 {
+		t.Fatalf("expected no ok run, got %d", metrics.recorded.ok)
+	}
+	if metrics.recorded.errCount != 1 {
+		t.Fatalf("expected 1 error run, got %d", metrics.recorded.errCount)
+	}
+}
+
 func TestLightScrubber_SkipsWhenNotLeader(t *testing.T) {
 	metrics := &mockMetrics{}
 

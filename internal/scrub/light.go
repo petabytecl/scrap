@@ -157,6 +157,7 @@ func (ls *Light) RunOnce(ctx context.Context) error {
 
 func (ls *Light) collectDivergentPeers(ctx context.Context, scrubID string, leaderHash [32]byte) ([]string, error) {
 	var divergent []string
+	var compared int
 	for _, addr := range ls.cfg.PeerAddrs {
 		peerResult, err := ls.checkPeerConsistency(ctx, addr, scrubID)
 		if errors.Is(err, ErrConsistencyResultNotReady) {
@@ -176,9 +177,17 @@ func (ls *Light) collectDivergentPeers(ctx context.Context, scrubID string, lead
 		if peerResult.SHA256 == [32]byte{} {
 			return nil, fmt.Errorf("scrub: peer %s projection hash missing for scrub %s", addr, scrubID)
 		}
+		compared++
 		if peerResult.SHA256 != leaderHash {
 			divergent = append(divergent, addr)
 		}
+	}
+	// If the Cell has peers but none produced a comparable result, the check is
+	// inconclusive, not clean: reporting ok here would mask a total loss of
+	// projection-divergence coverage. Fail so RunOnce records a degraded run and
+	// retries next cycle.
+	if len(ls.cfg.PeerAddrs) > 0 && compared == 0 {
+		return nil, fmt.Errorf("scrub: no peer consistency result compared for scrub %s across %d peer(s)", scrubID, len(ls.cfg.PeerAddrs))
 	}
 	return divergent, nil
 }
