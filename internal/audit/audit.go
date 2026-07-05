@@ -80,6 +80,11 @@ const (
 	principalHashPrefix = "sha256:"
 	principalHashBytes  = 8
 	defaultMaxEventSize = 1024
+
+	// FailureModeFailClosed blocks the audited operation when the sink write fails.
+	FailureModeFailClosed = "fail_closed"
+	// FailureModeFailOpen drops the event, logs the loss, and lets the operation proceed.
+	FailureModeFailOpen = "fail_open"
 )
 
 // Event is the bounded audit record emitted for security decisions.
@@ -255,11 +260,52 @@ func (p Policy) validate() error {
 	default:
 		return errors.New("audit policy sink is invalid")
 	}
-	if p.FailureMode != "fail_closed" {
+	if p.FailureMode != FailureModeFailClosed && p.FailureMode != FailureModeFailOpen {
 		return errors.New("audit policy failure_mode is invalid")
 	}
 	if p.MaxEventBytes < 256 || p.MaxEventBytes > 4096 {
 		return errors.New("audit policy max_event_bytes is invalid")
+	}
+	return nil
+}
+
+// PolicySink enforces the production audit policy on every recorded event:
+// events over MaxEventBytes are rejected (fields are enum-bounded, so an
+// oversized event indicates corruption, and truncation would break that
+// bounding), and sink write failures follow FailureMode.
+type PolicySink struct {
+	inner  Sink
+	policy Policy
+	logger *slog.Logger
+}
+
+func NewPolicySink(inner Sink, policy Policy, logger *slog.Logger) (*PolicySink, error) {
+	if inner == nil {
+		return nil, errors.New("audit policy sink requires an inner sink")
+	}
+	if err := policy.validate(); err != nil {
+		return nil, err
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &PolicySink{inner: inner, policy: policy, logger: logger.With("component", "audit")}, nil
+}
+
+func (s *PolicySink) Record(ctx context.Context, event Event) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode audit event: %w", err)
+	}
+	if len(data) > s.policy.MaxEventBytes {
+		return fmt.Errorf("audit event size %d exceeds policy max %d bytes", len(data), s.policy.MaxEventBytes)
+	}
+	if err := s.inner.Record(ctx, event); err != nil {
+		if s.policy.FailureMode == FailureModeFailOpen {
+			s.logger.WarnContext(ctx, "audit event dropped by fail-open policy", "error", err)
+			return nil
+		}
+		return fmt.Errorf("audit sink write failed: %w", err)
 	}
 	return nil
 }

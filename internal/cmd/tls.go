@@ -123,10 +123,15 @@ func newAppAuditSink(cfg Config, logger *slog.Logger) (audit.Sink, error) {
 	if cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.AuditSink.PolicyPath) == "" {
 		return audit.NewLoggerSink(logger), nil
 	}
-	if _, err := audit.LoadPolicy(cfg.ProductionGates.AuditSink.PolicyPath); err != nil {
+	policy, err := audit.LoadPolicy(cfg.ProductionGates.AuditSink.PolicyPath)
+	if err != nil {
 		return nil, fmt.Errorf("audit policy: %w", err)
 	}
-	return audit.NewLoggerSink(logger), nil
+	sink, err := audit.NewPolicySink(audit.NewLoggerSink(logger), policy, logger)
+	if err != nil {
+		return nil, fmt.Errorf("audit policy sink: %w", err)
+	}
+	return sink, nil
 }
 
 func newAppRateLimiter(cfg Config, observer security.RateLimitObserver) (*security.RateLimiter, error) {
