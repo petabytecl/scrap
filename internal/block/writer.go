@@ -359,13 +359,25 @@ func (w *Writer) Truncate(offset int64) error {
 	if err := w.f.Truncate(offset); err != nil {
 		return fmt.Errorf("block: truncate: %w", err)
 	}
-	if _, err := w.f.Seek(offset, io.SeekStart); err != nil {
-		return fmt.Errorf("block: seek after truncate: %w", err)
-	}
 	if err := w.f.Sync(); err != nil {
 		return fmt.Errorf("block: fsync after truncate: %w", err)
 	}
-	w.offset = offset
+	// Re-derive the document counters from the Frames that survive the
+	// truncation. Abort paths truncate to a document boundary after a partial
+	// or complete append, and docSeq/docCount must match the Frames actually on
+	// disk: a leaked doc_seq desynchronizes the next committed Frame's DocSeq
+	// from its .idx position, which deep scrub reads as corruption and
+	// quarantines an intact Block.
+	newOffset, docSeq, docCount, err := scanWriterState(w.f, w.path)
+	if err != nil {
+		return err
+	}
+	if _, err := w.f.Seek(newOffset, io.SeekStart); err != nil {
+		return fmt.Errorf("block: seek after truncate: %w", err)
+	}
+	w.offset = newOffset
+	w.docSeq = docSeq
+	w.docCount = docCount
 	return nil
 }
 

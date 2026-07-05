@@ -243,6 +243,59 @@ func TestBlockWriterTruncateBeyondEndRejected(t *testing.T) {
 	}
 }
 
+func appendTruncateTestDoc(t *testing.T, w *block.Writer, name string, fill byte) {
+	t.Helper()
+	body := bytes.NewReader(bytes.Repeat([]byte{fill}, 128))
+	if _, err := w.AppendDocument("tx", name, "text/plain", body); err != nil {
+		t.Fatalf("AppendDocument %s: %v", name, err)
+	}
+}
+
+func TestBlockWriterTruncateRollsBackDocCounters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.blk")
+
+	w, err := block.NewWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	// Commit document A at doc_seq 0.
+	appendTruncateTestDoc(t, w, "a", 'A')
+
+	// Append document B, then abort it by truncating back to the boundary, as
+	// the leader/peer write-abort paths do on a rejected write.
+	boundary := w.Offset()
+	appendTruncateTestDoc(t, w, "b", 'B')
+	if err := w.Truncate(boundary); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	if w.DocCount() != 1 {
+		t.Fatalf("DocCount after truncate: got %d, want 1", w.DocCount())
+	}
+
+	// The next committed document must reuse the doc_seq freed by the abort so
+	// its frame DocSeq stays contiguous with its .idx position; a leaked
+	// counter would write document C at doc_seq 2 over position 1.
+	appendTruncateTestDoc(t, w, "c", 'C')
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// OpenWriter re-scans the Frames and rejects any doc_seq gap, so a leaked
+	// counter fails this reopen.
+	reopened, err := block.OpenWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("OpenWriter after truncate+append: %v", err)
+	}
+	if reopened.DocCount() != 2 {
+		t.Fatalf("reopened DocCount: got %d, want 2", reopened.DocCount())
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened: %v", err)
+	}
+}
+
 func TestOpenWriterRejectsInvalidFrameFlags(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.blk")
