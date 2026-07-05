@@ -188,7 +188,7 @@ func TestScrubCoordinatorRetentionEvictsOldestBeyondCap(t *testing.T) {
 	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
 
 	total := maxRetainedScrubResults + 5
-	for i := 0; i < total; i++ {
+	for i := range total {
 		id := fmt.Sprintf("scrub-%03d", i)
 		c.applyConsistencyCheck(&scrapv1.RequestConsistencyCheck{ScrubId: id}, uint64(i))
 	}
