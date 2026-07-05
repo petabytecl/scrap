@@ -114,4 +114,4 @@ origin: full-project code review (CLI & cmd), 2026-07-05
 location: internal/cmd/shard_diagnostics.go (applyLiveShardDiagnostics)
 severity: low
 reason: Readiness/leader/pressure/scanner/eviction fields are read as separate calls with no shared lock, so a concurrent leadership change can yield inconsistent fields. Display-only for a best-effort read-only endpoint; filed for visibility and may be closed as accepted. Mirror: GitHub #452.
-status: open
+status: accepted (2026-07-05) — closed #452 as not-planned per triage decision; display-only best-effort endpoint, no consumer acts on the snapshot
