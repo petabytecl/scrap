@@ -128,6 +128,7 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 			BlockID:   info.BlockID,
 			SizeBytes: size,
 			Open:      scannerBlockOpener(info.BlockID, info.BlkPath),
+			Restored:  restoreMarkerPresent(c.blocksDir, info.BlockID),
 		})
 	}
 	return out, nil
@@ -139,6 +140,11 @@ func (c *scannerCoordinator) ReportDetections(ctx context.Context, block avscan.
 		return avscan.ErrDetectionReporterUnavailable
 	}
 	return reporter.ReportDetections(ctx, block, detections)
+}
+
+func restoreMarkerPresent(blocksDir string, blockID uint64) bool {
+	_, err := os.Stat(RestoreMarkerPath(blocksDir, blockID))
+	return err == nil
 }
 
 func scannerBlockOpener(blockID uint64, path string) func(context.Context) (io.ReadCloser, error) {

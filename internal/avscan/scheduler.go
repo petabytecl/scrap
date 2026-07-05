@@ -48,9 +48,15 @@ type runProgressState struct {
 }
 
 type scanRunState struct {
-	remaining       int
-	frontierBlocked bool
-	progress        runProgressState
+	remaining int
+	progress  runProgressState
+	// listed and restored describe the current sealed listing: the frontier
+	// may advance through IDs absent from listed (quarantined or evicted
+	// Blocks that no longer exist locally), while restored Blocks keep their
+	// completed entries so an in-process rescan loop cannot form.
+	listed    map[uint64]struct{}
+	restored  map[uint64]struct{}
+	maxListed uint64
 }
 
 type realTickerFactory struct{}
@@ -195,7 +201,7 @@ func (s *Scheduler) RunOnce(ctx context.Context) (err error) {
 		return ErrEngineUnavailable
 	}
 
-	progress, blocks, progressReason, err := s.prepareScanRun(ctx)
+	progress, listing, progressReason, err := s.prepareScanRun(ctx)
 	if err != nil {
 		status = StatusDegraded
 		reason = progressReason
@@ -203,13 +209,13 @@ func (s *Scheduler) RunOnce(ctx context.Context) (err error) {
 		return err
 	}
 
-	blocks = s.eligibleBlocks(blocks, progress)
+	blocks := s.eligibleBlocks(listing, progress)
 	s.setLag(len(blocks))
 	s.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.LagBlocks = len(blocks)
 	})
 
-	reason, runErr = s.scanBlocks(ctx, blocks, progress)
+	reason, runErr = s.scanBlocks(ctx, blocks, listing, progress)
 	if runErr != nil {
 		status = StatusDegraded
 		return runErr
@@ -248,12 +254,30 @@ func (s *Scheduler) prepareScanRun(ctx context.Context) (runProgressState, []Blo
 	return progress, blocks, ReasonNone, nil
 }
 
-func (s *Scheduler) scanBlocks(ctx context.Context, blocks []Block, progress runProgressState) (Reason, error) {
+func (s *Scheduler) scanBlocks(ctx context.Context, blocks, listing []Block, progress runProgressState) (Reason, error) {
 	var firstReason Reason
 	var firstErr error
 	state := scanRunState{
 		remaining: len(blocks),
 		progress:  progress,
+	}
+	state.listed = make(map[uint64]struct{}, len(listing))
+	state.restored = make(map[uint64]struct{})
+	for _, block := range listing {
+		state.listed[block.BlockID] = struct{}{}
+		if block.Restored {
+			state.restored[block.BlockID] = struct{}{}
+		}
+		if block.BlockID > state.maxListed {
+			state.maxListed = block.BlockID
+		}
+	}
+	// Advance through leading gaps before scanning: a quarantined or evicted
+	// Block at frontier+1 must not pin the durable watermark when everything
+	// still listed is already completed or absent.
+	if reason, err := s.persistAdvancedProgress(ctx, &state); err != nil {
+		s.recordFailure(reason, state.remaining)
+		return reason, err
 	}
 	for _, block := range blocks {
 		if reason, err := s.waitBeforeScan(ctx, block, state.remaining); err != nil {
@@ -276,48 +300,63 @@ func (s *Scheduler) scanBlocks(ctx context.Context, blocks []Block, progress run
 func (s *Scheduler) tryScanBlock(ctx context.Context, block Block, state *scanRunState) (Reason, error) {
 	if err := s.scanOne(ctx, block); err != nil {
 		reason := reasonForScanError(err)
-		state.frontierBlocked = true
 		s.updateLag(state.remaining)
 		return reason, err
 	}
 
 	state.remaining--
-	if reason, err := s.persistProgressAfterScan(ctx, block, state); err != nil {
+	if reason, err := s.persistAdvancedProgress(ctx, state); err != nil {
+		s.recordFailure(reason, state.remaining)
 		return reason, err
 	}
 	s.updateLag(state.remaining)
 	return ReasonNone, nil
 }
 
-func (s *Scheduler) persistProgressAfterScan(ctx context.Context, block Block, state *scanRunState) (Reason, error) {
-	if !state.progress.enabled || state.frontierBlocked {
+func (s *Scheduler) persistAdvancedProgress(ctx context.Context, state *scanRunState) (Reason, error) {
+	if !state.progress.enabled {
 		return ReasonNone, nil
 	}
-	if block.BlockID != state.progress.frontier+1 {
-		state.frontierBlocked = true
+	before := state.progress.frontier
+	s.advanceProgressFrontier(state)
+	if state.progress.frontier == before {
 		return ReasonNone, nil
 	}
-
-	state.progress.frontier = block.BlockID
-	s.advanceProgressThroughCompleted(&state.progress)
 	if err := s.saveProgress(ctx, state.progress); err != nil {
-		reason := reasonForProgressError(err)
-		s.recordFailure(reason, state.remaining)
-		return reason, err
+		return reasonForProgressError(err), err
 	}
 	return ReasonNone, nil
 }
 
-func (s *Scheduler) advanceProgressThroughCompleted(progress *runProgressState) {
+// advanceProgressFrontier moves the durable frontier through Block IDs that
+// are either completed in this process or absent from the current sealed
+// listing (quarantined or evicted Blocks that may never reappear). It stops
+// at the first listed Block that has not been scanned — a scan failure there
+// keeps the watermark below it — and prunes completed entries at or below
+// the new frontier, except restored Blocks whose entries suppress in-process
+// rescans while they remain scan-eligible below the frontier.
+func (s *Scheduler) advanceProgressFrontier(state *scanRunState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for {
-		nextBlockID := progress.frontier + 1
-		if _, ok := s.completed[nextBlockID]; !ok {
-			return
+	progress := &state.progress
+	for progress.frontier < state.maxListed {
+		next := progress.frontier + 1
+		if _, done := s.completed[next]; !done {
+			if _, isListed := state.listed[next]; isListed {
+				break
+			}
 		}
-		progress.frontier = nextBlockID
+		progress.frontier = next
+	}
+	for blockID := range s.completed {
+		if blockID > progress.frontier {
+			continue
+		}
+		if _, isRestored := state.restored[blockID]; isRestored {
+			continue
+		}
+		delete(s.completed, blockID)
 	}
 }
 
@@ -396,7 +435,10 @@ func (s *Scheduler) eligibleBlocks(blocks []Block, progress runProgressState) []
 			continue
 		}
 		seen[block.BlockID] = struct{}{}
-		if progress.enabled && block.BlockID <= progress.frontier {
+		// Restored Blocks stay eligible below the frontier: they may have
+		// been evicted before their first scan and the frontier may have
+		// advanced through their gap while they were absent.
+		if progress.enabled && block.BlockID <= progress.frontier && !block.Restored {
 			continue
 		}
 		if _, ok := s.completed[block.BlockID]; ok {

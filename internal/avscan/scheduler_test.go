@@ -460,7 +460,10 @@ func TestSchedulerHigherPersistedFrontierRescansKnownBlocks(t *testing.T) {
 	assertSavedProgress(t, store.lastSaved(), 2)
 }
 
-func TestSchedulerDoesNotPersistAcrossGapAboveFrontier(t *testing.T) {
+func TestSchedulerAdvancesFrontierThroughPermanentGap(t *testing.T) {
+	// Block 2 is absent from the sealed listing (quarantined or evicted), so
+	// the durable watermark must advance through the gap instead of pinning
+	// at 1 forever.
 	store := &memoryProgressStore{
 		progress: Progress{
 			LastScannedBlockID:          1,
@@ -484,10 +487,61 @@ func TestSchedulerDoesNotPersistAcrossGapAboveFrontier(t *testing.T) {
 	if got, want := engine.blockIDs(), []uint64{3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("scanned Blocks = %v, want %v", got, want)
 	}
-	assertSavedProgress(t, store.lastSaved(), 1)
+	assertSavedProgress(t, store.lastSaved(), 3)
 }
 
-func TestSchedulerAdvancesFrontierThroughCompletedBlocksAfterGapFills(t *testing.T) {
+func TestSchedulerAdvancesFrontierThroughGapWithoutScanningAnything(t *testing.T) {
+	// Everything still listed is already recorded as scanned, so the run has
+	// nothing eligible; the frontier must still advance through the gap left
+	// by Block 2 up to the last completed listed Block.
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          1,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	lister := &mutableBlockLister{blocks: []Block{{BlockID: 2}, {BlockID: 3}}}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              lister,
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	// First run: Block 2 fails to scan, Block 3 completes; frontier stays at 1.
+	failingEngine := engineFunc(func(_ context.Context, block Block) (Result, error) {
+		if block.BlockID == 2 {
+			return Result{}, errors.New("scan failed")
+		}
+		return Result{Status: ResultClean, ScannedDocuments: 1}, nil
+	})
+	scheduler.cfg.Engine = failingEngine
+	if err := scheduler.RunOnce(context.Background()); err == nil {
+		t.Fatal("first RunOnce succeeded despite failing Block 2")
+	}
+	assertSavedProgress(t, store.lastSaved(), 1)
+
+	// Block 2 is quarantined: it leaves the listing. The next run has nothing
+	// eligible (3 is completed) but must advance the watermark through the gap.
+	scheduler.cfg.Engine = engine
+	lister.blocks = []Block{{BlockID: 3}}
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
+	}
+	if len(engine.blockIDs()) != 0 {
+		t.Fatalf("second run scanned Blocks = %v, want none", engine.blockIDs())
+	}
+	assertSavedProgress(t, store.lastSaved(), 3)
+}
+
+func TestSchedulerScansRestoredBlockBelowFrontier(t *testing.T) {
+	// The frontier advanced through Block 2's gap while it was evicted. When
+	// it is restored it may never have been scanned, so the restored flag
+	// keeps it eligible below the frontier without moving the watermark back.
 	store := &memoryProgressStore{
 		progress: Progress{
 			LastScannedBlockID:          1,
@@ -495,11 +549,12 @@ func TestSchedulerAdvancesFrontierThroughCompletedBlocksAfterGapFills(t *testing
 		},
 	}
 	lister := &mutableBlockLister{blocks: []Block{{BlockID: 3}}}
+	engine := &recordingEngine{}
 	scheduler := NewScheduler(Config{
 		ShardID:                  7,
 		BlockLister:              lister,
 		LeaderChecker:            staticLeaderChecker(true),
-		Engine:                   &recordingEngine{},
+		Engine:                   engine,
 		ProgressStore:            store,
 		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
 		Interval:                 time.Hour,
@@ -508,13 +563,77 @@ func TestSchedulerAdvancesFrontierThroughCompletedBlocksAfterGapFills(t *testing
 	if err := scheduler.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first RunOnce: %v", err)
 	}
-	assertSavedProgress(t, store.lastSaved(), 1)
+	assertSavedProgress(t, store.lastSaved(), 3)
 
-	lister.blocks = []Block{{BlockID: 2}, {BlockID: 3}}
+	lister.blocks = []Block{{BlockID: 2, Restored: true}, {BlockID: 3}}
 	if err := scheduler.RunOnce(context.Background()); err != nil {
 		t.Fatalf("second RunOnce: %v", err)
 	}
+	if got, want := engine.blockIDs(), []uint64{3, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
 	assertSavedProgress(t, store.lastSaved(), 3)
+
+	// A third run must not rescan the restored Block within this process.
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("third RunOnce: %v", err)
+	}
+	if got, want := engine.blockIDs(), []uint64{3, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks after third run = %v, want %v", got, want)
+	}
+}
+
+func TestSchedulerSkipsNonRestoredGapFillBelowFrontier(t *testing.T) {
+	// A quarantine release refills a gap without a restore marker; the Block
+	// was scanned before quarantine, so it stays behind the watermark.
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          3,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 2}, {BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(engine.blockIDs()) != 0 {
+		t.Fatalf("scanned Blocks = %v, want none", engine.blockIDs())
+	}
+}
+
+func TestSchedulerPrunesCompletedEntriesBehindFrontier(t *testing.T) {
+	store := &memoryProgressStore{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 1}, {BlockID: 2}, {BlockID: 3}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   &recordingEngine{},
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	assertSavedProgress(t, store.lastSaved(), 3)
+
+	scheduler.mu.Lock()
+	completed := len(scheduler.completed)
+	scheduler.mu.Unlock()
+	if completed != 0 {
+		t.Fatalf("completed map size = %d, want 0 after frontier advanced past all Blocks", completed)
+	}
 }
 
 func TestSchedulerDeduplicatesBlockListerDuplicates(t *testing.T) {
