@@ -115,7 +115,11 @@ func recoverProjectionSwapDirs(dataDir, pebbleDir string) error {
 	}
 	sort.Strings(previous)
 
-	if len(previous) > 0 && projectionDirMissingOrEmpty(pebbleDir) {
+	missing, err := projectionDirMissingOrEmpty(pebbleDir)
+	if err != nil {
+		return err
+	}
+	if len(previous) > 0 && missing {
 		newest := previous[len(previous)-1]
 		_ = os.RemoveAll(pebbleDir)
 		if err := os.Rename(newest, pebbleDir); err != nil {
@@ -136,12 +140,19 @@ func recoverProjectionSwapDirs(dataDir, pebbleDir string) error {
 	return nil
 }
 
-func projectionDirMissingOrEmpty(pebbleDir string) bool {
+// projectionDirMissingOrEmpty reports whether the live projection directory is
+// absent or empty. A non-ENOENT read error (EACCES/EIO on a failing disk) is
+// returned rather than treated as "present", so recoverProjectionSwapDirs
+// aborts instead of deleting the pebble.previous-* backups without restoring.
+func projectionDirMissingOrEmpty(pebbleDir string) (bool, error) {
 	entries, err := os.ReadDir(pebbleDir)
 	if err != nil {
-		return os.IsNotExist(err)
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("shard: read projection dir %s: %w", pebbleDir, err)
 	}
-	return len(entries) == 0
+	return len(entries) == 0, nil
 }
 
 func (r *projectionRebuilder) doRebuild(ctx context.Context, done chan struct{}) {
