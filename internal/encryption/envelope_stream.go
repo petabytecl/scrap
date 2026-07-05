@@ -19,6 +19,22 @@ type FrameSource interface {
 	NextFrame() ([]byte, error)
 }
 
+// MaxCiphertextSize returns the largest ciphertext a streamed Document of at
+// most plaintextMax bytes can produce. Each fixed-size plaintext frame is
+// sealed into a ciphertext frame that adds one AES-GCM tag, so the total
+// expansion is bounded by the frame count times the tag size. Callers that
+// enforce a plaintext size limit on encrypted bytes on the wire (e.g. peer
+// replication) must budget for this expansion, or a valid Document near the
+// plaintext limit is rejected once encrypted.
+func MaxCiphertextSize(plaintextMax int64) int64 {
+	if plaintextMax <= 0 {
+		return 0
+	}
+	plainFrameSize := int64(defaultCiphertextFramePayload - aesGCMTagSize)
+	frames := (plaintextMax + plainFrameSize - 1) / plainFrameSize
+	return plaintextMax + frames*aesGCMTagSize
+}
+
 // EncryptedDocumentInfo describes a fully streamed encrypted Document. It is
 // only available after the encryptor has produced its last frame.
 type EncryptedDocumentInfo struct {

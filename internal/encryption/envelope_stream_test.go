@@ -10,6 +10,39 @@ import (
 	"github.com/petabytecl/scrap/internal/encryption"
 )
 
+func TestMaxCiphertextSizeBoundsRealCiphertext(t *testing.T) {
+	if got := encryption.MaxCiphertextSize(0); got != 0 {
+		t.Fatalf("MaxCiphertextSize(0) = %d, want 0", got)
+	}
+
+	cfg := encryption.DocumentConfig{Transit: encryption.NewFakeTransit(encryption.FakeConfig{})}
+	identity := encryption.DocumentIdentity{TransactionID: "tx", DocumentName: "doc"}
+
+	// Sizes chosen to straddle the 64 KiB frame boundary so the bound is checked
+	// against single-frame, exact-frame, and multi-frame ciphertext.
+	for _, size := range []int{1, 100, 64 * 1024, 64*1024 + 1, 200_000, 1 << 20} {
+		body := bytes.Repeat([]byte("x"), size)
+		enc, err := encryption.NewDocumentEncryptor(context.Background(), cfg, identity, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewDocumentEncryptor(%d): %v", size, err)
+		}
+		collectStreamedFrames(t, enc)
+		info, err := enc.Finalize()
+		enc.Close()
+		if err != nil {
+			t.Fatalf("Finalize(%d): %v", size, err)
+		}
+
+		bound := encryption.MaxCiphertextSize(info.PlaintextSize)
+		if info.CiphertextSize > bound {
+			t.Fatalf("size %d: actual ciphertext %d exceeds MaxCiphertextSize bound %d", size, info.CiphertextSize, bound)
+		}
+		if info.CiphertextSize <= info.PlaintextSize {
+			t.Fatalf("size %d: ciphertext %d did not expand over plaintext %d", size, info.CiphertextSize, info.PlaintextSize)
+		}
+	}
+}
+
 func TestDocumentEncryptorStreamsFramesAndRoundTrips(t *testing.T) {
 	identity := encryption.DocumentIdentity{TransactionID: "tx-1", DocumentName: "doc-a"}
 	body := bytes.Repeat([]byte("scrap-streaming-payload-"), 20_000) // multi-frame

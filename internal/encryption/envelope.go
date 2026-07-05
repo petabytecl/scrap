@@ -25,6 +25,7 @@ const (
 	defaultCiphertextFramePayload = 64 * 1024
 	noncePrefixSize               = 8
 	aesGCMNonceSize               = 12
+	aesGCMTagSize                 = 16
 	aes256KeySize                 = 32
 )
 

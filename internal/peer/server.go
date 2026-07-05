@@ -20,6 +20,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/audit"
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/security"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -27,6 +28,14 @@ import (
 
 // sha256DigestLen is the byte length of an SHA-256 digest.
 const sha256DigestLen = sha256.Size
+
+// maxReplicatedDocumentBytes bounds the replicated body on the wire. Replication
+// carries stored bytes, which are ciphertext when encryption is enabled, so the
+// limit must budget for AES-GCM per-frame expansion over the MaxDocumentBytes
+// plaintext limit; otherwise a valid Document near the limit fails peer
+// replication with ResourceExhausted and cannot reach quorum. Plaintext
+// replication stays well under this bound.
+var maxReplicatedDocumentBytes = encryption.MaxCiphertextSize(storeapi.MaxDocumentBytes)
 
 type RebuildHandler interface {
 	TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error)
@@ -222,8 +231,8 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 // buffering the whole Document. The first body chunk is peeked before the
 // consumer starts, so an empty body or an oversized first chunk fails closed
 // with no consumer side effect. Each subsequent chunk is bounded before it is
-// written to the pipe, and a Document that exceeds MaxDocumentBytes mid-stream
-// fails closed without the consumer committing visible state.
+// written to the pipe, and a Document that exceeds the replicated-body limit
+// mid-stream fails closed without the consumer committing visible state.
 func (s *Server) streamReplicatedDocument(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], init *scrapv1.ReplicateDocumentInit) ([]byte, error) {
 	firstChunk, totalBytes, err := receiveFirstReplicateChunk(stream)
 	if err != nil {
@@ -332,9 +341,9 @@ func validateReplicateDocumentInit(init *scrapv1.ReplicateDocumentInit) error {
 }
 
 // validateReplicateDocumentDeclaredSize rejects a Document whose declared size
-// already exceeds MaxDocumentBytes before any body bytes are received.
+// already exceeds the replicated-body limit before any body bytes are received.
 func validateReplicateDocumentDeclaredSize(totalBytes int64) error {
-	if totalBytes > storeapi.MaxDocumentBytes {
+	if totalBytes > maxReplicatedDocumentBytes {
 		return storeapi.NewResourceExhausted(storeapi.ResourceExhaustedReasonDocumentTooLarge, "document too large")
 	}
 	return nil
@@ -424,7 +433,7 @@ func validateReplicateDocumentChunk(totalBytes int64, chunk []byte) (int64, erro
 		return 0, err
 	}
 	nextTotal := totalBytes + int64(len(chunk))
-	if nextTotal > storeapi.MaxDocumentBytes {
+	if nextTotal > maxReplicatedDocumentBytes {
 		return 0, storeapi.NewResourceExhausted(storeapi.ResourceExhaustedReasonDocumentTooLarge, "document too large")
 	}
 	return nextTotal, nil
