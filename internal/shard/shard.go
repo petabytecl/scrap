@@ -302,6 +302,8 @@ func Open(cfg Config) (*Shard, error) {
 		TickInterval: cfg.TickInterval,
 		Transport:    transport,
 		Apply:        s.applyEntries,
+		Snapshot:     s.raftSnapshotData,
+		Restore:      s.restoreRaftSnapshot,
 		Logger:       baseLogger.With("component", "raft"),
 	})
 	if err != nil {

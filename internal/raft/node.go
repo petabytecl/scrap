@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/etcd/server/v3/storage/wal"
 	"go.etcd.io/etcd/server/v3/storage/wal/walpb"
@@ -28,6 +30,16 @@ const (
 	defaultMaxSnapCount  = 10000
 	defaultElectionTick  = 10
 	defaultHeartbeatTick = 1
+
+	// defaultSnapshotCatchUpEntries is how many entries stay in MemoryStorage
+	// behind a new snapshot so a slightly lagging follower catches up via
+	// normal log replication instead of an install-snapshot.
+	defaultSnapshotCatchUpEntries = 5000
+
+	// maxKeptSnapFiles and maxKeptWALFiles bound the on-disk history retained
+	// after each snapshot; older files are purged best-effort.
+	maxKeptSnapFiles = 5
+	maxKeptWALFiles  = 5
 )
 
 // ApplyFunc applies committed entries to the state machine. replayUntil is the
@@ -58,6 +70,10 @@ type Config struct {
 	HeartbeatTick   int
 	MaxSizePerMsg   uint64
 	MaxInflightMsgs int
+
+	// SnapshotCatchUpEntries is the trailing log window retained in
+	// MemoryStorage when the log compacts behind a new snapshot.
+	SnapshotCatchUpEntries uint64
 }
 
 type Node struct {
@@ -73,6 +89,7 @@ type Node struct {
 	snapshotIndex     uint64
 	replayCommitIndex uint64
 	commitIndex       uint64
+	confState         raftpb.ConfState
 
 	leaderID atomic.Uint64
 	stateMu  sync.RWMutex
@@ -112,6 +129,9 @@ func Open(cfg Config) (*Node, error) {
 	}
 	if cfg.MaxSnapCount == 0 {
 		cfg.MaxSnapCount = defaultMaxSnapCount
+	}
+	if cfg.SnapshotCatchUpEntries == 0 {
+		cfg.SnapshotCatchUpEntries = defaultSnapshotCatchUpEntries
 	}
 
 	walDir := cfg.DataDir + "/wal"
@@ -240,6 +260,7 @@ func (n *Node) rebuildStorageFromWAL(snapshot *raftpb.Snapshot, hardState raftpb
 		if err := n.restoreSnapshotToStorage(snapshot, &hardState); err != nil {
 			return err
 		}
+		n.confState = snapshot.Metadata.ConfState
 	}
 
 	if err := n.storage.SetHardState(hardState); err != nil {
@@ -247,6 +268,7 @@ func (n *Node) rebuildStorageFromWAL(snapshot *raftpb.Snapshot, hardState raftpb
 	}
 	if snapshot == nil {
 		if cs := n.restartConfState(entries, hardState.Commit); cs != nil {
+			n.confState = *cs
 			n.storage = &initialConfStateStorage{
 				MemoryStorage: baseStorage,
 				confState:     *cs,
@@ -318,6 +340,8 @@ type durableStorage interface {
 	SetHardState(raftpb.HardState) error
 	ApplySnapshot(raftpb.Snapshot) error
 	Append([]raftpb.Entry) error
+	CreateSnapshot(index uint64, cs *raftpb.ConfState, data []byte) (raftpb.Snapshot, error)
+	Compact(compactIndex uint64) error
 }
 
 type initialConfStateStorage struct {
@@ -379,7 +403,6 @@ func (n *Node) drainReadyLocked() {
 	}
 }
 
-//nolint:cyclop // Ready handling must keep the WAL, storage, transport, apply, and publish order explicit.
 func (n *Node) processReadyLocked(rd raft.Ready) {
 	if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
 		panic(fmt.Sprintf("raft: WAL save: %v", err))
@@ -390,15 +413,7 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 	}
 
 	if !raft.IsEmptySnap(rd.Snapshot) {
-		if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
-			panic(fmt.Sprintf("raft: save snapshot: %v", err))
-		}
-		if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(rd.Snapshot)); err != nil {
-			panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
-		}
-		if err := n.storage.ApplySnapshot(rd.Snapshot); err != nil {
-			panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
-		}
+		n.applyIncomingSnapshotLocked(rd.Snapshot)
 	}
 
 	if err := n.storage.Append(rd.Entries); err != nil {
@@ -421,7 +436,108 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 
 	n.publishReadStates(rd.ReadStates)
 
+	n.maybeTriggerSnapshotLocked()
+
 	n.node.Advance()
+}
+
+// applyIncomingSnapshotLocked handles an install-snapshot delivered by the
+// leader to a follower whose log fell behind the compaction window. The
+// application Restore hook decides whether local state can satisfy the
+// snapshot; a Restore failure is fatal because continuing would silently
+// diverge from the committed state.
+func (n *Node) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot) {
+	if err := n.snap.SaveSnap(snapshot); err != nil {
+		panic(fmt.Sprintf("raft: save snapshot: %v", err))
+	}
+	if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(snapshot)); err != nil {
+		panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
+	}
+	if err := n.wal.ReleaseLockTo(snapshot.Metadata.Index); err != nil {
+		panic(fmt.Sprintf("raft: WAL release to snapshot: %v", err))
+	}
+	if err := n.storage.ApplySnapshot(snapshot); err != nil {
+		panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
+	}
+	if n.cfg.Restore != nil {
+		if err := n.cfg.Restore(snapshot.Data); err != nil {
+			panic(fmt.Sprintf("raft: restore snapshot at index %d: %v", snapshot.Metadata.Index, err))
+		}
+	}
+	n.confState = snapshot.Metadata.ConfState
+	n.snapshotIndex = snapshot.Metadata.Index
+	atomic.StoreUint64(&n.appliedIndex, snapshot.Metadata.Index)
+	if commit := atomic.LoadUint64(&n.commitIndex); commit < snapshot.Metadata.Index {
+		atomic.StoreUint64(&n.commitIndex, snapshot.Metadata.Index)
+	}
+}
+
+// maybeTriggerSnapshotLocked snapshots the state machine and compacts the
+// in-memory log once MaxSnapCount entries applied since the last snapshot.
+// The application state is durably applied outside the Raft log, so the
+// snapshot data is whatever cfg.Snapshot returns (a manifest); failing to
+// produce it only defers the snapshot, but failing to persist one is fatal
+// like any other WAL/snapshot durability failure.
+func (n *Node) maybeTriggerSnapshotLocked() {
+	if n.cfg.Snapshot == nil {
+		return
+	}
+	applied := atomic.LoadUint64(&n.appliedIndex)
+	if applied <= n.snapshotIndex || applied-n.snapshotIndex < n.cfg.MaxSnapCount {
+		return
+	}
+
+	data, err := n.cfg.Snapshot()
+	if err != nil {
+		n.logger.Error("raft: snapshot data unavailable, deferring snapshot", "error", err)
+		return
+	}
+	var cs *raftpb.ConfState
+	if len(n.confState.Voters) > 0 {
+		cs = &n.confState
+	}
+	snapshot, err := n.storage.CreateSnapshot(applied, cs, data)
+	if err != nil {
+		n.logger.Error("raft: create snapshot", "applied_index", applied, "error", err)
+		return
+	}
+	n.commitSnapshotLocked(snapshot, applied)
+}
+
+func (n *Node) commitSnapshotLocked(snapshot raftpb.Snapshot, applied uint64) {
+	if err := n.persistSnapshotLocked(snapshot); err != nil {
+		panic(fmt.Sprintf("raft: persist snapshot: %v", err))
+	}
+
+	compactIndex := uint64(1)
+	if applied > n.cfg.SnapshotCatchUpEntries {
+		compactIndex = applied - n.cfg.SnapshotCatchUpEntries
+	}
+	if err := n.storage.Compact(compactIndex); err != nil && !errors.Is(err, raft.ErrCompacted) {
+		panic(fmt.Sprintf("raft: compact log to %d: %v", compactIndex, err))
+	}
+	n.snapshotIndex = applied
+	n.logger.Info("raft: snapshot created",
+		"snapshot_index", applied,
+		"compact_index", compactIndex,
+	)
+	n.purgeObsoleteFiles()
+}
+
+// persistSnapshotLocked follows the etcd ordering: snapshot file first so a
+// WAL snapshot record never points at a missing file, then the WAL record,
+// then release WAL locks up to the snapshot index so old segments can purge.
+func (n *Node) persistSnapshotLocked(snapshot raftpb.Snapshot) error {
+	if err := n.snap.SaveSnap(snapshot); err != nil {
+		return fmt.Errorf("save snapshot file: %w", err)
+	}
+	if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(snapshot)); err != nil {
+		return fmt.Errorf("save WAL snapshot record: %w", err)
+	}
+	if err := n.wal.ReleaseLockTo(snapshot.Metadata.Index); err != nil {
+		return fmt.Errorf("release WAL locks: %w", err)
+	}
+	return nil
 }
 
 // applyCommittedConfChangesLocked feeds committed membership entries to the
@@ -438,7 +554,54 @@ func (n *Node) applyCommittedConfChangesLocked(entries []raftpb.Entry) {
 		if err := cc.Unmarshal(e.Data); err != nil {
 			continue
 		}
-		n.node.ApplyConfChange(cc)
+		if cs := n.node.ApplyConfChange(cc); cs != nil {
+			n.confState = *cs
+		}
+	}
+}
+
+// purgeObsoleteFiles removes snapshot and WAL files made obsolete by a new
+// snapshot, keeping the newest few of each. WAL segments are only removed
+// when their file lock is free, which is exactly the set ReleaseLockTo
+// released. Purging is best-effort: failures only delay reclamation.
+func (n *Node) purgeObsoleteFiles() {
+	n.purgeOldestFiles(n.cfg.DataDir+"/snap", ".snap", maxKeptSnapFiles, nil)
+	n.purgeOldestFiles(n.cfg.DataDir+"/wal", ".wal", maxKeptWALFiles, func(path string) bool {
+		lock, err := fileutil.TryLockFile(path, os.O_WRONLY, fileutil.PrivateFileMode)
+		if err != nil {
+			return false
+		}
+		_ = lock.Close()
+		return true
+	})
+}
+
+func (n *Node) purgeOldestFiles(dir, suffix string, keep int, removable func(string) bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		n.logger.Warn("raft: purge read dir", "dir", dir, "error", err)
+		return
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), suffix) {
+			names = append(names, entry.Name())
+		}
+	}
+	// File names embed zero-padded hex sequence/index pairs, so lexical order
+	// is creation order.
+	slices.Sort(names)
+	for _, name := range names[:max(0, len(names)-keep)] {
+		path := dir + "/" + name
+		if removable != nil && !removable(path) {
+			// Still locked by the live WAL: this and everything newer is needed.
+			return
+		}
+		if err := os.Remove(path); err != nil {
+			n.logger.Warn("raft: purge file", "path", path, "error", err)
+			return
+		}
+		n.logger.Info("raft: purged obsolete file", "path", path)
 	}
 }
 
