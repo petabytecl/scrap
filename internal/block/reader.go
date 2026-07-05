@@ -47,6 +47,50 @@ func ReadDocumentFramesFromBlock(blkPath string, shardID, blockID uint64, entry 
 	return ReadDocumentFrames(blkPath, entry)
 }
 
+// OpenDocumentFrameSource streams one Document's stored Frame payloads so
+// encrypted reads never buffer a whole Document. The caller must Close it.
+func OpenDocumentFrameSource(blkPath string, shardID, blockID uint64, entry IndexEntry) (*StoredFrameSource, error) {
+	if err := VerifyHeader(blkPath, shardID, blockID); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
+	if err != nil {
+		return nil, fmt.Errorf("block: open %s for frame read: %w", blkPath, err)
+	}
+	if _, err := f.Seek(entry.FirstFrameOff, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("block: seek for frame read: %w", err)
+	}
+	return &StoredFrameSource{f: f, entry: entry}, nil
+}
+
+// StoredFrameSource yields one stored Frame payload at a time and returns
+// io.EOF after the last Frame of the Document.
+type StoredFrameSource struct {
+	f        *os.File
+	entry    IndexEntry
+	frameIdx uint32
+}
+
+func (s *StoredFrameSource) NextFrame() ([]byte, error) {
+	if s.frameIdx == s.entry.FrameCount {
+		return nil, io.EOF
+	}
+	hdr, payload, err := ReadFrame(s.f)
+	if err != nil {
+		return nil, fmt.Errorf("block: read stored frame %d: %w", s.frameIdx, err)
+	}
+	if err := validateReadFrameSequence(hdr, s.frameIdx); err != nil {
+		return nil, fmt.Errorf("block: read stored frame %d: %w", s.frameIdx, err)
+	}
+	s.frameIdx++
+	return payload, nil
+}
+
+func (s *StoredFrameSource) Close() error {
+	return s.f.Close()
+}
+
 func ReadDocumentFrames(blkPath string, entry IndexEntry) ([][]byte, error) {
 	f, err := os.Open(blkPath) //nolint:gosec // path is constructed by caller from controlled shard/block IDs
 	if err != nil {

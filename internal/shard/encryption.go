@@ -25,38 +25,41 @@ func (s *Shard) appendDocumentPayload(
 		return result, bodyCopy.Bytes(), nil, err
 	}
 
-	encrypted, err := encryption.EncryptDocument(ctx, s.encryption.documentConfig(), encryption.DocumentIdentity{
+	encryptor, err := encryption.NewDocumentEncryptor(ctx, s.encryption.documentConfig(), encryption.DocumentIdentity{
 		TransactionID: txID,
 		DocumentName:  docName,
 	}, body)
 	if err != nil {
 		return block.AppendResult{}, nil, nil, err
 	}
+	defer encryptor.Close()
 
-	result, err := s.blockWriter.AppendDocumentFrames(txID, docName, contentType, block.DocumentFrames{
-		Payloads: encrypted.Frames,
-		SHA256:   encrypted.PlaintextSHA256,
-		Size:     encrypted.PlaintextSize,
+	// Ciphertext frames stream straight into the Block; the single
+	// replication buffer is the only whole-Document copy left on this path
+	// (the peer replication transport still needs the body as bytes).
+	var replication bytes.Buffer
+	firstOffset, frameCount, err := s.blockWriter.AppendDocumentFrameSource(func() ([]byte, bool, error) {
+		frame, last, err := encryptor.NextFrame()
+		if err != nil {
+			return nil, false, err
+		}
+		replication.Write(frame)
+		return frame, last, nil
 	})
 	if err != nil {
 		return block.AppendResult{}, nil, nil, err
 	}
-	return result, joinFramePayloads(encrypted.Frames), encrypted.Envelope, nil
-}
-
-func joinFramePayloads(frames [][]byte) []byte {
-	var total int
-	for _, frame := range frames {
-		total += len(frame)
+	info, err := encryptor.Finalize()
+	if err != nil {
+		return block.AppendResult{}, nil, nil, err
 	}
-	if total == 0 {
-		return nil
+	result := block.AppendResult{
+		SHA256:           info.PlaintextSHA256,
+		Size:             info.PlaintextSize,
+		FrameCount:       frameCount,
+		FirstFrameOffset: firstOffset,
 	}
-	out := make([]byte, 0, total)
-	for _, frame := range frames {
-		out = append(out, frame...)
-	}
-	return out
+	return result, replication.Bytes(), info.Envelope, nil
 }
 
 func mapEncryptionError(err error) error {

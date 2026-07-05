@@ -1,7 +1,6 @@
 package shard
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -664,18 +663,47 @@ func (s *Shard) readDocumentBytes(ctx context.Context, blkPath string, blockID u
 	if !s.encryption.enabled() {
 		return nil, storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
 	}
-	frames, err := block.ReadDocumentFramesFromBlock(blkPath, s.shardID, blockID, entry)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
-	}
-	plaintext, err := encryption.DecryptDocument(ctx, s.encryption.Transit, encryption.DocumentIdentity{
+	decryptor, err := encryption.NewDocumentDecryptor(ctx, s.encryption.Transit, encryption.DocumentIdentity{
 		TransactionID: entry.TransactionID,
 		DocumentName:  entry.DocName,
-	}, entry.EncryptionEnvelope, frames, entry.SHA256, entry.TotalBytes)
+	}, entry.EncryptionEnvelope, entry.SHA256, entry.TotalBytes)
 	if err != nil {
 		return nil, mapEncryptionError(err)
 	}
-	return io.NopCloser(bytes.NewReader(plaintext)), nil
+
+	// Mirror the plaintext read path's two-pass contract: verify the whole
+	// Document (streaming, bounded memory) before serving the first byte,
+	// then stream-decrypt again for the response. Both passes share the one
+	// unwrapped data key.
+	verifySource, err := block.OpenDocumentFrameSource(blkPath, s.shardID, blockID, entry)
+	if err != nil {
+		decryptor.Close()
+		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+	}
+	if err := decryptor.Verify(verifySource); err != nil {
+		decryptor.Close()
+		return nil, mapEncryptionError(err)
+	}
+
+	streamSource, err := block.OpenDocumentFrameSource(blkPath, s.shardID, blockID, entry)
+	if err != nil {
+		decryptor.Close()
+		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
+	}
+	return decryptReadCloser{ReadCloser: decryptor.Reader(streamSource), decryptor: decryptor}, nil
+}
+
+// decryptReadCloser zeroes the unwrapped data key when the streamed
+// encrypted read finishes.
+type decryptReadCloser struct {
+	io.ReadCloser
+	decryptor *encryption.DocumentDecryptor
+}
+
+func (r decryptReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.decryptor.Close()
+	return err
 }
 
 func mapReadDocumentError(err error) error {

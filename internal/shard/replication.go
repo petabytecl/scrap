@@ -200,11 +200,17 @@ func (s *Shard) appendReplicatedPayload(ctx context.Context, init *scrapv1.Repli
 	if !s.encryption.enabled() {
 		return block.AppendResult{}, storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
 	}
-	_, err = encryption.DecryptDocument(ctx, s.encryption.Transit, encryption.DocumentIdentity{
+	// Streaming verify: authenticate every frame and the whole-Document
+	// digest without ever materializing the plaintext.
+	decryptor, err := encryption.NewDocumentDecryptor(ctx, s.encryption.Transit, encryption.DocumentIdentity{
 		TransactionID: init.GetTransactionId(),
 		DocumentName:  init.GetDocumentName(),
-	}, init.GetEncryptionEnvelope(), frames, sha, init.GetTotalBytes())
+	}, init.GetEncryptionEnvelope(), sha, init.GetTotalBytes())
 	if err != nil {
+		return block.AppendResult{}, mapEncryptionError(err)
+	}
+	defer decryptor.Close()
+	if err := decryptor.Verify(encryption.NewSliceFrameSource(frames)); err != nil {
 		return block.AppendResult{}, mapEncryptionError(err)
 	}
 	return s.blockWriter.AppendDocumentFrames(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), block.DocumentFrames{

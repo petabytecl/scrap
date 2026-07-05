@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -66,62 +65,41 @@ type Envelope struct {
 	CiphertextLength int64  `json:"ciphertext_length"`
 }
 
+// EncryptDocument buffers every ciphertext frame in memory. Prefer
+// DocumentEncryptor on paths that handle full-size Documents.
 func EncryptDocument(ctx context.Context, cfg DocumentConfig, identity DocumentIdentity, body io.Reader) (EncryptedDocument, error) {
-	if cfg.Transit == nil {
-		return EncryptedDocument{}, fmt.Errorf("encryption transit is required: %w", ErrInvalidEnvelope)
-	}
-	cfg = normalizeDocumentConfig(cfg)
-	keyContext := DocumentKeyContext(identity)
-	dataKey, err := cfg.Transit.GenerateDataKey(ctx, GenerateDataKeyRequest{
-		Context: keyContext,
-		Bits:    dataKeyBits256,
-	})
+	encryptor, err := NewDocumentEncryptor(ctx, cfg, identity, body)
 	if err != nil {
 		return EncryptedDocument{}, err
 	}
-	defer zeroBytes(dataKey.Plaintext)
+	defer encryptor.Close()
 
-	aead, err := newPayloadAEAD(dataKey.Plaintext)
+	var frames [][]byte
+	for {
+		frame, _, err := encryptor.NextFrame()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return EncryptedDocument{}, err
+		}
+		frames = append(frames, frame)
+	}
+	info, err := encryptor.Finalize()
 	if err != nil {
 		return EncryptedDocument{}, err
 	}
-
-	noncePrefix := make([]byte, noncePrefixSize)
-	if _, err := rand.Read(noncePrefix); err != nil {
-		return EncryptedDocument{}, fmt.Errorf("encryption nonce generation failed: %w", err)
-	}
-
-	frames, plaintextSHA, plaintextSize, ciphertextSize, err := encryptFrames(aead, noncePrefix, identity, body)
-	if err != nil {
-		return EncryptedDocument{}, err
-	}
-	envelope, err := MarshalEnvelope(Envelope{
-		Version:          EnvelopeVersion,
-		TransitMount:     cfg.TransitMount,
-		TransitKey:       cfg.TransitKey,
-		KeyVersion:       dataKey.Version,
-		WrappedDataKey:   dataKey.WrappedKey,
-		PayloadAlgorithm: PayloadAlgorithmAES256GCM,
-		NoncePrefix:      noncePrefix,
-		PlaintextSHA256:  plaintextSHA[:],
-		PlaintextLength:  plaintextSize,
-		CiphertextLength: ciphertextSize,
-	})
-	if err != nil {
-		return EncryptedDocument{}, err
-	}
-
 	return EncryptedDocument{
-		Envelope: envelope,
-		// encryptFrames returns freshly sealed frames that alias nothing, so
-		// they can be handed back directly without a defensive deep copy.
+		Envelope:        info.Envelope,
 		Frames:          frames,
-		PlaintextSHA256: plaintextSHA,
-		PlaintextSize:   plaintextSize,
-		CiphertextSize:  ciphertextSize,
+		PlaintextSHA256: info.PlaintextSHA256,
+		PlaintextSize:   info.PlaintextSize,
+		CiphertextSize:  info.CiphertextSize,
 	}, nil
 }
 
+// DecryptDocument buffers the whole plaintext in memory. Prefer
+// DocumentDecryptor on paths that handle full-size Documents.
 func DecryptDocument(
 	ctx context.Context,
 	transit Transit,
@@ -131,39 +109,25 @@ func DecryptDocument(
 	expectedSHA [sha256.Size]byte,
 	expectedSize int64,
 ) ([]byte, error) {
-	if transit == nil {
-		return nil, fmt.Errorf("encryption transit is required: %w", ErrUnavailable)
-	}
-	envelope, err := ParseEnvelope(envelopeBytes)
+	decryptor, err := NewDocumentDecryptor(ctx, transit, identity, envelopeBytes, expectedSHA, expectedSize)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateDecryptMetadata(envelope, frames, expectedSHA, expectedSize); err != nil {
-		return nil, err
-	}
+	defer decryptor.Close()
 
-	unwrapped, err := transit.UnwrapDataKey(ctx, UnwrapDataKeyRequest{
-		WrappedKey: envelope.WrappedDataKey,
-		Context:    DocumentKeyContext(identity),
-	})
-	if err != nil {
+	// Preserve the pre-streaming contract of rejecting a ciphertext length
+	// mismatch before any frame is decrypted.
+	if framePayloadBytes(frames) != decryptor.envelope.CiphertextLength {
+		return nil, fmt.Errorf("%w: ciphertext length mismatch", ErrIntegrity)
+	}
+	reader := decryptor.Reader(NewSliceFrameSource(frames))
+	defer func() { _ = reader.Close() }()
+	plaintext := make([]byte, 0, max(0, int(framePayloadBytes(frames))-decryptor.aead.Overhead()*len(frames)))
+	buf := bytes.NewBuffer(plaintext)
+	if _, err := io.Copy(buf, reader); err != nil {
 		return nil, err
 	}
-	defer zeroBytes(unwrapped.Plaintext)
-
-	aead, err := newPayloadAEAD(unwrapped.Plaintext)
-	if err != nil {
-		return nil, err
-	}
-
-	plaintext, err := decryptFrames(aead, envelope.NoncePrefix, identity, frames)
-	if err != nil {
-		return nil, err
-	}
-	if err := verifyPlaintextIntegrity(plaintext, envelope, expectedSHA); err != nil {
-		return nil, err
-	}
-	return plaintext, nil
+	return buf.Bytes(), nil
 }
 
 func MarshalEnvelope(envelope Envelope) ([]byte, error) {
@@ -251,83 +215,6 @@ func validateEnvelopePayload(envelope Envelope) error {
 	default:
 		return nil
 	}
-}
-
-func validateDecryptMetadata(envelope Envelope, frames [][]byte, expectedSHA [sha256.Size]byte, expectedSize int64) error {
-	switch {
-	case expectedSize != envelope.PlaintextLength:
-		return fmt.Errorf("%w: plaintext length metadata mismatch", ErrIntegrity)
-	case !bytes.Equal(expectedSHA[:], envelope.PlaintextSHA256):
-		return fmt.Errorf("%w: plaintext SHA-256 metadata mismatch", ErrIntegrity)
-	case framePayloadBytes(frames) != envelope.CiphertextLength:
-		return fmt.Errorf("%w: ciphertext length mismatch", ErrIntegrity)
-	default:
-		return nil
-	}
-}
-
-func verifyPlaintextIntegrity(plaintext []byte, envelope Envelope, expectedSHA [sha256.Size]byte) error {
-	if int64(len(plaintext)) != envelope.PlaintextLength {
-		return fmt.Errorf("%w: plaintext length mismatch", ErrIntegrity)
-	}
-	gotSHA := sha256.Sum256(plaintext)
-	if !bytes.Equal(gotSHA[:], expectedSHA[:]) {
-		return fmt.Errorf("%w: plaintext SHA-256 mismatch", ErrIntegrity)
-	}
-	return nil
-}
-
-func encryptFrames(aead cipher.AEAD, noncePrefix []byte, identity DocumentIdentity, body io.Reader) ([][]byte, [sha256.Size]byte, int64, int64, error) {
-	plainFrameSize := defaultCiphertextFramePayload - aead.Overhead()
-	if plainFrameSize <= 0 {
-		return nil, [sha256.Size]byte{}, 0, 0, fmt.Errorf("%w: invalid AEAD overhead", ErrInvalidEnvelope)
-	}
-
-	hasher := sha256.New()
-	buf := make([]byte, plainFrameSize)
-	var frames [][]byte
-	var plaintextSize int64
-	var ciphertextSize int64
-	var frameSeq uint32
-
-	for {
-		n, readErr := io.ReadFull(body, buf)
-		if n > 0 {
-			plaintext := buf[:n]
-			hasher.Write(plaintext)
-			plaintextSize += int64(n)
-
-			ciphertext := aead.Seal(nil, frameNonce(noncePrefix, frameSeq), plaintext, frameAAD(identity, frameSeq))
-			frames = append(frames, ciphertext)
-			ciphertextSize += int64(len(ciphertext))
-			frameSeq++
-		}
-		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
-			break
-		}
-		if readErr != nil {
-			return nil, [sha256.Size]byte{}, 0, 0, fmt.Errorf("encryption read document: %w", readErr)
-		}
-	}
-
-	var digest [sha256.Size]byte
-	copy(digest[:], hasher.Sum(nil))
-	return frames, digest, plaintextSize, ciphertextSize, nil
-}
-
-func decryptFrames(aead cipher.AEAD, noncePrefix []byte, identity DocumentIdentity, frames [][]byte) ([]byte, error) {
-	plaintext := make([]byte, 0, max(0, int(framePayloadBytes(frames))-aead.Overhead()*len(frames)))
-	for i, frame := range frames {
-		if len(frame) < aead.Overhead() {
-			return nil, fmt.Errorf("%w: ciphertext frame %d too short", ErrIntegrity, i)
-		}
-		opened, err := aead.Open(nil, frameNonce(noncePrefix, uint32(i)), frame, frameAAD(identity, uint32(i)))
-		if err != nil {
-			return nil, fmt.Errorf("%w: decrypt frame %d", ErrIntegrity, i)
-		}
-		plaintext = append(plaintext, opened...)
-	}
-	return plaintext, nil
 }
 
 func newPayloadAEAD(key []byte) (cipher.AEAD, error) {

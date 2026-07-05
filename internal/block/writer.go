@@ -231,6 +231,51 @@ func (w *Writer) AppendDocumentFrames(txID, docName, contentType string, frames 
 	}, nil
 }
 
+// AppendDocumentFrameSource streams prepared ciphertext Frames into the
+// Block without buffering the whole Document. next returns each payload and
+// whether it is the final Frame; it returns io.EOF only when the Document
+// has no Frames at all, which is an error. The Document SHA-256 and size are
+// only known to the caller after the source is exhausted, so this returns
+// the first Frame offset and Frame count instead of a full AppendResult; on
+// error the caller must Truncate back to the starting offset.
+func (w *Writer) AppendDocumentFrameSource(next func() (payload []byte, last bool, err error)) (int64, uint32, error) {
+	if w.closed {
+		return 0, 0, errors.New("block: writer is closed")
+	}
+
+	firstOffset := w.offset
+	var frameSeq uint32
+	for {
+		payload, last, err := next()
+		if err != nil {
+			if errors.Is(err, io.EOF) && frameSeq == 0 {
+				return 0, 0, errors.New("block: document has no frames")
+			}
+			return 0, 0, err
+		}
+		if err := WriteFrame(w.f, FrameHeader{
+			DocSeq:   w.docSeq,
+			FrameSeq: frameSeq,
+			Flags:    frameFlags(frameSeq, last),
+		}, payload); err != nil {
+			return 0, 0, fmt.Errorf("block: write streamed frame %d: %w", frameSeq, err)
+		}
+		w.offset += int64(FrameHeaderSize + len(payload))
+		frameSeq++
+		if last {
+			break
+		}
+	}
+
+	if err := w.f.Sync(); err != nil {
+		return 0, 0, fmt.Errorf("block: fsync after document: %w", err)
+	}
+
+	w.docSeq++
+	w.docCount++
+	return firstOffset, frameSeq, nil
+}
+
 // writeDocFrames reads one frame ahead of what it writes so the final frame
 // is known before its header is emitted: io.ReadFull returns nil (not io.EOF)
 // when a read exactly fills the buffer, so bodies sized an exact multiple of
