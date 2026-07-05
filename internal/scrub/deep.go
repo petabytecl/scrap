@@ -153,16 +153,19 @@ func (ds *Deep) RunOnce(ctx context.Context) error {
 	}
 
 	start := time.Now()
-	// Clear any prior bad-disk suspicion at the top of each run; a run that
-	// re-encounters over-cap corruption sets it again below, so the gauge
-	// reflects current disk health instead of latching until restart.
-	ds.cfg.Metrics.SetBadDiskSuspected(false)
 
 	blocks, err := ds.cfg.BlockLister.ListSealedBlocks(ds.cfg.OpenBlockID)
 	if err != nil {
 		ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
 		return err
 	}
+
+	// Clear any prior bad-disk suspicion only once the listing succeeds; a run
+	// that re-encounters over-cap corruption sets it again below, so the gauge
+	// reflects current disk health instead of latching until restart. Clearing
+	// before the listing would reset the latched gauge to healthy on every cycle
+	// even while an actual disk failure keeps the listing itself failing.
+	ds.cfg.Metrics.SetBadDiskSuspected(false)
 
 	blocks = ds.filterFromCheckpoint(blocks)
 	total := len(blocks)

@@ -15,9 +15,13 @@ import (
 
 type stubBlockLister struct {
 	blocks []block.Info
+	err    error
 }
 
 func (s *stubBlockLister) ListSealedBlocks(openBlockID uint64) ([]block.Info, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	var out []block.Info
 	for _, b := range s.blocks {
 		if b.BlockID != openBlockID {
@@ -241,6 +245,31 @@ func (s *stubCheckpointStore) SetDeepScrubCheckpoint(blockID uint64) {
 func (s *stubCheckpointStore) ClearDeepScrubCheckpoint() {
 	s.blockID = 0
 	s.set = false
+}
+
+func TestDeepScrubber_KeepsBadDiskGaugeWhenListingFails(t *testing.T) {
+	metrics := &deepScrubMetrics{}
+	// A prior cycle latched the gauge on over-cap corruption.
+	metrics.badDiskSet = true
+
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:       &stubBlockLister{err: errors.New("read dir: input/output error")},
+		BlockVerifier:     &orderedVerifier{},
+		QuarantineManager: &stubQuarantineManager{},
+		Metrics:           metrics,
+		OpenBlockID:       99,
+		CorruptCap:        5,
+	})
+
+	if err := ds.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce with failing listing succeeded, want error")
+	}
+	if !metrics.badDiskSet {
+		t.Fatal("bad-disk gauge cleared despite a failing listing; suspicion must survive until a listing succeeds")
+	}
+	if metrics.runsError != 1 {
+		t.Fatalf("error runs = %d, want 1", metrics.runsError)
+	}
 }
 
 func TestDeepScrubber_CleanBlocks(t *testing.T) {
