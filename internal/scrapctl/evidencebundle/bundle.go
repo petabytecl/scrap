@@ -88,6 +88,7 @@ type signalResults struct {
 
 type generationState struct {
 	paths        bundlePaths
+	finalRoot    string
 	marker       string
 	baseline     []metricSample
 	stressOutput string
@@ -112,17 +113,29 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := captureRunEvidence(ctx, cfg, opts, &state); err != nil {
-		return Result{}, err
-	}
-	if err := captureTelemetryEvidence(ctx, cfg, opts, &state); err != nil {
-		return Result{}, err
-	}
-	gate, err := finalizeBundle(ctx, cfg, opts, &state)
+	gate, err := generateIntoStaging(ctx, cfg, opts, &state)
 	if err != nil {
+		// The bundle is built in a .partial staging directory so a mid-run
+		// failure never leaves anything at the final path; drop the staging
+		// directory instead of leaving an ambiguous partial bundle behind.
+		_ = os.RemoveAll(state.paths.root)
 		return Result{}, err
 	}
-	return Result{BundlePath: state.paths.root, Gate: gate}, nil
+	if err := os.Rename(state.paths.root, state.finalRoot); err != nil {
+		_ = os.RemoveAll(state.paths.root)
+		return Result{}, fmt.Errorf("finalize bundle %s: %w", state.finalRoot, err)
+	}
+	return Result{BundlePath: state.finalRoot, Gate: gate}, nil
+}
+
+func generateIntoStaging(ctx context.Context, cfg Config, opts Options, state *generationState) (Gate, error) {
+	if err := captureRunEvidence(ctx, cfg, opts, state); err != nil {
+		return Gate{}, err
+	}
+	if err := captureTelemetryEvidence(ctx, cfg, opts, state); err != nil {
+		return Gate{}, err
+	}
+	return finalizeBundle(ctx, cfg, opts, state)
 }
 
 func finalizeBundle(ctx context.Context, cfg Config, opts Options, state *generationState) (Gate, error) {
@@ -163,14 +176,18 @@ func initializeBundle(ctx context.Context, cfg Config, opts Options) (generation
 	timestamp := opts.Clock.Now().UTC()
 	shortSHA := commandOutput(ctx, opts.Command, "unknown", "git", "-C", cfg.RepoRoot, "rev-parse", "--short", "HEAD")
 	bundleName := cfg.Scenario + "-" + timestamp.Format(timestampFormat) + "-" + shortSHA
+	finalRoot := filepath.Join(cfg.BundleDir, bundleName)
+	// Stage under a .partial sibling and rename into place on success so a
+	// bundle at the final path is always complete.
+	stagingRoot := finalRoot + ".partial"
 	paths := bundlePaths{
-		root:     filepath.Join(cfg.BundleDir, bundleName),
-		metrics:  filepath.Join(cfg.BundleDir, bundleName, "metrics"),
-		traces:   filepath.Join(cfg.BundleDir, bundleName, "traces"),
-		logs:     filepath.Join(cfg.BundleDir, bundleName, "logs"),
-		profiles: filepath.Join(cfg.BundleDir, bundleName, "profiles"),
-		eviction: filepath.Join(cfg.BundleDir, bundleName, "eviction"),
-		security: filepath.Join(cfg.BundleDir, bundleName, "security"),
+		root:     stagingRoot,
+		metrics:  filepath.Join(stagingRoot, "metrics"),
+		traces:   filepath.Join(stagingRoot, "traces"),
+		logs:     filepath.Join(stagingRoot, "logs"),
+		profiles: filepath.Join(stagingRoot, "profiles"),
+		eviction: filepath.Join(stagingRoot, "eviction"),
+		security: filepath.Join(stagingRoot, "security"),
 	}
 	if err := createBundleDirs(paths); err != nil {
 		return generationState{}, err
@@ -181,10 +198,11 @@ func initializeBundle(ctx context.Context, cfg Config, opts Options) (generation
 	opts.logf("Scenario: %s (workers=%d, duration=%s, doc_size=%d)", cfg.Scenario, cfg.Workers, cfg.Duration, cfg.DocSizeBytes)
 
 	if err := writeRunConfig(ctx, cfg, opts.Command, timestamp, shortSHA, paths.root); err != nil {
+		_ = os.RemoveAll(stagingRoot)
 		return generationState{}, err
 	}
 	opts.logf("Wrote config.json")
-	return generationState{paths: paths, marker: logMarker}, nil
+	return generationState{paths: paths, finalRoot: finalRoot, marker: logMarker}, nil
 }
 
 func captureRunEvidence(ctx context.Context, cfg Config, opts Options, state *generationState) error {
@@ -326,9 +344,9 @@ func writeGate(_ context.Context, opts Options, state generationState) (Gate, er
 	}
 	opts.logf("Wrote gates.json")
 	if gate.Pass {
-		opts.logf("PASS - Evidence bundle: %s", state.paths.root)
+		opts.logf("PASS - Evidence bundle: %s", state.finalRoot)
 	} else {
-		opts.logf("FAIL - Evidence bundle: %s", state.paths.root)
+		opts.logf("FAIL - Evidence bundle: %s", state.finalRoot)
 	}
 	logBundleContents(state.paths.root, opts.logf)
 	return gate, nil

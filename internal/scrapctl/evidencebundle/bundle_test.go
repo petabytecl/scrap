@@ -356,6 +356,57 @@ func TestManifestBroadRowsFailWhenSubEvidenceIsMissing(t *testing.T) {
 	assertManifestEvidenceStatus(t, securityResult.BundlePath, "openbao_readiness", "FAIL")
 }
 
+func TestGenerateLeavesNoPartialBundleOnMidRunFailure(t *testing.T) {
+	bundleDir := t.TempDir()
+	signals := fakeSignals{}
+	securityReportPath := writeSecurityReportFixture(t, signals)
+	clock := &sequenceClock{values: []time.Time{
+		time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC),
+	}}
+
+	_, err := Generate(context.Background(), Options{
+		Config: Config{
+			RepoRoot:           "/repo",
+			BundleDir:          bundleDir,
+			GrafanaURL:         "http://grafana.local",
+			AdminURL:           "http://admin.local",
+			MimirProxy:         "http://grafana.local/mimir",
+			TempoProxy:         "http://grafana.local/tempo",
+			LokiProxy:          "http://grafana.local/loki",
+			PyroscopeURL:       "http://grafana.local/pyroscope",
+			SecurityReportPath: securityReportPath,
+			Scenario:           "throughput",
+			StressAddr:         "127.0.0.1:18090",
+			Workers:            8,
+			Duration:           "60s",
+			DocSizeBytes:       16384,
+			Settle:             time.Second,
+		},
+		Clock:        clock,
+		Sleeper:      func(context.Context, time.Duration) error { return errors.New("telemetry settle interrupted") },
+		Command:      fakeMetadataCommand{},
+		StressRunner: fakeStressRunner{scenario: "throughput", signals: signals},
+		AdminProbe:   fakeAdminProbe{signals: signals},
+		HTTPClient:   &http.Client{Transport: &fakeEvidenceTransport{signals: signals}},
+		Logf:         func(string, ...any) {},
+	})
+	if err == nil {
+		t.Fatal("Generate succeeded, want mid-run failure")
+	}
+
+	entries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		t.Fatalf("read bundle dir: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("bundle dir entries after failure = %v, want none", names)
+	}
+}
+
 func generateTestBundle(t *testing.T, signals fakeSignals) Result {
 	t.Helper()
 
