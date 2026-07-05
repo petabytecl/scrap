@@ -27,3 +27,91 @@
 ## Deferred from: code review of 2-6-multi-shard-evidence-closure (2026-06-11)
 
 - CI runner migration is outside Story 2.6 scope [.github/workflows/ci.yml:21]: the runner migration was committed before the Story 2.6 evidence implementation and needs separate CI evidence if it is kept. Deferred as pre-existing relative to this story review.
+
+## Deferred from: full-project adversarial code review (2026-07-05)
+
+Parallel Blind Hunter + Edge Case Hunter passes over the whole `internal/`
+tree; verified fixes committed on branch `code-review-hardening`. The items
+below were deferred because they need a bigger change (streaming APIs, new
+subsystem, signature changes) or a design decision. Each is mirrored to a
+GitHub issue on milestone `storage-gateway-v2`.
+
+### DW-1: raft has no snapshot creation, log compaction, or WAL segment release
+
+origin: full-project code review (consensus & transport), 2026-07-05
+location: internal/raft/node.go (Ready loop; storage/WAL lifecycle)
+severity: critical
+reason: The node loads and receives snapshots but never calls CreateSnapshot/Compact/ReleaseLockTo, so MemoryStorage and the WAL grow without bound (eventual OOM / disk exhaustion) and a lagging follower cannot be caught up via install-snapshot. Needs a snapshot subsystem + retention window + likely an ADR. Mirror: GitHub #443.
+status: open
+
+### DW-2: EncryptDocument/DecryptDocument buffer whole documents in memory
+
+origin: full-project code review (security & telemetry), 2026-07-05
+location: internal/encryption/envelope.go
+severity: high
+reason: Frames are accumulated into [][]byte on encrypt and returned as one []byte on decrypt, wired into shard write/read/verify — an authenticated memory-amplification vector against CONTEXT.md's bounded-memory invariant. Fixing requires a streaming crypto API across callers. Mirror: GitHub #444.
+status: open
+
+### DW-3: avscan scan watermark stalls on a permanent Block-ID gap; completed map is unbounded
+
+origin: full-project code review (security & telemetry), 2026-07-05
+location: internal/avscan/scheduler.go (advanceProgressThroughCompleted; completed map)
+severity: high
+reason: The frontier only advances through contiguous Block IDs, so a quarantined/evicted block at frontier+1 pins the durable watermark forever (full re-scan every restart); the in-memory completed map also grows without bound. Needs gap-aware frontier advance + map pruning + a test matrix. Mirror: GitHub #445.
+status: open
+
+### DW-4: NewRateLimiter silently drops invalid surface budgets (fails open)
+
+origin: full-project code review (security & telemetry), 2026-07-05
+location: internal/security/ratelimit.go (NewRateLimiter)
+severity: medium
+reason: Surfaces with Limit<=0/Window<=0 are skipped and the constructor has no error return, so a hand-built policy can fail open. Production goes through the validating LoadRateLimitPolicy, so live risk is low; the fix is a signature change. Mirror: GitHub #446.
+status: open
+
+### DW-5: audit Policy.MaxEventBytes and FailureMode are validated but never enforced
+
+origin: full-project code review (security & telemetry), 2026-07-05
+location: internal/audit/audit.go
+severity: low
+reason: Both fields are checked at construction but consulted nowhere — dead config that reads as an enforced control. Either wire them (truncate/reject oversized events; act on FailureMode on sink write failure) or remove them; needs a semantics decision. Mirror: GitHub #447.
+status: open
+
+### DW-6: ApplyEvictionPlan caches a terminal Failed result and strands the rest of the plan
+
+origin: full-project code review (backend/eviction/scrub), 2026-07-05
+location: internal/eviction/apply.go; internal/eviction/campaigns.go
+severity: medium
+reason: A single non-context block failure breaks the loop with cacheable=true, so the Failed result is cached and re-issuing apply for the same plan returns it without retrying; later Selected blocks are never attempted. Needs a transient-vs-permanent cacheability distinction or continue-past-failure — a retry-semantics decision. Mirror: GitHub #448.
+status: open
+
+### DW-7: FS ListObjects prefix semantics diverge from S3 (path-segment prune vs byte prefix)
+
+origin: full-project code review (backend/eviction/scrub), 2026-07-05
+location: internal/backend/fs.go (listWalkRoot) vs internal/backend/s3.go
+severity: low
+reason: A partial-segment prefix returns different sets on FS vs S3, so the provider-neutral Backend contract is not truly interchangeable. Latent — all current callers pass full-segment, slash-terminated prefixes. Fix: walk the parent and filter by string prefix, or enforce slash-terminated prefixes, plus a conformance test. Mirror: GitHub #449.
+status: open
+
+### DW-8: evidence-bundle log-value redaction is a denylist net with structural holes
+
+origin: full-project code review (CLI & cmd), 2026-07-05
+location: internal/scrapctl/evidencebundle/http.go (redactLogValue/containsSensitiveLogString)
+severity: medium
+reason: Only host-path fragments are redacted; arbitrary sensitive tokens or bare-value identifiers in free-text log messages pass through, relying on scrapd's upstream hashing contract as backstop. (The /data host-root gap in this denylist was fixed and both layers now share sensitiveHostPathRoots; this is the residual structural weakness.) Fix: positive allowlist of permitted shapes, or document the upstream-hashing dependency. Mirror: GitHub #450.
+status: open
+
+### DW-9: evidence-bundle leaves a partial directory on mid-run error; no atomic finalize
+
+origin: full-project code review (CLI & cmd), 2026-07-05
+location: internal/scrapctl/evidencebundle/bundle.go (Generate)
+severity: low
+reason: Any post-init error returns without removing the partially-written bundle or emitting a completeness marker; consumers can only infer completeness from manifest.json presence. Fix: write to a temp dir and atomically rename on success, or emit a terminal marker. Low urgency (CLI returns non-zero). Mirror: GitHub #451.
+status: open
+
+### DW-10: shard diagnostics snapshot is non-atomic across sub-reads
+
+origin: full-project code review (CLI & cmd), 2026-07-05
+location: internal/cmd/shard_diagnostics.go (applyLiveShardDiagnostics)
+severity: low
+reason: Readiness/leader/pressure/scanner/eviction fields are read as separate calls with no shared lock, so a concurrent leadership change can yield inconsistent fields. Display-only for a best-effort read-only endpoint; filed for visibility and may be closed as accepted. Mirror: GitHub #452.
+status: open
