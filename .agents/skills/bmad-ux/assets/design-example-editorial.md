@@ -115,7 +115,7 @@ The style is **Editorial Minimalism** with **Tactile** accents. It prioritizes b
 
 ## Colors
 
-The palette is inspired by natural fibers and weathered landscapes.
+The palette is inspired by natural fibers and weathered landscapes. 
 - **Warm White (#F9F7F2)** serves as the primary canvas, providing a soft, non-clinical background that reduces eye strain.
 - **Bone (#E3DED1)** and **Dust (#C2B9A7)** are used for structural depth, subtle dividers, and secondary surfaces.
 - **Tobacco (#735C41)** is the primary ink color, used for high-contrast typography and essential UI elements.
@@ -123,9 +123,9 @@ The palette is inspired by natural fibers and weathered landscapes.
 
 ## Typography
 
-Typography is the primary vehicle for the brand’s sophisticated voice.
+Typography is the primary vehicle for the brand’s sophisticated voice. 
 - **Libre Caslon Text** is the voice of the curator. Its classic proportions and elegant serifs provide the editorial weight required for discovery and storytelling.
-- **DM Sans** provides a quiet, functional counterpoint. It is used for body copy and navigational elements, ensuring clarity without competing with the headlines.
+- **DM Sans** provides a quiet, functional counterpoint. It is used for body copy and navigational elements, ensuring clarity without competing with the headlines. 
 
 Large display titles should often use "optical sizing" logic—tighter leading and slightly negative letter spacing to create a cohesive visual block. Labels are always tracked out (0.1em) to maintain a sense of airy premiumness.
 
@@ -138,13 +138,13 @@ Spacing is generous. The `editorial-gap` (80px+) should be used between major co
 ## Elevation & Depth
 
 Depth is communicated through **Tonal Layering** and **Ambient Shadows** rather than sharp borders.
-- **Surfaces:** Use the "Bone" color to define containers against the "Warm White" base.
+- **Surfaces:** Use the "Bone" color to define containers against the "Warm White" base. 
 - **Shadows:** Shadows are highly diffused and tinted with the "Tobacco" hue (`rgba(115, 92, 65, 0.08)`). They should feel like a soft glow of light hitting fabric, with large blur radii (20px+) and very low opacity.
 - **Borders:** When borders are necessary, they are 1px thick and rendered in "Dust," creating a "ghost" outline that barely separates elements from the background.
 
 ## Shapes
 
-The shape language is **Soft (0.25rem)**. While a sharp edge feels too aggressive and a pill-shape feels too digital/tech-heavy, a subtle rounding of corners mimics the natural softening of woven textiles over time.
+The shape language is **Soft (0.25rem)**. While a sharp edge feels too aggressive and a pill-shape feels too digital/tech-heavy, a subtle rounding of corners mimics the natural softening of woven textiles over time. 
 
 Larger containers (Cards, Modals) may use `rounded-lg` (0.5rem) to emphasize their tactile, object-like quality. Imagery should always follow these corner radii to maintain a cohesive, "framed" appearance.
 
