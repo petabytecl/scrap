@@ -33,9 +33,12 @@ func ApplyBlocks(ctx context.Context, plan Plan, now time.Time, apply ApplyBlock
 		}
 		result.Blocks = append(result.Blocks, blockResult)
 		result = countApplyBlock(result, blockResult)
-		if blockResult.Status == ApplyBlockStatusFailed {
-			break
-		}
+	}
+	// Failed blocks are retryable: re-applying the plan attempts them again
+	// while already-evicted blocks re-classify as skips, so a result with
+	// failures must not be cached as terminal.
+	if result.FailedBlocks > 0 {
+		cacheable = false
 	}
 	result.Status = ApplyStatus(result)
 	return result, cacheable

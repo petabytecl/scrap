@@ -174,9 +174,12 @@ func TestCampaignsKeepExpiredRunningApplyUntilFinish(t *testing.T) {
 	}
 }
 
-func TestApplyBlocksCountsResultsAndStopsAtFailure(t *testing.T) {
+func TestApplyBlocksContinuesPastFailureAndIsNotCacheable(t *testing.T) {
 	plan := campaignPlanForTest("plan-1")
-	plan.Selected = append(plan.Selected, PlanBlock{BlockID: 2, ShardID: 7, SizeBytes: 2048})
+	plan.Selected = append(plan.Selected,
+		PlanBlock{BlockID: 2, ShardID: 7, SizeBytes: 2048},
+		PlanBlock{BlockID: 3, ShardID: 7, SizeBytes: 4096},
+	)
 	var observed []ApplyBlock
 
 	result, cacheable := ApplyBlocks(
@@ -184,30 +187,40 @@ func TestApplyBlocksCountsResultsAndStopsAtFailure(t *testing.T) {
 		plan,
 		time.Unix(1700, 0),
 		func(selected PlanBlock) ApplyBlock {
-			if selected.BlockID == 1 {
-				return ApplyBlock{
-					BlockID:    selected.BlockID,
-					ShardID:    selected.ShardID,
-					SizeBytes:  selected.SizeBytes,
-					Status:     ApplyBlockStatusEvicted,
-					BytesFreed: selected.SizeBytes,
-				}
+			if selected.BlockID == 2 {
+				return FailedBlock(selected, errors.New("boom"))
 			}
-			return FailedBlock(selected, errors.New("boom"))
+			return ApplyBlock{
+				BlockID:    selected.BlockID,
+				ShardID:    selected.ShardID,
+				SizeBytes:  selected.SizeBytes,
+				Status:     ApplyBlockStatusEvicted,
+				BytesFreed: selected.SizeBytes,
+			}
 		},
 		func(block ApplyBlock) {
 			observed = append(observed, block)
 		},
 	)
 
-	if !cacheable {
-		t.Fatal("cacheable = false, want true for completed apply attempt")
+	if cacheable {
+		t.Fatal("cacheable = true, want false so a re-apply retries the failed Block")
 	}
-	if result.Status != ApplyStatusFailed || result.EvictedBlocks != 1 || result.FailedBlocks != 1 || result.BytesFreed != 1024 {
-		t.Fatalf("result = %+v, want one evicted Block and one failure", result)
+	if result.Status != ApplyStatusFailed || result.EvictedBlocks != 2 || result.FailedBlocks != 1 || result.BytesFreed != 1024+4096 {
+		t.Fatalf("result = %+v, want two evicted Blocks and one failure", result)
 	}
-	if len(observed) != 2 || observed[0].Status != ApplyBlockStatusEvicted || observed[1].Status != ApplyBlockStatusFailed {
-		t.Fatalf("observed = %+v, want evicted then failed", observed)
+	assertApplyBlockStatusOrder(t, observed, ApplyBlockStatusEvicted, ApplyBlockStatusFailed, ApplyBlockStatusEvicted)
+}
+
+func assertApplyBlockStatusOrder(t *testing.T, blocks []ApplyBlock, want ...string) {
+	t.Helper()
+	if len(blocks) != len(want) {
+		t.Fatalf("blocks = %+v, want statuses %v", blocks, want)
+	}
+	for i, status := range want {
+		if blocks[i].Status != status {
+			t.Fatalf("blocks = %+v, want statuses %v", blocks, want)
+		}
 	}
 }
 
