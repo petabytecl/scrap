@@ -42,7 +42,7 @@ origin: full-project code review (consensus & transport), 2026-07-05
 location: internal/raft/node.go (Ready loop; storage/WAL lifecycle)
 severity: critical
 reason: The node loads and receives snapshots but never calls CreateSnapshot/Compact/ReleaseLockTo, so MemoryStorage and the WAL grow without bound (eventual OOM / disk exhaustion) and a lagging follower cannot be caught up via install-snapshot. Needs a snapshot subsystem + retention window + likely an ADR. Mirror: GitHub #443.
-status: open
+status: resolved (2026-07-05) — snapshot creation/compaction/WAL release + purge on branch code-review-hardening (e2b8d30, ADR 0029); foreign install-snapshot fails closed with re-seed guidance, automated catch-up via replica repair is the documented follow-up
 
 ### DW-2: EncryptDocument/DecryptDocument buffer whole documents in memory
 
@@ -50,7 +50,7 @@ origin: full-project code review (security & telemetry), 2026-07-05
 location: internal/encryption/envelope.go
 severity: high
 reason: Frames are accumulated into [][]byte on encrypt and returned as one []byte on decrypt, wired into shard write/read/verify — an authenticated memory-amplification vector against CONTEXT.md's bounded-memory invariant. Fixing requires a streaming crypto API across callers. Mirror: GitHub #444.
-status: open
+status: resolved (2026-07-05) — streaming DocumentEncryptor/DocumentDecryptor wired into shard write/read/verify (617bf83, ADR 0028); remaining whole-Document copy is the peer replication buffer, tracked by the pre-existing peer transport deferred item
 
 ### DW-3: avscan scan watermark stalls on a permanent Block-ID gap; completed map is unbounded
 
@@ -58,7 +58,7 @@ origin: full-project code review (security & telemetry), 2026-07-05
 location: internal/avscan/scheduler.go (advanceProgressThroughCompleted; completed map)
 severity: high
 reason: The frontier only advances through contiguous Block IDs, so a quarantined/evicted block at frontier+1 pins the durable watermark forever (full re-scan every restart); the in-memory completed map also grows without bound. Needs gap-aware frontier advance + map pruning + a test matrix. Mirror: GitHub #445.
-status: open
+status: resolved (2026-07-05) — gap-aware frontier advance + restored-block rescan eligibility + completed-map pruning (720a50f)
 
 ### DW-4: NewRateLimiter silently drops invalid surface budgets (fails open)
 
@@ -66,7 +66,7 @@ origin: full-project code review (security & telemetry), 2026-07-05
 location: internal/security/ratelimit.go (NewRateLimiter)
 severity: medium
 reason: Surfaces with Limit<=0/Window<=0 are skipped and the constructor has no error return, so a hand-built policy can fail open. Production goes through the validating LoadRateLimitPolicy, so live risk is low; the fix is a signature change. Mirror: GitHub #446.
-status: open
+status: resolved (2026-07-05) — NewRateLimiter returns an error on invalid/duplicate/unknown surface budgets (ed198d3)
 
 ### DW-5: audit Policy.MaxEventBytes and FailureMode are validated but never enforced
 
@@ -74,7 +74,7 @@ origin: full-project code review (security & telemetry), 2026-07-05
 location: internal/audit/audit.go
 severity: low
 reason: Both fields are checked at construction but consulted nowhere — dead config that reads as an enforced control. Either wire them (truncate/reject oversized events; act on FailureMode on sink write failure) or remove them; needs a semantics decision. Mirror: GitHub #447.
-status: open
+status: resolved (2026-07-05) — PolicySink enforces MaxEventBytes (reject oversized) and FailureMode (fail_closed propagates, fail_open logs and drops); wired in newAppAuditSink (8ef00e9)
 
 ### DW-6: ApplyEvictionPlan caches a terminal Failed result and strands the rest of the plan
 
@@ -82,7 +82,7 @@ origin: full-project code review (backend/eviction/scrub), 2026-07-05
 location: internal/eviction/apply.go; internal/eviction/campaigns.go
 severity: medium
 reason: A single non-context block failure breaks the loop with cacheable=true, so the Failed result is cached and re-issuing apply for the same plan returns it without retrying; later Selected blocks are never attempted. Needs a transient-vs-permanent cacheability distinction or continue-past-failure — a retry-semantics decision. Mirror: GitHub #448.
-status: open
+status: resolved (2026-07-05) — ApplyBlocks continues past per-block failures and results with failures are not cached, so re-apply retries exactly the failed blocks (7dd33db)
 
 ### DW-7: FS ListObjects prefix semantics diverge from S3 (path-segment prune vs byte prefix)
 
@@ -90,7 +90,7 @@ origin: full-project code review (backend/eviction/scrub), 2026-07-05
 location: internal/backend/fs.go (listWalkRoot) vs internal/backend/s3.go
 severity: low
 reason: A partial-segment prefix returns different sets on FS vs S3, so the provider-neutral Backend contract is not truly interchangeable. Latent — all current callers pass full-segment, slash-terminated prefixes. Fix: walk the parent and filter by string prefix, or enforce slash-terminated prefixes, plus a conformance test. Mirror: GitHub #449.
-status: open
+status: resolved (2026-07-05) — FS listWalkRoot prunes only to the parent of the last (possibly partial) segment; byte-prefix parity locked by test (24f058c)
 
 ### DW-8: evidence-bundle log-value redaction is a denylist net with structural holes
 
@@ -98,7 +98,7 @@ origin: full-project code review (CLI & cmd), 2026-07-05
 location: internal/scrapctl/evidencebundle/http.go (redactLogValue/containsSensitiveLogString)
 severity: medium
 reason: Only host-path fragments are redacted; arbitrary sensitive tokens or bare-value identifiers in free-text log messages pass through, relying on scrapd's upstream hashing contract as backstop. (The /data host-root gap in this denylist was fixed and both layers now share sensitiveHostPathRoots; this is the residual structural weakness.) Fix: positive allowlist of permitted shapes, or document the upstream-hashing dependency. Mirror: GitHub #450.
-status: open
+status: resolved (2026-07-05) — log evidence rebuilt through a positive allowlist (enum status/resultType, bounded labels, timestamps only); free text never copied (d09e319)
 
 ### DW-9: evidence-bundle leaves a partial directory on mid-run error; no atomic finalize
 
@@ -106,7 +106,7 @@ origin: full-project code review (CLI & cmd), 2026-07-05
 location: internal/scrapctl/evidencebundle/bundle.go (Generate)
 severity: low
 reason: Any post-init error returns without removing the partially-written bundle or emitting a completeness marker; consumers can only infer completeness from manifest.json presence. Fix: write to a temp dir and atomically rename on success, or emit a terminal marker. Low urgency (CLI returns non-zero). Mirror: GitHub #451.
-status: open
+status: resolved (2026-07-05) — bundle staged under <name>.partial and renamed atomically on success; failures remove staging (2eabe34)
 
 ### DW-10: shard diagnostics snapshot is non-atomic across sub-reads
 
