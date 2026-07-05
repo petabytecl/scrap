@@ -63,7 +63,7 @@ func TestPrincipalInterceptorRejectsMissingOrNonTLSPeer(t *testing.T) {
 func TestPrincipalInterceptorAuditsAndRateLimitsEarlyDenials(t *testing.T) {
 	authz := rolePolicyAuthorizerForPrincipal(t, "spiffe://scrap/cell/cell-a/member/other/member-2", security.RoleDocumentReader)
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter := mustNewRateLimiter(t, security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfacePublic, Limit: 1, Window: time.Minute},
 		},

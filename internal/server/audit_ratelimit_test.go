@@ -20,7 +20,7 @@ import (
 func TestDocumentServerAuditsAndRateLimitsPublicReads(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter := mustNewRateLimiter(t, security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfacePublic, Limit: 1, Window: time.Minute},
 		},
@@ -214,4 +214,13 @@ func assertPublicDeniedAuditNoLeaks(t *testing.T, events []audit.Event) {
 			t.Fatalf("public denial audit leaked %q in %+v", forbidden, events)
 		}
 	}
+}
+
+func mustNewRateLimiter(t *testing.T, policy security.RateLimitPolicy) *security.RateLimiter {
+	t.Helper()
+	limiter, err := security.NewRateLimiter(policy)
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
+	return limiter
 }

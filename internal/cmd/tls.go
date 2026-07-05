@@ -131,16 +131,16 @@ func newAppAuditSink(cfg Config, logger *slog.Logger) (audit.Sink, error) {
 
 func newAppRateLimiter(cfg Config, observer security.RateLimitObserver) (*security.RateLimiter, error) {
 	if !appSecurityControlsEnabled(cfg) {
-		return security.NewRateLimiter(security.RateLimitPolicy{}), nil
+		return security.NewRateLimiter(security.RateLimitPolicy{})
 	}
 	if cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.RateLimits.PolicyPath) == "" {
-		return security.NewRateLimiter(security.RateLimitPolicy{}, security.WithRateLimitObserver(observer)), nil
+		return security.NewRateLimiter(security.RateLimitPolicy{}, security.WithRateLimitObserver(observer))
 	}
 	policy, err := security.LoadRateLimitPolicy(cfg.ProductionGates.RateLimits.PolicyPath)
 	if err != nil {
 		return nil, fmt.Errorf("rate-limit policy: %w", err)
 	}
-	return security.NewRateLimiter(policy, security.WithRateLimitObserver(observer)), nil
+	return security.NewRateLimiter(policy, security.WithRateLimitObserver(observer))
 }
 
 func newAppTransit(cfg Config) (encryption.Transit, error) {

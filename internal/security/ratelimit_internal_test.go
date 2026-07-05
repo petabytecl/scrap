@@ -8,11 +8,14 @@ import (
 
 func TestRateLimiterPrunesExpiredKeys(t *testing.T) {
 	now := time.Unix(10, 0)
-	limiter := NewRateLimiter(RateLimitPolicy{
+	limiter, err := NewRateLimiter(RateLimitPolicy{
 		Surfaces: []RateLimitSurfacePolicy{
 			{Surface: RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
 		},
 	}, WithRateLimitNow(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
 
 	limiter.Allow(context.Background(), RateLimitSurfaceAdmin, "principal-a")
 	limiter.Allow(context.Background(), RateLimitSurfaceAdmin, "principal-b")

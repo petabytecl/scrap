@@ -152,11 +152,14 @@ func TestServerHealthRequiresAdminReaderBeforeShardDiagnostics(t *testing.T) {
 func TestServerHealthRateLimitsBeforeShardDiagnostics(t *testing.T) {
 	provider := &shardDiagnosticsProviderStub{}
 	authz := security.NewStaticAuthorizer()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter, err := security.NewRateLimiter(security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
 	srv := admin.New(admin.WithAuthorizer(authz), admin.WithRateLimiter(limiter), admin.WithShardDiagnosticsProvider(provider))
 
 	ctx := adminAuthContext(security.RoleAdminReader)
