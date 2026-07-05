@@ -67,7 +67,7 @@ func TestQuarantine_ListSealedExcludes(t *testing.T) {
 		t.Fatalf("Quarantine: %v", err)
 	}
 
-	sealed, err := block.ListSealedBlocks(dir, 99)
+	sealed, err := block.ListSealedBlocks(dir, 99, nil)
 	if err != nil {
 		t.Fatalf("ListSealedBlocks: %v", err)
 	}

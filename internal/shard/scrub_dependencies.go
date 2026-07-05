@@ -18,7 +18,7 @@ import (
 
 func (c *scrubCoordinator) ListSealedBlocks(_ uint64) ([]block.Info, error) {
 	openBlockID := c.core.currentOpenBlockID()
-	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID)
+	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID, c.baseLogger)
 	if err != nil {
 		return nil, err
 	}

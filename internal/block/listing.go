@@ -3,6 +3,7 @@ package block
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,7 +25,12 @@ func IdxFilePath(dir string, blockID uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%016x.idx", blockID))
 }
 
-func ListSealedBlocks(dir string, openBlockID uint64) ([]Info, error) {
+// ListSealedBlocks returns the sealed Blocks in dir, oldest first, excluding
+// the open Block. A stray `*.blk` name that is not the canonical fixed-width
+// lowercase hex form is skipped with a loud warning rather than failing the
+// listing: a single unrecognized file must not halt all scanning and scrubbing
+// every cycle. logger may be nil to suppress the warning (tests, tooling).
+func ListSealedBlocks(dir string, openBlockID uint64, logger *slog.Logger) ([]Info, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("block: read dir: %w", err)
@@ -39,7 +45,11 @@ func ListSealedBlocks(dir string, openBlockID uint64) ([]Info, error) {
 
 		id, err := parseCanonicalBlockID(strings.TrimSuffix(name, ".blk"))
 		if err != nil {
-			return nil, fmt.Errorf("block: malformed block filename %q: %w", name, err)
+			if logger != nil {
+				logger.Warn("block: ignoring unrecognized block filename",
+					"dir", dir, "name", name, "err", err)
+			}
+			continue
 		}
 		if id == openBlockID {
 			continue
@@ -64,7 +74,8 @@ const blockIDHexWidth = 16
 
 // parseCanonicalBlockID accepts only the fixed-width lowercase hex form that
 // FilePath produces. Anything else in the Blocks directory is evidence of
-// tampering or corruption and must fail the listing, not vanish from it.
+// tampering or corruption; ListSealedBlocks skips such names with a loud
+// warning so a single stray file is surfaced without halting all scanning.
 func parseCanonicalBlockID(hexPart string) (uint64, error) {
 	if len(hexPart) != blockIDHexWidth {
 		return 0, fmt.Errorf("expected %d hex digits, got %d", blockIDHexWidth, len(hexPart))

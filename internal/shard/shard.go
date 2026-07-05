@@ -272,6 +272,7 @@ func Open(cfg Config) (*Shard, error) {
 		cfg.ShardID,
 		cfg.Scanner,
 		s.uploadPressure.ScrubPauseController(),
+		s.logger,
 	)
 	s.rebuilder = newProjectionRebuilder(s, cfg.DataDir, blocksDir, cfg.ShardID, cfg.Upload, logger)
 	// Raft Open starts its run loop before returning and can replay committed upload

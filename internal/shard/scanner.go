@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -39,6 +40,7 @@ type scannerCore interface {
 type scannerCoordinator struct {
 	core      scannerCore
 	blocksDir string
+	logger    *slog.Logger
 	scheduler *avscan.Scheduler
 }
 
@@ -49,10 +51,12 @@ func newScannerCoordinator(
 	shardID uint64,
 	cfg ScannerConfig,
 	pauseController scrub.PauseController,
+	logger *slog.Logger,
 ) *scannerCoordinator {
 	c := &scannerCoordinator{
 		core:      core,
 		blocksDir: blocksDir,
+		logger:    logger,
 	}
 	if !cfg.enabled() {
 		return c
@@ -106,7 +110,7 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 		return nil, err
 	}
 	openBlockID := c.core.currentOpenBlockID()
-	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID)
+	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID, c.logger)
 	if err != nil {
 		return nil, err
 	}

@@ -40,7 +40,7 @@ func TestScannerCoordinatorPersistsProgressAcrossReconstruction(t *testing.T) {
 		Engine:                   firstEngine,
 		SignatureVersionProvider: scannerProgressSignatureVersion("daily-2026.06.12:1"),
 		Interval:                 time.Hour,
-	}, nil)
+	}, nil, nil)
 	if err := first.scheduler.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first RunOnce: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestScannerCoordinatorPersistsProgressAcrossReconstruction(t *testing.T) {
 		Engine:                   secondEngine,
 		SignatureVersionProvider: scannerProgressSignatureVersion("daily-2026.06.12:1"),
 		Interval:                 time.Hour,
-	}, nil)
+	}, nil, nil)
 	if err := second.scheduler.RunOnce(context.Background()); err != nil {
 		t.Fatalf("second RunOnce: %v", err)
 	}
