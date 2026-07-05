@@ -101,7 +101,10 @@ func (idx *Index) ListContentQuarantines(txID string, limit int) ([]ContentQuara
 	}
 	defer func() { _ = iter.Close() }()
 
-	records := make([]ContentQuarantine, 0, min(limit, contentQuarantineListPrealloc))
+	// Preallocate a fixed hint and let append grow: sizing the allocation from
+	// the caller-supplied limit is an uncontrolled-allocation vector, and the
+	// loop below already bounds growth at limit.
+	records := make([]ContentQuarantine, 0, contentQuarantineListPrealloc)
 	for iter.First(); iter.Valid() && len(records) < limit; iter.Next() {
 		val, err := iter.ValueAndErr()
 		if err != nil {

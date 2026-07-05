@@ -25,6 +25,12 @@ import (
 
 const appShardID uint64 = 0
 
+// quarantineListAllocHint is a fixed preallocation hint for aggregated
+// content-quarantine listings. Sizing the allocation from the caller-supplied
+// filter.Limit is an uncontrolled-allocation vector; append grows as needed and
+// the aggregation loop already stops at filter.Limit.
+const quarantineListAllocHint = 64
+
 // App owns the long-lived scrapd components and their lifecycle. Construction
 // (newApp) wires everything; Run serves until the context is cancelled or a
 // server fails; Shutdown tears down in one explicit, documented order.
@@ -452,7 +458,7 @@ func (a appShardSetAdminAdapter) ListContentQuarantines(ctx context.Context, fil
 		}
 		return localShard.ListContentQuarantines(ctx, filter)
 	}
-	records := make([]quarantine.Record, 0, filter.Limit)
+	records := make([]quarantine.Record, 0, quarantineListAllocHint)
 	for _, shardID := range a.shards.IDs() {
 		if len(records) >= filter.Limit {
 			break
