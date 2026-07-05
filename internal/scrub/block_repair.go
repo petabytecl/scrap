@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 const repairStagingSuffix = ".repair"
@@ -177,6 +179,15 @@ func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAd
 		_ = cleanupRepairStaging(paths)
 		return err
 	}
+	if err := r.markRepairedBlockRestored(blockID); err != nil {
+		// Best-effort: the repaired Block is durably installed and structurally
+		// verified. The restore marker keeps the scanner from skipping this Block
+		// below an advanced frontier (peer-repaired Blocks are otherwise ordinary
+		// hot files with Restored=false); a missing marker only risks a delayed
+		// content scan, whereas failing the repair here would re-fetch from a peer
+		// every cycle.
+		r.cfg.Logger.WarnContext(ctx, "scrub: mark repaired block restored", "block_id", blockID, "err", err)
+	}
 	if err := removeQuarantineFiles(paths); err != nil {
 		// The repaired .blk/.idx are already durably installed, so the block is
 		// healthy. Failing here would mis-record a successful repair as failed
@@ -185,6 +196,19 @@ func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAd
 		r.cfg.Logger.WarnContext(ctx, "scrub: remove quarantine markers after repair", "block_id", blockID, "err", err)
 	}
 	return nil
+}
+
+// markRepairedBlockRestored records a restore marker for a peer-repaired Block
+// so the content scanner keeps it eligible below an advanced watermark, matching
+// the eviction-restore path. The Block is repaired from a peer, so the source is
+// the peer, not the Backend.
+func (r *BlockRepair) markRepairedBlockRestored(blockID uint64) error {
+	return localblock.WriteRestoreMarker(r.cfg.BlocksDir, localblock.RestoreMarker{
+		BlockID:      blockID,
+		RestoredAtUs: time.Now().UTC().UnixMicro(),
+		Source:       localblock.RestoreSourcePeer,
+		Reason:       localblock.RestoreReasonRepair,
+	})
 }
 
 type blockRepairPaths struct {

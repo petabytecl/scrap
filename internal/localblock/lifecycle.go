@@ -20,6 +20,7 @@ const (
 	EvictionReasonEvidenceRun        = "evidence_run"
 
 	RestoreSourceBackend    = "backend"
+	RestoreSourcePeer       = "peer"
 	RestoreReasonRead       = "read"
 	RestoreReasonValidation = "validation"
 	RestoreReasonRepair     = "repair"
