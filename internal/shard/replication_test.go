@@ -64,7 +64,11 @@ func TestAppendReplicatedDocument_RejectsWrongStartOffset(t *testing.T) {
 	}
 }
 
-func TestAppendReplicatedDocument_CorrectOffsetAfterPriorAppend(t *testing.T) {
+// A replica that accepted an append the leader then aborted holds an
+// uncommitted overhang: the next replicated append arrives at the leader's
+// rolled-back offset and must reclaim the overhang instead of stranding the
+// replica until restart recovery.
+func TestAppendReplicatedDocument_RollsBackAbortedOverhang(t *testing.T) {
 	s := openTestShard(t)
 
 	first := []byte("first document")
@@ -88,7 +92,7 @@ func TestAppendReplicatedDocument_CorrectOffsetAfterPriorAppend(t *testing.T) {
 
 	second := []byte("second document")
 	secondSum := sha256.Sum256(second)
-	_, err = s.AppendReplicatedDocument(context.Background(), &scrapv1.ReplicateDocumentInit{
+	sha, err = s.AppendReplicatedDocument(context.Background(), &scrapv1.ReplicateDocumentInit{
 		TransactionId: "tx-second",
 		DocumentName:  "b.xml",
 		ContentType:   "text/xml",
@@ -98,11 +102,17 @@ func TestAppendReplicatedDocument_CorrectOffsetAfterPriorAppend(t *testing.T) {
 		TotalBytes:    int64(len(second)),
 		Sha256:        secondSum[:],
 	}, bytes.NewReader(second))
-	if err == nil {
-		t.Fatal("expected error: StartOffset=40 should not match after first append")
+	if err != nil {
+		t.Fatalf("append at rolled-back offset: %v", err)
 	}
-	if !strings.Contains(err.Error(), "replica offset") {
-		t.Fatalf("expected offset mismatch error, got: %v", err)
+	if !bytes.Equal(sha, secondSum[:]) {
+		t.Fatalf("second sha mismatch")
+	}
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	gotDocSeqs := readBlockDocSeqs(t, block.FilePath(blocksDir, 1))
+	if want := []uint32{0}; !equalUint32s(gotDocSeqs, want) {
+		t.Fatalf("doc sequences = %v, want %v (overhang reclaimed, second doc only)", gotDocSeqs, want)
 	}
 }
 

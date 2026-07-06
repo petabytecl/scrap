@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -122,6 +123,12 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 		}
 		currentOffset = s.blockWriter.Offset()
 	}
+	if currentOffset > wantOffset {
+		if err := s.rollbackReplicaOverhangLocked(init.GetBlockId(), wantOffset, currentOffset); err != nil {
+			return nil, fmt.Errorf("shard: replica offset %d, want %d: %w", currentOffset, wantOffset, err)
+		}
+		currentOffset = s.blockWriter.Offset()
+	}
 	if currentOffset != wantOffset {
 		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
 	}
@@ -154,6 +161,57 @@ func (s *Shard) abortReplicatedWriteAttempt(attempt *openlogWriteAttempt, startO
 		_ = s.blockWriter.Truncate(startOffset)
 	}
 	attempt.cleanupOnAbort()
+}
+
+// rollbackReplicaOverhangLocked reclaims replica Block bytes past wantOffset.
+// A replica ends up ahead of the leader when it accepted a replicated append
+// whose write the leader then aborted: the leader truncates its own Block, but
+// replicas that already appended keep the Frames. Those Frames were never
+// committed — a commit indexes Frames the leader kept — so rolling back to
+// wantOffset restores replication instead of rejecting every later append
+// until restart recovery truncates the same region (and, until then, applying
+// committed entries whose bytes this replica never received). Refuse when the
+// open Block's index references the overhang: an indexed Document there means
+// committed bytes.
+func (s *Shard) rollbackReplicaOverhangLocked(blockID uint64, wantOffset, currentOffset int64) error {
+	indexed, err := s.replicaOverhangIndexed(blockID, wantOffset)
+	if err != nil {
+		return err
+	}
+	if indexed {
+		return fmt.Errorf("shard: replica overhang past offset %d holds indexed documents", wantOffset)
+	}
+	if err := s.blockWriter.Truncate(wantOffset); err != nil {
+		return fmt.Errorf("shard: roll back replica overhang: %w", err)
+	}
+	// The aborted writes' preps still point at the overhang. With the bytes
+	// reclaimed they must not survive: Openlog recovery would truncate at
+	// their start offset again and cut whatever commits there afterwards.
+	s.removeOverhangPreps(blockID, wantOffset)
+	s.logger.Warn("shard: rolled back replica overhang from aborted leader write",
+		"block_id", blockID, "from_offset", currentOffset, "to_offset", wantOffset)
+	return nil
+}
+
+// replicaOverhangIndexed reports whether the open Block's index references any
+// Document at or past wantOffset. Any read failure other than a missing index
+// counts as indexed, failing closed to the pre-rollback behavior (reject the
+// append) rather than truncating bytes it cannot prove uncommitted.
+func (s *Shard) replicaOverhangIndexed(blockID uint64, wantOffset int64) (bool, error) {
+	ir, err := block.OpenIndexReader(s.idxPath(blockID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("shard: open replica index: %w", err)
+	}
+	defer func() { _ = ir.Close() }()
+	for _, entry := range ir.Entries() {
+		if entry.FirstFrameOff >= wantOffset {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func validateReplicatedAppend(init *scrapv1.ReplicateDocumentInit, result block.AppendResult, wantOffset int64) error {

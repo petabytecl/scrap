@@ -503,7 +503,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	case applyErr := <-doneCh:
 		applyStage.End(applyErr)
 		if applyErr != nil {
-			s.abortWriteAttempt(attempt, startOffset)
+			s.resolveCommitApplyFailure(attempt, startOffset, applyErr)
 			return storeapi.WriteResult{}, applyErr
 		}
 	case <-ctx.Done():
@@ -544,6 +544,25 @@ func (s *Shard) abortWriteAttemptLocked(attempt *openlogWriteAttempt, startOffse
 			"block_id", s.blockWriter.BlockID(), "err", err)
 		return
 	}
+	attempt.cleanupOnAbort()
+}
+
+// resolveCommitApplyFailure handles the Block bytes of a write whose command
+// committed but whose local apply reported an error. A conflict rejection is
+// deterministic — every replica and every replay rejects the same command
+// against the same projection state — so the Frames can never be indexed and
+// are reclaimed like any aborted write. Any other apply error may be local
+// (projection or .idx I/O): peers may have indexed the Document and a restart
+// replay can still index it here, so truncating would destroy committed bytes.
+// Keep them and drop the prep so Openlog recovery does not truncate them
+// either; scrub reconciles the divergence if replay cannot.
+func (s *Shard) resolveCommitApplyFailure(attempt *openlogWriteAttempt, startOffset int64, applyErr error) {
+	if errors.Is(applyErr, storeapi.ErrAlreadyExists) {
+		s.abortWriteAttempt(attempt, startOffset)
+		return
+	}
+	s.logger.Error("shard: commit document apply failed after commit; preserving committed block bytes",
+		"block_id", attempt.entry.GetBlockId(), "start_offset", startOffset, "err", applyErr)
 	attempt.cleanupOnAbort()
 }
 
