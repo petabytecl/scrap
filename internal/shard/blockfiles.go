@@ -66,6 +66,15 @@ func (s *Shard) openNewBlock() error {
 		_ = bw.Close() // best-effort cleanup on index writer failure
 		return err
 	}
+	// Persist the new .blk/.idx directory entries. Without this a power loss
+	// after a committed write can lose the freshly created Block files while the
+	// raft log durably references the Block ID, leaving replay unable to open
+	// the index and the payload bytes (not in the raft log) gone.
+	if err := syncDir(s.blocksDir); err != nil {
+		_ = iw.Close()
+		_ = bw.Close()
+		return fmt.Errorf("shard: sync blocks dir after open block %d: %w", id, err)
+	}
 	s.blockWriter = bw
 	s.idxWriter = iw
 	return nil

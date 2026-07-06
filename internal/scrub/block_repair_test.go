@@ -225,6 +225,28 @@ func TestBlockRepair_InvalidReplacementIndexDeletedAndQuarantineRemains(t *testi
 	}
 }
 
+func TestBlockRepair_RejectsReplacementWithWrongIdentity(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(30)
+	quarantineBlock(t, dir, blockID)
+
+	// A peer returns a structurally valid Block, but its header identifies a
+	// different Block (blockID 999). It must not be installed under blockID 30.
+	wrongIdentity := replacementPayload(t, 999, []byte("valid block, wrong identity"))
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{payloads: map[uint64]transferPayload{blockID: wrongIdentity}}
+	repair := newTestBlockRepair(dir, transferer, metrics, []string{"member-a:9091"})
+
+	repair.RepairQuarantined(context.Background())
+
+	requireQuarantined(t, dir, blockID)
+	requireNoPromotedBlock(t, dir, blockID)
+	requireNoRepairStaging(t, dir)
+	if metrics.repairsFailed != 1 || metrics.repairsOK != 0 {
+		t.Fatalf("repair metrics ok=%d failed=%d, want ok=0 failed=1", metrics.repairsOK, metrics.repairsFailed)
+	}
+}
+
 func TestBlockRepair_VerifiedReplacementRemovesQuarantineFiles(t *testing.T) {
 	dir := t.TempDir()
 	blockID := uint64(9)
