@@ -381,6 +381,19 @@ def main():
     answers = load_json_file(args.answers)
     existing_config = load_yaml_file(args.config_path)
 
+    # User-only values still living in the shared config (pre-split layouts:
+    # at root or under a legacy core: section). merge_config strips them from
+    # config.yaml, so they must be carried into config.user.yaml below or an
+    # upgrade whose answers omit them would silently drop the user's settings.
+    displaced_user_values = {}
+    existing_core = existing_config.get("core")
+    core_section = existing_core if isinstance(existing_core, dict) else {}
+    for key in _CORE_USER_KEYS:
+        if key in existing_config:
+            displaced_user_values[key] = existing_config[key]
+        elif key in core_section:
+            displaced_user_values[key] = core_section[key]
+
     if args.verbose:
         exists = Path(args.config_path).exists()
         print(f"Config file exists: {exists}", file=sys.stderr)
@@ -403,9 +416,13 @@ def main():
     updated_config = merge_config(existing_config, module_yaml, answers, args.verbose)
     write_config(updated_config, args.config_path, args.verbose)
 
-    # Merge and write config.user.yaml
+    # Merge and write config.user.yaml. Displaced values migrate only as
+    # fallbacks: explicit answers and values already in config.user.yaml win.
     user_settings = extract_user_settings(module_yaml, answers)
     existing_user_config = load_yaml_file(args.user_config_path)
+    for key, value in displaced_user_values.items():
+        if key not in user_settings and key not in existing_user_config:
+            user_settings[key] = value
     updated_user_config = dict(existing_user_config)
     updated_user_config.update(user_settings)
     if user_settings:

@@ -82,8 +82,10 @@ def verify_skills_installed(
     """Verify that skills in legacy directories exist at the installed location.
 
     Scans each directory in dirs_to_check for skill folders (containing SKILL.md),
-    then checks that a matching directory exists under skills_dir. Directories
-    that contain no skills (like _config/) are silently skipped.
+    then checks that a matching directory under skills_dir contains an installed
+    SKILL.md — a bare directory left by a partial install must not count, or the
+    legacy copy holding the real SKILL.md would be deleted. Directories that
+    contain no skills (like _config/) are silently skipped.
 
     Returns:
         List of verified skill names.
@@ -109,18 +111,18 @@ def verify_skills_installed(
 
         for skill_name in skill_names:
             installed_path = Path(skills_dir) / skill_name
-            if installed_path.is_dir():
+            if (installed_path / "SKILL.md").is_file():
                 all_verified.append(skill_name)
                 if verbose:
                     print(
-                        f"Verified: {skill_name} exists at {installed_path}",
+                        f"Verified: {skill_name} installed at {installed_path}",
                         file=sys.stderr,
                     )
             else:
                 missing.append(skill_name)
                 if verbose:
                     print(
-                        f"MISSING: {skill_name} not found at {installed_path}",
+                        f"MISSING: {skill_name} has no SKILL.md at {installed_path}",
                         file=sys.stderr,
                     )
 
