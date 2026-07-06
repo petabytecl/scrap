@@ -9,8 +9,11 @@ package shard
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/index"
 )
 
 func TestProjectionRebuildCarriesAppliedIndexWatermark(t *testing.T) {
@@ -42,6 +45,49 @@ func TestProjectionRebuildCarriesAppliedIndexWatermark(t *testing.T) {
 	// closed as a partial DataDir restore.
 	if err := s.restoreRaftSnapshot(snapshot); err != nil {
 		t.Fatalf("restoreRaftSnapshot after rebuild: %v", err)
+	}
+}
+
+// A raft snapshot created while the rebuild was preparing persists a newer
+// watermark into the projection being replaced; the swap must re-persist it
+// into the installed projection.
+func TestSwapRebuiltProjectionRestoresNewerWatermark(t *testing.T) {
+	dataDir := t.TempDir()
+	pebbleDir := filepath.Join(dataDir, "pebble")
+	tempDir := filepath.Join(dataDir, "pebble.rebuild-1")
+	oldDir := filepath.Join(dataDir, "pebble.previous-1")
+
+	current, err := index.Open(pebbleDir)
+	if err != nil {
+		t.Fatalf("open current projection: %v", err)
+	}
+	if err := current.PersistAppliedIndex(100); err != nil {
+		t.Fatalf("PersistAppliedIndex: %v", err)
+	}
+
+	rebuilt, err := index.Open(tempDir)
+	if err != nil {
+		t.Fatalf("open rebuilt projection: %v", err)
+	}
+	if err := rebuilt.PersistAppliedIndex(42); err != nil {
+		t.Fatalf("PersistAppliedIndex rebuilt: %v", err)
+	}
+	if err := rebuilt.Close(); err != nil {
+		t.Fatalf("close rebuilt projection: %v", err)
+	}
+
+	s := &Shard{idx: current}
+	t.Cleanup(func() {
+		if s.idx != nil {
+			_ = s.idx.Close()
+		}
+	})
+
+	if _, err := s.swapRebuiltProjection(pebbleDir, tempDir, oldDir); err != nil {
+		t.Fatalf("swapRebuiltProjection: %v", err)
+	}
+	if got := s.idx.AppliedIndex(); got != 100 {
+		t.Fatalf("applied index after swap = %d, want 100 (newer pre-swap watermark restored)", got)
 	}
 }
 
