@@ -347,6 +347,25 @@ func TestGenerateFailsWhenManifestContainsSensitiveEnvironment(t *testing.T) {
 	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
 }
 
+// The eviction-status capture error payload must never read as PASS evidence:
+// jsonArtifactHasEvidence recognizes {"error": ...} as no evidence, so the
+// manifest row fails when the admin plan-status GET was unavailable.
+func TestEvictionEvidenceFailsOnCaptureErrorPayload(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "eviction")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir eviction: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status.json"), []byte(`{"error":"eviction plan status unavailable"}`), 0o600); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+
+	state := evictionEvidence(root, Config{EvictionPlanID: "plan-1"})
+	if state.Status != "FAIL" {
+		t.Fatalf("eviction evidence status = %q, want FAIL", state.Status)
+	}
+}
+
 func TestManifestBroadRowsFailWhenSubEvidenceIsMissing(t *testing.T) {
 	profileResult := generateTestBundle(t, fakeSignals{missingHeapProfile: true})
 	assertManifestEvidenceStatus(t, profileResult.BundlePath, "profiles", "FAIL")
