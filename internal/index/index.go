@@ -37,8 +37,12 @@ type Entry struct {
 }
 
 type Index struct {
-	db           *pebble.DB
-	appliedIndex atomic.Uint64
+	db *pebble.DB
+	// appliedIndex is the transient applied index consulted by the projection
+	// consistency check; durableAppliedIndex is the fsynced watermark used by
+	// raft snapshot restore to detect a rolled-back projection.
+	appliedIndex        atomic.Uint64
+	durableAppliedIndex atomic.Uint64
 }
 
 func Open(dir string) (*Index, error) {
@@ -46,7 +50,12 @@ func Open(dir string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("index: open pebble: %w", err)
 	}
-	return &Index{db: db}, nil
+	idx := &Index{db: db}
+	if err := idx.loadAppliedIndex(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return idx, nil
 }
 
 func (idx *Index) Put(txID string, blockID uint64, docCount uint16, completed bool) error {
@@ -94,6 +103,9 @@ func (idx *Index) IncrementDocCount(txID string) error {
 	if err != nil {
 		return err
 	}
+	if entry.DocCount == math.MaxUint16 {
+		return fmt.Errorf("index: doc count at maximum %d", math.MaxUint16)
+	}
 	entry.DocCount++
 	return idx.put(txID, entry)
 }
@@ -134,6 +146,11 @@ func (idx *Index) StreamingHash() (appliedIndex uint64, hash [32]byte, err error
 	h := sha256.New()
 	for iter.First(); iter.Valid(); iter.Next() {
 		if bytes.HasPrefix(iter.Key(), []byte(scannerWatermarkPrefix)) {
+			continue
+		}
+		// The durable applied index is per-Member restore bookkeeping, not
+		// projection content, so it must not enter the cross-Member hash.
+		if bytes.Equal(iter.Key(), []byte(appliedIndexKey)) {
 			continue
 		}
 		val, err := iter.ValueAndErr()
@@ -191,8 +208,8 @@ func decodeEntry(val []byte) (Entry, error) {
 
 	blockCount := binary.LittleEndian.Uint16(val[sizeVersion:headerLen])
 	expected := headerLen + sizeBlockID*int(blockCount) + trailerLen
-	if len(val) < expected {
-		return Entry{}, fmt.Errorf("index: value truncated: need %d, got %d", expected, len(val))
+	if len(val) != expected {
+		return Entry{}, fmt.Errorf("index: value length mismatch: need %d, got %d", expected, len(val))
 	}
 
 	blockIDs := make([]uint64, blockCount)

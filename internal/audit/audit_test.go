@@ -173,6 +173,80 @@ func TestLoggerSinkReturnsHandlerErrors(t *testing.T) {
 	}
 }
 
+func TestPolicySinkRecordsEventWithinBudget(t *testing.T) {
+	memory := audit.NewMemorySink()
+	sink, err := audit.NewPolicySink(memory, audit.Policy{
+		Sink: "log", FailureMode: audit.FailureModeFailClosed, MaxEventBytes: 4096,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("NewPolicySink: %v", err)
+	}
+	if err := sink.Record(context.Background(), policySinkEvent(t)); err != nil {
+		t.Fatalf("Record within budget: %v", err)
+	}
+	if got := len(memory.Events()); got != 1 {
+		t.Fatalf("recorded events = %d, want 1", got)
+	}
+}
+
+func TestPolicySinkFailClosedPropagatesSinkErrors(t *testing.T) {
+	wantErr := errors.New("sink down")
+	sink, err := audit.NewPolicySink(failingSink{err: wantErr}, audit.Policy{
+		Sink: "log", FailureMode: audit.FailureModeFailClosed, MaxEventBytes: 1024,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("NewPolicySink: %v", err)
+	}
+	if err := sink.Record(context.Background(), policySinkEvent(t)); !errors.Is(err, wantErr) {
+		t.Fatalf("Record = %v, want wrapped sink error", err)
+	}
+}
+
+func TestPolicySinkFailOpenDropsEventAndContinues(t *testing.T) {
+	sink, err := audit.NewPolicySink(failingSink{err: errors.New("sink down")}, audit.Policy{
+		Sink: "log", FailureMode: audit.FailureModeFailOpen, MaxEventBytes: 1024,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("NewPolicySink: %v", err)
+	}
+	if err := sink.Record(context.Background(), policySinkEvent(t)); err != nil {
+		t.Fatalf("Record fail-open = %v, want nil", err)
+	}
+}
+
+func TestPolicySinkRejectsInvalidPolicy(t *testing.T) {
+	if _, err := audit.NewPolicySink(audit.NewMemorySink(), audit.Policy{
+		Sink: "log", FailureMode: "ignore", MaxEventBytes: 1024,
+	}, slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("NewPolicySink accepted invalid failure_mode, want error")
+	}
+}
+
+func policySinkEvent(t *testing.T) audit.Event {
+	t.Helper()
+	event, err := audit.NewEvent(audit.EventInput{
+		PrincipalID: "principal",
+		Role:        "admin_operator",
+		Surface:     audit.SurfaceAdmin,
+		Operation:   audit.OperationEvictionApply,
+		Target:      audit.TargetBlock,
+		Result:      audit.ResultAllowed,
+		Reason:      audit.ReasonAllowed,
+	})
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	return event
+}
+
+type failingSink struct {
+	err error
+}
+
+func (s failingSink) Record(context.Context, audit.Event) error {
+	return s.err
+}
+
 type errorHandler struct {
 	err error
 }

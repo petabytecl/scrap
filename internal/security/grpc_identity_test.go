@@ -49,7 +49,7 @@ func TestPeerIdentityUnaryServerInterceptorAddsIdentityToContext(t *testing.T) {
 func TestPeerIdentityInterceptorAuditsAndRateLimitsIdentityDenials(t *testing.T) {
 	ctx := grpcContextWithClientURI(t, "spiffe://scrap/service/non-peer")
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter := mustNewRateLimiter(t, security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfacePeer, Limit: 1, Window: time.Minute},
 		},

@@ -41,7 +41,7 @@ type appAuthorizerConfig struct {
 }
 
 func newAppSecurityRuntime(cfg Config, peers map[uint64]string, logger *slog.Logger, rateObserver security.RateLimitObserver, authorizationObserver security.AuthorizationObserver) (appSecurityRuntime, error) {
-	transport, err := newSharedTransport(cfg, peers)
+	transport, err := newSharedTransport(cfg, peers, logger)
 	if err != nil {
 		return appSecurityRuntime{}, err
 	}
@@ -123,24 +123,29 @@ func newAppAuditSink(cfg Config, logger *slog.Logger) (audit.Sink, error) {
 	if cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.AuditSink.PolicyPath) == "" {
 		return audit.NewLoggerSink(logger), nil
 	}
-	if _, err := audit.LoadPolicy(cfg.ProductionGates.AuditSink.PolicyPath); err != nil {
+	policy, err := audit.LoadPolicy(cfg.ProductionGates.AuditSink.PolicyPath)
+	if err != nil {
 		return nil, fmt.Errorf("audit policy: %w", err)
 	}
-	return audit.NewLoggerSink(logger), nil
+	sink, err := audit.NewPolicySink(audit.NewLoggerSink(logger), policy, logger)
+	if err != nil {
+		return nil, fmt.Errorf("audit policy sink: %w", err)
+	}
+	return sink, nil
 }
 
 func newAppRateLimiter(cfg Config, observer security.RateLimitObserver) (*security.RateLimiter, error) {
 	if !appSecurityControlsEnabled(cfg) {
-		return security.NewRateLimiter(security.RateLimitPolicy{}), nil
+		return security.NewRateLimiter(security.RateLimitPolicy{})
 	}
 	if cfg.SecurityMode == security.ModeTest && strings.TrimSpace(cfg.ProductionGates.RateLimits.PolicyPath) == "" {
-		return security.NewRateLimiter(security.RateLimitPolicy{}, security.WithRateLimitObserver(observer)), nil
+		return security.NewRateLimiter(security.RateLimitPolicy{}, security.WithRateLimitObserver(observer))
 	}
 	policy, err := security.LoadRateLimitPolicy(cfg.ProductionGates.RateLimits.PolicyPath)
 	if err != nil {
 		return nil, fmt.Errorf("rate-limit policy: %w", err)
 	}
-	return security.NewRateLimiter(policy, security.WithRateLimitObserver(observer)), nil
+	return security.NewRateLimiter(policy, security.WithRateLimitObserver(observer))
 }
 
 func newAppTransit(cfg Config) (encryption.Transit, error) {
@@ -171,15 +176,18 @@ func newAppTransit(cfg Config) (encryption.Transit, error) {
 	return transit, nil
 }
 
-func newSharedTransport(cfg Config, peers map[uint64]string) (*peer.SharedTransport, error) {
+func newSharedTransport(cfg Config, peers map[uint64]string, logger *slog.Logger) (*peer.SharedTransport, error) {
 	if !appSecurityControlsEnabled(cfg) {
-		return peer.NewSharedTransport(peers), nil
+		return peer.NewSharedTransport(peers, peer.WithSharedTransportLogger(logger)), nil
 	}
 	clientTLS, err := security.BuildMTLSClientConfig("SCRAP_TLS_PEER", security.ClientTLSFilesFromSurface(cfg.ProductionGates.TLS.Peer))
 	if err != nil {
 		return nil, fmt.Errorf("peer transport TLS: %w", err)
 	}
-	return peer.NewSharedTransport(peers, peer.WithSharedTransportCredentials(credentials.NewTLS(clientTLS))), nil
+	return peer.NewSharedTransport(peers,
+		peer.WithSharedTransportCredentials(credentials.NewTLS(clientTLS)),
+		peer.WithSharedTransportLogger(logger),
+	), nil
 }
 
 func newPeerClient(cfg Config) (*peer.Client, error) {

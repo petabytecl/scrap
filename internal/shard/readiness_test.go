@@ -23,6 +23,7 @@ func TestCheckReadinessWithinGracePeriod(t *testing.T) {
 		},
 		TickInterval:   50 * time.Millisecond,
 		BootstrapGrace: 30 * time.Second,
+		Replicator:     noopTestReplicator{},
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -49,6 +50,7 @@ func TestCheckReadinessFailsAfterGraceExpires(t *testing.T) {
 		},
 		TickInterval:   50 * time.Millisecond,
 		BootstrapGrace: 1 * time.Millisecond,
+		Replicator:     noopTestReplicator{},
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

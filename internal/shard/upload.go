@@ -20,7 +20,11 @@ import (
 const DefaultUploadConcurrency = 2
 
 const (
-	uploadPollInterval        = 50 * time.Millisecond
+	// uploadPollInterval is only the fallback wake-up: seals and requeues wake
+	// the processor through Notify, so this tick exists to catch missed
+	// notifications, not to drive latency. At 50ms the leader was prefix-
+	// scanning the projection under s.mu 20x/second with an empty outbox.
+	uploadPollInterval        = time.Second
 	defaultUploadRetryBase    = time.Second
 	defaultUploadAuthDelay    = time.Minute
 	maxTransientUploadRetries = 5

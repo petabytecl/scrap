@@ -38,11 +38,14 @@ func TestPeerServerAuditsAndRateLimitsPeerOperations(t *testing.T) {
 	expected := peerAuthExpectedIdentity()
 	authz := security.NewStaticAuthorizer()
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter, err := security.NewRateLimiter(security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfacePeer, Limit: 1, Window: time.Minute},
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
 	srv := NewServer(t.TempDir(), WithAuthorizer(authz, expected), WithAuditSink(sink), WithRateLimiter(limiter))
 	defer func() { _ = srv.Close() }()
 	router := &recordingRaftRouter{}
@@ -56,7 +59,7 @@ func TestPeerServerAuditsAndRateLimitsPeerOperations(t *testing.T) {
 	if _, err := srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{Message: marshalRaftMessage(t)}); err != nil {
 		t.Fatalf("ForwardRaft first call: %v", err)
 	}
-	_, err := srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{Message: mustMarshalRaftForRateLimit(t)})
+	_, err = srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{Message: mustMarshalRaftForRateLimit(t)})
 	if !errors.Is(err, security.ErrRateLimited) || status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("ForwardRaft second call = %v (%s), want rate limited", err, status.Code(err))
 	}

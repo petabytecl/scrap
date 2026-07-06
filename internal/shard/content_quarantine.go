@@ -82,6 +82,9 @@ func (s *Shard) watchQuarantineProposal(key string, doneCh chan error) error {
 }
 
 func quarantineCommandFromDetection(blockID uint64, detection avscan.Detection) (*scrapv1.RaftCommand, error) {
+	if blockID == 0 {
+		return nil, errors.New("shard: quarantine block_id is required")
+	}
 	if err := storeapi.ValidateDocumentIdentity(detection.TransactionID, detection.DocumentName, ""); err != nil {
 		return nil, err
 	}

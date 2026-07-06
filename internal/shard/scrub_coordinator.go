@@ -73,6 +73,16 @@ func (c *scrubCoordinator) Start(cfg Config) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
+	// Data-integrity verification must not vanish silently when wiring is
+	// incomplete: scrub is enabled but a missing dependency disables a layer.
+	if cfg.ConsistencyChecker == nil || cfg.Metrics == nil {
+		c.baseLogger.Warn("scrub: light scrub disabled despite Scrub.Enabled",
+			"missing_consistency_checker", cfg.ConsistencyChecker == nil,
+			"missing_metrics", cfg.Metrics == nil)
+	}
+	if cfg.DeepMetrics == nil {
+		c.baseLogger.Warn("scrub: deep scrub disabled despite Scrub.Enabled", "missing_deep_metrics", true)
+	}
 	if cfg.ConsistencyChecker != nil && cfg.Metrics != nil {
 		c.lightScrub = scrub.NewLight(scrub.LightConfig{
 			Proposer:           c,

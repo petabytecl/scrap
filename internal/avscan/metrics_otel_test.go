@@ -72,6 +72,19 @@ func TestOTelMetricsImplementsInterface(t *testing.T) {
 	var _ Metrics = m
 }
 
+func TestBoundedReasonPreservesTerminalFailureReasons(t *testing.T) {
+	// ReasonQuarantineFailed is the one security-critical AV failure; it must
+	// surface under its own label rather than collapsing to "unknown".
+	for _, reason := range []Reason{ReasonQuarantineFailed, ReasonProgressFailed} {
+		if got := boundedReason(string(reason)); got != string(reason) {
+			t.Fatalf("boundedReason(%q) = %q, want %q", reason, got, reason)
+		}
+	}
+	if got := boundedReason("scanner-error:/tmp/secret"); got != "unknown" {
+		t.Fatalf("boundedReason(raw) = %q, want unknown", got)
+	}
+}
+
 type avscanMetricExpectation struct {
 	keys          []string
 	allowedValues map[string]map[string]struct{}
@@ -101,6 +114,8 @@ func avscanReasonAllowedValues() map[string]map[string]struct{} {
 			string(ReasonCanceled),
 			string(ReasonIOBudget),
 			string(ReasonPaused),
+			string(ReasonProgressFailed),
+			string(ReasonQuarantineFailed),
 			"unknown",
 		),
 	}

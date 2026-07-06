@@ -4,6 +4,7 @@ package shard
 // close to the Pebble Projection authority on Shard.
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -45,6 +46,9 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint
 		return err
 	}
 
+	if len(doc.Sha256) != sha256.Size {
+		return fmt.Errorf("%w: commit document SHA-256 length %d, want %d", storeapi.ErrDataLoss, len(doc.Sha256), sha256.Size)
+	}
 	var sha [32]byte
 	copy(sha[:], doc.Sha256)
 	createdAt := time.UnixMicro(doc.CreatedAtUs)
@@ -178,7 +182,13 @@ func (s *Shard) blockIndexEntriesForApply(blockID uint64, txID string) ([]block.
 	ir, err := block.OpenIndexReader(s.idxPath(blockID))
 	if err != nil {
 		if !errors.Is(err, block.ErrIdxCorrupt) {
-			return nil, nil
+			// Only a genuinely absent index means "no entries". Any other
+			// failure (EIO, EACCES) must fail the apply-side conflict check
+			// closed instead of silently bypassing duplicate detection.
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("shard: open historical read idx: %w", err)
 		}
 		if err := block.RepairIndexTail(s.idxPath(blockID)); err != nil {
 			return nil, fmt.Errorf("shard: repair historical read idx: %w", err)

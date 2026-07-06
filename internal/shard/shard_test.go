@@ -251,6 +251,19 @@ func TestOpenlogRecoveryDeletesCompletedPrep(t *testing.T) {
 	if meta.Name != "doc.xml" {
 		t.Fatalf("Name: got %q", meta.Name)
 	}
+
+	assertNoPrepFiles(t, dir)
+}
+
+func assertNoPrepFiles(t *testing.T, dataDir string) {
+	t.Helper()
+	preps, err := filepath.Glob(filepath.Join(dataDir, "openlog", "*.prep"))
+	if err != nil {
+		t.Fatalf("Glob preps: %v", err)
+	}
+	if len(preps) != 0 {
+		t.Fatalf("prep files after recovery of completed write: got %d, want 0", len(preps))
+	}
 }
 
 func TestOpenlogRecoveryToleratesProjectionAheadOfBlockIndex(t *testing.T) {
@@ -353,7 +366,7 @@ func TestConsistencyCheckEmptyProjection(t *testing.T) {
 	}
 
 	if result.SHA256 == [32]byte{} {
-		t.Log("empty projection hash is the SHA-256 of empty input, which is non-zero")
+		t.Fatal("empty projection hash should be the non-zero SHA-256 of empty input")
 	}
 	if result.AppliedIndex == 0 {
 		t.Fatal("AppliedIndex should be non-zero even for empty projection")

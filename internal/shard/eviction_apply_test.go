@@ -1258,7 +1258,7 @@ func TestApplyEvictionPlanFailsBlockWhenConfirmationDrifts(t *testing.T) {
 	}
 }
 
-func TestApplyEvictionPlanStopsAtFirstBlockFailure(t *testing.T) {
+func TestApplyEvictionPlanContinuesPastBlockFailure(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
@@ -1279,23 +1279,21 @@ func TestApplyEvictionPlanStopsAtFirstBlockFailure(t *testing.T) {
 		t.Fatalf("ApplyEvictionPlan: %v", err)
 	}
 
-	if result.Status != eviction.ApplyStatusFailed || result.FailedBlocks != 1 {
-		t.Fatalf("result = %+v, want failed one Block", result)
+	if result.Status != eviction.ApplyStatusFailed || result.FailedBlocks != 1 || result.EvictedBlocks != 1 {
+		t.Fatalf("result = %+v, want one failure and one eviction", result)
 	}
-	if len(result.Blocks) != 1 || result.Blocks[0].BlockID != 1 {
-		t.Fatalf("blocks = %+v, want only first failed Block", result.Blocks)
+	if len(result.Blocks) != 2 {
+		t.Fatalf("blocks = %+v, want failed Block 1 then evicted Block 2", result.Blocks)
 	}
-	if _, err := os.Stat(block.FilePath(s.blocksDir, 2)); err != nil {
-		t.Fatalf("second Block should remain untouched after first failure: %v", err)
+	assertEvictionApplyBlock(t, result.Blocks[0], 1, eviction.ApplyBlockStatusFailed)
+	assertEvictionApplyBlock(t, result.Blocks[1], 2, eviction.ApplyBlockStatusEvicted)
+	assertBlockEvictedForApply(t, s, 2)
+	if hasEvictionApplyResultForTest(s, plan.PlanID) {
+		t.Fatal("result with retryable failures should not be cached")
 	}
-	if _, err := os.Stat(EvictionMarkerPath(s.blocksDir, 2)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("second eviction marker stat error = %v, want not exist", err)
-	}
-
-	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
 }
 
-func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T) {
+func TestApplyEvictionPlanRetriesFailedBlocksOnReapply(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)
 	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
@@ -1317,8 +1315,29 @@ func TestApplyEvictionPlanCachesFailedResultAfterEvictionSideEffect(t *testing.T
 	if result.Status != eviction.ApplyStatusFailed || result.EvictedBlocks != 1 || result.FailedBlocks != 1 {
 		t.Fatalf("result = %+v, want one eviction then one failure", result)
 	}
+	if hasEvictionApplyResultForTest(s, plan.PlanID) {
+		t.Fatal("result with retryable failures should not be cached")
+	}
 
-	assertCachedEvictionApplyResult(t, s, plan.PlanID, result)
+	retry, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan retry: %v", err)
+	}
+	if len(retry.Blocks) != 2 {
+		t.Fatalf("retry blocks = %+v, want evicted Block skipped and failed Block retried", retry.Blocks)
+	}
+	assertEvictionApplyBlock(t, retry.Blocks[0], 1, eviction.ApplyBlockStatusSkipped)
+	if retry.Blocks[0].Reason != eviction.SkipReasonLocalStateNotHot {
+		t.Fatalf("retry blocks = %+v, want evicted Block skipped as local_state_not_hot", retry.Blocks)
+	}
+	assertEvictionApplyBlock(t, retry.Blocks[1], 2, eviction.ApplyBlockStatusFailed)
+}
+
+func assertEvictionApplyBlock(t *testing.T, got eviction.ApplyBlock, blockID uint64, status string) {
+	t.Helper()
+	if got.BlockID != blockID || got.Status != status {
+		t.Fatalf("block = %+v, want Block %d with status %s", got, blockID, status)
+	}
 }
 
 func TestApplyEvictionPlanDoesNotCacheCanceledResult(t *testing.T) {

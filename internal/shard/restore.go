@@ -393,7 +393,12 @@ func (s *Shard) publishVerifiedRepairRestore(input restoreInput, tmpBlockPath, t
 		Source:       localblock.RestoreSourceBackend,
 		Reason:       localblock.RestoreReasonRepair,
 	}); err != nil {
-		return true, err
+		// The repaired Block is already published and verified; the marker is
+		// per-Member evidence, not authority. Failing the repair here would
+		// send retries looking for quarantine files that no longer exist.
+		s.logger.Warn("shard: restore marker write failed after successful repair publish",
+			"block_id", input.confirmed.BlockID, "err", err)
+		return true, nil
 	}
 	s.recordEvictionHealthBlockBestEffort(input.confirmed.BlockID)
 	return true, nil
@@ -568,6 +573,12 @@ func (s *Shard) downloadRestoreObjectOnce(ctx context.Context, input restoreInpu
 
 	if err := validateRestoreObjectMeta(input.confirmed.BlockID, ext, object, meta); err != nil {
 		return "", err
+	}
+	if meta.ETag == "" {
+		// Size-only verification is a silent downgrade of restore validation;
+		// surface it so a Backend that stops returning ETags is noticed.
+		s.logger.WarnContext(ctx, "shard: backend returned no ETag; restore validation token check skipped",
+			"block_id", input.confirmed.BlockID, "ext", ext)
 	}
 
 	tmp, err := os.CreateTemp(s.blocksDir, fmt.Sprintf(".%016x.%s.restore-*", input.confirmed.BlockID, ext))

@@ -186,7 +186,7 @@ func TestLightScrubber_ReportsPeerResultTimeout(t *testing.T) {
 	metrics := &mockMetrics{}
 
 	ls := scrub.NewLight(scrub.LightConfig{
-		Proposer:           &mockProposer{result: scrub.Result{}},
+		Proposer:           &mockProposer{result: scrub.Result{SHA256: [32]byte{1}}},
 		ConsistencyChecker: checker,
 		LeaderChecker:      &mockLeaderChecker{leader: true},
 		Metrics:            metrics,
@@ -200,6 +200,34 @@ func TestLightScrubber_ReportsPeerResultTimeout(t *testing.T) {
 		t.Fatalf("RunOnce error = %v, want %v", err, scrub.ErrConsistencyResultNotReady)
 	}
 
+	if metrics.recorded.errCount != 1 {
+		t.Fatalf("expected 1 error run, got %d", metrics.recorded.errCount)
+	}
+}
+
+func TestLightScrubber_AllPeersUnreachableIsNotOK(t *testing.T) {
+	// Every peer errors with a non-NotReady failure (e.g. unreachable), so no
+	// peer result is ever compared against the leader hash.
+	checker := &mockConsistencyChecker{err: errors.New("dial peer: connection refused")}
+	metrics := &mockMetrics{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           &mockProposer{result: scrub.Result{SHA256: [32]byte{1}}},
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+		PeerResultTimeout:  5 * time.Millisecond,
+		PeerResultPoll:     time.Millisecond,
+	})
+
+	err := ls.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce reported success when every peer check failed, want a degraded error")
+	}
+	if metrics.recorded.ok != 0 {
+		t.Fatalf("expected no ok run, got %d", metrics.recorded.ok)
+	}
 	if metrics.recorded.errCount != 1 {
 		t.Fatalf("expected 1 error run, got %d", metrics.recorded.errCount)
 	}
@@ -374,5 +402,36 @@ func TestLightScrubber_NoRebuildOnMatch(t *testing.T) {
 
 	if len(rebuilder.requested) != 0 {
 		t.Fatalf("expected 0 rebuild requests, got %d", len(rebuilder.requested))
+	}
+}
+
+func TestLightScrubber_ZeroLeaderHashIsErrorNotDivergence(t *testing.T) {
+	// A zero hash means the voter failed to compute one; comparing it would
+	// mark every healthy peer divergent and trigger projection rebuilds.
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {SHA256: [32]byte{2}},
+	}}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           &mockProposer{result: scrub.Result{}},
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		PeerAddrs:          []string{"peer-1:9091"},
+		PeerResultTimeout:  5 * time.Millisecond,
+		PeerResultPoll:     time.Millisecond,
+	})
+
+	if err := ls.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce with zero leader hash succeeded, want error")
+	}
+	if metrics.recorded.errCount != 1 {
+		t.Fatalf("expected 1 error run, got %d", metrics.recorded.errCount)
+	}
+	if len(rebuilder.requested) != 0 {
+		t.Fatalf("expected no rebuild requests off a zero hash, got %v", rebuilder.requested)
 	}
 }

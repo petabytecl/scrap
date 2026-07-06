@@ -2,6 +2,7 @@ package shard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,14 +77,25 @@ func (s fileUploadSource) Open(kind uploadObjectKind) (io.ReadCloser, int64, err
 
 	file, err := os.Open(path) //nolint:gosec // paths are derived from controlled shard block IDs
 	if err != nil {
-		return nil, 0, fmt.Errorf("%w: upload open %s failed", backend.ErrPermanent, kind)
+		return nil, 0, fmt.Errorf("%w: upload open %s failed: %w", backend.ErrPermanent, kind, fsErrCause(err))
 	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return nil, 0, fmt.Errorf("%w: upload stat %s failed", backend.ErrPermanent, kind)
+		return nil, 0, fmt.Errorf("%w: upload stat %s failed: %w", backend.ErrPermanent, kind, fsErrCause(err))
 	}
 	return file, info.Size(), nil
+}
+
+// fsErrCause strips the path from a filesystem error, keeping the errno
+// (ENOENT vs EACCES vs EIO) for diagnosis without leaking file paths into
+// logs or error strings on deployed Cells.
+func fsErrCause(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
 }
 
 func (s fileUploadSource) path(kind uploadObjectKind) (string, bool) {
@@ -288,8 +300,10 @@ func (c *uploadController) handleRetry(ctx context.Context, err error, state *up
 	case backend.ClassNotFound:
 		return handleTransientUpload(ctx, state)
 	case backend.ClassAuth:
+		// The pause gate already blocks subsequent cycles for the full delay;
+		// sleeping here as well would freeze every worker in this cycle too.
 		c.pause(c.authRetryDelay())
-		return false, sleepUploadRetry(ctx, c.authRetryDelay())
+		return false, nil
 	case backend.ClassCorrupt:
 		state.corruptAttempts++
 		return state.corruptAttempts <= 1, nil
@@ -315,13 +329,13 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 	blockAttr := trace.WithAttributes(blockIDAttribute(upload.BlockID))
 
 	putBlkCtx, putBlk := c.telemetry.StartSpan(bctx, "scrap.upload/put.blk", blockAttr)
-	blk, err := c.uploadObject(putBlkCtx, upload.BlockID, prefix, uploadObjectBlock)
+	blk, err := c.uploadObject(putBlkCtx, upload.BlockID, prefix, uploadObjectBlock, upload.SealedSizeBytes)
 	putBlk.End(err)
 	if err != nil {
 		return err
 	}
 	putIdxCtx, putIdx := c.telemetry.StartSpan(bctx, "scrap.upload/put.idx", blockAttr)
-	idx, err := c.uploadObject(putIdxCtx, upload.BlockID, prefix, uploadObjectIndex)
+	idx, err := c.uploadObject(putIdxCtx, upload.BlockID, prefix, uploadObjectIndex, uploadSizeUnchecked)
 	putIdx.End(err)
 	if err != nil {
 		return err
@@ -338,7 +352,11 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 	})
 }
 
-func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix string, kind uploadObjectKind) (index.BackendObjectMetadata, error) {
+// uploadSizeUnchecked disables the pre-PUT size check for objects whose size
+// has no seal-time authority (the index object grows with historical appends).
+const uploadSizeUnchecked = int64(-1)
+
+func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, prefix string, kind uploadObjectKind, expectedSize int64) (index.BackendObjectMetadata, error) {
 	source, availability := c.core.localUploadSource(blockID)
 	if !availability.ready() {
 		c.recordLocalUploadUnavailable(blockID, availability)
@@ -353,6 +371,12 @@ func (c *uploadController) uploadObject(ctx context.Context, blockID uint64, pre
 	defer func() {
 		_ = file.Close()
 	}()
+	// Catch a truncated or grown local file before the PUT: uploading it would
+	// only fail at confirm apply, where the upload obligation is forfeited.
+	if expectedSize != uploadSizeUnchecked && size != expectedSize {
+		return index.BackendObjectMetadata{}, fmt.Errorf(
+			"shard: local %s size %d does not match sealed size %d for block %d", kind, size, expectedSize, blockID)
+	}
 
 	ext := string(kind)
 	key := prefix + "." + ext

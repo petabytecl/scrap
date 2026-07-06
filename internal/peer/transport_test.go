@@ -20,6 +20,16 @@ type grpcTestCluster struct {
 	nodes     []*scrapraft.Node
 	servers   []*grpc.Server
 	transport *peer.SharedTransport
+	applied   [3]struct {
+		mu    sync.Mutex
+		count int
+	}
+}
+
+func (tc *grpcTestCluster) appliedCount(idx int) int {
+	tc.applied[idx].mu.Lock()
+	defer tc.applied[idx].mu.Unlock()
+	return tc.applied[idx].count
 }
 
 //nolint:gocognit // integration test helper wiring 3-node gRPC cluster
@@ -42,11 +52,6 @@ func startGRPCCluster(t *testing.T) *grpcTestCluster {
 	transport := peer.NewSharedTransport(addrs)
 	tc := &grpcTestCluster{transport: transport}
 
-	var applied [3]struct {
-		mu    sync.Mutex
-		count int
-	}
-
 	for i := range 3 {
 		id := uint64(i + 1)
 		idx := i
@@ -67,11 +72,11 @@ func startGRPCCluster(t *testing.T) *grpcTestCluster {
 			TickInterval: 10 * time.Millisecond,
 			Transport:    shardTransport,
 			Apply: func(entries []raftpb.Entry, _ uint64) error {
-				applied[idx].mu.Lock()
-				defer applied[idx].mu.Unlock()
+				tc.applied[idx].mu.Lock()
+				defer tc.applied[idx].mu.Unlock()
 				for _, e := range entries {
 					if e.Type == raftpb.EntryNormal && len(e.Data) > 0 {
-						applied[idx].count++
+						tc.applied[idx].count++
 					}
 				}
 				return nil
@@ -160,13 +165,13 @@ func TestGRPCTransport_ProposeAndApply(t *testing.T) {
 		t.Fatalf("Propose: %v", err)
 	}
 
-	// Wait for all 3 nodes to apply
+	// Wait for all 3 nodes to apply the proposed command itself; the raw
+	// AppliedIndex is already >= 4 from bootstrap entries alone.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		// Check applied via Raft's AppliedIndex
 		allApplied := true
-		for _, n := range tc.nodes {
-			if n.AppliedIndex() < 2 {
+		for i := range tc.nodes {
+			if tc.appliedCount(i) < 1 {
 				allApplied = false
 				break
 			}
@@ -177,9 +182,9 @@ func TestGRPCTransport_ProposeAndApply(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	for i, n := range tc.nodes {
-		t.Logf("node %d: appliedIndex=%d", i+1, n.AppliedIndex())
+		t.Logf("node %d: appliedIndex=%d appliedCommands=%d", i+1, n.AppliedIndex(), tc.appliedCount(i))
 	}
-	t.Fatal("not all nodes applied the entry via gRPC transport")
+	t.Fatal("not all nodes applied the proposed entry via gRPC transport")
 }
 
 //nolint:gocognit // integration test with peer kill + quorum verification
@@ -208,15 +213,16 @@ func TestGRPCTransport_DeadPeerTolerance(t *testing.T) {
 		t.Fatalf("Propose after kill: %v", err)
 	}
 
-	// Verify the 2 surviving nodes apply
+	// Verify the 2 surviving nodes apply the post-kill command itself; the
+	// raw AppliedIndex is already >= 4 from bootstrap entries alone.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		applied := 0
-		for i, n := range tc.nodes {
+		for i := range tc.nodes {
 			if i == killedIdx {
 				continue
 			}
-			if n.AppliedIndex() >= 2 {
+			if tc.appliedCount(i) >= 1 {
 				applied++
 			}
 		}
@@ -225,5 +231,5 @@ func TestGRPCTransport_DeadPeerTolerance(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("surviving nodes did not apply after peer death")
+	t.Fatal("surviving nodes did not apply the post-kill proposal")
 }

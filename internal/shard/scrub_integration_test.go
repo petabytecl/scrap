@@ -65,6 +65,7 @@ func openShardCluster(t *testing.T) *shardCluster {
 			Peers:        peers,
 			TickInterval: 10 * time.Millisecond,
 			Transport:    transport,
+			Replicator:   noopTestReplicator{},
 		})
 		if err != nil {
 			t.Fatalf("Open shard %d: %v", id, err)

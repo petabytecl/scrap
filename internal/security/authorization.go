@@ -111,6 +111,7 @@ func (a *Authorizer) ContextWithTLSPrincipal(ctx context.Context, state tls.Conn
 
 func (a *Authorizer) contextWithPolicyTLSPrincipal(ctx context.Context, cert *x509.Certificate) (context.Context, error) {
 	hasUsableURI := false
+	var matched *Principal
 	for _, uri := range cert.URIs {
 		if uri == nil {
 			continue
@@ -121,15 +122,25 @@ func (a *Authorizer) contextWithPolicyTLSPrincipal(ctx context.Context, cert *x5
 		}
 		hasUsableURI = true
 		roles, ok := a.policy.rolesForPrincipal(id)
-		if ok {
-			return ContextWithPrincipal(ctx, Principal{ID: id, Roles: roles}), nil
+		if !ok {
+			continue
 		}
+		if matched != nil && matched.ID != id {
+			// More than one SAN resolves to a distinct policy principal: the
+			// caller's effective identity is ambiguous, so deny rather than
+			// silently binding to whichever SAN is enumerated first.
+			a.RecordAuthorizationStatus(AuthorizationStatusDenied)
+			return nil, newAuthorizationError(ErrPermissionDenied, "permission denied")
+		}
+		matched = &Principal{ID: id, Roles: roles}
 	}
-	if hasUsableURI {
-		a.RecordAuthorizationStatus(AuthorizationStatusDenied)
-		return nil, newAuthorizationError(ErrPermissionDenied, "permission denied")
+	if matched != nil {
+		return ContextWithPrincipal(ctx, *matched), nil
 	}
 	a.RecordAuthorizationStatus(AuthorizationStatusDenied)
+	if hasUsableURI {
+		return nil, newAuthorizationError(ErrPermissionDenied, "permission denied")
+	}
 	return nil, newAuthorizationError(ErrUnauthenticated, "authentication required")
 }
 

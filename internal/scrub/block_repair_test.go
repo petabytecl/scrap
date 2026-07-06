@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/localblock"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
@@ -248,6 +249,32 @@ func TestBlockRepair_VerifiedReplacementRemovesQuarantineFiles(t *testing.T) {
 	}
 	if metrics.decremented != 1 {
 		t.Fatalf("quarantine gauge decremented %d times, want 1", metrics.decremented)
+	}
+}
+
+func TestBlockRepair_VerifiedReplacementRecordsRestoreMarker(t *testing.T) {
+	dir := t.TempDir()
+	blockID := uint64(21)
+	quarantineBlock(t, dir, blockID)
+	replacement := replacementPayload(t, blockID, []byte("verified replacement"))
+	metrics := &deepScrubMetrics{}
+	transferer := &recordingBlockTransferer{payloads: map[uint64]transferPayload{blockID: replacement}}
+	repair := newTestBlockRepair(dir, transferer, metrics, []string{"member-a:9091"})
+
+	repair.RepairQuarantined(context.Background())
+
+	requireNotQuarantined(t, dir, blockID)
+	// A peer-repaired Block must carry a restore marker so the scanner keeps it
+	// eligible below an advanced frontier instead of skipping it forever.
+	marker, err := localblock.ReadRestoreMarker(dir, blockID)
+	if err != nil {
+		t.Fatalf("ReadRestoreMarker after repair: %v", err)
+	}
+	if marker.Source != localblock.RestoreSourcePeer {
+		t.Fatalf("restore marker source = %q, want %q", marker.Source, localblock.RestoreSourcePeer)
+	}
+	if marker.Reason != localblock.RestoreReasonRepair {
+		t.Fatalf("restore marker reason = %q, want %q", marker.Reason, localblock.RestoreReasonRepair)
 	}
 }
 

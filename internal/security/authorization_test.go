@@ -260,6 +260,38 @@ func TestContextWithTLSPrincipalTriesAllPolicyMappedURIs(t *testing.T) {
 	}
 }
 
+func TestContextWithTLSPrincipalRejectsAmbiguousMappedSANs(t *testing.T) {
+	const principalB = "spiffe://scrap/cell/cell-b/member/member-b/member-2"
+	policy, err := security.ParseRolePolicy([]byte(`{
+		"roles": ["admin_reader"],
+		"principals": [
+			{"id": "spiffe://scrap/cell/cell-a/member/member-a/member-1", "roles": ["admin_reader"]},
+			{"id": "spiffe://scrap/cell/cell-b/member/member-b/member-2", "roles": ["admin_reader"]}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("ParseRolePolicy: %v", err)
+	}
+	uriA, err := url.Parse(principalA)
+	if err != nil {
+		t.Fatalf("parse principalA URI: %v", err)
+	}
+	uriB, err := url.Parse(principalB)
+	if err != nil {
+		t.Fatalf("parse principalB URI: %v", err)
+	}
+	state := *verifiedTLSState(t)
+	cert := *state.VerifiedChains[0][0]
+	cert.URIs = []*url.URL{uriA, uriB}
+	state.VerifiedChains = [][]*x509.Certificate{{&cert}}
+
+	authz := security.NewAuthorizer(policy)
+	_, err = authz.ContextWithTLSPrincipal(context.Background(), state)
+	if !errors.Is(err, security.ErrPermissionDenied) {
+		t.Fatalf("ContextWithTLSPrincipal with two policy-mapped SANs = %v, want permission denied", err)
+	}
+}
+
 func TestNilAuthorizerAllowsBoundaryCompatibility(t *testing.T) {
 	var authz *security.Authorizer
 	ctx, err := authz.ContextWithPrincipalID(context.Background(), principalA)

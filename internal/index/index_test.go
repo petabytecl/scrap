@@ -167,6 +167,76 @@ func TestStreamingHash_Determinism(t *testing.T) {
 	}
 }
 
+func TestPersistAppliedIndex_SurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	pebbleDir := filepath.Join(dir, "pebble")
+
+	idx, err := index.Open(pebbleDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := idx.AppliedIndex(); got != 0 {
+		t.Fatalf("fresh AppliedIndex: got %d, want 0", got)
+	}
+	if err := idx.PersistAppliedIndex(1234); err != nil {
+		t.Fatalf("PersistAppliedIndex: %v", err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := index.Open(pebbleDir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.AppliedIndex(); got != 1234 {
+		t.Fatalf("reopened AppliedIndex: got %d, want 1234", got)
+	}
+}
+
+func TestPersistAppliedIndex_ExcludedFromStreamingHash(t *testing.T) {
+	dir := t.TempDir()
+
+	idx1, err := index.Open(filepath.Join(dir, "pebble1"))
+	if err != nil {
+		t.Fatalf("Open idx1: %v", err)
+	}
+	defer func() { _ = idx1.Close() }()
+	idx2, err := index.Open(filepath.Join(dir, "pebble2"))
+	if err != nil {
+		t.Fatalf("Open idx2: %v", err)
+	}
+	defer func() { _ = idx2.Close() }()
+
+	for _, idx := range []*index.Index{idx1, idx2} {
+		if err := idx.Put("tx-a", 1, 2, false); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	// Same projection content, different durable applied indexes: the applied
+	// index is per-Member restore bookkeeping and must not change the hash, or
+	// cross-Member consistency checks would always diverge.
+	if err := idx1.PersistAppliedIndex(10); err != nil {
+		t.Fatalf("PersistAppliedIndex idx1: %v", err)
+	}
+	if err := idx2.PersistAppliedIndex(99); err != nil {
+		t.Fatalf("PersistAppliedIndex idx2: %v", err)
+	}
+
+	_, hash1, err := idx1.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash idx1: %v", err)
+	}
+	_, hash2, err := idx2.StreamingHash()
+	if err != nil {
+		t.Fatalf("StreamingHash idx2: %v", err)
+	}
+	if hash1 != hash2 {
+		t.Fatalf("hash changed with durable applied index: %x vs %x", hash1, hash2)
+	}
+}
+
 func TestStreamingHash_EmptyProjection(t *testing.T) {
 	dir := t.TempDir()
 	idx, err := index.Open(filepath.Join(dir, "pebble"))
@@ -218,5 +288,28 @@ func TestStreamingHash_DifferentData(t *testing.T) {
 
 	if hash1 == hash2 {
 		t.Fatal("different data should produce different hashes")
+	}
+}
+
+func TestIncrementDocCountRejectsOverflow(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.Open(filepath.Join(dir, "pebble"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	if err := idx.Put("tx-full", 1, 65535, false); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := idx.IncrementDocCount("tx-full"); err == nil {
+		t.Fatal("IncrementDocCount at 65535 succeeded, want overflow error")
+	}
+	entry, err := idx.Get("tx-full")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.DocCount != 65535 {
+		t.Fatalf("DocCount after rejected increment: got %d, want 65535", entry.DocCount)
 	}
 }

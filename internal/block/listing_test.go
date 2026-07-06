@@ -49,7 +49,7 @@ func TestListSealedBlocks_OldestFirst(t *testing.T) {
 	createSealedBlock(t, dir, 1, 1)
 	createSealedBlock(t, dir, 1, 2)
 
-	blocks, err := block.ListSealedBlocks(dir, 99)
+	blocks, err := block.ListSealedBlocks(dir, 99, nil)
 	if err != nil {
 		t.Fatalf("ListSealedBlocks: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestListSealedBlocks_ExcludesOpenBlock(t *testing.T) {
 	createSealedBlock(t, dir, 1, 1)
 	createSealedBlock(t, dir, 1, 2)
 
-	blocks, err := block.ListSealedBlocks(dir, 2)
+	blocks, err := block.ListSealedBlocks(dir, 2, nil)
 	if err != nil {
 		t.Fatalf("ListSealedBlocks: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestListSealedBlocks_ExcludesQuarantined(t *testing.T) {
 		t.Fatalf("Rename: %v", err)
 	}
 
-	blocks, err := block.ListSealedBlocks(dir, 99)
+	blocks, err := block.ListSealedBlocks(dir, 99, nil)
 	if err != nil {
 		t.Fatalf("ListSealedBlocks: %v", err)
 	}
@@ -104,11 +104,32 @@ func TestListSealedBlocks_ExcludesQuarantined(t *testing.T) {
 func TestListSealedBlocks_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
-	blocks, err := block.ListSealedBlocks(dir, 99)
+	blocks, err := block.ListSealedBlocks(dir, 99, nil)
 	if err != nil {
 		t.Fatalf("ListSealedBlocks: %v", err)
 	}
 	if len(blocks) != 0 {
 		t.Fatalf("expected 0 blocks, got %d", len(blocks))
+	}
+}
+
+func TestListSealedBlocks_SkipsMalformedFilename(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 1)
+	// A stray, non-canonical *.blk name must be skipped, not halt the listing,
+	// so scanning and scrubbing of the valid Blocks still proceeds.
+	if err := os.WriteFile(filepath.Join(dir, "1.blk"), []byte("junk"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	blocks, err := block.ListSealedBlocks(dir, 99, nil)
+	if err != nil {
+		t.Fatalf("ListSealedBlocks with a stray filename: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 valid block, got %d", len(blocks))
+	}
+	if blocks[0].BlockID != 1 {
+		t.Fatalf("expected block 1, got %d", blocks[0].BlockID)
 	}
 }

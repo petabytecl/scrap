@@ -104,7 +104,7 @@ reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "Nod
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
 reject 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$base_render" "security mode in base render"
 
-require 'kind:[[:space:]]*NetworkPolicy' "$base_render" "base NetworkPolicy"
+require 'kind:[[:space:]]*CiliumNetworkPolicy' "$base_render" "base CiliumNetworkPolicy"
 require 'name:[[:space:]]*scrapd-ingress' "$base_render" "base S.C.R.A.P. ingress NetworkPolicy"
 require 'port:[[:space:]]*9091' "$base_render" "peer ingress port"
 require 'kubernetes\.io/metadata\.name:[[:space:]]*monitoring' "$base_render" "monitoring-scoped admin ingress"

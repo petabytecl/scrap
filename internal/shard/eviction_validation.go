@@ -54,6 +54,9 @@ func evictionValidationSampleLimit(plan eviction.Plan) int {
 	if evictionReasonForMarker(plan) != eviction.ReasonEvidenceRun || plan.Config.MaxValidateSamples <= 0 {
 		return 0
 	}
+	// ADR 0016: evidence runs default to one sampled validation, subject to
+	// the configured cap. The request-level override the ADR also describes
+	// ("up to the configured cap") has no API surface yet — see deferred work.
 	return min(1, plan.Config.MaxValidateSamples)
 }
 

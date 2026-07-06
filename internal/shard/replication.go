@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -114,16 +115,9 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 	}
 
 	// Validate offset before appending to prevent poisoning the follower block with data at the wrong position.
-	currentOffset := s.blockWriter.Offset()
 	wantOffset := safeUint64ToInt64(init.GetStartOffset())
-	if currentOffset < wantOffset {
-		if err := s.repairReplicaOffsetLocked(ctx, init.GetBlockId(), wantOffset); err != nil {
-			return nil, fmt.Errorf("shard: replica offset %d, want %d: repair failed: %w", currentOffset, wantOffset, err)
-		}
-		currentOffset = s.blockWriter.Offset()
-	}
-	if currentOffset != wantOffset {
-		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
+	if err := s.ensureReplicaAppendOffsetLocked(ctx, init, wantOffset); err != nil {
+		return nil, err
 	}
 
 	attempt, err := s.beginOpenlogWriteAttempt(openlogWriteAttemptConfig{
@@ -154,6 +148,121 @@ func (s *Shard) abortReplicatedWriteAttempt(attempt *openlogWriteAttempt, startO
 		_ = s.blockWriter.Truncate(startOffset)
 	}
 	attempt.cleanupOnAbort()
+}
+
+// ensureReplicaAppendOffsetLocked reconciles the replica Block offset with the
+// leader's declared start offset: repair from a peer when behind, roll back an
+// uncommitted overhang when ahead.
+func (s *Shard) ensureReplicaAppendOffsetLocked(ctx context.Context, init *scrapv1.ReplicateDocumentInit, wantOffset int64) error {
+	currentOffset := s.blockWriter.Offset()
+	if currentOffset < wantOffset {
+		if err := s.repairReplicaOffsetLocked(ctx, init.GetBlockId(), wantOffset); err != nil {
+			return fmt.Errorf("shard: replica offset %d, want %d: repair failed: %w", currentOffset, wantOffset, err)
+		}
+		currentOffset = s.blockWriter.Offset()
+	}
+	if currentOffset > wantOffset {
+		if err := s.rollbackReplicaOverhangLocked(init.GetBlockId(), wantOffset, currentOffset); err != nil {
+			return fmt.Errorf("shard: replica offset %d, want %d: %w", currentOffset, wantOffset, err)
+		}
+		currentOffset = s.blockWriter.Offset()
+	}
+	if currentOffset != wantOffset {
+		return fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
+	}
+	return nil
+}
+
+// rollbackReplicaOverhangLocked reclaims replica Block bytes past wantOffset.
+// A replica ends up ahead of the leader when it accepted a replicated append
+// whose write the leader then aborted: the leader truncates its own Block, but
+// replicas that already appended keep the Frames. Those Frames were never
+// committed — a commit indexes Frames the leader kept — so rolling back to
+// wantOffset restores replication instead of rejecting every later append
+// until restart recovery truncates the same region (and, until then, applying
+// committed entries whose bytes this replica never received). Refuse when the
+// open Block's index references the overhang: an indexed Document there means
+// committed bytes.
+func (s *Shard) rollbackReplicaOverhangLocked(blockID uint64, wantOffset, currentOffset int64) error {
+	indexed, err := s.replicaOverhangIndexed(blockID, wantOffset)
+	if err != nil {
+		return err
+	}
+	if indexed {
+		return fmt.Errorf("shard: replica overhang past offset %d holds indexed documents", wantOffset)
+	}
+	boundary, err := s.replicaRollbackTargetIsDocumentBoundary(blockID, wantOffset)
+	if err != nil {
+		return err
+	}
+	if !boundary {
+		return fmt.Errorf("shard: replica rollback offset %d is not a document boundary", wantOffset)
+	}
+	if err := s.blockWriter.Truncate(wantOffset); err != nil {
+		return fmt.Errorf("shard: roll back replica overhang: %w", err)
+	}
+	// The aborted writes' preps still point at the overhang. With the bytes
+	// reclaimed they must not survive: Openlog recovery would truncate at
+	// their start offset again and cut whatever commits there afterwards.
+	s.removeOverhangPreps(blockID, wantOffset)
+	s.logger.Warn("shard: rolled back replica overhang from aborted leader write",
+		"block_id", blockID, "from_offset", currentOffset, "to_offset", wantOffset)
+	return nil
+}
+
+// replicaOverhangIndexed reports whether the open Block's index references any
+// Document at or past wantOffset. Any read failure other than a missing index
+// counts as indexed, failing closed to the pre-rollback behavior (reject the
+// append) rather than truncating bytes it cannot prove uncommitted.
+func (s *Shard) replicaOverhangIndexed(blockID uint64, wantOffset int64) (bool, error) {
+	ir, err := block.OpenIndexReader(s.idxPath(blockID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("shard: open replica index: %w", err)
+	}
+	defer func() { _ = ir.Close() }()
+	for _, entry := range ir.Entries() {
+		if entry.FirstFrameOff >= wantOffset {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// replicaRollbackTargetIsDocumentBoundary reports whether wantOffset lands
+// exactly between whole Documents in the Block. The overhang of an aborted
+// leader write always starts at a Document boundary; any other offset (a
+// malformed init from a buggy peer) must be refused before Truncate physically
+// cuts a Document mid-frame. Scan failures fail closed as "not a boundary".
+func (s *Shard) replicaRollbackTargetIsDocumentBoundary(blockID uint64, wantOffset int64) (bool, error) {
+	f, err := os.Open(s.blockPath(blockID))
+	if err != nil {
+		return false, fmt.Errorf("shard: open replica block for rollback scan: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(block.HeaderSize, io.SeekStart); err != nil {
+		return false, fmt.Errorf("shard: seek replica block: %w", err)
+	}
+	offset := int64(block.HeaderSize)
+	for offset < wantOffset {
+		_, payload, err := block.ReadFrame(f)
+		if err != nil {
+			return false, fmt.Errorf("shard: scan replica block for rollback: %w", err)
+		}
+		offset += int64(block.FrameHeaderSize) + int64(len(payload))
+	}
+	if offset != wantOffset {
+		return false, nil
+	}
+	// The first overhang Frame exists (the caller saw currentOffset > wantOffset)
+	// and must start a Document; a continuation Frame means wantOffset splits one.
+	hdr, _, err := block.ReadFrame(f)
+	if err != nil {
+		return false, fmt.Errorf("shard: read overhang frame: %w", err)
+	}
+	return hdr.FrameSeq == 0, nil
 }
 
 func validateReplicatedAppend(init *scrapv1.ReplicateDocumentInit, result block.AppendResult, wantOffset int64) error {
@@ -200,11 +309,17 @@ func (s *Shard) appendReplicatedPayload(ctx context.Context, init *scrapv1.Repli
 	if !s.encryption.enabled() {
 		return block.AppendResult{}, storeapi.NewUnavailable(storeapi.UnavailableReasonCryptoUnavailable, "key material unavailable")
 	}
-	_, err = encryption.DecryptDocument(ctx, s.encryption.Transit, encryption.DocumentIdentity{
+	// Streaming verify: authenticate every frame and the whole-Document
+	// digest without ever materializing the plaintext.
+	decryptor, err := encryption.NewDocumentDecryptor(ctx, s.encryption.Transit, encryption.DocumentIdentity{
 		TransactionID: init.GetTransactionId(),
 		DocumentName:  init.GetDocumentName(),
-	}, init.GetEncryptionEnvelope(), frames, sha, init.GetTotalBytes())
+	}, init.GetEncryptionEnvelope(), sha, init.GetTotalBytes())
 	if err != nil {
+		return block.AppendResult{}, mapEncryptionError(err)
+	}
+	defer decryptor.Close()
+	if err := decryptor.Verify(encryption.NewSliceFrameSource(frames)); err != nil {
 		return block.AppendResult{}, mapEncryptionError(err)
 	}
 	return s.blockWriter.AppendDocumentFrames(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), block.DocumentFrames{
@@ -214,12 +329,20 @@ func (s *Shard) appendReplicatedPayload(ctx context.Context, init *scrapv1.Repli
 	})
 }
 
+// maxReplicatedFrameCount bounds a peer-declared frame count by the largest
+// frame count a maximum-size Document can produce, so a malformed init message
+// cannot drive the frames allocation below.
+const maxReplicatedFrameCount = storeapi.MaxDocumentBytes/block.MaxFramePayload + 1
+
 func splitReplicatedStoredFrames(data []byte, frameCount uint32) ([][]byte, error) {
 	if frameCount == 0 {
 		if len(data) != 0 {
 			return nil, fmt.Errorf("shard: replicated payload has %d bytes for zero frames", len(data))
 		}
 		return nil, nil
+	}
+	if frameCount > maxReplicatedFrameCount {
+		return nil, fmt.Errorf("shard: replicated frame count %d exceeds max %d", frameCount, maxReplicatedFrameCount)
 	}
 	frames := make([][]byte, 0, frameCount)
 	remaining := data

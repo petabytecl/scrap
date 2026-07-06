@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -107,21 +108,38 @@ func resolvePeers(cfg Config) (map[uint64]string, uint64, error) {
 		return peers, scrapraft.OrdinalToRaftID(ord), nil
 
 	case cfg.Replicas > 0 && cfg.HeadlessService != "":
-		hostname, err := os.Hostname()
-		if err != nil {
-			return nil, 0, fmt.Errorf("hostname: %w", err)
-		}
-		ord, err := scrapraft.ParseOrdinal(hostname)
-		if err != nil {
-			return nil, 0, fmt.Errorf("parse ordinal from %q: %w", hostname, err)
-		}
-		raftID := scrapraft.OrdinalToRaftID(ord)
-		peers := scrapraft.BuildK8sPeers(cfg.Replicas, cfg.HeadlessService, cfg.Namespace, cfg.PeerPort)
-		return peers, raftID, nil
+		return resolveK8sPeers(cfg)
+
+	case cfg.Replicas > 0 || cfg.HeadlessService != "":
+		// Half-specified cluster identity: fail closed rather than silently
+		// falling through to the lone-node default, which would make a pod that
+		// is meant to be clustered bootstrap as a single-voter raft ID 1.
+		return nil, 0, halfSpecifiedClusterError(cfg)
 
 	default:
 		return map[uint64]string{1: "localhost:9091"}, 1, nil
 	}
+}
+
+func resolveK8sPeers(cfg Config) (map[uint64]string, uint64, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, 0, fmt.Errorf("hostname: %w", err)
+	}
+	ord, err := scrapraft.ParseOrdinal(hostname)
+	if err != nil {
+		return nil, 0, fmt.Errorf("parse ordinal from %q: %w", hostname, err)
+	}
+	raftID := scrapraft.OrdinalToRaftID(ord)
+	peers := scrapraft.BuildK8sPeers(cfg.Replicas, cfg.HeadlessService, cfg.Namespace, cfg.PeerPort)
+	return peers, raftID, nil
+}
+
+func halfSpecifiedClusterError(cfg Config) error {
+	if cfg.HeadlessService == "" {
+		return errors.New("SCRAP_HEADLESS_SERVICE is required when SCRAP_REPLICAS is set")
+	}
+	return errors.New("SCRAP_REPLICAS must be greater than 0 when SCRAP_HEADLESS_SERVICE is set")
 }
 
 func resolveClientAddrs(cfg Config, peers map[uint64]string) map[uint64]string {

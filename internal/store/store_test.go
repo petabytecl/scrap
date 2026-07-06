@@ -3,8 +3,6 @@ package store_test
 import (
 	"context"
 	"io"
-	"testing"
-	"time"
 
 	"github.com/petabytecl/scrap/internal/store"
 )
@@ -29,45 +27,3 @@ func (s *stubStore) FindDocuments(_ context.Context, _ string) ([]store.Document
 
 // Compile-time interface compliance check.
 var _ store.Store = (*stubStore)(nil)
-
-func TestWriteResultFields(t *testing.T) {
-	r := store.WriteResult{
-		SHA256:    [32]byte{0xAA},
-		Size:      1024,
-		CreatedAt: time.Now(),
-	}
-	if r.SHA256 == [32]byte{} {
-		t.Fatal("SHA256 should be set")
-	}
-	if r.Size != 1024 {
-		t.Fatal("Size should be 1024")
-	}
-	if r.CreatedAt.IsZero() {
-		t.Fatal("CreatedAt should be set")
-	}
-}
-
-func TestDocumentMetaFields(t *testing.T) {
-	m := store.DocumentMeta{
-		Name:        "invoice.xml",
-		ContentType: "application/xml",
-		Size:        2048,
-		SHA256:      [32]byte{0xBB},
-		CreatedAt:   time.Now(),
-	}
-	if m.Name == "" {
-		t.Fatal("Name should be set")
-	}
-	if m.ContentType == "" {
-		t.Fatal("ContentType should be set")
-	}
-	if m.Size != 2048 {
-		t.Fatal("Size should be 2048")
-	}
-	if m.SHA256 == [32]byte{} {
-		t.Fatal("SHA256 should be set")
-	}
-	if m.CreatedAt.IsZero() {
-		t.Fatal("CreatedAt should be set")
-	}
-}

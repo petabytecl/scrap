@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -167,64 +168,88 @@ func writeLogEvidence(dir, marker string, body []byte, count int) error {
 	return writeJSONFile(filepath.Join(dir, "scrapd.json"), evidence)
 }
 
+// lokiLogResponse is the only response shape the log evidence permits. The
+// redaction below is a positive allowlist: fields outside this shape are
+// dropped, values outside the allowed enums and token shapes are replaced
+// with "redacted", and a response that does not parse into this shape is
+// discarded entirely. Free-text log lines are never copied into the bundle;
+// the marker proof is carried by the query, marker, and log_count fields.
+type lokiLogResponse struct {
+	Status string `json:"status"`
+	Data   struct {
+		ResultType string `json:"resultType"`
+		Result     []struct {
+			Stream map[string]string `json:"stream"`
+			Values [][]string        `json:"values"`
+		} `json:"result"`
+	} `json:"data"`
+}
+
+var (
+	allowedLogStatuses     = map[string]struct{}{"success": {}, "error": {}}
+	allowedLogResultTypes  = map[string]struct{}{"streams": {}, "matrix": {}, "vector": {}}
+	allowedLogStreamLabels = map[string]struct{}{
+		"service_name":   {},
+		"level":          {},
+		"detected_level": {},
+		"component":      {},
+	}
+	safeLogTokenPattern    = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	logTimestampPattern    = regexp.MustCompile(`^[0-9]{1,20}$`)
+	redactedLogPlaceholder = "redacted"
+)
+
 func redactedLogResponse(body []byte) any {
-	var value any
-	if err := json.Unmarshal(body, &value); err != nil {
+	var resp lokiLogResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return map[string]any{
 			"status":      "error",
-			"parse_error": "invalid_json",
+			"parse_error": "unrecognized_response_shape",
 		}
 	}
-	return redactLogValue(value)
+	results := make([]map[string]any, 0, len(resp.Data.Result))
+	for _, result := range resp.Data.Result {
+		results = append(results, map[string]any{
+			"stream": allowlistedStreamLabels(result.Stream),
+			"values": redactedLogValues(result.Values),
+		})
+	}
+	return map[string]any{
+		"status": allowlistedToken(resp.Status, allowedLogStatuses),
+		"data": map[string]any{
+			"resultType": allowlistedToken(resp.Data.ResultType, allowedLogResultTypes),
+			"result":     results,
+		},
+	}
 }
 
-func redactLogValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for key, child := range typed {
-			if shouldRedactLogField(key, child) {
-				continue
-			}
-			out[key] = redactLogValue(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, child := range typed {
-			out[i] = redactLogValue(child)
-		}
-		return out
-	case string:
-		if containsSensitiveLogString(typed) {
-			return "redacted"
-		}
-		return typed
-	default:
+func allowlistedToken(value string, allowed map[string]struct{}) string {
+	if _, ok := allowed[value]; ok {
 		return value
 	}
+	return redactedLogPlaceholder
 }
 
-func shouldRedactLogField(key string, value any) bool {
-	lowerKey := strings.ToLower(key)
-	if lowerKey == "log_file_path" || lowerKey == "filename" || lowerKey == "file_path" || lowerKey == "__path__" {
-		return true
-	}
-	if lowerKey == "path" {
-		if text, ok := value.(string); ok {
-			return containsSensitiveLogString(text)
+func allowlistedStreamLabels(stream map[string]string) map[string]string {
+	out := make(map[string]string, len(allowedLogStreamLabels))
+	for key, value := range stream {
+		if _, ok := allowedLogStreamLabels[key]; ok && safeLogTokenPattern.MatchString(value) {
+			out[key] = value
 		}
 	}
-	return false
+	return out
 }
 
-func containsSensitiveLogString(text string) bool {
-	for _, fragment := range []string{"/home/", "/Users/", "/var/", "/opt/", "/private/", "/tmp/"} {
-		if strings.Contains(text, fragment) {
-			return true
+func redactedLogValues(values [][]string) [][]string {
+	out := make([][]string, 0, len(values))
+	for _, value := range values {
+		entry := []string{"", redactedLogPlaceholder}
+		if len(value) > 0 && logTimestampPattern.MatchString(value[0]) {
+			entry[0] = value[0]
 		}
+		out = append(out, entry)
 	}
-	return false
+	return out
 }
 
 func captureCPUProfile(ctx context.Context, client *http.Client, cfg Config, dir string, window runWindow) (bool, string, error) {

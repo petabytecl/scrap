@@ -153,12 +153,14 @@ func leafCertificate(cert tls.Certificate) (*x509.Certificate, error) {
 	return leaf, nil
 }
 
+// hasExtKeyUsage requires the certificate to explicitly carry the given
+// extended key usage (or anyExtendedKeyUsage). A certificate with no recognized
+// EKU — including one presenting only unknown OIDs — is rejected rather than
+// treated as universally usable, so a client cert cannot masquerade as a server
+// identity and vice versa.
 func hasExtKeyUsage(cert *x509.Certificate, usage x509.ExtKeyUsage) bool {
-	if len(cert.ExtKeyUsage) == 0 {
-		return true
-	}
 	for _, candidate := range cert.ExtKeyUsage {
-		if candidate == usage {
+		if candidate == usage || candidate == x509.ExtKeyUsageAny {
 			return true
 		}
 	}

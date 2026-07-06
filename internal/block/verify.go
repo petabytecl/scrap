@@ -15,6 +15,7 @@ import (
 type CorruptionType string
 
 const (
+	CorruptionHeader              CorruptionType = "header"
 	CorruptionFrameCRC            CorruptionType = "frame_crc"
 	CorruptionDocSHA256           CorruptionType = "doc_sha256"
 	CorruptionDocCiphertextLength CorruptionType = "doc_ciphertext_length"
@@ -48,11 +49,30 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 	}
 	defer func() { _ = f.Close() }()
 
+	headerCorrupt := verifyHeaderStructure(f)
 	if _, err := f.Seek(HeaderSize, io.SeekStart); err != nil {
 		return VerifyResult{}, fmt.Errorf("block: verify seek past header: %w", err)
 	}
 
-	return verifyFrames(f, idxEntries), nil
+	result := verifyFrames(f, idxEntries)
+	if headerCorrupt {
+		result.CorruptFrames = append([]CorruptFrame{{Offset: 0, Type: CorruptionHeader}}, result.CorruptFrames...)
+	}
+	return result, nil
+}
+
+// verifyHeaderStructure checks the 40-byte Block header's magic and CRC.
+// VerifyBlock has no expected shard/block IDs, so identity fields are not
+// checked here; VerifyHeader covers those on the read path.
+func verifyHeaderStructure(f io.Reader) bool {
+	var hdr [HeaderSize]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return true
+	}
+	if string(hdr[0:4]) != "SCRP" {
+		return true
+	}
+	return crc32.Checksum(hdr[0:36], crcTable) != binary.LittleEndian.Uint32(hdr[36:40])
 }
 
 func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
@@ -215,7 +235,7 @@ func readRawFramePayload(r io.Reader, payloadLen uint32) ([]byte, error) {
 	payload := make([]byte, payloadLen)
 	if payloadLen > 0 {
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, ErrCRCMismatch
+			return nil, ErrTruncated
 		}
 	}
 	return payload, nil

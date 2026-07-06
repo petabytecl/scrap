@@ -198,14 +198,21 @@ func validateTransferSizes(blkSize, idxSize int64) error {
 	return nil
 }
 
+// transferPreallocBytes caps the initial allocation derived from peer-declared
+// sizes; buffers still grow to the validated size as data actually arrives.
+const transferPreallocBytes int64 = 64 << 20 // 64 MiB, the nominal Block size
+
 func recvBlockData(stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse], blkSize, idxSize int64) ([]byte, []byte, error) {
 	if err := validateTransferSizes(blkSize, idxSize); err != nil {
 		return nil, nil, err
 	}
 
-	blkData := make([]byte, 0, blkSize)
-	idxData := make([]byte, 0, idxSize)
-	remaining := blkSize
+	bufs := &blockDataBuffers{
+		blk:       make([]byte, 0, min(blkSize, transferPreallocBytes)),
+		idx:       make([]byte, 0, min(idxSize, transferPreallocBytes)),
+		remaining: blkSize,
+		idxSize:   idxSize,
+	}
 
 	for {
 		msg, err := stream.Recv()
@@ -215,33 +222,65 @@ func recvBlockData(stream grpc.ServerStreamingClient[scrapv1.TransferBlockRespon
 		if err != nil {
 			return nil, nil, fmt.Errorf("peer: recv block data: %w", err)
 		}
-		chunk := msg.GetChunkData()
-		if remaining <= 0 {
-			idxData = append(idxData, chunk...)
-			continue
+		if err := bufs.consume(msg.GetChunkData()); err != nil {
+			return nil, nil, err
 		}
-		take := min(int64(len(chunk)), remaining)
-		blkData = append(blkData, chunk[:take]...)
-		if take < int64(len(chunk)) {
-			idxData = append(idxData, chunk[take:]...)
-		}
-		remaining -= take
 	}
 
-	if int64(len(blkData)) != blkSize {
-		return nil, nil, fmt.Errorf("peer: block size mismatch: got %d, expected %d", len(blkData), blkSize)
+	if int64(len(bufs.blk)) != blkSize {
+		return nil, nil, fmt.Errorf("peer: block size mismatch: got %d, expected %d", len(bufs.blk), blkSize)
 	}
-	if int64(len(idxData)) != idxSize {
-		return nil, nil, fmt.Errorf("peer: index size mismatch: got %d, expected %d", len(idxData), idxSize)
+	if int64(len(bufs.idx)) != idxSize {
+		return nil, nil, fmt.Errorf("peer: index size mismatch: got %d, expected %d", len(bufs.idx), idxSize)
 	}
-	return blkData, idxData, nil
+	return bufs.blk, bufs.idx, nil
+}
+
+// blockDataBuffers splits a transfer stream at the declared block size into
+// blk and idx buffers.
+type blockDataBuffers struct {
+	blk       []byte
+	idx       []byte
+	remaining int64
+	idxSize   int64
+}
+
+func (b *blockDataBuffers) consume(chunk []byte) error {
+	if b.remaining <= 0 {
+		var err error
+		b.idx, err = appendBoundedIdxData(b.idx, chunk, b.idxSize)
+		return err
+	}
+	take := min(int64(len(chunk)), b.remaining)
+	b.blk = append(b.blk, chunk[:take]...)
+	if take < int64(len(chunk)) {
+		var err error
+		if b.idx, err = appendBoundedIdxData(b.idx, chunk[take:], b.idxSize); err != nil {
+			return err
+		}
+	}
+	b.remaining -= take
+	return nil
+}
+
+// appendBoundedIdxData rejects index bytes beyond the declared size as soon as
+// they arrive, so a peer that never stops streaming cannot grow the buffer
+// unboundedly waiting for an EOF-time check.
+func appendBoundedIdxData(idxData, chunk []byte, idxSize int64) ([]byte, error) {
+	if int64(len(idxData))+int64(len(chunk)) > idxSize {
+		return nil, fmt.Errorf("peer: index data exceeds declared size %d", idxSize)
+	}
+	return append(idxData, chunk...), nil
 }
 
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, conn := range c.conns {
+	for addr, conn := range c.conns {
 		_ = conn.Close()
+		// Drop the closed conn so a later call redials instead of failing
+		// every RPC on a conn stuck in the closed state.
+		delete(c.conns, addr)
 	}
 }
 

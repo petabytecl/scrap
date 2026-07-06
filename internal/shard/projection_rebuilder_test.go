@@ -523,3 +523,34 @@ func (noopRebuildBackend) DeleteObject(context.Context, string) error {
 func (noopRebuildBackend) ListObjects(context.Context, string, backend.ListOpts) (backend.ObjectIterator, error) {
 	return nil, backend.ErrPermanent
 }
+
+func TestRecoverProjectionSwapDirsAbortsOnUnreadableProjection(t *testing.T) {
+	dataDir := t.TempDir()
+
+	// A pre-rebuild backup from an interrupted swap is the only surviving copy
+	// of the projection and must not be destroyed.
+	backup := filepath.Join(dataDir, "pebble.previous-1")
+	if err := os.MkdirAll(backup, 0o750); err != nil {
+		t.Fatalf("mkdir backup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "MANIFEST"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write backup file: %v", err)
+	}
+
+	// Stand in for an EIO/EACCES read of the live projection: a plain file at
+	// the projection path makes os.ReadDir fail with ENOTDIR, which is not
+	// os.IsNotExist.
+	pebbleDir := filepath.Join(dataDir, "pebble")
+	if err := os.WriteFile(pebbleDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write pebble stand-in file: %v", err)
+	}
+
+	if err := recoverProjectionSwapDirs(dataDir, pebbleDir); err == nil {
+		t.Fatal("recoverProjectionSwapDirs succeeded on unreadable projection, want error")
+	}
+
+	// The backup must survive so a later recovery can still restore it.
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("backup removed on a failing-disk read: %v", err)
+	}
+}

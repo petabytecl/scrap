@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -134,7 +135,8 @@ func (t *OpenBaoTransit) UnwrapDataKey(ctx context.Context, req UnwrapDataKeyReq
 }
 
 func (t *OpenBaoTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyRequest) (RewrappedKey, error) {
-	body := map[string]any{"ciphertext": strings.TrimSpace(req.WrappedKey)}
+	priorKey := strings.TrimSpace(req.WrappedKey)
+	body := map[string]any{"ciphertext": priorKey}
 	if len(req.Context) > 0 {
 		body["context"] = base64.StdEncoding.EncodeToString(req.Context)
 	}
@@ -155,7 +157,7 @@ func (t *OpenBaoTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyReq
 	return RewrappedKey{
 		WrappedKey: ciphertext,
 		Version:    versionFromWrappedKey(ciphertext),
-		Changed:    ciphertext != req.WrappedKey,
+		Changed:    ciphertext != priorKey,
 	}, nil
 }
 
@@ -211,8 +213,38 @@ func transitKeyMetadataFromData(data map[string]any) (transitKeyMetadata, error)
 	}, nil
 }
 
+// transitInsecureEnvVars are TLS-verification kill switches the OpenBao/Vault
+// SDK honors through DefaultConfig's environment reading. SCRAP exchanges
+// plaintext data keys over this connection, so it refuses to start when any of
+// them disables certificate verification rather than silently accepting a
+// MITM-able transport.
+var transitInsecureEnvVars = []string{"VAULT_SKIP_VERIFY", "BAO_SKIP_VERIFY"}
+
+func rejectInsecureTransitEnv() error {
+	for _, key := range transitInsecureEnvVars {
+		raw, ok := os.LookupEnv(key)
+		if !ok {
+			continue
+		}
+		skip, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("openbao transit config: %s is not a valid boolean: %w", key, ErrInvalidConfig)
+		}
+		if skip {
+			return fmt.Errorf("openbao transit config: %s disables TLS verification and is not permitted: %w", key, ErrInvalidConfig)
+		}
+	}
+	return nil
+}
+
 func newOpenBaoClient(address, token string, httpClient *http.Client) (*baoapi.Client, error) {
+	if err := rejectInsecureTransitEnv(); err != nil {
+		return nil, err
+	}
 	cfg := baoapi.DefaultConfig()
+	if cfg.Error != nil {
+		return nil, fmt.Errorf("openbao transit client config: %w", ErrInvalidConfig)
+	}
 	cfg.Address = address
 	cfg.Timeout = defaultClientTimeout
 	cfg.MaxRetries = defaultClientRetries
@@ -390,10 +422,15 @@ func classifyOpenBaoFailure(statusCode int, bodyText string) error {
 		cause = ErrAuthDenied
 	case statusCode == http.StatusNotFound:
 		cause = ErrMissingKey
-	case isMinimumVersionFailure(bodyText):
-		cause = ErrMinimumVersion
 	case statusCode == http.StatusBadRequest:
-		cause = ErrInvalidRequest
+		// The minimum-version signal is a body-text heuristic, so only trust it
+		// on a 400. A 5xx whose body happens to contain "minimum"+"version" is a
+		// transient provider failure, not the terminal min-version condition.
+		if isMinimumVersionFailure(bodyText) {
+			cause = ErrMinimumVersion
+		} else {
+			cause = ErrInvalidRequest
+		}
 	case statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError:
 		cause = ErrUnavailable
 	default:

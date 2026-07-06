@@ -96,6 +96,26 @@ func safeUint64ToInt64(v uint64) int64 {
 	return int64(v)
 }
 
+// sweepOrphanedStagingFiles removes restore and replica-repair staging files
+// left behind by a crash. They can each hold a full Block of bytes, the
+// lifecycle scan deliberately ignores them, and nothing else ever reclaims
+// them. Runs before the Shard serves, so no staging file can be live.
+func sweepOrphanedStagingFiles(blocksDir string) error {
+	patterns := []string{".*.restore-*", "*" + replicaRepairSuffix, "*" + replicaRepairSuffix + ".tmp"}
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(blocksDir, pattern))
+		if err != nil {
+			return fmt.Errorf("shard: glob staging files: %w", err)
+		}
+		for _, match := range matches {
+			if err := os.Remove(match); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("shard: remove orphaned staging file: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 func scanMaxBlockID(blocksDir string) (uint64, error) {
 	entries, err := os.ReadDir(blocksDir)
 	if err != nil {
@@ -110,7 +130,7 @@ func scanMaxBlockID(blocksDir string) (uint64, error) {
 		name := e.Name()
 		id, ok, err := blockIDFromLocalLifecycleName(name)
 		if err != nil {
-			return 0, fmt.Errorf("shard: malformed block filename: %s", name)
+			return 0, fmt.Errorf("shard: malformed block filename %s: %w", name, err)
 		}
 		if !ok {
 			continue
@@ -123,7 +143,10 @@ func scanMaxBlockID(blocksDir string) (uint64, error) {
 }
 
 func blockIDFromLocalLifecycleName(name string) (uint64, bool, error) {
-	for _, suffix := range []string{".blk", ".idx", ".blk.eviction.json", ".blk.restore.json"} {
+	// Quarantined Block files must keep reserving their ID: Block IDs are
+	// never reused, and a fully quarantined highest Block would otherwise be
+	// reallocated at the next startup.
+	for _, suffix := range []string{".blk", ".idx", ".blk.eviction.json", ".blk.restore.json", ".blk.quarantine", ".idx.quarantine", ".confirmed-upload.json"} {
 		if !strings.HasSuffix(name, suffix) {
 			continue
 		}

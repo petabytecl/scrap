@@ -25,11 +25,14 @@ import (
 func TestAdminAuditsDangerousOperationAndRateLimitDenial(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter, err := security.NewRateLimiter(security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
 	applier := &successfulEvictionApplier{}
 	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithRateLimiter(limiter), admin.WithEvictionApplier(applier))
 	ctx := security.ContextWithPrincipal(context.Background(), security.Principal{
@@ -372,11 +375,14 @@ func TestAdminAuditsEvictionPlanCollectionMethodDenialAsCreate(t *testing.T) {
 func TestAdminAuditsDistinctDeniedTLSPrincipals(t *testing.T) {
 	authz := adminAuthorizerForPrincipal(t, "spiffe://scrap/cell/cell-a/member/scrapd-0/member-a", security.RoleAdminReader)
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter, err := security.NewRateLimiter(security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
 	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithRateLimiter(limiter))
 
 	unknownPrincipals := []string{
@@ -512,11 +518,14 @@ func TestAdminAuditsQuarantineValidationFailureAsInvalidRequest(t *testing.T) {
 func TestAdminQuarantineRateLimitDenialReturnsJSON(t *testing.T) {
 	authz := security.NewStaticAuthorizer()
 	sink := audit.NewMemorySink()
-	limiter := security.NewRateLimiter(security.RateLimitPolicy{
+	limiter, err := security.NewRateLimiter(security.RateLimitPolicy{
 		Surfaces: []security.RateLimitSurfacePolicy{
 			{Surface: security.RateLimitSurfaceAdmin, Limit: 1, Window: time.Minute},
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewRateLimiter: %v", err)
+	}
 	service := &quarantineServiceStub{}
 	srv := admin.New(admin.WithAuthorizer(authz), admin.WithAuditSink(sink), admin.WithRateLimiter(limiter), admin.WithQuarantineService(service))
 	ctx := adminAuthContext(security.RoleAdminReader)

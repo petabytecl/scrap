@@ -76,7 +76,7 @@ func (a *openlogWriteAttempt) commitCommand(result block.AppendResult, createdAt
 				ContentType:        a.entry.ContentType,
 				IdempotencyKey:     a.entry.IdempotencyKey,
 				BlockId:            a.entry.BlockId,
-				FirstFrameOff:      uint64(max(0, result.FirstFrameOffset)),
+				FirstFrameOff:      uint64(result.FirstFrameOffset), //nolint:gosec // WriteDocument verifies FirstFrameOffset equals the non-negative startOffset before building the command.
 				FrameCount:         result.FrameCount,
 				TotalBytes:         result.Size,
 				Sha256:             result.SHA256[:],

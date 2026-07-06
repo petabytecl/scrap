@@ -57,6 +57,10 @@ type Block struct {
 	BlockID   uint64
 	SizeBytes int64
 	Open      func(context.Context) (io.ReadCloser, error)
+	// Restored marks a Block brought back from the Backend after eviction. A
+	// restored Block may never have been scanned (eviction does not gate on
+	// scan state), so it stays scan-eligible even below the durable frontier.
+	Restored bool
 }
 
 func (b Block) OpenBytes(ctx context.Context) (io.ReadCloser, error) {

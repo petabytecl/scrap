@@ -89,14 +89,26 @@ func WithRateLimitObserver(observer RateLimitObserver) RateLimiterOption {
 	}
 }
 
-func NewRateLimiter(policy RateLimitPolicy, opts ...RateLimiterOption) *RateLimiter {
+// NewRateLimiter rejects invalid surface budgets instead of skipping them so a
+// hand-built policy cannot silently fail open. An empty policy is valid and
+// leaves every surface unlimited.
+func NewRateLimiter(policy RateLimitPolicy, opts ...RateLimiterOption) (*RateLimiter, error) {
 	limiter := &RateLimiter{
 		now:      time.Now,
 		surfaces: make(map[RateLimitSurface]*surfaceBudget, len(policy.Surfaces)),
 	}
 	for _, surface := range policy.Surfaces {
-		if surface.Limit <= 0 || surface.Window <= 0 {
-			continue
+		if !validRateLimitSurface(surface.Surface) {
+			return nil, fmt.Errorf("rate-limit surface %q is invalid", surface.Surface)
+		}
+		if surface.Limit <= 0 {
+			return nil, fmt.Errorf("rate-limit surface %q limit is invalid", surface.Surface)
+		}
+		if surface.Window <= 0 {
+			return nil, fmt.Errorf("rate-limit surface %q window is invalid", surface.Surface)
+		}
+		if _, ok := limiter.surfaces[surface.Surface]; ok {
+			return nil, fmt.Errorf("rate-limit surface %q is duplicated", surface.Surface)
 		}
 		limiter.surfaces[surface.Surface] = &surfaceBudget{
 			limit:  surface.Limit,
@@ -109,7 +121,7 @@ func NewRateLimiter(policy RateLimitPolicy, opts ...RateLimiterOption) *RateLimi
 			opt(limiter)
 		}
 	}
-	return limiter
+	return limiter, nil
 }
 
 func (l *RateLimiter) Allow(ctx context.Context, surface RateLimitSurface, key string, operation ...string) RateLimitDecision {

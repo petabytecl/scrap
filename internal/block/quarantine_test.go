@@ -67,7 +67,7 @@ func TestQuarantine_ListSealedExcludes(t *testing.T) {
 		t.Fatalf("Quarantine: %v", err)
 	}
 
-	sealed, err := block.ListSealedBlocks(dir, 99)
+	sealed, err := block.ListSealedBlocks(dir, 99, nil)
 	if err != nil {
 		t.Fatalf("ListSealedBlocks: %v", err)
 	}
@@ -147,5 +147,31 @@ func TestUnquarantine_RollsBackBlkOnIdxFailure(t *testing.T) {
 	}
 	if _, statErr := os.Stat(blkPath); !os.IsNotExist(statErr) {
 		t.Fatal("expected blk not to exist after rollback")
+	}
+}
+
+func TestUnquarantine_RefusesToClobberExistingBlock(t *testing.T) {
+	dir := t.TempDir()
+	createSealedBlock(t, dir, 1, 7)
+
+	blkPath := block.FilePath(dir, 7)
+	if err := block.Quarantine(blkPath); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+
+	// A replacement Block arrived (e.g. via peer transfer) while the corrupt
+	// copy sat in quarantine; Unquarantine must not overwrite it.
+	createSealedBlock(t, dir, 1, 7)
+
+	if err := block.Unquarantine(dir, 7); err == nil {
+		t.Fatal("Unquarantine over existing block succeeded, want error")
+	}
+
+	data, err := os.ReadFile(blkPath) //nolint:gosec // test reads file it just created in a temp dir
+	if err != nil {
+		t.Fatalf("ReadFile replacement block: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("replacement block is empty after refused unquarantine")
 	}
 }

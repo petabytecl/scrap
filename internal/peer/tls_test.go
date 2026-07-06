@@ -118,6 +118,7 @@ func replicateSmallDocument(client *peer.Client, addr string) error {
 		ContentType:   "text/xml",
 		BlockId:       1,
 		TotalBytes:    4,
+		Sha256:        testBodySHA256("data"),
 	}, [][]byte{[]byte("data")})
 	return err
 }

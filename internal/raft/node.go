@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/etcd/server/v3/storage/wal"
 	"go.etcd.io/etcd/server/v3/storage/wal/walpb"
@@ -27,6 +30,16 @@ const (
 	defaultMaxSnapCount  = 10000
 	defaultElectionTick  = 10
 	defaultHeartbeatTick = 1
+
+	// defaultSnapshotCatchUpEntries is how many entries stay in MemoryStorage
+	// behind a new snapshot so a slightly lagging follower catches up via
+	// normal log replication instead of an install-snapshot.
+	defaultSnapshotCatchUpEntries = 5000
+
+	// maxKeptSnapFiles and maxKeptWALFiles bound the on-disk history retained
+	// after each snapshot; older files are purged best-effort.
+	maxKeptSnapFiles = 5
+	maxKeptWALFiles  = 5
 )
 
 // ApplyFunc applies committed entries to the state machine. replayUntil is the
@@ -36,7 +49,10 @@ const (
 // even though Open starts the run loop before returning the node.
 type ApplyFunc func(entries []raftpb.Entry, replayUntil uint64) error
 
-type SnapshotFunc func() (data []byte, err error)
+// SnapshotFunc produces the snapshot manifest for the given applied index. The
+// index lets the application durably record how far its out-of-log state has
+// advanced, so a later Restore can detect a partially-restored DataDir.
+type SnapshotFunc func(appliedIndex uint64) (data []byte, err error)
 
 type RestoreFunc func(data []byte) error
 
@@ -57,6 +73,10 @@ type Config struct {
 	HeartbeatTick   int
 	MaxSizePerMsg   uint64
 	MaxInflightMsgs int
+
+	// SnapshotCatchUpEntries is the trailing log window retained in
+	// MemoryStorage when the log compacts behind a new snapshot.
+	SnapshotCatchUpEntries uint64
 }
 
 type Node struct {
@@ -72,11 +92,13 @@ type Node struct {
 	snapshotIndex     uint64
 	replayCommitIndex uint64
 	commitIndex       uint64
+	confState         raftpb.ConfState
 
 	leaderID atomic.Uint64
 	stateMu  sync.RWMutex
 	readMu   sync.Mutex
 	readMap  map[string]chan uint64
+	readSeq  atomic.Uint64
 
 	stopc chan struct{}
 	donec chan struct{}
@@ -111,6 +133,9 @@ func Open(cfg Config) (*Node, error) {
 	if cfg.MaxSnapCount == 0 {
 		cfg.MaxSnapCount = defaultMaxSnapCount
 	}
+	if cfg.SnapshotCatchUpEntries == 0 {
+		cfg.SnapshotCatchUpEntries = defaultSnapshotCatchUpEntries
+	}
 
 	walDir := cfg.DataDir + "/wal"
 	snapDir := cfg.DataDir + "/snap"
@@ -129,6 +154,9 @@ func Open(cfg Config) (*Node, error) {
 	snapshotter := snap.New(lg, snapDir)
 
 	walExists := wal.Exist(walDir)
+	if !walExists && len(cfg.Peers) == 0 {
+		return nil, errors.New("raft: at least one peer is required to bootstrap a new node")
+	}
 
 	n := &Node{
 		cfg:       cfg,
@@ -181,7 +209,6 @@ func (n *Node) startNode(lg *zap.Logger, walDir string) error {
 	return nil
 }
 
-//nolint:gocognit,cyclop // restart orchestrates snapshot load, WAL replay, and storage reconstruction
 func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	snapshot, err := n.snap.Load()
 	if err != nil && !errors.Is(err, snap.ErrNoSnapshot) {
@@ -206,47 +233,11 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	}
 	n.wal = w
 
-	baseStorage := raft.NewMemoryStorage()
-	n.storage = baseStorage
-
-	if snapshot != nil {
-		if err := n.storage.ApplySnapshot(*snapshot); err != nil {
-			return fmt.Errorf("raft: apply snapshot to storage: %w", err)
-		}
-		n.snapshotIndex = snapshot.Metadata.Index
-		n.appliedIndex = snapshot.Metadata.Index
-		if hardState.Commit < snapshot.Metadata.Index {
-			hardState.Commit = snapshot.Metadata.Index
-		}
-
-		if n.cfg.Restore != nil {
-			if err := n.cfg.Restore(snapshot.Data); err != nil {
-				return fmt.Errorf("raft: restore snapshot: %w", err)
-			}
-		}
-	}
-
-	if err := n.storage.SetHardState(hardState); err != nil {
-		return fmt.Errorf("raft: set hard state: %w", err)
-	}
-	if snapshot == nil {
-		if cs := deriveCommittedConfState(entries, hardState.Commit); cs != nil {
-			n.storage = &initialConfStateStorage{
-				MemoryStorage: baseStorage,
-				confState:     *cs,
-			}
-		}
-	}
-	// Replay watermark = the durably applied index (the loaded snapshot's index, set
-	// above as n.appliedIndex, or 0 with no snapshot) — NOT hardState.Commit. Entries
-	// committed but not yet applied before a crash are re-delivered and applied for the
-	// first time after restart, so they must emit live spans; only entries known to
-	// have applied are suppressed as replay. Basing this on Commit would leave a gap in
-	// crash-recovery apply evidence (ADR 0013 §3).
-	n.replayCommitIndex = n.appliedIndex
-	atomic.StoreUint64(&n.commitIndex, hardState.Commit)
-	if err := n.storage.Append(entries); err != nil {
-		return fmt.Errorf("raft: append entries: %w", err)
+	if err := n.rebuildStorageFromWAL(snapshot, hardState, entries); err != nil {
+		// Release the WAL file locks so a retried Open does not fail on them.
+		_ = w.Close()
+		n.wal = nil
+		return err
 	}
 
 	c := &raft.Config{
@@ -264,11 +255,96 @@ func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
 	return nil
 }
 
+func (n *Node) rebuildStorageFromWAL(snapshot *raftpb.Snapshot, hardState raftpb.HardState, entries []raftpb.Entry) error {
+	baseStorage := raft.NewMemoryStorage()
+	n.storage = baseStorage
+
+	if snapshot != nil {
+		if err := n.restoreSnapshotToStorage(snapshot, &hardState); err != nil {
+			return err
+		}
+		n.confState = snapshot.Metadata.ConfState
+	}
+
+	if err := n.storage.SetHardState(hardState); err != nil {
+		return fmt.Errorf("raft: set hard state: %w", err)
+	}
+	if snapshot == nil {
+		if cs := n.restartConfState(entries, hardState.Commit); cs != nil {
+			n.confState = *cs
+			n.storage = &initialConfStateStorage{
+				MemoryStorage: baseStorage,
+				confState:     *cs,
+			}
+		}
+	}
+	// Replay watermark = the durably applied index (the loaded snapshot's index, set
+	// above as n.appliedIndex, or 0 with no snapshot) — NOT hardState.Commit. Entries
+	// committed but not yet applied before a crash are re-delivered and applied for the
+	// first time after restart, so they must emit live spans; only entries known to
+	// have applied are suppressed as replay. Basing this on Commit would leave a gap in
+	// crash-recovery apply evidence (ADR 0013 §3).
+	n.replayCommitIndex = n.appliedIndex
+	atomic.StoreUint64(&n.commitIndex, hardState.Commit)
+	if err := n.storage.Append(entries); err != nil {
+		return fmt.Errorf("raft: append entries: %w", err)
+	}
+	return nil
+}
+
+func (n *Node) restoreSnapshotToStorage(snapshot *raftpb.Snapshot, hardState *raftpb.HardState) error {
+	if err := n.storage.ApplySnapshot(*snapshot); err != nil {
+		return fmt.Errorf("raft: apply snapshot to storage: %w", err)
+	}
+	n.snapshotIndex = snapshot.Metadata.Index
+	n.appliedIndex = snapshot.Metadata.Index
+	if hardState.Commit < snapshot.Metadata.Index {
+		hardState.Commit = snapshot.Metadata.Index
+	}
+
+	if n.cfg.Restore != nil {
+		if err := n.cfg.Restore(snapshot.Data); err != nil {
+			return fmt.Errorf("raft: restore snapshot: %w", err)
+		}
+	}
+	return nil
+}
+
+// restartConfState picks the voter set for a snapshot-less restart. When no
+// committed conf state exists in the WAL (crash before the bootstrap
+// ConfChange entries committed), it falls back to the static peer
+// configuration: restarting with an empty voter set would leave the node
+// permanently unable to campaign, and membership is static (there is no
+// ProposeConfChange path), so cfg.Peers is authoritative.
+func (n *Node) restartConfState(entries []raftpb.Entry, commit uint64) *raftpb.ConfState {
+	if cs := deriveCommittedConfState(entries, commit); cs != nil {
+		return cs
+	}
+	if commit == 0 {
+		return bootstrapConfStateFromPeers(n.cfg.Peers)
+	}
+	return nil
+}
+
+func bootstrapConfStateFromPeers(peers map[uint64]string) *raftpb.ConfState {
+	if len(peers) == 0 {
+		return nil
+	}
+	voters := make([]uint64, 0, len(peers))
+	for id := range peers {
+		voters = append(voters, id)
+	}
+	slices.Sort(voters)
+	return &raftpb.ConfState{Voters: voters}
+}
+
 type durableStorage interface {
 	raft.Storage
 	SetHardState(raftpb.HardState) error
 	ApplySnapshot(raftpb.Snapshot) error
 	Append([]raftpb.Entry) error
+	CreateSnapshot(index uint64, cs *raftpb.ConfState, data []byte) (raftpb.Snapshot, error)
+	Compact(compactIndex uint64) error
 }
 
 type initialConfStateStorage struct {
@@ -330,7 +406,6 @@ func (n *Node) drainReadyLocked() {
 	}
 }
 
-//nolint:cyclop // Ready handling must keep the WAL, storage, transport, apply, and publish order explicit.
 func (n *Node) processReadyLocked(rd raft.Ready) {
 	if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
 		panic(fmt.Sprintf("raft: WAL save: %v", err))
@@ -341,15 +416,7 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 	}
 
 	if !raft.IsEmptySnap(rd.Snapshot) {
-		if err := n.snap.SaveSnap(rd.Snapshot); err != nil {
-			panic(fmt.Sprintf("raft: save snapshot: %v", err))
-		}
-		if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(rd.Snapshot)); err != nil {
-			panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
-		}
-		if err := n.storage.ApplySnapshot(rd.Snapshot); err != nil {
-			panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
-		}
+		n.applyIncomingSnapshotLocked(rd.Snapshot)
 	}
 
 	if err := n.storage.Append(rd.Entries); err != nil {
@@ -366,12 +433,179 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 		if err := n.cfg.Apply(rd.CommittedEntries, n.replayCommitIndex); err != nil {
 			panic(fmt.Sprintf("raft: apply: %v", err))
 		}
+		n.applyCommittedConfChangesLocked(rd.CommittedEntries)
 		atomic.StoreUint64(&n.appliedIndex, rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
 	}
 
 	n.publishReadStates(rd.ReadStates)
 
+	n.maybeTriggerSnapshotLocked()
+
 	n.node.Advance()
+}
+
+// applyIncomingSnapshotLocked handles an install-snapshot delivered by the
+// leader to a follower whose log fell behind the compaction window. The
+// application Restore hook decides whether local state can satisfy the
+// snapshot; a Restore failure is fatal because continuing would silently
+// diverge from the committed state.
+func (n *Node) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot) {
+	if err := n.snap.SaveSnap(snapshot); err != nil {
+		panic(fmt.Sprintf("raft: save snapshot: %v", err))
+	}
+	if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(snapshot)); err != nil {
+		panic(fmt.Sprintf("raft: WAL save snapshot: %v", err))
+	}
+	if err := n.wal.ReleaseLockTo(snapshot.Metadata.Index); err != nil {
+		panic(fmt.Sprintf("raft: WAL release to snapshot: %v", err))
+	}
+	if err := n.storage.ApplySnapshot(snapshot); err != nil {
+		panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
+	}
+	if n.cfg.Restore != nil {
+		if err := n.cfg.Restore(snapshot.Data); err != nil {
+			panic(fmt.Sprintf("raft: restore snapshot at index %d: %v", snapshot.Metadata.Index, err))
+		}
+	}
+	n.confState = snapshot.Metadata.ConfState
+	n.snapshotIndex = snapshot.Metadata.Index
+	atomic.StoreUint64(&n.appliedIndex, snapshot.Metadata.Index)
+	if commit := atomic.LoadUint64(&n.commitIndex); commit < snapshot.Metadata.Index {
+		atomic.StoreUint64(&n.commitIndex, snapshot.Metadata.Index)
+	}
+}
+
+// maybeTriggerSnapshotLocked snapshots the state machine and compacts the
+// in-memory log once MaxSnapCount entries applied since the last snapshot.
+// The application state is durably applied outside the Raft log, so the
+// snapshot data is whatever cfg.Snapshot returns (a manifest); failing to
+// produce it only defers the snapshot, but failing to persist one is fatal
+// like any other WAL/snapshot durability failure.
+func (n *Node) maybeTriggerSnapshotLocked() {
+	if n.cfg.Snapshot == nil {
+		return
+	}
+	applied := atomic.LoadUint64(&n.appliedIndex)
+	if applied <= n.snapshotIndex || applied-n.snapshotIndex < n.cfg.MaxSnapCount {
+		return
+	}
+
+	data, err := n.cfg.Snapshot(applied)
+	if err != nil {
+		n.logger.Error("raft: snapshot data unavailable, deferring snapshot", "error", err)
+		return
+	}
+	var cs *raftpb.ConfState
+	if len(n.confState.Voters) > 0 {
+		cs = &n.confState
+	}
+	snapshot, err := n.storage.CreateSnapshot(applied, cs, data)
+	if err != nil {
+		n.logger.Error("raft: create snapshot", "applied_index", applied, "error", err)
+		return
+	}
+	n.commitSnapshotLocked(snapshot, applied)
+}
+
+func (n *Node) commitSnapshotLocked(snapshot raftpb.Snapshot, applied uint64) {
+	if err := n.persistSnapshotLocked(snapshot); err != nil {
+		panic(fmt.Sprintf("raft: persist snapshot: %v", err))
+	}
+
+	compactIndex := uint64(1)
+	if applied > n.cfg.SnapshotCatchUpEntries {
+		compactIndex = applied - n.cfg.SnapshotCatchUpEntries
+	}
+	if err := n.storage.Compact(compactIndex); err != nil && !errors.Is(err, raft.ErrCompacted) {
+		panic(fmt.Sprintf("raft: compact log to %d: %v", compactIndex, err))
+	}
+	n.snapshotIndex = applied
+	n.logger.Info("raft: snapshot created",
+		"snapshot_index", applied,
+		"compact_index", compactIndex,
+	)
+	n.purgeObsoleteFiles()
+}
+
+// persistSnapshotLocked follows the etcd ordering: snapshot file first so a
+// WAL snapshot record never points at a missing file, then the WAL record,
+// then release WAL locks up to the snapshot index so old segments can purge.
+func (n *Node) persistSnapshotLocked(snapshot raftpb.Snapshot) error {
+	if err := n.snap.SaveSnap(snapshot); err != nil {
+		return fmt.Errorf("save snapshot file: %w", err)
+	}
+	if err := n.wal.SaveSnapshot(walSnapshotFromReadySnapshot(snapshot)); err != nil {
+		return fmt.Errorf("save WAL snapshot record: %w", err)
+	}
+	if err := n.wal.ReleaseLockTo(snapshot.Metadata.Index); err != nil {
+		return fmt.Errorf("release WAL locks: %w", err)
+	}
+	return nil
+}
+
+// applyCommittedConfChangesLocked feeds committed membership entries to the
+// raft state machine, as the etcd raft contract requires. The application
+// apply path skips ConfChange entries, so without this the node's live voter
+// tracker never reflects committed membership (e.g. after a restart that
+// found no committed conf state in the WAL).
+func (n *Node) applyCommittedConfChangesLocked(entries []raftpb.Entry) {
+	for _, e := range entries {
+		if e.Type != raftpb.EntryConfChange {
+			continue
+		}
+		var cc raftpb.ConfChange
+		if err := cc.Unmarshal(e.Data); err != nil {
+			continue
+		}
+		if cs := n.node.ApplyConfChange(cc); cs != nil {
+			n.confState = *cs
+		}
+	}
+}
+
+// purgeObsoleteFiles removes snapshot and WAL files made obsolete by a new
+// snapshot, keeping the newest few of each. WAL segments are only removed
+// when their file lock is free, which is exactly the set ReleaseLockTo
+// released. Purging is best-effort: failures only delay reclamation.
+func (n *Node) purgeObsoleteFiles() {
+	n.purgeOldestFiles(n.cfg.DataDir+"/snap", ".snap", maxKeptSnapFiles, nil)
+	n.purgeOldestFiles(n.cfg.DataDir+"/wal", ".wal", maxKeptWALFiles, func(path string) bool {
+		lock, err := fileutil.TryLockFile(path, os.O_WRONLY, fileutil.PrivateFileMode)
+		if err != nil {
+			return false
+		}
+		_ = lock.Close()
+		return true
+	})
+}
+
+func (n *Node) purgeOldestFiles(dir, suffix string, keep int, removable func(string) bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		n.logger.Warn("raft: purge read dir", "dir", dir, "error", err)
+		return
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), suffix) {
+			names = append(names, entry.Name())
+		}
+	}
+	// File names embed zero-padded hex sequence/index pairs, so lexical order
+	// is creation order.
+	slices.Sort(names)
+	for _, name := range names[:max(0, len(names)-keep)] {
+		path := dir + "/" + name
+		if removable != nil && !removable(path) {
+			// Still locked by the live WAL: this and everything newer is needed.
+			return
+		}
+		if err := os.Remove(path); err != nil {
+			n.logger.Warn("raft: purge file", "path", path, "error", err)
+			return
+		}
+		n.logger.Info("raft: purged obsolete file", "path", path)
+	}
 }
 
 func walSnapshotFromReadySnapshot(snapshot raftpb.Snapshot) walpb.Snapshot {
@@ -400,7 +634,7 @@ func (n *Node) Propose(ctx context.Context, data []byte) error {
 }
 
 func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
-	rctx := fmt.Sprintf("ri-%d-%d", n.cfg.ID, time.Now().UnixNano())
+	rctx := n.nextReadContext()
 	ch := make(chan uint64, 1)
 
 	n.readMu.Lock()
@@ -423,6 +657,13 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 		n.readMu.Unlock()
 		return 0, ctx.Err()
 	}
+}
+
+// nextReadContext returns a process-unique ReadIndex request key. A
+// wall-clock key can collide when two reads land on the same nanosecond,
+// overwriting the first waiter's channel and stranding it until its deadline.
+func (n *Node) nextReadContext() string {
+	return fmt.Sprintf("ri-%d-%d", n.cfg.ID, n.readSeq.Add(1))
 }
 
 func (n *Node) Step(ctx context.Context, msg raftpb.Message) error {

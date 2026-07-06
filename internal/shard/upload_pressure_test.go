@@ -214,7 +214,10 @@ func TestParseUploadPressureConfigFromEnv(t *testing.T) {
 	t.Setenv("SCRAP_UPLOAD_PRESSURE_PCT", "0.85")
 	t.Setenv("SCRAP_UPLOAD_CRITICAL_PCT", "0.95")
 
-	cfg := shard.ParseUploadPressureConfigFromEnv()
+	cfg, err := shard.ParseUploadPressureConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ParseUploadPressureConfigFromEnv: %v", err)
+	}
 	if cfg.BudgetBytes != 2048 {
 		t.Fatalf("BudgetBytes = %d, want 2048", cfg.BudgetBytes)
 	}
@@ -223,17 +226,20 @@ func TestParseUploadPressureConfigFromEnv(t *testing.T) {
 	}
 }
 
-func TestParseUploadPressureConfigFromEnv_WholePercentagesResetToDefaults(t *testing.T) {
+func TestParseUploadPressureConfigFromEnv_WholePercentagesFailClosed(t *testing.T) {
+	// Out-of-range explicit input must be a startup error naming the key,
+	// never a silent reset to defaults.
 	t.Setenv("SCRAP_UPLOAD_BUDGET", "2048")
 	t.Setenv("SCRAP_UPLOAD_WARN_PCT", "70")
 	t.Setenv("SCRAP_UPLOAD_PRESSURE_PCT", "85")
 	t.Setenv("SCRAP_UPLOAD_CRITICAL_PCT", "95")
 
-	cfg := shard.ParseUploadPressureConfigFromEnv()
-	if cfg.WarnPct != shard.DefaultUploadWarnPct || cfg.PressurePct != shard.DefaultUploadPressurePct || cfg.CriticalPct != shard.DefaultUploadCriticalPct {
-		t.Fatalf("thresholds = %.2f/%.2f/%.2f, want defaults %.2f/%.2f/%.2f",
-			cfg.WarnPct, cfg.PressurePct, cfg.CriticalPct,
-			shard.DefaultUploadWarnPct, shard.DefaultUploadPressurePct, shard.DefaultUploadCriticalPct)
+	_, err := shard.ParseUploadPressureConfigFromEnv()
+	if err == nil {
+		t.Fatal("ParseUploadPressureConfigFromEnv with whole percentages succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "SCRAP_UPLOAD_WARN_PCT") {
+		t.Fatalf("error should name the offending key, got: %v", err)
 	}
 }
 

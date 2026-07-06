@@ -39,10 +39,11 @@ func (s *healthServer) Check(ctx context.Context, req *healthv1.HealthCheckReque
 }
 
 // checkReadinessResponse maps readiness check errors to NOT_SERVING status
-// without propagating the error as a gRPC error.
+// without propagating the error as a gRPC error. A nil checker is a wiring
+// error and reports NOT_SERVING instead of panicking the probe handler.
 func (s *healthServer) checkReadinessResponse(ctx context.Context) (*healthv1.HealthCheckResponse, error) {
 	serving := healthv1.HealthCheckResponse_SERVING
-	if s.checker.CheckReadiness(ctx) != nil {
+	if s.checker == nil || s.checker.CheckReadiness(ctx) != nil {
 		serving = healthv1.HealthCheckResponse_NOT_SERVING
 	}
 	return &healthv1.HealthCheckResponse{Status: serving}, nil

@@ -133,6 +133,10 @@ func (s *documentServer) recvChunks(ctx context.Context, stream grpc.ClientStrea
 		if err != nil {
 			return s.handleRecvError(ctx, pw, done, totalBytes, err)
 		}
+		if msg.GetInit() != nil {
+			dupErr := fmt.Errorf("%w: duplicate init message", storeapi.ErrInvalidArgument)
+			return closePipeAndMapStoreError(pw, done, dupErr)
+		}
 		chunk := msg.GetChunkData()
 		if len(chunk) == 0 {
 			continue

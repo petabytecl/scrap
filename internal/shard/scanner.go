@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -39,6 +40,7 @@ type scannerCore interface {
 type scannerCoordinator struct {
 	core      scannerCore
 	blocksDir string
+	logger    *slog.Logger
 	scheduler *avscan.Scheduler
 }
 
@@ -49,10 +51,12 @@ func newScannerCoordinator(
 	shardID uint64,
 	cfg ScannerConfig,
 	pauseController scrub.PauseController,
+	logger *slog.Logger,
 ) *scannerCoordinator {
 	c := &scannerCoordinator{
 		core:      core,
 		blocksDir: blocksDir,
+		logger:    logger,
 	}
 	if !cfg.enabled() {
 		return c
@@ -106,7 +110,7 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 		return nil, err
 	}
 	openBlockID := c.core.currentOpenBlockID()
-	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID)
+	blocks, err := block.ListSealedBlocks(c.blocksDir, openBlockID, c.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +121,18 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 		}
 		size, err := blockSize(info.BlkPath)
 		if err != nil {
+			// A Block evicted between the listing and this stat is not an
+			// error for the scan cycle; it simply has no local bytes to scan.
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf("shard: stat scanner Block %d: %w", info.BlockID, err)
 		}
 		out = append(out, avscan.Block{
 			BlockID:   info.BlockID,
 			SizeBytes: size,
 			Open:      scannerBlockOpener(info.BlockID, info.BlkPath),
+			Restored:  restoreMarkerPresent(c.blocksDir, info.BlockID),
 		})
 	}
 	return out, nil
@@ -136,6 +146,11 @@ func (c *scannerCoordinator) ReportDetections(ctx context.Context, block avscan.
 	return reporter.ReportDetections(ctx, block, detections)
 }
 
+func restoreMarkerPresent(blocksDir string, blockID uint64) bool {
+	_, err := os.Stat(RestoreMarkerPath(blocksDir, blockID))
+	return err == nil
+}
+
 func scannerBlockOpener(blockID uint64, path string) func(context.Context) (io.ReadCloser, error) {
 	return func(ctx context.Context) (io.ReadCloser, error) {
 		if err := ctx.Err(); err != nil {
@@ -143,7 +158,7 @@ func scannerBlockOpener(blockID uint64, path string) func(context.Context) (io.R
 		}
 		file, err := os.Open(path) //nolint:gosec // path comes from Shard-owned sealed Block discovery under blocksDir.
 		if err != nil {
-			return nil, fmt.Errorf("shard: open scanner Block %d: %w", blockID, avscan.ErrBlockSource)
+			return nil, fmt.Errorf("shard: open scanner Block %d: %w: %w", blockID, avscan.ErrBlockSource, fsErrCause(err))
 		}
 		return file, nil
 	}

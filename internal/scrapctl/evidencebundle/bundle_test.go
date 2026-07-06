@@ -347,6 +347,25 @@ func TestGenerateFailsWhenManifestContainsSensitiveEnvironment(t *testing.T) {
 	assertBundlePrivacyScan(t, result.BundlePath, "FAIL")
 }
 
+// The eviction-status capture error payload must never read as PASS evidence:
+// jsonArtifactHasEvidence recognizes {"error": ...} as no evidence, so the
+// manifest row fails when the admin plan-status GET was unavailable.
+func TestEvictionEvidenceFailsOnCaptureErrorPayload(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "eviction")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir eviction: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status.json"), []byte(`{"error":"eviction plan status unavailable"}`), 0o600); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+
+	state := evictionEvidence(root, Config{EvictionPlanID: "plan-1"})
+	if state.Status != "FAIL" {
+		t.Fatalf("eviction evidence status = %q, want FAIL", state.Status)
+	}
+}
+
 func TestManifestBroadRowsFailWhenSubEvidenceIsMissing(t *testing.T) {
 	profileResult := generateTestBundle(t, fakeSignals{missingHeapProfile: true})
 	assertManifestEvidenceStatus(t, profileResult.BundlePath, "profiles", "FAIL")
@@ -354,6 +373,57 @@ func TestManifestBroadRowsFailWhenSubEvidenceIsMissing(t *testing.T) {
 	securityResult := generateTestBundle(t, fakeSignals{missingSecurityRestore: true})
 	assertManifestEvidenceStatus(t, securityResult.BundlePath, "security", "FAIL")
 	assertManifestEvidenceStatus(t, securityResult.BundlePath, "openbao_readiness", "FAIL")
+}
+
+func TestGenerateLeavesNoPartialBundleOnMidRunFailure(t *testing.T) {
+	bundleDir := t.TempDir()
+	signals := fakeSignals{}
+	securityReportPath := writeSecurityReportFixture(t, signals)
+	clock := &sequenceClock{values: []time.Time{
+		time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC),
+	}}
+
+	_, err := Generate(context.Background(), Options{
+		Config: Config{
+			RepoRoot:           "/repo",
+			BundleDir:          bundleDir,
+			GrafanaURL:         "http://grafana.local",
+			AdminURL:           "http://admin.local",
+			MimirProxy:         "http://grafana.local/mimir",
+			TempoProxy:         "http://grafana.local/tempo",
+			LokiProxy:          "http://grafana.local/loki",
+			PyroscopeURL:       "http://grafana.local/pyroscope",
+			SecurityReportPath: securityReportPath,
+			Scenario:           "throughput",
+			StressAddr:         "127.0.0.1:18090",
+			Workers:            8,
+			Duration:           "60s",
+			DocSizeBytes:       16384,
+			Settle:             time.Second,
+		},
+		Clock:        clock,
+		Sleeper:      func(context.Context, time.Duration) error { return errors.New("telemetry settle interrupted") },
+		Command:      fakeMetadataCommand{},
+		StressRunner: fakeStressRunner{scenario: "throughput", signals: signals},
+		AdminProbe:   fakeAdminProbe{signals: signals},
+		HTTPClient:   &http.Client{Transport: &fakeEvidenceTransport{signals: signals}},
+		Logf:         func(string, ...any) {},
+	})
+	if err == nil {
+		t.Fatal("Generate succeeded, want mid-run failure")
+	}
+
+	entries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		t.Fatalf("read bundle dir: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("bundle dir entries after failure = %v, want none", names)
+	}
 }
 
 func generateTestBundle(t *testing.T, signals fakeSignals) Result {

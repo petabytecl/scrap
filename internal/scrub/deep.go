@@ -57,7 +57,9 @@ const (
 	BlockLocalStateMetadataLoss     BlockLocalState = "metadata_loss"
 	BlockLocalStateUnexpectedLoss   BlockLocalState = "unexpected_loss"
 
-	SkipReasonEvicted = "evicted"
+	SkipReasonEvicted        = "evicted"
+	SkipReasonMetadataLoss   = "metadata_loss"
+	SkipReasonUnexpectedLoss = "unexpected_loss"
 )
 
 type BlockStateClassifier interface {
@@ -158,6 +160,13 @@ func (ds *Deep) RunOnce(ctx context.Context) error {
 		return err
 	}
 
+	// Clear any prior bad-disk suspicion only once the listing succeeds; a run
+	// that re-encounters over-cap corruption sets it again below, so the gauge
+	// reflects current disk health instead of latching until restart. Clearing
+	// before the listing would reset the latched gauge to healthy on every cycle
+	// even while an actual disk failure keeps the listing itself failing.
+	ds.cfg.Metrics.SetBadDiskSuspected(false)
+
 	blocks = ds.filterFromCheckpoint(blocks)
 	total := len(blocks)
 
@@ -214,10 +223,24 @@ func (ds *Deep) skipBlockByLifecycle(blk block.Info) (bool, error) {
 		ds.cfg.Logger.Info("scrub: skip Block", "block_id", blk.BlockID, "reason", SkipReasonEvicted)
 		return true, nil
 	case BlockLocalStateMetadataLoss, BlockLocalStateUnexpectedLoss:
-		return false, fmt.Errorf("scrub: Block %d local state %s", blk.BlockID, state)
+		// A loss-state block has no verifiable index, so it cannot be CRC/SHA
+		// checked regardless. Skip it (with an observable reason) and advance the
+		// checkpoint rather than aborting the whole run — otherwise every
+		// higher-ID block stays unverified until the condition clears.
+		reason := skipReasonForLossState(state)
+		ds.cfg.Metrics.RecordSkip(reason)
+		ds.cfg.Logger.Warn("scrub: skip Block", "block_id", blk.BlockID, "reason", reason)
+		return true, nil
 	default:
 		return false, fmt.Errorf("scrub: Block %d unknown local state %s", blk.BlockID, state)
 	}
+}
+
+func skipReasonForLossState(state BlockLocalState) string {
+	if state == BlockLocalStateUnexpectedLoss {
+		return SkipReasonUnexpectedLoss
+	}
+	return SkipReasonMetadataLoss
 }
 
 func (ds *Deep) filterFromCheckpoint(blocks []block.Info) []block.Info {
@@ -278,7 +301,7 @@ func (ds *Deep) waitIOBudget(ctx context.Context, blkPath string) error {
 	}
 	info, err := os.Stat(blkPath)
 	if err != nil {
-		return fmt.Errorf("scrub: stat block for IO budget: %w", err)
+		return fmt.Errorf("scrub: stat block for IO budget: %w", fsErrCause(err))
 	}
 	return ds.cfg.IOBudget.Wait(ctx, info.Size())
 }
@@ -302,7 +325,7 @@ func (ds *Deep) verifyOneBlock(blk block.Info) error {
 		ds.cfg.Metrics.SetBadDiskSuspected(true)
 	}
 	if err := ds.cfg.QuarantineManager.Quarantine(blk.BlkPath); err != nil {
-		return fmt.Errorf("scrub: quarantine %s: %w", blk.BlkPath, err)
+		return fmt.Errorf("scrub: quarantine block: %w", fsErrCause(err))
 	}
 	ds.cfg.Metrics.RecordQuarantine()
 	return nil

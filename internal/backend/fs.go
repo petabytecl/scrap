@@ -114,6 +114,11 @@ func (b *fsBackend) DeleteObject(ctx context.Context, key string) error {
 		return err
 	}
 	if err := os.Remove(path); err != nil {
+		// Deleting an absent key is a no-op, matching S3's idempotent DeleteObject
+		// so retried/concurrent deletes behave identically across backends.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return classifyFSError("delete object", err)
 	}
 	return syncDirectory(filepath.Dir(path))
@@ -307,7 +312,20 @@ func listWalkRoot(root, prefix string) string {
 	if prefix == "" {
 		return root
 	}
-	candidate := filepath.Join(root, filepath.FromSlash(prefix))
+	// S3 prefixes match byte-wise: "a/bc" matches both a/bcd and a/bc/e. A
+	// trailing non-slash-terminated segment may therefore be partial, so
+	// prune only to the parent of the last segment — never to a directory
+	// that happens to share the partial segment's name, which would hide
+	// sibling keys like a/bcd.
+	parent := prefix
+	if !strings.HasSuffix(prefix, "/") {
+		idx := strings.LastIndex(prefix, "/")
+		if idx < 0 {
+			return root
+		}
+		parent = prefix[:idx+1]
+	}
+	candidate := filepath.Join(root, filepath.FromSlash(parent))
 	for candidate != root {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate

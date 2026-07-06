@@ -106,7 +106,7 @@ func zapFieldToAttr(f zapcore.Field) []slog.Attr {
 	case zapcore.TimeType, zapcore.TimeFullType:
 		return zapTimeToAttr(f)
 	case zapcore.StringerType:
-		return []slog.Attr{slog.String(f.Key, f.Interface.(fmt.Stringer).String())}
+		return []slog.Attr{slog.String(f.Key, zapStringerString(f.Interface))}
 	case zapcore.ErrorType:
 		return []slog.Attr{slog.Any(f.Key, f.Interface)}
 	case zapcore.NamespaceType:
@@ -123,13 +123,32 @@ func zapFieldToAttr(f zapcore.Field) []slog.Attr {
 }
 
 func zapTimeToAttr(f zapcore.Field) []slog.Attr {
-	if f.Interface != nil {
-		loc, ok := f.Interface.(*time.Location)
-		if ok {
-			return []slog.Attr{slog.Time(f.Key, time.Unix(0, f.Integer).In(loc))}
-		}
+	// TimeFullType carries the value directly as a time.Time (used when the
+	// timestamp does not fit the nanosecond int64 shape); TimeType carries the
+	// nanos in f.Integer with an optional *time.Location in f.Interface.
+	if t, ok := f.Interface.(time.Time); ok {
+		return []slog.Attr{slog.Time(f.Key, t)}
+	}
+	if loc, ok := f.Interface.(*time.Location); ok {
+		return []slog.Attr{slog.Time(f.Key, time.Unix(0, f.Integer).In(loc))}
 	}
 	return []slog.Attr{slog.Time(f.Key, time.Unix(0, f.Integer))}
+}
+
+// zapStringerString renders a StringerType field defensively: a nil interface,
+// a non-Stringer payload, or a Stringer whose String() panics on a nil receiver
+// must not take down the logging path.
+func zapStringerString(v any) (s string) {
+	stringer, ok := v.(fmt.Stringer)
+	if !ok {
+		return "<invalid stringer>"
+	}
+	defer func() {
+		if recover() != nil {
+			s = "<invalid stringer>"
+		}
+	}()
+	return stringer.String()
 }
 
 func zapFieldToAttrViaEncoder(f zapcore.Field) []slog.Attr {

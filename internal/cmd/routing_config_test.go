@@ -427,7 +427,6 @@ func testAppConfig(t *testing.T) Config {
 		Namespace:         "default",
 		SecurityMode:      security.ModeTest,
 		Scrub:             scrub.ParseConfig(),
-		UploadPressure:    shard.ParseUploadPressureConfigFromEnv(),
 	}
 }
 

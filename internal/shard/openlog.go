@@ -5,6 +5,7 @@ package shard
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -81,6 +82,10 @@ func (s *Shard) recoverPrepFile(name string) error {
 		return fmt.Errorf("shard: unmarshal prep %s: %w", name, err)
 	}
 
+	if entry.StartOffset > math.MaxInt64 {
+		return fmt.Errorf("shard: prep %s: start offset %d overflows int64", name, entry.StartOffset)
+	}
+
 	exists, err := s.documentVisibleInProjectionLenient(entry.TransactionId, entry.DocumentName)
 	if err != nil {
 		return fmt.Errorf("shard: resolve prep %s: %w", name, err)
@@ -128,6 +133,36 @@ func (s *Shard) cleanupCommittedOpenlogPrep(name string, doc *scrapv1.CommitDocu
 		return
 	}
 	_ = os.Remove(path) // best-effort cleanup; recovery also handles completed prep files.
+}
+
+// removeOverhangPreps deletes prep files for aborted writes whose Block bytes
+// at or past wantOffset were just reclaimed by a replica overhang rollback.
+// Best-effort like cleanupCommittedOpenlogPreps: a survivor is re-truncated at
+// the same offset by recovery, which is harmless only until new Documents
+// commit there — hence the removal happens before the next append.
+func (s *Shard) removeOverhangPreps(blockID uint64, wantOffset int64) {
+	entries, err := os.ReadDir(s.openlogDir)
+	if err != nil {
+		return
+	}
+	for _, dirEntry := range entries {
+		if dirEntry.IsDir() || !strings.HasSuffix(dirEntry.Name(), ".prep") {
+			continue
+		}
+		path := filepath.Join(s.openlogDir, dirEntry.Name())
+		data, err := os.ReadFile(path) //nolint:gosec // path constructed from known openlogDir + directory listing
+		if err != nil {
+			continue
+		}
+		entry := &scrapv1.OpenlogEntry{}
+		if err := proto.Unmarshal(data, entry); err != nil {
+			continue
+		}
+		if entry.GetBlockId() != blockID || safeUint64ToInt64(entry.GetStartOffset()) < wantOffset {
+			continue
+		}
+		_ = os.Remove(path) // best-effort cleanup after overhang rollback
+	}
 }
 
 func openlogPrepMatchesCommit(entry *scrapv1.OpenlogEntry, doc *scrapv1.CommitDocument) bool {

@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/block"
+	"github.com/petabytecl/scrap/internal/localblock"
 )
 
 const repairStagingSuffix = ".repair"
@@ -156,17 +158,17 @@ func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAd
 		return err
 	}
 	if err := atomicWrite(paths.blkStaged, blkData); err != nil {
-		return fmt.Errorf("write replacement block: %w", err)
+		return fmt.Errorf("write replacement block: %w", fsErrCause(err))
 	}
 	if err := atomicWrite(paths.idxStaged, idxData); err != nil {
 		_ = cleanupRepairStaging(paths)
-		return fmt.Errorf("write replacement index: %w", err)
+		return fmt.Errorf("write replacement index: %w", fsErrCause(err))
 	}
 
 	result, err := block.VerifyBlock(paths.blkStaged, paths.idxStaged)
 	if err != nil {
 		_ = cleanupRepairStaging(paths)
-		return fmt.Errorf("verify replacement: %w", err)
+		return fmt.Errorf("verify replacement: %w", fsErrCause(err))
 	}
 	if len(result.CorruptFrames) > 0 {
 		_ = cleanupRepairStaging(paths)
@@ -177,10 +179,36 @@ func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAd
 		_ = cleanupRepairStaging(paths)
 		return err
 	}
+	if err := r.markRepairedBlockRestored(blockID); err != nil {
+		// Best-effort: the repaired Block is durably installed and structurally
+		// verified. The restore marker keeps the scanner from skipping this Block
+		// below an advanced frontier (peer-repaired Blocks are otherwise ordinary
+		// hot files with Restored=false); a missing marker only risks a delayed
+		// content scan, whereas failing the repair here would re-fetch from a peer
+		// every cycle.
+		r.cfg.Logger.WarnContext(ctx, "scrub: mark repaired block restored", "block_id", blockID, "err", err)
+	}
 	if err := removeQuarantineFiles(paths); err != nil {
-		return err
+		// The repaired .blk/.idx are already durably installed, so the block is
+		// healthy. Failing here would mis-record a successful repair as failed
+		// and re-fetch the block from a peer next cycle. Treat quarantine-marker
+		// cleanup as best-effort; a leftover marker is reclaimed on a later run.
+		r.cfg.Logger.WarnContext(ctx, "scrub: remove quarantine markers after repair", "block_id", blockID, "err", err)
 	}
 	return nil
+}
+
+// markRepairedBlockRestored records a restore marker for a peer-repaired Block
+// so the content scanner keeps it eligible below an advanced watermark, matching
+// the eviction-restore path. The Block is repaired from a peer, so the source is
+// the peer, not the Backend.
+func (r *BlockRepair) markRepairedBlockRestored(blockID uint64) error {
+	return localblock.WriteRestoreMarker(r.cfg.BlocksDir, localblock.RestoreMarker{
+		BlockID:      blockID,
+		RestoredAtUs: time.Now().UTC().UnixMicro(),
+		Source:       localblock.RestoreSourcePeer,
+		Reason:       localblock.RestoreReasonRepair,
+	})
 }
 
 type blockRepairPaths struct {
@@ -208,37 +236,54 @@ func blockRepairPathsFor(dir string, blockID uint64) blockRepairPaths {
 func cleanupRepairStaging(paths blockRepairPaths) error {
 	for _, path := range []string{paths.blkStaged, paths.idxStaged, paths.blkStaged + ".tmp", paths.idxStaged + ".tmp"} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("scrub: remove repair staging %s: %w", path, err)
+			return fmt.Errorf("scrub: remove repair staging: %w", fsErrCause(err))
 		}
 	}
 	return nil
 }
 
 func promoteRepairStaging(paths blockRepairPaths) error {
-	if err := os.Rename(paths.idxStaged, paths.idxFinal); err != nil {
-		return fmt.Errorf("scrub: promote replacement index: %w", err)
-	}
+	// Install data before metadata: a crash between the two renames must leave
+	// data-without-index (a recoverable metadata_loss shape) rather than an
+	// index that references absent data.
 	if err := os.Rename(paths.blkStaged, paths.blkFinal); err != nil {
-		_ = os.Remove(paths.idxFinal)
-		return fmt.Errorf("scrub: promote replacement block: %w", err)
+		return fmt.Errorf("scrub: promote replacement block: %w", fsErrCause(err))
+	}
+	if err := os.Rename(paths.idxStaged, paths.idxFinal); err != nil {
+		_ = os.Remove(paths.blkFinal)
+		return fmt.Errorf("scrub: promote replacement index: %w", fsErrCause(err))
 	}
 	if err := syncDir(filepath.Dir(paths.blkFinal)); err != nil {
-		return fmt.Errorf("scrub: sync promoted replacement: %w", err)
+		return fmt.Errorf("scrub: sync promoted replacement: %w", fsErrCause(err))
 	}
 	return nil
 }
 
 func removeQuarantineFiles(paths blockRepairPaths) error {
 	if err := os.Remove(paths.blkQ); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("scrub: remove quarantined block: %w", err)
+		return fmt.Errorf("scrub: remove quarantined block: %w", fsErrCause(err))
 	}
 	if err := os.Remove(paths.idxQ); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("scrub: remove quarantined index: %w", err)
+		return fmt.Errorf("scrub: remove quarantined index: %w", fsErrCause(err))
 	}
 	if err := syncDir(filepath.Dir(paths.blkQ)); err != nil {
-		return fmt.Errorf("scrub: sync quarantine removal: %w", err)
+		return fmt.Errorf("scrub: sync quarantine removal: %w", fsErrCause(err))
 	}
 	return nil
+}
+
+// fsErrCause strips filesystem paths from os errors so raw Block paths never
+// reach Cell logs or error strings, keeping only the errno/class for diagnosis.
+func fsErrCause(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err
+	}
+	return err
 }
 
 func atomicWrite(destPath string, data []byte) error {

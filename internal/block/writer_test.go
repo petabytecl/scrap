@@ -141,6 +141,161 @@ func TestBlockWriterMultiFrameDocument(t *testing.T) {
 	}
 }
 
+func TestBlockWriterExactMultipleFramePayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		frames int
+	}{
+		{name: "single frame", frames: 1},
+		{name: "two frames", frames: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appendExactMultipleDocument(t, tt.frames)
+		})
+	}
+}
+
+func appendExactMultipleDocument(t *testing.T, frames int) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.blk")
+
+	w, err := block.NewWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	doc := bytes.Repeat([]byte("E"), block.MaxFramePayload*frames)
+	result, err := w.AppendDocument("tx-003", "exact.bin", "application/octet-stream", bytes.NewReader(doc))
+	if err != nil {
+		t.Fatalf("AppendDocument: %v", err)
+	}
+	if int(result.FrameCount) != frames {
+		t.Fatalf("FrameCount: got %d, want %d", result.FrameCount, frames)
+	}
+	if result.Size != int64(block.MaxFramePayload*frames) {
+		t.Fatalf("Size: got %d, want %d", result.Size, block.MaxFramePayload*frames)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The final frame must carry a last-frame flag or the block can never be
+	// reopened for appending.
+	w2, err := block.OpenWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("OpenWriter after exact-multiple document: %v", err)
+	}
+	if w2.DocCount() != 1 {
+		t.Fatalf("DocCount after reopen: got %d, want 1", w2.DocCount())
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatalf("Close reopened writer: %v", err)
+	}
+}
+
+func TestBlockWriterRejectsEmptyDocument(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.blk")
+
+	w, err := block.NewWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if _, err := w.AppendDocument("tx-004", "empty.bin", "text/plain", bytes.NewReader(nil)); err == nil {
+		t.Fatal("AppendDocument with empty body succeeded, want error")
+	}
+	if _, err := w.AppendDocumentFrames("tx-004", "empty.bin", "text/plain", block.DocumentFrames{}); err == nil {
+		t.Fatal("AppendDocumentFrames with no payloads succeeded, want error")
+	}
+
+	// A rejected empty document must not consume a doc_seq: the next append
+	// must produce a block that reopens cleanly.
+	if _, err := w.AppendDocument("tx-004", "ok.bin", "text/plain", bytes.NewReader([]byte("x"))); err != nil {
+		t.Fatalf("AppendDocument after rejected empty document: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	w2, err := block.OpenWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatalf("Close reopened writer: %v", err)
+	}
+}
+
+func TestBlockWriterTruncateBeyondEndRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.blk")
+
+	w, err := block.NewWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if err := w.Truncate(w.Offset() + 1); err == nil {
+		t.Fatal("Truncate beyond end succeeded, want error")
+	}
+}
+
+func appendTruncateTestDoc(t *testing.T, w *block.Writer, name string, fill byte) {
+	t.Helper()
+	body := bytes.NewReader(bytes.Repeat([]byte{fill}, 128))
+	if _, err := w.AppendDocument("tx", name, "text/plain", body); err != nil {
+		t.Fatalf("AppendDocument %s: %v", name, err)
+	}
+}
+
+func TestBlockWriterTruncateRollsBackDocCounters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.blk")
+
+	w, err := block.NewWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	// Commit document A at doc_seq 0.
+	appendTruncateTestDoc(t, w, "a", 'A')
+
+	// Append document B, then abort it by truncating back to the boundary, as
+	// the leader/peer write-abort paths do on a rejected write.
+	boundary := w.Offset()
+	appendTruncateTestDoc(t, w, "b", 'B')
+	if err := w.Truncate(boundary); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	if w.DocCount() != 1 {
+		t.Fatalf("DocCount after truncate: got %d, want 1", w.DocCount())
+	}
+
+	// The next committed document must reuse the doc_seq freed by the abort so
+	// its frame DocSeq stays contiguous with its .idx position; a leaked
+	// counter would write document C at doc_seq 2 over position 1.
+	appendTruncateTestDoc(t, w, "c", 'C')
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// OpenWriter re-scans the Frames and rejects any doc_seq gap, so a leaked
+	// counter fails this reopen.
+	reopened, err := block.OpenWriter(path, 1, 100)
+	if err != nil {
+		t.Fatalf("OpenWriter after truncate+append: %v", err)
+	}
+	if reopened.DocCount() != 2 {
+		t.Fatalf("reopened DocCount: got %d, want 2", reopened.DocCount())
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened: %v", err)
+	}
+}
+
 func TestOpenWriterRejectsInvalidFrameFlags(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.blk")

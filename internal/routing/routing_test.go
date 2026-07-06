@@ -41,6 +41,17 @@ func TestPlacementRoutesTransactionsWithStableHashSlots(t *testing.T) {
 	}
 }
 
+func TestSlotForTransactionAcceptsExactIdentifiers(t *testing.T) {
+	// The public contract preserves identifiers exactly (no trimming or
+	// normalization), so a whitespace-only Transaction ID must route.
+	if _, err := routing.SlotForTransaction(" "); err != nil {
+		t.Fatalf("SlotForTransaction(%q) = %v, want routable", " ", err)
+	}
+	if _, err := routing.SlotForTransaction(""); !errors.Is(err, routing.ErrInvalidTransaction) {
+		t.Fatalf("SlotForTransaction(\"\") error = %v, want ErrInvalidTransaction", err)
+	}
+}
+
 func assertTransactionRoute(t *testing.T, placement routing.Placement, transactionID string, wantSlot uint16, wantShardID uint64) {
 	t.Helper()
 	slot, err := routing.SlotForTransaction(transactionID)

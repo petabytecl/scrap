@@ -1,0 +1,215 @@
+package raft
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"go.etcd.io/raft/v3/raftpb"
+)
+
+const snapshotTestManifest = `{"member":"member-a"}`
+
+func TestNodeSnapshotsAndCompactsAfterThreshold(t *testing.T) {
+	dataDir := t.TempDir()
+	var lastApplied atomic.Uint64
+	var snapshotCalls atomic.Uint64
+
+	node := openSnapshotTestNode(t, dataDir, &lastApplied, &snapshotCalls)
+	defer node.Stop()
+
+	waitForLeader(t, node)
+	proposeUntilApplied(t, node, &lastApplied, 40)
+
+	waitForCondition(t, "snapshot file", func() bool {
+		return len(snapDirFiles(t, dataDir)) > 0
+	})
+	if snapshotCalls.Load() == 0 {
+		t.Fatal("Snapshot func was never called")
+	}
+
+	node.Stop()
+	firstIndex, err := node.storage.FirstIndex()
+	if err != nil {
+		t.Fatalf("FirstIndex: %v", err)
+	}
+	if firstIndex <= 1 {
+		t.Fatalf("FirstIndex = %d, want compacted log (> 1)", firstIndex)
+	}
+	if count := len(snapDirFiles(t, dataDir)); count > maxKeptSnapFiles+1 {
+		t.Fatalf("snap files = %d, want purge to keep at most %d", count, maxKeptSnapFiles+1)
+	}
+}
+
+func TestNodeRestartsFromOwnSnapshotAndReplaysOnlyTail(t *testing.T) {
+	dataDir := t.TempDir()
+	var lastApplied atomic.Uint64
+	var snapshotCalls atomic.Uint64
+
+	node := openSnapshotTestNode(t, dataDir, &lastApplied, &snapshotCalls)
+	waitForLeader(t, node)
+	proposeUntilApplied(t, node, &lastApplied, 40)
+	waitForCondition(t, "snapshot file", func() bool {
+		return len(snapDirFiles(t, dataDir)) > 0
+	})
+	node.Stop()
+
+	var restored atomic.Bool
+	var replayUntilSeen atomic.Uint64
+	restarted, err := Open(Config{
+		ID:           1,
+		Peers:        map[uint64]string{1: ""},
+		DataDir:      dataDir,
+		Transport:    discardTransport{},
+		TickInterval: 5 * time.Millisecond,
+		Apply: func(entries []raftpb.Entry, replayUntil uint64) error {
+			replayUntilSeen.Store(replayUntil)
+			if len(entries) > 0 {
+				lastApplied.Store(entries[len(entries)-1].Index)
+			}
+			return nil
+		},
+		Snapshot: func(uint64) ([]byte, error) { return []byte(snapshotTestManifest), nil },
+		Restore: func(data []byte) error {
+			if string(data) != snapshotTestManifest {
+				t.Errorf("Restore data = %q, want manifest", string(data))
+			}
+			restored.Store(true)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer restarted.Stop()
+
+	if !restored.Load() {
+		t.Fatal("Restore was not invoked on restart with a snapshot present")
+	}
+	if restarted.AppliedIndex() == 0 {
+		t.Fatal("restarted node applied index = 0, want snapshot index")
+	}
+}
+
+func TestNodeSnapshotDataFailureDefersSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	var lastApplied atomic.Uint64
+
+	node, err := Open(Config{
+		ID:                     1,
+		Peers:                  map[uint64]string{1: ""},
+		DataDir:                dataDir,
+		Transport:              discardTransport{},
+		TickInterval:           5 * time.Millisecond,
+		MaxSnapCount:           8,
+		SnapshotCatchUpEntries: 4,
+		Apply: func(entries []raftpb.Entry, _ uint64) error {
+			if len(entries) > 0 {
+				lastApplied.Store(entries[len(entries)-1].Index)
+			}
+			return nil
+		},
+		Snapshot: func(uint64) ([]byte, error) { return nil, os.ErrDeadlineExceeded },
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer node.Stop()
+
+	waitForLeader(t, node)
+	proposeUntilApplied(t, node, &lastApplied, 20)
+
+	// The node keeps running and never persists a snapshot.
+	if files := snapDirFiles(t, dataDir); len(files) != 0 {
+		t.Fatalf("snap files = %v, want none when Snapshot fails", files)
+	}
+	firstIndex, err := node.storage.FirstIndex()
+	if err != nil {
+		t.Fatalf("FirstIndex: %v", err)
+	}
+	if firstIndex != 1 {
+		t.Fatalf("FirstIndex = %d, want uncompacted log when Snapshot fails", firstIndex)
+	}
+}
+
+func openSnapshotTestNode(t *testing.T, dataDir string, lastApplied, snapshotCalls *atomic.Uint64) *Node {
+	t.Helper()
+	node, err := Open(Config{
+		ID:                     1,
+		Peers:                  map[uint64]string{1: ""},
+		DataDir:                dataDir,
+		Transport:              discardTransport{},
+		TickInterval:           5 * time.Millisecond,
+		MaxSnapCount:           8,
+		SnapshotCatchUpEntries: 4,
+		Apply: func(entries []raftpb.Entry, _ uint64) error {
+			if len(entries) > 0 {
+				lastApplied.Store(entries[len(entries)-1].Index)
+			}
+			return nil
+		},
+		Snapshot: func(uint64) ([]byte, error) {
+			snapshotCalls.Add(1)
+			return []byte(snapshotTestManifest), nil
+		},
+		Restore: func([]byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return node
+}
+
+func waitForLeader(t *testing.T, node *Node) {
+	t.Helper()
+	waitForCondition(t, "leader election", node.IsLeader)
+}
+
+func proposeUntilApplied(t *testing.T, node *Node, lastApplied *atomic.Uint64, proposals int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for i := range proposals {
+		if err := node.Propose(ctx, []byte("snapshot-test-entry")); err != nil {
+			t.Fatalf("Propose %d: %v", i, err)
+		}
+	}
+	target := node.CommitIndex()
+	waitForCondition(t, "proposals applied", func() bool {
+		return lastApplied.Load() >= target
+	})
+}
+
+func waitForCondition(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func snapDirFiles(t *testing.T, dataDir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dataDir, "snap"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read snap dir: %v", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".snap") {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
+}
