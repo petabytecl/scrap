@@ -73,7 +73,7 @@ func TestNodeRestartsFromOwnSnapshotAndReplaysOnlyTail(t *testing.T) {
 			}
 			return nil
 		},
-		Snapshot: func() ([]byte, error) { return []byte(snapshotTestManifest), nil },
+		Snapshot: func(uint64) ([]byte, error) { return []byte(snapshotTestManifest), nil },
 		Restore: func(data []byte) error {
 			if string(data) != snapshotTestManifest {
 				t.Errorf("Restore data = %q, want manifest", string(data))
@@ -113,7 +113,7 @@ func TestNodeSnapshotDataFailureDefersSnapshot(t *testing.T) {
 			}
 			return nil
 		},
-		Snapshot: func() ([]byte, error) { return nil, os.ErrDeadlineExceeded },
+		Snapshot: func(uint64) ([]byte, error) { return nil, os.ErrDeadlineExceeded },
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -152,7 +152,7 @@ func openSnapshotTestNode(t *testing.T, dataDir string, lastApplied, snapshotCal
 			}
 			return nil
 		},
-		Snapshot: func() ([]byte, error) {
+		Snapshot: func(uint64) ([]byte, error) {
 			snapshotCalls.Add(1)
 			return []byte(snapshotTestManifest), nil
 		},

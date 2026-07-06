@@ -49,7 +49,10 @@ const (
 // even though Open starts the run loop before returning the node.
 type ApplyFunc func(entries []raftpb.Entry, replayUntil uint64) error
 
-type SnapshotFunc func() (data []byte, err error)
+// SnapshotFunc produces the snapshot manifest for the given applied index. The
+// index lets the application durably record how far its out-of-log state has
+// advanced, so a later Restore can detect a partially-restored DataDir.
+type SnapshotFunc func(appliedIndex uint64) (data []byte, err error)
 
 type RestoreFunc func(data []byte) error
 
@@ -487,7 +490,7 @@ func (n *Node) maybeTriggerSnapshotLocked() {
 		return
 	}
 
-	data, err := n.cfg.Snapshot()
+	data, err := n.cfg.Snapshot(applied)
 	if err != nil {
 		n.logger.Error("raft: snapshot data unavailable, deferring snapshot", "error", err)
 		return
