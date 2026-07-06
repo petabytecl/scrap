@@ -24,10 +24,15 @@ type projectionRebuildCoreStub struct {
 	swapOnce         sync.Once
 	idxNil           bool
 	swapErr          error
+	appliedIndex     uint64
 }
 
 func (s *projectionRebuildCoreStub) currentOpenBlockID() uint64 {
 	return s.openBlockID
+}
+
+func (s *projectionRebuildCoreStub) projectionAppliedIndex() (uint64, bool) {
+	return s.appliedIndex, true
 }
 
 func (s *projectionRebuildCoreStub) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {

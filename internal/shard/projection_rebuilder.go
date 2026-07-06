@@ -24,6 +24,7 @@ type projectionRebuildCore interface {
 	confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error)
 	pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error)
 	swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (idxNil bool, err error)
+	projectionAppliedIndex() (uint64, bool)
 }
 
 type projectionRebuilder struct {
@@ -196,6 +197,16 @@ func (r *projectionRebuilder) prepareRebuildProjection(tempDir string) error {
 	if err := r.rebuildProjectionInto(newIdx); err != nil {
 		_ = newIdx.Close()
 		return err
+	}
+	// Carry the durable applied-index watermark into the rebuilt projection.
+	// The rebuild's sources (Block .idx files) cover at least the state the
+	// old watermark stands for, and without the key a restart after the swap
+	// fails the raft snapshot restore check as a partial DataDir restore.
+	if watermark, ok := r.core.projectionAppliedIndex(); ok && watermark > 0 {
+		if err := newIdx.PersistAppliedIndex(watermark); err != nil {
+			_ = newIdx.Close()
+			return fmt.Errorf("shard: carry applied index into rebuild: %w", err)
+		}
 	}
 	if err := newIdx.Close(); err != nil {
 		return fmt.Errorf("shard: close rebuild index: %w", err)

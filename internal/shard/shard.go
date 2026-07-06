@@ -897,6 +897,12 @@ func (s *Shard) RunLightScrub(ctx context.Context) error {
 }
 
 func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) error {
+	// The rebuilt projection carries the watermark captured at prepare time; a
+	// raft snapshot created during the rebuild persisted a newer one into the
+	// projection being replaced. Re-persist it after the swap or a restart
+	// would fail the snapshot restore check as a partial DataDir restore.
+	oldWatermark := s.idx.AppliedIndex()
+
 	if err := s.idx.Close(); err != nil {
 		// Fail closed: a half-closed Pebble handle must never serve reads.
 		s.idx = nil
@@ -912,6 +918,11 @@ func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) e
 	}
 	if err := s.reopenInstalledProjectionLocked(pebbleDir, oldDir); err != nil {
 		return err
+	}
+	if oldWatermark > s.idx.AppliedIndex() {
+		if err := s.idx.PersistAppliedIndex(oldWatermark); err != nil {
+			return fmt.Errorf("shard: restore applied index after rebuild swap: %w", err)
+		}
 	}
 	_ = os.RemoveAll(oldDir)
 	return nil
