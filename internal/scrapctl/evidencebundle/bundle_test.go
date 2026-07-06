@@ -353,7 +353,7 @@ func TestGenerateFailsWhenManifestContainsSensitiveEnvironment(t *testing.T) {
 func TestEvictionEvidenceFailsOnCaptureErrorPayload(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "eviction")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("mkdir eviction: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "status.json"), []byte(`{"error":"eviction plan status unavailable"}`), 0o600); err != nil {

@@ -9,7 +9,6 @@ package shard
 import (
 	"bytes"
 	"errors"
-	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -53,6 +52,19 @@ func TestRollbackReplicaOverhangTruncatesAndRemovesPreps(t *testing.T) {
 	assertAbortWritePrepRemoved(t, attempt)
 }
 
+func TestRollbackReplicaOverhangRefusesMidDocumentTarget(t *testing.T) {
+	s, _, startOffset := shardForAbortWriteTest(t)
+	overhangEnd := s.blockWriter.Offset()
+
+	err := s.rollbackReplicaOverhangLocked(1, startOffset+1, overhangEnd)
+	if err == nil {
+		t.Fatal("rollbackReplicaOverhangLocked succeeded, want refusal for mid-document target")
+	}
+	if got := s.blockWriter.Offset(); got != overhangEnd {
+		t.Fatalf("block offset = %d, want %d: mid-document target must not truncate", got, overhangEnd)
+	}
+}
+
 func TestRollbackReplicaOverhangRefusesIndexedDocuments(t *testing.T) {
 	s, _, startOffset := shardForAbortWriteTest(t)
 	overhangEnd := s.blockWriter.Offset()
@@ -84,7 +96,7 @@ func shardForAbortWriteTest(t *testing.T) (*Shard, *openlogWriteAttempt, int64) 
 		blockWriter: bw,
 		blocksDir:   blocksDir,
 		openlogDir:  t.TempDir(),
-		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:      slog.New(slog.DiscardHandler),
 	}
 
 	startOffset := bw.Offset()

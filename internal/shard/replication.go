@@ -115,22 +115,9 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 	}
 
 	// Validate offset before appending to prevent poisoning the follower block with data at the wrong position.
-	currentOffset := s.blockWriter.Offset()
 	wantOffset := safeUint64ToInt64(init.GetStartOffset())
-	if currentOffset < wantOffset {
-		if err := s.repairReplicaOffsetLocked(ctx, init.GetBlockId(), wantOffset); err != nil {
-			return nil, fmt.Errorf("shard: replica offset %d, want %d: repair failed: %w", currentOffset, wantOffset, err)
-		}
-		currentOffset = s.blockWriter.Offset()
-	}
-	if currentOffset > wantOffset {
-		if err := s.rollbackReplicaOverhangLocked(init.GetBlockId(), wantOffset, currentOffset); err != nil {
-			return nil, fmt.Errorf("shard: replica offset %d, want %d: %w", currentOffset, wantOffset, err)
-		}
-		currentOffset = s.blockWriter.Offset()
-	}
-	if currentOffset != wantOffset {
-		return nil, fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
+	if err := s.ensureReplicaAppendOffsetLocked(ctx, init, wantOffset); err != nil {
+		return nil, err
 	}
 
 	attempt, err := s.beginOpenlogWriteAttempt(openlogWriteAttemptConfig{
@@ -163,6 +150,29 @@ func (s *Shard) abortReplicatedWriteAttempt(attempt *openlogWriteAttempt, startO
 	attempt.cleanupOnAbort()
 }
 
+// ensureReplicaAppendOffsetLocked reconciles the replica Block offset with the
+// leader's declared start offset: repair from a peer when behind, roll back an
+// uncommitted overhang when ahead.
+func (s *Shard) ensureReplicaAppendOffsetLocked(ctx context.Context, init *scrapv1.ReplicateDocumentInit, wantOffset int64) error {
+	currentOffset := s.blockWriter.Offset()
+	if currentOffset < wantOffset {
+		if err := s.repairReplicaOffsetLocked(ctx, init.GetBlockId(), wantOffset); err != nil {
+			return fmt.Errorf("shard: replica offset %d, want %d: repair failed: %w", currentOffset, wantOffset, err)
+		}
+		currentOffset = s.blockWriter.Offset()
+	}
+	if currentOffset > wantOffset {
+		if err := s.rollbackReplicaOverhangLocked(init.GetBlockId(), wantOffset, currentOffset); err != nil {
+			return fmt.Errorf("shard: replica offset %d, want %d: %w", currentOffset, wantOffset, err)
+		}
+		currentOffset = s.blockWriter.Offset()
+	}
+	if currentOffset != wantOffset {
+		return fmt.Errorf("shard: replica offset %d, want %d", currentOffset, wantOffset)
+	}
+	return nil
+}
+
 // rollbackReplicaOverhangLocked reclaims replica Block bytes past wantOffset.
 // A replica ends up ahead of the leader when it accepted a replicated append
 // whose write the leader then aborted: the leader truncates its own Block, but
@@ -180,6 +190,13 @@ func (s *Shard) rollbackReplicaOverhangLocked(blockID uint64, wantOffset, curren
 	}
 	if indexed {
 		return fmt.Errorf("shard: replica overhang past offset %d holds indexed documents", wantOffset)
+	}
+	boundary, err := s.replicaRollbackTargetIsDocumentBoundary(blockID, wantOffset)
+	if err != nil {
+		return err
+	}
+	if !boundary {
+		return fmt.Errorf("shard: replica rollback offset %d is not a document boundary", wantOffset)
 	}
 	if err := s.blockWriter.Truncate(wantOffset); err != nil {
 		return fmt.Errorf("shard: roll back replica overhang: %w", err)
@@ -212,6 +229,40 @@ func (s *Shard) replicaOverhangIndexed(blockID uint64, wantOffset int64) (bool, 
 		}
 	}
 	return false, nil
+}
+
+// replicaRollbackTargetIsDocumentBoundary reports whether wantOffset lands
+// exactly between whole Documents in the Block. The overhang of an aborted
+// leader write always starts at a Document boundary; any other offset (a
+// malformed init from a buggy peer) must be refused before Truncate physically
+// cuts a Document mid-frame. Scan failures fail closed as "not a boundary".
+func (s *Shard) replicaRollbackTargetIsDocumentBoundary(blockID uint64, wantOffset int64) (bool, error) {
+	f, err := os.Open(s.blockPath(blockID))
+	if err != nil {
+		return false, fmt.Errorf("shard: open replica block for rollback scan: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(block.HeaderSize, io.SeekStart); err != nil {
+		return false, fmt.Errorf("shard: seek replica block: %w", err)
+	}
+	offset := int64(block.HeaderSize)
+	for offset < wantOffset {
+		_, payload, err := block.ReadFrame(f)
+		if err != nil {
+			return false, fmt.Errorf("shard: scan replica block for rollback: %w", err)
+		}
+		offset += int64(block.FrameHeaderSize) + int64(len(payload))
+	}
+	if offset != wantOffset {
+		return false, nil
+	}
+	// The first overhang Frame exists (the caller saw currentOffset > wantOffset)
+	// and must start a Document; a continuation Frame means wantOffset splits one.
+	hdr, _, err := block.ReadFrame(f)
+	if err != nil {
+		return false, fmt.Errorf("shard: read overhang frame: %w", err)
+	}
+	return hdr.FrameSeq == 0, nil
 }
 
 func validateReplicatedAppend(init *scrapv1.ReplicateDocumentInit, result block.AppendResult, wantOffset int64) error {

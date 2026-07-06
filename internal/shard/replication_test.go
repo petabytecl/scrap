@@ -111,7 +111,7 @@ func TestAppendReplicatedDocument_RollsBackAbortedOverhang(t *testing.T) {
 
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	gotDocSeqs := readBlockDocSeqs(t, block.FilePath(blocksDir, 1))
-	if want := []uint32{0}; !equalUint32s(gotDocSeqs, want) {
+	if want := []uint32{0}; !slices.Equal(gotDocSeqs, want) {
 		t.Fatalf("doc sequences = %v, want %v (overhang reclaimed, second doc only)", gotDocSeqs, want)
 	}
 }
@@ -152,7 +152,7 @@ func TestAppendReplicatedDocument_ReopensEmptyFutureBlockAfterRestart(t *testing
 	}
 	gotDocSeqs := readBlockDocSeqs(t, block.FilePath(blocksDir, 1))
 	wantDocSeqs := []uint32{0, 1}
-	if !equalUint32s(gotDocSeqs, wantDocSeqs) {
+	if !slices.Equal(gotDocSeqs, wantDocSeqs) {
 		t.Fatalf("doc sequences = %v, want %v", gotDocSeqs, wantDocSeqs)
 	}
 }
@@ -212,7 +212,7 @@ func TestAppendReplicatedDocument_RepairsBehindCurrentBlockFromPeer(t *testing.T
 	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
 	gotDocSeqs := readBlockDocSeqs(t, block.FilePath(blocksDir, 1))
 	wantDocSeqs := []uint32{0, 1, 2}
-	if !equalUint32s(gotDocSeqs, wantDocSeqs) {
+	if !slices.Equal(gotDocSeqs, wantDocSeqs) {
 		t.Fatalf("doc sequences = %v, want %v", gotDocSeqs, wantDocSeqs)
 	}
 }
@@ -415,16 +415,4 @@ func readBlockDocSeqs(t *testing.T, path string) []uint32 {
 			seqs = append(seqs, hdr.DocSeq)
 		}
 	}
-}
-
-func equalUint32s(a, b []uint32) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
