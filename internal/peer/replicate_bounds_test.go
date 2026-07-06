@@ -191,7 +191,7 @@ func TestReplicateDocumentRejectsOversizedChunkBeforeBuffering(t *testing.T) {
 
 func TestReplicateDocumentRejectsDeclaredOverLimitBeforeSideEffects(t *testing.T) {
 	init := validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
-		init.TotalBytes = maxReplicatedDocumentBytes + 1
+		init.TotalBytes = storeapi.MaxDocumentBytes + 1
 	})
 	assertReplicateDocumentBodyRejectedBeforeSideEffects(t, init, codes.ResourceExhausted)
 }
@@ -201,27 +201,46 @@ func TestReplicateDocumentRejectsEmptyBodyBeforeAcceptedState(t *testing.T) {
 }
 
 func TestValidateReplicateDocumentChunkBounds(t *testing.T) {
-	if _, err := validateReplicateDocumentChunk(0, make([]byte, storeapi.MaxClientChunkBytes+1)); !errors.Is(err, storeapi.ErrResourceExhausted) {
+	if _, err := validateReplicateDocumentChunk(0, make([]byte, storeapi.MaxClientChunkBytes+1), maxReplicatedDocumentBytes); !errors.Is(err, storeapi.ErrResourceExhausted) {
 		t.Fatalf("oversized chunk error = %v, want resource exhausted", err)
 	}
-	if _, err := validateReplicateDocumentChunk(maxReplicatedDocumentBytes, []byte("x")); !errors.Is(err, storeapi.ErrResourceExhausted) {
+	if _, err := validateReplicateDocumentChunk(maxReplicatedDocumentBytes, []byte("x"), maxReplicatedDocumentBytes); !errors.Is(err, storeapi.ErrResourceExhausted) {
 		t.Fatalf("over-limit running total error = %v, want resource exhausted", err)
 	}
 	// Encrypted replication carries ciphertext, which expands past the plaintext
-	// limit, so the replicated-body limit must leave headroom: a running total
-	// just over MaxDocumentBytes is still accepted on the replication path.
+	// limit, so the enveloped-body limit must leave headroom: a running total
+	// just over MaxDocumentBytes is still accepted on the encrypted path.
 	if maxReplicatedDocumentBytes <= storeapi.MaxDocumentBytes {
 		t.Fatalf("replicated limit %d must exceed plaintext limit %d", maxReplicatedDocumentBytes, storeapi.MaxDocumentBytes)
 	}
-	if _, err := validateReplicateDocumentChunk(storeapi.MaxDocumentBytes, []byte("x")); err != nil {
+	if _, err := validateReplicateDocumentChunk(storeapi.MaxDocumentBytes, []byte("x"), maxReplicatedDocumentBytes); err != nil {
 		t.Fatalf("chunk within ciphertext headroom error = %v, want nil", err)
 	}
-	got, err := validateReplicateDocumentChunk(10, []byte("xy"))
+	// An unenveloped body carries plaintext: the same running total must fail
+	// against the plaintext limit, or a peer could persist a Document above
+	// the public size limit on a follower.
+	if _, err := validateReplicateDocumentChunk(storeapi.MaxDocumentBytes, []byte("x"), storeapi.MaxDocumentBytes); !errors.Is(err, storeapi.ErrResourceExhausted) {
+		t.Fatalf("plaintext over-limit error = %v, want resource exhausted", err)
+	}
+	got, err := validateReplicateDocumentChunk(10, []byte("xy"), maxReplicatedDocumentBytes)
 	if err != nil {
 		t.Fatalf("valid chunk error = %v, want nil", err)
 	}
 	if want := int64(12); got != want {
 		t.Fatalf("running total = %d, want %d", got, want)
+	}
+}
+
+func TestReplicatedBodyLimitDependsOnEnvelope(t *testing.T) {
+	plain := validReplicateDocumentInit()
+	if got := replicatedBodyLimit(plain); got != storeapi.MaxDocumentBytes {
+		t.Fatalf("plaintext body limit = %d, want %d", got, storeapi.MaxDocumentBytes)
+	}
+	enveloped := validReplicateDocumentInit(func(init *scrapv1.ReplicateDocumentInit) {
+		init.EncryptionEnvelope = []byte("envelope")
+	})
+	if got := replicatedBodyLimit(enveloped); got != maxReplicatedDocumentBytes {
+		t.Fatalf("enveloped body limit = %d, want %d", got, maxReplicatedDocumentBytes)
 	}
 }
 

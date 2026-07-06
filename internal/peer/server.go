@@ -234,7 +234,8 @@ func (s *Server) ReplicateDocument(stream grpc.ClientStreamingServer[scrapv1.Rep
 // written to the pipe, and a Document that exceeds the replicated-body limit
 // mid-stream fails closed without the consumer committing visible state.
 func (s *Server) streamReplicatedDocument(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], init *scrapv1.ReplicateDocumentInit) ([]byte, error) {
-	firstChunk, totalBytes, err := receiveFirstReplicateChunk(stream)
+	bodyLimit := replicatedBodyLimit(init)
+	firstChunk, totalBytes, err := receiveFirstReplicateChunk(stream, bodyLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +259,7 @@ func (s *Server) streamReplicatedDocument(stream grpc.ClientStreamingServer[scra
 		_ = pr.CloseWithError(consumeErr)
 	}()
 
-	recvErr := streamReplicateChunks(stream, pw, firstChunk, totalBytes)
+	recvErr := streamReplicateChunks(stream, pw, firstChunk, totalBytes, bodyLimit)
 	<-done
 
 	if recvErr != nil {
@@ -341,19 +342,33 @@ func validateReplicateDocumentInit(init *scrapv1.ReplicateDocumentInit) error {
 }
 
 // validateReplicateDocumentDeclaredSize rejects a Document whose declared size
-// already exceeds the replicated-body limit before any body bytes are received.
+// already exceeds MaxDocumentBytes before any body bytes are received. The
+// declared TotalBytes is the plaintext size on both replication paths, so the
+// plaintext limit applies even when the wire body is ciphertext.
 func validateReplicateDocumentDeclaredSize(totalBytes int64) error {
-	if totalBytes > maxReplicatedDocumentBytes {
+	if totalBytes > storeapi.MaxDocumentBytes {
 		return storeapi.NewResourceExhausted(storeapi.ResourceExhaustedReasonDocumentTooLarge, "document too large")
 	}
 	return nil
+}
+
+// replicatedBodyLimit returns the wire-body budget for a replicated Document.
+// The wire carries stored bytes: ciphertext with AES-GCM per-frame expansion
+// when an encryption envelope is present, plaintext otherwise. An unenveloped
+// body gets no ciphertext headroom — otherwise a peer could persist a
+// plaintext Document above the public MaxDocumentBytes limit on a follower.
+func replicatedBodyLimit(init *scrapv1.ReplicateDocumentInit) int64 {
+	if len(init.GetEncryptionEnvelope()) == 0 {
+		return storeapi.MaxDocumentBytes
+	}
+	return maxReplicatedDocumentBytes
 }
 
 // receiveFirstReplicateChunk reads stream messages until the first non-empty
 // body chunk and validates its size. It returns InvalidArgument when the body
 // is empty (EOF before any bytes), so empty bodies and oversized first chunks
 // fail closed before the consumer starts.
-func receiveFirstReplicateChunk(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse]) ([]byte, int64, error) {
+func receiveFirstReplicateChunk(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], bodyLimit int64) ([]byte, int64, error) {
 	for {
 		msg, err := stream.Recv()
 		switch {
@@ -370,7 +385,7 @@ func receiveFirstReplicateChunk(stream grpc.ClientStreamingServer[scrapv1.Replic
 		if len(chunk) == 0 {
 			continue
 		}
-		total, verr := validateReplicateDocumentChunk(0, chunk)
+		total, verr := validateReplicateDocumentChunk(0, chunk, bodyLimit)
 		if verr != nil {
 			return nil, 0, peerStoreStatus(verr)
 		}
@@ -385,7 +400,7 @@ func errDuplicateReplicateInit() error {
 // streamReplicateChunks writes the already-validated first chunk, then bounds
 // and forwards each subsequent chunk into pw. It closes pw so the consumer
 // observes EOF on success or the failure on error.
-func streamReplicateChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], pw *io.PipeWriter, firstChunk []byte, totalBytes int64) error {
+func streamReplicateChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDocumentRequest, scrapv1.ReplicateDocumentResponse], pw *io.PipeWriter, firstChunk []byte, totalBytes, bodyLimit int64) error {
 	if consumerStopped(pw, firstChunk) {
 		return nil
 	}
@@ -408,7 +423,7 @@ func streamReplicateChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDo
 		if len(chunk) == 0 {
 			continue
 		}
-		nextTotal, verr := validateReplicateDocumentChunk(totalBytes, chunk)
+		nextTotal, verr := validateReplicateDocumentChunk(totalBytes, chunk, bodyLimit)
 		if verr != nil {
 			_ = pw.CloseWithError(verr)
 			return peerStoreStatus(verr)
@@ -428,12 +443,12 @@ func consumerStopped(pw *io.PipeWriter, chunk []byte) bool {
 	return err != nil
 }
 
-func validateReplicateDocumentChunk(totalBytes int64, chunk []byte) (int64, error) {
+func validateReplicateDocumentChunk(totalBytes int64, chunk []byte, bodyLimit int64) (int64, error) {
 	if err := storeapi.ValidateClientChunk(chunk); err != nil {
 		return 0, err
 	}
 	nextTotal := totalBytes + int64(len(chunk))
-	if nextTotal > maxReplicatedDocumentBytes {
+	if nextTotal > bodyLimit {
 		return 0, storeapi.NewResourceExhausted(storeapi.ResourceExhaustedReasonDocumentTooLarge, "document too large")
 	}
 	return nextTotal, nil
