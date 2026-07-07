@@ -224,7 +224,7 @@ func TestApplyConfirmUploadRecordsCommittedAuthorityForRebuild(t *testing.T) {
 		t.Fatalf("poison confirmed upload: %v", err)
 	}
 
-	got, err := s.confirmedUploadForRebuild(uploadApplyTestBlockID)
+	got, err := s.confirmedUploadForRebuildForTest(uploadApplyTestBlockID)
 	if err != nil {
 		t.Fatalf("confirmedUploadForRebuild: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestConfirmedUploadForRebuildRequiresCommittedAuthority(t *testing.T) {
 		t.Fatalf("PutConfirmedUpload: %v", err)
 	}
 
-	_, err := shardForApplyTest(t, idx).confirmedUploadForRebuild(uploadApplyTestBlockID)
+	_, err := shardForApplyTest(t, idx).confirmedUploadForRebuildForTest(uploadApplyTestBlockID)
 	if !errors.Is(err, index.ErrConfirmedUploadNotFound) {
 		t.Fatalf("confirmedUploadForRebuild error = %v, want ErrConfirmedUploadNotFound", err)
 	}
@@ -264,7 +264,7 @@ func TestConfirmedUploadForRebuildSurvivesRestart(t *testing.T) {
 	}
 
 	restarted := &Shard{blocksDir: s.blocksDir}
-	got, err := restarted.confirmedUploadForRebuild(uploadApplyTestBlockID)
+	got, err := restarted.confirmedUploadForRebuildForTest(uploadApplyTestBlockID)
 	if err != nil {
 		t.Fatalf("confirmedUploadForRebuild after restart: %v", err)
 	}
@@ -336,4 +336,12 @@ func confirmUploadCommandForApplyTest() *scrapv1.ConfirmUpload {
 
 func shardApplyValidationValue(kind string) string {
 	return kind + "-validation"
+}
+
+// confirmedUploadForRebuildForTest wraps the rebuild accessor with the shard
+// lock its production caller (the rebuild finalize closure) holds.
+func (s *Shard) confirmedUploadForRebuildForTest(blockID uint64) (index.ConfirmedUpload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.confirmedUploadForRebuildLocked(blockID)
 }

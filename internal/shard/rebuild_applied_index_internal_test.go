@@ -83,8 +83,8 @@ func TestSwapRebuiltProjectionRestoresNewerWatermark(t *testing.T) {
 		}
 	})
 
-	if _, err := s.swapRebuiltProjection(pebbleDir, tempDir, oldDir); err != nil {
-		t.Fatalf("swapRebuiltProjection: %v", err)
+	if _, err := s.finalizeAndSwapRebuiltProjection(func() error { return nil }, pebbleDir, tempDir, oldDir); err != nil {
+		t.Fatalf("finalizeAndSwapRebuiltProjection: %v", err)
 	}
 	if got := s.idx.AppliedIndex(); got != 100 {
 		t.Fatalf("applied index after swap = %d, want 100 (newer pre-swap watermark restored)", got)

@@ -981,25 +981,27 @@ func (s *Shard) reopenProjectionLocked(pebbleDir string) error {
 	return nil
 }
 
-func (s *Shard) swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (bool, error) {
+// finalizeAndSwapRebuiltProjection runs the rebuild's finalize step and the
+// projection swap under one apply-lock hold: raft applies mutate the
+// projection (and Block .idx files) under s.mu, so nothing can land between
+// the rebuild catch-up and the switch (#464). A finalize failure leaves the
+// live projection untouched.
+func (s *Shard) finalizeAndSwapRebuiltProjection(finalize func() error, pebbleDir, tempDir, oldDir string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := finalize(); err != nil {
+		return s.idx == nil, err
+	}
 	err := s.swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir)
 	return s.idx == nil, err
 }
 
-func (s *Shard) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Shard) confirmedUploadForRebuildLocked(blockID uint64) (index.ConfirmedUpload, error) {
 	return s.committedConfirmUploadAuthorityLocked(blockID)
 }
 
-func (s *Shard) pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Shard) pendingUploadForRebuildLocked(blockID uint64) (index.PendingUpload, error) {
 	if s.idx == nil {
 		return index.PendingUpload{}, fmt.Errorf("%w: projection is nil", storeapi.ErrDataLoss)
 	}
@@ -1021,6 +1023,10 @@ func (s *Shard) currentOpenBlockID() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.currentOpenBlockIDLocked()
+}
+
+func (s *Shard) currentOpenBlockIDLocked() uint64 {
 	if s.blockWriter == nil {
 		return 0
 	}

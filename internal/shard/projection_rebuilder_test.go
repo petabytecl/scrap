@@ -28,7 +28,7 @@ type projectionRebuildCoreStub struct {
 	contentQuarantines []index.ContentQuarantine
 }
 
-func (s *projectionRebuildCoreStub) currentOpenBlockID() uint64 {
+func (s *projectionRebuildCoreStub) currentOpenBlockIDLocked() uint64 {
 	return s.openBlockID
 }
 
@@ -36,7 +36,7 @@ func (s *projectionRebuildCoreStub) projectionAppliedIndex() (uint64, bool) {
 	return s.appliedIndex, true
 }
 
-func (s *projectionRebuildCoreStub) copyContentSafetyInto(dst *index.Index) error {
+func (s *projectionRebuildCoreStub) copyContentSafetyIntoLocked(dst *index.Index) error {
 	for _, q := range s.contentQuarantines {
 		if err := dst.PutContentQuarantine(q); err != nil {
 			return err
@@ -45,7 +45,7 @@ func (s *projectionRebuildCoreStub) copyContentSafetyInto(dst *index.Index) erro
 	return nil
 }
 
-func (s *projectionRebuildCoreStub) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {
+func (s *projectionRebuildCoreStub) confirmedUploadForRebuildLocked(blockID uint64) (index.ConfirmedUpload, error) {
 	confirmed, ok := s.confirmedUploads[blockID]
 	if !ok {
 		return index.ConfirmedUpload{}, index.ErrConfirmedUploadNotFound
@@ -53,7 +53,7 @@ func (s *projectionRebuildCoreStub) confirmedUploadForRebuild(blockID uint64) (i
 	return confirmed, nil
 }
 
-func (s *projectionRebuildCoreStub) pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error) {
+func (s *projectionRebuildCoreStub) pendingUploadForRebuildLocked(blockID uint64) (index.PendingUpload, error) {
 	upload, ok := s.pendingUploads[blockID]
 	if !ok {
 		return index.PendingUpload{}, index.ErrPendingUploadNotFound
@@ -61,7 +61,7 @@ func (s *projectionRebuildCoreStub) pendingUploadForRebuild(blockID uint64) (ind
 	return upload, nil
 }
 
-func (s *projectionRebuildCoreStub) swapRebuiltProjection(_, _, _ string) (bool, error) {
+func (s *projectionRebuildCoreStub) finalizeAndSwapRebuiltProjection(finalize func() error, _, _, _ string) (bool, error) {
 	s.swapOnce.Do(func() {
 		if s.swapStarted != nil {
 			close(s.swapStarted)
@@ -69,6 +69,9 @@ func (s *projectionRebuildCoreStub) swapRebuiltProjection(_, _, _ string) (bool,
 	})
 	if s.releaseSwap != nil {
 		<-s.releaseSwap
+	}
+	if err := finalize(); err != nil {
+		return s.idxNil, err
 	}
 	return s.idxNil, s.swapErr
 }
@@ -187,7 +190,7 @@ func TestProjectionRebuilderRequeuesSealedBlockForRaftConfirmation(t *testing.T)
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
@@ -223,7 +226,7 @@ func TestProjectionRebuilderPreservesHotConfirmedBlock(t *testing.T) {
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
@@ -269,7 +272,7 @@ func TestProjectionRebuilderPreservesPendingRewrapUploadOverConfirmedAuthority(t
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
@@ -301,7 +304,7 @@ func TestProjectionRebuilderPreservesHotConfirmedBlockWhenUploadsDisabled(t *tes
 	}
 	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
@@ -330,7 +333,7 @@ func TestProjectionRebuilderFailsClosedWhenSealedBlockMetadataMissing(t *testing
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err == nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err == nil {
 		t.Fatal("rebuildUploadOutbox succeeded without sealed Block metadata")
 	}
 	if _, err := projection.GetConfirmedUpload(1); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
@@ -373,7 +376,7 @@ func TestProjectionRebuilderSkipsEvictedConfirmedBlock(t *testing.T) {
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
@@ -419,7 +422,7 @@ func TestProjectionRebuilderPreservesEvictedConfirmedBlockWhenUploadsDisabled(t 
 	}
 	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	got, err := projection.GetConfirmedUpload(1)
@@ -477,7 +480,7 @@ func TestProjectionRebuilderPreservesEvictedCommittedBlockAfterRestart(t *testin
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{uploadApplyTestBlockID}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{uploadApplyTestBlockID}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	got, err := projection.GetConfirmedUpload(uploadApplyTestBlockID)
