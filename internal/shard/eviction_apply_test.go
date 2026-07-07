@@ -19,6 +19,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -2108,4 +2109,37 @@ func (b blockingGetBackend) GetObject(ctx context.Context, _ string, _ backend.G
 	b.cancel()
 	<-ctx.Done()
 	return nil, backend.ObjectMeta{}, ctx.Err()
+}
+
+func TestApplyEvictionPlanRemovesRestoreMarkerOnReEviction(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	// A previously restored Block outside the hot-residency window: eviction
+	// must end its restore lifecycle by removing the marker (#454).
+	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
+		BlockID:      1,
+		RestoredAtUs: time.Now().UTC().Add(-time.Hour).UnixMicro(),
+		Source:       RestoreSourceBackend,
+		Reason:       RestoreReasonRead,
+	}); err != nil {
+		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+	if err := localblock.RecordRestoreScan(s.blocksDir, 1, time.Now().UTC().UnixMicro()); err != nil {
+		t.Fatalf("RecordRestoreScan: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	assertEvictionApplyCompleted(t, result)
+	assertBlockEvictedForApply(t, s, 1)
+	for _, path := range []string{RestoreMarkerPath(s.blocksDir, 1), localblock.RestoreScanRecordPath(s.blocksDir, 1)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s = %v, want removed after re-eviction", path, err)
+		}
+	}
 }

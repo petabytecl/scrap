@@ -21,6 +21,7 @@ type Config struct {
 	ProgressStore            ProgressStore
 	SignatureVersionProvider SignatureVersionProvider
 	DetectionReporter        DetectionReporter
+	ScanRecorder             ScanRecorder
 	Metrics                  Metrics
 	PauseController          PauseController
 	IOBudget                 IOBudget
@@ -260,8 +261,11 @@ func (s *Scheduler) scanBlocks(ctx context.Context, blocks, listing []Block, pro
 	state := newScanRunState(blocks, listing, progress)
 	// Advance through leading gaps before scanning: a quarantined or evicted
 	// Block at frontier+1 must not pin the durable watermark when everything
-	// still listed is already completed or absent.
-	if reason, err := s.persistAdvancedProgress(ctx, &state); err != nil {
+	// still listed is already completed or absent. This once-per-run call also
+	// sweeps the whole completed map; per-Block calls prune only the delta the
+	// frontier just advanced through, so a pinned frontier costs O(N) per run
+	// instead of O(N²) (#456).
+	if reason, err := s.persistAdvancedProgress(ctx, &state, true); err != nil {
 		s.recordFailure(reason, state.remaining)
 		return reason, err
 	}
@@ -310,7 +314,7 @@ func (s *Scheduler) tryScanBlock(ctx context.Context, block Block, state *scanRu
 	}
 
 	state.remaining--
-	if reason, err := s.persistAdvancedProgress(ctx, state); err != nil {
+	if reason, err := s.persistAdvancedProgress(ctx, state, false); err != nil {
 		s.recordFailure(reason, state.remaining)
 		return reason, err
 	}
@@ -318,12 +322,12 @@ func (s *Scheduler) tryScanBlock(ctx context.Context, block Block, state *scanRu
 	return ReasonNone, nil
 }
 
-func (s *Scheduler) persistAdvancedProgress(ctx context.Context, state *scanRunState) (Reason, error) {
+func (s *Scheduler) persistAdvancedProgress(ctx context.Context, state *scanRunState, fullPrune bool) (Reason, error) {
 	if !state.progress.enabled {
 		return ReasonNone, nil
 	}
 	before := state.progress.frontier
-	s.advanceProgressFrontier(state)
+	s.advanceProgressFrontier(state, fullPrune)
 	if state.progress.frontier == before {
 		return ReasonNone, nil
 	}
@@ -339,12 +343,16 @@ func (s *Scheduler) persistAdvancedProgress(ctx context.Context, state *scanRunS
 // at the first listed Block that has not been scanned — a scan failure there
 // keeps the watermark below it — and prunes completed entries at or below
 // the new frontier, except restored Blocks whose entries suppress in-process
-// rescans while they remain scan-eligible below the frontier.
-func (s *Scheduler) advanceProgressFrontier(state *scanRunState) {
+// rescans while they remain scan-eligible below the frontier. A full prune
+// sweeps the whole completed map and runs once per scan run; per-Block calls
+// prune only the (before, frontier] delta so a stuck frontier Block does not
+// make the sweep O(N²) over the completed set (#456).
+func (s *Scheduler) advanceProgressFrontier(state *scanRunState, fullPrune bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	progress := &state.progress
+	before := progress.frontier
 	for progress.frontier < state.maxListed {
 		next := progress.frontier + 1
 		if _, done := s.completed[next]; !done {
@@ -354,15 +362,25 @@ func (s *Scheduler) advanceProgressFrontier(state *scanRunState) {
 		}
 		progress.frontier = next
 	}
-	for blockID := range s.completed {
-		if blockID > progress.frontier {
-			continue
+	if fullPrune {
+		for blockID := range s.completed {
+			s.pruneCompletedLocked(blockID, state)
 		}
-		if _, isRestored := state.restored[blockID]; isRestored {
-			continue
-		}
-		delete(s.completed, blockID)
+		return
 	}
+	for blockID := before + 1; blockID != 0 && blockID <= progress.frontier; blockID++ {
+		s.pruneCompletedLocked(blockID, state)
+	}
+}
+
+func (s *Scheduler) pruneCompletedLocked(blockID uint64, state *scanRunState) {
+	if blockID > state.progress.frontier {
+		return
+	}
+	if _, isRestored := state.restored[blockID]; isRestored {
+		return
+	}
+	delete(s.completed, blockID)
 }
 
 func (s *Scheduler) waitBeforeScan(ctx context.Context, block Block, remaining int) (Reason, error) {
@@ -657,6 +675,9 @@ func (s *Scheduler) scanOne(ctx context.Context, block Block) error {
 		return err
 	}
 	s.recordBlock(string(result.Status), ReasonNone)
+	if block.Restored && s.cfg.ScanRecorder != nil {
+		s.cfg.ScanRecorder.RecordRestoredBlockScanned(ctx, block)
+	}
 	s.updateSnapshot(func(snapshot *Snapshot) {
 		if block.BlockID > snapshot.LastScannedBlockID {
 			snapshot.LastScannedBlockID = block.BlockID

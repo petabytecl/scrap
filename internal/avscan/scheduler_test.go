@@ -1291,3 +1291,82 @@ func assertSavedProgress(t *testing.T, got Progress, blockID uint64) {
 		t.Fatalf("progress = %+v, want %+v", got, want)
 	}
 }
+
+type recordingScanRecorder struct {
+	blocks []Block
+}
+
+func (r *recordingScanRecorder) RecordRestoredBlockScanned(_ context.Context, block Block) {
+	r.blocks = append(r.blocks, block)
+}
+
+func (r *recordingScanRecorder) blockIDs() []uint64 {
+	ids := make([]uint64, 0, len(r.blocks))
+	for _, block := range r.blocks {
+		ids = append(ids, block.BlockID)
+	}
+	return ids
+}
+
+func TestSchedulerRecordsOnlyRestoredBlockScans(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          3,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	recorder := &recordingScanRecorder{}
+	engine := &recordingEngine{}
+	scheduler := NewScheduler(Config{
+		ShardID:                  7,
+		BlockLister:              staticBlockLister{blocks: []Block{{BlockID: 2, Restored: true}, {BlockID: 3}, {BlockID: 4}}},
+		LeaderChecker:            staticLeaderChecker(true),
+		Engine:                   engine,
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		ScanRecorder:             recorder,
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if got, want := engine.blockIDs(), []uint64{2, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scanned Blocks = %v, want %v", got, want)
+	}
+	// Only the restored Block scan is recorded: Block 4 is an ordinary scan
+	// covered by the durable frontier.
+	if got, want := recorder.blockIDs(), []uint64{2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("recorded restored scans = %v, want %v", got, want)
+	}
+}
+
+func TestSchedulerDoesNotRecordFailedRestoredBlockScan(t *testing.T) {
+	store := &memoryProgressStore{
+		progress: Progress{
+			LastScannedBlockID:          3,
+			LastSignatureVersionScanned: schedulerTestSignatureVersion,
+		},
+	}
+	recorder := &recordingScanRecorder{}
+	scheduler := NewScheduler(Config{
+		ShardID:       7,
+		BlockLister:   staticBlockLister{blocks: []Block{{BlockID: 2, Restored: true}}},
+		LeaderChecker: staticLeaderChecker(true),
+		Engine: engineFunc(func(context.Context, Block) (Result, error) {
+			return Result{}, errors.New("scan failed")
+		}),
+		ProgressStore:            store,
+		SignatureVersionProvider: staticSignatureVersion(schedulerTestSignatureVersion),
+		ScanRecorder:             recorder,
+		Interval:                 time.Hour,
+	})
+
+	if err := scheduler.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce succeeded, want scan failure")
+	}
+	if len(recorder.blocks) != 0 {
+		t.Fatalf("recorded restored scans = %v, want none for failed scan", recorder.blockIDs())
+	}
+}

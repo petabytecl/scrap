@@ -66,12 +66,30 @@ type RestoreMarker struct {
 	Reason       string `json:"reason"`
 }
 
+// RestoreScanRecord is the durable post-restore scan record (ADR 0032). It
+// lives in its own sidecar file — not inside the restore marker — so binaries
+// that predate it (strict unknown-field marker readers) keep classifying the
+// Block after a rollback. RestoredAtUs binds the record to one restore
+// generation: it must equal the restore marker's RestoredAtUs or the record
+// is stale (the Block was restored again) and the Block is still
+// scan-pending.
+type RestoreScanRecord struct {
+	Version      int    `json:"version"`
+	BlockID      uint64 `json:"block_id"`
+	RestoredAtUs int64  `json:"restored_at_us"`
+	ScannedAtUs  int64  `json:"scanned_at_us"`
+}
+
 func EvictionMarkerPath(blocksDir string, blockID uint64) string {
 	return filepath.Join(blocksDir, fmt.Sprintf("%016x.blk.eviction.json", blockID))
 }
 
 func RestoreMarkerPath(blocksDir string, blockID uint64) string {
 	return filepath.Join(blocksDir, fmt.Sprintf("%016x.blk.restore.json", blockID))
+}
+
+func RestoreScanRecordPath(blocksDir string, blockID uint64) string {
+	return filepath.Join(blocksDir, fmt.Sprintf("%016x.blk.restore.scanned.json", blockID))
 }
 
 func WriteEvictionMarker(blocksDir string, marker EvictionMarker) error {
@@ -116,6 +134,28 @@ func ReadRestoreMarker(blocksDir string, blockID uint64) (RestoreMarker, error) 
 		return RestoreMarker{}, err
 	}
 	return marker, nil
+}
+
+func WriteRestoreScanRecord(blocksDir string, record RestoreScanRecord) error {
+	record.Version = MarkerVersion
+	if err := validateRestoreScanRecord(record, record.BlockID); err != nil {
+		return err
+	}
+	if err := WriteJSONMarker(RestoreScanRecordPath(blocksDir, record.BlockID), record); err != nil {
+		return fmt.Errorf("localblock: write restore scan record: %w", err)
+	}
+	return nil
+}
+
+func ReadRestoreScanRecord(blocksDir string, blockID uint64) (RestoreScanRecord, error) {
+	var record RestoreScanRecord
+	if err := ReadJSONMarker(RestoreScanRecordPath(blocksDir, blockID), &record); err != nil {
+		return RestoreScanRecord{}, err
+	}
+	if err := validateRestoreScanRecord(record, blockID); err != nil {
+		return RestoreScanRecord{}, err
+	}
+	return record, nil
 }
 
 func Classify(blocksDir string, blockID uint64) (Lifecycle, error) {
@@ -327,6 +367,20 @@ func validateRestoreMarker(marker RestoreMarker, blockID uint64) error {
 		return fmt.Errorf("%w: restore marker source is required", ErrMarkerInvalid)
 	case marker.Reason == "":
 		return fmt.Errorf("%w: restore marker reason is required", ErrMarkerInvalid)
+	default:
+		return nil
+	}
+}
+
+func validateRestoreScanRecord(record RestoreScanRecord, blockID uint64) error {
+	if err := ValidateMarkerHeader("restore scan", record.Version, record.BlockID, blockID); err != nil {
+		return err
+	}
+	switch {
+	case record.RestoredAtUs <= 0:
+		return fmt.Errorf("%w: restore scan record restored_at_us is required", ErrMarkerInvalid)
+	case record.ScannedAtUs <= 0:
+		return fmt.Errorf("%w: restore scan record scanned_at_us is required", ErrMarkerInvalid)
 	default:
 		return nil
 	}

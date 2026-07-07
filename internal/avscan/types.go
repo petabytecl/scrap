@@ -117,6 +117,15 @@ type BlockLister interface {
 	ListSealedBlocks(context.Context) ([]Block, error)
 }
 
+// ScanRecorder receives a best-effort notification after a restored Block
+// completes a scan, so the owner can persist a durable post-restore scan
+// record and stop re-listing the Block as Restored. Implementations must not
+// block scanning and must report their own failures; a lost record only means
+// the Block is rescanned again, which is always safe.
+type ScanRecorder interface {
+	RecordRestoredBlockScanned(context.Context, Block)
+}
+
 type LeaderChecker interface {
 	IsLeader() bool
 }
