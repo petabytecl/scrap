@@ -180,17 +180,20 @@ func TestS3BackendHeadObjectAcceptsNonMD5ETag(t *testing.T) {
 func TestS3BackendGetObjectUsesRangeHeader(t *testing.T) {
 	client := &mockS3Client{}
 	client.headObject = func(context.Context, *awss3.HeadObjectInput, ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error) {
-		return &awss3.HeadObjectOutput{
-			ContentLength: aws.Int64(16),
-			ContentType:   aws.String(DefaultContentType),
-			ETag:          aws.String(`"0123456789abcdef0123456789abcdef"`),
-		}, nil
+		t.Error("HeadObject must not be called for a ranged get; meta comes from the GET response (#469)")
+		return nil, errors.New("unexpected HeadObject call")
 	}
 	client.getObject = func(_ context.Context, input *awss3.GetObjectInput, _ ...func(*awss3.Options)) (*awss3.GetObjectOutput, error) {
 		if got := aws.ToString(input.Range); got != "bytes=4-9" {
 			t.Fatalf("Range = %q, want bytes=4-9", got)
 		}
-		return &awss3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("456789")))}, nil
+		return &awss3.GetObjectOutput{
+			Body:          io.NopCloser(bytes.NewReader([]byte("456789"))),
+			ContentLength: aws.Int64(6),
+			ContentRange:  aws.String("bytes 4-9/16"),
+			ContentType:   aws.String(DefaultContentType),
+			ETag:          aws.String(`"0123456789abcdef0123456789abcdef"`),
+		}, nil
 	}
 	store := NewS3(client, "bucket-a")
 
@@ -209,7 +212,45 @@ func TestS3BackendGetObjectUsesRangeHeader(t *testing.T) {
 		t.Fatalf("body = %q, want 456789", got)
 	}
 	if meta.Size != 16 {
-		t.Fatalf("meta size = %d, want full object size 16", meta.Size)
+		t.Fatalf("meta size = %d, want full object size 16 (from Content-Range)", meta.Size)
+	}
+}
+
+// Regression for #469: an object replaced between a HeadObject and the
+// GetObject would pair the old version's meta with the new version's body,
+// and restore would validate the wrong version. Meta must be built from the
+// GET response itself.
+func TestS3BackendGetObjectMetaComesFromGetResponse(t *testing.T) {
+	client := &mockS3Client{}
+	client.headObject = func(context.Context, *awss3.HeadObjectInput, ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error) {
+		// The stale pre-replacement version a racing HeadObject would see.
+		return &awss3.HeadObjectOutput{
+			ContentLength: aws.Int64(9),
+			ETag:          aws.String(`"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`),
+		}, nil
+	}
+	newBody := []byte("new-version-bytes")
+	client.getObject = func(context.Context, *awss3.GetObjectInput, ...func(*awss3.Options)) (*awss3.GetObjectOutput, error) {
+		return &awss3.GetObjectOutput{
+			Body:          io.NopCloser(bytes.NewReader(newBody)),
+			ContentLength: aws.Int64(int64(len(newBody))),
+			ContentType:   aws.String(DefaultContentType),
+			ETag:          aws.String(`"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"`),
+		}, nil
+	}
+	store := NewS3(client, "bucket-a")
+
+	rc, meta, err := store.GetObject(context.Background(), "cell/shard/block.blk", GetOpts{})
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	if meta.ETag != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("meta ETag = %q, want the GET response's version, not a racing Head's", meta.ETag)
+	}
+	if meta.Size != int64(len(newBody)) {
+		t.Fatalf("meta size = %d, want %d (the GET response's version)", meta.Size, len(newBody))
 	}
 }
 

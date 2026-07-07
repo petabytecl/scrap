@@ -149,16 +149,17 @@ func (b *s3Backend) GetObject(ctx context.Context, key string, opts GetOpts) (io
 	if err := b.validateRequest("get object", key); err != nil {
 		return nil, ObjectMeta{}, err
 	}
-	meta, err := b.HeadObject(ctx, key)
-	if err != nil {
-		return nil, ObjectMeta{}, err
-	}
-
 	rangeHeader, err := s3RangeHeader(opts.Range)
 	if err != nil {
 		return nil, ObjectMeta{}, err
 	}
 	if opts.Range.Enabled && opts.Range.Length == 0 {
+		// No bytes wanted, so there is no body a concurrent replacement could
+		// disagree with; HeadObject supplies the meta.
+		meta, err := b.HeadObject(ctx, key)
+		if err != nil {
+			return nil, ObjectMeta{}, err
+		}
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
 	}
 
@@ -175,6 +176,15 @@ func (b *s3Backend) GetObject(ctx context.Context, key string, opts GetOpts) (io
 	}
 	if out.Body == nil {
 		return nil, ObjectMeta{}, fmt.Errorf("get object: empty response body: %w", ErrCorrupt)
+	}
+	// Meta comes from the GET response itself, never a separate HeadObject: an
+	// object replaced between two calls (replacement upload generations exist)
+	// would pair one version's meta with the other's body, and restore would
+	// validate the wrong version (#469).
+	meta, err := objectMetaFromS3Get(out, opts.Range.Enabled)
+	if err != nil {
+		_ = out.Body.Close()
+		return nil, ObjectMeta{}, fmt.Errorf("get object: %w", err)
 	}
 	return out.Body, meta, nil
 }
@@ -260,6 +270,55 @@ func objectMetaFromS3Head(out *awss3.HeadObjectOutput) (ObjectMeta, error) {
 		Size:        *out.ContentLength,
 		ContentType: contentType,
 	}, nil
+}
+
+// objectMetaFromS3Get builds ObjectMeta from a GetObject response. Size is
+// always the TOTAL object size (matching HeadObject and the FS backend): a
+// ranged response's ContentLength is only the range length, so the total is
+// parsed from Content-Range instead.
+func objectMetaFromS3Get(out *awss3.GetObjectOutput, ranged bool) (ObjectMeta, error) {
+	if out == nil || out.ContentLength == nil {
+		return ObjectMeta{}, fmt.Errorf("missing content length: %w", ErrCorrupt)
+	}
+	size := *out.ContentLength
+	if ranged {
+		total, err := totalSizeFromContentRange(aws.ToString(out.ContentRange))
+		if err != nil {
+			return ObjectMeta{}, err
+		}
+		size = total
+	}
+	if size < 0 {
+		return ObjectMeta{}, fmt.Errorf("negative content length %d: %w", size, ErrCorrupt)
+	}
+
+	contentType := aws.ToString(out.ContentType)
+	if contentType == "" {
+		contentType = DefaultContentType
+	}
+	return ObjectMeta{
+		ETag:        normalizeS3ETag(out.ETag),
+		Size:        size,
+		ContentType: contentType,
+	}, nil
+}
+
+// totalSizeFromContentRange extracts the complete object length from a
+// Content-Range header ("bytes 4-9/1234" → 1234).
+func totalSizeFromContentRange(contentRange string) (int64, error) {
+	slash := strings.LastIndexByte(contentRange, '/')
+	if slash < 0 || slash == len(contentRange)-1 {
+		return 0, fmt.Errorf("ranged response missing Content-Range total (%q): %w", contentRange, ErrCorrupt)
+	}
+	totalPart := contentRange[slash+1:]
+	if totalPart == "*" {
+		return 0, fmt.Errorf("ranged response with unknown Content-Range total (%q): %w", contentRange, ErrCorrupt)
+	}
+	total, err := strconv.ParseInt(totalPart, 10, 64)
+	if err != nil || total < 0 {
+		return 0, fmt.Errorf("ranged response with invalid Content-Range total (%q): %w", contentRange, ErrCorrupt)
+	}
+	return total, nil
 }
 
 func objectInfoFromS3(obj types.Object) (ObjectInfo, error) {
