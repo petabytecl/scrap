@@ -36,10 +36,10 @@ const (
 	// normal log replication instead of an install-snapshot.
 	defaultSnapshotCatchUpEntries = 5000
 
-	// maxKeptSnapFiles and maxKeptWALFiles bound the on-disk history retained
-	// after each snapshot; older files are purged best-effort.
-	maxKeptSnapFiles = 5
-	maxKeptWALFiles  = 5
+	// maxKeptObsoleteFiles bounds each class of obsolete on-disk file
+	// (snapshots, broken/db artifacts, released WAL segments) retained after
+	// a purge; older files are purged best-effort.
+	maxKeptObsoleteFiles = 5
 )
 
 // ApplyFunc applies committed entries to the state machine. replayUntil is the
@@ -68,7 +68,6 @@ type Config struct {
 	Logger       *slog.Logger
 
 	MaxSnapCount    uint64
-	MaxWALSize      int64
 	ElectionTick    int
 	HeartbeatTick   int
 	MaxSizePerMsg   uint64
@@ -198,6 +197,11 @@ func Open(cfg Config) (*Node, error) {
 	if sink, ok := cfg.Transport.(ReporterSink); ok {
 		sink.SetStatusReporter(n)
 	}
+
+	// Startup purge: stale artifacts from before the last shutdown (and
+	// .snap.broken files the loader just renamed aside) must not wait for
+	// the next snapshot creation to be reclaimed (#457).
+	n.purgeObsoleteFiles()
 
 	go n.run()
 	return n, nil
@@ -634,9 +638,19 @@ func (n *Node) applyCommittedConfChangesLocked(entries []raftpb.Entry) {
 // snapshot, keeping the newest few of each. WAL segments are only removed
 // when their file lock is free, which is exactly the set ReleaseLockTo
 // released. Purging is best-effort: failures only delay reclamation.
+// It runs at startup and after each snapshot creation: .snap.broken files
+// are produced by the snapshot loader at restart (a corrupt .snap is renamed
+// aside), so a snapshot-creation-only purge would let them accumulate across
+// restarts (#457).
 func (n *Node) purgeObsoleteFiles() {
-	n.purgeOldestFiles(n.cfg.DataDir+"/snap", ".snap", maxKeptSnapFiles, nil)
-	n.purgeOldestFiles(n.cfg.DataDir+"/wal", ".wal", maxKeptWALFiles, func(path string) bool {
+	snapDir := n.cfg.DataDir + "/snap"
+	n.purgeOldestFiles(snapDir, ".snap", nil)
+	// Neither .snap.broken (corrupt snapshots renamed aside by the loader)
+	// nor .snap.db (etcd snapshotter payload files this node never writes)
+	// are ever re-read; bound their accumulation with the same policy.
+	n.purgeOldestFiles(snapDir, ".snap.broken", nil)
+	n.purgeOldestFiles(snapDir, ".snap.db", nil)
+	n.purgeOldestFiles(n.cfg.DataDir+"/wal", ".wal", func(path string) bool {
 		lock, err := fileutil.TryLockFile(path, os.O_WRONLY, fileutil.PrivateFileMode)
 		if err != nil {
 			return false
@@ -646,7 +660,7 @@ func (n *Node) purgeObsoleteFiles() {
 	})
 }
 
-func (n *Node) purgeOldestFiles(dir, suffix string, keep int, removable func(string) bool) {
+func (n *Node) purgeOldestFiles(dir, suffix string, removable func(string) bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		n.logger.Warn("raft: purge read dir", "dir", dir, "error", err)
@@ -661,7 +675,7 @@ func (n *Node) purgeOldestFiles(dir, suffix string, keep int, removable func(str
 	// File names embed zero-padded hex sequence/index pairs, so lexical order
 	// is creation order.
 	slices.Sort(names)
-	for _, name := range names[:max(0, len(names)-keep)] {
+	for _, name := range names[:max(0, len(names)-maxKeptObsoleteFiles)] {
 		path := dir + "/" + name
 		if removable != nil && !removable(path) {
 			// Still locked by the live WAL: this and everything newer is needed.
