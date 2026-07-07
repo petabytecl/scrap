@@ -472,6 +472,11 @@ func TestClassifyS3Error(t *testing.T) {
 		// not burn retries or be masked as transient).
 		{name: "unknown server fault", err: apiErrFault("WeirdServer", smithy.FaultServer), want: ErrTransient},
 		{name: "unknown client fault", err: apiErrFault("WeirdClient", smithy.FaultClient), want: ErrPermanent},
+		// An unrecognized code with no fault but a 4xx HTTP status must stay
+		// permanent (status wins over the transient fault default); a 5xx status
+		// is transient.
+		{name: "unknown code 4xx status", err: apiErrResponse("Weird", smithy.FaultUnknown, http.StatusBadRequest), want: ErrPermanent},
+		{name: "unknown code 5xx status", err: apiErrResponse("Weird", smithy.FaultUnknown, http.StatusInternalServerError), want: ErrTransient},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -578,6 +583,16 @@ func apiErr(code string) error {
 
 func apiErrFault(code string, fault smithy.ErrorFault) error {
 	return &smithy.GenericAPIError{Code: code, Message: code, Fault: fault}
+}
+
+// apiErrResponse builds an error that unwraps as both smithy.APIError and
+// smithyhttp.ResponseError, modeling an unmodeled provider code carried on an
+// HTTP response with a known status.
+func apiErrResponse(code string, fault smithy.ErrorFault, status int) error {
+	return &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
+		Err:      &smithy.GenericAPIError{Code: code, Message: code, Fault: fault},
+	}
 }
 
 func responseErr(status int) error {

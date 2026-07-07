@@ -233,26 +233,29 @@ func commitTempObject(tmpPath, path string) error {
 // a concurrent PutObject may have created the same new prefix via MkdirAll but
 // not yet fsynced it, so returning success without our own fsync could ack an
 // object whose ancestors are not durable. fsync(P) durably records P's
-// children, so syncing every directory from dir's parent up to root persists
-// the existence of the whole chain. root and above are created at startup and
-// assumed durable. The chain is shallow and uploads are large, so the extra
-// directory fsyncs are negligible.
+// children, so syncing every directory from dir's parent up to and including
+// the backend root's parent persists the existence of the whole chain — the
+// root's parent must be synced too, because the backend root itself may be
+// created by this same MkdirAll on a fresh deployment and fsync(root) records
+// root's children, not root's own entry in its parent. The chain is shallow and
+// uploads are large, so the extra directory fsyncs are negligible.
 func mkdirAllSynced(dir, root string) error {
 	if err := os.MkdirAll(dir, directoryMode); err != nil {
 		return err
 	}
+	stop := filepath.Dir(root) // include root's parent so root's own entry is durable
 	current := filepath.Dir(dir)
 	for {
 		if err := syncDirectory(current); err != nil {
 			return err
 		}
-		if current == root {
+		if current == stop {
 			return nil
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			// Reached the filesystem root without matching the backend root
-			// (dir was not under root); stop rather than climb system dirs.
+			// Reached the filesystem root without matching the backend root's
+			// parent (dir was not under root); stop rather than climb system dirs.
 			return nil
 		}
 		current = parent

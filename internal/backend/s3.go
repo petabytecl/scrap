@@ -324,13 +324,25 @@ func classifyS3Error(op string, err error) error {
 		return nil
 	}
 
+	var responseErr *smithyhttp.ResponseError
+	isResponse := errors.As(err, &responseErr)
+
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
-		return wrapS3Error(op, classForS3Code(apiErr.ErrorCode(), apiErr.ErrorFault()), err)
+		if ok, class := classForKnownS3Code(apiErr.ErrorCode()); ok {
+			return wrapS3Error(op, class, err)
+		}
+		// Unrecognized code: prefer the HTTP status when the error carries one (an
+		// unmapped 4xx must stay permanent, an unmapped 5xx transient) so a
+		// client/config error is not masked as transient; otherwise fall back to
+		// the fault classification.
+		if isResponse {
+			return wrapS3Error(op, classForS3Status(responseErr.HTTPStatusCode()), err)
+		}
+		return wrapS3Error(op, classForUnknownS3Code(apiErr.ErrorFault()), err)
 	}
 
-	var responseErr *smithyhttp.ResponseError
-	if errors.As(err, &responseErr) {
+	if isResponse {
 		return wrapS3Error(op, classForS3Status(responseErr.HTTPStatusCode()), err)
 	}
 
@@ -344,24 +356,27 @@ func classifyS3Error(op string, err error) error {
 	return wrapS3Error(op, ErrPermanent, err)
 }
 
-func classForS3Code(code string, fault smithy.ErrorFault) error {
+// classForKnownS3Code maps a recognized S3 error code to a class, returning
+// ok=false for an unrecognized code so the caller can consult the HTTP status
+// or fault instead of forcing a default.
+func classForKnownS3Code(code string) (bool, error) {
 	switch code {
 	case "SlowDown", "ServiceUnavailable":
-		return ErrThrottled
+		return true, ErrThrottled
 	case "InternalError", "RequestTimeout", "RequestTimeoutException":
-		return ErrTransient
+		return true, ErrTransient
 	case "AccessDenied", "ExpiredToken", "InvalidAccessKeyId", "InvalidToken", "SignatureDoesNotMatch":
-		return ErrAuth
+		return true, ErrAuth
 	case "NoSuchKey", "NoSuchBucket", "NotFound":
-		return ErrNotFound
+		return true, ErrNotFound
 	case "ConditionalRequestConflict", "OperationAborted":
-		return ErrConflict
+		return true, ErrConflict
 	case "BadDigest", "ChecksumMismatch", "InvalidDigest":
-		return ErrCorrupt
+		return true, ErrCorrupt
 	case "BucketNotFound", "InvalidBucketName":
-		return ErrPermanent
+		return true, ErrPermanent
 	default:
-		return classForUnknownS3Code(fault)
+		return false, nil
 	}
 }
 
