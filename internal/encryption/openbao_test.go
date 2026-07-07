@@ -39,6 +39,63 @@ func TestOpenBaoTransitMapsTransitOperations(t *testing.T) {
 	assertOpenBaoPaths(t, srv.Paths())
 }
 
+func TestOpenBaoTransitRewrapChangedTracksKeyVersion(t *testing.T) {
+	const token = "test-token"
+	tests := []struct {
+		name       string
+		priorKey   string
+		respCipher string
+		wantChange bool
+	}{
+		{
+			// Same key version, fresh nonce (real Transit re-encrypts every call):
+			// must not report Changed, or every no-op rewrap forces a Block re-upload.
+			name:       "same version fresh nonce",
+			priorKey:   "vault:v2:wrapped-key",
+			respCipher: "vault:v2:different-nonce-same-version",
+			wantChange: false,
+		},
+		{
+			name:       "version upgraded",
+			priorKey:   "vault:v2:wrapped-key",
+			respCipher: "vault:v3:rewrapped-key",
+			wantChange: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeOpenBaoData(t, w, map[string]any{"ciphertext": tt.respCipher})
+			}))
+			defer srv.Close()
+
+			transit, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+				Address:   srv.URL,
+				MountPath: "transit",
+				KeyName:   "scrap-documents",
+				Token:     token,
+			})
+			if err != nil {
+				t.Fatalf("NewOpenBaoTransit: %v", err)
+			}
+
+			rewrapped, err := transit.RewrapDataKey(context.Background(), encryption.RewrapDataKeyRequest{
+				WrappedKey: tt.priorKey,
+				Context:    []byte("tx/doc"),
+			})
+			if err != nil {
+				t.Fatalf("RewrapDataKey: %v", err)
+			}
+			if rewrapped.WrappedKey != tt.respCipher {
+				t.Fatalf("WrappedKey = %q, want %q", rewrapped.WrappedKey, tt.respCipher)
+			}
+			if rewrapped.Changed != tt.wantChange {
+				t.Fatalf("Changed = %v, want %v (prior %q -> new %q)", rewrapped.Changed, tt.wantChange, tt.priorKey, tt.respCipher)
+			}
+		})
+	}
+}
+
 func TestOpenBaoTransitReadinessAcceptsLargeSuccessfulPayload(t *testing.T) {
 	const token = "test-token"
 	keyVersions := map[string]any{}

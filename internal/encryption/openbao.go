@@ -154,10 +154,17 @@ func (t *OpenBaoTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyReq
 	if ciphertext == "" {
 		return RewrappedKey{}, fmt.Errorf("openbao transit rewrap response missing ciphertext: %w", ErrUnavailable)
 	}
+	// Transit rewrap re-encrypts with a fresh nonce, so the ciphertext string
+	// differs on every call even when the wrapping key version is unchanged.
+	// Deriving Changed from string inequality would report every no-op rewrap as
+	// changed, defeating the shard's idempotency short-circuit and forcing a full
+	// Block re-upload each time. The wrapping key version is the meaningful
+	// signal, matching the fake's semantics.
+	newVersion := versionFromWrappedKey(ciphertext)
 	return RewrappedKey{
 		WrappedKey: ciphertext,
-		Version:    versionFromWrappedKey(ciphertext),
-		Changed:    ciphertext != priorKey,
+		Version:    newVersion,
+		Changed:    newVersion > versionFromWrappedKey(priorKey),
 	}, nil
 }
 
