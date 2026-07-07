@@ -25,6 +25,8 @@ const (
 	SkipReasonHotResidencyWindow    = "hot_residency_window"
 	SkipReasonLeaderHotCopyRequired = "leader_hot_copy_required"
 	SkipReasonLocalStateNotHot      = "local_state_not_hot"
+	SkipReasonNoDurableCopy         = "no_durable_copy"
+	SkipReasonPlanExpired           = "plan_expired"
 	SkipReasonPlanBounds            = "plan_bounds"
 	SkipReasonShardFilter           = "shard_filter"
 

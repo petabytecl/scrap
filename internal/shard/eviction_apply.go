@@ -120,10 +120,20 @@ func (s *Shard) ensureEvictionApplyReadyLocked() error {
 }
 
 func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan) (eviction.ApplyResult, bool) {
+	now := time.Now().UTC()
+	// Bound the destructive loop by the plan's expiry, mirroring the validation
+	// context. Expiry is checked once at BeginApply; without this a plan begun
+	// just before ExpiresAtUs would keep unlinking local Block copies (the last
+	// hot copy of Documents) arbitrarily long past expiry.
+	if plan.ExpiresAtUs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.UnixMicro(plan.ExpiresAtUs))
+		defer cancel()
+	}
 	return eviction.ApplyBlocks(
 		ctx,
 		plan,
-		time.Now().UTC(),
+		now,
 		func(selected eviction.PlanBlock) eviction.ApplyBlock {
 			return s.applyEvictionBlock(plan, selected)
 		},
@@ -185,13 +195,13 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 	if err != nil {
 		return eviction.FailedBlock(selected, err)
 	}
-	if s.leaderHotCopyRequired() {
-		return eviction.SkippedBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+	if blocked := evictionApplyDestructiveGuard(plan, selected, s.leaderHotCopyRequired()); blocked.Status != "" {
+		return blocked
 	}
 	if err := s.prepareEvictionMarkerForApply(plan, lifecycle, confirmed); err != nil {
 		return eviction.FailedBlock(selected, err)
 	}
-	removed, blockResult, err := s.unlinkEvictedBlockIfFollower(selected, lifecycle)
+	removed, blockResult, err := s.unlinkEvictedBlockRespectingExpiry(plan, selected, lifecycle)
 	if blockResult.Status != "" {
 		return blockResult
 	}
@@ -209,6 +219,36 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 		Status:     eviction.ApplyBlockStatusEvicted,
 		BytesFreed: confirmed.BlockObject.SizeBytes,
 	}
+}
+
+// evictionApplyDestructiveGuard returns a terminal ApplyBlock (non-empty
+// Status) when the Block must not be unlinked: the leader must keep its hot
+// copy, or the plan already expired. This runs before the marker write; the
+// unlink is re-guarded against expiry immediately before it runs (the marker
+// write/fsync can itself span the expiry).
+func evictionApplyDestructiveGuard(plan eviction.Plan, selected eviction.PlanBlock, leaderHotCopyRequired bool) eviction.ApplyBlock {
+	if leaderHotCopyRequired {
+		return eviction.SkippedBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+	}
+	if evictionPlanExpired(plan) {
+		return eviction.SkippedBlock(selected, eviction.SkipReasonPlanExpired)
+	}
+	return eviction.ApplyBlock{}
+}
+
+func evictionPlanExpired(plan eviction.Plan) bool {
+	return plan.ExpiresAtUs > 0 && time.Now().UTC().UnixMicro() >= plan.ExpiresAtUs
+}
+
+// unlinkEvictedBlockRespectingExpiry re-checks the plan expiry immediately
+// before the destructive unlink. The pre-marker guard can pass and then the
+// marker write/fsync can span the expiry, so this final check ensures a Block
+// is never unlinked after the plan has expired.
+func (s *Shard) unlinkEvictedBlockRespectingExpiry(plan eviction.Plan, selected eviction.PlanBlock, lifecycle localblock.Lifecycle) (bool, eviction.ApplyBlock, error) {
+	if evictionPlanExpired(plan) {
+		return false, eviction.SkippedBlock(selected, eviction.SkipReasonPlanExpired), nil
+	}
+	return s.unlinkEvictedBlockIfFollower(selected, lifecycle)
 }
 
 func (s *Shard) confirmedEvictionApplyAuthorityLocked(selected eviction.PlanBlock) (index.ConfirmedUpload, error) {
@@ -290,7 +330,12 @@ func validateEvictionApplyAuthority(selected eviction.PlanBlock, confirmed index
 		return fmt.Errorf("confirmed Shard mismatch for Block %d", selected.BlockID)
 	case selected.SizeBytes != confirmed.BlockObject.SizeBytes:
 		return fmt.Errorf("confirmed Block size mismatch for Block %d", selected.BlockID)
-	case selected.BackendKey != "" && selected.BackendKey != confirmed.BlockObject.Key:
+	case selected.BackendKey == "":
+		// Fail closed: an empty Backend key is no proof of a durable copy, so
+		// evicting would delete the last copy. The planner also skips such
+		// candidates (SkipReasonNoDurableCopy); this is the apply-side backstop.
+		return fmt.Errorf("missing Backend key for Block %d", selected.BlockID)
+	case selected.BackendKey != confirmed.BlockObject.Key:
 		return fmt.Errorf("confirmed Backend key mismatch for Block %d", selected.BlockID)
 	default:
 		return nil

@@ -228,6 +228,16 @@ func planSkipReason(candidate PlanCandidate, req PlanRequest, isLeader bool, now
 	if !candidate.LocalEvictable {
 		return SkipReasonLocalStateNotHot
 	}
+	// Never evict the last durable copy: a candidate without a Backend object key
+	// has no offsite copy to restore from. The shard's ConfirmedUploads source
+	// enforces this today, but the plan layer must not depend on the caller — a
+	// future candidate source could feed unconfirmed Blocks straight to
+	// UnlinkBlockData. (ConfirmedAtUs is a hot-residency timing input, not a
+	// durability signal — restored Blocks carry a durable copy with an unrelated
+	// ConfirmedAtUs.)
+	if candidate.BackendKey == "" {
+		return SkipReasonNoDurableCopy
+	}
 	if isLeader {
 		return SkipReasonLeaderHotCopyRequired
 	}
