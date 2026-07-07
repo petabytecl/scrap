@@ -79,13 +79,30 @@ type Config struct {
 	SnapshotCatchUpEntries uint64
 }
 
+// walLog is the subset of *wal.WAL the node uses after Open. It is an
+// interface so ordering-sensitive persistence paths can be verified against
+// a recording fake (the etcd contract: an incoming snapshot must be durable
+// before the WAL saves a HardState that references it).
+type walLog interface {
+	Save(st raftpb.HardState, ents []raftpb.Entry) error
+	SaveSnapshot(e walpb.Snapshot) error
+	ReleaseLockTo(index uint64) error
+	Close() error
+}
+
+// snapshotStore is the subset of *snap.Snapshotter the node uses.
+type snapshotStore interface {
+	SaveSnap(snapshot raftpb.Snapshot) error
+	LoadNewestAvailable(walSnaps []walpb.Snapshot) (*raftpb.Snapshot, error)
+}
+
 type Node struct {
 	cfg       Config
 	logger    *slog.Logger
 	node      raft.Node
 	storage   durableStorage
-	wal       *wal.WAL
-	snap      *snap.Snapshotter
+	wal       walLog
+	snap      snapshotStore
 	transport Transport
 
 	appliedIndex      uint64
@@ -210,7 +227,15 @@ func (n *Node) startNode(lg *zap.Logger, walDir string) error {
 }
 
 func (n *Node) restartNode(lg *zap.Logger, walDir string) error {
-	snapshot, err := n.snap.Load()
+	// Trust only snapshots the WAL has a record for. The snap file is written
+	// before the WAL snapshot record, so a crash between the two leaves an
+	// orphaned newest .snap; naively loading it (snap.Load) would make
+	// wal.Open fail with ErrSnapshotNotFound on every restart (#462).
+	walSnaps, err := wal.ValidSnapshotEntries(lg, walDir)
+	if err != nil {
+		return fmt.Errorf("raft: read WAL snapshot records: %w", err)
+	}
+	snapshot, err := n.snap.LoadNewestAvailable(walSnaps)
 	if err != nil && !errors.Is(err, snap.ErrNoSnapshot) {
 		return fmt.Errorf("raft: load snapshot: %w", err)
 	}
@@ -407,6 +432,15 @@ func (n *Node) drainReadyLocked() {
 }
 
 func (n *Node) processReadyLocked(rd raft.Ready) {
+	// An incoming install-snapshot must be durable BEFORE the WAL saves a
+	// HardState whose Commit references it (etcd contract). A crash between
+	// wal.Save and the snapshot persist would otherwise leave the WAL
+	// pointing at a snapshot that never hit disk — an unbootable member
+	// (#462).
+	if !raft.IsEmptySnap(rd.Snapshot) {
+		n.persistIncomingSnapshotLocked(rd.Snapshot)
+	}
+
 	if err := n.wal.Save(rd.HardState, rd.Entries); err != nil {
 		panic(fmt.Sprintf("raft: WAL save: %v", err))
 	}
@@ -416,7 +450,7 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 	}
 
 	if !raft.IsEmptySnap(rd.Snapshot) {
-		n.applyIncomingSnapshotLocked(rd.Snapshot)
+		n.adoptIncomingSnapshotLocked(rd.Snapshot)
 	}
 
 	if err := n.storage.Append(rd.Entries); err != nil {
@@ -444,12 +478,23 @@ func (n *Node) processReadyLocked(rd raft.Ready) {
 	n.node.Advance()
 }
 
-// applyIncomingSnapshotLocked handles an install-snapshot delivered by the
-// leader to a follower whose log fell behind the compaction window. The
-// application Restore hook decides whether local state can satisfy the
-// snapshot; a Restore failure is fatal because continuing would silently
-// diverge from the committed state.
-func (n *Node) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot) {
+// persistIncomingSnapshotLocked validates and durably persists an
+// install-snapshot delivered by the leader to a follower whose log fell
+// behind the compaction window. The application Restore hook runs FIRST: it
+// decides whether local state can satisfy the snapshot, and a rejection is
+// fatal (continuing would silently diverge) — but because nothing has been
+// persisted yet, the member restarts at its previous state instead of
+// crash-looping on a durably adopted foreign snapshot (#462). Restore may
+// therefore be invoked again for the same snapshot after a crash or retry;
+// it must be idempotent. Persist order after validation follows the etcd
+// contract: snap file first, then the WAL snapshot record, then release WAL
+// locks.
+func (n *Node) persistIncomingSnapshotLocked(snapshot raftpb.Snapshot) {
+	if n.cfg.Restore != nil {
+		if err := n.cfg.Restore(snapshot.Data); err != nil {
+			panic(fmt.Sprintf("raft: restore snapshot at index %d: %v", snapshot.Metadata.Index, err))
+		}
+	}
 	if err := n.snap.SaveSnap(snapshot); err != nil {
 		panic(fmt.Sprintf("raft: save snapshot: %v", err))
 	}
@@ -459,13 +504,13 @@ func (n *Node) applyIncomingSnapshotLocked(snapshot raftpb.Snapshot) {
 	if err := n.wal.ReleaseLockTo(snapshot.Metadata.Index); err != nil {
 		panic(fmt.Sprintf("raft: WAL release to snapshot: %v", err))
 	}
+}
+
+// adoptIncomingSnapshotLocked switches the in-memory raft state over to a
+// persisted install-snapshot. Runs after the WAL saved the Ready's HardState.
+func (n *Node) adoptIncomingSnapshotLocked(snapshot raftpb.Snapshot) {
 	if err := n.storage.ApplySnapshot(snapshot); err != nil {
 		panic(fmt.Sprintf("raft: storage apply snapshot: %v", err))
-	}
-	if n.cfg.Restore != nil {
-		if err := n.cfg.Restore(snapshot.Data); err != nil {
-			panic(fmt.Sprintf("raft: restore snapshot at index %d: %v", snapshot.Metadata.Index, err))
-		}
 	}
 	n.confState = snapshot.Metadata.ConfState
 	n.snapshotIndex = snapshot.Metadata.Index
