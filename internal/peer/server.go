@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
@@ -277,24 +278,85 @@ func (s *Server) consumeReplicatedDocument(ctx context.Context, init *scrapv1.Re
 	if s.replicationSink != nil {
 		sha, err := s.replicationSink.AppendReplicatedDocument(ctx, init, body)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "append replicated document: %v", err)
+			return nil, mapReplicateConsumeError("append replicated document", err)
 		}
 		return sha, nil
 	}
 	return s.appendReplicatedDocumentLocally(init, body)
 }
 
+// mapReplicateConsumeError converts a replication-consumer failure into a
+// peer status. It preserves the store error taxonomy instead of collapsing
+// status-bearing sink errors into INTERNAL, distinguishes caller
+// cancellation and disk exhaustion from true internal faults, and strips
+// filesystem paths from os errors so raw Block paths never cross the peer
+// surface (deferred peer-transport hardening).
+func mapReplicateConsumeError(op string, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return newPeerStatusError(codes.Canceled, fmt.Errorf("%s: %w", op, context.Canceled))
+	case errors.Is(err, context.DeadlineExceeded):
+		return newPeerStatusError(codes.DeadlineExceeded, fmt.Errorf("%s: %w", op, context.DeadlineExceeded))
+	case errors.Is(err, storeapi.ErrInvalidArgument):
+		return newPeerStatusError(codes.InvalidArgument, err)
+	case errors.Is(err, storeapi.ErrAlreadyExists):
+		return newPeerStatusError(codes.AlreadyExists, err)
+	case errors.Is(err, storeapi.ErrResourceExhausted), errors.Is(err, syscall.ENOSPC):
+		return newPeerStatusError(codes.ResourceExhausted, fmt.Errorf("%s: %w", op, sanitizedFSCause(err)))
+	case errors.Is(err, storeapi.ErrDataLoss):
+		return newPeerStatusError(codes.DataLoss, err)
+	case errors.Is(err, storeapi.ErrUnavailable):
+		return newPeerStatusError(codes.Unavailable, err)
+	default:
+		// A sink error that already carries a gRPC status (e.g. the shard-set
+		// sink's FailedPrecondition for an unconfigured Shard) is fully
+		// classified: pass it through instead of rewriting it to Internal.
+		if _, ok := status.FromError(err); ok {
+			return err
+		}
+		return newPeerStatusError(codes.Internal, fmt.Errorf("%s: %w", op, sanitizedFSCause(err)))
+	}
+}
+
+// sanitizedFSCause strips filesystem paths from os errors so raw local Block
+// paths never reach peer responses, keeping only the errno/class.
+func sanitizedFSCause(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err
+	}
+	return err
+}
+
+// mapReplicateReceiveError classifies a stream.Recv failure: the caller
+// hanging up or running out its deadline is not an internal server fault.
+func mapReplicateReceiveError(err error) error {
+	code := status.Code(err)
+	switch {
+	case errors.Is(err, context.Canceled), code == codes.Canceled:
+		return status.Error(codes.Canceled, "replicate stream canceled")
+	case errors.Is(err, context.DeadlineExceeded), code == codes.DeadlineExceeded:
+		return status.Error(codes.DeadlineExceeded, "replicate stream deadline exceeded")
+	default:
+		return status.Errorf(codes.Internal, "receive chunk: %v", err)
+	}
+}
+
 func (s *Server) appendReplicatedDocumentLocally(init *scrapv1.ReplicateDocumentInit, body io.Reader) ([]byte, error) {
 	hasher := sha256.New()
 	bs, err := s.getOrCreateBlock(init.GetBlockId(), init.GetShardId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "block: %v", err)
+		return nil, mapReplicateConsumeError("open replica block", err)
 	}
 
 	startOffset := bs.writer.Offset()
 	tee := io.TeeReader(body, hasher)
 	if _, err := bs.writer.AppendDocument(init.GetTransactionId(), init.GetDocumentName(), init.GetContentType(), tee); err != nil {
-		return nil, status.Errorf(codes.Internal, "append: %v", err)
+		return nil, mapReplicateConsumeError("append", err)
 	}
 
 	computedSHA := hasher.Sum(nil)
@@ -376,7 +438,7 @@ func receiveFirstReplicateChunk(stream grpc.ClientStreamingServer[scrapv1.Replic
 			emptyErr := fmt.Errorf("%w: document body is empty", storeapi.ErrInvalidArgument)
 			return nil, 0, peerStoreStatus(emptyErr)
 		case err != nil:
-			return nil, 0, status.Errorf(codes.Internal, "receive chunk: %v", err)
+			return nil, 0, mapReplicateReceiveError(err)
 		}
 		if msg.GetInit() != nil {
 			return nil, 0, peerStoreStatus(errDuplicateReplicateInit())
@@ -412,7 +474,7 @@ func streamReplicateChunks(stream grpc.ClientStreamingServer[scrapv1.ReplicateDo
 			return nil
 		case err != nil:
 			_ = pw.CloseWithError(err)
-			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+			return mapReplicateReceiveError(err)
 		}
 		if msg.GetInit() != nil {
 			verr := errDuplicateReplicateInit()
