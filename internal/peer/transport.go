@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	scrapraft "github.com/petabytecl/scrap/internal/raft"
 )
 
 const reconnectBackoff = 100 * time.Millisecond
@@ -33,8 +34,15 @@ func (f RaftRouterFunc) RouteRaftMessage(ctx context.Context, shardID uint64, ms
 
 type outbound struct {
 	shardID uint64
+	to      uint64
+	snap    bool
 	data    []byte
 }
+
+// sendReport receives per-message delivery outcomes so dropped raft traffic —
+// snapshots above all — is reported back to the raft state machine instead of
+// silently stranding a follower in StateSnapshot (#462).
+type sendReport func(msg outbound, delivered bool)
 
 type peerSender struct {
 	addr   string
@@ -43,12 +51,13 @@ type peerSender struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	logger *slog.Logger
+	report sendReport
 
 	drops          atomic.Uint64
 	streamFailures atomic.Uint64
 }
 
-func newPeerSender(addr string, conn *grpc.ClientConn, logger *slog.Logger) *peerSender {
+func newPeerSender(addr string, conn *grpc.ClientConn, logger *slog.Logger, report sendReport) *peerSender {
 	ctx, cancel := context.WithCancel(context.Background())
 	ps := &peerSender{
 		addr:   addr,
@@ -57,6 +66,7 @@ func newPeerSender(addr string, conn *grpc.ClientConn, logger *slog.Logger) *pee
 		cancel: cancel,
 		done:   make(chan struct{}),
 		logger: logger,
+		report: report,
 	}
 	go ps.run(ctx)
 	return ps
@@ -66,6 +76,7 @@ func (ps *peerSender) send(msg outbound) {
 	select {
 	case ps.ch <- msg:
 	default:
+		ps.report(msg, false)
 		count := ps.drops.Add(1)
 		if shouldLogPowerOfTwoCount(count) {
 			ps.logger.Warn("peer transport: raft outbound buffer full, dropping message",
@@ -167,12 +178,14 @@ func (ps *peerSender) sendLoop(ctx context.Context, stream grpc.BidiStreamingCli
 				ShardId: msg.shardID,
 				Message: msg.data,
 			}); err != nil {
+				ps.report(msg, false)
 				if ctx.Err() == nil {
 					ps.logStreamFailure(ctx, "send", err)
 					return true
 				}
 				return false
 			}
+			ps.report(msg, true)
 		case <-ctx.Done():
 			return false
 		}
@@ -182,7 +195,8 @@ func (ps *peerSender) sendLoop(ctx context.Context, stream grpc.BidiStreamingCli
 func (ps *peerSender) drain(ctx context.Context) {
 	for {
 		select {
-		case <-ps.ch:
+		case msg := <-ps.ch:
+			ps.report(msg, false)
 		case <-ctx.Done():
 			return
 		default:
@@ -196,6 +210,7 @@ type SharedTransport struct {
 	peers     map[uint64]string
 	conns     map[string]*grpc.ClientConn
 	senders   map[string]*peerSender
+	reporters map[uint64]scrapraft.StatusReporter
 	transport credentials.TransportCredentials
 	logger    *slog.Logger
 	closed    bool
@@ -224,6 +239,7 @@ func NewSharedTransport(peers map[uint64]string, opts ...SharedTransportOption) 
 		peers:     peers,
 		conns:     make(map[string]*grpc.ClientConn),
 		senders:   make(map[string]*peerSender),
+		reporters: make(map[uint64]scrapraft.StatusReporter),
 		transport: insecure.NewCredentials(),
 		logger:    slog.Default(),
 	}
@@ -231,6 +247,39 @@ func NewSharedTransport(peers map[uint64]string, opts ...SharedTransportOption) 
 		opt(t)
 	}
 	return t
+}
+
+func (t *SharedTransport) setReporter(shardID uint64, r scrapraft.StatusReporter) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reporters[shardID] = r
+}
+
+func (t *SharedTransport) reporterFor(shardID uint64) scrapraft.StatusReporter {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.reporters[shardID]
+}
+
+// reportSendResult feeds per-message delivery outcomes back to the shard's
+// raft node. A dropped message marks the peer unreachable; a dropped MsgSnap
+// additionally reports snapshot failure so the leader leaves StateSnapshot
+// and retries instead of silently running one durable replica short (#462).
+func (t *SharedTransport) reportSendResult(msg outbound, delivered bool) {
+	r := t.reporterFor(msg.shardID)
+	if r == nil {
+		return
+	}
+	if delivered {
+		if msg.snap {
+			r.ReportSnapshotSuccess(msg.to)
+		}
+		return
+	}
+	r.ReportUnreachable(msg.to)
+	if msg.snap {
+		r.ReportSnapshotFailure(msg.to)
+	}
 }
 
 func (t *SharedTransport) ForShard(shardID uint64, peers map[uint64]string) *ShardTransport {
@@ -264,26 +313,34 @@ func (t *SharedTransport) getSender(addr string) *peerSender {
 	}
 	t.conns[addr] = conn
 
-	sender := newPeerSender(addr, conn, t.logger)
+	sender := newPeerSender(addr, conn, t.logger, t.reportSendResult)
 	t.senders[addr] = sender
 	return sender
 }
 
 func (t *SharedTransport) enqueue(shardID uint64, addr string, msg raftpb.Message) {
+	out := outbound{
+		shardID: shardID,
+		to:      msg.To,
+		snap:    msg.Type == raftpb.MsgSnap,
+	}
 	data, err := msg.Marshal()
 	if err != nil {
 		t.logger.Warn("peer transport: marshal raft message failed",
 			"scrap.shard_id", shardID,
 			"err", err,
 		)
+		t.reportSendResult(out, false)
 		return
 	}
+	out.data = data
 
 	sender := t.getSender(addr)
 	if sender == nil {
+		t.reportSendResult(out, false)
 		return
 	}
-	sender.send(outbound{shardID: shardID, data: data})
+	sender.send(out)
 }
 
 func (t *SharedTransport) Close() {
@@ -313,4 +370,10 @@ func (st *ShardTransport) Send(msgs []raftpb.Message) {
 		}
 		st.shared.enqueue(st.shardID, addr, m)
 	}
+}
+
+// SetStatusReporter implements raft.ReporterSink: the shard's raft node
+// registers itself so this transport can report send outcomes (#462).
+func (st *ShardTransport) SetStatusReporter(r scrapraft.StatusReporter) {
+	st.shared.setReporter(st.shardID, r)
 }

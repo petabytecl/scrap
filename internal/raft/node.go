@@ -195,8 +195,30 @@ func Open(cfg Config) (*Node, error) {
 		}
 	}
 
+	if sink, ok := cfg.Transport.(ReporterSink); ok {
+		sink.SetStatusReporter(n)
+	}
+
 	go n.run()
 	return n, nil
+}
+
+// ReportUnreachable reports to raft that the peer could not be reached.
+// Safe to call from any goroutine (raft node methods are channel-based) and
+// a no-op after Stop.
+func (n *Node) ReportUnreachable(id uint64) {
+	n.node.ReportUnreachable(id)
+}
+
+// ReportSnapshotFailure reports that a MsgSnap to the peer was dropped or
+// failed, so the leader leaves StateSnapshot and retries.
+func (n *Node) ReportSnapshotFailure(id uint64) {
+	n.node.ReportSnapshot(id, raft.SnapshotFailure)
+}
+
+// ReportSnapshotSuccess reports that a MsgSnap was handed to the peer.
+func (n *Node) ReportSnapshotSuccess(id uint64) {
+	n.node.ReportSnapshot(id, raft.SnapshotFinish)
 }
 
 func (n *Node) startNode(lg *zap.Logger, walDir string) error {
