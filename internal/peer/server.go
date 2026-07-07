@@ -308,6 +308,12 @@ func mapReplicateConsumeError(op string, err error) error {
 	case errors.Is(err, storeapi.ErrUnavailable):
 		return newPeerStatusError(codes.Unavailable, err)
 	default:
+		// A sink error that already carries a gRPC status (e.g. the shard-set
+		// sink's FailedPrecondition for an unconfigured Shard) is fully
+		// classified: pass it through instead of rewriting it to Internal.
+		if _, ok := status.FromError(err); ok {
+			return err
+		}
 		return newPeerStatusError(codes.Internal, fmt.Errorf("%s: %w", op, sanitizedFSCause(err)))
 	}
 }

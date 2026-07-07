@@ -104,3 +104,16 @@ type failingSink struct {
 func (s failingSink) AppendReplicatedDocument(context.Context, *scrapv1.ReplicateDocumentInit, io.Reader) ([]byte, error) {
 	return nil, s.err
 }
+
+// Review finding on #492: a sink error that already carries a gRPC status
+// (e.g. the shard-set sink's FailedPrecondition for an unconfigured Shard)
+// must pass through instead of being rewritten to Internal.
+func TestMapReplicateConsumeErrorPreservesStatusBearingSinkErrors(t *testing.T) {
+	sinkErr := status.Error(codes.FailedPrecondition, "shard 7 not configured")
+
+	got := mapReplicateConsumeError("append replicated document", sinkErr)
+
+	if code := status.Code(got); code != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition preserved", code)
+	}
+}
