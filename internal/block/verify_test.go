@@ -3,7 +3,9 @@ package block_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
@@ -115,7 +117,7 @@ func TestVerifyBlock_EncryptedEntryVerifiesStoredCiphertext(t *testing.T) {
 		FrameCount:         result.FrameCount,
 		TotalBytes:         result.Size,
 		SHA256:             result.SHA256,
-		EncryptionEnvelope: []byte(`{"ciphertext_length":16}`),
+		EncryptionEnvelope: encryptedEnvelopeForVerifyTest(16, plaintextSHA),
 	}); err != nil {
 		t.Fatalf("Append index: %v", err)
 	}
@@ -133,6 +135,11 @@ func TestVerifyBlock_EncryptedEntryVerifiesStoredCiphertext(t *testing.T) {
 	if len(resultVerify.CorruptFrames) != 0 {
 		t.Fatalf("expected encrypted block to verify cleanly, got %v", resultVerify.CorruptFrames)
 	}
+}
+
+func encryptedEnvelopeForVerifyTest(ciphertextLength int, plaintextSHA [32]byte) []byte {
+	return []byte(fmt.Sprintf(`{"ciphertext_length":%d,"plaintext_sha256":%q}`,
+		ciphertextLength, base64.StdEncoding.EncodeToString(plaintextSHA[:])))
 }
 
 func TestVerifyBlock_FrameCRCCorruption(t *testing.T) {
@@ -313,4 +320,131 @@ func TestVerifyBlock_CorruptHeaderReported(t *testing.T) {
 	if result.CorruptFrames[0].Type != block.CorruptionHeader {
 		t.Fatalf("corruption type: got %s, want %s", result.CorruptFrames[0].Type, block.CorruptionHeader)
 	}
+}
+
+// Deferred finding from the Story 1.6 review: an index entry with
+// FrameCount==0 and an all-zero SHA-256 made VerifyBlock report clean —
+// every real Document has at least one Frame, so such an entry is corrupt
+// metadata, not a vacuously clean one.
+func TestVerifyBlock_ZeroFrameCountEntryIsCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	blkPath := filepath.Join(dir, "0000000000000064.blk")
+	idxPath := filepath.Join(dir, "0000000000000064.idx")
+
+	bw, err := block.NewWriter(blkPath, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close block: %v", err)
+	}
+	iw, err := block.NewIndexWriter(idxPath)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{
+		TransactionID: "tx-zero",
+		DocName:       "ghost.xml",
+		ContentType:   "text/xml",
+		CreatedAt:     time.Now(),
+		FrameCount:    0,
+	}); err != nil {
+		t.Fatalf("Append index: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index: %v", err)
+	}
+
+	result, err := block.VerifyBlock(blkPath, idxPath)
+	if err != nil {
+		t.Fatalf("VerifyBlock: %v", err)
+	}
+	if len(result.CorruptFrames) != 1 || result.CorruptFrames[0].Type != block.CorruptionMissing {
+		t.Fatalf("corrupt frames = %+v, want one missing_frame for the zero-FrameCount entry", result.CorruptFrames)
+	}
+}
+
+// Deferred decision from the Story 1.6 review, resolved: encrypted entries
+// whose .idx plaintext SHA-256 is zero, diverges from the envelope's, or
+// whose envelope carries no digest must report doc_sha256 corruption — the
+// read path fails every read on those shapes, so scrub must detect and
+// repair them instead of reporting the Block clean.
+func TestVerifyBlock_EncryptedSHAMetadataCorruption(t *testing.T) {
+	plaintextSHA := sha256.Sum256([]byte("plaintext-frame"))
+	otherSHA := sha256.Sum256([]byte("different-plaintext"))
+
+	for _, tt := range []struct {
+		name     string
+		idxSHA   [32]byte
+		envelope []byte
+	}{
+		{name: "zero idx sha", idxSHA: [32]byte{}, envelope: encryptedEnvelopeForVerifyTest(16, plaintextSHA)},
+		{name: "idx sha diverges from envelope", idxSHA: otherSHA, envelope: encryptedEnvelopeForVerifyTest(16, plaintextSHA)},
+		{name: "envelope missing digest", idxSHA: plaintextSHA, envelope: []byte(`{"ciphertext_length":16}`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			blkPath, idxPath := writeEncryptedSHAMetadataBlock(t, tt.idxSHA, tt.envelope, plaintextSHA)
+
+			verify, err := block.VerifyBlock(blkPath, idxPath)
+			if err != nil {
+				t.Fatalf("VerifyBlock: %v", err)
+			}
+			if !hasCorruptionType(verify.CorruptFrames, block.CorruptionDocSHA256) {
+				t.Fatalf("corrupt frames = %+v, want doc_sha256", verify.CorruptFrames)
+			}
+		})
+	}
+}
+
+func hasCorruptionType(frames []block.CorruptFrame, want block.CorruptionType) bool {
+	for _, cf := range frames {
+		if cf.Type == want {
+			return true
+		}
+	}
+	return false
+}
+
+func writeEncryptedSHAMetadataBlock(t *testing.T, idxSHA [32]byte, envelope []byte, docSHA [32]byte) (blkPath, idxPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	blkPath = filepath.Join(dir, "0000000000000064.blk")
+	idxPath = filepath.Join(dir, "0000000000000064.idx")
+
+	bw, err := block.NewWriter(blkPath, 1, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	result, err := bw.AppendDocumentFrames("tx-encrypted", "doc.xml", "text/xml", block.DocumentFrames{
+		Payloads: [][]byte{[]byte("ciphertext-frame")},
+		SHA256:   docSHA,
+		Size:     int64(len("plaintext-frame")),
+	})
+	if err != nil {
+		t.Fatalf("AppendDocumentFrames: %v", err)
+	}
+	iw, err := block.NewIndexWriter(idxPath)
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{
+		TransactionID:      "tx-encrypted",
+		DocName:            "doc.xml",
+		ContentType:        "text/xml",
+		CreatedAt:          time.Now(),
+		FirstFrameOff:      result.FirstFrameOffset,
+		FrameCount:         result.FrameCount,
+		TotalBytes:         result.Size,
+		SHA256:             idxSHA,
+		EncryptionEnvelope: envelope,
+	}); err != nil {
+		t.Fatalf("Append index: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close block: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("Close index: %v", err)
+	}
+	return blkPath, idxPath
 }
