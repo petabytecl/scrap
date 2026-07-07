@@ -49,8 +49,16 @@ func TestRecoverPrepFileKeepsCommittedBytesAbovePrepOffset(t *testing.T) {
 		t.Fatalf("writePrepFile: %v", err)
 	}
 
-	if err := s.recoverOpenlog(); err != nil {
+	candidates, err := s.recoverOpenlog()
+	if err != nil {
 		t.Fatalf("recoverOpenlog: %v", err)
+	}
+	// Phase A must not touch the Block; the destructive decision is deferred.
+	if info, err := os.Stat(block.FilePath(blocksDir, 1)); err != nil || info.Size() != sizeBefore {
+		t.Fatalf("phase A modified the Block (size=%v err=%v), want untouched %d", info, err, sizeBefore)
+	}
+	if err := s.resolveOpenlogTruncations(candidates); err != nil {
+		t.Fatalf("resolveOpenlogTruncations: %v", err)
 	}
 
 	info, err := os.Stat(block.FilePath(blocksDir, 1))
