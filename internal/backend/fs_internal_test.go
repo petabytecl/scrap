@@ -46,6 +46,48 @@ func TestFSHelpersClassifyFailures(t *testing.T) {
 	}
 }
 
+func TestMkdirAllSyncedCreatesAndPersistsDeepPrefix(t *testing.T) {
+	root := t.TempDir()
+	// A brand-new multi-level key prefix, as PutObject would create for the
+	// first object under it.
+	dir := filepath.Join(root, "cell", "shards", "7")
+
+	if err := mkdirAllSynced(dir); err != nil {
+		t.Fatalf("mkdirAllSynced: %v", err)
+	}
+
+	for _, d := range []string{
+		filepath.Join(root, "cell"),
+		filepath.Join(root, "cell", "shards"),
+		dir,
+	} {
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Fatalf("stat %s: %v", d, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s is not a directory", d)
+		}
+	}
+
+	// Idempotent on an existing chain.
+	if err := mkdirAllSynced(dir); err != nil {
+		t.Fatalf("mkdirAllSynced (existing): %v", err)
+	}
+}
+
+func TestClassForS3StatusUnknownServerErrorIsTransient(t *testing.T) {
+	// 507 Insufficient Storage is unmapped; an unknown 5xx must be transient so
+	// restore retries instead of reporting data loss on an intact Block.
+	if got := classForS3Status(507); !errors.Is(got, ErrTransient) {
+		t.Fatalf("classForS3Status(507) = %v, want ErrTransient", got)
+	}
+	// An unmapped 4xx stays permanent.
+	if got := classForS3Status(418); !errors.Is(got, ErrPermanent) {
+		t.Fatalf("classForS3Status(418) = %v, want ErrPermanent", got)
+	}
+}
+
 func TestListObjectsMissingRootIsEmpty(t *testing.T) {
 	objects, err := listObjects(context.Background(), filepath.Join(t.TempDir(), "missing"), "")
 	if err != nil {

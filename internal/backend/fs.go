@@ -170,7 +170,7 @@ func (b *fsBackend) rootPath() (string, error) {
 
 func writeTempObject(path string, body io.Reader, size int64) (string, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, directoryMode); err != nil {
+	if err := mkdirAllSynced(dir); err != nil {
 		return "", classifyFSError("create object directory", err)
 	}
 
@@ -217,6 +217,50 @@ func commitTempObject(tmpPath, path string) error {
 		return classifyFSError("commit object", err)
 	}
 	return syncDirectory(filepath.Dir(path))
+}
+
+// mkdirAllSynced creates dir and fsyncs every directory it had to create,
+// making the new directory chain durable. os.MkdirAll alone leaves the new
+// entries unsynced in their parents, so a crash after PutObject returns success
+// can lose the whole chain for the first object under a new key prefix — while
+// eviction has already deleted the local Block, losing both copies.
+func mkdirAllSynced(dir string) error {
+	// Collect the not-yet-existing ancestors (deepest first) up to the first
+	// existing one.
+	var created []string
+	existing := dir
+	for {
+		if _, err := os.Stat(existing); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		created = append(created, existing)
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			break
+		}
+		existing = parent
+	}
+
+	if err := os.MkdirAll(dir, directoryMode); err != nil {
+		return err
+	}
+	if len(created) == 0 {
+		return nil
+	}
+	// Fsync the deepest pre-existing ancestor (persists the first new child) and
+	// each newly created directory (persists its child). Together this makes the
+	// whole chain durable.
+	if err := syncDirectory(existing); err != nil {
+		return err
+	}
+	for _, d := range created {
+		if err := syncDirectory(d); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func objectMeta(path string) (ObjectMeta, error) {

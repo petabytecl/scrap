@@ -464,7 +464,9 @@ func TestClassifyS3Error(t *testing.T) {
 		{name: "checksum mismatch", err: apiErr("ChecksumMismatch"), want: ErrCorrupt},
 		{name: "bucket not found", err: apiErr("BucketNotFound"), want: ErrPermanent},
 		{name: "invalid bucket", err: apiErr("InvalidBucketName"), want: ErrPermanent},
-		{name: "unknown", err: apiErr("Weird"), want: ErrPermanent},
+		// An unrecognized provider code must be transient, not permanent: the
+		// restore path maps permanent to data-loss with no retry.
+		{name: "unknown", err: apiErr("Weird"), want: ErrTransient},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

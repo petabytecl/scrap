@@ -361,7 +361,12 @@ func classForS3Code(code string) error {
 	case "BucketNotFound", "InvalidBucketName":
 		return ErrPermanent
 	default:
-		return ErrPermanent
+		// An unrecognized code (provider-specific, e.g. MinIO) must not default
+		// to permanent: the restore path maps ClassPermanent to
+		// DataLossReasonBackendRestoreCorrupt with no retry, so an unmapped
+		// transient condition would be reported as data loss on an intact Block.
+		// Treat the unknown as transient; the restore retry budget bounds retries.
+		return ErrTransient
 	}
 }
 
@@ -381,6 +386,12 @@ func classForS3Status(status int) error {
 	case http.StatusConflict, http.StatusPreconditionFailed:
 		return ErrConflict
 	default:
+		// Unmapped 5xx is a server-side/transient condition; only unmapped 4xx
+		// client errors are permanent. Avoids reporting an intact Block's restore
+		// as data loss on an unrecognized transient status.
+		if status >= http.StatusInternalServerError {
+			return ErrTransient
+		}
 		return ErrPermanent
 	}
 }
