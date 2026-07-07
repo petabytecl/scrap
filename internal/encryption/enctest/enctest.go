@@ -76,5 +76,13 @@ func DecryptDocument(
 
 	reader := decryptor.Reader(encryption.NewSliceFrameSource(frames))
 	defer func() { _ = reader.Close() }()
-	return io.ReadAll(reader)
+	plaintext, err := io.ReadAll(reader)
+	if err != nil {
+		// Never hand back a partial plaintext prefix from a failed decrypt:
+		// the pre-streaming helper discarded buffered bytes on any error, and
+		// a test observing bytes from an integrity failure would be testing
+		// the wrong contract.
+		return nil, err
+	}
+	return plaintext, nil
 }

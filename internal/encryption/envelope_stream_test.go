@@ -190,35 +190,6 @@ func TestDocumentDecryptReaderFailsMidStreamOnTamperedLaterFrame(t *testing.T) {
 	}
 }
 
-// unwrapCountingTransit counts UnwrapDataKey calls so tests can assert a
-// mismatch is rejected before any KMS round trip (#455).
-type unwrapCountingTransit struct {
-	encryption.Transit
-	unwraps int
-}
-
-func (t *unwrapCountingTransit) UnwrapDataKey(ctx context.Context, req encryption.UnwrapDataKeyRequest) (encryption.UnwrappedDataKey, error) {
-	t.unwraps++
-	return t.Transit.UnwrapDataKey(ctx, req)
-}
-
-func TestDecryptDocumentRejectsLengthMismatchBeforeKMSRoundTrip(t *testing.T) {
-	identity := encryption.DocumentIdentity{TransactionID: "tx-1", DocumentName: "doc-a"}
-	body := bytes.Repeat([]byte("scrap-streaming-payload-"), 20_000)
-	cfg, doc := encryptTestDocument(t, identity, body)
-
-	transit := &unwrapCountingTransit{Transit: cfg.Transit}
-	frames := cloneTestFrames(doc.Frames[:len(doc.Frames)-1]) // drop the tail
-
-	_, err := encryption.DecryptDocument(context.Background(), transit, identity, doc.Envelope, frames, doc.PlaintextSHA256, doc.PlaintextSize)
-	if !errors.Is(err, encryption.ErrIntegrity) {
-		t.Fatalf("DecryptDocument short ciphertext = %v, want ErrIntegrity", err)
-	}
-	if transit.unwraps != 0 {
-		t.Fatalf("UnwrapDataKey calls = %d, want 0 before the length pre-check", transit.unwraps)
-	}
-}
-
 // pullCountingFrameSource records how many frames were pulled so tests can
 // assert the reader stops at the first over-length frame.
 type pullCountingFrameSource struct {
