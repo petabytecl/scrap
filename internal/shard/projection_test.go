@@ -421,7 +421,7 @@ func TestAppendDocumentIndexEntryReportsCurrentWriterError(t *testing.T) {
 	err = s.appendDocumentIndexEntry(&scrapv1.CommitDocument{BlockId: 1}, block.IndexEntry{
 		TransactionID: "tx-current-error",
 		DocName:       "doc.xml",
-	}, 0)
+	}, 0, false)
 	if err == nil {
 		t.Fatal("expected current writer error")
 	}
