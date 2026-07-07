@@ -174,7 +174,7 @@ func (r *projectionRebuilder) doRebuild(ctx context.Context, done chan struct{})
 	tempDir := filepath.Join(r.dataDir, fmt.Sprintf("pebble.rebuild-%d", time.Now().UnixNano()))
 	oldDir := filepath.Join(r.dataDir, fmt.Sprintf("pebble.previous-%d", time.Now().UnixNano()))
 
-	newIdx, seenEntries, err := r.prepareRebuildProjection(tempDir)
+	newIdx, bulk, err := r.prepareRebuildProjection(tempDir)
 	if err != nil {
 		r.logger.ErrorContext(ctx, "rebuild: prepare projection failed", "err", err)
 		_ = os.RemoveAll(tempDir)
@@ -191,7 +191,7 @@ func (r *projectionRebuilder) doRebuild(ctx context.Context, done chan struct{})
 	// commit landing during the long unlocked prepare cannot be lost with the
 	// outgoing projection.
 	idxNil, err := r.core.finalizeAndSwapRebuiltProjection(func() error {
-		return r.finalizeRebuildLocked(newIdx, seenEntries)
+		return r.finalizeRebuildLocked(newIdx, bulk)
 	}, pebbleDir, tempDir, oldDir)
 	_ = os.RemoveAll(tempDir)
 
@@ -214,19 +214,32 @@ func (r *projectionRebuilder) doRebuild(ctx context.Context, done chan struct{})
 // landed during this scan. State without a Block-file source (content
 // safety, upload outbox) is deliberately NOT built here — it is copied under
 // the apply lock in finalizeRebuildLocked, where it cannot race an apply.
-func (r *projectionRebuilder) prepareRebuildProjection(tempDir string) (*index.Index, map[uint64]int, error) {
+// rebuildBulkState is everything the unlocked bulk phase captured for the
+// locked finalize: how far each Block's .idx was consumed (for the delta
+// re-scan) and the per-Block filesystem evidence (so finalize does no fs I/O
+// under the apply lock).
+type rebuildBulkState struct {
+	seenEntries map[uint64]int
+	fsState     map[uint64]rebuildBlockFS
+}
+
+func (r *projectionRebuilder) prepareRebuildProjection(tempDir string) (*index.Index, rebuildBulkState, error) {
 	if err := os.RemoveAll(tempDir); err != nil {
-		return nil, nil, fmt.Errorf("shard: remove stale rebuild dir: %w", err)
+		return nil, rebuildBulkState{}, fmt.Errorf("shard: remove stale rebuild dir: %w", err)
 	}
 
 	newIdx, err := index.Open(tempDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("shard: open rebuild index: %w", err)
+		return nil, rebuildBulkState{}, fmt.Errorf("shard: open rebuild index: %w", err)
 	}
 	seenEntries, err := r.rebuildProjectionInto(newIdx)
 	if err != nil {
 		_ = newIdx.Close()
-		return nil, nil, err
+		return nil, rebuildBulkState{}, err
+	}
+	fsState := make(map[uint64]rebuildBlockFS, len(seenEntries))
+	for blockID := range seenEntries {
+		fsState[blockID] = r.snapshotBlockFS(blockID)
 	}
 	// Carry the durable applied-index watermark into the rebuilt projection.
 	// The rebuild's sources (Block .idx files) cover at least the state the
@@ -237,15 +250,15 @@ func (r *projectionRebuilder) prepareRebuildProjection(tempDir string) (*index.I
 	if watermark, ok := r.core.projectionAppliedIndex(); ok && watermark > 0 {
 		if err := newIdx.PersistAppliedIndex(watermark); err != nil {
 			_ = newIdx.Close()
-			return nil, nil, fmt.Errorf("shard: carry applied index into rebuild: %w", err)
+			return nil, rebuildBulkState{}, fmt.Errorf("shard: carry applied index into rebuild: %w", err)
 		}
 	}
-	return newIdx, seenEntries, nil
+	return newIdx, rebuildBulkState{seenEntries: seenEntries, fsState: fsState}, nil
 }
 
 // finalizeRebuildLocked is the short catch-up phase, run under the shard
 // apply lock immediately before the swap. It closes newIdx in every path.
-func (r *projectionRebuilder) finalizeRebuildLocked(newIdx *index.Index, seenEntries map[uint64]int) (err error) {
+func (r *projectionRebuilder) finalizeRebuildLocked(newIdx *index.Index, bulk rebuildBulkState) (err error) {
 	defer func() {
 		closeErr := newIdx.Close()
 		if err == nil && closeErr != nil {
@@ -253,7 +266,7 @@ func (r *projectionRebuilder) finalizeRebuildLocked(newIdx *index.Index, seenEnt
 		}
 	}()
 
-	blockIDs, err := r.applyBlockIndexDelta(newIdx, seenEntries)
+	blockIDs, err := r.applyBlockIndexDelta(newIdx, bulk.seenEntries)
 	if err != nil {
 		return err
 	}
@@ -264,7 +277,12 @@ func (r *projectionRebuilder) finalizeRebuildLocked(newIdx *index.Index, seenEnt
 	if err := r.core.copyContentSafetyIntoLocked(newIdx); err != nil {
 		return fmt.Errorf("shard: carry content safety state into rebuild: %w", err)
 	}
-	return r.rebuildUploadOutbox(newIdx, blockIDs)
+	// The outbox pass under the lock reads only the live projection (fresh
+	// pending/confirmed records, including window applies) plus the fs
+	// evidence snapshotted in the unlocked phase — no per-Block stat/classify
+	// I/O while the raft apply loop is stalled, or a large Cell's finalize
+	// could hold up heartbeats long enough to cost leadership.
+	return r.rebuildUploadOutbox(newIdx, blockIDs, bulk.fsState)
 }
 
 // applyBlockIndexDelta re-applies Document records appended to any Block
@@ -329,10 +347,38 @@ func (r *projectionRebuilder) readBlockIndexEntries(blockID uint64) ([]block.Ind
 	return entries, nil
 }
 
-func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64) error {
+// rebuildBlockFS is one Block's filesystem evidence (data-file stat and local
+// lifecycle), captured in the UNLOCKED bulk phase so the locked finalize does
+// no per-Block fs I/O. Block files barely change during a rebuild (client
+// traffic and eviction apply are rejected), matching the staleness the
+// pre-#464 prepare-time outbox rebuild already had.
+type rebuildBlockFS struct {
+	statInfo     os.FileInfo
+	statErr      error
+	lifecycle    localblock.Lifecycle
+	lifecycleErr error
+}
+
+func (r *projectionRebuilder) snapshotBlockFS(blockID uint64) rebuildBlockFS {
+	var fs rebuildBlockFS
+	fs.statInfo, fs.statErr = os.Stat(r.blockPath(blockID))
+	fs.lifecycle, fs.lifecycleErr = localblock.Classify(r.blocksDir, blockID)
+	return fs
+}
+
+// blockFS returns the phase-1 snapshot for the Block, or captures it fresh
+// for a Block that appeared during the rebuild window (bounded by the window).
+func (r *projectionRebuilder) blockFS(fsState map[uint64]rebuildBlockFS, blockID uint64) rebuildBlockFS {
+	if fs, ok := fsState[blockID]; ok {
+		return fs
+	}
+	return r.snapshotBlockFS(blockID)
+}
+
+func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, blockIDs []uint64, fsState map[uint64]rebuildBlockFS) error {
 	be := r.upload.Backend
 	if !r.upload.Enabled || be == nil {
-		return r.rebuildCommittedUploadAuthorities(projection, blockIDs)
+		return r.rebuildCommittedUploadAuthorities(projection, blockIDs, fsState)
 	}
 
 	openBlockID := r.core.currentOpenBlockIDLocked()
@@ -342,28 +388,28 @@ func (r *projectionRebuilder) rebuildUploadOutbox(projection *index.Index, block
 		if blockID == openBlockID {
 			continue
 		}
-		if err := r.rebuildPendingUpload(ctx, projection, blockID); err != nil {
+		if err := r.rebuildPendingUpload(ctx, projection, blockID, r.blockFS(fsState, blockID)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *projectionRebuilder) rebuildCommittedUploadAuthorities(projection *index.Index, blockIDs []uint64) error {
+func (r *projectionRebuilder) rebuildCommittedUploadAuthorities(projection *index.Index, blockIDs []uint64, fsState map[uint64]rebuildBlockFS) error {
 	openBlockID := r.core.currentOpenBlockIDLocked()
 	for _, blockID := range blockIDs {
 		if blockID == openBlockID {
 			continue
 		}
-		if _, err := r.rebuildLocalConfirmedUploadAuthority(projection, blockID); err != nil {
+		if _, err := r.rebuildLocalConfirmedUploadAuthority(projection, blockID, r.blockFS(fsState, blockID)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projection *index.Index, blockID uint64) error {
-	info, statErr := os.Stat(r.blockPath(blockID))
+func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projection *index.Index, blockID uint64, fs rebuildBlockFS) error {
+	info, statErr := fs.statInfo, fs.statErr
 	if statErr == nil {
 		pending, hasPending, err := r.pendingUploadForRebuild(blockID)
 		if err != nil {
@@ -388,7 +434,7 @@ func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projecti
 		r.logger.ErrorContext(ctx, "shard: rebuild upload cannot stat sealed Block metadata", "block_id", blockID, "err", statErr)
 		return fmt.Errorf("shard: rebuild pending upload %d stat sealed Block metadata: %w", blockID, statErr)
 	}
-	evicted, err := r.rebuildLocalConfirmedUploadAuthority(projection, blockID)
+	evicted, err := r.rebuildLocalConfirmedUploadAuthority(projection, blockID, fs)
 	if err != nil {
 		return err
 	}
@@ -399,8 +445,8 @@ func (r *projectionRebuilder) rebuildPendingUpload(ctx context.Context, projecti
 	return fmt.Errorf("shard: rebuild pending upload %d missing sealed Block metadata: %w", blockID, statErr)
 }
 
-func (r *projectionRebuilder) rebuildLocalConfirmedUploadAuthority(projection *index.Index, blockID uint64) (bool, error) {
-	lifecycle, err := localblock.Classify(r.blocksDir, blockID)
+func (r *projectionRebuilder) rebuildLocalConfirmedUploadAuthority(projection *index.Index, blockID uint64, fs rebuildBlockFS) (bool, error) {
+	lifecycle, err := fs.lifecycle, fs.lifecycleErr
 	if err != nil {
 		return false, fmt.Errorf("shard: rebuild pending upload %d classify local lifecycle: %w", blockID, err)
 	}

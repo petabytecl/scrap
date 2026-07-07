@@ -190,7 +190,7 @@ func TestProjectionRebuilderRequeuesSealedBlockForRaftConfirmation(t *testing.T)
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
@@ -226,7 +226,7 @@ func TestProjectionRebuilderPreservesHotConfirmedBlock(t *testing.T) {
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
@@ -272,7 +272,7 @@ func TestProjectionRebuilderPreservesPendingRewrapUploadOverConfirmedAuthority(t
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestProjectionRebuilderPreservesHotConfirmedBlockWhenUploadsDisabled(t *tes
 	}
 	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
@@ -333,7 +333,7 @@ func TestProjectionRebuilderFailsClosedWhenSealedBlockMetadataMissing(t *testing
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err == nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err == nil {
 		t.Fatal("rebuildUploadOutbox succeeded without sealed Block metadata")
 	}
 	if _, err := projection.GetConfirmedUpload(1); !errors.Is(err, index.ErrConfirmedUploadNotFound) {
@@ -376,7 +376,7 @@ func TestProjectionRebuilderSkipsEvictedConfirmedBlock(t *testing.T) {
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	if _, err := projection.GetPendingUpload(1); !errors.Is(err, index.ErrPendingUploadNotFound) {
@@ -422,7 +422,7 @@ func TestProjectionRebuilderPreservesEvictedConfirmedBlockWhenUploadsDisabled(t 
 	}
 	r := newProjectionRebuilder(core, dataDir, blocksDir, 7, UploadConfig{}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{1}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{1}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	got, err := projection.GetConfirmedUpload(1)
@@ -480,7 +480,7 @@ func TestProjectionRebuilderPreservesEvictedCommittedBlockAfterRestart(t *testin
 		CellID:  "cell-a",
 	}, nil)
 
-	if err := r.rebuildUploadOutbox(projection, []uint64{uploadApplyTestBlockID}); err != nil {
+	if err := r.rebuildUploadOutbox(projection, []uint64{uploadApplyTestBlockID}, nil); err != nil {
 		t.Fatalf("rebuildUploadOutbox: %v", err)
 	}
 	got, err := projection.GetConfirmedUpload(uploadApplyTestBlockID)
