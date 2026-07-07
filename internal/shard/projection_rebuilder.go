@@ -25,6 +25,7 @@ type projectionRebuildCore interface {
 	pendingUploadForRebuild(blockID uint64) (index.PendingUpload, error)
 	swapRebuiltProjection(pebbleDir, tempDir, oldDir string) (idxNil bool, err error)
 	projectionAppliedIndex() (uint64, bool)
+	copyContentSafetyInto(dst *index.Index) error
 }
 
 type projectionRebuilder struct {
@@ -197,6 +198,16 @@ func (r *projectionRebuilder) prepareRebuildProjection(tempDir string) error {
 	if err := r.rebuildProjectionInto(newIdx); err != nil {
 		_ = newIdx.Close()
 		return err
+	}
+	// Content-quarantine records and the scanner watermark live only in the
+	// projection (no Block-file source), so the rebuild above cannot reconstruct
+	// them. Copy them from the live projection or a rebuild silently re-serves
+	// malware-quarantined Documents — and with the applied-index watermark now
+	// carried forward, restart replay would not re-apply the quarantine commands
+	// either.
+	if err := r.core.copyContentSafetyInto(newIdx); err != nil {
+		_ = newIdx.Close()
+		return fmt.Errorf("shard: carry content safety state into rebuild: %w", err)
 	}
 	// Carry the durable applied-index watermark into the rebuilt projection.
 	// The rebuild's sources (Block .idx files) cover at least the state the
