@@ -110,17 +110,22 @@ func DecryptDocument(
 	expectedSHA [sha256.Size]byte,
 	expectedSize int64,
 ) ([]byte, error) {
+	// Preserve the pre-streaming contract of rejecting a ciphertext length
+	// mismatch before any KMS or crypto work: the frame sizes are known up
+	// front here, so a mismatch must not cost a Transit round trip (#455).
+	envelope, err := ParseEnvelope(envelopeBytes)
+	if err != nil {
+		return nil, err
+	}
+	if framePayloadBytes(frames) != envelope.CiphertextLength {
+		return nil, fmt.Errorf("%w: ciphertext length mismatch", ErrIntegrity)
+	}
+
 	decryptor, err := NewDocumentDecryptor(ctx, transit, identity, envelopeBytes, expectedSHA, expectedSize)
 	if err != nil {
 		return nil, err
 	}
 	defer decryptor.Close()
-
-	// Preserve the pre-streaming contract of rejecting a ciphertext length
-	// mismatch before any frame is decrypted.
-	if framePayloadBytes(frames) != decryptor.envelope.CiphertextLength {
-		return nil, fmt.Errorf("%w: ciphertext length mismatch", ErrIntegrity)
-	}
 	reader := decryptor.Reader(NewSliceFrameSource(frames))
 	defer func() { _ = reader.Close() }()
 	plaintext := make([]byte, 0, max(0, int(framePayloadBytes(frames))-decryptor.aead.Overhead()*len(frames)))

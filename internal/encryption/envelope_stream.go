@@ -341,6 +341,13 @@ func (r *documentDecryptReader) openFrame(frame []byte) error {
 	if len(frame) < d.aead.Overhead() {
 		return fmt.Errorf("%w: ciphertext frame %d too short", ErrIntegrity, r.frameSeq)
 	}
+	// Reject an over-length ciphertext as soon as the running total exceeds
+	// the envelope, before decrypting the excess frame — not at stream EOF
+	// after a full decryption pass (#455). Under-length is only knowable at
+	// EOF and stays in finish.
+	if r.ciphertextSize+int64(len(frame)) > d.envelope.CiphertextLength {
+		return fmt.Errorf("%w: ciphertext length mismatch", ErrIntegrity)
+	}
 	opened, err := d.aead.Open(nil, frameNonce(d.envelope.NoncePrefix, r.frameSeq), frame, frameAAD(d.identity, r.frameSeq))
 	if err != nil {
 		return fmt.Errorf("%w: decrypt frame %d", ErrIntegrity, r.frameSeq)
