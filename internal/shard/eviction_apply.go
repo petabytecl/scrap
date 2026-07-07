@@ -120,10 +120,20 @@ func (s *Shard) ensureEvictionApplyReadyLocked() error {
 }
 
 func (s *Shard) applyEvictionPlanBlocks(ctx context.Context, plan eviction.Plan) (eviction.ApplyResult, bool) {
+	now := time.Now().UTC()
+	// Bound the destructive loop by the plan's expiry, mirroring the validation
+	// context. Expiry is checked once at BeginApply; without this a plan begun
+	// just before ExpiresAtUs would keep unlinking local Block copies (the last
+	// hot copy of Documents) arbitrarily long past expiry.
+	if plan.ExpiresAtUs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.UnixMicro(plan.ExpiresAtUs))
+		defer cancel()
+	}
 	return eviction.ApplyBlocks(
 		ctx,
 		plan,
-		time.Now().UTC(),
+		now,
 		func(selected eviction.PlanBlock) eviction.ApplyBlock {
 			return s.applyEvictionBlock(plan, selected)
 		},
@@ -290,7 +300,12 @@ func validateEvictionApplyAuthority(selected eviction.PlanBlock, confirmed index
 		return fmt.Errorf("confirmed Shard mismatch for Block %d", selected.BlockID)
 	case selected.SizeBytes != confirmed.BlockObject.SizeBytes:
 		return fmt.Errorf("confirmed Block size mismatch for Block %d", selected.BlockID)
-	case selected.BackendKey != "" && selected.BackendKey != confirmed.BlockObject.Key:
+	case selected.BackendKey == "":
+		// Fail closed: an empty Backend key is no proof of a durable copy, so
+		// evicting would delete the last copy. The planner also skips such
+		// candidates (SkipReasonNoDurableCopy); this is the apply-side backstop.
+		return fmt.Errorf("missing Backend key for Block %d", selected.BlockID)
+	case selected.BackendKey != confirmed.BlockObject.Key:
 		return fmt.Errorf("confirmed Backend key mismatch for Block %d", selected.BlockID)
 	default:
 		return nil

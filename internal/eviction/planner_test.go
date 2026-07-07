@@ -30,6 +30,31 @@ func TestBuildPlanSelectsOldestEligibleFollowerBlocksWithinBounds(t *testing.T) 
 	assertPlanSelectionForTest(t, plan)
 }
 
+func TestBuildPlanSkipsCandidateWithoutDurableCopy(t *testing.T) {
+	now := time.UnixMicro(100_000_000_000)
+
+	noBackend := planCandidateForTest(5, 100, now.Add(-2*time.Hour))
+	noBackend.BackendKey = ""
+
+	plan, err := BuildPlan(PlanInput{
+		Request:    PlanRequest{MemberHostname: "scrapd-2"},
+		Config:     planConfigForTest(),
+		Member:     Member{Hostname: "scrapd-2", ID: "member-b"},
+		Now:        now,
+		PlanID:     "plan-no-durable",
+		Candidates: []PlanCandidate{noBackend},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if len(plan.Selected) != 0 {
+		t.Fatalf("selected = %+v, want none (no durable copy)", plan.Selected)
+	}
+	if len(plan.Skipped) != 1 || plan.Skipped[0].Reason != SkipReasonNoDurableCopy {
+		t.Fatalf("skipped = %+v, want SkipReasonNoDurableCopy", plan.Skipped)
+	}
+}
+
 func assertPlanSelectionForTest(t *testing.T, plan Plan) {
 	t.Helper()
 

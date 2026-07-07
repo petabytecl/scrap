@@ -1517,6 +1517,15 @@ func TestValidateEvictionApplyAuthorityRejectsMismatches(t *testing.T) {
 				return block
 			},
 		},
+		{
+			// An empty Backend key is no proof of a durable copy; evicting would
+			// delete the last copy, so authority must fail closed.
+			name: "empty backend key",
+			mutate: func(block eviction.PlanBlock) eviction.PlanBlock {
+				block.BackendKey = ""
+				return block
+			},
+		},
 	}
 
 	for _, tt := range tests {
