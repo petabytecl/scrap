@@ -185,3 +185,66 @@ func TestReadFrameRawClassifiesIOFailure(t *testing.T) {
 	}
 	_ = fmt.Sprintf("%v", err)
 }
+
+// Review finding on #489: a transient I/O fault on the 40-byte header read
+// must get the same bounded re-read as frames — a header read hiccup is not
+// header corruption.
+func TestVerifyHeaderStructureRetriesTransientReadFault(t *testing.T) {
+	blkPath, _ := writeRetryTestBlock(t, t.TempDir())
+	f, err := os.Open(blkPath) //nolint:gosec // test path under t.TempDir
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	var retries uint64
+	faulty := &faultingReadSeeker{inner: f, failCalls: map[int]bool{1: true}}
+	if corrupt := verifyHeaderStructure(faulty, &retries); corrupt {
+		t.Fatal("header reported corrupt despite clean re-read")
+	}
+	if retries != 1 {
+		t.Fatalf("header retries = %d, want 1", retries)
+	}
+}
+
+func TestVerifyHeaderStructurePersistentFaultIsCorrupt(t *testing.T) {
+	blkPath, _ := writeRetryTestBlock(t, t.TempDir())
+	f, err := os.Open(blkPath) //nolint:gosec // test path under t.TempDir
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	var retries uint64
+	faulty := &faultingReadSeeker{inner: f, failAll: true, failFrom: 1}
+	if corrupt := verifyHeaderStructure(faulty, &retries); !corrupt {
+		t.Fatal("persistent header read fault not reported as corrupt")
+	}
+	if retries != 0 {
+		t.Fatalf("header retries = %d, want 0 for persistent fault", retries)
+	}
+}
+
+// A short file (EOF during the header read) is structural corruption, not a
+// transient fault: no retry.
+func TestVerifyHeaderStructureShortFileIsCorruptWithoutRetry(t *testing.T) {
+	dir := t.TempDir()
+	blkPath := filepath.Join(dir, "00000000000000ca.blk")
+	if err := os.WriteFile(blkPath, []byte("SCRP-too-short"), 0o600); err != nil {
+		t.Fatalf("write short block: %v", err)
+	}
+	f, err := os.Open(blkPath) //nolint:gosec // test path under t.TempDir
+	if err != nil {
+		t.Fatalf("open block: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	var retries uint64
+	faulty := &faultingReadSeeker{inner: f}
+	if corrupt := verifyHeaderStructure(faulty, &retries); !corrupt {
+		t.Fatal("short header not reported as corrupt")
+	}
+	if retries != 0 || faulty.seeks != 0 {
+		t.Fatalf("retries = %d seeks = %d, want no retry for a short file", retries, faulty.seeks)
+	}
+}

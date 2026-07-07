@@ -25,13 +25,17 @@ func (m *mockProposer) ProposeConsistencyCheck(_ context.Context, scrubID string
 }
 
 type mockConsistencyChecker struct {
-	results map[string]scrub.Result
-	err     error
-	calls   atomic.Int32
+	results  map[string]scrub.Result
+	errAddrs map[string]error
+	err      error
+	calls    atomic.Int32
 }
 
 func (m *mockConsistencyChecker) CheckConsistency(_ context.Context, addr, scrubID string) (scrub.Result, error) {
 	m.calls.Add(1)
+	if err, ok := m.errAddrs[addr]; ok {
+		return scrub.Result{}, err
+	}
 	if m.err != nil {
 		return scrub.Result{}, m.err
 	}
@@ -548,6 +552,47 @@ func TestLightScrubber_ThreeWayDisagreementFreezes(t *testing.T) {
 	}
 	if len(rebuilder.requested) != 0 || selfRebuilder.calls != 0 {
 		t.Fatalf("rebuilds on three-way disagreement: peers=%v self=%d, want none", rebuilder.requested, selfRebuilder.calls)
+	}
+	if metrics.recorded.quorumTie != 1 {
+		t.Fatalf("quorum_tie runs = %d, want 1", metrics.recorded.quorumTie)
+	}
+}
+
+// Review finding on #489: the quorum is sized by the CONFIGURED voter set.
+// Two reachable peers in a 5-voter Cell (two peers unreachable) must not
+// outvote the leader — unreachable voters are unknowns, not abstentions.
+func TestLightScrubber_UnreachablePeersCannotFormMajority(t *testing.T) {
+	peerHash := [32]byte{0xbb}
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: [32]byte{0xaa}}}
+	checker := &mockConsistencyChecker{
+		results: map[string]scrub.Result{
+			"peer-1:9091": {AppliedIndex: 10, SHA256: peerHash},
+			"peer-2:9091": {AppliedIndex: 10, SHA256: peerHash},
+		},
+		errAddrs: map[string]error{
+			"peer-3:9091": errors.New("unreachable"),
+			"peer-4:9091": errors.New("unreachable"),
+		},
+	}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+	selfRebuilder := &mockSelfRebuilder{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		SelfRebuilder:      selfRebuilder,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091", "peer-3:9091", "peer-4:9091"},
+	})
+
+	if err := ls.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce succeeded, want no-majority error with two voters unreachable")
+	}
+	if selfRebuilder.calls != 0 || len(rebuilder.requested) != 0 {
+		t.Fatalf("rebuilds: self=%d peers=%v, want none without a configured-voter majority", selfRebuilder.calls, rebuilder.requested)
 	}
 	if metrics.recorded.quorumTie != 1 {
 		t.Fatalf("quorum_tie runs = %d, want 1", metrics.recorded.quorumTie)

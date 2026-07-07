@@ -899,8 +899,9 @@ func TestDeepScrubQuarantinesIdxCorruptBlockAndContinues(t *testing.T) {
 	if len(qm.quarantined) != 1 || qm.quarantined[0] != "1.blk" {
 		t.Fatalf("quarantined = %v, want [1.blk]", qm.quarantined)
 	}
-	if len(verifier.calls) != 2 {
-		t.Fatalf("verified blocks = %v, want the run to continue past the corrupt idx", verifier.calls)
+	// Block 1 is verified twice (bounded idx re-read), then the run continues.
+	if len(verifier.calls) != 3 {
+		t.Fatalf("verified blocks = %v, want retry of 1.blk then continue to 2.blk", verifier.calls)
 	}
 	if metrics.runsOK != 1 {
 		t.Fatalf("run recorded ok = %d, want 1", metrics.runsOK)
@@ -994,5 +995,53 @@ func TestDeepScrubRunsEndOfRunRepairAfterQuarantine(t *testing.T) {
 	}
 	if repairer.calls != 1 {
 		t.Fatalf("repair passes on clean run = %d, want 1", repairer.calls)
+	}
+}
+
+// oncePathVerifier fails a path's first call only, succeeding afterwards —
+// the transient .idx read fault shape.
+type oncePathVerifier struct {
+	errOnce map[string]error
+	calls   []string
+}
+
+func (v *oncePathVerifier) VerifyBlock(blkPath, _ string) (block.VerifyResult, error) {
+	v.calls = append(v.calls, blkPath)
+	if err, ok := v.errOnce[blkPath]; ok {
+		delete(v.errOnce, blkPath)
+		return block.VerifyResult{}, err
+	}
+	return block.VerifyResult{FramesVerified: 1}, nil
+}
+
+// Review finding on #489: OpenIndexReader wraps transient .idx read faults in
+// ErrIdxCorrupt, so the index gets one bounded re-read before quarantine —
+// same policy as .blk frames.
+func TestDeepScrubRetriesTransientIdxFaultBeforeQuarantine(t *testing.T) {
+	blocks := []block.Info{{BlockID: 1, BlkPath: "1.blk", IdxPath: "1.idx"}}
+	verifier := &oncePathVerifier{
+		errOnce: map[string]error{"1.blk": fmt.Errorf("read entry payload: %w", block.ErrIdxCorrupt)},
+	}
+	qm := &stubQuarantineManager{}
+	metrics := &deepScrubMetrics{}
+
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:       &stubBlockLister{blocks: blocks},
+		BlockVerifier:     verifier,
+		QuarantineManager: qm,
+		Metrics:           metrics,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(qm.quarantined) != 0 {
+		t.Fatalf("quarantined = %v, want none after clean idx re-read", qm.quarantined)
+	}
+	if len(verifier.calls) != 2 {
+		t.Fatalf("verify calls = %v, want one bounded retry", verifier.calls)
+	}
+	if metrics.degradedReads != 1 {
+		t.Fatalf("degraded reads = %d, want 1", metrics.degradedReads)
 	}
 }

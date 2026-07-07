@@ -61,12 +61,14 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	headerCorrupt := verifyHeaderStructure(f)
+	var headerRetries uint64
+	headerCorrupt := verifyHeaderStructure(f, &headerRetries)
 	if _, err := f.Seek(HeaderSize, io.SeekStart); err != nil {
 		return VerifyResult{}, fmt.Errorf("block: verify seek past header: %w", err)
 	}
 
 	result := verifyFrames(f, idxEntries)
+	result.TransientReadRetries += headerRetries
 	if headerCorrupt {
 		result.CorruptFrames = append([]CorruptFrame{{Offset: 0, Type: CorruptionHeader}}, result.CorruptFrames...)
 	}
@@ -75,16 +77,38 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 
 // verifyHeaderStructure checks the 40-byte Block header's magic and CRC.
 // VerifyBlock has no expected shard/block IDs, so identity fields are not
-// checked here; VerifyHeader covers those on the read path.
-func verifyHeaderStructure(f io.Reader) bool {
+// checked here; VerifyHeader covers those on the read path. An I/O-class
+// read fault gets the same single bounded re-read as frames (#470): a short
+// file is structural corruption, but a faulted read only proves the read
+// failed.
+func verifyHeaderStructure(f io.ReadSeeker, retries *uint64) bool {
+	corrupt, ioFault := readHeaderStructure(f)
+	if !ioFault {
+		return corrupt
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return true
+	}
+	corrupt, ioFault = readHeaderStructure(f)
+	if ioFault {
+		return true
+	}
+	*retries++
+	return corrupt
+}
+
+func readHeaderStructure(f io.Reader) (corrupt, ioFault bool) {
 	var hdr [HeaderSize]byte
 	if _, err := io.ReadFull(f, hdr[:]); err != nil {
-		return true
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return true, false
+		}
+		return true, true
 	}
 	if string(hdr[0:4]) != "SCRP" {
-		return true
+		return true, false
 	}
-	return crc32.Checksum(hdr[0:36], crcTable) != binary.LittleEndian.Uint32(hdr[36:40])
+	return crc32.Checksum(hdr[0:36], crcTable) != binary.LittleEndian.Uint32(hdr[36:40]), false
 }
 
 func verifyFrames(f io.ReadSeeker, idxEntries []IndexEntry) VerifyResult {

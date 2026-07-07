@@ -340,6 +340,16 @@ func (ds *Deep) waitIOBudget(ctx context.Context, blkPath string) error {
 func (ds *Deep) verifyOneBlock(blk block.Info) (bool, error) {
 	result, err := ds.cfg.BlockVerifier.VerifyBlock(blk.BlkPath, blk.IdxPath)
 	if errors.Is(err, block.ErrIdxCorrupt) {
+		// OpenIndexReader wraps transient .idx read faults in ErrIdxCorrupt
+		// too, so give the index the same bounded re-read the frames get
+		// before treating the failure as durable corruption (#470).
+		result, err = ds.cfg.BlockVerifier.VerifyBlock(blk.BlkPath, blk.IdxPath)
+		if err == nil {
+			ds.cfg.Metrics.RecordDegradedRead(1)
+			ds.cfg.Logger.Warn("scrub: Block index read back clean after transient read fault", "block_id", blk.BlockID)
+		}
+	}
+	if errors.Is(err, block.ErrIdxCorrupt) {
 		// A corrupt .idx is quarantine-eligible like corrupt .blk bytes (#470):
 		// repair replaces both files from a peer or the Backend. Aborting here
 		// wedged every deep-scrub run at this Block, so all higher-ID Blocks

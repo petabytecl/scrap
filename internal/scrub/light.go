@@ -166,12 +166,12 @@ func (ls *Light) applyQuorumVerdict(
 	peerHashes map[string][32]byte,
 	start time.Time,
 ) error {
-	majority, ok := majorityHash(leaderHash, peerHashes)
+	majority, ok := majorityHash(leaderHash, peerHashes, 1+len(ls.cfg.PeerAddrs))
 	if !ok {
-		ls.cfg.Logger.ErrorContext(ctx, "scrub: projection hash quorum tie; refusing to rebuild",
-			"scrub_id", scrubID, "voters", 1+len(peerHashes))
+		ls.cfg.Logger.ErrorContext(ctx, "scrub: no projection hash majority; refusing to rebuild",
+			"scrub_id", scrubID, "configured_voters", 1+len(ls.cfg.PeerAddrs), "compared_voters", 1+len(peerHashes))
 		ls.cfg.Metrics.RecordRun("quorum_tie", time.Since(start).Seconds())
-		return fmt.Errorf("scrub: projection hash quorum tie for scrub %s across %d voter(s)", scrubID, 1+len(peerHashes))
+		return fmt.Errorf("scrub: no projection hash majority for scrub %s across %d configured voter(s)", scrubID, 1+len(ls.cfg.PeerAddrs))
 	}
 
 	var divergent []string
@@ -214,16 +214,18 @@ func (ls *Light) requestSelfRebuild(ctx context.Context, scrubID string) {
 	}
 }
 
-// majorityHash returns the hash held by a strict majority of the comparable
-// voters (leader + peers with a published hash), or ok=false on a tie.
-func majorityHash(leaderHash [32]byte, peerHashes map[string][32]byte) ([32]byte, bool) {
+// majorityHash returns the hash held by a strict majority of the CONFIGURED
+// voters, or ok=false when no hash reaches one. Sizing the quorum by the
+// comparable subset instead would let two reachable peers outvote the leader
+// in a 5-voter Cell whose other two voters are temporarily unreachable —
+// unreachable voters are unknowns, not abstentions (review finding on #489).
+func majorityHash(leaderHash [32]byte, peerHashes map[string][32]byte, configuredVoters int) ([32]byte, bool) {
 	votes := map[[32]byte]int{leaderHash: 1}
 	for _, hash := range peerHashes {
 		votes[hash]++
 	}
-	total := 1 + len(peerHashes)
 	for hash, n := range votes {
-		if n > total/2 {
+		if n > configuredVoters/2 {
 			return hash, true
 		}
 	}
