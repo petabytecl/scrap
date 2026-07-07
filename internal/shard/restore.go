@@ -41,8 +41,12 @@ type blockRestoreCall struct {
 func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID uint64, reason string) error {
 	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
+		if servable := s.servableDespiteInvalidMarker(blockID, err); servable {
+			return nil
+		}
+		mapped := s.classifyReadErrorLocked(blockID, err)
 		s.mu.Unlock()
-		return fmt.Errorf("%w: classify Block %d for read: %w", storeapi.ErrDataLoss, blockID, err)
+		return mapped
 	}
 
 	switch lifecycle.State {
@@ -62,6 +66,44 @@ func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID 
 		s.mu.Unlock()
 		return fmt.Errorf("%w: Block %d unknown local state %s", storeapi.ErrDataLoss, blockID, lifecycle.State)
 	}
+}
+
+// servableDespiteInvalidMarker reports whether a Block whose lifecycle markers
+// fail to parse can still serve reads: the .blk bytes are present, and every
+// read re-verifies Frame CRC-32C and Document SHA-256, so a corrupt side file
+// must not fail reads of intact Documents (#467).
+func (s *Shard) servableDespiteInvalidMarker(blockID uint64, classifyErr error) bool {
+	if !errors.Is(classifyErr, localblock.ErrMarkerInvalid) {
+		return false
+	}
+	if _, err := os.Stat(s.blockPath(blockID)); err != nil {
+		return false
+	}
+	if s.logger != nil {
+		s.logger.Warn("serving Block despite invalid lifecycle marker",
+			"block_id", blockID, "error", classifyErr)
+	}
+	return true
+}
+
+// classifyReadErrorLocked maps a Classify failure on the read path. A marker
+// parse failure is only a per-Member side-file problem when a committed
+// ConfirmUpload proves the Block's bytes are durable in the Backend — then it
+// maps to retryable Unavailable (#467). Without that proof there is no known
+// durable copy, so the read stays ErrDataLoss, matching the valid-marker
+// evicted path. Callers must hold s.mu (for s.idx).
+func (s *Shard) classifyReadErrorLocked(blockID uint64, err error) error {
+	if !errors.Is(err, localblock.ErrMarkerInvalid) {
+		return fmt.Errorf("%w: classify Block %d for read: %w", storeapi.ErrDataLoss, blockID, err)
+	}
+	if _, confirmedErr := s.idx.GetConfirmedUpload(blockID); confirmedErr != nil {
+		return fmt.Errorf("%w: Block %d lifecycle marker invalid with no committed ConfirmUpload: %w",
+			storeapi.ErrDataLoss, blockID, err)
+	}
+	return fmt.Errorf("%w: %w", storeapi.NewUnavailable(
+		storeapi.UnavailableReasonLifecycleMarkerInvalid,
+		fmt.Sprintf("Block %d lifecycle marker invalid", blockID),
+	), err)
 }
 
 func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64, reason string) error {
@@ -299,7 +341,7 @@ func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput,
 	}
 	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
-		return restoreInput{}, fmt.Errorf("%w: classify Block %d for restore: %w", storeapi.ErrDataLoss, blockID, err)
+		return restoreInput{}, s.classifyReadErrorLocked(blockID, err)
 	}
 	if lifecycle.State != localblock.StateEvicted {
 		return restoreInput{lifecycle: lifecycle}, nil

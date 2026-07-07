@@ -679,6 +679,7 @@ func publicUnavailableReason(reason string) bool {
 	switch reason {
 	case storeapi.UnavailableReasonBackendRestoreUnavailable,
 		storeapi.UnavailableReasonCryptoUnavailable,
+		storeapi.UnavailableReasonLifecycleMarkerInvalid,
 		storeapi.UnavailableReasonProjectionRebuild,
 		storeapi.UnavailableReasonShardRouteUnavailable,
 		storeapi.UnavailableReasonShardRoutingPending,

@@ -207,36 +207,47 @@ func readMarkers(blocksDir string, blockID uint64, blkExists bool) (markers, err
 	}, nil
 }
 
-func CleanupHotMarkers(blocksDir string) error {
+// MarkerCleanupFailure reports one Block whose eviction marker could not be
+// classified or removed during CleanupHotMarkers. The marker is left in place.
+type MarkerCleanupFailure struct {
+	BlockID uint64
+	Err     error
+}
+
+func CleanupHotMarkers(blocksDir string) ([]MarkerCleanupFailure, error) {
 	entries, err := os.ReadDir(blocksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("localblock: read lifecycle markers: %w", err)
+		return nil, fmt.Errorf("localblock: read lifecycle markers: %w", err)
 	}
 
+	var failures []MarkerCleanupFailure
 	removed := false
 	for _, entry := range entries {
-		markerRemoved, err := cleanupHotMarker(blocksDir, entry.Name())
+		blockID, ok := parseEvictionMarkerBlockID(entry.Name())
+		if !ok {
+			continue
+		}
+		markerRemoved, err := cleanupHotMarker(blocksDir, blockID)
 		if err != nil {
-			return err
+			// One unreadable marker must not abort the sweep for every other
+			// Block (#467): leave it in place for the operator and continue.
+			failures = append(failures, MarkerCleanupFailure{BlockID: blockID, Err: err})
+			continue
 		}
 		removed = removed || markerRemoved
 	}
 	if removed {
 		if err := SyncDirectory(blocksDir); err != nil {
-			return fmt.Errorf("localblock: sync marker cleanup: %w", err)
+			return failures, fmt.Errorf("localblock: sync marker cleanup: %w", err)
 		}
 	}
-	return nil
+	return failures, nil
 }
 
-func cleanupHotMarker(blocksDir, name string) (bool, error) {
-	blockID, ok := parseEvictionMarkerBlockID(name)
-	if !ok {
-		return false, nil
-	}
+func cleanupHotMarker(blocksDir string, blockID uint64) (bool, error) {
 	lifecycle, err := Classify(blocksDir, blockID)
 	if err != nil {
 		return false, err

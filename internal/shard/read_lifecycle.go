@@ -25,7 +25,10 @@ func (s *Shard) ensureMetadataReadsAllowed(docs []index.ResolvedDocument) error 
 func (s *Shard) ensureMetadataReadAllowed(blockID uint64) error {
 	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
-		return fmt.Errorf("%w: classify Block %d for metadata read: %w", storeapi.ErrDataLoss, blockID, err)
+		if s.servableDespiteInvalidMarker(blockID, err) {
+			return nil
+		}
+		return s.classifyReadErrorLocked(blockID, err)
 	}
 
 	switch lifecycle.State {

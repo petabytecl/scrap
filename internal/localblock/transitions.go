@@ -78,14 +78,23 @@ func UnlinkBlockData(blocksDir string, blockID uint64) (bool, error) {
 }
 
 func PublishRestoredBlock(blocksDir string, blockID uint64, tmpPath string, marker RestoreMarker) (bool, error) {
+	// Write the restore marker BEFORE renaming the .blk into place. Classify
+	// keeps the Block Evicted while the .blk is absent, so a crash (or marker
+	// write failure) here leaves a retryable Evicted Block. The reverse order
+	// can strand a Hot Block with no restore marker, which silently disables
+	// the restored-block hot-residency guard and rescan eligibility (#467).
+	marker.BlockID = blockID
+	if err := WriteRestoreMarker(blocksDir, marker); err != nil {
+		return false, err
+	}
 	if err := os.Rename(tmpPath, block.FilePath(blocksDir, blockID)); err != nil {
 		return false, fmt.Errorf("publish restored Block %d: %w", blockID, err)
 	}
 	if err := SyncDirectory(blocksDir); err != nil {
 		return true, fmt.Errorf("sync restored Block %d: %w", blockID, err)
 	}
-	if err := RecordSuccessfulRestore(blocksDir, blockID, marker); err != nil {
-		return true, err
+	if err := RemoveEvictionMarker(blocksDir, blockID); err != nil {
+		return true, fmt.Errorf("remove eviction marker after restore: %w", err)
 	}
 	return true, nil
 }

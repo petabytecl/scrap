@@ -82,12 +82,25 @@ func (s *Shard) evictionCandidatesLocked() ([]eviction.PlanCandidate, error) {
 		}
 		candidate, eligible, err := s.evictionCandidateLocked(upload)
 		if err != nil {
-			return nil, err
+			s.skipUnclassifiableEvictionCandidate(upload.BlockID, err)
+			continue
 		}
 		if eligible {
 			candidates = append(candidates, candidate)
 		}
 	}
+}
+
+// skipUnclassifiableEvictionCandidate handles one Block that cannot be
+// classified during plan creation (#467). Skipping it must not fail the whole
+// plan: not evicting never loses a durable copy, so log, degrade health, and
+// keep planning the healthy Blocks.
+func (s *Shard) skipUnclassifiableEvictionCandidate(blockID uint64, err error) {
+	if s.logger != nil {
+		s.logger.Warn("eviction plan skipped unclassifiable Block",
+			"block_id", blockID, "error", err)
+	}
+	s.recordEvictionHealthBlockBestEffort(blockID)
 }
 
 func (s *Shard) evictionCandidateLocked(upload index.ConfirmedUpload) (eviction.PlanCandidate, bool, error) {
