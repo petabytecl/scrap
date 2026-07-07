@@ -324,13 +324,25 @@ func classifyS3Error(op string, err error) error {
 		return nil
 	}
 
+	var responseErr *smithyhttp.ResponseError
+	isResponse := errors.As(err, &responseErr)
+
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
-		return wrapS3Error(op, classForS3Code(apiErr.ErrorCode()), err)
+		if ok, class := classForKnownS3Code(apiErr.ErrorCode()); ok {
+			return wrapS3Error(op, class, err)
+		}
+		// Unrecognized code: prefer the HTTP status when the error carries one (an
+		// unmapped 4xx must stay permanent, an unmapped 5xx transient) so a
+		// client/config error is not masked as transient; otherwise fall back to
+		// the fault classification.
+		if isResponse {
+			return wrapS3Error(op, classForS3Status(responseErr.HTTPStatusCode()), err)
+		}
+		return wrapS3Error(op, classForUnknownS3Code(apiErr.ErrorFault()), err)
 	}
 
-	var responseErr *smithyhttp.ResponseError
-	if errors.As(err, &responseErr) {
+	if isResponse {
 		return wrapS3Error(op, classForS3Status(responseErr.HTTPStatusCode()), err)
 	}
 
@@ -344,25 +356,41 @@ func classifyS3Error(op string, err error) error {
 	return wrapS3Error(op, ErrPermanent, err)
 }
 
-func classForS3Code(code string) error {
+// classForKnownS3Code maps a recognized S3 error code to a class, returning
+// ok=false for an unrecognized code so the caller can consult the HTTP status
+// or fault instead of forcing a default.
+func classForKnownS3Code(code string) (bool, error) {
 	switch code {
 	case "SlowDown", "ServiceUnavailable":
-		return ErrThrottled
+		return true, ErrThrottled
 	case "InternalError", "RequestTimeout", "RequestTimeoutException":
-		return ErrTransient
+		return true, ErrTransient
 	case "AccessDenied", "ExpiredToken", "InvalidAccessKeyId", "InvalidToken", "SignatureDoesNotMatch":
-		return ErrAuth
+		return true, ErrAuth
 	case "NoSuchKey", "NoSuchBucket", "NotFound":
-		return ErrNotFound
+		return true, ErrNotFound
 	case "ConditionalRequestConflict", "OperationAborted":
-		return ErrConflict
+		return true, ErrConflict
 	case "BadDigest", "ChecksumMismatch", "InvalidDigest":
-		return ErrCorrupt
+		return true, ErrCorrupt
 	case "BucketNotFound", "InvalidBucketName":
-		return ErrPermanent
+		return true, ErrPermanent
 	default:
+		return false, nil
+	}
+}
+
+// classForUnknownS3Code classifies an unrecognized S3 error code by its fault.
+// It must not blindly default to permanent (the restore path maps permanent to
+// data-loss with no retry) nor blindly to transient (a genuine client/config
+// error would burn retries and mask a permanent failure): server faults are
+// transient, client faults permanent, unknown fault transient (safer for
+// restore; the retry budget bounds it).
+func classForUnknownS3Code(fault smithy.ErrorFault) error {
+	if fault == smithy.FaultClient {
 		return ErrPermanent
 	}
+	return ErrTransient
 }
 
 func classForS3Status(status int) error {
@@ -381,6 +409,12 @@ func classForS3Status(status int) error {
 	case http.StatusConflict, http.StatusPreconditionFailed:
 		return ErrConflict
 	default:
+		// Unmapped 5xx is a server-side/transient condition; only unmapped 4xx
+		// client errors are permanent. Avoids reporting an intact Block's restore
+		// as data loss on an unrecognized transient status.
+		if status >= http.StatusInternalServerError {
+			return ErrTransient
+		}
 		return ErrPermanent
 	}
 }

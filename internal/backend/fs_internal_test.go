@@ -35,7 +35,7 @@ func TestFSHelpersClassifyFailures(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "object")
 
-	if _, err := writeTempObject(path, failingReader{}, 1); !errors.Is(err, ErrPermanent) {
+	if _, err := writeTempObject(path, root, failingReader{}, 1); !errors.Is(err, ErrPermanent) {
 		t.Fatalf("writeTempObject failing reader error = %v, want ErrPermanent", err)
 	}
 	if err := commitTempObject(filepath.Join(root, "missing-temp"), path); !errors.Is(err, ErrNotFound) {
@@ -43,6 +43,64 @@ func TestFSHelpersClassifyFailures(t *testing.T) {
 	}
 	if err := syncDirectory(filepath.Join(root, "missing-dir")); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("syncDirectory missing dir error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestMkdirAllSyncedCreatesAndPersistsDeepPrefix(t *testing.T) {
+	root := t.TempDir()
+	// A brand-new multi-level key prefix, as PutObject would create for the
+	// first object under it.
+	dir := filepath.Join(root, "cell", "shards", "7")
+
+	if err := mkdirAllSynced(dir, root); err != nil {
+		t.Fatalf("mkdirAllSynced: %v", err)
+	}
+
+	for _, d := range []string{
+		filepath.Join(root, "cell"),
+		filepath.Join(root, "cell", "shards"),
+		dir,
+	} {
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Fatalf("stat %s: %v", d, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s is not a directory", d)
+		}
+	}
+
+	// Idempotent on an existing chain (still fsyncs the ancestors, doesn't error).
+	if err := mkdirAllSynced(dir, root); err != nil {
+		t.Fatalf("mkdirAllSynced (existing): %v", err)
+	}
+}
+
+func TestMkdirAllSyncedSyncsExistingChainConcurrentCreator(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "cell", "shards", "9")
+
+	// Simulate a concurrent creator that ran MkdirAll but has not fsynced yet:
+	// the chain already exists when this call runs. mkdirAllSynced must still
+	// fsync the ancestors (up to root) rather than early-returning, so the
+	// object it is about to write can be acked durably.
+	if err := os.MkdirAll(dir, directoryMode); err != nil {
+		t.Fatalf("pre-create chain: %v", err)
+	}
+	if err := mkdirAllSynced(dir, root); err != nil {
+		t.Fatalf("mkdirAllSynced on existing chain: %v", err)
+	}
+}
+
+func TestClassForS3StatusUnknownServerErrorIsTransient(t *testing.T) {
+	// 507 Insufficient Storage is unmapped; an unknown 5xx must be transient so
+	// restore retries instead of reporting data loss on an intact Block.
+	if got := classForS3Status(507); !errors.Is(got, ErrTransient) {
+		t.Fatalf("classForS3Status(507) = %v, want ErrTransient", got)
+	}
+	// An unmapped 4xx stays permanent.
+	if got := classForS3Status(418); !errors.Is(got, ErrPermanent) {
+		t.Fatalf("classForS3Status(418) = %v, want ErrPermanent", got)
 	}
 }
 
