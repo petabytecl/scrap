@@ -885,6 +885,25 @@ func TestTriggerRebuildReportsInProgressDuringEvictionApply(t *testing.T) {
 	}
 }
 
+func TestApplyEvictionBlockSkipsWhenPlanExpiresBeforeUnlink(t *testing.T) {
+	s := shardForEvictionApplyTest(t, true)
+	s.raft = &evictionApplyRaftStub{leader: false}
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	plan := storeEvictionApplyPlan(t, s)
+	// Simulate the plan expiring during apply (BeginApply's own check is bypassed
+	// by calling the per-Block path directly): the destructive unlink must not run.
+	plan.ExpiresAtUs = time.Now().Add(-time.Second).UnixMicro()
+
+	result := s.applyEvictionBlock(plan, plan.Selected[0])
+
+	if result.Status != eviction.ApplyBlockStatusSkipped || result.Reason != eviction.SkipReasonPlanExpired {
+		t.Fatalf("result = %+v, want skipped %q", result, eviction.SkipReasonPlanExpired)
+	}
+	if _, err := os.Stat(s.blockPath(1)); err != nil {
+		t.Fatalf("Block file must remain after expiry skip: %v", err)
+	}
+}
+
 func TestApplyEvictionPlanRejectsExpiredCachedResult(t *testing.T) {
 	ctx := context.Background()
 	s := shardForEvictionApplyTest(t, true)

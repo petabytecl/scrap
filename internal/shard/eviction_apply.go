@@ -195,8 +195,8 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 	if err != nil {
 		return eviction.FailedBlock(selected, err)
 	}
-	if s.leaderHotCopyRequired() {
-		return eviction.SkippedBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+	if blocked := evictionApplyDestructiveGuard(plan, selected, s.leaderHotCopyRequired()); blocked.Status != "" {
+		return blocked
 	}
 	if err := s.prepareEvictionMarkerForApply(plan, lifecycle, confirmed); err != nil {
 		return eviction.FailedBlock(selected, err)
@@ -219,6 +219,21 @@ func (s *Shard) applyEvictionBlockLocked(plan eviction.Plan, selected eviction.P
 		Status:     eviction.ApplyBlockStatusEvicted,
 		BytesFreed: confirmed.BlockObject.SizeBytes,
 	}
+}
+
+// evictionApplyDestructiveGuard returns a terminal ApplyBlock (non-empty
+// Status) when the Block must not be unlinked: the leader must keep its hot
+// copy, or the plan expired. Re-checking expiry here bounds the destructive
+// path — the context deadline only gates the loop between Blocks, but the
+// per-Block classify/fence/marker work can span the expiry.
+func evictionApplyDestructiveGuard(plan eviction.Plan, selected eviction.PlanBlock, leaderHotCopyRequired bool) eviction.ApplyBlock {
+	if leaderHotCopyRequired {
+		return eviction.SkippedBlock(selected, eviction.SkipReasonLeaderHotCopyRequired)
+	}
+	if plan.ExpiresAtUs > 0 && time.Now().UTC().UnixMicro() >= plan.ExpiresAtUs {
+		return eviction.SkippedBlock(selected, eviction.SkipReasonPlanExpired)
+	}
+	return eviction.ApplyBlock{}
 }
 
 func (s *Shard) confirmedEvictionApplyAuthorityLocked(selected eviction.PlanBlock) (index.ConfirmedUpload, error) {
