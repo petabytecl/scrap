@@ -247,3 +247,34 @@ func campaignPlanForTest(planID string) Plan {
 func campaignMemberForTest() Member {
 	return Member{Hostname: "scrapd-2", ID: "member-b"}
 }
+
+// #471: pruneExpired was at 25% coverage. Storing a new plan reclaims
+// expired plans and their cached apply results so campaign state is bounded.
+func TestCampaignsStorePlanPrunesExpiredPlansAndResults(t *testing.T) {
+	campaigns := NewCampaigns()
+	expired := campaignPlanForTest("plan-expired")
+	campaigns.StorePlan(expired)
+	start, err := campaigns.BeginApply(expired.PlanID, campaignMemberForTest(), time.UnixMicro(expired.GeneratedAtUs))
+	if err != nil {
+		t.Fatalf("BeginApply: %v", err)
+	}
+	if start.Cached {
+		t.Fatal("BeginApply returned cached result for fresh plan")
+	}
+	campaigns.FinishApply(expired.PlanID, ApplyResult{PlanID: expired.PlanID, Status: ApplyStatusCompleted}, true)
+
+	fresh := campaignPlanForTest("plan-fresh")
+	fresh.GeneratedAtUs = expired.ExpiresAtUs + 1
+	fresh.ExpiresAtUs = expired.ExpiresAtUs + time.Hour.Microseconds()
+	campaigns.StorePlan(fresh)
+
+	if _, ok := campaigns.Plan(expired.PlanID); ok {
+		t.Fatal("expired plan survived StorePlan prune")
+	}
+	if _, ok := campaigns.ApplyResult(expired.PlanID); ok {
+		t.Fatal("expired plan's cached apply result survived StorePlan prune")
+	}
+	if _, ok := campaigns.Plan(fresh.PlanID); !ok {
+		t.Fatal("fresh plan missing after prune")
+	}
+}
