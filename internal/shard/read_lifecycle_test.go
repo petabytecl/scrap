@@ -58,6 +58,82 @@ func TestMetadataReadsFailClosedForUnexpectedBlockLoss(t *testing.T) {
 	}
 }
 
+// Regression for #467: a corrupt lifecycle marker on a Block whose .blk bytes
+// are present and verifiable must not fail reads — the read path re-verifies
+// Frame CRC-32C and Document SHA-256, so the side file carries no authority.
+func TestReadServesHotBlockDespiteCorruptLifecycleMarker(t *testing.T) {
+	ctx := context.Background()
+	s := openUploadTestShard(t, shard.UploadConfig{})
+
+	content := bytes.Repeat([]byte("intact bytes "), 4)
+	if _, err := s.WriteDocument(ctx, "tx-marker", "doc.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := os.WriteFile(shard.EvictionMarkerPath(blocksDir, 1), []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt marker: %v", err)
+	}
+
+	if _, err := s.HeadDocument(ctx, "tx-marker", "doc.bin"); err != nil {
+		t.Fatalf("HeadDocument with corrupt marker: %v", err)
+	}
+	rc, _, err := s.ReadDocument(ctx, "tx-marker", "doc.bin")
+	if err != nil {
+		t.Fatalf("ReadDocument with corrupt marker: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("content = %q, want %q", got, content)
+	}
+}
+
+// Regression for #467: a corrupt eviction marker on an evicted Block must
+// surface as retryable Unavailable, not ErrDataLoss — the Document bytes are
+// intact in the Backend; only a per-Member side file is unreadable.
+func TestReadEvictedBlockWithCorruptMarkerIsUnavailableNotDataLoss(t *testing.T) {
+	ctx := context.Background()
+	fsBackend := backend.NewFS(t.TempDir())
+	s := openUploadTestShard(t, shard.UploadConfig{
+		Enabled:     true,
+		Backend:     fsBackend,
+		CellID:      testCellID,
+		Concurrency: 1,
+	})
+
+	content := bytes.Repeat([]byte("cold bytes "), 4)
+	stageEvictedConfirmedBlock(ctx, t, s, fsBackend, content)
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := os.WriteFile(shard.EvictionMarkerPath(blocksDir, 1), []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt marker: %v", err)
+	}
+
+	_, _, err := s.ReadDocument(ctx, "tx-restore", "doc-1.bin")
+	if errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("ReadDocument = %v, must not be ErrDataLoss for a side-file parse failure", err)
+	}
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("ReadDocument = %v, want ErrUnavailable", err)
+	}
+	if reason, ok := storeapi.UnavailableReason(err); !ok || reason != storeapi.UnavailableReasonLifecycleMarkerInvalid {
+		t.Fatalf("unavailable reason = %q (ok=%t), want %q", reason, ok, storeapi.UnavailableReasonLifecycleMarkerInvalid)
+	}
+
+	// Metadata reads take the same stance: side-file parse failure is not loss.
+	_, err = s.HeadDocument(ctx, "tx-restore", "doc-1.bin")
+	if errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("HeadDocument = %v, must not be ErrDataLoss for a side-file parse failure", err)
+	}
+	if !errors.Is(err, storeapi.ErrUnavailable) {
+		t.Fatalf("HeadDocument = %v, want ErrUnavailable", err)
+	}
+}
+
 func TestMetadataReadsStayLocalForEvictedBlock(t *testing.T) {
 	ctx := context.Background()
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))

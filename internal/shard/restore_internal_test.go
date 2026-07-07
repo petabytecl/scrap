@@ -43,13 +43,49 @@ func TestPublishVerifiedRestoreSerializesLifecycleMutation(t *testing.T) {
 	assertRestorePublishedForMutationTest(t, s, blockID)
 }
 
-func TestPublishVerifiedRestoreRecordsHealthAfterPartialPublish(t *testing.T) {
+// Regression for #467: PublishRestoredBlock writes the restore marker before
+// the .blk rename, so a marker write failure (here: empty restore reason)
+// must leave the Block Evicted and retryable — never a published .blk without
+// its restore marker, and no hot_cleanup_needed health debt.
+func TestPublishVerifiedRestoreMarkerFailureLeavesBlockEvicted(t *testing.T) {
 	const blockID uint64 = 1
 
 	s := &Shard{
 		blocksDir:            t.TempDir(),
 		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
 	}
+	tmpPath := stageEvictedBlockForRestorePublish(t, s, blockID)
+
+	published, err := s.publishVerifiedRestore(restoreInput{
+		confirmed: index.ConfirmedUpload{BlockID: blockID},
+		blockPath: block.FilePath(s.blocksDir, blockID),
+		indexPath: block.IdxFilePath(s.blocksDir, blockID),
+	}, tmpPath, "")
+	if published || err == nil {
+		t.Fatalf("publishVerifiedRestore published=%v err=%v, want unpublished marker error", published, err)
+	}
+	if _, statErr := os.Stat(block.FilePath(s.blocksDir, blockID)); !os.IsNotExist(statErr) {
+		t.Fatalf(".blk stat = %v, want not exist (Block must stay Evicted)", statErr)
+	}
+	lifecycle, classifyErr := ClassifyLocalBlock(s.blocksDir, blockID)
+	if classifyErr != nil {
+		t.Fatalf("ClassifyLocalBlock: %v", classifyErr)
+	}
+	if lifecycle.State != LocalBlockStateEvicted {
+		t.Fatalf("State = %s, want %s (retryable)", lifecycle.State, LocalBlockStateEvicted)
+	}
+
+	got, err := s.EvictionHealthSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("EvictionHealthSnapshot: %v", err)
+	}
+	if got.HotCleanupNeededBlocks != 0 {
+		t.Fatalf("hot cleanup needed = %d, want 0 (nothing was published)", got.HotCleanupNeededBlocks)
+	}
+}
+
+func stageEvictedBlockForRestorePublish(t *testing.T, s *Shard, blockID uint64) string {
+	t.Helper()
 	tmpPath := filepath.Join(s.blocksDir, "restore.tmp")
 	if err := os.WriteFile(tmpPath, []byte("restored"), 0o600); err != nil {
 		t.Fatalf("write restore tmp: %v", err)
@@ -68,23 +104,7 @@ func TestPublishVerifiedRestoreRecordsHealthAfterPartialPublish(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteEvictionMarker: %v", err)
 	}
-
-	published, err := s.publishVerifiedRestore(restoreInput{
-		confirmed: index.ConfirmedUpload{BlockID: blockID},
-		blockPath: block.FilePath(s.blocksDir, blockID),
-		indexPath: block.IdxFilePath(s.blocksDir, blockID),
-	}, tmpPath, "")
-	if !published || err == nil {
-		t.Fatalf("publishVerifiedRestore published=%v err=%v, want published marker error", published, err)
-	}
-
-	got, err := s.EvictionHealthSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("EvictionHealthSnapshot: %v", err)
-	}
-	if got.HotCleanupNeededBlocks != 1 {
-		t.Fatalf("hot cleanup needed = %d, want 1", got.HotCleanupNeededBlocks)
-	}
+	return tmpPath
 }
 
 func TestRequireQuarantinedRepairFilesFailsClosed(t *testing.T) {

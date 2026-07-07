@@ -1584,15 +1584,21 @@ func TestEvictionMarkerBeforeUnlinkCrashClassifiesHotCleanupNeeded(t *testing.T)
 		t.Fatalf("lifecycle = %+v, want hot_cleanup_needed serving allowed degraded", lifecycle)
 	}
 
-	if err := CleanupHotLifecycleMarkers(s.blocksDir); err != nil {
-		t.Fatalf("CleanupHotLifecycleMarkers: %v", err)
-	}
+	mustCleanupHotLifecycleMarkers(t, s.blocksDir)
 	lifecycle, err = ClassifyLocalBlock(s.blocksDir, 1)
 	if err != nil {
 		t.Fatalf("ClassifyLocalBlock after cleanup: %v", err)
 	}
 	if lifecycle.State != LocalBlockStateHot {
 		t.Fatalf("lifecycle after cleanup = %+v, want hot", lifecycle)
+	}
+}
+
+func mustCleanupHotLifecycleMarkers(t *testing.T, blocksDir string) {
+	t.Helper()
+	failures, err := CleanupHotLifecycleMarkers(blocksDir)
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("CleanupHotLifecycleMarkers = (%v, %v), want no failures", failures, err)
 	}
 }
 

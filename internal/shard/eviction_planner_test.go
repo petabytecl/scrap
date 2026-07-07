@@ -27,6 +27,28 @@ func TestShardCreateEvictionPlanStoresTokenAndSkipsLeaderBlocks(t *testing.T) {
 	assertEvictionPlanStored(t, s, plan)
 }
 
+// Regression for #467: a Block whose lifecycle marker cannot be parsed must
+// not fail plan creation. The Block is excluded from candidacy; the plan
+// itself succeeds.
+func TestShardCreateEvictionPlanSkipsBlockWithCorruptMarker(t *testing.T) {
+	s := openEvictionPlanTestShard(t)
+
+	writeConfirmedUploadForEvictionPlan(t, s)
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	writeLifecycleFile(t, shard.EvictionMarkerPath(blocksDir, 1), "{ not valid json")
+
+	plan := createLeaderEvictionPlan(t, s)
+	if len(plan.Selected) != 0 {
+		t.Fatalf("selected = %+v, want none", plan.Selected)
+	}
+	for _, skipped := range plan.Skipped {
+		if skipped.BlockID == 1 {
+			t.Fatalf("Block 1 in skip evidence %+v, want excluded from candidacy", plan.Skipped)
+		}
+	}
+}
+
 func writeConfirmedUploadForEvictionPlan(t *testing.T, s *shard.Shard) {
 	t.Helper()
 

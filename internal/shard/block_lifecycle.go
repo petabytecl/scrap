@@ -31,9 +31,10 @@ const (
 )
 
 type (
-	LocalBlockLifecycle = localblock.Lifecycle
-	EvictionMarker      = localblock.EvictionMarker
-	RestoreMarker       = localblock.RestoreMarker
+	LocalBlockLifecycle  = localblock.Lifecycle
+	EvictionMarker       = localblock.EvictionMarker
+	RestoreMarker        = localblock.RestoreMarker
+	MarkerCleanupFailure = localblock.MarkerCleanupFailure
 )
 
 func EvictionMarkerPath(blocksDir string, blockID uint64) string {
@@ -64,7 +65,7 @@ func ClassifyLocalBlock(blocksDir string, blockID uint64) (LocalBlockLifecycle, 
 	return localblock.Classify(blocksDir, blockID)
 }
 
-func CleanupHotLifecycleMarkers(blocksDir string) error {
+func CleanupHotLifecycleMarkers(blocksDir string) ([]MarkerCleanupFailure, error) {
 	return localblock.CleanupHotMarkers(blocksDir)
 }
 
@@ -75,12 +76,20 @@ func (s *Shard) startLifecycleCleanup() {
 		defer close(done)
 		s.lifecycleMutationMu.Lock()
 		defer s.lifecycleMutationMu.Unlock()
-		if err := localblock.CleanupHotMarkers(s.blocksDir); err != nil {
+		failures, err := localblock.CleanupHotMarkers(s.blocksDir)
+		if err != nil {
 			s.logger.Warn("lifecycle cleanup failed", "error", err)
 			return
 		}
 		if err := s.rebuildEvictionHealthSnapshot(context.Background()); err != nil {
 			s.logger.Warn("rebuild eviction health after lifecycle cleanup failed", "error", err)
+		}
+		// Recorded after the snapshot rebuild so a skipped Block without a
+		// confirmed upload (invisible to the rebuild) still degrades health.
+		for _, failure := range failures {
+			s.logger.Warn("lifecycle cleanup skipped Block with unreadable marker",
+				"block_id", failure.BlockID, "error", failure.Err)
+			s.recordEvictionHealthBlockBestEffort(failure.BlockID)
 		}
 	}()
 }

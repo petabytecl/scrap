@@ -22,8 +22,8 @@ func TestCleanupHotMarkersResolvesHotCleanupNeededBlock(t *testing.T) {
 	writeLifecycleFile(t, block.IdxFilePath(dir, 1), "index")
 	writeEvictionMarker(t, dir)
 
-	if err := localblock.CleanupHotMarkers(dir); err != nil {
-		t.Fatalf("CleanupHotMarkers: %v", err)
+	if failures, err := localblock.CleanupHotMarkers(dir); err != nil || len(failures) != 0 {
+		t.Fatalf("CleanupHotMarkers = (%v, %v), want no failures", failures, err)
 	}
 
 	// The eviction marker is removed and the block classifies Hot again.
@@ -46,8 +46,8 @@ func TestCleanupHotMarkersLeavesEvictedBlockMarker(t *testing.T) {
 	writeLifecycleFile(t, block.IdxFilePath(dir, 1), "index")
 	writeEvictionMarker(t, dir)
 
-	if err := localblock.CleanupHotMarkers(dir); err != nil {
-		t.Fatalf("CleanupHotMarkers: %v", err)
+	if failures, err := localblock.CleanupHotMarkers(dir); err != nil || len(failures) != 0 {
+		t.Fatalf("CleanupHotMarkers = (%v, %v), want no failures", failures, err)
 	}
 
 	if _, err := os.Stat(localblock.EvictionMarkerPath(dir, 1)); err != nil {
@@ -60,26 +60,97 @@ func TestCleanupHotMarkersIgnoresNonMarkerFilesAndMissingDir(t *testing.T) {
 	writeLifecycleFile(t, block.FilePath(dir, 1), "block")
 	writeLifecycleFile(t, filepath.Join(dir, "unrelated.txt"), "x")
 
-	if err := localblock.CleanupHotMarkers(dir); err != nil {
-		t.Fatalf("CleanupHotMarkers with non-marker files: %v", err)
+	if failures, err := localblock.CleanupHotMarkers(dir); err != nil || len(failures) != 0 {
+		t.Fatalf("CleanupHotMarkers with non-marker files = (%v, %v), want no failures", failures, err)
 	}
-	if err := localblock.CleanupHotMarkers(filepath.Join(dir, "does-not-exist")); err != nil {
-		t.Fatalf("CleanupHotMarkers on missing dir should be nil: %v", err)
+	if failures, err := localblock.CleanupHotMarkers(filepath.Join(dir, "does-not-exist")); err != nil || len(failures) != 0 {
+		t.Fatalf("CleanupHotMarkers on missing dir = (%v, %v), want no failures", failures, err)
 	}
 }
 
-// A corrupt eviction marker makes Classify fail, and CleanupHotMarkers aborts
-// the whole sweep on it. This pins the current (fail-the-sweep) behavior that
-// issue #467 tracks changing to skip-and-degrade; if that changes, update this
-// expectation deliberately.
-func TestCleanupHotMarkersAbortsOnCorruptMarker(t *testing.T) {
+// A corrupt eviction marker must not abort the sweep (#467): the failing
+// Block is skipped (marker left in place, reported to the caller) and every
+// other Block's stale marker is still cleaned up.
+func TestCleanupHotMarkersSkipsCorruptMarkerAndContinues(t *testing.T) {
 	dir := t.TempDir()
 	writeLifecycleFile(t, block.FilePath(dir, 1), "block")
 	writeLifecycleFile(t, block.IdxFilePath(dir, 1), "index")
 	writeLifecycleFile(t, localblock.EvictionMarkerPath(dir, 1), "{ not valid json")
+	writeLifecycleFile(t, block.FilePath(dir, 2), "block")
+	writeLifecycleFile(t, block.IdxFilePath(dir, 2), "index")
+	if err := localblock.WriteEvictionMarker(dir, evictionMarkerForTest(2)); err != nil {
+		t.Fatalf("WriteEvictionMarker: %v", err)
+	}
 
-	if err := localblock.CleanupHotMarkers(dir); err == nil {
-		t.Fatal("CleanupHotMarkers with a corrupt marker succeeded, want error (current fail-the-sweep behavior, #467)")
+	failures, err := localblock.CleanupHotMarkers(dir)
+	if err != nil {
+		t.Fatalf("CleanupHotMarkers: %v", err)
+	}
+	if len(failures) != 1 || failures[0].BlockID != 1 || failures[0].Err == nil {
+		t.Fatalf("failures = %+v, want one failure for Block 1", failures)
+	}
+	// The corrupt marker is left in place as operator evidence.
+	if _, err := os.Stat(localblock.EvictionMarkerPath(dir, 1)); err != nil {
+		t.Fatalf("corrupt marker must survive the sweep: %v", err)
+	}
+	// The healthy Block's stale marker is still cleaned up.
+	if _, err := os.Stat(localblock.EvictionMarkerPath(dir, 2)); !os.IsNotExist(err) {
+		t.Fatalf("healthy Block marker still present (stat err=%v), want removed", err)
+	}
+}
+
+// Regression for #467: PublishRestoredBlock writes the restore marker before
+// publishing the .blk. A marker write failure must leave the Block Evicted
+// (retryable) — not a Hot Block with no restore marker, which would disable
+// the hot-residency guard and rescan eligibility.
+func TestPublishRestoredBlockMarkerFailureKeepsBlockEvicted(t *testing.T) {
+	dir := t.TempDir()
+	writeLifecycleFile(t, block.IdxFilePath(dir, 1), "index")
+	writeEvictionMarker(t, dir)
+	tmp := filepath.Join(dir, ".0000000000000001.blk.restore-test")
+	writeLifecycleFile(t, tmp, "restored")
+
+	badMarker := restoreMarkerForTest(1)
+	badMarker.Source = "" // fails restore marker validation
+	published, err := localblock.PublishRestoredBlock(dir, 1, tmp, badMarker)
+	if err == nil {
+		t.Fatal("PublishRestoredBlock with an invalid restore marker succeeded, want error")
+	}
+	if published {
+		t.Fatal("PublishRestoredBlock published = true after marker failure, want false (retryable)")
+	}
+	if _, err := os.Stat(block.FilePath(dir, 1)); !os.IsNotExist(err) {
+		t.Fatalf(".blk published despite marker failure (stat err=%v), want absent", err)
+	}
+	lifecycle, err := localblock.Classify(dir, 1)
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if lifecycle.State != localblock.StateEvicted {
+		t.Fatalf("State after marker failure = %s, want %s (retryable)", lifecycle.State, localblock.StateEvicted)
+	}
+}
+
+// Pins the crash window the #467 reorder depends on: a restore marker written
+// while the .blk is still absent must keep the Block Evicted (restore is
+// retried), not flip it to another state.
+func TestClassifyKeepsEvictedStateWithEarlyRestoreMarker(t *testing.T) {
+	dir := t.TempDir()
+	writeLifecycleFile(t, block.IdxFilePath(dir, 1), "index")
+	writeEvictionMarker(t, dir)
+	if err := localblock.WriteRestoreMarker(dir, restoreMarkerForTest(1)); err != nil {
+		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+
+	lifecycle, err := localblock.Classify(dir, 1)
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if lifecycle.State != localblock.StateEvicted {
+		t.Fatalf("State = %s, want %s", lifecycle.State, localblock.StateEvicted)
+	}
+	if lifecycle.EvictionMarker == nil {
+		t.Fatal("EvictionMarker = nil, want present (restore authority cross-check needs it)")
 	}
 }
 

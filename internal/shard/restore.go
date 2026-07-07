@@ -41,8 +41,11 @@ type blockRestoreCall struct {
 func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID uint64, reason string) error {
 	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
+		if servable := s.servableDespiteInvalidMarker(blockID, err); servable {
+			return nil
+		}
 		s.mu.Unlock()
-		return fmt.Errorf("%w: classify Block %d for read: %w", storeapi.ErrDataLoss, blockID, err)
+		return classifyReadError(blockID, err)
 	}
 
 	switch lifecycle.State {
@@ -62,6 +65,37 @@ func (s *Shard) ensureReadableBlockLockedForReason(ctx context.Context, blockID 
 		s.mu.Unlock()
 		return fmt.Errorf("%w: Block %d unknown local state %s", storeapi.ErrDataLoss, blockID, lifecycle.State)
 	}
+}
+
+// servableDespiteInvalidMarker reports whether a Block whose lifecycle markers
+// fail to parse can still serve reads: the .blk bytes are present, and every
+// read re-verifies Frame CRC-32C and Document SHA-256, so a corrupt side file
+// must not fail reads of intact Documents (#467).
+func (s *Shard) servableDespiteInvalidMarker(blockID uint64, classifyErr error) bool {
+	if !errors.Is(classifyErr, localblock.ErrMarkerInvalid) {
+		return false
+	}
+	if _, err := os.Stat(s.blockPath(blockID)); err != nil {
+		return false
+	}
+	if s.logger != nil {
+		s.logger.Warn("serving Block despite invalid lifecycle marker",
+			"block_id", blockID, "error", classifyErr)
+	}
+	return true
+}
+
+// classifyReadError maps a Classify failure on the read path. A marker parse
+// failure is a per-Member side-file problem — the Document bytes are intact in
+// the Backend — so it maps to Unavailable, never to ErrDataLoss (#467).
+func classifyReadError(blockID uint64, err error) error {
+	if errors.Is(err, localblock.ErrMarkerInvalid) {
+		return fmt.Errorf("%w: %w", storeapi.NewUnavailable(
+			storeapi.UnavailableReasonLifecycleMarkerInvalid,
+			fmt.Sprintf("Block %d lifecycle marker invalid", blockID),
+		), err)
+	}
+	return fmt.Errorf("%w: classify Block %d for read: %w", storeapi.ErrDataLoss, blockID, err)
 }
 
 func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64, reason string) error {
@@ -299,7 +333,7 @@ func (s *Shard) restoreInput(ctx context.Context, blockID uint64) (restoreInput,
 	}
 	lifecycle, err := localblock.Classify(s.blocksDir, blockID)
 	if err != nil {
-		return restoreInput{}, fmt.Errorf("%w: classify Block %d for restore: %w", storeapi.ErrDataLoss, blockID, err)
+		return restoreInput{}, classifyReadError(blockID, err)
 	}
 	if lifecycle.State != localblock.StateEvicted {
 		return restoreInput{lifecycle: lifecycle}, nil
