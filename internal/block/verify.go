@@ -133,9 +133,49 @@ func checkDocIntegrity(acc *docAccumulator, docSeq uint32, entries []IndexEntry,
 	}
 	if len(idx.EncryptionEnvelope) > 0 {
 		checkEncryptedDocPayloadLength(acc.payloadBytes, idx.EncryptionEnvelope, offset, result)
+		checkEncryptedDocSHAMetadata(idx, offset, result)
 		return
 	}
 	checkDocSHA(acc.hash, idx.SHA256, offset, result)
+}
+
+// checkEncryptedDocSHAMetadata cross-checks the .idx plaintext SHA-256
+// against the envelope's. Deep scrub cannot recompute an encrypted
+// Document's plaintext digest without the data key, but the two stored
+// copies must agree: the read path compares them and fails every read with
+// DATA_LOSS when they diverge (or when the .idx digest is zero), so a
+// mismatch is corrupt metadata that repair can replace — not a clean Block.
+func checkEncryptedDocSHAMetadata(idx IndexEntry, offset int64, result *VerifyResult) {
+	envelopeSHA, err := encryptedEnvelopePlaintextSHA256(idx.EncryptionEnvelope)
+	if errors.Is(err, ErrIdxCorrupt) {
+		// The envelope decoded but carries no valid digest: the write path
+		// always records one, and ParseEnvelope fails every read without it.
+		result.CorruptFrames = append(result.CorruptFrames, CorruptFrame{Offset: offset, Type: CorruptionDocSHA256})
+		return
+	}
+	if err != nil {
+		// Garbage envelope bytes are already reported as
+		// doc_ciphertext_length by the payload-length check.
+		return
+	}
+	if isZeroSHA256(idx.SHA256) || idx.SHA256 != envelopeSHA {
+		result.CorruptFrames = append(result.CorruptFrames, CorruptFrame{Offset: offset, Type: CorruptionDocSHA256})
+	}
+}
+
+func encryptedEnvelopePlaintextSHA256(envelope []byte) ([32]byte, error) {
+	var meta struct {
+		PlaintextSHA256 []byte `json:"plaintext_sha256"`
+	}
+	if err := json.Unmarshal(envelope, &meta); err != nil {
+		return [32]byte{}, err
+	}
+	if len(meta.PlaintextSHA256) != sha256.Size {
+		return [32]byte{}, ErrIdxCorrupt
+	}
+	var digest [32]byte
+	copy(digest[:], meta.PlaintextSHA256)
+	return digest, nil
 }
 
 func checkDocSHA(h hash.Hash, expected [32]byte, offset int64, result *VerifyResult) {
@@ -170,6 +210,11 @@ func encryptedEnvelopeCiphertextLength(envelope []byte) (int64, error) {
 func recordMissingIndexedFrames(entries []IndexEntry, framesByDocSeq map[uint32]uint32, completedDocSeq map[uint32]bool, offset int64, result *VerifyResult) {
 	for docSeq, entry := range entries {
 		if entry.FrameCount == 0 {
+			// Zero-byte Documents are invalid by API contract, so every real
+			// entry has at least one Frame. A zero FrameCount is corrupt
+			// metadata that previously made the entry vacuously "clean"
+			// (deferred finding from Story 1.6 review).
+			result.CorruptFrames = append(result.CorruptFrames, CorruptFrame{Offset: offset, Type: CorruptionMissing})
 			continue
 		}
 		seq := uint32(docSeq)
