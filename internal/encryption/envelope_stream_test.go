@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/encryption"
@@ -186,5 +187,85 @@ func TestDocumentDecryptReaderFailsMidStreamOnTamperedLaterFrame(t *testing.T) {
 	// Every byte served before the failure was frame-authenticated.
 	if !bytes.Equal(got, body[:len(got)]) {
 		t.Fatal("bytes served before tamper detection do not match the plaintext prefix")
+	}
+}
+
+// unwrapCountingTransit counts UnwrapDataKey calls so tests can assert a
+// mismatch is rejected before any KMS round trip (#455).
+type unwrapCountingTransit struct {
+	encryption.Transit
+	unwraps int
+}
+
+func (t *unwrapCountingTransit) UnwrapDataKey(ctx context.Context, req encryption.UnwrapDataKeyRequest) (encryption.UnwrappedDataKey, error) {
+	t.unwraps++
+	return t.Transit.UnwrapDataKey(ctx, req)
+}
+
+func TestDecryptDocumentRejectsLengthMismatchBeforeKMSRoundTrip(t *testing.T) {
+	identity := encryption.DocumentIdentity{TransactionID: "tx-1", DocumentName: "doc-a"}
+	body := bytes.Repeat([]byte("scrap-streaming-payload-"), 20_000)
+	cfg, doc := encryptTestDocument(t, identity, body)
+
+	transit := &unwrapCountingTransit{Transit: cfg.Transit}
+	frames := cloneTestFrames(doc.Frames[:len(doc.Frames)-1]) // drop the tail
+
+	_, err := encryption.DecryptDocument(context.Background(), transit, identity, doc.Envelope, frames, doc.PlaintextSHA256, doc.PlaintextSize)
+	if !errors.Is(err, encryption.ErrIntegrity) {
+		t.Fatalf("DecryptDocument short ciphertext = %v, want ErrIntegrity", err)
+	}
+	if transit.unwraps != 0 {
+		t.Fatalf("UnwrapDataKey calls = %d, want 0 before the length pre-check", transit.unwraps)
+	}
+}
+
+// pullCountingFrameSource records how many frames were pulled so tests can
+// assert the reader stops at the first over-length frame.
+type pullCountingFrameSource struct {
+	source encryption.FrameSource
+	pulls  int
+}
+
+func (s *pullCountingFrameSource) NextFrame() ([]byte, error) {
+	frame, err := s.source.NextFrame()
+	if err == nil {
+		s.pulls++
+	}
+	return frame, err
+}
+
+func TestDocumentDecryptReaderRejectsOverLengthCiphertextMidStream(t *testing.T) {
+	identity := encryption.DocumentIdentity{TransactionID: "tx-1", DocumentName: "doc-a"}
+	body := bytes.Repeat([]byte("scrap-streaming-payload-"), 20_000)
+	cfg, doc := encryptTestDocument(t, identity, body)
+
+	// Append surplus garbage frames after the true last frame. The reader
+	// must reject on the first surplus frame — before decrypting it — instead
+	// of grinding through the tail and only failing at stream EOF.
+	frames := cloneTestFrames(doc.Frames)
+	surplusStart := len(frames)
+	for range 4 {
+		frames = append(frames, bytes.Repeat([]byte{0xAB}, 64))
+	}
+
+	decryptor, err := encryption.NewDocumentDecryptor(context.Background(), cfg.Transit, identity, doc.Envelope, doc.PlaintextSHA256, doc.PlaintextSize)
+	if err != nil {
+		t.Fatalf("NewDocumentDecryptor: %v", err)
+	}
+	defer decryptor.Close()
+
+	source := &pullCountingFrameSource{source: encryption.NewSliceFrameSource(frames)}
+	reader := decryptor.Reader(source)
+	defer func() { _ = reader.Close() }()
+
+	_, err = io.ReadAll(reader)
+	if !errors.Is(err, encryption.ErrIntegrity) {
+		t.Fatalf("streamed read of over-length ciphertext = %v, want ErrIntegrity", err)
+	}
+	if !strings.Contains(err.Error(), "ciphertext length mismatch") {
+		t.Fatalf("error = %v, want ciphertext length mismatch before decrypting the surplus frame", err)
+	}
+	if source.pulls != surplusStart+1 {
+		t.Fatalf("frames pulled = %d, want %d (stop at the first surplus frame)", source.pulls, surplusStart+1)
 	}
 }
