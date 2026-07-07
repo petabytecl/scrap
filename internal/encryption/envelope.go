@@ -1,8 +1,6 @@
 package encryption
 
 import (
-	"bytes"
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
@@ -10,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -45,14 +42,6 @@ type DocumentIdentity struct {
 	DocumentName  string
 }
 
-type EncryptedDocument struct {
-	Envelope        []byte
-	Frames          [][]byte
-	PlaintextSHA256 [sha256.Size]byte
-	PlaintextSize   int64
-	CiphertextSize  int64
-}
-
 type Envelope struct {
 	Version          int    `json:"version"`
 	TransitMount     string `json:"transit_mount"`
@@ -64,76 +53,6 @@ type Envelope struct {
 	PlaintextSHA256  []byte `json:"plaintext_sha256"`
 	PlaintextLength  int64  `json:"plaintext_length"`
 	CiphertextLength int64  `json:"ciphertext_length"`
-}
-
-// EncryptDocument buffers every ciphertext frame in memory. Prefer
-// DocumentEncryptor on paths that handle full-size Documents.
-func EncryptDocument(ctx context.Context, cfg DocumentConfig, identity DocumentIdentity, body io.Reader) (EncryptedDocument, error) {
-	encryptor, err := NewDocumentEncryptor(ctx, cfg, identity, body)
-	if err != nil {
-		return EncryptedDocument{}, err
-	}
-	defer encryptor.Close()
-
-	var frames [][]byte
-	for {
-		frame, _, err := encryptor.NextFrame()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return EncryptedDocument{}, err
-		}
-		frames = append(frames, frame)
-	}
-	info, err := encryptor.Finalize()
-	if err != nil {
-		return EncryptedDocument{}, err
-	}
-	return EncryptedDocument{
-		Envelope:        info.Envelope,
-		Frames:          frames,
-		PlaintextSHA256: info.PlaintextSHA256,
-		PlaintextSize:   info.PlaintextSize,
-		CiphertextSize:  info.CiphertextSize,
-	}, nil
-}
-
-// DecryptDocument buffers the whole plaintext in memory. Prefer
-// DocumentDecryptor on paths that handle full-size Documents.
-func DecryptDocument(
-	ctx context.Context,
-	transit Transit,
-	identity DocumentIdentity,
-	envelopeBytes []byte,
-	frames [][]byte,
-	expectedSHA [sha256.Size]byte,
-	expectedSize int64,
-) ([]byte, error) {
-	// Preserve the pre-streaming contract of rejecting a ciphertext length
-	// mismatch before any KMS or crypto work: the frame sizes are known up
-	// front here, so a mismatch must not cost a Transit round trip (#455).
-	envelope, err := ParseEnvelope(envelopeBytes)
-	if err != nil {
-		return nil, err
-	}
-	if framePayloadBytes(frames) != envelope.CiphertextLength {
-		return nil, fmt.Errorf("%w: ciphertext length mismatch", ErrIntegrity)
-	}
-
-	decryptor, err := NewDocumentDecryptor(ctx, transit, identity, envelopeBytes, expectedSHA, expectedSize)
-	if err != nil {
-		return nil, err
-	}
-	defer decryptor.Close()
-	reader := decryptor.Reader(NewSliceFrameSource(frames))
-	defer func() { _ = reader.Close() }()
-	plaintext := make([]byte, 0, max(0, int(framePayloadBytes(frames))-decryptor.aead.Overhead()*len(frames)))
-	buf := bytes.NewBuffer(plaintext)
-	if _, err := io.Copy(buf, reader); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 func MarshalEnvelope(envelope Envelope) ([]byte, error) {
@@ -266,14 +185,6 @@ func appendLen(dst, value []byte) []byte {
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(value))) //nolint:gosec // identity strings are bounded by request validation.
 	dst = append(dst, lenBuf[:]...)
 	return append(dst, value...)
-}
-
-func framePayloadBytes(frames [][]byte) int64 {
-	var total int64
-	for _, frame := range frames {
-		total += int64(len(frame))
-	}
-	return total
 }
 
 func zeroBytes(data []byte) {

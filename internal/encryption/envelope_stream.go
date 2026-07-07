@@ -75,6 +75,9 @@ type DocumentEncryptor struct {
 	ciphertextSize int64
 }
 
+// NewDocumentEncryptor generates a per-Document data key via Transit and
+// returns a streaming encryptor over body. Callers must Close it to zero the
+// data key.
 func NewDocumentEncryptor(ctx context.Context, cfg DocumentConfig, identity DocumentIdentity, body io.Reader) (*DocumentEncryptor, error) {
 	if cfg.Transit == nil {
 		return nil, fmt.Errorf("encryption transit is required: %w", ErrInvalidEnvelope)
@@ -233,6 +236,10 @@ type DocumentDecryptor struct {
 	expectedSHA [sha256.Size]byte
 }
 
+// NewDocumentDecryptor validates the envelope against the expected Document
+// metadata, unwraps the data key via Transit, and returns a streaming
+// decryptor whose verify and serve passes share that one Transit round trip.
+// Callers must Close it to zero the data key.
 func NewDocumentDecryptor(
 	ctx context.Context,
 	transit Transit,
@@ -389,6 +396,8 @@ type sliceFrameSource struct {
 	next   int
 }
 
+// NewSliceFrameSource adapts already-materialized ciphertext frames (e.g. a
+// bounded replication body) to FrameSource.
 func NewSliceFrameSource(frames [][]byte) FrameSource {
 	return &sliceFrameSource{frames: frames}
 }

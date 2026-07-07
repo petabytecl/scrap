@@ -9,12 +9,13 @@ import (
 	"testing"
 
 	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/encryption/enctest"
 )
 
-func encryptTestDocument(t *testing.T, identity encryption.DocumentIdentity, body []byte) (encryption.DocumentConfig, encryption.EncryptedDocument) {
+func encryptTestDocument(t *testing.T, identity encryption.DocumentIdentity, body []byte) (encryption.DocumentConfig, enctest.EncryptedDocument) {
 	t.Helper()
 	cfg := encryption.DocumentConfig{Transit: encryption.NewFakeTransit(encryption.FakeConfig{})}
-	doc, err := encryption.EncryptDocument(context.Background(), cfg, identity, bytes.NewReader(body))
+	doc, err := enctest.EncryptDocument(context.Background(), cfg, identity, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("EncryptDocument: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestEncryptDocumentRoundTrips(t *testing.T) {
 		t.Fatalf("frame count = %d, want multi-frame body", len(doc.Frames))
 	}
 
-	got, err := encryption.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, doc.Frames, doc.PlaintextSHA256, doc.PlaintextSize)
+	got, err := enctest.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, doc.Frames, doc.PlaintextSHA256, doc.PlaintextSize)
 	if err != nil {
 		t.Fatalf("DecryptDocument: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestDecryptDocumentRejectsTamperedFrame(t *testing.T) {
 	frames := cloneTestFrames(doc.Frames)
 	frames[0][0] ^= 0xFF // flip a ciphertext bit
 
-	_, err := encryption.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, frames, doc.PlaintextSHA256, doc.PlaintextSize)
+	_, err := enctest.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, frames, doc.PlaintextSHA256, doc.PlaintextSize)
 	if !errors.Is(err, encryption.ErrIntegrity) {
 		t.Fatalf("DecryptDocument tampered frame = %v, want ErrIntegrity", err)
 	}
@@ -61,7 +62,7 @@ func TestDecryptDocumentRejectsReorderedFrames(t *testing.T) {
 	frames := cloneTestFrames(doc.Frames)
 	frames[0], frames[1] = frames[1], frames[0] // per-frame nonce+AAD binding must reject the swap
 
-	_, err := encryption.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, frames, doc.PlaintextSHA256, doc.PlaintextSize)
+	_, err := enctest.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, frames, doc.PlaintextSHA256, doc.PlaintextSize)
 	if !errors.Is(err, encryption.ErrIntegrity) {
 		t.Fatalf("DecryptDocument reordered frames = %v, want ErrIntegrity", err)
 	}
@@ -76,7 +77,7 @@ func TestDecryptDocumentRejectsWrongIdentity(t *testing.T) {
 	// A mismatched identity must fail; the fake enforces the key-context binding
 	// first, so it surfaces before frame AAD verification is reached.
 	other := encryption.DocumentIdentity{TransactionID: "tx-1", DocumentName: "doc-b"}
-	got, err := encryption.DecryptDocument(context.Background(), cfg.Transit, other, doc.Envelope, doc.Frames, doc.PlaintextSHA256, doc.PlaintextSize)
+	got, err := enctest.DecryptDocument(context.Background(), cfg.Transit, other, doc.Envelope, doc.Frames, doc.PlaintextSHA256, doc.PlaintextSize)
 	if err == nil {
 		t.Fatal("DecryptDocument with wrong identity succeeded, want failure")
 	}
@@ -92,12 +93,12 @@ func TestDecryptDocumentRejectsMetadataMismatch(t *testing.T) {
 
 	var wrongSHA [sha256.Size]byte
 	wrongSHA[0] = doc.PlaintextSHA256[0] ^ 0xFF
-	_, err := encryption.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, doc.Frames, wrongSHA, doc.PlaintextSize)
+	_, err := enctest.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, doc.Frames, wrongSHA, doc.PlaintextSize)
 	if !errors.Is(err, encryption.ErrIntegrity) {
 		t.Fatalf("DecryptDocument wrong SHA = %v, want ErrIntegrity", err)
 	}
 
-	_, err = encryption.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, doc.Frames, doc.PlaintextSHA256, doc.PlaintextSize+1)
+	_, err = enctest.DecryptDocument(context.Background(), cfg.Transit, identity, doc.Envelope, doc.Frames, doc.PlaintextSHA256, doc.PlaintextSize+1)
 	if !errors.Is(err, encryption.ErrIntegrity) {
 		t.Fatalf("DecryptDocument wrong size = %v, want ErrIntegrity", err)
 	}
@@ -117,7 +118,7 @@ func TestDecryptDocumentRejectsMalformedEnvelope(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := encryption.DocumentConfig{Transit: encryption.NewFakeTransit(encryption.FakeConfig{})}
-			_, err := encryption.DecryptDocument(context.Background(), cfg.Transit, identity, tt.envelope, nil, sha, 0)
+			_, err := enctest.DecryptDocument(context.Background(), cfg.Transit, identity, tt.envelope, nil, sha, 0)
 			if !errors.Is(err, encryption.ErrInvalidEnvelope) {
 				t.Fatalf("DecryptDocument %s = %v, want ErrInvalidEnvelope", tt.name, err)
 			}
