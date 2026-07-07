@@ -147,3 +147,42 @@ func TestUploadObligationsPressureStatsDeduplicatesCommittedSeal(t *testing.T) {
 		t.Fatalf("pressure pending bytes = %d, want 120", stats.pendingBytes)
 	}
 }
+
+// #471: markSealRetryFailed and the outbox wrapper were at 0% coverage. The
+// retry-failed path re-arms the obligation so a failed seal retry is retried
+// after the backoff instead of staying in-flight forever.
+func TestUploadObligationsSealRetryFailureReArmsAfterBackoff(t *testing.T) {
+	lifecycle := newBlockUploadLifecycle()
+	outbox := newUploadOutbox("", nil, lifecycle)
+	lifecycle.recordLocalSeal(PendingUpload{
+		BlockID:         1,
+		ShardID:         uploadObligationsTestShardID,
+		SealedSizeBytes: 1,
+	})
+
+	now := time.Now()
+	backoff := now.Add(time.Minute)
+	if pending := outbox.BeginBlockSealRetry(now, backoff); len(pending) != 1 {
+		t.Fatalf("initial retry batch = %d, want 1", len(pending))
+	}
+	// In-flight obligations are not handed out again.
+	if pending := outbox.BeginBlockSealRetry(now, backoff); len(pending) != 0 {
+		t.Fatalf("retry batch while in flight = %d, want 0", len(pending))
+	}
+
+	outbox.MarkBlockSealRetryFailed(1, backoff)
+
+	// Before the backoff expires the failed obligation stays parked.
+	if pending := outbox.BeginBlockSealRetry(now, backoff); len(pending) != 0 {
+		t.Fatalf("retry batch before backoff = %d, want 0", len(pending))
+	}
+	// After the backoff it is handed out again.
+	after := backoff.Add(time.Second)
+	pending := outbox.BeginBlockSealRetry(after, after.Add(time.Minute))
+	if len(pending) != 1 || pending[0].BlockID != 1 {
+		t.Fatalf("retry batch after backoff = %+v, want Block 1", pending)
+	}
+	if outbox.UploadObligationCount() != 1 {
+		t.Fatalf("obligation count = %d, want 1", outbox.UploadObligationCount())
+	}
+}
