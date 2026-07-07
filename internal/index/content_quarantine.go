@@ -124,6 +124,40 @@ func (idx *Index) ListContentQuarantines(txID string, limit int) ([]ContentQuara
 	return records, nil
 }
 
+// ForEachContentQuarantine streams every content-quarantine record to fn in key
+// order, without bounding the count by a caller limit. It is used by projection
+// rebuild to carry quarantine state (which has no Block-file source) into the
+// rebuilt projection. A fn error stops iteration and is returned.
+func (idx *Index) ForEachContentQuarantine(fn func(ContentQuarantine) error) error {
+	lower, upper, err := contentQuarantineScanBounds("")
+	if err != nil {
+		return err
+	}
+	iter, err := idx.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return fmt.Errorf("index: content quarantine iter: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		val, err := iter.ValueAndErr()
+		if err != nil {
+			return fmt.Errorf("index: content quarantine iter value: %w", err)
+		}
+		record, err := decodeContentQuarantine(append([]byte(nil), iter.Key()...), append([]byte(nil), val...))
+		if err != nil {
+			return err
+		}
+		if err := fn(record); err != nil {
+			return err
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return fmt.Errorf("index: content quarantine iter: %w", err)
+	}
+	return nil
+}
+
 func (idx *Index) ConfirmContentQuarantine(txID, docName string, confirmedAtUs int64) error {
 	if confirmedAtUs <= 0 {
 		return fmt.Errorf("%w: confirmed_at_us is required", ErrInvalidContentQuarantine)

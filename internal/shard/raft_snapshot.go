@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/petabytecl/scrap/internal/index"
 )
 
 // persistProjectionAppliedIndex durably records the applied index in the Pebble
@@ -28,6 +30,31 @@ func (s *Shard) projectionAppliedIndex() (uint64, bool) {
 		return 0, false
 	}
 	return s.idx.AppliedIndex(), true
+}
+
+// copyContentSafetyInto copies the live projection's content-quarantine records
+// and scanner watermark into dst (a rebuild-in-progress projection). These have
+// no Block-file source, so a projection rebuild must carry them forward or it
+// silently rolls back the content-safety controls.
+func (s *Shard) copyContentSafetyInto(dst *index.Index) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.idx == nil {
+		return errors.New("shard: projection unavailable (rebuild in progress)")
+	}
+	if err := s.idx.ForEachContentQuarantine(func(q index.ContentQuarantine) error {
+		return dst.PutContentQuarantine(q)
+	}); err != nil {
+		return err
+	}
+	watermark, err := s.idx.GetScannerWatermark()
+	if errors.Is(err, index.ErrScannerWatermarkNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return dst.PutScannerWatermark(watermark)
 }
 
 const (

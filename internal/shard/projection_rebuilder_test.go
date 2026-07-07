@@ -16,15 +16,16 @@ import (
 )
 
 type projectionRebuildCoreStub struct {
-	openBlockID      uint64
-	confirmedUploads map[uint64]index.ConfirmedUpload
-	pendingUploads   map[uint64]index.PendingUpload
-	swapStarted      chan struct{}
-	releaseSwap      chan struct{}
-	swapOnce         sync.Once
-	idxNil           bool
-	swapErr          error
-	appliedIndex     uint64
+	openBlockID        uint64
+	confirmedUploads   map[uint64]index.ConfirmedUpload
+	pendingUploads     map[uint64]index.PendingUpload
+	swapStarted        chan struct{}
+	releaseSwap        chan struct{}
+	swapOnce           sync.Once
+	idxNil             bool
+	swapErr            error
+	appliedIndex       uint64
+	contentQuarantines []index.ContentQuarantine
 }
 
 func (s *projectionRebuildCoreStub) currentOpenBlockID() uint64 {
@@ -33,6 +34,15 @@ func (s *projectionRebuildCoreStub) currentOpenBlockID() uint64 {
 
 func (s *projectionRebuildCoreStub) projectionAppliedIndex() (uint64, bool) {
 	return s.appliedIndex, true
+}
+
+func (s *projectionRebuildCoreStub) copyContentSafetyInto(dst *index.Index) error {
+	for _, q := range s.contentQuarantines {
+		if err := dst.PutContentQuarantine(q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *projectionRebuildCoreStub) confirmedUploadForRebuild(blockID uint64) (index.ConfirmedUpload, error) {
