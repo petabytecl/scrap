@@ -161,6 +161,12 @@ func (t *OpenBaoTransit) RewrapDataKey(ctx context.Context, req RewrapDataKeyReq
 	// Block re-upload each time. The wrapping key version is the meaningful
 	// signal, matching the fake's semantics.
 	newVersion := versionFromWrappedKey(ciphertext)
+	if newVersion < minimumKeyVersion {
+		// A non-empty ciphertext whose version cannot be parsed must fail closed:
+		// otherwise it derives Changed=false and the shard reports a successful
+		// no-op rewrap for a malformed provider response instead of erroring.
+		return RewrappedKey{}, fmt.Errorf("openbao transit rewrap returned unparsable key version: %w", ErrUnavailable)
+	}
 	return RewrappedKey{
 		WrappedKey: ciphertext,
 		Version:    newVersion,

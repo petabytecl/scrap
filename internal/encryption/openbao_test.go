@@ -96,6 +96,32 @@ func TestOpenBaoTransitRewrapChangedTracksKeyVersion(t *testing.T) {
 	}
 }
 
+func TestOpenBaoTransitRewrapFailsClosedOnUnparsableVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Non-empty ciphertext with a prefix whose version cannot be parsed.
+		writeOpenBaoData(t, w, map[string]any{"ciphertext": "garbage-no-version"})
+	}))
+	defer srv.Close()
+
+	transit, err := encryption.NewOpenBaoTransit(encryption.OpenBaoConfig{
+		Address:   srv.URL,
+		MountPath: "transit",
+		KeyName:   "scrap-documents",
+		Token:     "test-token",
+	})
+	if err != nil {
+		t.Fatalf("NewOpenBaoTransit: %v", err)
+	}
+
+	_, err = transit.RewrapDataKey(context.Background(), encryption.RewrapDataKeyRequest{
+		WrappedKey: "vault:v2:wrapped-key",
+		Context:    []byte("tx/doc"),
+	})
+	if !errors.Is(err, encryption.ErrUnavailable) {
+		t.Fatalf("RewrapDataKey error = %v, want ErrUnavailable (fail closed on unparsable version)", err)
+	}
+}
+
 func TestOpenBaoTransitReadinessAcceptsLargeSuccessfulPayload(t *testing.T) {
 	const token = "test-token"
 	keyVersions := map[string]any{}
