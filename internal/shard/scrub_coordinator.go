@@ -35,6 +35,7 @@ type scrubCore interface {
 	currentOpenBlockID() uint64
 	RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 	recordEvictionHealthBlockBestEffort(blockID uint64)
+	TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error)
 }
 
 type scrubCoordinator struct {
@@ -90,6 +91,7 @@ func (c *scrubCoordinator) Start(cfg Config) {
 			LeaderChecker:      c,
 			Metrics:            cfg.Metrics,
 			Rebuilder:          cfg.Rebuilder,
+			SelfRebuilder:      c,
 			Logger:             c.baseLogger.With("component", "scrub"),
 			PeerAddrs:          cfg.PeerAddrs,
 			Interval:           cfg.Scrub.LightScrubInterval,
@@ -173,6 +175,15 @@ func (c *scrubCoordinator) RunLightScrub(ctx context.Context) error {
 
 func (c *scrubCoordinator) IsLeader() bool {
 	return c.core.IsLeader()
+}
+
+// RequestSelfRebuild rebuilds this Member's own projection when the light
+// scrub's hash quorum puts the leader in the minority (#470). It reuses the
+// same rebuild path a peer RequestIndexRebuild RPC triggers; an
+// already-in-progress rebuild counts as satisfied.
+func (c *scrubCoordinator) RequestSelfRebuild(ctx context.Context, _ string) error {
+	_, err := c.core.TriggerRebuild(ctx)
+	return err
 }
 
 func (c *scrubCoordinator) ProposeConsistencyCheck(ctx context.Context, scrubID string) (scrub.Result, error) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"time"
 
@@ -37,12 +38,21 @@ type Rebuilder interface {
 	RequestRebuild(ctx context.Context, addr, scrubID string) error
 }
 
+// SelfRebuilder triggers a projection rebuild on this Member. The light scrub
+// uses it when the majority hash disagrees with the leader's own (#470): the
+// leader is the divergent voter and must rebuild itself instead of rebuilding
+// every healthy peer forever.
+type SelfRebuilder interface {
+	RequestSelfRebuild(ctx context.Context, scrubID string) error
+}
+
 type LightConfig struct {
 	Proposer           Proposer
 	ConsistencyChecker ConsistencyChecker
 	LeaderChecker      LeaderChecker
 	Metrics            Metrics
 	Rebuilder          Rebuilder
+	SelfRebuilder      SelfRebuilder
 	Logger             *slog.Logger
 	PeerAddrs          []string
 	Interval           time.Duration
@@ -133,31 +143,95 @@ func (ls *Light) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("scrub: leader projection hash missing for scrub %s", scrubID)
 	}
 
-	divergent, err := ls.collectDivergentPeers(ctx, scrubID, leaderResult.SHA256)
+	peerHashes, err := ls.collectPeerHashes(ctx, scrubID)
 	if err != nil {
 		ls.cfg.Metrics.RecordRun("error", time.Since(start).Seconds())
 		return err
 	}
 
+	return ls.applyQuorumVerdict(ctx, scrubID, leaderResult.SHA256, peerHashes, start)
+}
+
+// applyQuorumVerdict majority-votes the leader and peer projection hashes and
+// rebuilds the minority (#470). The pre-quorum behavior judged divergence
+// solely against the leader's hash, so a corrupt leader flagged every healthy
+// peer divergent and rebuilt them forever while itself never rebuilding. A
+// tie (no strict majority among comparable voters) freezes: no rebuilds, a
+// distinct degraded run result, and an error-level alert for the operator —
+// rebuilding on a coin flip could propagate the corrupt copy.
+func (ls *Light) applyQuorumVerdict(
+	ctx context.Context,
+	scrubID string,
+	leaderHash [32]byte,
+	peerHashes map[string][32]byte,
+	start time.Time,
+) error {
+	majority, ok := majorityHash(leaderHash, peerHashes)
+	if !ok {
+		ls.cfg.Logger.ErrorContext(ctx, "scrub: projection hash quorum tie; refusing to rebuild",
+			"scrub_id", scrubID, "voters", 1+len(peerHashes))
+		ls.cfg.Metrics.RecordRun("quorum_tie", time.Since(start).Seconds())
+		return fmt.Errorf("scrub: projection hash quorum tie for scrub %s across %d voter(s)", scrubID, 1+len(peerHashes))
+	}
+
+	var divergent []string
+	for addr, hash := range peerHashes {
+		if hash != majority {
+			divergent = append(divergent, addr)
+		}
+	}
+	sort.Strings(divergent)
+	leaderDivergent := leaderHash != majority
+
 	duration := time.Since(start).Seconds()
-	if len(divergent) > 0 {
-		ls.cfg.Metrics.RecordRun("mismatch", duration)
-		if ls.cfg.Rebuilder != nil {
-			for _, addr := range divergent {
-				if err := ls.cfg.Rebuilder.RequestRebuild(ctx, addr, scrubID); err != nil {
-					ls.cfg.Logger.WarnContext(ctx, "scrub: rebuild request failed", "addr", addr, "scrub_id", scrubID, "err", err)
-				}
+	if !leaderDivergent && len(divergent) == 0 {
+		ls.cfg.Metrics.RecordRun("ok", duration)
+		return nil
+	}
+
+	ls.cfg.Metrics.RecordRun("mismatch", duration)
+	if leaderDivergent {
+		ls.requestSelfRebuild(ctx, scrubID)
+	}
+	if ls.cfg.Rebuilder != nil {
+		for _, addr := range divergent {
+			if err := ls.cfg.Rebuilder.RequestRebuild(ctx, addr, scrubID); err != nil {
+				ls.cfg.Logger.WarnContext(ctx, "scrub: rebuild request failed", "addr", addr, "scrub_id", scrubID, "err", err)
 			}
 		}
-	} else {
-		ls.cfg.Metrics.RecordRun("ok", duration)
 	}
 	return nil
 }
 
-func (ls *Light) collectDivergentPeers(ctx context.Context, scrubID string, leaderHash [32]byte) ([]string, error) {
-	var divergent []string
-	var compared int
+func (ls *Light) requestSelfRebuild(ctx context.Context, scrubID string) {
+	if ls.cfg.SelfRebuilder == nil {
+		ls.cfg.Logger.ErrorContext(ctx, "scrub: leader projection diverges from quorum but no self rebuilder is wired",
+			"scrub_id", scrubID)
+		return
+	}
+	if err := ls.cfg.SelfRebuilder.RequestSelfRebuild(ctx, scrubID); err != nil {
+		ls.cfg.Logger.WarnContext(ctx, "scrub: self rebuild request failed", "scrub_id", scrubID, "err", err)
+	}
+}
+
+// majorityHash returns the hash held by a strict majority of the comparable
+// voters (leader + peers with a published hash), or ok=false on a tie.
+func majorityHash(leaderHash [32]byte, peerHashes map[string][32]byte) ([32]byte, bool) {
+	votes := map[[32]byte]int{leaderHash: 1}
+	for _, hash := range peerHashes {
+		votes[hash]++
+	}
+	total := 1 + len(peerHashes)
+	for hash, n := range votes {
+		if n > total/2 {
+			return hash, true
+		}
+	}
+	return [32]byte{}, false
+}
+
+func (ls *Light) collectPeerHashes(ctx context.Context, scrubID string) (map[string][32]byte, error) {
+	hashes := make(map[string][32]byte, len(ls.cfg.PeerAddrs))
 	for _, addr := range ls.cfg.PeerAddrs {
 		peerResult, err := ls.checkPeerConsistency(ctx, addr, scrubID)
 		if errors.Is(err, ErrConsistencyResultNotReady) {
@@ -177,19 +251,16 @@ func (ls *Light) collectDivergentPeers(ctx context.Context, scrubID string, lead
 		if peerResult.SHA256 == [32]byte{} {
 			return nil, fmt.Errorf("scrub: peer %s projection hash missing for scrub %s", addr, scrubID)
 		}
-		compared++
-		if peerResult.SHA256 != leaderHash {
-			divergent = append(divergent, addr)
-		}
+		hashes[addr] = peerResult.SHA256
 	}
 	// If the Cell has peers but none produced a comparable result, the check is
 	// inconclusive, not clean: reporting ok here would mask a total loss of
 	// projection-divergence coverage. Fail so RunOnce records a degraded run and
 	// retries next cycle.
-	if len(ls.cfg.PeerAddrs) > 0 && compared == 0 {
+	if len(ls.cfg.PeerAddrs) > 0 && len(hashes) == 0 {
 		return nil, fmt.Errorf("scrub: no peer consistency result compared for scrub %s across %d peer(s)", scrubID, len(ls.cfg.PeerAddrs))
 	}
-	return divergent, nil
+	return hashes, nil
 }
 
 func (ls *Light) checkPeerConsistency(ctx context.Context, addr, scrubID string) (Result, error) {

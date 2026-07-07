@@ -2,6 +2,7 @@ package scrub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -46,6 +47,10 @@ type DeepMetrics interface {
 	RecordRepair(result string)
 	DecrementQuarantined()
 	RecordSkip(reason string)
+	// RecordDegradedRead counts frames that failed an I/O-class read and then
+	// read back clean on the bounded re-read (#470): the Block is intact but
+	// the device faulted, which operators should see without a quarantine.
+	RecordDegradedRead(n uint64)
 }
 
 type BlockLocalState string
@@ -60,6 +65,11 @@ const (
 	SkipReasonEvicted        = "evicted"
 	SkipReasonMetadataLoss   = "metadata_loss"
 	SkipReasonUnexpectedLoss = "unexpected_loss"
+
+	// corruptionTypeIdx labels quarantines caused by a corrupt .idx side file
+	// rather than corrupt .blk bytes (block.CorruptionType covers only frame
+	// and Document corruption inside the .blk).
+	corruptionTypeIdx = "idx"
 )
 
 type BlockStateClassifier interface {
@@ -168,43 +178,63 @@ func (ds *Deep) RunOnce(ctx context.Context) error {
 	ds.cfg.Metrics.SetBadDiskSuspected(false)
 
 	blocks = ds.filterFromCheckpoint(blocks)
-	total := len(blocks)
 
-	for i, blk := range blocks {
-		if ctx.Err() != nil {
-			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
-			return ctx.Err()
-		}
-		if err := ds.waitPressurePause(ctx); err != nil {
-			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
-			return err
-		}
-		ds.pauseIfLatencyExceeded(ctx)
-		skipped, err := ds.skipBlockByLifecycle(blk)
-		if err != nil {
-			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
-			return err
-		}
-		if skipped {
-			ds.saveCheckpoint(blk.BlockID)
-			ds.cfg.Metrics.SetProgressRatio(float64(i+1) / float64(total))
-			continue
-		}
-		if err := ds.waitIOBudget(ctx, blk.BlkPath); err != nil {
-			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
-			return err
-		}
-		if err := ds.verifyOneBlock(blk); err != nil {
-			ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
-			return err
-		}
-		ds.saveCheckpoint(blk.BlockID)
-		ds.cfg.Metrics.SetProgressRatio(float64(i+1) / float64(total))
+	quarantinedThisRun, err := ds.scrubBlocks(ctx, blocks)
+	if err != nil {
+		ds.cfg.Metrics.RecordDeepRun("error", time.Since(start).Seconds())
+		return err
 	}
 
 	ds.clearCheckpoint()
 	ds.cfg.Metrics.RecordDeepRun("ok", time.Since(start).Seconds())
+	// End-of-run repair pass (#470): a Block quarantined mid-cycle would
+	// otherwise wait a full scrub interval (default a week) for its first
+	// repair attempt while reads return ErrDataLoss. Gated on this run having
+	// quarantined something so persistent repair failures are not retried
+	// twice per cycle.
+	if quarantinedThisRun > 0 && ds.cfg.BlockRepairer != nil {
+		ds.cfg.BlockRepairer.RepairQuarantined(ctx)
+	}
 	return nil
+}
+
+// scrubBlocks verifies each listed Block in order and reports how many were
+// quarantined this run.
+func (ds *Deep) scrubBlocks(ctx context.Context, blocks []block.Info) (int, error) {
+	total := len(blocks)
+	quarantinedThisRun := 0
+	for i, blk := range blocks {
+		if ctx.Err() != nil {
+			return quarantinedThisRun, ctx.Err()
+		}
+		quarantined, err := ds.scrubOneBlock(ctx, blk)
+		if err != nil {
+			return quarantinedThisRun, err
+		}
+		if quarantined {
+			quarantinedThisRun++
+		}
+		ds.saveCheckpoint(blk.BlockID)
+		ds.cfg.Metrics.SetProgressRatio(float64(i+1) / float64(total))
+	}
+	return quarantinedThisRun, nil
+}
+
+// scrubOneBlock waits out backpressure, applies the lifecycle skip, and
+// verifies one Block, reporting whether it was quarantined.
+func (ds *Deep) scrubOneBlock(ctx context.Context, blk block.Info) (bool, error) {
+	if err := ds.waitPressurePause(ctx); err != nil {
+		return false, err
+	}
+	ds.pauseIfLatencyExceeded(ctx)
+	skipped, err := ds.skipBlockByLifecycle(blk)
+	if err != nil || skipped {
+		return false, err
+	}
+	if err := ds.waitIOBudget(ctx, blk.BlkPath); err != nil {
+		return false, err
+	}
+	return ds.verifyOneBlock(blk)
 }
 
 func (ds *Deep) skipBlockByLifecycle(blk block.Info) (bool, error) {
@@ -306,16 +336,35 @@ func (ds *Deep) waitIOBudget(ctx context.Context, blkPath string) error {
 	return ds.cfg.IOBudget.Wait(ctx, info.Size())
 }
 
-func (ds *Deep) verifyOneBlock(blk block.Info) error {
+// verifyOneBlock verifies one Block and reports whether it was quarantined.
+func (ds *Deep) verifyOneBlock(blk block.Info) (bool, error) {
 	result, err := ds.cfg.BlockVerifier.VerifyBlock(blk.BlkPath, blk.IdxPath)
+	if errors.Is(err, block.ErrIdxCorrupt) {
+		// A corrupt .idx is quarantine-eligible like corrupt .blk bytes (#470):
+		// repair replaces both files from a peer or the Backend. Aborting here
+		// wedged every deep-scrub run at this Block, so all higher-ID Blocks
+		// lost coverage and the Block was never repaired. The .blk may be
+		// intact; quarantining it anyway is the accepted trade (owner decision
+		// on #470) because repair restores both files together.
+		ds.cfg.Metrics.RecordCorruption(corruptionTypeIdx)
+		ds.cfg.Logger.Warn("scrub: quarantining Block with corrupt index", "block_id", blk.BlockID, "err", err)
+		return true, ds.quarantineBlock(blk)
+	}
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	ds.cfg.Metrics.RecordFramesVerified(result.FramesVerified)
+	if result.TransientReadRetries > 0 {
+		// Clean after a bounded re-read: not corruption, but the device
+		// faulted. Surface it so a dying disk is visible before it corrupts.
+		ds.cfg.Metrics.RecordDegradedRead(result.TransientReadRetries)
+		ds.cfg.Logger.Warn("scrub: Block read back clean after transient read fault",
+			"block_id", blk.BlockID, "retries", result.TransientReadRetries)
+	}
 
 	if len(result.CorruptFrames) == 0 {
-		return nil
+		return false, nil
 	}
 
 	for _, cf := range result.CorruptFrames {
@@ -324,6 +373,10 @@ func (ds *Deep) verifyOneBlock(blk block.Info) error {
 	if len(result.CorruptFrames) > ds.cfg.CorruptCap {
 		ds.cfg.Metrics.SetBadDiskSuspected(true)
 	}
+	return true, ds.quarantineBlock(blk)
+}
+
+func (ds *Deep) quarantineBlock(blk block.Info) error {
 	if err := ds.cfg.QuarantineManager.Quarantine(blk.BlkPath); err != nil {
 		return fmt.Errorf("scrub: quarantine block: %w", fsErrCause(err))
 	}

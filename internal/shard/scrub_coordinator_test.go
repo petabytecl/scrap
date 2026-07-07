@@ -23,6 +23,12 @@ type scrubCoordinatorCoreStub struct {
 	proposed         chan []byte
 	result           scrub.Result
 	openBlockID      uint64
+	rebuildTriggers  int
+}
+
+func (s *scrubCoordinatorCoreStub) TriggerRebuild(context.Context) (bool, error) {
+	s.rebuildTriggers++
+	return false, nil
 }
 
 func (s *scrubCoordinatorCoreStub) Propose(ctx context.Context, data []byte) error {
@@ -465,5 +471,17 @@ func readProposedScrubCommand(t *testing.T, proposed <-chan []byte) *scrapv1.Raf
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for proposed command")
 		return nil
+	}
+}
+
+func TestScrubCoordinatorSelfRebuildTriggersLocalRebuild(t *testing.T) {
+	core := &scrubCoordinatorCoreStub{leader: true}
+	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+
+	if err := c.RequestSelfRebuild(context.Background(), "scrub-1"); err != nil {
+		t.Fatalf("RequestSelfRebuild: %v", err)
+	}
+	if core.rebuildTriggers != 1 {
+		t.Fatalf("rebuild triggers = %d, want 1", core.rebuildTriggers)
 	}
 }

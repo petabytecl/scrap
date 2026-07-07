@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 type deepScrubProbeMetrics struct {
+	degradedReads  atomic.Uint64
 	mu             sync.Mutex
 	framesVerified uint64
 	ran            chan struct{}
@@ -38,7 +40,11 @@ func (m *deepScrubProbeMetrics) RecordPause()             {}
 func (m *deepScrubProbeMetrics) SetProgressRatio(float64) {}
 func (m *deepScrubProbeMetrics) RecordRepair(string)      {}
 func (m *deepScrubProbeMetrics) DecrementQuarantined()    {}
-func (m *deepScrubProbeMetrics) RecordSkip(string)        {}
+func (m *deepScrubProbeMetrics) RecordDegradedRead(n uint64) {
+	m.degradedReads.Add(n)
+}
+
+func (m *deepScrubProbeMetrics) RecordSkip(string) {}
 
 func (m *deepScrubProbeMetrics) verifiedFrames() uint64 {
 	m.mu.Lock()

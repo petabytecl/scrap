@@ -3,6 +3,7 @@ package scrub_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -147,6 +148,13 @@ type deepScrubMetrics struct {
 	repairsFailed   int
 	decremented     int
 	skips           map[string]int
+	degradedReads   uint64
+}
+
+func (m *deepScrubMetrics) RecordDegradedRead(n uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.degradedReads += n
 }
 
 func (m *deepScrubMetrics) RecordDeepRun(result string, durationSec float64) {
@@ -847,5 +855,144 @@ func TestDeepScrubber_NilRepairerSkipsGracefully(t *testing.T) {
 	}
 	if metrics.repairsOK+metrics.repairsFailed != 0 {
 		t.Fatal("expected no repair attempts without repairer")
+	}
+}
+
+// pathVerifier returns canned results or errors keyed by .blk path.
+type pathVerifier struct {
+	results map[string]block.VerifyResult
+	errs    map[string]error
+	calls   []string
+}
+
+func (v *pathVerifier) VerifyBlock(blkPath, _ string) (block.VerifyResult, error) {
+	v.calls = append(v.calls, blkPath)
+	if err, ok := v.errs[blkPath]; ok {
+		return block.VerifyResult{}, err
+	}
+	return v.results[blkPath], nil
+}
+
+// Regression for #470: a corrupt .idx must quarantine the Block and let the
+// run continue, not wedge every deep-scrub cycle at that Block.
+func TestDeepScrubQuarantinesIdxCorruptBlockAndContinues(t *testing.T) {
+	blocks := []block.Info{
+		{BlockID: 1, BlkPath: "1.blk", IdxPath: "1.idx"},
+		{BlockID: 2, BlkPath: "2.blk", IdxPath: "2.idx"},
+	}
+	verifier := &pathVerifier{
+		errs: map[string]error{"1.blk": fmt.Errorf("verify load idx: %w", block.ErrIdxCorrupt)},
+	}
+	qm := &stubQuarantineManager{}
+	metrics := &deepScrubMetrics{}
+
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:       &stubBlockLister{blocks: blocks},
+		BlockVerifier:     verifier,
+		QuarantineManager: qm,
+		Metrics:           metrics,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(qm.quarantined) != 1 || qm.quarantined[0] != "1.blk" {
+		t.Fatalf("quarantined = %v, want [1.blk]", qm.quarantined)
+	}
+	if len(verifier.calls) != 2 {
+		t.Fatalf("verified blocks = %v, want the run to continue past the corrupt idx", verifier.calls)
+	}
+	if metrics.runsOK != 1 {
+		t.Fatalf("run recorded ok = %d, want 1", metrics.runsOK)
+	}
+}
+
+// A verifier error that is NOT idx corruption (environmental) still aborts.
+func TestDeepScrubEnvironmentalVerifyErrorStillAborts(t *testing.T) {
+	blocks := []block.Info{{BlockID: 1, BlkPath: "1.blk", IdxPath: "1.idx"}}
+	verifier := &pathVerifier{errs: map[string]error{"1.blk": errors.New("open: EIO")}}
+	qm := &stubQuarantineManager{}
+	metrics := &deepScrubMetrics{}
+
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:       &stubBlockLister{blocks: blocks},
+		BlockVerifier:     verifier,
+		QuarantineManager: qm,
+		Metrics:           metrics,
+	})
+
+	if err := ds.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce succeeded, want environmental error")
+	}
+	if len(qm.quarantined) != 0 {
+		t.Fatalf("quarantined = %v, want none for environmental error", qm.quarantined)
+	}
+}
+
+// Regression for #470: a Block that read back clean after a transient read
+// fault is not quarantined but must surface a degraded-health signal.
+func TestDeepScrubRecordsDegradedReadWithoutQuarantine(t *testing.T) {
+	blocks := []block.Info{{BlockID: 1, BlkPath: "1.blk", IdxPath: "1.idx"}}
+	verifier := &pathVerifier{
+		results: map[string]block.VerifyResult{
+			"1.blk": {FramesVerified: 4, TransientReadRetries: 2},
+		},
+	}
+	qm := &stubQuarantineManager{}
+	metrics := &deepScrubMetrics{}
+
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:       &stubBlockLister{blocks: blocks},
+		BlockVerifier:     verifier,
+		QuarantineManager: qm,
+		Metrics:           metrics,
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(qm.quarantined) != 0 {
+		t.Fatalf("quarantined = %v, want none for clean re-read", qm.quarantined)
+	}
+	if metrics.degradedReads != 2 {
+		t.Fatalf("degraded reads = %d, want 2", metrics.degradedReads)
+	}
+}
+
+// Regression for #470: a Block quarantined mid-cycle gets a repair attempt at
+// the end of the same run instead of waiting a full scrub interval.
+func TestDeepScrubRunsEndOfRunRepairAfterQuarantine(t *testing.T) {
+	blocks := []block.Info{{BlockID: 1, BlkPath: "1.blk", IdxPath: "1.idx"}}
+	verifier := &pathVerifier{
+		results: map[string]block.VerifyResult{
+			"1.blk": {CorruptFrames: []block.CorruptFrame{{Offset: 40, Type: block.CorruptionFrameCRC}}},
+		},
+	}
+	repairer := &stubBlockRepairer{}
+	ds := scrub.NewDeep(scrub.DeepConfig{
+		BlockLister:       &stubBlockLister{blocks: blocks},
+		BlockVerifier:     verifier,
+		QuarantineManager: &stubQuarantineManager{},
+		BlockRepairer:     repairer,
+		Metrics:           &deepScrubMetrics{},
+	})
+
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if repairer.calls != 2 {
+		t.Fatalf("repair passes = %d, want start-of-run and end-of-run", repairer.calls)
+	}
+
+	// A clean run keeps the single start-of-run pass: persistent repair
+	// failures are not retried twice per cycle.
+	verifier.errs = nil
+	verifier.results = nil
+	repairer.calls = 0
+	if err := ds.RunOnce(context.Background()); err != nil {
+		t.Fatalf("clean RunOnce: %v", err)
+	}
+	if repairer.calls != 1 {
+		t.Fatalf("repair passes on clean run = %d, want 1", repairer.calls)
 	}
 }

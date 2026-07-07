@@ -175,3 +175,30 @@ func TestUnquarantine_RefusesToClobberExistingBlock(t *testing.T) {
 		t.Fatal("replacement block is empty after refused unquarantine")
 	}
 }
+
+// Pins the crash-shape contract behind the #470 rename-order fix: quarantine
+// renames .blk before .idx, so a crash between the two leaves
+// .blk.quarantine + .idx — a state ListQuarantined still reports for repair.
+// The reverse order left .idx.quarantine + .blk, invisible to both
+// ListQuarantined and scrub (metadata_loss skip), so the Block was never
+// repaired.
+func TestListQuarantinedSeesBlkFirstCrashShape(t *testing.T) {
+	dir := t.TempDir()
+	writeQuarantineCrashFile(t, filepath.Join(dir, "000000000000002a.blk"+block.QuarantineSuffix))
+	writeQuarantineCrashFile(t, filepath.Join(dir, "000000000000002a.idx"))
+
+	ids, err := block.ListQuarantined(dir)
+	if err != nil {
+		t.Fatalf("ListQuarantined: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != 0x2a {
+		t.Fatalf("quarantined IDs = %v, want [42]", ids)
+	}
+}
+
+func writeQuarantineCrashFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
