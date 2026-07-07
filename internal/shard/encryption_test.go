@@ -14,6 +14,7 @@ import (
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
+	"github.com/petabytecl/scrap/internal/encryption/enctest"
 	"github.com/petabytecl/scrap/internal/rewrap"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
@@ -403,7 +404,7 @@ func assertRewrapIsIdempotent(t *testing.T, s *shard.Shard, txID, docName string
 func TestEnvelopeDecryptVerifiesPlaintextSHA256(t *testing.T) {
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	content := []byte("verify plaintext digest")
-	encrypted, err := encryption.EncryptDocument(context.Background(), encryption.DocumentConfig{
+	encrypted, err := enctest.EncryptDocument(context.Background(), encryption.DocumentConfig{
 		Transit:      transit,
 		TransitMount: testTransitMount,
 		TransitKey:   testTransitKey,
@@ -414,7 +415,7 @@ func TestEnvelopeDecryptVerifiesPlaintextSHA256(t *testing.T) {
 
 	wrongSHA := encrypted.PlaintextSHA256
 	wrongSHA[0] ^= 0xff
-	_, err = encryption.DecryptDocument(context.Background(), transit, encryption.DocumentIdentity{
+	_, err = enctest.DecryptDocument(context.Background(), transit, encryption.DocumentIdentity{
 		TransactionID: "tx-sha",
 		DocumentName:  "doc.xml",
 	}, encrypted.Envelope, encrypted.Frames, wrongSHA, int64(len(content)))
@@ -426,7 +427,7 @@ func TestEnvelopeDecryptVerifiesPlaintextSHA256(t *testing.T) {
 func TestEncryptedReplicationAuthenticatesCiphertext(t *testing.T) {
 	transit := encryption.NewFakeTransit(encryption.FakeConfig{KeyName: testTransitKey})
 	content := bytes.Repeat([]byte("replicated encrypted payload:"), 8)
-	encrypted, err := encryption.EncryptDocument(context.Background(), encryption.DocumentConfig{
+	encrypted, err := enctest.EncryptDocument(context.Background(), encryption.DocumentConfig{
 		Transit:      transit,
 		TransitMount: testTransitMount,
 		TransitKey:   testTransitKey,

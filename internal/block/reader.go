@@ -72,6 +72,8 @@ type StoredFrameSource struct {
 	frameIdx uint32
 }
 
+// NextFrame returns the next stored Frame payload after validating its
+// header sequence, or io.EOF past the Document's last Frame.
 func (s *StoredFrameSource) NextFrame() ([]byte, error) {
 	if s.frameIdx == s.entry.FrameCount {
 		return nil, io.EOF
@@ -87,6 +89,7 @@ func (s *StoredFrameSource) NextFrame() ([]byte, error) {
 	return payload, nil
 }
 
+// Close releases the underlying Block file handle.
 func (s *StoredFrameSource) Close() error {
 	return s.f.Close()
 }

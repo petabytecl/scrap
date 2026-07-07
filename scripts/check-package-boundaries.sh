@@ -39,4 +39,29 @@ for package in "${storage_core_packages[@]}" "${consensus_packages[@]}"; do
 	check_no_direct_import "$package" google.golang.org/grpc/codes "gRPC status mapping belongs at transport boundaries"
 done
 
+# check_test_only_package fails when any production (non-test) file imports a
+# test-fixture package.
+check_test_only_package() {
+	local forbidden="$1"
+	local reason="$2"
+	local importers
+
+	if ! importers="$("$go_cmd" list -f "{{\$p := .ImportPath}}{{range .Imports}}{{if eq . \"$forbidden\"}}{{\$p}}{{println}}{{end}}{{end}}" ./...)"; then
+		echo "package boundary check failed: go list importers of ${forbidden}" >&2
+		failures=$((failures + 1))
+		return
+	fi
+	importers="$(grep -v '^$' <<<"$importers" || true)"
+	if [ -n "$importers" ]; then
+		echo "package boundary violation: ${forbidden} imported outside tests (${reason}):" >&2
+		echo "$importers" >&2
+		failures=$((failures + 1))
+	fi
+}
+
+# The buffering document-encryption helpers materialize whole Documents in
+# memory; a production import would reintroduce the unbounded-memory path
+# removed by ADR 0028 (#458).
+check_test_only_package github.com/petabytecl/scrap/internal/encryption/enctest "buffering crypto helpers are test fixtures only"
+
 exit "$failures"
