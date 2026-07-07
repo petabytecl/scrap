@@ -282,7 +282,8 @@ func Open(cfg Config) (*Shard, error) {
 	s.uploads = newUploadController(s, cfg.Upload, s.shardID, s.logger, s.writeTelemetry, s.uploadPressure)
 	s.uploads.resetConcurrency()
 
-	if err := s.recoverOpenlog(); err != nil {
+	truncationCandidates, err := s.recoverOpenlog()
+	if err != nil {
 		_ = idx.Close()
 		return nil, fmt.Errorf("shard: openlog recovery: %w", err)
 	}
@@ -314,7 +315,7 @@ func Open(cfg Config) (*Shard, error) {
 	}
 	s.raft = raftNode
 
-	if err := s.refreshRuntimeStateAfterRaftOpen(); err != nil {
+	if err := s.initAfterRaftOpen(truncationCandidates); err != nil {
 		raftNode.Stop()
 		s.closeBlockAndIdx()
 		_ = idx.Close()
@@ -328,6 +329,16 @@ func Open(cfg Config) (*Shard, error) {
 	s.startLifecycleCleanup()
 
 	return s, nil
+}
+
+// initAfterRaftOpen finishes the recovery and runtime work that must wait for
+// the raft node: deferred openlog truncation decisions (recovery phase B,
+// #463), then runtime state refresh.
+func (s *Shard) initAfterRaftOpen(truncationCandidates []openlogTruncationCandidate) error {
+	if err := s.finishOpenlogRecovery(truncationCandidates); err != nil {
+		return fmt.Errorf("shard: openlog recovery: %w", err)
+	}
+	return s.refreshRuntimeStateAfterRaftOpen()
 }
 
 func (s *Shard) refreshRuntimeStateAfterRaftOpen() error {
