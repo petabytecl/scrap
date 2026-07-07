@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,11 +149,13 @@ func TestUnlinkBlockDataMissingBlockIsIdempotent(t *testing.T) {
 	}
 }
 
-func writeRestoreMarkerForScanTest(t *testing.T, dir string, blockID uint64) {
+const scanRecordTestBlockID = 3
+
+func writeRestoreMarkerForScanTest(t *testing.T, dir string, restoredAtUs int64) {
 	t.Helper()
 	err := localblock.WriteRestoreMarker(dir, localblock.RestoreMarker{
-		BlockID:      blockID,
-		RestoredAtUs: time.Unix(100, 0).UnixMicro(),
+		BlockID:      scanRecordTestBlockID,
+		RestoredAtUs: restoredAtUs,
 		Source:       localblock.RestoreSourceBackend,
 		Reason:       localblock.RestoreReasonRead,
 	})
@@ -161,35 +164,75 @@ func writeRestoreMarkerForScanTest(t *testing.T, dir string, blockID uint64) {
 	}
 }
 
-func TestRecordRestoreScanStampsMarkerOnce(t *testing.T) {
+func TestRecordRestoreScanWritesGenerationBoundRecord(t *testing.T) {
 	dir := t.TempDir()
-	writeRestoreMarkerForScanTest(t, dir, 3)
+	restoredAt := time.Unix(100, 0).UnixMicro()
+	writeRestoreMarkerForScanTest(t, dir, restoredAt)
 
-	first := time.Unix(200, 0).UnixMicro()
-	if err := localblock.RecordRestoreScan(dir, 3, first); err != nil {
+	scannedAt := time.Unix(200, 0).UnixMicro()
+	if err := localblock.RecordRestoreScan(dir, 3, scannedAt); err != nil {
 		t.Fatalf("RecordRestoreScan: %v", err)
 	}
-	marker, err := localblock.ReadRestoreMarker(dir, 3)
+	record, err := localblock.ReadRestoreScanRecord(dir, 3)
 	if err != nil {
-		t.Fatalf("ReadRestoreMarker: %v", err)
+		t.Fatalf("ReadRestoreScanRecord: %v", err)
 	}
-	if marker.ScannedAtUs != first {
-		t.Fatalf("scanned_at_us = %d, want %d", marker.ScannedAtUs, first)
+	if record.RestoredAtUs != restoredAt || record.ScannedAtUs != scannedAt {
+		t.Fatalf("record = %+v, want restored_at %d scanned_at %d", record, restoredAt, scannedAt)
 	}
-	if marker.RestoredAtUs != time.Unix(100, 0).UnixMicro() {
-		t.Fatalf("restored_at_us = %d, want preserved original", marker.RestoredAtUs)
+	if localblock.RestorePendingScan(dir, 3) {
+		t.Fatal("recorded restore must not be scan-pending")
+	}
+}
+
+// A rollback to a binary that predates the scan record must keep reading the
+// restore marker: the record is a sidecar file and the marker stays exactly
+// version-1 shaped (strict unknown-field readers accept it).
+func TestRecordRestoreScanKeepsMarkerRollbackCompatible(t *testing.T) {
+	dir := t.TempDir()
+	writeRestoreMarkerForScanTest(t, dir, time.Unix(100, 0).UnixMicro())
+	if err := localblock.RecordRestoreScan(dir, 3, time.Unix(200, 0).UnixMicro()); err != nil {
+		t.Fatalf("RecordRestoreScan: %v", err)
 	}
 
-	// A second stamp must not overwrite the first scan record.
-	if err := localblock.RecordRestoreScan(dir, 3, time.Unix(300, 0).UnixMicro()); err != nil {
-		t.Fatalf("RecordRestoreScan second stamp: %v", err)
-	}
-	marker, err = localblock.ReadRestoreMarker(dir, 3)
+	raw, err := os.ReadFile(localblock.RestoreMarkerPath(dir, 3))
 	if err != nil {
-		t.Fatalf("ReadRestoreMarker after second stamp: %v", err)
+		t.Fatalf("read marker file: %v", err)
 	}
-	if marker.ScannedAtUs != first {
-		t.Fatalf("scanned_at_us after second stamp = %d, want %d", marker.ScannedAtUs, first)
+	if strings.Contains(string(raw), "scanned_at_us") {
+		t.Fatal("restore marker gained a field older binaries reject")
+	}
+	if _, err := localblock.ReadRestoreMarker(dir, 3); err != nil {
+		t.Fatalf("ReadRestoreMarker after scan record: %v", err)
+	}
+}
+
+// Regression for the restore-generation race: a scan record from an earlier
+// restore must not suppress the scan of a later restore of the same Block.
+func TestRestorePendingScanDetectsFreshRestoreGeneration(t *testing.T) {
+	dir := t.TempDir()
+	writeRestoreMarkerForScanTest(t, dir, time.Unix(100, 0).UnixMicro())
+	if err := localblock.RecordRestoreScan(dir, 3, time.Unix(200, 0).UnixMicro()); err != nil {
+		t.Fatalf("RecordRestoreScan: %v", err)
+	}
+
+	// The Block is evicted and restored again: a fresh marker generation.
+	writeRestoreMarkerForScanTest(t, dir, time.Unix(300, 0).UnixMicro())
+	if !localblock.RestorePendingScan(dir, 3) {
+		t.Fatal("fresh restore generation must be scan-pending despite the stale record")
+	}
+}
+
+func TestRestorePendingScanTreatsUnreadableMarkerAsPending(t *testing.T) {
+	dir := t.TempDir()
+	if localblock.RestorePendingScan(dir, 1) {
+		t.Fatal("missing marker must not be pending")
+	}
+	if err := os.WriteFile(localblock.RestoreMarkerPath(dir, 1), []byte("{corrupt"), 0o600); err != nil {
+		t.Fatalf("write corrupt marker: %v", err)
+	}
+	if !localblock.RestorePendingScan(dir, 1) {
+		t.Fatal("unreadable marker must stay scan-eligible (rescan is safe, a skipped scan is not)")
 	}
 }
 
@@ -199,31 +242,36 @@ func TestRecordRestoreScanMissingMarkerIsNoOp(t *testing.T) {
 	if err := localblock.RecordRestoreScan(dir, 9, time.Unix(200, 0).UnixMicro()); err != nil {
 		t.Fatalf("RecordRestoreScan on missing marker: %v", err)
 	}
-	if _, err := os.Stat(localblock.RestoreMarkerPath(dir, 9)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("marker stat error = %v, want not exist", err)
+	if _, err := os.Stat(localblock.RestoreScanRecordPath(dir, 9)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scan record stat error = %v, want not exist", err)
 	}
 }
 
 func TestRecordRestoreScanRejectsNonPositiveTime(t *testing.T) {
 	dir := t.TempDir()
-	writeRestoreMarkerForScanTest(t, dir, 3)
+	writeRestoreMarkerForScanTest(t, dir, time.Unix(100, 0).UnixMicro())
 
 	if err := localblock.RecordRestoreScan(dir, 3, 0); !errors.Is(err, localblock.ErrMarkerInvalid) {
 		t.Fatalf("RecordRestoreScan(0) error = %v, want ErrMarkerInvalid", err)
 	}
 }
 
-func TestRemoveRestoreMarkerRemovesAndIsIdempotent(t *testing.T) {
+func TestRemoveRestoreMarkerRemovesMarkerAndRecordAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	writeRestoreMarkerForScanTest(t, dir, 3)
+	writeRestoreMarkerForScanTest(t, dir, time.Unix(100, 0).UnixMicro())
+	if err := localblock.RecordRestoreScan(dir, 3, time.Unix(200, 0).UnixMicro()); err != nil {
+		t.Fatalf("RecordRestoreScan: %v", err)
+	}
 
 	if err := localblock.RemoveRestoreMarker(dir, 3); err != nil {
 		t.Fatalf("RemoveRestoreMarker: %v", err)
 	}
-	if _, err := os.Stat(localblock.RestoreMarkerPath(dir, 3)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("marker stat error = %v, want not exist", err)
+	for _, path := range []string{localblock.RestoreMarkerPath(dir, 3), localblock.RestoreScanRecordPath(dir, 3)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s = %v, want not exist", path, err)
+		}
 	}
 	if err := localblock.RemoveRestoreMarker(dir, 3); err != nil {
-		t.Fatalf("RemoveRestoreMarker on missing marker: %v", err)
+		t.Fatalf("RemoveRestoreMarker on missing files: %v", err)
 	}
 }

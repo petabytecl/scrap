@@ -97,16 +97,12 @@ func TestScannerRestoredBlockRescansOncePerRestoreNotPerRestart(t *testing.T) {
 	if len(first.scanned) != 1 || first.scanned[0] != 1 {
 		t.Fatalf("first process scanned = %v, want restored Block 1", first.scanned)
 	}
-	marker, err := localblock.ReadRestoreMarker(blocksDir, 1)
-	if err != nil {
-		t.Fatalf("ReadRestoreMarker: %v", err)
-	}
-	if marker.ScannedAtUs == 0 {
-		t.Fatal("restore marker not stamped with a post-restore scan record")
+	if _, err := localblock.ReadRestoreScanRecord(blocksDir, 1); err != nil {
+		t.Fatalf("post-restore scan record not written: %v", err)
 	}
 
 	// Simulate a restart: a fresh coordinator loses the in-memory completed
-	// set, so only the durable stamp can suppress the rescan.
+	// set, so only the durable scan record can suppress the rescan.
 	second := &restoreScanRecordingEngine{}
 	c2 := newRestoreScanCoordinator(t, blocksDir, progress, second)
 	if err := c2.scheduler.RunOnce(ctx); err != nil {
@@ -114,21 +110,5 @@ func TestScannerRestoredBlockRescansOncePerRestoreNotPerRestart(t *testing.T) {
 	}
 	if len(second.scanned) != 0 {
 		t.Fatalf("post-restart process rescanned = %v, want none", second.scanned)
-	}
-}
-
-func TestRestorePendingScanTreatsUnreadableMarkerAsPending(t *testing.T) {
-	blocksDir := t.TempDir()
-	if restorePendingScan(blocksDir, 1) {
-		t.Fatal("missing marker must not be pending")
-	}
-	if err := os.MkdirAll(blocksDir, 0o750); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(localblock.RestoreMarkerPath(blocksDir, 1), []byte("{corrupt"), 0o600); err != nil {
-		t.Fatalf("write corrupt marker: %v", err)
-	}
-	if !restorePendingScan(blocksDir, 1) {
-		t.Fatal("unreadable marker must stay scan-eligible (rescan is safe, a skipped scan is not)")
 	}
 }

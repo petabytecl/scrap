@@ -134,7 +134,7 @@ func (c *scannerCoordinator) ListSealedBlocks(ctx context.Context) ([]avscan.Blo
 			BlockID:   info.BlockID,
 			SizeBytes: size,
 			Open:      scannerBlockOpener(info.BlockID, info.BlkPath),
-			Restored:  restorePendingScan(c.blocksDir, info.BlockID),
+			Restored:  localblock.RestorePendingScan(c.blocksDir, info.BlockID),
 		})
 	}
 	return out, nil
@@ -148,22 +148,9 @@ func (c *scannerCoordinator) ReportDetections(ctx context.Context, block avscan.
 	return reporter.ReportDetections(ctx, block, detections)
 }
 
-// restorePendingScan reports whether blockID carries a restore marker without
-// a durable post-restore scan record. A stamped marker means the restored
-// Block already scanned once, so it is no longer scan-eligible below the
-// frontier (#454). An unreadable marker keeps the Block eligible: a rescan is
-// safe, a skipped scan is not.
-func restorePendingScan(blocksDir string, blockID uint64) bool {
-	marker, err := localblock.ReadRestoreMarker(blocksDir, blockID)
-	if err != nil {
-		return !os.IsNotExist(err)
-	}
-	return marker.ScannedAtUs == 0
-}
-
-// RecordRestoredBlockScanned stamps the Block's restore marker with a durable
-// post-restore scan record. Best-effort by the avscan.ScanRecorder contract:
-// a failed stamp only means the Block rescans after the next restart.
+// RecordRestoredBlockScanned writes the Block's durable post-restore scan
+// record. Best-effort by the avscan.ScanRecorder contract: a lost record only
+// means the Block rescans after the next restart.
 func (c *scannerCoordinator) RecordRestoredBlockScanned(ctx context.Context, blk avscan.Block) {
 	if err := localblock.RecordRestoreScan(c.blocksDir, blk.BlockID, time.Now().UTC().UnixMicro()); err != nil && c.logger != nil {
 		c.logger.WarnContext(ctx, "shard: restore scan record failed; Block rescans after restart",

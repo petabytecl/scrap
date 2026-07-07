@@ -19,6 +19,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/eviction"
 	"github.com/petabytecl/scrap/internal/index"
+	"github.com/petabytecl/scrap/internal/localblock"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
 
@@ -2121,9 +2122,11 @@ func TestApplyEvictionPlanRemovesRestoreMarkerOnReEviction(t *testing.T) {
 		RestoredAtUs: time.Now().UTC().Add(-time.Hour).UnixMicro(),
 		Source:       RestoreSourceBackend,
 		Reason:       RestoreReasonRead,
-		ScannedAtUs:  time.Now().UTC().UnixMicro(),
 	}); err != nil {
 		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+	if err := localblock.RecordRestoreScan(s.blocksDir, 1, time.Now().UTC().UnixMicro()); err != nil {
+		t.Fatalf("RecordRestoreScan: %v", err)
 	}
 	plan := storeEvictionApplyPlan(t, s)
 
@@ -2134,7 +2137,9 @@ func TestApplyEvictionPlanRemovesRestoreMarkerOnReEviction(t *testing.T) {
 
 	assertEvictionApplyCompleted(t, result)
 	assertBlockEvictedForApply(t, s, 1)
-	if _, err := os.Stat(RestoreMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("restore marker stat error = %v, want removed after re-eviction", err)
+	for _, path := range []string{RestoreMarkerPath(s.blocksDir, 1), localblock.RestoreScanRecordPath(s.blocksDir, 1)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s = %v, want removed after re-eviction", path, err)
+		}
 	}
 }
