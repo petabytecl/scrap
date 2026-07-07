@@ -60,6 +60,7 @@ type OTelDeepMetrics struct {
 	deepDuration      metric.Float64Histogram
 	repairsTotal      metric.Int64Counter
 	skipsTotal        metric.Int64Counter
+	degradedReads     metric.Int64Counter
 }
 
 //nolint:cyclop // straight-line constructor registering many independent instruments
@@ -146,6 +147,13 @@ func NewOTelDeepMetrics(meter metric.Meter) (*OTelDeepMetrics, error) {
 		return nil, fmt.Errorf("create skips counter: %w", err)
 	}
 
+	degradedReads, err := meter.Int64Counter("scrap.scrub.deep.degraded_reads",
+		metric.WithDescription("Total frames that read back clean only after a transient read fault."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create degraded reads counter: %w", err)
+	}
+
 	return &OTelDeepMetrics{
 		deepRunsTotal:     deepRuns,
 		framesVerified:    frames,
@@ -158,6 +166,7 @@ func NewOTelDeepMetrics(meter metric.Meter) (*OTelDeepMetrics, error) {
 		deepDuration:      duration,
 		repairsTotal:      repairs,
 		skipsTotal:        skips,
+		degradedReads:     degradedReads,
 	}, nil
 }
 
@@ -213,6 +222,10 @@ func (m *OTelDeepMetrics) RecordRepair(result string) {
 
 func (m *OTelDeepMetrics) DecrementQuarantined() {
 	m.blocksQuarantined.Add(context.Background(), -1)
+}
+
+func (m *OTelDeepMetrics) RecordDegradedRead(n uint64) {
+	m.degradedReads.Add(context.Background(), clampFrames(n))
 }
 
 func (m *OTelDeepMetrics) RecordSkip(reason string) {

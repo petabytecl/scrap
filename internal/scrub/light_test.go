@@ -25,13 +25,17 @@ func (m *mockProposer) ProposeConsistencyCheck(_ context.Context, scrubID string
 }
 
 type mockConsistencyChecker struct {
-	results map[string]scrub.Result
-	err     error
-	calls   atomic.Int32
+	results  map[string]scrub.Result
+	errAddrs map[string]error
+	err      error
+	calls    atomic.Int32
 }
 
 func (m *mockConsistencyChecker) CheckConsistency(_ context.Context, addr, scrubID string) (scrub.Result, error) {
 	m.calls.Add(1)
+	if err, ok := m.errAddrs[addr]; ok {
+		return scrub.Result{}, err
+	}
 	if m.err != nil {
 		return scrub.Result{}, m.err
 	}
@@ -50,10 +54,11 @@ type mockLeaderChecker struct {
 func (m *mockLeaderChecker) IsLeader() bool { return m.leader }
 
 type scrubMetrics struct {
-	ok       int
-	mismatch int
-	errCount int
-	duration float64
+	ok        int
+	mismatch  int
+	errCount  int
+	quorumTie int
+	duration  float64
 }
 
 type mockMetrics struct {
@@ -68,6 +73,8 @@ func (m *mockMetrics) RecordRun(result string, durationSec float64) {
 		m.recorded.mismatch++
 	case "error":
 		m.recorded.errCount++
+	case "quorum_tie":
+		m.recorded.quorumTie++
 	}
 	m.recorded.duration = durationSec
 }
@@ -356,6 +363,8 @@ func TestLightScrubber_MultipleMismatchesRebuildAll(t *testing.T) {
 	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
 		"peer-1:9091": {AppliedIndex: 10, SHA256: [32]byte{0xbb}},
 		"peer-2:9091": {AppliedIndex: 10, SHA256: [32]byte{0xcc}},
+		"peer-3:9091": {AppliedIndex: 10, SHA256: leaderHash},
+		"peer-4:9091": {AppliedIndex: 10, SHA256: leaderHash},
 	}}
 	metrics := &mockMetrics{}
 	rebuilder := &mockRebuilder{}
@@ -366,7 +375,7 @@ func TestLightScrubber_MultipleMismatchesRebuildAll(t *testing.T) {
 		LeaderChecker:      &mockLeaderChecker{leader: true},
 		Metrics:            metrics,
 		Rebuilder:          rebuilder,
-		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091", "peer-3:9091", "peer-4:9091"},
 	})
 
 	err := ls.RunOnce(context.Background())
@@ -375,7 +384,7 @@ func TestLightScrubber_MultipleMismatchesRebuildAll(t *testing.T) {
 	}
 
 	if len(rebuilder.requested) != 2 {
-		t.Fatalf("expected 2 rebuild requests, got %d", len(rebuilder.requested))
+		t.Fatalf("expected 2 rebuild requests, got %d: %v", len(rebuilder.requested), rebuilder.requested)
 	}
 }
 
@@ -433,5 +442,159 @@ func TestLightScrubber_ZeroLeaderHashIsErrorNotDivergence(t *testing.T) {
 	}
 	if len(rebuilder.requested) != 0 {
 		t.Fatalf("expected no rebuild requests off a zero hash, got %v", rebuilder.requested)
+	}
+}
+
+type mockSelfRebuilder struct {
+	calls int
+	err   error
+}
+
+func (m *mockSelfRebuilder) RequestSelfRebuild(context.Context, string) error {
+	m.calls++
+	return m.err
+}
+
+// Regression for #470: when the leader's projection hash is the minority, the
+// quorum must rebuild the leader itself instead of rebuilding every healthy
+// peer forever.
+func TestLightScrubber_CorruptLeaderRebuildsSelfByMajority(t *testing.T) {
+	peerHash := [32]byte{0xbb}
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: [32]byte{0xaa}}}
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {AppliedIndex: 10, SHA256: peerHash},
+		"peer-2:9091": {AppliedIndex: 10, SHA256: peerHash},
+	}}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+	selfRebuilder := &mockSelfRebuilder{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		SelfRebuilder:      selfRebuilder,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+	})
+
+	if err := ls.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if selfRebuilder.calls != 1 {
+		t.Fatalf("self rebuilds = %d, want 1 (leader is the minority)", selfRebuilder.calls)
+	}
+	if len(rebuilder.requested) != 0 {
+		t.Fatalf("peer rebuilds = %v, want none (peers hold the majority)", rebuilder.requested)
+	}
+	if metrics.recorded.mismatch != 1 {
+		t.Fatalf("mismatch runs = %d, want 1", metrics.recorded.mismatch)
+	}
+}
+
+// Regression for #470: a hash tie (no strict majority) freezes — no rebuilds
+// in either direction, a distinct run result, and an error for the operator.
+func TestLightScrubber_QuorumTieFreezesWithoutRebuilds(t *testing.T) {
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: [32]byte{0xaa}}}
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {AppliedIndex: 10, SHA256: [32]byte{0xbb}},
+	}}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+	selfRebuilder := &mockSelfRebuilder{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		SelfRebuilder:      selfRebuilder,
+		PeerAddrs:          []string{"peer-1:9091"},
+	})
+
+	if err := ls.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce succeeded, want quorum-tie error")
+	}
+	if len(rebuilder.requested) != 0 || selfRebuilder.calls != 0 {
+		t.Fatalf("rebuilds on tie: peers=%v self=%d, want none", rebuilder.requested, selfRebuilder.calls)
+	}
+	if metrics.recorded.quorumTie != 1 {
+		t.Fatalf("quorum_tie runs = %d, want 1", metrics.recorded.quorumTie)
+	}
+}
+
+// Three-way disagreement has no majority either: freeze rather than trust the
+// leader's copy by default.
+func TestLightScrubber_ThreeWayDisagreementFreezes(t *testing.T) {
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: [32]byte{0xaa}}}
+	checker := &mockConsistencyChecker{results: map[string]scrub.Result{
+		"peer-1:9091": {AppliedIndex: 10, SHA256: [32]byte{0xbb}},
+		"peer-2:9091": {AppliedIndex: 10, SHA256: [32]byte{0xcc}},
+	}}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+	selfRebuilder := &mockSelfRebuilder{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		SelfRebuilder:      selfRebuilder,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091"},
+	})
+
+	if err := ls.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce succeeded, want quorum-tie error")
+	}
+	if len(rebuilder.requested) != 0 || selfRebuilder.calls != 0 {
+		t.Fatalf("rebuilds on three-way disagreement: peers=%v self=%d, want none", rebuilder.requested, selfRebuilder.calls)
+	}
+	if metrics.recorded.quorumTie != 1 {
+		t.Fatalf("quorum_tie runs = %d, want 1", metrics.recorded.quorumTie)
+	}
+}
+
+// Review finding on #489: the quorum is sized by the CONFIGURED voter set.
+// Two reachable peers in a 5-voter Cell (two peers unreachable) must not
+// outvote the leader — unreachable voters are unknowns, not abstentions.
+func TestLightScrubber_UnreachablePeersCannotFormMajority(t *testing.T) {
+	peerHash := [32]byte{0xbb}
+	proposer := &mockProposer{result: scrub.Result{AppliedIndex: 10, SHA256: [32]byte{0xaa}}}
+	checker := &mockConsistencyChecker{
+		results: map[string]scrub.Result{
+			"peer-1:9091": {AppliedIndex: 10, SHA256: peerHash},
+			"peer-2:9091": {AppliedIndex: 10, SHA256: peerHash},
+		},
+		errAddrs: map[string]error{
+			"peer-3:9091": errors.New("unreachable"),
+			"peer-4:9091": errors.New("unreachable"),
+		},
+	}
+	metrics := &mockMetrics{}
+	rebuilder := &mockRebuilder{}
+	selfRebuilder := &mockSelfRebuilder{}
+
+	ls := scrub.NewLight(scrub.LightConfig{
+		Proposer:           proposer,
+		ConsistencyChecker: checker,
+		LeaderChecker:      &mockLeaderChecker{leader: true},
+		Metrics:            metrics,
+		Rebuilder:          rebuilder,
+		SelfRebuilder:      selfRebuilder,
+		PeerAddrs:          []string{"peer-1:9091", "peer-2:9091", "peer-3:9091", "peer-4:9091"},
+	})
+
+	if err := ls.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce succeeded, want no-majority error with two voters unreachable")
+	}
+	if selfRebuilder.calls != 0 || len(rebuilder.requested) != 0 {
+		t.Fatalf("rebuilds: self=%d peers=%v, want none without a configured-voter majority", selfRebuilder.calls, rebuilder.requested)
+	}
+	if metrics.recorded.quorumTie != 1 {
+		t.Fatalf("quorum_tie runs = %d, want 1", metrics.recorded.quorumTie)
 	}
 }

@@ -17,18 +17,24 @@ func Quarantine(blkPath string) error {
 	hasIdx := false
 	if _, err := os.Stat(idxPath); err == nil {
 		hasIdx = true
-		if err := os.Rename(idxPath, idxPath+QuarantineSuffix); err != nil {
-			return fmt.Errorf("block: quarantine idx: %w", err)
-		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("block: quarantine stat idx: %w", err)
 	}
 
+	// Rename the .blk first: ListQuarantined keys off .blk.quarantine, so a
+	// crash between the two renames leaves a half-state the repair pass can
+	// still see (and repair replaces both files). The reverse order left
+	// .idx.quarantine + .blk — invisible to both ListQuarantined and scrub
+	// (a Block without its .idx classifies as metadata_loss and is skipped),
+	// so the Block was never repaired (#470).
 	if err := os.Rename(blkPath, blkPath+QuarantineSuffix); err != nil {
-		if hasIdx {
-			_ = os.Rename(idxPath+QuarantineSuffix, idxPath)
-		}
 		return fmt.Errorf("block: quarantine blk: %w", err)
+	}
+	if hasIdx {
+		if err := os.Rename(idxPath, idxPath+QuarantineSuffix); err != nil {
+			_ = os.Rename(blkPath+QuarantineSuffix, blkPath)
+			return fmt.Errorf("block: quarantine idx: %w", err)
+		}
 	}
 
 	return syncIndexDir(filepath.Dir(blkPath))

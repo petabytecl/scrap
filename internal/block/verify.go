@@ -27,9 +27,21 @@ type CorruptFrame struct {
 	Type   CorruptionType
 }
 
+// ErrVerifyRead classifies a frame read that failed at the I/O layer (EIO,
+// NFS hiccup) rather than on checksum or structure. Verification retries such
+// reads once before treating the frame as corrupt (#470): a checksum mismatch
+// proves the stored bytes are bad, but a read fault only proves the read
+// failed.
+var ErrVerifyRead = errors.New("block: verify read failed")
+
 type VerifyResult struct {
 	CorruptFrames  []CorruptFrame
 	FramesVerified uint64
+	// TransientReadRetries counts frames that failed a read with an I/O-class
+	// error and then read back clean on the bounded re-read. The Block is not
+	// corrupt, but the device produced a fault: callers should surface a
+	// degraded-health signal.
+	TransientReadRetries uint64
 }
 
 type docAccumulator struct {
@@ -49,12 +61,14 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	headerCorrupt := verifyHeaderStructure(f)
+	var headerRetries uint64
+	headerCorrupt := verifyHeaderStructure(f, &headerRetries)
 	if _, err := f.Seek(HeaderSize, io.SeekStart); err != nil {
 		return VerifyResult{}, fmt.Errorf("block: verify seek past header: %w", err)
 	}
 
 	result := verifyFrames(f, idxEntries)
+	result.TransientReadRetries += headerRetries
 	if headerCorrupt {
 		result.CorruptFrames = append([]CorruptFrame{{Offset: 0, Type: CorruptionHeader}}, result.CorruptFrames...)
 	}
@@ -63,19 +77,41 @@ func VerifyBlock(blkPath, idxPath string) (VerifyResult, error) {
 
 // verifyHeaderStructure checks the 40-byte Block header's magic and CRC.
 // VerifyBlock has no expected shard/block IDs, so identity fields are not
-// checked here; VerifyHeader covers those on the read path.
-func verifyHeaderStructure(f io.Reader) bool {
-	var hdr [HeaderSize]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+// checked here; VerifyHeader covers those on the read path. An I/O-class
+// read fault gets the same single bounded re-read as frames (#470): a short
+// file is structural corruption, but a faulted read only proves the read
+// failed.
+func verifyHeaderStructure(f io.ReadSeeker, retries *uint64) bool {
+	corrupt, ioFault := readHeaderStructure(f)
+	if !ioFault {
+		return corrupt
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return true
 	}
-	if string(hdr[0:4]) != "SCRP" {
+	corrupt, ioFault = readHeaderStructure(f)
+	if ioFault {
 		return true
 	}
-	return crc32.Checksum(hdr[0:36], crcTable) != binary.LittleEndian.Uint32(hdr[36:40])
+	*retries++
+	return corrupt
 }
 
-func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
+func readHeaderStructure(f io.Reader) (corrupt, ioFault bool) {
+	var hdr [HeaderSize]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return true, false
+		}
+		return true, true
+	}
+	if string(hdr[0:4]) != "SCRP" {
+		return true, false
+	}
+	return crc32.Checksum(hdr[0:36], crcTable) != binary.LittleEndian.Uint32(hdr[36:40]), false
+}
+
+func verifyFrames(f io.ReadSeeker, idxEntries []IndexEntry) VerifyResult {
 	var result VerifyResult
 	offset := int64(HeaderSize)
 	docBySeq := make(map[uint32]*docAccumulator)
@@ -84,7 +120,7 @@ func verifyFrames(f io.Reader, idxEntries []IndexEntry) VerifyResult {
 	reachedEOF := false
 
 	for {
-		hdr, payload, readErr := readFrameRaw(f)
+		hdr, payload, readErr := readFrameWithRetry(f, offset, &result.TransientReadRetries)
 		if errors.Is(readErr, io.EOF) {
 			reachedEOF = true
 			break
@@ -224,13 +260,31 @@ func recordMissingIndexedFrames(entries []IndexEntry, framesByDocSeq map[uint32]
 	}
 }
 
+// readFrameWithRetry reads one frame, re-seeking and re-reading exactly once
+// when the failure is I/O-class (ErrVerifyRead). Checksum and structure
+// failures are never retried: the bytes were read successfully and are wrong.
+func readFrameWithRetry(f io.ReadSeeker, offset int64, retries *uint64) (FrameHeader, []byte, error) {
+	hdr, payload, err := readFrameRaw(f)
+	if err == nil || !errors.Is(err, ErrVerifyRead) {
+		return hdr, payload, err
+	}
+	if _, seekErr := f.Seek(offset, io.SeekStart); seekErr != nil {
+		return FrameHeader{}, nil, err
+	}
+	hdr, payload, err = readFrameRaw(f)
+	if err == nil {
+		*retries++
+	}
+	return hdr, payload, err
+}
+
 func readFrameRaw(r io.Reader) (FrameHeader, []byte, error) {
 	var buf [FrameHeaderSize]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return FrameHeader{}, nil, io.EOF
 		}
-		return FrameHeader{}, nil, fmt.Errorf("block: verify read header: %w", err)
+		return FrameHeader{}, nil, fmt.Errorf("%w: read header: %w", ErrVerifyRead, err)
 	}
 
 	hdr, err := parseRawFrameHeader(buf)
@@ -280,7 +334,10 @@ func readRawFramePayload(r io.Reader, payloadLen uint32) ([]byte, error) {
 	payload := make([]byte, payloadLen)
 	if payloadLen > 0 {
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, ErrTruncated
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, ErrTruncated
+			}
+			return nil, fmt.Errorf("%w: read payload: %w", ErrVerifyRead, err)
 		}
 	}
 	return payload, nil
