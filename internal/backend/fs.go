@@ -43,8 +43,12 @@ func (b *fsBackend) PutObject(
 	if err != nil {
 		return PutResult{}, err
 	}
+	root, err := b.rootPath()
+	if err != nil {
+		return PutResult{}, err
+	}
 
-	tmpPath, err := writeTempObject(path, body, size)
+	tmpPath, err := writeTempObject(path, root, body, size)
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -168,9 +172,9 @@ func (b *fsBackend) rootPath() (string, error) {
 	return root, nil
 }
 
-func writeTempObject(path string, body io.Reader, size int64) (string, error) {
+func writeTempObject(path, root string, body io.Reader, size int64) (string, error) {
 	dir := filepath.Dir(path)
-	if err := mkdirAllSynced(dir); err != nil {
+	if err := mkdirAllSynced(dir, root); err != nil {
 		return "", classifyFSError("create object directory", err)
 	}
 
@@ -219,48 +223,40 @@ func commitTempObject(tmpPath, path string) error {
 	return syncDirectory(filepath.Dir(path))
 }
 
-// mkdirAllSynced creates dir and fsyncs every directory it had to create,
+// mkdirAllSynced creates dir and fsyncs its whole ancestor chain up to root,
 // making the new directory chain durable. os.MkdirAll alone leaves the new
 // entries unsynced in their parents, so a crash after PutObject returns success
-// can lose the whole chain for the first object under a new key prefix — while
+// can lose the chain for the first object under a new key prefix — while
 // eviction has already deleted the local Block, losing both copies.
-func mkdirAllSynced(dir string) error {
-	// Collect the not-yet-existing ancestors (deepest first) up to the first
-	// existing one.
-	var created []string
-	existing := dir
-	for {
-		if _, err := os.Stat(existing); err == nil {
-			break
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		created = append(created, existing)
-		parent := filepath.Dir(existing)
-		if parent == existing {
-			break
-		}
-		existing = parent
-	}
-
+//
+// It fsyncs the chain unconditionally, not just directories this call created:
+// a concurrent PutObject may have created the same new prefix via MkdirAll but
+// not yet fsynced it, so returning success without our own fsync could ack an
+// object whose ancestors are not durable. fsync(P) durably records P's
+// children, so syncing every directory from dir's parent up to root persists
+// the existence of the whole chain. root and above are created at startup and
+// assumed durable. The chain is shallow and uploads are large, so the extra
+// directory fsyncs are negligible.
+func mkdirAllSynced(dir, root string) error {
 	if err := os.MkdirAll(dir, directoryMode); err != nil {
 		return err
 	}
-	if len(created) == 0 {
-		return nil
-	}
-	// Fsync the deepest pre-existing ancestor (persists the first new child) and
-	// each newly created directory (persists its child). Together this makes the
-	// whole chain durable.
-	if err := syncDirectory(existing); err != nil {
-		return err
-	}
-	for _, d := range created {
-		if err := syncDirectory(d); err != nil {
+	current := filepath.Dir(dir)
+	for {
+		if err := syncDirectory(current); err != nil {
 			return err
 		}
+		if current == root {
+			return nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached the filesystem root without matching the backend root
+			// (dir was not under root); stop rather than climb system dirs.
+			return nil
+		}
+		current = parent
 	}
-	return nil
 }
 
 func objectMeta(path string) (ObjectMeta, error) {

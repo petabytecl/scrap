@@ -326,7 +326,7 @@ func classifyS3Error(op string, err error) error {
 
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
-		return wrapS3Error(op, classForS3Code(apiErr.ErrorCode()), err)
+		return wrapS3Error(op, classForS3Code(apiErr.ErrorCode(), apiErr.ErrorFault()), err)
 	}
 
 	var responseErr *smithyhttp.ResponseError
@@ -344,7 +344,7 @@ func classifyS3Error(op string, err error) error {
 	return wrapS3Error(op, ErrPermanent, err)
 }
 
-func classForS3Code(code string) error {
+func classForS3Code(code string, fault smithy.ErrorFault) error {
 	switch code {
 	case "SlowDown", "ServiceUnavailable":
 		return ErrThrottled
@@ -361,13 +361,21 @@ func classForS3Code(code string) error {
 	case "BucketNotFound", "InvalidBucketName":
 		return ErrPermanent
 	default:
-		// An unrecognized code (provider-specific, e.g. MinIO) must not default
-		// to permanent: the restore path maps ClassPermanent to
-		// DataLossReasonBackendRestoreCorrupt with no retry, so an unmapped
-		// transient condition would be reported as data loss on an intact Block.
-		// Treat the unknown as transient; the restore retry budget bounds retries.
-		return ErrTransient
+		return classForUnknownS3Code(fault)
 	}
+}
+
+// classForUnknownS3Code classifies an unrecognized S3 error code by its fault.
+// It must not blindly default to permanent (the restore path maps permanent to
+// data-loss with no retry) nor blindly to transient (a genuine client/config
+// error would burn retries and mask a permanent failure): server faults are
+// transient, client faults permanent, unknown fault transient (safer for
+// restore; the retry budget bounds it).
+func classForUnknownS3Code(fault smithy.ErrorFault) error {
+	if fault == smithy.FaultClient {
+		return ErrPermanent
+	}
+	return ErrTransient
 }
 
 func classForS3Status(status int) error {

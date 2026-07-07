@@ -35,7 +35,7 @@ func TestFSHelpersClassifyFailures(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "object")
 
-	if _, err := writeTempObject(path, failingReader{}, 1); !errors.Is(err, ErrPermanent) {
+	if _, err := writeTempObject(path, root, failingReader{}, 1); !errors.Is(err, ErrPermanent) {
 		t.Fatalf("writeTempObject failing reader error = %v, want ErrPermanent", err)
 	}
 	if err := commitTempObject(filepath.Join(root, "missing-temp"), path); !errors.Is(err, ErrNotFound) {
@@ -52,7 +52,7 @@ func TestMkdirAllSyncedCreatesAndPersistsDeepPrefix(t *testing.T) {
 	// first object under it.
 	dir := filepath.Join(root, "cell", "shards", "7")
 
-	if err := mkdirAllSynced(dir); err != nil {
+	if err := mkdirAllSynced(dir, root); err != nil {
 		t.Fatalf("mkdirAllSynced: %v", err)
 	}
 
@@ -70,9 +70,25 @@ func TestMkdirAllSyncedCreatesAndPersistsDeepPrefix(t *testing.T) {
 		}
 	}
 
-	// Idempotent on an existing chain.
-	if err := mkdirAllSynced(dir); err != nil {
+	// Idempotent on an existing chain (still fsyncs the ancestors, doesn't error).
+	if err := mkdirAllSynced(dir, root); err != nil {
 		t.Fatalf("mkdirAllSynced (existing): %v", err)
+	}
+}
+
+func TestMkdirAllSyncedSyncsExistingChainConcurrentCreator(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "cell", "shards", "9")
+
+	// Simulate a concurrent creator that ran MkdirAll but has not fsynced yet:
+	// the chain already exists when this call runs. mkdirAllSynced must still
+	// fsync the ancestors (up to root) rather than early-returning, so the
+	// object it is about to write can be acked durably.
+	if err := os.MkdirAll(dir, directoryMode); err != nil {
+		t.Fatalf("pre-create chain: %v", err)
+	}
+	if err := mkdirAllSynced(dir, root); err != nil {
+		t.Fatalf("mkdirAllSynced on existing chain: %v", err)
 	}
 }
 

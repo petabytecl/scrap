@@ -464,9 +464,14 @@ func TestClassifyS3Error(t *testing.T) {
 		{name: "checksum mismatch", err: apiErr("ChecksumMismatch"), want: ErrCorrupt},
 		{name: "bucket not found", err: apiErr("BucketNotFound"), want: ErrPermanent},
 		{name: "invalid bucket", err: apiErr("InvalidBucketName"), want: ErrPermanent},
-		// An unrecognized provider code must be transient, not permanent: the
-		// restore path maps permanent to data-loss with no retry.
-		{name: "unknown", err: apiErr("Weird"), want: ErrTransient},
+		// An unrecognized provider code with no fault classification defaults to
+		// transient (safer for restore than permanent → data-loss).
+		{name: "unknown no fault", err: apiErr("Weird"), want: ErrTransient},
+		// An unrecognized server-fault code is transient; an unrecognized
+		// client-fault code stays permanent (a genuine client/config error must
+		// not burn retries or be masked as transient).
+		{name: "unknown server fault", err: apiErrFault("WeirdServer", smithy.FaultServer), want: ErrTransient},
+		{name: "unknown client fault", err: apiErrFault("WeirdClient", smithy.FaultClient), want: ErrPermanent},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -569,6 +574,10 @@ func (m *mockS3Client) ListObjectsV2(ctx context.Context, input *awss3.ListObjec
 
 func apiErr(code string) error {
 	return &smithy.GenericAPIError{Code: code, Message: code}
+}
+
+func apiErrFault(code string, fault smithy.ErrorFault) error {
+	return &smithy.GenericAPIError{Code: code, Message: code, Fault: fault}
 }
 
 func responseErr(status int) error {
