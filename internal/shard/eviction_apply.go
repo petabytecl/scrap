@@ -289,6 +289,16 @@ func (s *Shard) unlinkEvictedBlockIfFollower(selected eviction.PlanBlock, lifecy
 		return false, s.skipEvictionAfterPreparedMarker(selected, lifecycle), nil
 	}
 	removed, err := localblock.UnlinkBlockData(s.blocksDir, selected.BlockID)
+	if removed && err == nil {
+		// The restore lifecycle ends at re-eviction: drop the restore marker so
+		// marker files do not accumulate across restore/evict cycles (#454).
+		// Best-effort — a fresh restore rewrites the marker anyway, so a leaked
+		// marker is stale but harmless.
+		if markerErr := localblock.RemoveRestoreMarker(s.blocksDir, selected.BlockID); markerErr != nil && s.logger != nil {
+			s.logger.Warn("shard: remove restore marker after eviction",
+				"block_id", selected.BlockID, "err", markerErr)
+		}
+	}
 	return removed, eviction.ApplyBlock{}, err
 }
 

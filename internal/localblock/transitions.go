@@ -109,3 +109,40 @@ func RecordSuccessfulRestore(blocksDir string, blockID uint64, marker RestoreMar
 	}
 	return nil
 }
+
+// RecordRestoreScan stamps the restore marker for blockID with a durable
+// post-restore scan record so the Block is rescanned exactly once per restore
+// instead of once per process restart (#454). A missing marker is a no-op; an
+// already-stamped marker is left untouched.
+func RecordRestoreScan(blocksDir string, blockID uint64, scannedAtUs int64) error {
+	if scannedAtUs <= 0 {
+		return fmt.Errorf("%w: restore scan record scanned_at_us is required", ErrMarkerInvalid)
+	}
+	marker, err := ReadRestoreMarker(blocksDir, blockID)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("localblock: record restore scan for Block %d: %w", blockID, err)
+	}
+	if marker.ScannedAtUs != 0 {
+		return nil
+	}
+	marker.ScannedAtUs = scannedAtUs
+	return WriteRestoreMarker(blocksDir, marker)
+}
+
+// RemoveRestoreMarker removes the restore marker for blockID once its restore
+// lifecycle ends (the Block is evicted again). A missing marker is a no-op.
+func RemoveRestoreMarker(blocksDir string, blockID uint64) error {
+	if err := os.Remove(RestoreMarkerPath(blocksDir, blockID)); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("remove restore marker: %w", err)
+	}
+	if err := SyncDirectory(blocksDir); err != nil {
+		return fmt.Errorf("sync lifecycle marker removal: %w", err)
+	}
+	return nil
+}

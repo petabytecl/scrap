@@ -2109,3 +2109,32 @@ func (b blockingGetBackend) GetObject(ctx context.Context, _ string, _ backend.G
 	<-ctx.Done()
 	return nil, backend.ObjectMeta{}, ctx.Err()
 }
+
+func TestApplyEvictionPlanRemovesRestoreMarkerOnReEviction(t *testing.T) {
+	ctx := context.Background()
+	s := shardForEvictionApplyTest(t, true)
+	stageHotConfirmedBlockForEvictionApply(t, s, 1, 1024)
+	// A previously restored Block outside the hot-residency window: eviction
+	// must end its restore lifecycle by removing the marker (#454).
+	if err := WriteRestoreMarker(s.blocksDir, RestoreMarker{
+		BlockID:      1,
+		RestoredAtUs: time.Now().UTC().Add(-time.Hour).UnixMicro(),
+		Source:       RestoreSourceBackend,
+		Reason:       RestoreReasonRead,
+		ScannedAtUs:  time.Now().UTC().UnixMicro(),
+	}); err != nil {
+		t.Fatalf("WriteRestoreMarker: %v", err)
+	}
+	plan := storeEvictionApplyPlan(t, s)
+
+	result, err := s.ApplyEvictionPlan(ctx, eviction.ApplyRequest{PlanID: plan.PlanID})
+	if err != nil {
+		t.Fatalf("ApplyEvictionPlan: %v", err)
+	}
+
+	assertEvictionApplyCompleted(t, result)
+	assertBlockEvictedForApply(t, s, 1)
+	if _, err := os.Stat(RestoreMarkerPath(s.blocksDir, 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore marker stat error = %v, want removed after re-eviction", err)
+	}
+}

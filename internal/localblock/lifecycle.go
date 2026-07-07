@@ -64,6 +64,11 @@ type RestoreMarker struct {
 	RestoredAtUs int64  `json:"restored_at_us"`
 	Source       string `json:"source"`
 	Reason       string `json:"reason"`
+	// ScannedAtUs is the durable post-restore scan record (ADR 0032): zero
+	// until the Content Scanner completes a scan of the restored Block, then
+	// the scan time. A fresh restore rewrites the marker and resets it, so a
+	// non-zero value always refers to the most recent restore.
+	ScannedAtUs int64 `json:"scanned_at_us,omitempty"`
 }
 
 func EvictionMarkerPath(blocksDir string, blockID uint64) string {
@@ -327,6 +332,8 @@ func validateRestoreMarker(marker RestoreMarker, blockID uint64) error {
 		return fmt.Errorf("%w: restore marker source is required", ErrMarkerInvalid)
 	case marker.Reason == "":
 		return fmt.Errorf("%w: restore marker reason is required", ErrMarkerInvalid)
+	case marker.ScannedAtUs < 0:
+		return fmt.Errorf("%w: restore marker scanned_at_us is negative: %d", ErrMarkerInvalid, marker.ScannedAtUs)
 	default:
 		return nil
 	}
