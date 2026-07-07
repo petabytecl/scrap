@@ -198,10 +198,12 @@ func Open(cfg Config) (*Node, error) {
 		sink.SetStatusReporter(n)
 	}
 
-	// Startup purge: stale artifacts from before the last shutdown (and
-	// .snap.broken files the loader just renamed aside) must not wait for
-	// the next snapshot creation to be reclaimed (#457).
-	n.purgeObsoleteFiles()
+	// Startup purge of never-loaded artifacts only (.snap.broken appears at
+	// restart, so it must not wait for the next snapshot creation). Live
+	// .snap files are deliberately excluded: an orphan newer than the
+	// WAL-backed snapshot must not push the WAL-backed file out of the keep
+	// window (review finding on #487).
+	n.purgeSnapshotArtifacts()
 
 	go n.run()
 	return n, nil
@@ -638,18 +640,13 @@ func (n *Node) applyCommittedConfChangesLocked(entries []raftpb.Entry) {
 // snapshot, keeping the newest few of each. WAL segments are only removed
 // when their file lock is free, which is exactly the set ReleaseLockTo
 // released. Purging is best-effort: failures only delay reclamation.
-// It runs at startup and after each snapshot creation: .snap.broken files
-// are produced by the snapshot loader at restart (a corrupt .snap is renamed
-// aside), so a snapshot-creation-only purge would let them accumulate across
-// restarts (#457).
+// .snap files are purged ONLY here, at snapshot creation, where the newest
+// file is WAL-backed by construction: at startup, orphan .snap files newer
+// than the WAL-backed snapshot (SaveSnap-then-crash leftovers) could crowd
+// the WAL-backed file out of the keep window and strand the next restart.
 func (n *Node) purgeObsoleteFiles() {
-	snapDir := n.cfg.DataDir + "/snap"
-	n.purgeOldestFiles(snapDir, ".snap", nil)
-	// Neither .snap.broken (corrupt snapshots renamed aside by the loader)
-	// nor .snap.db (etcd snapshotter payload files this node never writes)
-	// are ever re-read; bound their accumulation with the same policy.
-	n.purgeOldestFiles(snapDir, ".snap.broken", nil)
-	n.purgeOldestFiles(snapDir, ".snap.db", nil)
+	n.purgeOldestFiles(n.cfg.DataDir+"/snap", ".snap", nil)
+	n.purgeSnapshotArtifacts()
 	n.purgeOldestFiles(n.cfg.DataDir+"/wal", ".wal", func(path string) bool {
 		lock, err := fileutil.TryLockFile(path, os.O_WRONLY, fileutil.PrivateFileMode)
 		if err != nil {
@@ -658,6 +655,17 @@ func (n *Node) purgeObsoleteFiles() {
 		_ = lock.Close()
 		return true
 	})
+}
+
+// purgeSnapshotArtifacts bounds the artifact classes that are never re-read:
+// .snap.broken (corrupt snapshots renamed aside by the loader — created at
+// restart, so a snapshot-creation-only purge would let them accumulate,
+// #457) and .snap.db (etcd snapshotter payload files this node never
+// writes). Safe at startup because neither class is ever loaded.
+func (n *Node) purgeSnapshotArtifacts() {
+	snapDir := n.cfg.DataDir + "/snap"
+	n.purgeOldestFiles(snapDir, ".snap.broken", nil)
+	n.purgeOldestFiles(snapDir, ".snap.db", nil)
 }
 
 func (n *Node) purgeOldestFiles(dir, suffix string, removable func(string) bool) {

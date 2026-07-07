@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/raft/v3/raftpb"
+	"go.uber.org/zap"
 )
 
 const snapshotTestManifest = `{"member":"member-a"}`
@@ -288,4 +290,51 @@ func TestNodeSnapshotPurgeCoversBrokenAndDBArtifacts(t *testing.T) {
 		return len(snapDirFilesWithSuffix(t, dataDir, ".snap.broken")) == maxKeptObsoleteFiles &&
 			len(snapDirFilesWithSuffix(t, dataDir, ".snap.db")) == maxKeptObsoleteFiles
 	})
+}
+
+// Regression for the #487 review finding: the startup purge must never
+// delete .snap files — well-formed orphan snapshots newer than the
+// WAL-backed one (SaveSnap-then-crash leftovers) would otherwise crowd the
+// WAL-backed file out of the keep window and strand the next restart.
+func TestNodeStartupPurgeKeepsAllSnapFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	var lastApplied, snapshotCalls atomic.Uint64
+
+	node := openSnapshotTestNode(t, dataDir, &lastApplied, &snapshotCalls)
+	waitForLeader(t, node)
+	proposeUntilApplied(t, node, &lastApplied, 40)
+	waitForCondition(t, "snapshot file", func() bool {
+		return len(snapDirFiles(t, dataDir)) > 0
+	})
+	node.Stop()
+	walBacked := snapDirFiles(t, dataDir)
+
+	// Fabricate SaveSnap-then-crash orphans: well-formed snapshot files at
+	// higher indexes with no WAL snapshot record, more than the keep window.
+	snapshotter := snap.New(zap.NewNop(), filepath.Join(dataDir, "snap"))
+	for i := range maxKeptObsoleteFiles + 2 {
+		orphan := raftpb.Snapshot{
+			Metadata: raftpb.SnapshotMetadata{
+				Index: uint64(i) + 1_000_000,
+				Term:  99,
+			},
+			Data: []byte(snapshotTestManifest),
+		}
+		if err := snapshotter.SaveSnap(orphan); err != nil {
+			t.Fatalf("SaveSnap orphan: %v", err)
+		}
+	}
+	before := len(snapDirFiles(t, dataDir))
+
+	restarted := openSnapshotTestNode(t, dataDir, &lastApplied, &snapshotCalls)
+	defer restarted.Stop()
+
+	if after := len(snapDirFiles(t, dataDir)); after != before {
+		t.Fatalf("snap files after restart = %d, want %d (startup purge must not touch .snap)", after, before)
+	}
+	for _, name := range walBacked {
+		if _, err := os.Stat(filepath.Join(dataDir, "snap", name)); err != nil {
+			t.Fatalf("WAL-backed snapshot %s missing after restart: %v", name, err)
+		}
+	}
 }
