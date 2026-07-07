@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 type recordingReporter struct {
@@ -104,6 +105,30 @@ func TestPeerSenderDrainReportsEveryDroppedMessage(t *testing.T) {
 	}
 	if !slices.Equal(failures, []uint64{3}) {
 		t.Fatalf("drained snapshot failures = %v, want [3]", failures)
+	}
+}
+
+// Close holds the transport mutex while waiting for sender goroutines to
+// stop, and a stopping sender's failed stream.Send reports its outcome — so
+// the reporter lookup must never contend with the transport mutex or
+// shutdown deadlocks (Codex review on #481).
+func TestReportSendResultDoesNotContendWithTransportMutex(t *testing.T) {
+	shared := NewSharedTransport(nil)
+	reporter := &recordingReporter{}
+	shared.setReporter(7, reporter)
+
+	shared.mu.Lock() // simulate Close holding the transport lock
+	defer shared.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		shared.reportSendResult(outbound{shardID: 7, to: 2, snap: true}, false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reportSendResult blocked on the transport mutex; a stopping sender's report would deadlock Close")
 	}
 }
 

@@ -210,10 +210,15 @@ type SharedTransport struct {
 	peers     map[uint64]string
 	conns     map[string]*grpc.ClientConn
 	senders   map[string]*peerSender
-	reporters map[uint64]scrapraft.StatusReporter
 	transport credentials.TransportCredentials
 	logger    *slog.Logger
 	closed    bool
+
+	// reporters has its own mutex: sender goroutines report send outcomes
+	// while Close holds t.mu waiting for those same goroutines to stop, so
+	// guarding reporters with t.mu would deadlock shutdown.
+	reportersMu sync.Mutex
+	reporters   map[uint64]scrapraft.StatusReporter
 }
 
 type SharedTransportOption func(*SharedTransport)
@@ -250,14 +255,14 @@ func NewSharedTransport(peers map[uint64]string, opts ...SharedTransportOption) 
 }
 
 func (t *SharedTransport) setReporter(shardID uint64, r scrapraft.StatusReporter) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.reportersMu.Lock()
+	defer t.reportersMu.Unlock()
 	t.reporters[shardID] = r
 }
 
 func (t *SharedTransport) reporterFor(shardID uint64) scrapraft.StatusReporter {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.reportersMu.Lock()
+	defer t.reportersMu.Unlock()
 	return t.reporters[shardID]
 }
 
