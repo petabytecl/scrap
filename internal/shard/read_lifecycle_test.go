@@ -134,6 +134,38 @@ func TestReadEvictedBlockWithCorruptMarkerIsUnavailableNotDataLoss(t *testing.T)
 	}
 }
 
+// The Unavailable mapping for a corrupt marker requires a committed
+// ConfirmUpload proving a durable Backend copy. Without one there is no known
+// copy anywhere, so reads must stay ErrDataLoss — same as the valid-marker
+// evicted path.
+func TestReadCorruptMarkerWithoutConfirmedUploadIsDataLoss(t *testing.T) {
+	ctx := context.Background()
+	s := openUploadTestShard(t, shard.UploadConfig{})
+
+	content := bytes.Repeat([]byte("no durable copy "), 4)
+	if _, err := s.WriteDocument(ctx, "tx-lost", "doc.bin", "application/octet-stream", "", bytes.NewReader(content)); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	if _, err := s.WriteDocument(ctx, "tx-seal", "doc.bin", "application/octet-stream", "", bytes.NewReader([]byte("seal previous"))); err != nil {
+		t.Fatalf("WriteDocument seal: %v", err)
+	}
+
+	blocksDir := filepath.Join(s.DataDirForTest(), "blocks")
+	if err := os.Remove(block.FilePath(blocksDir, 1)); err != nil {
+		t.Fatalf("remove Block: %v", err)
+	}
+	if err := os.WriteFile(shard.EvictionMarkerPath(blocksDir, 1), []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt marker: %v", err)
+	}
+
+	if _, _, err := s.ReadDocument(ctx, "tx-lost", "doc.bin"); !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("ReadDocument = %v, want ErrDataLoss (no committed ConfirmUpload)", err)
+	}
+	if _, err := s.HeadDocument(ctx, "tx-lost", "doc.bin"); !errors.Is(err, storeapi.ErrDataLoss) {
+		t.Fatalf("HeadDocument = %v, want ErrDataLoss (no committed ConfirmUpload)", err)
+	}
+}
+
 func TestMetadataReadsStayLocalForEvictedBlock(t *testing.T) {
 	ctx := context.Background()
 	countingBackend := newCountingGetBackend(backend.NewFS(t.TempDir()))

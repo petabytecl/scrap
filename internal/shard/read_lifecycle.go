@@ -28,7 +28,7 @@ func (s *Shard) ensureMetadataReadAllowed(blockID uint64) error {
 		if s.servableDespiteInvalidMarker(blockID, err) {
 			return nil
 		}
-		return classifyReadError(blockID, err)
+		return s.classifyReadErrorLocked(blockID, err)
 	}
 
 	switch lifecycle.State {
