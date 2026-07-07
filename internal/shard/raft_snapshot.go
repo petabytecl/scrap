@@ -32,13 +32,13 @@ func (s *Shard) projectionAppliedIndex() (uint64, bool) {
 	return s.idx.AppliedIndex(), true
 }
 
-// copyContentSafetyInto copies the live projection's content-quarantine records
-// and scanner watermark into dst (a rebuild-in-progress projection). These have
-// no Block-file source, so a projection rebuild must carry them forward or it
-// silently rolls back the content-safety controls.
-func (s *Shard) copyContentSafetyInto(dst *index.Index) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// copyContentSafetyIntoLocked copies the live projection's content-quarantine
+// records and scanner watermark into dst (a rebuild-in-progress projection).
+// These have no Block-file source, so a projection rebuild must carry them
+// forward or it silently rolls back the content-safety controls. Callers must
+// hold s.mu (the rebuild finalize closure does), so the copy cannot race a
+// quarantine/scanner apply (#464).
+func (s *Shard) copyContentSafetyIntoLocked(dst *index.Index) error {
 	if s.idx == nil {
 		return errors.New("shard: projection unavailable (rebuild in progress)")
 	}
