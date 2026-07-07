@@ -18,7 +18,14 @@ type discardTransport struct{}
 
 func (discardTransport) Send(_ []raftpb.Message) {}
 
-func TestRestartWithSnapshotNewerThanHardStateCommit(t *testing.T) {
+// A WAL snapshot record whose index the recorded HardState.Commit never
+// reached is a crash artifact (the snapshot persists before wal.Save saves
+// the HardState referencing it, #462). Recovery must ignore it and boot from
+// the previous consistent state instead of trusting the newer .snap file.
+// (This replaces TestRestartWithSnapshotNewerThanHardStateCommit, which
+// pinned the old snap.Load loader that trusted the newest .snap over the
+// WAL — the exact behavior #462b removes.)
+func TestRestartIgnoresSnapshotRecordBeyondCommittedState(t *testing.T) {
 	dataDir := t.TempDir()
 	walDir := filepath.Join(dataDir, "wal")
 	snapDir := filepath.Join(dataDir, "snap")
@@ -30,23 +37,30 @@ func TestRestartWithSnapshotNewerThanHardStateCommit(t *testing.T) {
 	}
 
 	logger := zap.NewNop()
-	snapshot := raftpb.Snapshot{
-		Metadata: raftpb.SnapshotMetadata{
-			Index: 10,
-			Term:  2,
-			ConfState: raftpb.ConfState{
-				Voters: []uint64{1, 2, 3},
-			},
-		},
-		Data: []byte("snapshot"),
-	}
-	if err := snap.New(logger, snapDir).SaveSnap(snapshot); err != nil {
-		t.Fatalf("save snapshot: %v", err)
-	}
-
+	confState := raftpb.ConfState{Voters: []uint64{1}}
 	w, err := wal.Create(logger, walDir, nil)
 	if err != nil {
 		t.Fatalf("create wal: %v", err)
+	}
+	// Consistent pre-crash state: a committed bootstrap ConfChange plus a few
+	// committed entries.
+	entries := []raftpb.Entry{
+		{Index: 1, Term: 1, Type: raftpb.EntryConfChange, Data: mustConfChangeData(t, raftpb.ConfChangeAddNode, 1)},
+		{Index: 2, Term: 2, Type: raftpb.EntryNormal, Data: []byte("committed-1")},
+		{Index: 3, Term: 2, Type: raftpb.EntryNormal, Data: []byte("committed-2")},
+	}
+	if err := w.Save(raftpb.HardState{Term: 2, Vote: 1, Commit: 3}, entries); err != nil {
+		t.Fatalf("save wal: %v", err)
+	}
+	// Crash artifact: an install-snapshot at index 10 persisted its snap file
+	// and WAL snapshot record, but the crash hit before wal.Save recorded a
+	// HardState with Commit >= 10.
+	snapshot := raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{Index: 10, Term: 2, ConfState: confState},
+		Data:     []byte("orphaned install-snapshot"),
+	}
+	if err := snap.New(logger, snapDir).SaveSnap(snapshot); err != nil {
+		t.Fatalf("save snapshot: %v", err)
 	}
 	if err := w.SaveSnapshot(walpb.Snapshot{
 		Index:     snapshot.Metadata.Index,
@@ -55,32 +69,28 @@ func TestRestartWithSnapshotNewerThanHardStateCommit(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save wal snapshot: %v", err)
 	}
-	if err := w.Save(raftpb.HardState{Term: 2, Vote: 1, Commit: 5}, nil); err != nil {
-		t.Fatalf("save hard state: %v", err)
-	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close wal: %v", err)
 	}
 
 	node, err := Open(Config{
 		ID:        1,
-		Peers:     map[uint64]string{1: "", 2: "", 3: ""},
+		Peers:     map[uint64]string{1: ""},
 		DataDir:   dataDir,
 		Transport: discardTransport{},
-		Apply: func(_ []raftpb.Entry, _ uint64) error {
-			return nil
-		},
+		Apply:     func(_ []raftpb.Entry, _ uint64) error { return nil },
 		Restore: func(data []byte) error {
-			if string(data) != "snapshot" {
-				t.Fatalf("restore data = %q, want snapshot", string(data))
-			}
+			t.Errorf("Restore called with %q; the orphaned snapshot must be ignored", string(data))
 			return nil
 		},
 	})
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("Open after orphaned install-snapshot crash: %v", err)
 	}
-	node.Stop()
+	defer node.Stop()
+	if got := node.CommitIndex(); got != 3 {
+		t.Fatalf("CommitIndex = %d, want 3 (pre-crash committed state)", got)
+	}
 }
 
 func TestWALSnapshotFromReadySnapshotIncludesConfState(t *testing.T) {
