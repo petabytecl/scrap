@@ -63,7 +63,7 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint
 		TotalBytes:         doc.TotalBytes,
 		SHA256:             sha,
 		EncryptionEnvelope: append([]byte(nil), doc.EncryptionEnvelope...),
-	}, entryIndex); err != nil {
+	}, entryIndex, state.targetExists); err != nil {
 		return err
 	}
 
@@ -202,9 +202,17 @@ func (s *Shard) blockIndexEntriesForApply(blockID uint64, txID string) ([]block.
 	return ir.FindByTransaction(txID), nil
 }
 
-func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry, entryIndex uint64) error {
+func (s *Shard) appendDocumentIndexEntry(doc *scrapv1.CommitDocument, entry block.IndexEntry, entryIndex uint64, alreadyIndexed bool) error {
 	idxW := s.idxWriterForBlock(doc.BlockId)
 	if idxW != nil {
+		// Re-applying a committed entry already written to the open Block's index
+		// (a crash between the .idx append and the projection count) must not
+		// append a duplicate: a duplicate makes ListDocuments report ErrCorrupt
+		// and deep scrub misattribute the Block. The sealed-Block branch below
+		// makes the same check via blockIndexContainsDocumentRepairingTail.
+		if alreadyIndexed {
+			return nil
+		}
 		if err := idxW.Append(entry); err != nil {
 			return fmt.Errorf("shard: apply write idx: %w", err)
 		}
