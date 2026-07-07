@@ -184,7 +184,7 @@ func (s *Shard) ensureReplicaAppendOffsetLocked(ctx context.Context, init *scrap
 // open Block's index references the overhang: an indexed Document there means
 // committed bytes.
 func (s *Shard) rollbackReplicaOverhangLocked(blockID uint64, wantOffset, currentOffset int64) error {
-	indexed, err := s.replicaOverhangIndexed(blockID, wantOffset)
+	indexed, err := s.blockIndexHasEntryAtOrPast(blockID, wantOffset)
 	if err != nil {
 		return err
 	}
@@ -210,17 +210,19 @@ func (s *Shard) rollbackReplicaOverhangLocked(blockID uint64, wantOffset, curren
 	return nil
 }
 
-// replicaOverhangIndexed reports whether the open Block's index references any
-// Document at or past wantOffset. Any read failure other than a missing index
-// counts as indexed, failing closed to the pre-rollback behavior (reject the
-// append) rather than truncating bytes it cannot prove uncommitted.
-func (s *Shard) replicaOverhangIndexed(blockID uint64, wantOffset int64) (bool, error) {
+// blockIndexHasEntryAtOrPast reports whether the Block's index references any
+// committed Document at or past wantOffset. A missing index means no committed
+// entries; any other read failure is surfaced so callers can fail closed
+// rather than truncate bytes they cannot prove uncommitted. Used by both the
+// replica overhang rollback and openlog recovery to refuse truncating a region
+// that already holds committed Frames.
+func (s *Shard) blockIndexHasEntryAtOrPast(blockID uint64, wantOffset int64) (bool, error) {
 	ir, err := block.OpenIndexReader(s.idxPath(blockID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, fmt.Errorf("shard: open replica index: %w", err)
+		return false, fmt.Errorf("shard: open block index: %w", err)
 	}
 	defer func() { _ = ir.Close() }()
 	for _, entry := range ir.Entries() {

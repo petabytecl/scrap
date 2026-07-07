@@ -1,3 +1,48 @@
+## Deferred from: BMAD full-project data-reliability review (2026-07-06)
+
+Eight parallel Blind Hunter + Edge Case Hunter passes over the storage path
+(`block`, `index`, `shard`, `raft`, `peer`, `encryption`, `localblock`,
+`eviction`, `scrub`, `avscan`, `backend`) with a data-integrity/durability lens
+and per-package coverage sweeps. Findings verified against the code before
+acting.
+
+Fixed on branch `fix/recovery-truncation-and-durability-hardening` (PR #460),
+each with a regression test that fails without the fix:
+- openlog `recoverPrepFile` refuses to truncate a Block region that holds
+  committed `.idx` entries (was: rolling-restart could destroy ACKed Documents);
+  `truncateFile` never zero-extends.
+- `openNewBlock` fsyncs the blocks directory (was: power loss could lose a
+  committed Block's files while the raft log referenced it).
+- scrub `repairFromPeer` calls `VerifyHeader(shardID, blockID)` before promoting
+  a peer replacement (was: could install a different Block under the wrong ID).
+
+Also fixed: applied-index watermark carried across projection rebuilds
+(PR #459).
+
+Deferred to tracked issues on milestone `storage-gateway-v2` (need design/ADR
+or a larger change):
+- #461 projection rebuild drops content-quarantine records + scanner watermark
+  (content-safety rollback; interacts with #459).
+- #462 raft install-snapshot crash windows (Ready-loop ordering,
+  persist-before-Restore, missing ReportSnapshot; `applyIncomingSnapshotLocked`
+  at 0% coverage).
+- #463 openlog recovery decides truncation before raft replay (single-member
+  committed-byte loss).
+- #464 projection rebuild loses commits applied during the rebuild window.
+- #465 crash between `.idx` append and projection update can duplicate an `.idx`
+  entry on replay.
+- #466 rewrap `Changed` compares nondeterministic ciphertext → full Block
+  re-upload on every no-op rewrap.
+- #467 localblock restore/eviction marker crash windows; one corrupt marker
+  aborts the sweep and surfaces as `ErrDataLoss` on intact Documents.
+- #468 eviction plan lacks durable-copy proof; apply loop ignores plan expiry.
+- #469 backend restore integrity (S3 Head/Get version race, unknown-code →
+  permanent → DataLoss, missing FS ancestor fsync).
+- #470 scrub false-quarantine on transient I/O; idx-corruption aborts run;
+  repair cadence; light-scrub lacks quorum; avscan frontier reset.
+- #471 test-coverage epic: crash-recovery, repair-failure, encrypted-path, and
+  install-snapshot paths largely untested.
+
 ## Deferred from: code review of 2-7-bound-peer-replicatedocument-input-before-side-effects (2026-06-15)
 
 - Local (no-sink) `ReplicateDocument` path appends to the Block before SHA-256 verification and does not roll back on mismatch [internal/peer/server.go:replicateToLocalBlock]. Pre-existing (the prior implementation appended then compared); the production sink path validates and aborts via `internal/shard.validateReplicatedAppend`, and the local path is a test/legacy fallback.

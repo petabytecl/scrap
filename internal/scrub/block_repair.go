@@ -147,6 +147,27 @@ func (r *BlockRepair) decrementQuarantined() {
 	}
 }
 
+// verifyStagedReplacement confirms a fetched replacement is actually this
+// Shard's Block blockID and is structurally sound before it is promoted.
+// VerifyBlock checks CRC/SHA/frame integrity but deliberately skips header
+// identity, so the VerifyHeader call is what stops a peer bug or version skew
+// from installing a different, internally-consistent Block under blockID's name
+// (every read would then fail VerifyHeader while deep scrub reports it clean).
+// The Backend restore path and replica repair both perform this identity check.
+func (r *BlockRepair) verifyStagedReplacement(paths blockRepairPaths, blockID uint64) error {
+	if err := block.VerifyHeader(paths.blkStaged, r.cfg.ShardID, blockID); err != nil {
+		return fmt.Errorf("verify replacement identity: %w", fsErrCause(err))
+	}
+	result, err := block.VerifyBlock(paths.blkStaged, paths.idxStaged)
+	if err != nil {
+		return fmt.Errorf("verify replacement: %w", fsErrCause(err))
+	}
+	if len(result.CorruptFrames) > 0 {
+		return fmt.Errorf("verify replacement: %d corrupt frames", len(result.CorruptFrames))
+	}
+	return nil
+}
+
 func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAddr string) error {
 	blkData, idxData, err := r.cfg.Transferer.TransferBlock(ctx, peerAddr, r.cfg.ShardID, blockID)
 	if err != nil {
@@ -165,14 +186,9 @@ func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAd
 		return fmt.Errorf("write replacement index: %w", fsErrCause(err))
 	}
 
-	result, err := block.VerifyBlock(paths.blkStaged, paths.idxStaged)
-	if err != nil {
+	if err := r.verifyStagedReplacement(paths, blockID); err != nil {
 		_ = cleanupRepairStaging(paths)
-		return fmt.Errorf("verify replacement: %w", fsErrCause(err))
-	}
-	if len(result.CorruptFrames) > 0 {
-		_ = cleanupRepairStaging(paths)
-		return fmt.Errorf("verify replacement: %d corrupt frames", len(result.CorruptFrames))
+		return err
 	}
 
 	if err := promoteRepairStaging(paths); err != nil {

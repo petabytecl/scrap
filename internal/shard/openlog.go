@@ -95,8 +95,25 @@ func (s *Shard) recoverPrepFile(name string) error {
 		return nil
 	}
 
+	startOffset := safeUint64ToInt64(entry.StartOffset)
+	// The prep's Document never committed, but another Document may have
+	// committed at or past its offset in the same Block (an ambiguous propose
+	// kept this prep's bytes, then later writes committed above it). Truncating
+	// to the prep offset would destroy those committed Frames while their .idx
+	// entries survive pointing past EOF. Refuse and keep the prep; a corrupt or
+	// unreadable index fails closed the same way.
+	committedAbove, err := s.blockIndexHasEntryAtOrPast(entry.BlockId, startOffset)
+	if err != nil {
+		return fmt.Errorf("shard: inspect block %d index during recovery: %w", entry.BlockId, err)
+	}
+	if committedAbove {
+		s.logger.Error("shard: openlog recovery kept prep; committed documents sit at or past its offset",
+			"block_id", entry.BlockId, "start_offset", startOffset, "prep", name)
+		return nil
+	}
+
 	blkPath := s.blockPath(entry.BlockId)
-	if err := truncateFile(blkPath, safeUint64ToInt64(entry.StartOffset)); err != nil {
+	if err := truncateFile(blkPath, startOffset); err != nil {
 		return fmt.Errorf("shard: truncate block %d: %w", entry.BlockId, err)
 	}
 	if err := syncDir(filepath.Dir(blkPath)); err != nil {
@@ -179,6 +196,18 @@ func truncateFile(path string, size int64) error {
 			return nil
 		}
 		return err
+	}
+	// os.File.Truncate grows the file with zero bytes when size exceeds the
+	// current length. During recovery the target offset must only ever shrink
+	// the Block; growing it would inject a non-Frame zero region that every
+	// frame scanner reads as corruption. Never extend.
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	if size >= info.Size() {
+		return f.Close()
 	}
 	truncErr := f.Truncate(size)
 	if truncErr == nil {
