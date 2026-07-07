@@ -118,6 +118,109 @@ func writeUncommittedThenCommitted(t *testing.T, blocksDir string) (uint64, int6
 	return uint64(aOffset), sizeBefore //nolint:gosec // aOffset is a block file offset >= HeaderSize, never negative.
 }
 
+// A Document made visible by a committed RETRY at a different offset must not
+// resolve an earlier rejected duplicate's prep: that prep's unindexed Frames
+// are orphans and still need truncation, or doc_seq desynchronizes from the
+// .idx position (Codex review on #482).
+func TestRecoveryTruncatesRejectedDuplicateWhenRetryCommitted(t *testing.T) {
+	blocksDir := t.TempDir()
+	openlogDir := t.TempDir()
+	idx, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	s := &Shard{
+		blocksDir:  blocksDir,
+		openlogDir: openlogDir,
+		idx:        idx,
+		logger:     slog.New(slog.DiscardHandler),
+	}
+
+	orphanOffset := writeCommittedInstanceThenRejectedDuplicate(t, blocksDir, idx)
+
+	writeID := "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+	if err := s.writePrepFile(writeID, &scrapv1.OpenlogEntry{
+		TransactionId: "tx-r",
+		DocumentName:  "doc.xml",
+		BlockId:       1,
+		StartOffset:   uint64(orphanOffset), //nolint:gosec // offset >= HeaderSize, never negative
+		ContentType:   "text/xml",
+	}); err != nil {
+		t.Fatalf("writePrepFile: %v", err)
+	}
+
+	candidates, err := s.recoverOpenlog()
+	if err != nil {
+		t.Fatalf("recoverOpenlog: %v", err)
+	}
+	// The visible Document is the committed instance at a different offset —
+	// it must not resolve this prep in phase A.
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want the duplicate's prep deferred", len(candidates))
+	}
+	if err := s.resolveOpenlogTruncations(candidates); err != nil {
+		t.Fatalf("resolveOpenlogTruncations: %v", err)
+	}
+
+	info, err := os.Stat(block.FilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("stat block: %v", err)
+	}
+	if info.Size() != orphanOffset {
+		t.Fatalf("block size = %d, want %d: orphan Frames of the rejected duplicate must be truncated", info.Size(), orphanOffset)
+	}
+	if _, err := os.Stat(s.prepPath(writeID)); !os.IsNotExist(err) {
+		t.Fatalf("prep stat = %v, want removed after truncation", err)
+	}
+}
+
+// writeCommittedInstanceThenRejectedDuplicate builds Block 1 with tx-r/doc.xml
+// committed (indexed + in the projection) at the header offset, then the same
+// Document's rejected duplicate Frames above it. Returns the orphan offset.
+func writeCommittedInstanceThenRejectedDuplicate(t *testing.T, blocksDir string, idx *index.Index) int64 {
+	t.Helper()
+
+	bw, err := block.NewWriter(block.FilePath(blocksDir, 1), 7, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	committed, err := bw.AppendDocument("tx-r", "doc.xml", "text/xml", bytes.NewReader([]byte("committed instance")))
+	if err != nil {
+		t.Fatalf("append committed instance: %v", err)
+	}
+	orphanOffset := bw.Offset()
+	if _, err := bw.AppendDocument("tx-r", "doc.xml", "text/xml", bytes.NewReader([]byte("rejected duplicate"))); err != nil {
+		t.Fatalf("append rejected duplicate: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("close block: %v", err)
+	}
+	iw, err := block.NewIndexWriter(block.IdxFilePath(blocksDir, 1))
+	if err != nil {
+		t.Fatalf("NewIndexWriter: %v", err)
+	}
+	if err := iw.Append(block.IndexEntry{
+		TransactionID: "tx-r",
+		DocName:       "doc.xml",
+		ContentType:   "text/xml",
+		FirstFrameOff: committed.FirstFrameOffset,
+		FrameCount:    committed.FrameCount,
+		TotalBytes:    committed.Size,
+		SHA256:        committed.SHA256,
+	}); err != nil {
+		t.Fatalf("append committed index entry: %v", err)
+	}
+	if err := iw.Close(); err != nil {
+		t.Fatalf("close index: %v", err)
+	}
+	if err := addProjectionDocument(idx, "tx-r", 1); err != nil {
+		t.Fatalf("addProjectionDocument: %v", err)
+	}
+	return orphanOffset
+}
+
 func TestTruncateFileNeverExtends(t *testing.T) {
 	path := t.TempDir() + "/block.blk"
 	if err := os.WriteFile(path, []byte("0123456789"), 0o600); err != nil {

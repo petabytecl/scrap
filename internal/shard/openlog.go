@@ -109,25 +109,46 @@ func (s *Shard) recoverPrepFile(name string) (openlogTruncationCandidate, bool, 
 		return openlogTruncationCandidate{}, false, fmt.Errorf("shard: prep %s: start offset %d overflows int64", name, entry.StartOffset)
 	}
 
-	exists, err := s.documentVisibleInProjectionLenient(entry.TransactionId, entry.DocumentName)
-	if err != nil {
-		return openlogTruncationCandidate{}, false, fmt.Errorf("shard: resolve prep %s: %w", name, err)
-	}
-	if exists {
-		_ = os.Remove(path) // best-effort cleanup of already-committed prep
-		return openlogTruncationCandidate{}, false, nil
-	}
-
-	// Not visible yet — but the raft WAL may hold a committed CommitDocument
-	// for it that simply never applied before the crash. Keep the prep and
-	// defer the truncation decision until after replay (#463).
-	return openlogTruncationCandidate{
+	candidate := openlogTruncationCandidate{
 		prepName:    name,
 		txID:        entry.TransactionId,
 		docName:     entry.DocumentName,
 		blockID:     entry.BlockId,
 		startOffset: safeUint64ToInt64(entry.StartOffset),
-	}, true, nil
+	}
+	committed, err := s.prepIsCommittedInstance(candidate)
+	if err != nil {
+		return openlogTruncationCandidate{}, false, fmt.Errorf("shard: resolve prep %s: %w", name, err)
+	}
+	if committed {
+		_ = os.Remove(path) // best-effort cleanup of already-committed prep
+		return openlogTruncationCandidate{}, false, nil
+	}
+
+	// Not this prep's committed instance (yet) — the raft WAL may hold a
+	// committed CommitDocument for it that simply never applied before the
+	// crash. Keep the prep and defer the truncation decision until after
+	// replay (#463).
+	return candidate, true, nil
+}
+
+// prepIsCommittedInstance reports whether the visible Document for the prep's
+// identity is THIS prep's write: same Block and start offset. A Document made
+// visible by a committed retry at a different offset does not resolve this
+// prep — the prep's own Frames are unindexed orphans that still need the
+// truncation decision, or they desynchronize doc_seq from the .idx position.
+func (s *Shard) prepIsCommittedInstance(candidate openlogTruncationCandidate) (bool, error) {
+	exists, err := s.documentVisibleInProjectionLenient(candidate.txID, candidate.docName)
+	if err != nil || !exists {
+		return false, err
+	}
+	existing, found, err := s.duplicateDocumentEntry(candidate.txID, candidate.docName)
+	if err != nil {
+		return false, err
+	}
+	return found &&
+		existing.blockID == candidate.blockID &&
+		existing.FirstFrameOff == candidate.startOffset, nil
 }
 
 // finishOpenlogRecovery waits for raft replay to catch up with the commit
@@ -176,13 +197,16 @@ func (s *Shard) resolveOpenlogTruncation(candidate openlogTruncationCandidate) e
 		return nil
 	}
 
-	exists, err := s.documentVisibleInProjectionLenient(candidate.txID, candidate.docName)
+	committed, err := s.prepIsCommittedInstance(candidate)
 	if err != nil {
 		return fmt.Errorf("shard: resolve prep %s after replay: %w", candidate.prepName, err)
 	}
-	if exists {
+	if committed {
 		// Committed on quorum before the crash, applied during replay. The
 		// bytes are authoritative — truncating them would break invariant 1.
+		// A Document made visible by a committed RETRY at a different offset
+		// does not take this branch: that prep's Frames are orphans and fall
+		// through to the guard + truncation below.
 		_ = os.Remove(path) // best-effort cleanup of already-committed prep
 		return nil
 	}
