@@ -25,6 +25,11 @@ const (
 	defaultRestoreRetryBase   = 100 * time.Millisecond
 	restoreMaxAttemptsLimit   = 5
 	maxRestoreRetryBackoff    = time.Second
+
+	// DefaultRestoreConcurrency bounds simultaneous full-Block restores (M-02).
+	DefaultRestoreConcurrency = 4
+	// DefaultRestoreTimeout is the mandatory Shard-owned restore deadline (M-02).
+	DefaultRestoreTimeout = 5 * time.Minute
 )
 
 type restoreStagingFile interface {
@@ -112,7 +117,7 @@ func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64
 		return waitRestore(ctx, call)
 	}
 
-	restoreCtx, cancel := detachedRestoreContext(ctx)
+	restoreCtx, cancel := s.detachedRestoreContext(ctx)
 	defer cancel()
 	call.err = s.restoreEvictedBlockOnce(restoreCtx, blockID, reason)
 	close(call.done)
@@ -129,13 +134,56 @@ func (s *Shard) restoreEvictedBlockForReason(ctx context.Context, blockID uint64
 	return call.err
 }
 
-func detachedRestoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	detached := context.WithoutCancel(ctx)
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return detached, func() {}
+func newRestoreSemaphore(concurrency int) chan struct{} {
+	if concurrency <= 0 {
+		concurrency = DefaultRestoreConcurrency
 	}
-	return context.WithDeadline(detached, deadline)
+	return make(chan struct{}, concurrency)
+}
+
+func (s *Shard) restoreTimeout() time.Duration {
+	if s.upload.RestoreTimeout > 0 {
+		return s.upload.RestoreTimeout
+	}
+	return DefaultRestoreTimeout
+}
+
+// detachedRestoreContext builds a Shard-owned restore context with a mandatory
+// timeout (M-02 / ADR 0027). Caller cancellation does not cancel shared restore
+// work; the Shard timeout still bounds it.
+func (s *Shard) detachedRestoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	timeout := s.restoreTimeout()
+	deadline, ok := ctx.Deadline()
+	if ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	return context.WithTimeout(detached, timeout)
+}
+
+func (s *Shard) acquireRestoreSlot(ctx context.Context) error {
+	if s.restoreSem == nil {
+		return nil
+	}
+	select {
+	case s.restoreSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Shard) releaseRestoreSlot() {
+	if s.restoreSem == nil {
+		return
+	}
+	select {
+	case <-s.restoreSem:
+	default:
+	}
 }
 
 func (s *Shard) beginRestore(blockID uint64) (*blockRestoreCall, bool) {
@@ -189,6 +237,11 @@ func (s *Shard) restoreEvictedBlockOnce(ctx context.Context, blockID uint64, rea
 }
 
 func (s *Shard) restoreEvictedBlockOnceRecorded(ctx context.Context, blockID uint64, reason string) error {
+	if err := s.acquireRestoreSlot(ctx); err != nil {
+		return err
+	}
+	defer s.releaseRestoreSlot()
+
 	input, err := s.restoreInput(ctx, blockID)
 	if err != nil {
 		return err
@@ -207,11 +260,18 @@ func (s *Shard) RestoreBlockForRepair(ctx context.Context, blockID uint64) error
 }
 
 func (s *Shard) restoreBlockForRepair(ctx context.Context, blockID uint64) error {
-	input, err := s.repairRestoreInput(ctx, blockID)
+	restoreCtx, cancel := s.detachedRestoreContext(ctx)
+	defer cancel()
+	if err := s.acquireRestoreSlot(restoreCtx); err != nil {
+		return err
+	}
+	defer s.releaseRestoreSlot()
+
+	input, err := s.repairRestoreInput(restoreCtx, blockID)
 	if err != nil {
 		return err
 	}
-	tmpBlockPath, err := s.downloadRestore(ctx, input)
+	tmpBlockPath, err := s.downloadRestore(restoreCtx, input)
 	if err != nil {
 		return err
 	}
@@ -225,7 +285,7 @@ func (s *Shard) restoreBlockForRepair(ctx context.Context, blockID uint64) error
 		}
 	}()
 
-	tmpIndexPath, err := s.downloadRestoreIndex(ctx, input)
+	tmpIndexPath, err := s.downloadRestoreIndex(restoreCtx, input)
 	if err != nil {
 		return err
 	}

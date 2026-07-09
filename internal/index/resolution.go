@@ -32,23 +32,18 @@ func NewResolver(projection *Index, blockIndexPath BlockIndexPath) Resolver {
 }
 
 func (r Resolver) ResolveDocument(txID, docName string) (ResolvedDocument, error) {
-	entry, err := r.transactionEntry(txID)
+	// M-11 / ADR 0034: validate the complete Transaction (every Block ID and
+	// DocCount) before returning one Document. Early return on the first match
+	// would hide a corrupt later Block.
+	docs, err := r.ListDocuments(txID)
 	if err != nil {
 		return ResolvedDocument{}, err
 	}
-
-	for _, blockID := range entry.BlockIDs {
-		entries, err := r.blockEntries(txID, blockID)
-		if err != nil {
-			return ResolvedDocument{}, err
-		}
-		for _, e := range entries {
-			if e.DocName == docName {
-				return ResolvedDocument{IndexEntry: e, BlockID: blockID}, nil
-			}
+	for _, doc := range docs {
+		if doc.DocName == docName {
+			return doc, nil
 		}
 	}
-
 	return ResolvedDocument{}, fmt.Errorf("%w: %s/%s", ErrDocumentNotFound, txID, docName)
 }
 

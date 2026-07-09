@@ -33,16 +33,19 @@ type transferCall struct {
 	blockID uint64
 }
 
-func (t *recordingBlockTransferer) TransferBlock(_ context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error) {
+func (t *recordingBlockTransferer) TransferBlockToFiles(_ context.Context, addr string, shardID, blockID uint64, blkPath, idxPath string) error {
 	t.calls = append(t.calls, transferCall{addr: addr, shardID: shardID, blockID: blockID})
 	if t.err != nil {
-		return nil, nil, t.err
+		return t.err
 	}
 	payload, ok := t.payloads[blockID]
 	if !ok {
-		return nil, nil, errors.New("missing replacement")
+		return errors.New("missing replacement")
 	}
-	return bytes.Clone(payload.blk), bytes.Clone(payload.idx), nil
+	if err := os.WriteFile(blkPath, payload.blk, 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(idxPath, payload.idx, 0o600)
 }
 
 type recordingBackendRestorer struct {

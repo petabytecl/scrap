@@ -911,8 +911,11 @@ type CommitDocument struct {
 	Sha256             []byte                 `protobuf:"bytes,9,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	CreatedAtUs        int64                  `protobuf:"varint,10,opt,name=created_at_us,json=createdAtUs,proto3" json:"created_at_us,omitempty"`
 	EncryptionEnvelope []byte                 `protobuf:"bytes,11,opt,name=encryption_envelope,json=encryptionEnvelope,proto3" json:"encryption_envelope,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// proposal_id uniquely correlates one CommitDocument proposal with its waiter
+	// (ADR 0033 / H-02). Empty on historical entries; new proposals must set it.
+	ProposalId    string `protobuf:"bytes,12,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CommitDocument) Reset() {
@@ -1020,6 +1023,13 @@ func (x *CommitDocument) GetEncryptionEnvelope() []byte {
 		return x.EncryptionEnvelope
 	}
 	return nil
+}
+
+func (x *CommitDocument) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
 }
 
 type OpenlogEntry struct {
@@ -1178,7 +1188,7 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\x0fnew_key_version\x18\x06 \x01(\x05R\rnewKeyVersion\x12&\n" +
 	"\x0frewrapped_at_us\x18\a \x01(\x03R\rrewrappedAtUs\x12\x1f\n" +
 	"\vproposal_id\x18\b \x01(\tR\n" +
-	"proposalId\"\x9a\x03\n" +
+	"proposalId\"\xbb\x03\n" +
 	"\x0eCommitDocument\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
@@ -1193,7 +1203,9 @@ const file_scrap_v1_raft_proto_rawDesc = "" +
 	"\x06sha256\x18\t \x01(\fR\x06sha256\x12\"\n" +
 	"\rcreated_at_us\x18\n" +
 	" \x01(\x03R\vcreatedAtUs\x12/\n" +
-	"\x13encryption_envelope\x18\v \x01(\fR\x12encryptionEnvelope\"\xe4\x01\n" +
+	"\x13encryption_envelope\x18\v \x01(\fR\x12encryptionEnvelope\x12\x1f\n" +
+	"\vproposal_id\x18\f \x01(\tR\n" +
+	"proposalId\"\xe4\x01\n" +
 	"\fOpenlogEntry\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12\x19\n" +

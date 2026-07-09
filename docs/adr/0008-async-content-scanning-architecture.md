@@ -36,6 +36,14 @@ latency). Scanner outage would block all writes. Immutability means inline rejec
 is the only benefit — but async quarantine achieves the same protection with seconds
 of additional exposure.
 
+### Production composition
+
+Production `scrapd` composition must wire a real plaintext Content Scanner
+engine and signature provider (finding `M-05`). Metrics-only injection that
+leaves `Engine` nil and permanently reports `engine_unavailable` is not a
+production-ready scanner. Encrypted Blocks are scanned after decryption through
+the normal Document read path, never by treating ciphertext as plaintext.
+
 ### Engine: ClamAV + YARA
 
 ClamAV provides broad signature-based detection. YARA provides custom rules for

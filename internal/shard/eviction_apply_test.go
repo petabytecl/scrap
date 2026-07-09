@@ -2069,6 +2069,10 @@ func (r *evictionApplyRaftStub) LeaderID() uint64 {
 	return 2
 }
 
+func (r *evictionApplyRaftStub) Term() uint64 {
+	return 1
+}
+
 func (r *evictionApplyRaftStub) AppliedIndex() uint64 {
 	return 0
 }

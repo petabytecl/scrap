@@ -263,8 +263,10 @@ func NewDocumentDecryptor(
 	}
 
 	unwrapped, err := transit.UnwrapDataKey(ctx, UnwrapDataKeyRequest{
-		WrappedKey: envelope.WrappedDataKey,
-		Context:    DocumentKeyContext(identity),
+		WrappedKey:   envelope.WrappedDataKey,
+		Context:      DocumentKeyContext(identity),
+		TransitMount: envelope.TransitMount,
+		TransitKey:   envelope.TransitKey,
 	})
 	if err != nil {
 		return nil, err

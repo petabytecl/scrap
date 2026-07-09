@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -46,26 +48,42 @@ func chunkMsg(data []byte) *scrapv1.TransferBlockResponse {
 	}
 }
 
+func recvToTemp(t *testing.T, stream *mockTransferStream, blkSize, idxSize int64) (blk, idx []byte, err error) {
+	t.Helper()
+	dir := t.TempDir()
+	blkPath := filepath.Join(dir, "b.blk")
+	idxPath := filepath.Join(dir, "b.idx")
+	if err := validateTransferSizes(blkSize, idxSize); err != nil {
+		return nil, nil, err
+	}
+	if err := recvBlockDataToFiles(stream, blkSize, idxSize, blkPath, idxPath); err != nil {
+		return nil, nil, err
+	}
+	blk, err = os.ReadFile(blkPath) //nolint:gosec // test temp path
+	if err != nil {
+		return nil, nil, err
+	}
+	idx, err = os.ReadFile(idxPath) //nolint:gosec // test temp path
+	if err != nil {
+		return nil, nil, err
+	}
+	return blk, idx, nil
+}
+
 func TestRecvBlockData_NegativeBlockSize(t *testing.T) {
-	stream := &mockTransferStream{}
-	_, _, err := recvBlockData(stream, -1, 0)
-	if err == nil {
+	if err := validateTransferSizes(-1, 0); err == nil {
 		t.Fatal("expected error for negative block size")
 	}
 }
 
 func TestRecvBlockData_NegativeIdxSize(t *testing.T) {
-	stream := &mockTransferStream{}
-	_, _, err := recvBlockData(stream, 0, -1)
-	if err == nil {
+	if err := validateTransferSizes(0, -1); err == nil {
 		t.Fatal("expected error for negative index size")
 	}
 }
 
 func TestRecvBlockData_OversizedBlock(t *testing.T) {
-	stream := &mockTransferStream{}
-	_, _, err := recvBlockData(stream, maxTransferBytes+1, 0)
-	if err == nil {
+	if err := validateTransferSizes(maxTransferBytes+1, 0); err == nil {
 		t.Fatal("expected error for oversized block")
 	}
 }
@@ -75,7 +93,7 @@ func TestRecvBlockData_NetworkError(t *testing.T) {
 		msgs: []*scrapv1.TransferBlockResponse{chunkMsg([]byte("abc"))},
 		err:  status.Error(codes.Unavailable, "connection reset"),
 	}
-	_, _, err := recvBlockData(stream, 10, 0)
+	_, _, err := recvToTemp(t, stream, 10, 0)
 	if err == nil {
 		t.Fatal("expected network error to propagate")
 	}
@@ -85,7 +103,7 @@ func TestRecvBlockData_SizeMismatch(t *testing.T) {
 	stream := &mockTransferStream{
 		msgs: []*scrapv1.TransferBlockResponse{chunkMsg([]byte("short"))},
 	}
-	_, _, err := recvBlockData(stream, 100, 0)
+	_, _, err := recvToTemp(t, stream, 100, 0)
 	if err == nil {
 		t.Fatal("expected size mismatch error")
 	}
@@ -101,9 +119,9 @@ func TestRecvBlockData_HappyPath(t *testing.T) {
 		},
 	}
 
-	gotBlk, gotIdx, err := recvBlockData(stream, int64(len(blk)), int64(len(idx)))
+	gotBlk, gotIdx, err := recvToTemp(t, stream, int64(len(blk)), int64(len(idx)))
 	if err != nil {
-		t.Fatalf("recvBlockData: %v", err)
+		t.Fatalf("recvBlockDataToFiles: %v", err)
 	}
 	if string(gotBlk) != string(blk) {
 		t.Fatalf("blk mismatch: got %q, want %q", gotBlk, blk)
@@ -118,9 +136,9 @@ func TestRecvBlockData_SplitChunk(t *testing.T) {
 	stream := &mockTransferStream{
 		msgs: []*scrapv1.TransferBlockResponse{chunkMsg(combined)},
 	}
-	gotBlk, gotIdx, err := recvBlockData(stream, 5, 3)
+	gotBlk, gotIdx, err := recvToTemp(t, stream, 5, 3)
 	if err != nil {
-		t.Fatalf("recvBlockData: %v", err)
+		t.Fatalf("recvBlockDataToFiles: %v", err)
 	}
 	if string(gotBlk) != "BBBBB" {
 		t.Fatalf("blk: got %q, want %q", gotBlk, "BBBBB")
@@ -131,8 +149,6 @@ func TestRecvBlockData_SplitChunk(t *testing.T) {
 }
 
 func TestRecvBlockData_RejectsIndexBytesBeyondDeclaredSize(t *testing.T) {
-	// A peer that keeps streaming after the declared sizes must be cut off
-	// immediately, not buffered until it stops on its own.
 	stream := &mockTransferStream{
 		msgs: []*scrapv1.TransferBlockResponse{
 			chunkMsg([]byte("BBBBB")),
@@ -140,7 +156,7 @@ func TestRecvBlockData_RejectsIndexBytesBeyondDeclaredSize(t *testing.T) {
 			chunkMsg([]byte("unbounded-extra-data")),
 		},
 	}
-	_, _, err := recvBlockData(stream, 5, 3)
+	_, _, err := recvToTemp(t, stream, 5, 3)
 	if err == nil {
 		t.Fatal("expected error for index bytes beyond declared size")
 	}
@@ -153,7 +169,7 @@ func TestRecvBlockData_RejectsSplitChunkOverflowingIndex(t *testing.T) {
 	stream := &mockTransferStream{
 		msgs: []*scrapv1.TransferBlockResponse{chunkMsg([]byte("BBBBBiiiiiii"))},
 	}
-	_, _, err := recvBlockData(stream, 5, 3)
+	_, _, err := recvToTemp(t, stream, 5, 3)
 	if err == nil {
 		t.Fatal("expected error for spill bytes exceeding declared index size")
 	}
@@ -180,8 +196,6 @@ func TestMapTransferError(t *testing.T) {
 		{name: "quarantined", err: transferStatusWithReason(t, codes.DataLoss, transferReasonQuarantined, "corrupt"), want: scrub.ErrPeerBlockQuarantined},
 		{name: "unmatched status", err: status.Error(codes.NotFound, "missing"), want: nil},
 		{name: "non status", err: io.ErrUnexpectedEOF, want: nil},
-		// A reason mentioned only in the message text must not classify:
-		// substring-based error mapping is forbidden (CONTEXT.md).
 		{name: "reason in message only", err: status.Error(codes.DataLoss, transferReasonQuarantined+": corrupt"), want: nil},
 	}
 

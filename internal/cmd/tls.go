@@ -173,7 +173,12 @@ func newAppTransit(cfg Config) (encryption.Transit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transit config: %w", err)
 	}
-	return transit, nil
+	router, err := encryption.NewRouter(encryption.RouterConfig{Default: transit})
+	if err != nil {
+		return nil, fmt.Errorf("transit router: %w", err)
+	}
+	router.SetDefaultRoute(transitCfg.MountPath, transitCfg.KeyName)
+	return router, nil
 }
 
 func newSharedTransport(cfg Config, peers map[uint64]string, logger *slog.Logger) (*peer.SharedTransport, error) {

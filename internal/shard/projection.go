@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -37,6 +38,11 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// ADR 0001 / ADR 0033: Raft apply must remain deterministic even when local
+	// Document bytes lag replication. Byte readiness is tracked and enforced on
+	// read serving / leadership eligibility (see ensureCommitDocumentBytesReadyLocked),
+	// not by failing apply (which panics the Raft Ready loop).
+
 	state, err := s.inspectCommitProjectionState(doc)
 	if err != nil {
 		return err
@@ -48,6 +54,13 @@ func (s *Shard) applyCommitDocument(doc *scrapv1.CommitDocument, entryIndex uint
 
 	if len(doc.Sha256) != sha256.Size {
 		return fmt.Errorf("%w: commit document SHA-256 length %d, want %d", storeapi.ErrDataLoss, len(doc.Sha256), sha256.Size)
+	}
+	// ADR 0034 / H-03: preflight Transaction cardinality before mutating .idx so
+	// a MaxUint16 overflow cannot leave half-applied physical state.
+	if !state.targetCounted {
+		if err := preflightProjectionDocCount(s.idx, doc.TransactionId); err != nil {
+			return err
+		}
 	}
 	var sha [32]byte
 	copy(sha[:], doc.Sha256)
@@ -316,6 +329,20 @@ func (s *Shard) blockIndexContainsDocument(blockID uint64, txID, docName string)
 		return false, nil
 	}
 	return false, fmt.Errorf("shard: read historical write idx: %w", err)
+}
+
+func preflightProjectionDocCount(projection *index.Index, txID string) error {
+	existing, err := projection.Get(txID)
+	if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("shard: get index: %w", err)
+	}
+	if existing.DocCount == math.MaxUint16 {
+		return fmt.Errorf("shard: increment doc count: index: doc count at maximum %d", math.MaxUint16)
+	}
+	return nil
 }
 
 func addProjectionDocument(projection *index.Index, txID string, blockID uint64) error {

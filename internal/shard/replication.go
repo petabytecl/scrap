@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+	"time"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/block"
@@ -16,17 +18,23 @@ import (
 )
 
 const (
-	replicationChunkSize = 64 * 1024
-	majorityDivisor      = 2
+	replicationChunkSize   = 64 * 1024
+	majorityDivisor        = 2
+	replicationPeerTimeout = 5 * time.Second
 )
 
 type DocumentReplicator interface {
 	ReplicateDocument(ctx context.Context, addr string, init *scrapv1.ReplicateDocumentInit, chunks [][]byte) ([]byte, error)
 }
 
-func (s *Shard) replicateDocument(ctx context.Context, prep *scrapv1.OpenlogEntry, contentType string, result block.AppendResult, data, envelope []byte) error {
+func (s *Shard) replicateDocument(ctx context.Context, prep *scrapv1.OpenlogEntry, contentType string, result block.AppendResult, data, envelope []byte) error { //nolint:gocognit,cyclop // concurrent quorum fan-out with term fencing and per-peer deadlines (ADR 0033)
 	if s.replicator == nil || len(s.peers) <= 1 {
 		return nil
+	}
+	// ADR 0033 / H-01: recheck leadership before fan-out so a demoted Member
+	// cannot replicate after losing the term.
+	if err := s.requireWritableLeader(); err != nil {
+		return err
 	}
 
 	init := &scrapv1.ReplicateDocumentInit{
@@ -40,26 +48,69 @@ func (s *Shard) replicateDocument(ctx context.Context, prep *scrapv1.OpenlogEntr
 		Sha256:             result.SHA256[:],
 		EncryptionEnvelope: envelope,
 		ShardId:            s.shardID,
+		LeaderId:           s.raftID,
+		Term:               s.raft.Term(),
 	}
 	chunks := splitReplicationChunks(data)
+	addrs := s.replicationAddrs()
+
+	// ADR 0033 / H-14: fan out concurrently with per-peer deadlines; return when
+	// quorum is durable or impossible.
+	type peerResult struct {
+		err error
+	}
+	results := make(chan peerResult, len(addrs))
+	var wg sync.WaitGroup
+	for _, addr := range addrs {
+		wg.Add(1)
+		go func(peerAddr string) {
+			defer wg.Done()
+			peerCtx, cancel := context.WithTimeout(ctx, replicationPeerTimeout)
+			defer cancel()
+			sha, err := s.replicator.ReplicateDocument(peerCtx, peerAddr, init, chunks)
+			if err != nil {
+				results <- peerResult{err: err}
+				return
+			}
+			if !bytes.Equal(sha, result.SHA256[:]) {
+				results <- peerResult{err: fmt.Errorf("peer %s returned SHA-256 %x, want %x", peerAddr, sha, result.SHA256)}
+				return
+			}
+			results <- peerResult{}
+		}(addr)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
 	successes := 0
 	var firstErr error
-	for _, addr := range s.replicationAddrs() {
-		sha, err := s.replicator.ReplicateDocument(ctx, addr, init, chunks)
-		if err != nil {
+	remaining := len(addrs)
+	for remaining > 0 {
+		select {
+		case <-ctx.Done():
 			if firstErr == nil {
-				firstErr = err
+				firstErr = ctx.Err()
 			}
-			continue
-		}
-		if !bytes.Equal(sha, result.SHA256[:]) {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("peer %s returned SHA-256 %x, want %x", addr, sha, result.SHA256)
+			remaining = 0
+		case pr, ok := <-results:
+			if !ok {
+				remaining = 0
+				break
 			}
-			continue
+			remaining--
+			if pr.err != nil {
+				if firstErr == nil {
+					firstErr = pr.err
+				}
+				continue
+			}
+			successes++
+			if quorumMet(len(s.peers), successes) {
+				return nil
+			}
 		}
-		successes++
 	}
 
 	if quorumMet(len(s.peers), successes) {
@@ -107,6 +158,11 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// ADR 0033 / H-01: reject stale-leader replication when fencing fields are set.
+	if err := s.validateReplicationFenceLocked(init); err != nil {
+		return nil, err
+	}
+
 	if err := s.advanceReplicaBlockLocked(init.GetBlockId()); err != nil {
 		return nil, err
 	}
@@ -140,7 +196,27 @@ func (s *Shard) AppendReplicatedDocument(ctx context.Context, init *scrapv1.Repl
 		s.abortReplicatedWriteAttempt(attempt, wantOffset)
 		return nil, err
 	}
+	s.recordByteReadyLocked(init.GetBlockId(), init.GetStartOffset())
 	return result.SHA256[:], nil
+}
+
+func (s *Shard) validateReplicationFenceLocked(init *scrapv1.ReplicateDocumentInit) error {
+	leaderID := init.GetLeaderId()
+	term := init.GetTerm()
+	if leaderID == 0 && term == 0 {
+		// Legacy unfenced callers (tests / older peers). Production Cells must
+		// negotiate fencing before write admission (ADR 0033).
+		return nil
+	}
+	currentTerm := s.raft.Term()
+	currentLeader := s.raft.LeaderID()
+	if term < currentTerm {
+		return fmt.Errorf("%w: stale replication term %d, current %d", storeapi.ErrFailedPrecondition, term, currentTerm)
+	}
+	if term == currentTerm && currentLeader != 0 && leaderID != currentLeader {
+		return fmt.Errorf("%w: replication leader %d, current leader %d", storeapi.ErrFailedPrecondition, leaderID, currentLeader)
+	}
+	return nil
 }
 
 func (s *Shard) abortReplicatedWriteAttempt(attempt *openlogWriteAttempt, startOffset int64) {
@@ -370,6 +446,10 @@ func (s *Shard) advanceReplicaBlockLocked(targetBlockID uint64) error {
 		return s.reopenPreviousReplicaBlockLocked(targetBlockID)
 	}
 	for s.blockWriter != nil && s.blockWriter.BlockID() < targetBlockID {
+		current := s.blockWriter.BlockID()
+		if targetBlockID != current+1 {
+			return fmt.Errorf("shard: replica block transition %d -> %d is not protocol-valid", current, targetBlockID)
+		}
 		if err := s.idxWriter.Close(); err != nil {
 			return fmt.Errorf("shard: close replica index: %w", err)
 		}

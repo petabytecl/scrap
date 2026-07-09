@@ -182,6 +182,32 @@ When sources conflict, downstream workflows must apply this order:
   bypass committed metadata authority, publish partial restored Blocks, or let
   release evidence contradict the actual data-integrity status.
 - Accepted ADR scope is required unless explicitly superseded.
+- Unresolved thermo-nuclear High/Medium findings (`H-01`–`H-19`, `M-01`–`M-12`)
+  keep final release status at FAIL until each finding maps to accepted story
+  evidence on the exact release SHA.
+- Stale evidence (commit/ref mismatch), contradictory PASS/FAIL artifacts,
+  failing `make static`, and failing `make vuln` are non-waivable blockers.
+
+### 4.3 Production Authority Gates
+
+Production readiness additionally requires these explicit fail-closed gates:
+
+- **Voter count:** production Cells must declare explicit multi-voter membership
+  before readiness or write admission (finding `H-09`).
+- **Shared Backend:** production multi-Member or eviction-enabled Cells must use
+  an explicitly shared durable Backend; Member-local filesystem Backend is
+  rejected (`H-10`).
+- **Placement identity:** Cell-wide placement identity is persisted; slot map
+  changes that would remap existing Transactions are rejected until a
+  coordinated Shard-transfer protocol completes (`H-11`).
+- **Peer-to-Raft identity binding:** authenticated peer principals must map to
+  the Raft sender ID before message routing (`H-12`).
+- **Stored Transit identity:** unwrap/rewrap routes through allow-listed
+  envelope mount/key identity; Rewrap is monotonic (`H-18`, `M-06`).
+- **Scanner-engine composition:** production Content Scanner composition must
+  wire a real plaintext engine/signature provider (`M-05`).
+- **Exact-SHA release evidence:** Tier 2, Tier 3, real S3/IAM, and closure
+  artifacts must cite the exact candidate SHA with freshness checks (`H-19`).
 
 ## 5. Current Tracker Snapshot
 

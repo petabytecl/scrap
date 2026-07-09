@@ -29,6 +29,10 @@ rate limits, and bounded errors. Replacing the address with an opaque route hint
 or gateway token is a future wire-contract change that requires a separate ADR,
 protobuf update, and redirect stress/e2e update.
 
+Outside Kubernetes discovery, production and multi-Member setups must supply an
+explicit per-Member public DocumentService address map (finding `M-10`). Copying
+PeerService addresses into client leader hints is rejected.
+
 Peer authorization now includes explicit Shard scope. A peer must still pass the
 Phase 4.5 role, Cell, Member identity, and principal checks from ADR 0019. After
 that, Shard-carrying peer RPCs must match the server's configured authorized

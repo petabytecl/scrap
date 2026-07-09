@@ -781,6 +781,17 @@ func (n *Node) LeaderID() uint64 {
 	return n.leaderID.Load()
 }
 
+// Term returns the current Raft term from the in-memory Soft/Hard state.
+// Used to fence ReplicateDocument against stale leaders (ADR 0033 / H-01).
+func (n *Node) Term() uint64 {
+	n.stateMu.RLock()
+	defer n.stateMu.RUnlock()
+	if n.node == nil {
+		return 0
+	}
+	return n.node.Status().Term
+}
+
 func (n *Node) AppliedIndex() uint64 {
 	return atomic.LoadUint64(&n.appliedIndex)
 }

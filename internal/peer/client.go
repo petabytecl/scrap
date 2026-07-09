@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/admission"
 	"github.com/petabytecl/scrap/internal/scrub"
 )
 
@@ -100,7 +102,7 @@ func (c *Client) ReplicateDocument(ctx context.Context, addr string, init *scrap
 	return resp.GetSha256(), nil
 }
 
-func (c *Client) ConsistencyCheck(ctx context.Context, addr, scrubID string) (*scrapv1.ConsistencyCheckResponse, error) {
+func (c *Client) ConsistencyCheck(ctx context.Context, addr string, shardID uint64, scrubID string) (*scrapv1.ConsistencyCheckResponse, error) {
 	conn, err := c.getConn(addr)
 	if err != nil {
 		return nil, err
@@ -108,6 +110,7 @@ func (c *Client) ConsistencyCheck(ctx context.Context, addr, scrubID string) (*s
 	client := scrapv1.NewPeerServiceClient(conn)
 	resp, err := client.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{
 		ScrubId: scrubID,
+		ShardId: shardID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("peer: consistency check %s: %w", addr, mapConsistencyCheckError(err))
@@ -122,7 +125,7 @@ func mapConsistencyCheckError(err error) error {
 	return err
 }
 
-func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) (*scrapv1.RequestIndexRebuildResponse, error) {
+func (c *Client) RequestIndexRebuild(ctx context.Context, addr string, shardID uint64, scrubID string) (*scrapv1.RequestIndexRebuildResponse, error) {
 	conn, err := c.getConn(addr)
 	if err != nil {
 		return nil, err
@@ -130,6 +133,7 @@ func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) 
 	client := scrapv1.NewPeerServiceClient(conn)
 	resp, err := client.RequestIndexRebuild(ctx, &scrapv1.RequestIndexRebuildRequest{
 		ScrubId: scrubID,
+		ShardId: shardID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("peer: request rebuild %s: %w", addr, err)
@@ -137,10 +141,12 @@ func (c *Client) RequestIndexRebuild(ctx context.Context, addr, scrubID string) 
 	return resp, nil
 }
 
-func (c *Client) TransferBlock(ctx context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error) {
+// TransferBlockToFiles streams a peer Block into durable staging files without
+// buffering the full Block in memory (ADR 0036 / H-13).
+func (c *Client) TransferBlockToFiles(ctx context.Context, addr string, shardID, blockID uint64, blkPath, idxPath string) error {
 	conn, err := c.getConn(addr)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	client := scrapv1.NewPeerServiceClient(conn)
 	stream, err := client.TransferBlock(ctx, &scrapv1.TransferBlockRequest{
@@ -148,19 +154,52 @@ func (c *Client) TransferBlock(ctx context.Context, addr string, shardID, blockI
 		BlockId: blockID,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("peer: transfer block %d from %s: %w", blockID, addr, mapTransferError(err))
+		return fmt.Errorf("peer: transfer block %d from %s: %w", blockID, addr, mapTransferError(err))
 	}
 
 	msg, err := stream.Recv()
 	if err != nil {
-		return nil, nil, fmt.Errorf("peer: transfer block meta: %w", mapTransferError(err))
+		return fmt.Errorf("peer: transfer block meta: %w", mapTransferError(err))
 	}
 	meta := msg.GetMeta()
 	if meta == nil {
-		return nil, nil, errors.New("peer: expected meta, got chunk")
+		return errors.New("peer: expected meta, got chunk")
+	}
+	if err := validateTransferSizes(meta.BlockSize, meta.IdxSize); err != nil {
+		return err
 	}
 
-	return recvBlockData(stream, meta.BlockSize, meta.IdxSize)
+	reserve := meta.BlockSize + meta.IdxSize
+	if err := admission.Process.Acquire(ctx, reserve); err != nil {
+		return err
+	}
+	defer admission.Process.Release(reserve)
+
+	return recvBlockDataToFiles(stream, meta.BlockSize, meta.IdxSize, blkPath, idxPath)
+}
+
+// TransferBlock is a test/helper wrapper that materializes TransferBlockToFiles
+// into memory. Production repair paths must use TransferBlockToFiles.
+func (c *Client) TransferBlock(ctx context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error) {
+	dir, err := os.MkdirTemp("", "scrap-transfer-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	blkPath := dir + "/block.blk"
+	idxPath := dir + "/block.idx"
+	if err := c.TransferBlockToFiles(ctx, addr, shardID, blockID, blkPath, idxPath); err != nil {
+		return nil, nil, err
+	}
+	blk, err := os.ReadFile(blkPath) //nolint:gosec // test helper path under temp dir
+	if err != nil {
+		return nil, nil, err
+	}
+	idx, err := os.ReadFile(idxPath) //nolint:gosec // test helper path under temp dir
+	if err != nil {
+		return nil, nil, err
+	}
+	return blk, idx, nil
 }
 
 func mapTransferError(err error) error {
@@ -198,79 +237,91 @@ func validateTransferSizes(blkSize, idxSize int64) error {
 	return nil
 }
 
-// transferPreallocBytes caps the initial allocation derived from peer-declared
-// sizes; buffers still grow to the validated size as data actually arrives.
-const transferPreallocBytes int64 = 64 << 20 // 64 MiB, the nominal Block size
-
-func recvBlockData(stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse], blkSize, idxSize int64) ([]byte, []byte, error) {
-	if err := validateTransferSizes(blkSize, idxSize); err != nil {
-		return nil, nil, err
+func recvBlockDataToFiles(stream grpc.ServerStreamingClient[scrapv1.TransferBlockResponse], blkSize, idxSize int64, blkPath, idxPath string) error { //nolint:cyclop // stream-to-file transfer must validate sizes, write both components, and fsync
+	blkFile, err := os.OpenFile(blkPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // staging path constructed by caller
+	if err != nil {
+		return fmt.Errorf("peer: create block staging file: %w", err)
 	}
+	idxFile, err := os.OpenFile(idxPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // staging path constructed by caller
+	if err != nil {
+		_ = blkFile.Close()
+		return fmt.Errorf("peer: create index staging file: %w", err)
+	}
+	defer func() {
+		_ = blkFile.Close()
+		_ = idxFile.Close()
+	}()
 
-	bufs := &blockDataBuffers{
-		blk:       make([]byte, 0, min(blkSize, transferPreallocBytes)),
-		idx:       make([]byte, 0, min(idxSize, transferPreallocBytes)),
+	writer := &blockDataFileWriter{
+		blk:       blkFile,
+		idx:       idxFile,
 		remaining: blkSize,
 		idxSize:   idxSize,
+		idxWrote:  0,
 	}
-
 	for {
 		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("peer: recv block data: %w", err)
+			return fmt.Errorf("peer: recv block data: %w", err)
 		}
-		if err := bufs.consume(msg.GetChunkData()); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	if int64(len(bufs.blk)) != blkSize {
-		return nil, nil, fmt.Errorf("peer: block size mismatch: got %d, expected %d", len(bufs.blk), blkSize)
-	}
-	if int64(len(bufs.idx)) != idxSize {
-		return nil, nil, fmt.Errorf("peer: index size mismatch: got %d, expected %d", len(bufs.idx), idxSize)
-	}
-	return bufs.blk, bufs.idx, nil
-}
-
-// blockDataBuffers splits a transfer stream at the declared block size into
-// blk and idx buffers.
-type blockDataBuffers struct {
-	blk       []byte
-	idx       []byte
-	remaining int64
-	idxSize   int64
-}
-
-func (b *blockDataBuffers) consume(chunk []byte) error {
-	if b.remaining <= 0 {
-		var err error
-		b.idx, err = appendBoundedIdxData(b.idx, chunk, b.idxSize)
-		return err
-	}
-	take := min(int64(len(chunk)), b.remaining)
-	b.blk = append(b.blk, chunk[:take]...)
-	if take < int64(len(chunk)) {
-		var err error
-		if b.idx, err = appendBoundedIdxData(b.idx, chunk[take:], b.idxSize); err != nil {
+		if err := writer.consume(msg.GetChunkData()); err != nil {
 			return err
 		}
 	}
-	b.remaining -= take
+	if writer.remaining != 0 {
+		return fmt.Errorf("peer: block size mismatch: missing %d bytes", writer.remaining)
+	}
+	if writer.idxWrote != idxSize {
+		return fmt.Errorf("peer: index size mismatch: got %d, expected %d", writer.idxWrote, idxSize)
+	}
+	if err := blkFile.Sync(); err != nil {
+		return fmt.Errorf("peer: sync block staging file: %w", err)
+	}
+	if err := idxFile.Sync(); err != nil {
+		return fmt.Errorf("peer: sync index staging file: %w", err)
+	}
 	return nil
 }
 
-// appendBoundedIdxData rejects index bytes beyond the declared size as soon as
-// they arrive, so a peer that never stops streaming cannot grow the buffer
-// unboundedly waiting for an EOF-time check.
-func appendBoundedIdxData(idxData, chunk []byte, idxSize int64) ([]byte, error) {
-	if int64(len(idxData))+int64(len(chunk)) > idxSize {
-		return nil, fmt.Errorf("peer: index data exceeds declared size %d", idxSize)
+// blockDataFileWriter splits a transfer stream at the declared block size into
+// blk and idx staging files.
+type blockDataFileWriter struct {
+	blk       *os.File
+	idx       *os.File
+	remaining int64
+	idxSize   int64
+	idxWrote  int64
+}
+
+func (w *blockDataFileWriter) consume(chunk []byte) error {
+	if w.remaining <= 0 {
+		return w.writeIdx(chunk)
 	}
-	return append(idxData, chunk...), nil
+	take := min(int64(len(chunk)), w.remaining)
+	if _, err := w.blk.Write(chunk[:take]); err != nil {
+		return fmt.Errorf("peer: write block staging: %w", err)
+	}
+	if take < int64(len(chunk)) {
+		if err := w.writeIdx(chunk[take:]); err != nil {
+			return err
+		}
+	}
+	w.remaining -= take
+	return nil
+}
+
+func (w *blockDataFileWriter) writeIdx(chunk []byte) error {
+	if w.idxWrote+int64(len(chunk)) > w.idxSize {
+		return fmt.Errorf("peer: index data exceeds declared size %d", w.idxSize)
+	}
+	if _, err := w.idx.Write(chunk); err != nil {
+		return fmt.Errorf("peer: write index staging: %w", err)
+	}
+	w.idxWrote += int64(len(chunk))
+	return nil
 }
 
 func (c *Client) Close() {

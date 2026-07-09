@@ -410,6 +410,33 @@ func TestContentQuarantineReleaseRemovesOnlyRequestedRecord(t *testing.T) {
 	}
 }
 
+// H-06 / ADR 0025: committed release/confirm must be replay-safe when the
+// Content Quarantine record is already gone. Not-found is only for pre-proposal
+// validation, never an apply failure.
+func TestContentQuarantineReleaseMissingIsIdempotent(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	if err := idx.ReleaseContentQuarantine("tx-missing", "doc.xml"); err != nil {
+		t.Fatalf("ReleaseContentQuarantine missing = %v, want nil", err)
+	}
+}
+
+func TestContentQuarantineConfirmMissingIsIdempotent(t *testing.T) {
+	idx, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	if err := idx.ConfirmContentQuarantine("tx-missing", "doc.xml", 1716700003000000); err != nil {
+		t.Fatalf("ConfirmContentQuarantine missing = %v, want nil", err)
+	}
+}
+
 func contentQuarantineFixture(txID, docName string, blockID uint64) ContentQuarantine {
 	return ContentQuarantine{
 		TransactionID: txID,

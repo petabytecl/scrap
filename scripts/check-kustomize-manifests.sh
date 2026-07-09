@@ -104,10 +104,13 @@ reject '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$base_render" "Nod
 reject '^[[:space:]]*nodePort:' "$base_render" "nodePort field in base render"
 reject 'name:[[:space:]]*SCRAP_SECURITY_MODE' "$base_render" "security mode in base render"
 
-require 'kind:[[:space:]]*CiliumNetworkPolicy' "$base_render" "base CiliumNetworkPolicy"
-require 'name:[[:space:]]*scrapd-ingress' "$base_render" "base S.C.R.A.P. ingress NetworkPolicy"
-require 'port:[[:space:]]*9091' "$base_render" "peer ingress port"
-require 'kubernetes\.io/metadata\.name:[[:space:]]*monitoring' "$base_render" "monitoring-scoped admin ingress"
+reject 'kind:[[:space:]]*CiliumNetworkPolicy' "$base_render" "CiliumNetworkPolicy in shared base"
+reject 'kind:[[:space:]]*CiliumNetworkPolicy' "$local_kind_render" "CiliumNetworkPolicy in local Kind render"
+require 'kind:[[:space:]]*CiliumNetworkPolicy' "$prodlike_render" "prod-like CiliumNetworkPolicy"
+require 'name:[[:space:]]*scrapd-ingress' "$prodlike_render" "prod-like S.C.R.A.P. ingress NetworkPolicy"
+require 'port:[[:space:]]*9091' "$prodlike_render" "peer ingress port"
+require 'kubernetes\.io/metadata\.name:[[:space:]]*monitoring' "$prodlike_render" "monitoring-scoped admin ingress"
+require '../../components/cilium-network-policy' deploy/kustomize/environments/prodlike/kustomization.yaml "explicit Cilium network policy component"
 
 require 'healthcheck' "$base_render" "in-container healthcheck probe"
 require 'scrap\.v1-readiness' "$base_render" "readiness healthcheck service"

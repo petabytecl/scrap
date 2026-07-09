@@ -2019,3 +2019,745 @@ Tier 2/Tier 3, and which are explicitly deferred with owner and mitigation.
 **And** AC-6.9.4 evidence records `go test ./test/integration/...`,
 `make tier2-e2e-up`, and `make tier3-evidence-up STRESS_SCENARIO=throughput`
 where applicable.
+
+
+## Thermo-Nuclear Remediation Stories (2026-07-09)
+
+Added by Sprint Change Proposal
+`sprint-change-proposal-2026-07-09-thermo-nuclear.md`. Existing done
+stories remain historical evidence. Finding IDs `H-01`–`H-19` and
+`M-01`–`M-12` are the canonical traceability keys. Story 6.8 executes
+before other remediation evidence stories; Story 6.9 runs only after
+Waves 1–8.
+
+### Epic 1 — Core Document Gateway (remediation)
+
+#### Story 1.7: Proposal-scoped CommitDocument waiters
+
+**Findings:** H-02
+**Requirements:** FR-2
+**Governing ADR:** ADR-0033 (new)
+**Depends on:** none
+
+As a release owner,
+I want proposal-scoped CommitDocument waiters,
+So that thermo-nuclear finding H-02 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-02
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding H-02 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 1.8: Rebuild Projection from Raft/quorum authority
+
+**Findings:** H-05
+**Requirements:** FR-3,FR-4
+**Governing ADR:** ADR-0034 (new)
+**Depends on:** 2-9
+
+As a release owner,
+I want rebuild Projection from Raft/quorum authority,
+So that thermo-nuclear finding H-05 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-05
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding H-05 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 1.9: Durable Projection swap and complete Transaction Resolution
+
+**Findings:** M-11
+**Requirements:** FR-3
+**Governing ADR:** ADR-0034 (new)
+**Depends on:** 1-8
+
+As a release owner,
+I want durable Projection swap and complete Transaction Resolution,
+So that thermo-nuclear finding M-11 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-11
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/index/...`.
+
+**Given** release closure is evaluated
+**When** finding M-11 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 1.10: Immutable verified snapshot before ReadDocument stream
+
+**Findings:** M-01
+**Requirements:** FR-3
+**Governing ADR:** ADR-0002 amend
+**Depends on:** none
+
+As a release owner,
+I want immutable verified snapshot before ReadDocument stream,
+So that thermo-nuclear finding M-01 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-01
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/block/... ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding M-01 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+
+### Epic 2 — Raft, Replication, Topology, Peer Authority (remediation)
+
+#### Story 2.9: Propagate apply failures and reject unknown Raft commands
+
+**Findings:** H-03
+**Requirements:** FR-4
+**Governing ADR:** ADR-0034 (new)
+**Depends on:** none
+
+As a release owner,
+I want propagate apply failures and reject unknown Raft commands,
+So that thermo-nuclear finding H-03 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-03
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/raft/...`.
+
+**Given** release closure is evaluated
+**When** finding H-03 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.10: Term-fenced ReplicateDocument and write leadership recheck
+
+**Findings:** H-01
+**Requirements:** FR-2,FR-4
+**Governing ADR:** ADR-0033 (new)
+**Depends on:** 2-9
+
+As a release owner,
+I want term-fenced ReplicateDocument and write leadership recheck,
+So that thermo-nuclear finding H-01 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-01
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/peer/...`.
+
+**Given** release closure is evaluated
+**When** finding H-01 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.11: Byte-ready voter ledger and leadership fence
+
+**Findings:** H-04
+**Requirements:** FR-2,FR-4
+**Governing ADR:** ADR-0033 (new)
+**Depends on:** 2-10
+
+As a release owner,
+I want byte-ready voter ledger and leadership fence,
+So that thermo-nuclear finding H-04 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-04
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding H-04 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.12: Concurrent quorum replication with per-peer deadlines
+
+**Findings:** H-14
+**Requirements:** FR-2,NFR-2
+**Governing ADR:** ADR-0033 (new)
+**Depends on:** 2-10
+
+As a release owner,
+I want concurrent quorum replication with per-peer deadlines,
+So that thermo-nuclear finding H-14 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-14
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/peer/...`.
+
+**Given** release closure is evaluated
+**When** finding H-14 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.13: Explicit production multi-voter membership
+
+**Findings:** H-09
+**Requirements:** FR-5,FR-9
+**Governing ADR:** ADR-0024 amend
+**Depends on:** none
+
+As a release owner,
+I want explicit production multi-voter membership,
+So that thermo-nuclear finding H-09 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-09
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/...`.
+
+**Given** release closure is evaluated
+**When** finding H-09 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.14: Persist placement identity; reject silent Transaction remap
+
+**Findings:** H-11
+**Requirements:** FR-5
+**Governing ADR:** ADR-0035 (new)
+**Depends on:** none
+
+As a release owner,
+I want persist placement identity; reject silent Transaction remap,
+So that thermo-nuclear finding H-11 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-11
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/...`.
+
+**Given** release closure is evaluated
+**When** finding H-11 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.15: Bind peer principal to Raft message sender
+
+**Findings:** H-12
+**Requirements:** FR-4,FR-9
+**Governing ADR:** ADR-0024 amend
+**Depends on:** none
+
+As a release owner,
+I want bind peer principal to Raft message sender,
+So that thermo-nuclear finding H-12 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-12
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/peer/...`.
+
+**Given** release closure is evaluated
+**When** finding H-12 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.16: Protocol-valid Block transitions and streaming transfers
+
+**Findings:** H-13
+**Requirements:** FR-4,NFR-2
+**Governing ADR:** ADR-0036 (new)
+**Depends on:** 2-15
+
+As a release owner,
+I want protocol-valid Block transitions and streaming transfers,
+So that thermo-nuclear finding H-13 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-13
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/peer/... ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding H-13 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.17: Shard-scoped Light Scrub peer RPC routing
+
+**Findings:** M-03
+**Requirements:** FR-4,FR-5
+**Governing ADR:** ADR-0026 amend
+**Depends on:** 2-15
+
+As a release owner,
+I want shard-scoped Light Scrub peer RPC routing,
+So that thermo-nuclear finding M-03 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-03
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/scrub/... ./internal/cmd/...`.
+
+**Given** release closure is evaluated
+**When** finding M-03 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 2.18: Explicit per-Member public address map for LeaderHint
+
+**Findings:** M-10
+**Requirements:** FR-5
+**Governing ADR:** ADR-0024 amend
+**Depends on:** 2-13
+
+As a release owner,
+I want explicit per-Member public address map for LeaderHint,
+So that thermo-nuclear finding M-10 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-10
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/... ./internal/server/...`.
+
+**Given** release closure is evaluated
+**When** finding M-10 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+
+### Epic 3 — Backend Upload, Restore, Scrub (remediation)
+
+#### Story 3.9: Durable SealBlock intent and closed-Block Upload Outbox reconciliation
+
+**Findings:** H-07
+**Requirements:** FR-6
+**Governing ADR:** ADR-0037 (new)
+**Depends on:** 2-9
+
+As a release owner,
+I want durable SealBlock intent and closed-Block Upload Outbox reconciliation,
+So that thermo-nuclear finding H-07 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-07
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding H-07 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 3.10: Verified upload, immutable generations, term-fenced workers
+
+**Findings:** H-08
+**Requirements:** FR-6
+**Governing ADR:** ADR-0037 (new)
+**Depends on:** 3-9,2-10
+
+As a release owner,
+I want verified upload, immutable generations, term-fenced workers,
+So that thermo-nuclear finding H-08 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-08
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/backend/...`.
+
+**Given** release closure is evaluated
+**When** finding H-08 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 3.11: Reject Member-local filesystem Backend in production
+
+**Findings:** H-10
+**Requirements:** FR-6,FR-9
+**Governing ADR:** ADR-0024 amend
+**Depends on:** none
+
+As a release owner,
+I want reject Member-local filesystem Backend in production,
+So that thermo-nuclear finding H-10 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-10
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/...`.
+
+**Given** release closure is evaluated
+**When** finding H-10 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 3.12: Bounded cold restore worker and timeouts
+
+**Findings:** M-02
+**Requirements:** FR-8,NFR-2
+**Governing ADR:** ADR-0027 amend
+**Depends on:** 3-10
+
+As a release owner,
+I want bounded cold restore worker and timeouts,
+So that thermo-nuclear finding M-02 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-02
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding M-02 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 3.13: Deep Scrub read-parity verification and durable checkpoint
+
+**Findings:** M-04
+**Requirements:** FR-3
+**Governing ADR:** ADR-0002 amend
+**Depends on:** none
+
+As a release owner,
+I want deep Scrub read-parity verification and durable checkpoint,
+So that thermo-nuclear finding M-04 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-04
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/block/... ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding M-04 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+
+### Epic 4 — Encryption, TLS, Admission, Lifecycle (remediation)
+
+#### Story 4.8: Trusted CA bundle in image or explicit mount contract
+
+**Findings:** H-17
+**Requirements:** FR-9,FR-10
+**Governing ADR:** ADR-0019 amend
+**Depends on:** none
+
+As a release owner,
+I want trusted CA bundle in image or explicit mount contract,
+So that thermo-nuclear finding H-17 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-17
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/...; docker build smoke`.
+
+**Given** release closure is evaluated
+**When** finding H-17 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 4.9: Route unwrap/rewrap by stored Transit envelope identity
+
+**Findings:** H-18
+**Requirements:** FR-10
+**Governing ADR:** ADR-0038 (new)
+**Depends on:** none
+
+As a release owner,
+I want route unwrap/rewrap by stored Transit envelope identity,
+So that thermo-nuclear finding H-18 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-18
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/encryption/... ./internal/shard/...`.
+
+**Given** release closure is evaluated
+**When** finding H-18 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 4.10: Monotonic Rewrap key version enforcement
+
+**Findings:** M-06
+**Requirements:** FR-10
+**Governing ADR:** ADR-0038 (new)
+**Depends on:** 4-9
+
+As a release owner,
+I want monotonic Rewrap key version enforcement,
+So that thermo-nuclear finding M-06 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-06
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/encryption/...`.
+
+**Given** release closure is evaluated
+**When** finding M-06 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 4.11: Write stream idle deadlines and per-principal quotas
+
+**Findings:** M-07
+**Requirements:** FR-9,NFR-2
+**Governing ADR:** ADR-0019 amend
+**Depends on:** none
+
+As a release owner,
+I want write stream idle deadlines and per-principal quotas,
+So that thermo-nuclear finding M-07 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-07
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/server/...`.
+
+**Given** release closure is evaluated
+**When** finding M-07 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 4.12: Context-bounded graceful shutdown
+
+**Findings:** M-08
+**Requirements:** FR-9
+**Governing ADR:** ADR-0019 amend
+**Depends on:** none
+
+As a release owner,
+I want context-bounded graceful shutdown,
+So that thermo-nuclear finding M-08 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-08
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/... ./internal/peer/...`.
+
+**Given** release closure is evaluated
+**When** finding M-08 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 4.13: Distinct server/client TLS configuration per surface
+
+**Findings:** M-12
+**Requirements:** FR-9
+**Governing ADR:** ADR-0019 amend
+**Depends on:** none
+
+As a release owner,
+I want distinct server/client TLS configuration per surface,
+So that thermo-nuclear finding M-12 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-12
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/security/...`.
+
+**Given** release closure is evaluated
+**When** finding M-12 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+
+### Epic 5 — Content Quarantine and Content Scanner (remediation)
+
+#### Story 5.8: Replay-safe Content Quarantine lifecycle commands
+
+**Findings:** H-06
+**Requirements:** FR-12
+**Governing ADR:** ADR-0025 amend
+**Depends on:** 2-9
+
+As a release owner,
+I want replay-safe Content Quarantine lifecycle commands,
+So that thermo-nuclear finding H-06 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-06
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/index/...`.
+
+**Given** release closure is evaluated
+**When** finding H-06 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 5.9: Wire production plaintext Content Scanner engine
+
+**Findings:** M-05
+**Requirements:** FR-11
+**Governing ADR:** ADR-0008 amend
+**Depends on:** 4-9
+
+As a release owner,
+I want wire production plaintext Content Scanner engine,
+So that thermo-nuclear finding M-05 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-05
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/avscan/... ./internal/cmd/...`.
+
+**Given** release closure is evaluated
+**When** finding M-05 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+
+### Epic 6 — Release Evidence, Resources, Deployment, Identity (remediation)
+
+#### Story 6.10: Exact-SHA release evidence gate and deny-by-default .dockerignore
+
+**Findings:** H-19
+**Requirements:** FR-16,NFR-5
+**Governing ADR:** ADR-0006 amend
+**Depends on:** 6-8
+
+As a release owner,
+I want exact-SHA release evidence gate and deny-by-default .dockerignore,
+So that thermo-nuclear finding H-19 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-19
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./scripts/...; make gates-check`.
+
+**Given** release closure is evaluated
+**When** finding H-19 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 6.11: Stream/spool replication and Backend upload; weighted memory budget
+
+**Findings:** H-15
+**Requirements:** NFR-2
+**Governing ADR:** ADR-0036 (new)
+**Depends on:** 2-12
+
+As a release owner,
+I want stream/spool replication and Backend upload; weighted memory budget,
+So that thermo-nuclear finding H-15 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-15
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/shard/... ./internal/backend/...`.
+
+**Given** release closure is evaluated
+**When** finding H-15 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 6.12: Cilium-only network policy component
+
+**Findings:** H-16
+**Requirements:** FR-16
+**Governing ADR:** ADR-0015 amend
+**Depends on:** none
+
+As a release owner,
+I want cilium-only network policy component,
+So that thermo-nuclear finding H-16 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding H-16
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `kustomize build local; Kind apply`.
+
+**Given** release closure is evaluated
+**When** finding H-16 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+#### Story 6.13: Production telemetry and Member identity fail-closed
+
+**Findings:** M-09
+**Requirements:** FR-9,NFR-4
+**Governing ADR:** ADR-0019 amend
+**Depends on:** 2-13
+
+As a release owner,
+I want production telemetry and Member identity fail-closed,
+So that thermo-nuclear finding M-09 is closed with current evidence.
+
+**Acceptance Criteria:**
+
+**Given** the reproduction for finding M-09
+**When** the remediation is implemented
+**Then** a previously failing regression or fault-injection test passes
+and the narrow package/race gate is green.
+**And** evidence records `go test ./internal/cmd/... ./internal/telemetry/...`.
+
+**Given** release closure is evaluated
+**When** finding M-09 remains unresolved
+**Then** final SCRAP release status remains FAIL.
+
+

@@ -42,6 +42,14 @@ type RebuildHandler interface {
 	TriggerRebuild(ctx context.Context) (alreadyInProgress bool, err error)
 }
 
+type ScrubCacheResolver interface {
+	ScrubCacheForShard(shardID uint64) (scrub.ResultCache, bool)
+}
+
+type RebuildHandlerResolver interface {
+	RebuildHandlerForShard(shardID uint64) (RebuildHandler, bool)
+}
+
 type ReplicationSink interface {
 	AppendReplicatedDocument(ctx context.Context, init *scrapv1.ReplicateDocumentInit, body io.Reader) ([]byte, error)
 }
@@ -64,6 +72,18 @@ func WithRebuildHandler(handler RebuildHandler) ServerOption {
 	}
 }
 
+func WithScrubCacheResolver(resolver ScrubCacheResolver) ServerOption {
+	return func(s *Server) {
+		s.scrubCacheResolver = resolver
+	}
+}
+
+func WithRebuildHandlerResolver(resolver RebuildHandlerResolver) ServerOption {
+	return func(s *Server) {
+		s.rebuildHandlerResolver = resolver
+	}
+}
+
 func WithReplicationSink(sink ReplicationSink) ServerOption {
 	return func(s *Server) {
 		s.replicationSink = sink
@@ -80,6 +100,18 @@ func WithAuthorizer(authorizer *security.Authorizer, expected security.PeerIdent
 	return func(s *Server) {
 		s.authorizer = authorizer
 		s.expectedPeerIdentity = expected
+	}
+}
+
+// WithPeerRaftIDs binds authenticated Member hostnames to Raft IDs so
+// ForwardRaft rejects Message.From spoofing (ADR 0019 / H-12).
+func WithPeerRaftIDs(ids map[string]uint64) ServerOption {
+	cloned := make(map[string]uint64, len(ids))
+	for hostname, raftID := range ids {
+		cloned[hostname] = raftID
+	}
+	return func(s *Server) {
+		s.peerRaftIDs = cloned
 	}
 }
 
@@ -119,22 +151,25 @@ func WithLogger(logger *slog.Logger) ServerOption {
 
 type Server struct {
 	scrapv1.UnimplementedPeerServiceServer
-	blocksDir             string
-	blockDirResolver      BlockDirResolver
-	scrubCache            scrub.ResultCache
-	rebuildHandler        RebuildHandler
-	replicationSink       ReplicationSink
-	authorizer            *security.Authorizer
-	expectedPeerIdentity  security.PeerIdentityConfig
-	authorizedShardIDs    map[uint64]struct{}
-	authorizationObserver security.AuthorizationObserver
-	auditSink             audit.Sink
-	rateLimiter           *security.RateLimiter
-	raftRouter            atomic.Pointer[RaftRouter]
-	logger                *slog.Logger
-	malformedRaftMsgs     atomic.Uint64
-	mu                    sync.Mutex
-	writers               map[uint64]*blockState
+	blocksDir              string
+	blockDirResolver       BlockDirResolver
+	scrubCache             scrub.ResultCache
+	rebuildHandler         RebuildHandler
+	scrubCacheResolver     ScrubCacheResolver
+	rebuildHandlerResolver RebuildHandlerResolver
+	replicationSink        ReplicationSink
+	authorizer             *security.Authorizer
+	expectedPeerIdentity   security.PeerIdentityConfig
+	authorizedShardIDs     map[uint64]struct{}
+	peerRaftIDs            map[string]uint64
+	authorizationObserver  security.AuthorizationObserver
+	auditSink              audit.Sink
+	rateLimiter            *security.RateLimiter
+	raftRouter             atomic.Pointer[RaftRouter]
+	logger                 *slog.Logger
+	malformedRaftMsgs      atomic.Uint64
+	mu                     sync.Mutex
+	writers                map[uint64]*blockState
 }
 
 func (s *Server) SetRaftRouter(router RaftRouter) {
@@ -561,6 +596,9 @@ func (s *Server) ForwardRaft(ctx context.Context, req *scrapv1.ForwardRaftReques
 		s.recordMalformedRaftMessage(ctx, audit.OperationForwardRaft, req.ShardId, err)
 		return nil, status.Errorf(codes.InvalidArgument, "unmarshal raft message: %v", err)
 	}
+	if err := s.bindRaftMessageSender(ctx, &msg); err != nil {
+		return nil, err
+	}
 	if err := (*router).RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
 		return nil, status.Errorf(codes.Internal, "route raft message: %v", err)
 	}
@@ -603,6 +641,9 @@ func (s *Server) handleForwardRaftStreamRequest(ctx context.Context, router *Raf
 		s.recordMalformedRaftMessage(ctx, audit.OperationForwardRaftStream, req.ShardId, err)
 		return recordAllowed, status.Errorf(codes.InvalidArgument, "unmarshal raft message: %v", err)
 	}
+	if err := s.bindRaftMessageSender(ctx, &msg); err != nil {
+		return recordAllowed, err
+	}
 	if err := (*router).RouteRaftMessage(ctx, req.ShardId, msg); err != nil {
 		s.recordRaftRouteError(ctx, audit.OperationForwardRaftStream, req.ShardId, err)
 	}
@@ -639,14 +680,15 @@ func shouldLogPowerOfTwoCount(count uint64) bool {
 	return count == 1 || count&(count-1) == 0
 }
 
-func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestIndexRebuildRequest) (*scrapv1.RequestIndexRebuildResponse, error) {
-	if err := s.authorizePeer(ctx, audit.OperationRequestIndexRebuild, audit.TargetPeer); err != nil {
+func (s *Server) RequestIndexRebuild(ctx context.Context, req *scrapv1.RequestIndexRebuildRequest) (*scrapv1.RequestIndexRebuildResponse, error) {
+	if err := s.authorizePeerForShard(ctx, audit.OperationRequestIndexRebuild, audit.TargetPeer, req.GetShardId()); err != nil {
 		return nil, err
 	}
-	if s.rebuildHandler == nil {
+	handler, ok := s.rebuildHandlerForShard(req.GetShardId())
+	if !ok {
 		return nil, status.Error(codes.FailedPrecondition, "rebuild handler not configured")
 	}
-	alreadyInProgress, err := s.rebuildHandler.TriggerRebuild(ctx)
+	alreadyInProgress, err := handler.TriggerRebuild(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rebuild: %v", err)
 	}
@@ -656,13 +698,14 @@ func (s *Server) RequestIndexRebuild(ctx context.Context, _ *scrapv1.RequestInde
 }
 
 func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyCheckRequest) (*scrapv1.ConsistencyCheckResponse, error) {
-	if err := s.authorizePeer(ctx, audit.OperationConsistencyCheck, audit.TargetPeer); err != nil {
+	if err := s.authorizePeerForShard(ctx, audit.OperationConsistencyCheck, audit.TargetPeer, req.GetShardId()); err != nil {
 		return nil, err
 	}
-	if s.scrubCache == nil {
+	cache, ok := s.scrubCacheForShard(req.GetShardId())
+	if !ok {
 		return nil, status.Error(codes.FailedPrecondition, "scrub cache not configured")
 	}
-	result, ok := s.scrubCache.GetScrubResult(req.ScrubId)
+	result, ok := cache.GetScrubResult(req.ScrubId)
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "no result for scrub_id %q", req.ScrubId)
 	}
@@ -673,8 +716,24 @@ func (s *Server) ConsistencyCheck(ctx context.Context, req *scrapv1.ConsistencyC
 	}, nil
 }
 
-func (s *Server) authorizePeer(ctx context.Context, operation, target string) error {
-	return s.authorizePeerWithChecks(ctx, operation, target)
+func (s *Server) rebuildHandlerForShard(shardID uint64) (RebuildHandler, bool) {
+	if s.rebuildHandlerResolver != nil {
+		return s.rebuildHandlerResolver.RebuildHandlerForShard(shardID)
+	}
+	if s.rebuildHandler == nil {
+		return nil, false
+	}
+	return s.rebuildHandler, true
+}
+
+func (s *Server) scrubCacheForShard(shardID uint64) (scrub.ResultCache, bool) {
+	if s.scrubCacheResolver != nil {
+		return s.scrubCacheResolver.ScrubCacheForShard(shardID)
+	}
+	if s.scrubCache == nil {
+		return nil, false
+	}
+	return s.scrubCache, true
 }
 
 func (s *Server) authorizePeerForShard(ctx context.Context, operation, target string, shardID uint64) error {
@@ -742,6 +801,29 @@ func (s *Server) authorizePeerIdentity(ctx context.Context) error {
 	if principal.ID != security.PeerIdentityPrincipalID(identity) {
 		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
 		return security.PermissionDeniedErrorWithStatus("peer identity mismatch", security.AuthorizationStatusMismatch)
+	}
+	return nil
+}
+
+// bindRaftMessageSender requires Message.From to match the authenticated peer's
+// Member hostname → Raft ID mapping before routing.
+func (s *Server) bindRaftMessageSender(ctx context.Context, msg *raftpb.Message) error {
+	if s.authorizer == nil || len(s.peerRaftIDs) == 0 {
+		return nil
+	}
+	identity, ok := security.PeerIdentityFromContext(ctx)
+	if !ok {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusDenied)
+		return security.UnauthenticatedError("verified peer identity is required")
+	}
+	expectedFrom, ok := s.peerRaftIDs[identity.MemberHostname]
+	if !ok {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+		return security.PermissionDeniedErrorWithStatus("peer raft identity unknown", security.AuthorizationStatusMismatch)
+	}
+	if msg.From != expectedFrom {
+		s.authorizer.RecordAuthorizationStatus(security.AuthorizationStatusMismatch)
+		return security.PermissionDeniedErrorWithStatus("peer raft sender mismatch", security.AuthorizationStatusMismatch)
 	}
 	return nil
 }

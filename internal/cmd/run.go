@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,28 +63,31 @@ func Run(args []string, stderr io.Writer, build BuildInfo) error {
 	return app.Run(ctx)
 }
 
-func openConfiguredUploadBackend(ctx context.Context, dataDir string, enabled bool) (backend.Backend, string, error) {
-	if !enabled {
+func openConfiguredUploadBackend(ctx context.Context, cfg Config) (backend.Backend, string, error) {
+	if !cfg.UploadEnabled {
 		return nil, "", nil
 	}
-	return openUploadBackend(ctx, dataDir)
+	return openUploadBackend(ctx, cfg)
 }
 
-func openUploadBackend(ctx context.Context, dataDir string) (backend.Backend, string, error) {
+func openUploadBackend(ctx context.Context, cfg Config) (backend.Backend, string, error) {
 	backendType := os.Getenv("SCRAP_BACKEND_TYPE")
 	if backendType == "" {
 		backendType = "fs"
 	}
+	if err := validateProductionBackend(cfg, backendType); err != nil {
+		return nil, "", err
+	}
 
 	switch backendType {
 	case "fs":
-		return backend.NewFS(filepath.Join(dataDir, "backend")), backendType, nil
+		return backend.NewFS(filepath.Join(cfg.DataDir, "backend")), backendType, nil
 	case "s3":
-		cfg, err := backend.ParseS3ConfigFromEnv()
+		s3Cfg, err := backend.ParseS3ConfigFromEnv()
 		if err != nil {
 			return nil, "", fmt.Errorf("parse S3 backend config: %w", err)
 		}
-		store, err := backend.NewS3FromConfig(ctx, cfg)
+		store, err := backend.NewS3FromConfig(ctx, s3Cfg)
 		if err != nil {
 			return nil, "", fmt.Errorf("open S3 backend: %w", err)
 		}
@@ -93,7 +97,41 @@ func openUploadBackend(ctx context.Context, dataDir string) (backend.Backend, st
 	}
 }
 
+// validateProductionBackend rejects Member-local filesystem Backend in
+// production multi-Member or eviction-enabled Cells (ADR 0019 / H-10).
+func validateProductionBackend(cfg Config, backendType string) error {
+	if !cfg.SecurityMode.IsProduction() || backendType != "fs" {
+		return nil
+	}
+	if productionMultiMemberTopology(cfg) || cfg.Eviction.Enabled {
+		return errors.New("production mode rejects filesystem Backend for multi-Member or eviction-enabled Cells")
+	}
+	return nil
+}
+
+func productionMultiMemberTopology(cfg Config) bool {
+	if cfg.Replicas > 1 {
+		return true
+	}
+	if cfg.PeersFlag == "" {
+		return false
+	}
+	peers, err := scrapraft.ParsePeersFlag(cfg.PeersFlag)
+	return err == nil && len(peers) > 1
+}
+
 func resolvePeers(cfg Config) (map[uint64]string, uint64, error) {
+	peers, raftID, err := resolvePeersUnchecked(cfg)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := validateProductionMembership(cfg, peers); err != nil {
+		return nil, 0, err
+	}
+	return peers, raftID, nil
+}
+
+func resolvePeersUnchecked(cfg Config) (map[uint64]string, uint64, error) {
 	switch {
 	case cfg.PeersFlag != "":
 		peers, err := scrapraft.ParsePeersFlag(cfg.PeersFlag)
@@ -121,6 +159,22 @@ func resolvePeers(cfg Config) (map[uint64]string, uint64, error) {
 	}
 }
 
+// validateProductionMembership requires explicit multi-voter topology before
+// production readiness or write admission (ADR 0019 / H-09).
+func validateProductionMembership(cfg Config, peers map[uint64]string) error {
+	if !cfg.SecurityMode.IsProduction() {
+		return nil
+	}
+	const minProductionVoters = 2
+	if len(peers) < minProductionVoters {
+		return errors.New("production mode requires explicit multi-voter membership")
+	}
+	if cfg.PeersFlag == "" && (cfg.Replicas <= 1 || cfg.HeadlessService == "") {
+		return errors.New("production mode requires explicit --peers or SCRAP_REPLICAS>1 with SCRAP_HEADLESS_SERVICE")
+	}
+	return nil
+}
+
 func resolveK8sPeers(cfg Config) (map[uint64]string, uint64, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -142,14 +196,36 @@ func halfSpecifiedClusterError(cfg Config) error {
 	return errors.New("SCRAP_REPLICAS must be greater than 0 when SCRAP_HEADLESS_SERVICE is set")
 }
 
-func resolveClientAddrs(cfg Config, peers map[uint64]string) map[uint64]string {
+func resolveClientAddrs(cfg Config, peers map[uint64]string) (map[uint64]string, error) { //nolint:cyclop // production client-addr resolution has several mutually exclusive discovery paths
+	if cfg.ClientAddrsFlag != "" {
+		addrs, err := scrapraft.ParsePeersFlag(cfg.ClientAddrsFlag)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --client-addrs: %w", err)
+		}
+		if err := validateClientAddrCoverage(peers, addrs); err != nil {
+			return nil, err
+		}
+		return addrs, nil
+	}
+	if cfg.SecurityMode.IsProduction() && (cfg.Replicas <= 0 || cfg.HeadlessService == "") {
+		return nil, errors.New("production mode requires explicit --client-addrs (or SCRAP_CLIENT_ADDRS) outside Kubernetes discovery")
+	}
 	if cfg.Replicas > 0 && cfg.HeadlessService != "" {
 		clientPort, err := portFromListenAddr(cfg.ListenAddr)
 		if err == nil && clientPort > 0 {
-			return scrapraft.BuildK8sPeers(cfg.Replicas, cfg.HeadlessService, cfg.Namespace, clientPort)
+			return scrapraft.BuildK8sPeers(cfg.Replicas, cfg.HeadlessService, cfg.Namespace, clientPort), nil
 		}
 	}
-	return copyPeerAddrs(peers)
+	return copyPeerAddrs(peers), nil
+}
+
+func validateClientAddrCoverage(peers, addrs map[uint64]string) error {
+	for id := range peers {
+		if strings.TrimSpace(addrs[id]) == "" {
+			return fmt.Errorf("client address missing for raft member %d", id)
+		}
+	}
+	return nil
 }
 
 func portFromListenAddr(addr string) (int, error) {

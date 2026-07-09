@@ -41,6 +41,7 @@ type scrubCore interface {
 type scrubCoordinator struct {
 	core            scrubCore
 	blocksDir       string
+	shardID         uint64
 	baseLogger      *slog.Logger
 	pauseController scrub.PauseController
 
@@ -53,13 +54,14 @@ type scrubCoordinator struct {
 	resultOrder []string
 }
 
-func newScrubCoordinator(core scrubCore, blocksDir string, baseLogger *slog.Logger, pauseController scrub.PauseController) *scrubCoordinator {
+func newScrubCoordinator(core scrubCore, blocksDir string, shardID uint64, baseLogger *slog.Logger, pauseController scrub.PauseController) *scrubCoordinator {
 	if baseLogger == nil {
 		baseLogger = slog.Default()
 	}
 	return &scrubCoordinator{
 		core:            core,
 		blocksDir:       blocksDir,
+		shardID:         shardID,
 		baseLogger:      baseLogger,
 		pauseController: pauseController,
 		proposals:       make(map[string]chan scrub.Result),
@@ -109,6 +111,7 @@ func (c *scrubCoordinator) Start(cfg Config) {
 			BlockRepairer:        c.defaultBlockRepairer(cfg),
 			BlockStateClassifier: c,
 			PauseController:      c.pauseController,
+			Checkpoint:           c,
 			Logger:               c.baseLogger.With("component", "deep_scrub"),
 			IOBudget:             scrub.NewTokenBucket(cfg.Scrub.DeepScrubIORate),
 			CorruptCap:           cfg.Scrub.CorruptCap,

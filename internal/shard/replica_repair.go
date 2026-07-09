@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/petabytecl/scrap/internal/block"
 )
@@ -71,21 +72,13 @@ func appendUniqueReplicaRepairAddr(addrs []string, seen map[string]struct{}, add
 }
 
 func (s *Shard) repairReplicaBlockFromPeerLocked(ctx context.Context, addr string, blockID uint64, wantOffset int64) error {
-	blkData, idxData, err := s.blockTransferer.TransferBlock(ctx, addr, s.shardID, blockID)
-	if err != nil {
-		return fmt.Errorf("fetch replacement Block from %s: %w", addr, err)
-	}
-
 	paths := s.replicaRepairPaths(blockID)
 	if err := cleanupReplicaRepairStaging(paths); err != nil {
 		return err
 	}
-	if err := writeSyncedReplicaRepairFile(paths.blkStaged, blkData); err != nil {
-		return fmt.Errorf("write replacement Block: %w", err)
-	}
-	if err := writeSyncedReplicaRepairFile(paths.idxStaged, idxData); err != nil {
+	if err := s.blockTransferer.TransferBlockToFiles(ctx, addr, s.shardID, blockID, paths.blkStaged, paths.idxStaged); err != nil {
 		_ = cleanupReplicaRepairStaging(paths)
-		return fmt.Errorf("write replacement index: %w", err)
+		return fmt.Errorf("fetch replacement Block from %s: %w", addr, err)
 	}
 	defer func() { _ = cleanupReplicaRepairStaging(paths) }()
 
@@ -153,7 +146,7 @@ func validateReplicaRepairIndexTail(idxPath string, wantOffset int64) error {
 	return nil
 }
 
-func (s *Shard) promoteReplicaRepairLocked(paths replicaRepairPaths, blockID uint64, wantOffset int64) (err error) {
+func (s *Shard) promoteReplicaRepairLocked(paths replicaRepairPaths, blockID uint64, wantOffset int64) (err error) { //nolint:cyclop // repair promotion must verify, publish, and requeue upload atomically under the Shard lock
 	if err := s.idxWriter.Close(); err != nil {
 		return fmt.Errorf("close replica index before repair: %w", err)
 	}
@@ -196,6 +189,13 @@ func (s *Shard) promoteReplicaRepairLocked(paths replicaRepairPaths, blockID uin
 
 	s.blockWriter = bw
 	s.idxWriter = iw
+	// H-08 / ADR 0037: peer repair replaced local bytes; requeue Backend upload
+	// so ConfirmUpload cannot leave a stale generation as authority.
+	if s.upload.Enabled && s.uploads != nil {
+		if err := s.requeueBlockUploadAfterIndexAppend(blockID, time.Now().UnixMicro()); err != nil {
+			return fmt.Errorf("requeue upload after peer repair: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -227,33 +227,6 @@ func cleanupReplicaRepairStaging(paths replicaRepairPaths) error {
 		}
 	}
 	return nil
-}
-
-func writeSyncedReplicaRepairFile(path string, data []byte) error {
-	tmpPath := path + ".tmp"
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // path is derived from controlled Shard and Block IDs.
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return syncReplicaRepairDir(filepath.Dir(path))
 }
 
 func syncReplicaRepairFile(path string) error {

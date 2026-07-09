@@ -83,7 +83,7 @@ func TestScrubCoordinatorProposeApplyAndCache(t *testing.T) {
 		proposed: make(chan []byte, 1),
 		result:   scrub.Result{SHA256: [32]byte{1, 2, 3}},
 	}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -128,7 +128,7 @@ func TestScrubCoordinatorContextCancelRemovesProposal(t *testing.T) {
 		leader:   true,
 		proposed: make(chan []byte, 1),
 	}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	resultCh := make(chan scrubCoordinatorResult, 1)
@@ -158,7 +158,7 @@ func TestScrubCoordinatorApplyAfterStopIsSafe(t *testing.T) {
 		leader: true,
 		result: scrub.Result{SHA256: [32]byte{4, 5, 6}},
 	}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	c.Stop()
 	c.applyConsistencyCheck(&scrapv1.RequestConsistencyCheck{ScrubId: "post-stop"}, 7)
@@ -174,7 +174,7 @@ func TestScrubCoordinatorApplyAfterStopIsSafe(t *testing.T) {
 
 func TestScrubCoordinatorRetainsOverlappingResultsByID(t *testing.T) {
 	core := &scrubCoordinatorCoreStub{leader: true, result: scrub.Result{SHA256: [32]byte{9}}}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	c.applyConsistencyCheck(&scrapv1.RequestConsistencyCheck{ScrubId: "scrub-a"}, 1)
 	c.applyConsistencyCheck(&scrapv1.RequestConsistencyCheck{ScrubId: "scrub-b"}, 2)
@@ -191,7 +191,7 @@ func TestScrubCoordinatorRetainsOverlappingResultsByID(t *testing.T) {
 
 func TestScrubCoordinatorRetentionEvictsOldestBeyondCap(t *testing.T) {
 	core := &scrubCoordinatorCoreStub{leader: true}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	total := maxRetainedScrubResults + 5
 	for i := range total {
@@ -220,7 +220,7 @@ func TestScrubCoordinatorDuplicateScrubIDDoesNotHangFirstWaiter(t *testing.T) {
 		proposed: make(chan []byte, 1),
 		result:   scrub.Result{SHA256: [32]byte{7}},
 	}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -254,7 +254,7 @@ func TestScrubCoordinatorDuplicateScrubIDDoesNotHangFirstWaiter(t *testing.T) {
 
 func TestScrubCoordinatorApplyDoesNotHoldLockDuringSend(t *testing.T) {
 	core := &scrubCoordinatorCoreStub{leader: true}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	// Register an UNBUFFERED waiter so the apply send blocks until a receiver is
 	// ready. If the coordinator held c.mu across the send, no other goroutine
@@ -292,7 +292,7 @@ func TestScrubCoordinatorApplyDoesNotHoldLockDuringSend(t *testing.T) {
 }
 
 func TestScrubCoordinatorDefaultBlockRepairerSupportsBackendOnly(t *testing.T) {
-	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), 0, nil, nil)
 	repairer := c.defaultBlockRepairer(Config{
 		Upload: UploadConfig{
 			Enabled: true,
@@ -305,7 +305,7 @@ func TestScrubCoordinatorDefaultBlockRepairerSupportsBackendOnly(t *testing.T) {
 }
 
 func TestScrubCoordinatorDefaultBlockRepairerUsesConfiguredBackendWhenUploadsDisabled(t *testing.T) {
-	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), 0, nil, nil)
 	repairer := c.defaultBlockRepairer(Config{
 		Upload: UploadConfig{
 			Enabled: false,
@@ -318,7 +318,7 @@ func TestScrubCoordinatorDefaultBlockRepairerUsesConfiguredBackendWhenUploadsDis
 }
 
 func TestScrubCoordinatorDefaultBlockRepairerNilWithoutRepairSource(t *testing.T) {
-	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, t.TempDir(), 0, nil, nil)
 	if repairer := c.defaultBlockRepairer(Config{}); repairer != nil {
 		t.Fatalf("defaultBlockRepairer = %T, want nil", repairer)
 	}
@@ -327,7 +327,7 @@ func TestScrubCoordinatorDefaultBlockRepairerNilWithoutRepairSource(t *testing.T
 func TestScrubCoordinatorListsEvictedBlocksForDeepScrubSkip(t *testing.T) {
 	dir := t.TempDir()
 	core := &scrubCoordinatorCoreStub{openBlockID: 99}
-	c := newScrubCoordinator(core, dir, nil, nil)
+	c := newScrubCoordinator(core, dir, 0, nil, nil)
 
 	if err := os.WriteFile(block.IdxFilePath(dir, 7), []byte("idx retained"), 0o600); err != nil {
 		t.Fatalf("write retained idx: %v", err)
@@ -412,7 +412,7 @@ func TestScrubCoordinatorClassifyScrubBlockMapsLifecycleStates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, dir, nil, nil)
+			c := newScrubCoordinator(&scrubCoordinatorCoreStub{}, dir, 0, nil, nil)
 			tt.stage(t, dir, tt.blockID)
 
 			got, err := c.ClassifyScrubBlock(tt.blockID)
@@ -476,7 +476,7 @@ func readProposedScrubCommand(t *testing.T, proposed <-chan []byte) *scrapv1.Raf
 
 func TestScrubCoordinatorSelfRebuildTriggersLocalRebuild(t *testing.T) {
 	core := &scrubCoordinatorCoreStub{leader: true}
-	c := newScrubCoordinator(core, t.TempDir(), nil, nil)
+	c := newScrubCoordinator(core, t.TempDir(), 0, nil, nil)
 
 	if err := c.RequestSelfRebuild(context.Background(), "scrub-1"); err != nil {
 		t.Fatalf("RequestSelfRebuild: %v", err)

@@ -21,6 +21,7 @@ func (s *stubRaftNode) ReadIndex(context.Context) (uint64, error)  { return 0, n
 func (s *stubRaftNode) Step(context.Context, raftpb.Message) error { return nil }
 func (s *stubRaftNode) IsLeader() bool                             { return true }
 func (s *stubRaftNode) LeaderID() uint64                           { return 1 }
+func (s *stubRaftNode) Term() uint64                               { return 1 }
 func (s *stubRaftNode) AppliedIndex() uint64                       { return s.applied.Load() }
 func (s *stubRaftNode) CommitIndex() uint64                        { return s.applied.Load() }
 func (s *stubRaftNode) WithStableLeadership(fn func() error) error { return fn() }

@@ -16,8 +16,10 @@ import (
 	"google.golang.org/grpc/status"
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/avscan"
 	"github.com/petabytecl/scrap/internal/peer"
 	"github.com/petabytecl/scrap/internal/routing"
+	"github.com/petabytecl/scrap/internal/scrub"
 	"github.com/petabytecl/scrap/internal/shard"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 	"github.com/petabytecl/scrap/internal/telemetry"
@@ -143,15 +145,16 @@ func openLocalShard(openCfg shardSetOpenConfig, shardID uint64, dataDir string) 
 		Scrub:              openCfg.cfg.Scrub,
 		Transport:          openCfg.transport.ForShard(shardID, openCfg.peers),
 		Logger:             openCfg.logger,
-		ConsistencyChecker: peer.NewClientConsistencyChecker(openCfg.peerClient),
+		ConsistencyChecker: peer.NewClientConsistencyChecker(openCfg.peerClient, shardID),
 		Metrics:            shardTel.scrubMetrics,
 		DeepMetrics:        shardTel.deepScrubMetrics,
-		Rebuilder:          peer.NewClientRebuilder(openCfg.peerClient),
+		Rebuilder:          peer.NewClientRebuilder(openCfg.peerClient, shardID),
 		BlockTransferer:    openCfg.peerClient,
 		Replicator:         openCfg.peerClient,
 		PeerAddrs:          peerAddrsExceptSelf(openCfg.peers, openCfg.raftID),
 		Upload:             uploadCfg,
 		Scanner: shard.ScannerConfig{
+			Engine:  avscan.UnavailableEngine{},
 			Metrics: shardTel.scannerMetrics,
 		},
 		Eviction:        openCfg.cfg.Eviction,
@@ -250,6 +253,28 @@ func (s *shardSet) BlockDirForShard(shardID uint64) (string, bool) {
 	}
 	dir, ok := s.blockDirs[shardID]
 	return dir, ok
+}
+
+func (s *shardSet) ScrubCacheForShard(shardID uint64) (scrub.ResultCache, bool) {
+	if s == nil {
+		return nil, false
+	}
+	localShard, ok := s.shards[shardID]
+	if !ok || localShard == nil {
+		return nil, false
+	}
+	return localShard, true
+}
+
+func (s *shardSet) RebuildHandlerForShard(shardID uint64) (peer.RebuildHandler, bool) {
+	if s == nil {
+		return nil, false
+	}
+	localShard, ok := s.shards[shardID]
+	if !ok || localShard == nil {
+		return nil, false
+	}
+	return localShard, true
 }
 
 func (s *shardSet) singleShardStore() storeapi.Store {

@@ -120,7 +120,7 @@ func (r *projectionRebuilder) setInProgressForTest(v bool) {
 // pebble.previous-* directory is the pre-rebuild projection and is restored;
 // all remaining timestamped rebuild/previous directories are stale and removed
 // so they do not accumulate forever.
-func recoverProjectionSwapDirs(dataDir, pebbleDir string) error {
+func recoverProjectionSwapDirs(dataDir, pebbleDir string) error { //nolint:cyclop // crash recovery must handle every live/previous/rebuild directory combination
 	previous, err := filepath.Glob(filepath.Join(dataDir, "pebble.previous-*"))
 	if err != nil {
 		return fmt.Errorf("shard: glob previous projections: %w", err)
@@ -137,6 +137,9 @@ func recoverProjectionSwapDirs(dataDir, pebbleDir string) error {
 		if err := os.Rename(newest, pebbleDir); err != nil {
 			return fmt.Errorf("shard: restore projection from %s: %w", newest, err)
 		}
+		if err := syncDir(dataDir); err != nil {
+			return fmt.Errorf("shard: sync data dir after restoring projection: %w", err)
+		}
 		previous = previous[:len(previous)-1]
 	}
 
@@ -148,6 +151,9 @@ func recoverProjectionSwapDirs(dataDir, pebbleDir string) error {
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("shard: remove stale projection dir %s: %w", dir, err)
 		}
+	}
+	if err := syncDir(dataDir); err != nil {
+		return fmt.Errorf("shard: sync data dir after projection recovery cleanup: %w", err)
 	}
 	return nil
 }
@@ -214,6 +220,14 @@ func (r *projectionRebuilder) doRebuild(ctx context.Context, done chan struct{})
 // landed during this scan. State without a Block-file source (content
 // safety, upload outbox) is deliberately NOT built here — it is copied under
 // the apply lock in finalizeRebuildLocked, where it cannot race an apply.
+//
+// ADR 0034 / H-05: Document visibility during rebuild is fail-closed against
+// fabricated or orphan local .idx files. requireRebuildBlockAuthority verifies
+// Block header identity and companion .blk presence before any Document record
+// is projected. Content Quarantine and scanner watermarks still copy from the
+// live Projection under the apply lock because they have no Block-file source;
+// a Raft-log/snapshot-derived rebuild of those keys remains a follow-up once
+// those records are carried in Raft snapshots.
 // rebuildBulkState is everything the unlocked bulk phase captured for the
 // locked finalize: how far each Block's .idx was consumed (for the delta
 // re-scan) and the per-Block filesystem evidence (so finalize does no fs I/O
@@ -289,12 +303,17 @@ func (r *projectionRebuilder) finalizeRebuildLocked(newIdx *index.Index, bulk re
 // .idx after the bulk scan counted its entries. Block .idx files are
 // append-only for Document records and only mutate under the apply lock, so
 // the tail beyond the bulk count is exactly the rebuild-window delta.
-func (r *projectionRebuilder) applyBlockIndexDelta(projection *index.Index, seenEntries map[uint64]int) ([]uint64, error) {
+func (r *projectionRebuilder) applyBlockIndexDelta(projection *index.Index, seenEntries map[uint64]int) ([]uint64, error) { //nolint:gocognit // rebuild-window delta must validate every Block index tail entry
 	blockIDs, err := r.listBlockIndexIDs()
 	if err != nil {
 		return nil, err
 	}
 	for _, blockID := range blockIDs {
+		if _, seen := seenEntries[blockID]; !seen {
+			if err := r.requireRebuildBlockAuthority(blockID); err != nil {
+				return nil, err
+			}
+		}
 		entries, err := r.readBlockIndexEntries(blockID)
 		if err != nil {
 			return nil, err
@@ -320,6 +339,12 @@ func (r *projectionRebuilder) rebuildProjectionInto(projection *index.Index) (ma
 
 	seenEntries := make(map[uint64]int, len(blockIDs))
 	for _, blockID := range blockIDs {
+		// H-05 / ADR 0034: local .idx is not visibility authority by itself.
+		// Refuse to certify Documents from an index whose companion Block is
+		// missing or fails header identity checks.
+		if err := r.requireRebuildBlockAuthority(blockID); err != nil {
+			return nil, err
+		}
 		entries, err := r.readBlockIndexEntries(blockID)
 		if err != nil {
 			return nil, err
@@ -333,6 +358,23 @@ func (r *projectionRebuilder) rebuildProjectionInto(projection *index.Index) (ma
 		}
 	}
 	return seenEntries, nil
+}
+
+// requireRebuildBlockAuthority fails closed when a local .idx cannot be tied
+// to a verified Block header for this Shard. Fabricated or orphan indexes must
+// not become Document visibility during rebuild (H-05 / ADR 0034).
+func (r *projectionRebuilder) requireRebuildBlockAuthority(blockID uint64) error {
+	blkPath := r.blockPath(blockID)
+	if _, err := os.Stat(blkPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("shard: rebuild refuses Block %d index without companion .blk: %w", blockID, err)
+		}
+		return fmt.Errorf("shard: rebuild stat Block %d: %w", blockID, err)
+	}
+	if err := block.VerifyHeader(blkPath, r.shardID, blockID); err != nil {
+		return fmt.Errorf("shard: rebuild refuses Block %d with invalid header: %w", blockID, err)
+	}
+	return nil
 }
 
 func (r *projectionRebuilder) readBlockIndexEntries(blockID uint64) ([]block.IndexEntry, error) {

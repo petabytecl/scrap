@@ -9,28 +9,30 @@ import (
 )
 
 type ClientRebuilder struct {
-	client *Client
+	client  *Client
+	shardID uint64
 }
 
-func NewClientRebuilder(client *Client) *ClientRebuilder {
-	return &ClientRebuilder{client: client}
+func NewClientRebuilder(client *Client, shardID uint64) *ClientRebuilder {
+	return &ClientRebuilder{client: client, shardID: shardID}
 }
 
 func (r *ClientRebuilder) RequestRebuild(ctx context.Context, addr, scrubID string) error {
-	_, err := r.client.RequestIndexRebuild(ctx, addr, scrubID)
+	_, err := r.client.RequestIndexRebuild(ctx, addr, r.shardID, scrubID)
 	return err
 }
 
 type ClientConsistencyChecker struct {
-	client *Client
+	client  *Client
+	shardID uint64
 }
 
-func NewClientConsistencyChecker(client *Client) *ClientConsistencyChecker {
-	return &ClientConsistencyChecker{client: client}
+func NewClientConsistencyChecker(client *Client, shardID uint64) *ClientConsistencyChecker {
+	return &ClientConsistencyChecker{client: client, shardID: shardID}
 }
 
 func (c *ClientConsistencyChecker) CheckConsistency(ctx context.Context, addr, scrubID string) (scrub.Result, error) {
-	resp, err := c.client.ConsistencyCheck(ctx, addr, scrubID)
+	resp, err := c.client.ConsistencyCheck(ctx, addr, c.shardID, scrubID)
 	if err != nil {
 		return scrub.Result{}, err
 	}

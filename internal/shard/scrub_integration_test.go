@@ -44,43 +44,7 @@ type shardCluster struct {
 
 func openShardCluster(t *testing.T) *shardCluster {
 	t.Helper()
-	transport := newShardTransport()
-
-	peers := map[uint64]string{
-		1: "localhost:9091",
-		2: "localhost:9092",
-		3: "localhost:9093",
-	}
-
-	sc := &shardCluster{transport: transport}
-
-	for i := range 3 {
-		id := uint64(i + 1)
-		dir := t.TempDir()
-
-		s, err := shard.Open(shard.Config{
-			DataDir:      dir,
-			ShardID:      0,
-			RaftID:       id,
-			Peers:        peers,
-			TickInterval: 10 * time.Millisecond,
-			Transport:    transport,
-			Replicator:   noopTestReplicator{},
-		})
-		if err != nil {
-			t.Fatalf("Open shard %d: %v", id, err)
-		}
-		sc.shards = append(sc.shards, s)
-		transport.Register(id, s)
-	}
-
-	t.Cleanup(func() {
-		for _, s := range sc.shards {
-			_ = s.Close()
-		}
-	})
-
-	return sc
+	return openWriteAckCluster(t, newWriteAckReplicator(), &recordingWriteTelemetry{})
 }
 
 func (sc *shardCluster) waitForLeader(t *testing.T) *shard.Shard {

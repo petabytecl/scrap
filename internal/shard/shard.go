@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
 
+	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
+	"github.com/petabytecl/scrap/internal/admission"
 	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/encryption"
 	"github.com/petabytecl/scrap/internal/eviction"
@@ -80,10 +83,21 @@ type raftNode interface {
 	Step(ctx context.Context, msg raftpb.Message) error
 	IsLeader() bool
 	LeaderID() uint64
+	Term() uint64
 	AppliedIndex() uint64
 	CommitIndex() uint64
 	WithStableLeadership(func() error) error
 	Stop()
+}
+
+// LeadershipEpoch returns a token that changes when the observed leader ID
+// changes. Upload workers use it to fence ConfirmUpload after leadership loss
+// (H-08 / ADR 0037).
+func (s *Shard) LeadershipEpoch() uint64 {
+	if s.raft == nil {
+		return 0
+	}
+	return s.raft.LeaderID()
 }
 
 type Shard struct {
@@ -116,6 +130,7 @@ type Shard struct {
 	blockWriter *block.Writer
 	idxWriter   *block.IndexWriter
 	nextBlockID uint64
+	byteReady   map[byteReadyKey]struct{}
 
 	// Serializes the leader write pipeline so peer replication and Raft proposals
 	// preserve the same offset order as local block appends.
@@ -147,6 +162,7 @@ type Shard struct {
 	restoreMu                   sync.Mutex
 	restores                    map[uint64]*blockRestoreCall
 	restoreWaiterEnteredForTest chan uint64
+	restoreSem                  chan struct{}
 }
 
 func (c *Config) applyDefaults() {
@@ -255,16 +271,18 @@ func Open(cfg Config) (*Shard, error) {
 		encryption:           cfg.Encryption,
 		blockSealSize:        cfg.BlockSealSize,
 		nextBlockID:          nextID,
+		byteReady:            make(map[byteReadyKey]struct{}),
 		proposals:            make(map[string]chan error),
 		evictionCampaigns:    eviction.NewCampaigns(),
 		evictionHealthBlocks: make(map[uint64]evictionHealthBlockContribution),
 		blockUploads:         newBlockUploadLifecycle(),
 		restores:             make(map[uint64]*blockRestoreCall),
+		restoreSem:           newRestoreSemaphore(cfg.Upload.RestoreConcurrency),
 		uploadPressure:       newUploadPressureCoordinator(),
 		raftStartedAt:        time.Now(),
 		bootstrapGrace:       cfg.BootstrapGrace,
 	}
-	s.scrubs = newScrubCoordinator(s, blocksDir, baseLogger, s.uploadPressure.ScrubPauseController())
+	s.scrubs = newScrubCoordinator(s, blocksDir, cfg.ShardID, baseLogger, s.uploadPressure.ScrubPauseController())
 	s.scanner = newScannerCoordinator(
 		s,
 		blocksDir,
@@ -343,6 +361,12 @@ func (s *Shard) initAfterRaftOpen(truncationCandidates []openlogTruncationCandid
 
 func (s *Shard) refreshRuntimeStateAfterRaftOpen() error {
 	s.mu.Lock()
+	reconcileErr := s.reconcileClosedBlocksIntoUploadOutboxLocked()
+	s.mu.Unlock()
+	if reconcileErr != nil {
+		return fmt.Errorf("shard: reconcile closed Blocks into Upload Outbox: %w", reconcileErr)
+	}
+	s.mu.Lock()
 	refreshErr := s.refreshUploadPressureLocked()
 	s.mu.Unlock()
 	if refreshErr != nil {
@@ -391,6 +415,10 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	if err := s.requireLeader(); err != nil {
 		return storeapi.WriteResult{}, err
 	}
+	if err := admission.Process.Acquire(ctx, storeapi.MaxDocumentBytes); err != nil {
+		return storeapi.WriteResult{}, err
+	}
+	defer admission.Process.Release(storeapi.MaxDocumentBytes)
 	if err := storeapi.ValidateWriteMetadata(txID, docName, contentType, "", idempotencyKey); err != nil {
 		return storeapi.WriteResult{}, err
 	}
@@ -405,7 +433,6 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 
 	s.mu.Lock()
 
-	key := txID + "\x00" + docName
 	existing, exists, err := s.duplicateDocumentEntry(txID, docName)
 	if err != nil {
 		s.mu.Unlock()
@@ -464,6 +491,12 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		s.mu.Unlock()
 		return storeapi.WriteResult{}, fmt.Errorf("shard: append first frame offset %d, want %d", result.FirstFrameOffset, startOffset)
 	}
+	if startOffset < 0 {
+		s.abortWriteAttemptLocked(attempt, startOffset)
+		s.mu.Unlock()
+		return storeapi.WriteResult{}, errors.New("shard: negative append offset")
+	}
+	s.recordByteReadyLocked(blockID, uint64(startOffset))
 
 	s.mu.Unlock()
 
@@ -475,21 +508,23 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		return storeapi.WriteResult{}, err
 	}
 
-	doneCh := make(chan error, 1)
-	s.proposalMu.Lock()
-	s.proposals[key] = doneCh
-	s.proposalMu.Unlock()
-
 	ctx, proposeStage := s.writeTelemetry.StartStage(ctx, "raft_propose")
 	// Stamp the active propose span into the command so every voter's apply loop
 	// recovers it and emits a child apply span on all replicas. See ADR 0013.
 	cmd := attempt.commitCommand(result, now, envelope)
 	injectTraceContext(ctx, cmd)
+	// ADR 0033 / H-02: key waiters by proposal_id so a canceled proposal cannot
+	// falsely ACK a later retry for the same Document identity.
+	proposalKey := commitProposalWaiterKey(cmd.GetCommitDoc())
+	doneCh := make(chan error, 1)
+	s.proposalMu.Lock()
+	s.proposals[proposalKey] = doneCh
+	s.proposalMu.Unlock()
 	data, err := proto.Marshal(cmd)
 	if err != nil {
 		proposeStage.End(err)
 		s.proposalMu.Lock()
-		delete(s.proposals, key)
+		delete(s.proposals, proposalKey)
 		s.proposalMu.Unlock()
 		s.abortWriteAttempt(attempt, startOffset)
 		return storeapi.WriteResult{}, fmt.Errorf("shard: marshal command: %w", err)
@@ -498,7 +533,7 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 	proposeStage.End(proposeErr)
 	if proposeErr != nil {
 		s.proposalMu.Lock()
-		delete(s.proposals, key)
+		delete(s.proposals, proposalKey)
 		s.proposalMu.Unlock()
 		// A context error is ambiguous: the proposal may still be in the Raft
 		// pipeline and commit later, so the bytes and prep must survive for
@@ -521,9 +556,10 @@ func (s *Shard) WriteDocument(ctx context.Context, txID, docName, contentType, i
 		applyStage.End(ctx.Err())
 		// The committed command may still apply after cancellation: keep the
 		// bytes and the prep so apply-time cleanup or Openlog recovery resolves
-		// them, and drop the waiter so the channel entry does not leak.
+		// them. Drop only this proposal's waiter so a later retry installs its
+		// own proposal_id waiter (ADR 0033 / H-02).
 		s.proposalMu.Lock()
-		delete(s.proposals, key)
+		delete(s.proposals, proposalKey)
 		s.proposalMu.Unlock()
 		return storeapi.WriteResult{}, ctx.Err()
 	}
@@ -659,6 +695,16 @@ func (s *Shard) readDocumentFromProjection(
 	if err := s.ensureReadableBlockLockedForReason(ctx, entry.blockID, restoreReason); err != nil {
 		return nil, storeapi.DocumentMeta{}, err
 	}
+	// ADR 0033 / H-04: refuse to serve a Document whose local Frames are not
+	// byte-ready even if Projection metadata is visible.
+	if err := s.ensureCommitDocumentBytesReadyLocked(&scrapv1.CommitDocument{
+		BlockId:       entry.blockID,
+		FirstFrameOff: uint64(entry.FirstFrameOff), //nolint:gosec // FirstFrameOff is non-negative Block offset
+		FrameCount:    entry.FrameCount,
+	}); err != nil {
+		s.mu.Unlock()
+		return nil, storeapi.DocumentMeta{}, err
+	}
 	if err := s.ensureContentReadAllowedLocked(txID, docName); err != nil {
 		s.mu.Unlock()
 		return nil, storeapi.DocumentMeta{}, err
@@ -704,39 +750,22 @@ func (s *Shard) readDocumentBytes(ctx context.Context, blkPath string, blockID u
 		return nil, mapEncryptionError(err)
 	}
 
-	// Mirror the plaintext read path's two-pass contract: verify the whole
-	// Document (streaming, bounded memory) before serving the first byte,
-	// then stream-decrypt again for the response. Both passes share the one
-	// unwrapped data key.
-	verifySource, err := block.OpenDocumentFrameSource(blkPath, s.shardID, blockID, entry)
-	if err != nil {
-		decryptor.Close()
-		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
-	}
-	if err := decryptor.Verify(verifySource); err != nil {
-		decryptor.Close()
-		return nil, mapEncryptionError(err)
-	}
-
+	// M-01: spool verified plaintext before returning a reader so no prefix
+	// can reach the client before final integrity checks. DocumentDecryptor.Reader
+	// authenticates Frames and checks the Document digest before EOF.
 	streamSource, err := block.OpenDocumentFrameSource(blkPath, s.shardID, blockID, entry)
 	if err != nil {
 		decryptor.Close()
 		return nil, fmt.Errorf("%w: %w", storeapi.ErrDataLoss, err)
 	}
-	return decryptReadCloser{ReadCloser: decryptor.Reader(streamSource), decryptor: decryptor}, nil
-}
-
-// decryptReadCloser zeroes the unwrapped data key when the streamed
-// encrypted read finishes.
-type decryptReadCloser struct {
-	io.ReadCloser
-	decryptor *encryption.DocumentDecryptor
-}
-
-func (r decryptReadCloser) Close() error {
-	err := r.ReadCloser.Close()
-	r.decryptor.Close()
-	return err
+	rc := decryptor.Reader(streamSource)
+	payload, err := io.ReadAll(rc)
+	_ = rc.Close()
+	decryptor.Close()
+	if err != nil {
+		return nil, mapEncryptionError(err)
+	}
+	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
 func mapReadDocumentError(err error) error {
@@ -936,6 +965,9 @@ func (s *Shard) swapRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string) e
 		}
 	}
 	_ = os.RemoveAll(oldDir)
+	if err := syncDir(filepath.Dir(pebbleDir)); err != nil {
+		return fmt.Errorf("shard: sync data dir after removing previous projection: %w", err)
+	}
 	return nil
 }
 
@@ -945,6 +977,11 @@ func (s *Shard) moveCurrentProjectionLocked(pebbleDir, oldDir string) error {
 			return fmt.Errorf("shard: rename current index: %w; reopen current index: %w", err, reopenErr)
 		}
 		return fmt.Errorf("shard: rename current index: %w", err)
+	}
+	// M-11 / ADR 0034: fsync the parent after the rename so a power loss cannot
+	// lose both the live and previous directory entries.
+	if err := syncDir(filepath.Dir(pebbleDir)); err != nil {
+		return fmt.Errorf("shard: sync data dir after moving projection: %w", err)
 	}
 	return nil
 }
@@ -956,6 +993,9 @@ func (s *Shard) installRebuiltProjectionLocked(pebbleDir, tempDir, oldDir string
 			return fmt.Errorf("shard: install rebuild index: %w; reopen current index: %w", err, reopenErr)
 		}
 		return fmt.Errorf("shard: install rebuild index: %w", err)
+	}
+	if err := syncDir(filepath.Dir(pebbleDir)); err != nil {
+		return fmt.Errorf("shard: sync data dir after installing projection: %w", err)
 	}
 	return nil
 }
@@ -1092,7 +1132,37 @@ func (s *Shard) Close() error {
 	s.WaitRebuild()
 	s.waitLifecycleCleanup()
 
+	s.mu.Lock()
+	sealErr := s.sealTailOnShutdownLocked()
+	s.mu.Unlock()
+	if sealErr != nil && s.logger != nil {
+		s.logger.Error("shard: seal tail on shutdown failed", "err", sealErr)
+	}
+
 	return s.closeStorage()
+}
+
+// sealTailOnShutdownLocked persists seal intent for the open Block when upload
+// is enabled so the next leader can reconcile it into the Upload Outbox (H-07).
+func (s *Shard) sealTailOnShutdownLocked() error {
+	if !s.upload.Enabled || s.blockWriter == nil {
+		return nil
+	}
+	blockID := s.blockWriter.BlockID()
+	sealedSize := s.blockWriter.Offset()
+	if sealedSize <= block.HeaderSize {
+		return nil
+	}
+	if err := s.writeSealIntentLocked(blockID, sealedSize); err != nil {
+		return err
+	}
+	s.uploadOutboxLocked().RecordBlockSealed(blockSealedEventFromPending(index.PendingUpload{
+		BlockID:         blockID,
+		ShardID:         s.shardID,
+		SealedSizeBytes: sealedSize,
+		SealedAtUs:      time.Now().UnixMicro(),
+	}))
+	return nil
 }
 
 func (s *Shard) closeStorage() error {

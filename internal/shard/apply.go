@@ -5,6 +5,7 @@ package shard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -137,10 +138,10 @@ func blockIDAttribute(blockID uint64) attribute.KeyValue {
 	return attribute.Int64("scrap.block_id", v)
 }
 
-func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) error {
+func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) error { //nolint:cyclop // exhaustive Raft command dispatch must stay fail-closed per ADR 0034
 	switch c := cmd.Command.(type) {
 	case *scrapv1.RaftCommand_CommitDoc:
-		s.applyCommitDocumentCommand(c.CommitDoc, entryIndex)
+		return s.applyCommitDocumentCommand(c.CommitDoc, entryIndex)
 	case *scrapv1.RaftCommand_RewrapDoc:
 		return s.applyRewrapDocumentEnvelopeCommand(c.RewrapDoc, entryIndex)
 	case *scrapv1.RaftCommand_QuarantineDoc:
@@ -151,18 +152,26 @@ func (s *Shard) applyEntryCommand(cmd *scrapv1.RaftCommand, entryIndex uint64) e
 		return s.applyReleaseQuarantineCommand(c.ReleaseQuarantine)
 	case *scrapv1.RaftCommand_ConsistencyCheck:
 		s.scrubs.applyConsistencyCheck(c.ConsistencyCheck, entryIndex)
+		return nil
 	case *scrapv1.RaftCommand_SealBlock:
 		return s.applySealBlock(c.SealBlock)
 	case *scrapv1.RaftCommand_ConfirmUpload:
 		return s.applyConfirmUpload(c.ConfirmUpload)
+	case nil:
+		return errors.New("shard: raft command is nil")
+	default:
+		// ADR 0034 / H-03: unknown oneof variants must fail closed, not advance
+		// the applied watermark as silent success.
+		return fmt.Errorf("shard: unsupported raft command type %T", c)
 	}
-	return nil
 }
 
-func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument, entryIndex uint64) {
-	key := doc.TransactionId + "\x00" + doc.DocumentName
+func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument, entryIndex uint64) error {
 	applyErr := s.applyCommitDocument(doc, entryIndex)
 
+	// ADR 0033 / H-02: wake only the waiter for this proposal_id. Historical
+	// entries without proposal_id fall back to Document identity.
+	key := commitProposalWaiterKey(doc)
 	s.proposalMu.Lock()
 	waiter, hasWaiter := s.proposals[key]
 	if hasWaiter {
@@ -171,11 +180,16 @@ func (s *Shard) applyCommitDocumentCommand(doc *scrapv1.CommitDocument, entryInd
 	}
 	s.proposalMu.Unlock()
 
-	// A commit apply error with no local waiter is a replica silently missing a
-	// committed Document. The applied index still advances (see the apply-error
-	// taxonomy deferral), so this log line is the only divergence evidence.
 	if applyErr != nil && !hasWaiter {
 		s.logger.Error("shard: commit document apply failed with no local waiter; replica diverged from committed state",
 			"index", entryIndex, "block_id", doc.GetBlockId(), "err", applyErr)
 	}
+	return applyErr
+}
+
+func commitProposalWaiterKey(doc *scrapv1.CommitDocument) string {
+	if id := doc.GetProposalId(); id != "" {
+		return "commit-proposal\x00" + id
+	}
+	return doc.GetTransactionId() + "\x00" + doc.GetDocumentName()
 }

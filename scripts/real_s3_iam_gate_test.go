@@ -35,11 +35,28 @@ func TestRealS3IAMGateScriptAcceptsCompletePassEvidence(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	writeRealS3IAMReport(t, report, validRealS3IAMReport(report))
+	writeRealS3IAMReport(t, report, validRealS3IAMReport(report, realS3IAMTestReleaseSHA))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err != nil {
 		t.Fatalf("check failed: %v\n%s", err, output)
+	}
+}
+
+func TestRealS3IAMGateScriptRejectsMismatchedCommitRef(t *testing.T) {
+	tempDir := t.TempDir()
+	evidence := filepath.Join(tempDir, "evidence.md")
+	report := filepath.Join(tempDir, "report.json")
+	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
+	writeRealS3IAMReport(t, report, validRealS3IAMReport(report, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+
+	output, err := runRealS3IAMGateCheck(t, evidence, report)
+	if err == nil {
+		t.Fatalf("check unexpectedly passed:\n%s", output)
+	}
+	if !strings.Contains(output, "commit_ref does not match RELEASE_SHA/HEAD") &&
+		!strings.Contains(output, "release PASS report does not prove real S3/IAM") {
+		t.Fatalf("output = %q, want exact SHA failure", output)
 	}
 }
 
@@ -49,7 +66,7 @@ func TestRealS3IAMGateScriptRejectsWeakPassEvidence(t *testing.T) {
 	report := filepath.Join(tempDir, "report.json")
 	content := strings.Replace(validRealS3IAMPassEvidence(report), "real non-local AWS S3 IAM", "LocalStack-only output", 1)
 	writeEvidence(t, evidence, content)
-	writeRealS3IAMReport(t, report, validRealS3IAMReport(report))
+	writeRealS3IAMReport(t, report, validRealS3IAMReport(report, realS3IAMTestReleaseSHA))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -66,7 +83,7 @@ func TestRealS3IAMGateScriptRejectsRowPassWhenReleaseGateNotPass(t *testing.T) {
 	report := filepath.Join(tempDir, "report.json")
 	content := strings.Replace(validRealS3IAMPassEvidence(report), "Release gate status: PASS", "Release gate status: FAIL", 1)
 	writeEvidence(t, evidence, content)
-	writeRealS3IAMReport(t, report, validRealS3IAMReport(report))
+	writeRealS3IAMReport(t, report, validRealS3IAMReport(report, realS3IAMTestReleaseSHA))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -82,7 +99,7 @@ func TestRealS3IAMGateScriptRejectsLocalOverridePassReport(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	writeRealS3IAMReport(t, report, strings.Replace(validRealS3IAMReport(report), `"local_s3_endpoint_allowed": false`, `"local_s3_endpoint_allowed": true`, 1))
+	writeRealS3IAMReport(t, report, strings.Replace(validRealS3IAMReport(report, realS3IAMTestReleaseSHA), `"local_s3_endpoint_allowed": false`, `"local_s3_endpoint_allowed": true`, 1))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -98,7 +115,7 @@ func TestRealS3IAMGateScriptRejectsZeroUploadCountPassReport(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	writeRealS3IAMReport(t, report, strings.Replace(validRealS3IAMReport(report), `"confirmed_upload_count": 1`, `"confirmed_upload_count": 0`, 1))
+	writeRealS3IAMReport(t, report, strings.Replace(validRealS3IAMReport(report, realS3IAMTestReleaseSHA), `"confirmed_upload_count": 1`, `"confirmed_upload_count": 0`, 1))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -114,7 +131,7 @@ func TestRealS3IAMGateScriptRejectsBooleanUploadCountPassReport(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	writeRealS3IAMReport(t, report, strings.Replace(validRealS3IAMReport(report), `"confirmed_upload_count": 1`, `"confirmed_upload_count": true`, 1))
+	writeRealS3IAMReport(t, report, strings.Replace(validRealS3IAMReport(report, realS3IAMTestReleaseSHA), `"confirmed_upload_count": 1`, `"confirmed_upload_count": true`, 1))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -130,7 +147,7 @@ func TestRealS3IAMGateScriptRejectsReportPathMismatch(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	writeRealS3IAMReport(t, report, validRealS3IAMReport("artifacts/production-rehearsal/report.json"))
+	writeRealS3IAMReport(t, report, validRealS3IAMReport("artifacts/production-rehearsal/report.json", realS3IAMTestReleaseSHA))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -146,7 +163,7 @@ func TestRealS3IAMGateScriptRejectsMissingReportProvenance(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	content := strings.Replace(validRealS3IAMReport(report), `"commit_ref": "abc1234"`, `"commit_ref": ""`, 1)
+	content := strings.Replace(validRealS3IAMReport(report, realS3IAMTestReleaseSHA), `"commit_ref": "`+realS3IAMTestReleaseSHA+`"`, `"commit_ref": ""`, 1)
 	writeRealS3IAMReport(t, report, content)
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
@@ -163,7 +180,7 @@ func TestRealS3IAMGateScriptRejectsFailedRedactionProof(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	content := strings.Replace(validRealS3IAMReport(report), `"report_excludes_secret_material": true`, `"report_excludes_secret_material": false`, 1)
+	content := strings.Replace(validRealS3IAMReport(report, realS3IAMTestReleaseSHA), `"report_excludes_secret_material": true`, `"report_excludes_secret_material": false`, 1)
 	writeRealS3IAMReport(t, report, content)
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
@@ -180,7 +197,7 @@ func TestRealS3IAMGateScriptRejectsLeakedReportFields(t *testing.T) {
 	evidence := filepath.Join(tempDir, "evidence.md")
 	report := filepath.Join(tempDir, "report.json")
 	writeEvidence(t, evidence, validRealS3IAMPassEvidence(report))
-	content := strings.Replace(validRealS3IAMReport(report), `"backend": "s3"`, `"backend": "s3", "raw_backend_object_key": "shards/7/blocks/example"`, 1)
+	content := strings.Replace(validRealS3IAMReport(report, realS3IAMTestReleaseSHA), `"backend": "s3"`, `"backend": "s3", "raw_backend_object_key": "shards/7/blocks/example"`, 1)
 	writeRealS3IAMReport(t, report, content)
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
@@ -198,7 +215,7 @@ func TestRealS3IAMGateScriptRejectsOpenIssuePassEvidence(t *testing.T) {
 	report := filepath.Join(tempDir, "report.json")
 	content := strings.Replace(validRealS3IAMPassEvidence(report), "issue `#429` closed", "issue `#429` open", 1)
 	writeEvidence(t, evidence, content)
-	writeRealS3IAMReport(t, report, validRealS3IAMReport(report))
+	writeRealS3IAMReport(t, report, validRealS3IAMReport(report, realS3IAMTestReleaseSHA))
 
 	output, err := runRealS3IAMGateCheck(t, evidence, report)
 	if err == nil {
@@ -238,6 +255,8 @@ func TestRealS3IAMGateScriptRejectsFieldsOnlyInProse(t *testing.T) {
 	}
 }
 
+const realS3IAMTestReleaseSHA = "0123456789abcdef0123456789abcdef01234567"
+
 func runRealS3IAMGateCheck(t *testing.T, evidencePath, reportPath string) (string, error) {
 	t.Helper()
 
@@ -248,7 +267,10 @@ func runRealS3IAMGateCheck(t *testing.T, evidencePath, reportPath string) (strin
 	//nolint:gosec // The test executes this repo's validation script against test-owned files.
 	cmd := exec.CommandContext(ctx, "bash", filepath.Join(repoRoot, "scripts/check-real-s3-iam-gate.sh"))
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "REAL_S3_IAM_EVIDENCE="+evidencePath)
+	cmd.Env = append(os.Environ(),
+		"REAL_S3_IAM_EVIDENCE="+evidencePath,
+		"RELEASE_SHA="+realS3IAMTestReleaseSHA,
+	)
 	if reportPath != "" {
 		cmd.Env = append(cmd.Env, "REAL_S3_IAM_REPORT="+reportPath)
 	}
@@ -337,11 +359,11 @@ provenance, but it intentionally omits the full evidence table.
 `
 }
 
-func validRealS3IAMReport(reportPath string) string {
+func validRealS3IAMReport(reportPath, commitRef string) string {
 	return `{
   "status": "passed",
   "command": "make production-rehearsal",
-  "commit_ref": "abc1234",
+  "commit_ref": "` + commitRef + `",
   "git_worktree_state": "clean",
   "git_diff_sha256": "",
   "timestamp": "2026-06-12T20:38:29Z",

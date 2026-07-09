@@ -30,6 +30,12 @@ Prod-like and evidence Kind Cells use Cilium as the CNI with
 `kubeProxyReplacement=true`. They must not silently fall back to Kind's default
 CNI or kube-proxy.
 
+CiliumNetworkPolicy and other Cilium CRDs live only in Cilium-enabled
+kustomize components/overlays (finding `H-16`). The shared base used by plain
+local Kind must remain applyable without Cilium CRDs. Cilium egress allowlists
+must explicitly permit peer gRPC, Backend, and OpenBao ports required by the
+Cell under test.
+
 The Kind cluster configuration for those Cells disables the default Kind CNI.
 Cilium is installed before S.C.R.A.P. workloads are deployed. The Cilium
 installation must expose the same service datapath assumptions as production:

@@ -1,65 +1,52 @@
 # SCRAP Real S3/IAM Production Rehearsal Evidence
 
-Artifact status: complete; real S3/IAM release evidence PASS on 2026-06-13
-Release gate status: PASS
+Artifact status: reconciled 2026-07-09 to FAIL; historical PASS on `f615c722` is stale (H-19)
+Release gate status: FAIL
 
 Story: 6.6 - Real S3/IAM Production Rehearsal Closure
 
 ## Scope
 
 This artifact records the hard release criteria for issue `#429` and the real
-S3/IAM gate state. It does not replace the runtime report. A final release PASS
-requires a sanitized `artifacts/production-rehearsal/report.json` from a real
-non-local S3/IAM `env GOFLAGS=-buildvcs=false make production-rehearsal` run.
+S3/IAM gate state. A final release PASS requires a sanitized
+`artifacts/production-rehearsal/report.json` from a real non-local S3/IAM
+`env GOFLAGS=-buildvcs=false make production-rehearsal` run whose `commit_ref`
+matches the exact candidate release SHA (`RELEASE_SHA` or `git rev-parse HEAD`).
 
-Tracker query:
-
-```text
-gh issue view 429 --repo petabytecl/scrap --json number,title,state,labels,milestone,url,updatedAt
-```
-
-Issue `#429` is closed by this release PR. The real non-local S3/IAM rehearsal
-ran successfully and the sanitized report satisfies every hard criterion below,
-so the gate is satisfied and `#429` is resolved.
+Historical issue `#429` closure and the 2026-06-13 report at `f615c722` remain
+progress evidence only. They cannot certify the thermo-nuclear remediation
+baseline or any later candidate SHA (finding `H-19` / Story 6.10).
 
 ## Run Provenance
 
 - Command: `env GOFLAGS=-buildvcs=false make production-rehearsal`
-- Tested commit/ref: `f615c7226173d6cc1804a1bba391209b6fee6b54` on branch
-  `feat/real-aws-validation-iac`; `git_worktree_state=clean`.
-- Backend: real non-local AWS S3 in `us-east-2` (`SCRAP_S3_REGION=us-east-2`).
-- IAM provenance: credentials from the default provider chain via a dedicated
-  least-privilege IAM role (`AssumeRole` from the AWS SSO session). The role
-  grants only `s3:PutObject`/`s3:GetObject` under the Cell prefix,
-  `s3:ListBucket` (prefix-scoped), and `s3:GetBucketLocation`; out-of-scope
-  writes are denied.
-- Endpoint: `SCRAP_S3_ENDPOINT` unset (real AWS endpoint);
-  `SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3` not used.
-- Report timestamp: `2026-06-13T04:13:41Z`.
-- Infrastructure: provisioned by `deploy/aws/validation/scrap-real-aws-validation.yaml`.
+- Historical tested commit/ref: `f615c7226173d6cc1804a1bba391209b6fee6b54`
+  (stale relative to remediation baseline `03798da` and current HEAD).
+- Required for PASS: `commit_ref` equals exact candidate SHA with freshness.
+- Backend: real non-local AWS S3 (historical run in `us-east-2`).
+- Report path: `artifacts/production-rehearsal/report.json` (stale commit_ref).
 
 ## Gate Summary
 
 | Gate | Status | Freshness | Evidence |
 | --- | --- | --- | --- |
-| Real S3/IAM production rehearsal | PASS | real S3/IAM report captured 2026-06-13 | report `artifacts/production-rehearsal/report.json` proves every criterion under a least-privilege role; issue `#429` closed by this release PR; command `env GOFLAGS=-buildvcs=false make production-rehearsal`; owner Release owner. |
+| Real S3/IAM production rehearsal | FAIL | stale `commit_ref` vs current HEAD / remediation baseline | Historical report at `f615c722` cannot certify current SHA; rerun exact-SHA rehearsal before PASS. Owner Release owner. |
 
 ## Full Evidence Rows
 
 | Requirement | Command | Commit/ref | Environment | Expected result | Actual result | Artifact path | Issue | Report fields | Redaction proof | Freshness | Status | Owner | Mitigation |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| AC-6.6 Real S3/IAM production rehearsal | `env GOFLAGS=-buildvcs=false make production-rehearsal` | tested `f615c7226173d6cc1804a1bba391209b6fee6b54` on branch `feat/real-aws-validation-iac`; clean worktree | Real non-local S3/IAM in `us-east-2`; `SCRAP_S3_BUCKET` and `SCRAP_S3_REGION` set; credentials from default provider chain via a dedicated least-privilege role; `SCRAP_S3_ENDPOINT` unset; `SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3` not used | S3 Backend report proves production mode, real OpenBao Transit, encrypted write/read, committed Backend upload confirmation, and redacted artifacts. | PASS: real non-local S3/IAM run succeeded under the dedicated least-privilege validation role and the sanitized report proves every criterion. | sanitized `artifacts/production-rehearsal/report.json`; committed criteria artifact `_bmad-output/implementation-artifacts/real-s3-iam-production-rehearsal-evidence.md`. | issue `#429` closed by this release PR: https://github.com/petabytecl/scrap/issues/429 | Observed `status=passed`, `command=make production-rehearsal`, `evidence_tier=real-s3-iam`, `backend=s3`, `local_overrides.real_s3_iam=true`, `local_overrides.local_s3_endpoint_allowed=false`, `security_mode=production`, `production_readiness_status=ready`, `openbao_transit=real`, `test_hooks_enabled=false`, `pprof_enabled=false`, `encrypted_write_read_ok=true`, `plaintext_leak_scan_ok=true`, `backend_upload_confirmed=true`, `confirmed_upload_count >= 1` (observed 1), and `redaction_proof.status=passed`. | Redaction proof excludes secrets, tokens, raw Backend keys, validation tokens, raw logs, Document payloads, private material, generated certificate material, raw bucket object keys, trace IDs, and request IDs. | Real S3/IAM run captured 2026-06-13T04:13:41Z. | PASS | Release owner | None; the gate is satisfied and issue `#429` is closed by this release PR. |
+| AC-6.6 Real S3/IAM production rehearsal | `env GOFLAGS=-buildvcs=false make production-rehearsal` | required: exact candidate SHA; historical `f615c722` is stale | Real non-local S3/IAM; `SCRAP_S3_BUCKET` and `SCRAP_S3_REGION` set; credentials from default provider chain; `SCRAP_S3_ENDPOINT` unset; `SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3` not used | S3 Backend report proves production mode, real OpenBao Transit, encrypted write/read, committed Backend upload confirmation, and redacted artifacts on the exact release SHA. | FAIL: report `commit_ref` does not match current HEAD / RELEASE_SHA (H-19). Historical `#429` closure is progress evidence only. | Expected sanitized `artifacts/production-rehearsal/report.json` with matching `commit_ref`. | issue `#429` historically closed; exact-SHA revalidation required | Requires `status=passed`, `command=make production-rehearsal`, `evidence_tier=real-s3-iam`, `backend=s3`, `local_overrides.real_s3_iam=true`, `local_overrides.local_s3_endpoint_allowed=false`, and `confirmed_upload_count >= 1` on the exact candidate SHA; historical report fields are not accepted while `commit_ref` mismatches HEAD. | Redaction proof: artifact excludes secrets, tokens, raw Backend keys, Document payloads, private material, and raw logs. | Stale relative to remediation baseline 2026-07-09. | FAIL | Release owner | Rerun real non-local rehearsal on the candidate SHA; keep release below PASS until exact-SHA evidence lands. |
 
 ## Hard Criteria
 
 PASS is allowed only when the full evidence row links a sanitized
 `artifacts/production-rehearsal/report.json` produced by real non-local S3/IAM
-and the report fields satisfy every criterion in the row above.
+whose `commit_ref` matches `RELEASE_SHA` or `git rev-parse HEAD`, and the report
+fields satisfy every criterion in the Story 6.6 contract.
 
 Hard pass/fail criteria reject vague, screenshot-only, localhost-only,
-LocalStack-only, local-only, stale, unlinked, or missing IAM provenance. Any use
-of `SCRAP_PROD_REHEARSAL_ALLOW_LOCAL_S3=true` is development-only evidence and
-cannot close issue `#429`.
+LocalStack-only, local-only, stale, unlinked, or missing IAM provenance.
 
 ## Redaction Review
 

@@ -133,10 +133,21 @@ reject_weak_pass() {
 	fi
 }
 
+expected_release_sha() {
+	if [ -n "${RELEASE_SHA:-}" ]; then
+		printf '%s\n' "$RELEASE_SHA"
+		return
+	fi
+	git rev-parse HEAD
+}
+
 report_proves_real_s3_iam() {
 	[ -s "$REAL_S3_IAM_REPORT" ] || fail "release PASS requires non-empty report ${REAL_S3_IAM_REPORT}"
 
-	python3 - "$REAL_S3_IAM_REPORT" "$REAL_S3_IAM_REPORT" <<'PY' || fail "release PASS report does not prove real S3/IAM"
+	local expected_sha
+	expected_sha=$(expected_release_sha) || fail "unable to resolve expected release SHA"
+
+	python3 - "$REAL_S3_IAM_REPORT" "$REAL_S3_IAM_REPORT" "$expected_sha" <<'PY' || fail "release PASS report does not prove real S3/IAM"
 import json
 import re
 import sys
@@ -145,8 +156,10 @@ with open(sys.argv[1], "r", encoding="utf-8") as fh:
     report = json.load(fh)
 
 expected_report_path = sys.argv[2]
+expected_sha = sys.argv[3].strip()
 upload_count = report.get("confirmed_upload_count")
 worktree_state = report.get("git_worktree_state")
+commit_ref = str(report.get("commit_ref", "")).strip()
 forbidden_key_parts = (
     "aws_secret_access_key",
     "secret_access_key",
@@ -190,7 +203,8 @@ def report_excludes_forbidden_shapes(value):
 checks = [
     report.get("status") == "passed",
     report.get("command") == "make production-rehearsal",
-    report.get("commit_ref", "") != "",
+    commit_ref != "",
+    expected_sha != "",
     worktree_state in {"clean", "dirty", "unknown"},
     worktree_state != "dirty" or report.get("git_diff_sha256", "") != "",
     report.get("timestamp", "") != "",
@@ -220,6 +234,10 @@ checks = [
     report.get("redaction_proof", {}).get("scan_artifact_path", "") != "",
     report_excludes_forbidden_shapes(report),
 ]
+
+if commit_ref != expected_sha:
+    sys.stderr.write("commit_ref does not match RELEASE_SHA/HEAD\n")
+    sys.exit(1)
 
 if not all(checks):
     sys.exit(1)

@@ -115,8 +115,12 @@ type ReplicateDocumentInit struct {
 	Sha256             []byte                 `protobuf:"bytes,8,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	EncryptionEnvelope []byte                 `protobuf:"bytes,9,opt,name=encryption_envelope,json=encryptionEnvelope,proto3" json:"encryption_envelope,omitempty"`
 	ShardId            uint64                 `protobuf:"varint,10,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// leader_id and term fence stale-leader replication (ADR 0033 / H-01).
+	// Zero means legacy unfenced callers; production Cells must negotiate fencing.
+	LeaderId      uint64 `protobuf:"varint,11,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
+	Term          uint64 `protobuf:"varint,12,opt,name=term,proto3" json:"term,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReplicateDocumentInit) Reset() {
@@ -215,6 +219,20 @@ func (x *ReplicateDocumentInit) GetEncryptionEnvelope() []byte {
 func (x *ReplicateDocumentInit) GetShardId() uint64 {
 	if x != nil {
 		return x.ShardId
+	}
+	return 0
+}
+
+func (x *ReplicateDocumentInit) GetLeaderId() uint64 {
+	if x != nil {
+		return x.LeaderId
+	}
+	return 0
+}
+
+func (x *ReplicateDocumentInit) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
 	}
 	return 0
 }
@@ -460,6 +478,7 @@ func (x *TransferBlockMeta) GetIdxSize() int64 {
 type ConsistencyCheckRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ScrubId       string                 `protobuf:"bytes,1,opt,name=scrub_id,json=scrubId,proto3" json:"scrub_id,omitempty"`
+	ShardId       uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -499,6 +518,13 @@ func (x *ConsistencyCheckRequest) GetScrubId() string {
 		return x.ScrubId
 	}
 	return ""
+}
+
+func (x *ConsistencyCheckRequest) GetShardId() uint64 {
+	if x != nil {
+		return x.ShardId
+	}
+	return 0
 }
 
 type ConsistencyCheckResponse struct {
@@ -564,6 +590,7 @@ func (x *ConsistencyCheckResponse) GetSha256() []byte {
 type RequestIndexRebuildRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ScrubId       string                 `protobuf:"bytes,1,opt,name=scrub_id,json=scrubId,proto3" json:"scrub_id,omitempty"`
+	ShardId       uint64                 `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -603,6 +630,13 @@ func (x *RequestIndexRebuildRequest) GetScrubId() string {
 		return x.ScrubId
 	}
 	return ""
+}
+
+func (x *RequestIndexRebuildRequest) GetShardId() uint64 {
+	if x != nil {
+		return x.ShardId
+	}
+	return 0
 }
 
 type RequestIndexRebuildResponse struct {
@@ -834,7 +868,7 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"\x04init\x18\x01 \x01(\v2\x1f.scrap.v1.ReplicateDocumentInitH\x00R\x04init\x12\x1f\n" +
 	"\n" +
 	"chunk_data\x18\x02 \x01(\fH\x00R\tchunkDataB\x06\n" +
-	"\x04part\"\xea\x02\n" +
+	"\x04part\"\x9b\x03\n" +
 	"\x15ReplicateDocumentInit\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12#\n" +
 	"\rdocument_name\x18\x02 \x01(\tR\fdocumentName\x12!\n" +
@@ -848,7 +882,9 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"\x06sha256\x18\b \x01(\fR\x06sha256\x12/\n" +
 	"\x13encryption_envelope\x18\t \x01(\fR\x12encryptionEnvelope\x12\x19\n" +
 	"\bshard_id\x18\n" +
-	" \x01(\x04R\ashardId\"3\n" +
+	" \x01(\x04R\ashardId\x12\x1b\n" +
+	"\tleader_id\x18\v \x01(\x04R\bleaderId\x12\x12\n" +
+	"\x04term\x18\f \x01(\x04R\x04term\"3\n" +
 	"\x19ReplicateDocumentResponse\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\fR\x06sha256\"L\n" +
 	"\x14TransferBlockRequest\x12\x19\n" +
@@ -863,15 +899,17 @@ const file_scrap_v1_peer_proto_rawDesc = "" +
 	"\bblock_id\x18\x01 \x01(\x04R\ablockId\x12\x1d\n" +
 	"\n" +
 	"block_size\x18\x02 \x01(\x03R\tblockSize\x12\x19\n" +
-	"\bidx_size\x18\x03 \x01(\x03R\aidxSize\"4\n" +
+	"\bidx_size\x18\x03 \x01(\x03R\aidxSize\"O\n" +
 	"\x17ConsistencyCheckRequest\x12\x19\n" +
-	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\"r\n" +
+	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12\x19\n" +
+	"\bshard_id\x18\x02 \x01(\x04R\ashardId\"r\n" +
 	"\x18ConsistencyCheckResponse\x12\x19\n" +
 	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12#\n" +
 	"\rapplied_index\x18\x02 \x01(\x04R\fappliedIndex\x12\x16\n" +
-	"\x06sha256\x18\x03 \x01(\fR\x06sha256\"7\n" +
+	"\x06sha256\x18\x03 \x01(\fR\x06sha256\"R\n" +
 	"\x1aRequestIndexRebuildRequest\x12\x19\n" +
-	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\"M\n" +
+	"\bscrub_id\x18\x01 \x01(\tR\ascrubId\x12\x19\n" +
+	"\bshard_id\x18\x02 \x01(\x04R\ashardId\"M\n" +
 	"\x1bRequestIndexRebuildResponse\x12.\n" +
 	"\x13already_in_progress\x18\x01 \x01(\bR\x11alreadyInProgress\"I\n" +
 	"\x12ForwardRaftRequest\x12\x19\n" +

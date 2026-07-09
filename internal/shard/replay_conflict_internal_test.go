@@ -18,7 +18,7 @@ func TestApplyCommitDocumentExactDuplicateNoops(t *testing.T) {
 	}
 	sha := replayConflictApplySHA()
 
-	s.applyCommitDocumentCommand(&scrapv1.CommitDocument{
+	if err := s.applyCommitDocumentCommand(&scrapv1.CommitDocument{
 		TransactionId: "tx-apply-replay",
 		DocumentName:  "doc.xml",
 		ContentType:   "text/xml",
@@ -26,7 +26,9 @@ func TestApplyCommitDocumentExactDuplicateNoops(t *testing.T) {
 		TotalBytes:    7,
 		Sha256:        sha[:],
 		CreatedAtUs:   time.Unix(20, 0).UnixMicro(),
-	}, 12)
+	}, 12); err != nil {
+		t.Fatalf("applyCommitDocumentCommand: %v", err)
+	}
 
 	docs, err := s.projectionResolver().ListDocuments("tx-apply-replay")
 	if err != nil {
@@ -50,7 +52,7 @@ func TestApplyCommitDocumentConflictingDuplicateNotifiesProposal(t *testing.T) {
 	s.proposals["tx-apply-conflict\x00doc.xml"] = ch
 	sha := replayConflictApplySHA()
 
-	s.applyCommitDocumentCommand(&scrapv1.CommitDocument{
+	applyErr := s.applyCommitDocumentCommand(&scrapv1.CommitDocument{
 		TransactionId: "tx-apply-conflict",
 		DocumentName:  "doc.xml",
 		ContentType:   "application/xml",
@@ -59,6 +61,9 @@ func TestApplyCommitDocumentConflictingDuplicateNotifiesProposal(t *testing.T) {
 		Sha256:        sha[:],
 		CreatedAtUs:   time.Unix(20, 0).UnixMicro(),
 	}, 12)
+	if !errors.Is(applyErr, storeapi.ErrAlreadyExists) {
+		t.Fatalf("applyCommitDocumentCommand error = %v, want %v", applyErr, storeapi.ErrAlreadyExists)
+	}
 
 	select {
 	case err := <-ch:

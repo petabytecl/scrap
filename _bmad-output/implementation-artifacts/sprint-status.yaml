@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-06-10T20:50:36-04:00"
-last_updated: "2026-06-21T12:05:00-04:00"
+last_updated: "2026-07-09T18:20:00-04:00"
 project: scrap
 project_key: NOKEY
 tracking_system: file-system
@@ -49,6 +49,10 @@ development_status:
   1-4-transaction-scoped-document-discovery: done
   1-5-core-gateway-restart-and-rebuild-evidence: done
   1-6-fail-closed-on-missing-document-sha256-verification: done
+  1-7-proposal-scoped-commitdocument-waiters: done
+  1-8-rebuild-projection-from-raft-authority: done
+  1-9-durable-projection-swap-and-complete-resolution: done
+  1-10-verified-snapshot-before-read-stream: done
   epic-1-retrospective: optional
   epic-2: in-progress
   2-1-shard-routing-boundary-and-placement-validation: done
@@ -59,6 +63,16 @@ development_status:
   2-6-multi-shard-evidence-closure: done
   2-7-bound-peer-replicatedocument-input-before-side-effects: done
   2-8-reject-malformed-forwardraftstream-messages: done
+  2-9-propagate-apply-failures-reject-unknown-commands: done
+  2-10-term-fenced-replicatedocument-and-write-leadership: done
+  2-11-byte-ready-voter-ledger-and-leadership-fence: done
+  2-12-concurrent-quorum-replication-with-deadlines: done
+  2-13-explicit-production-multi-voter-membership: done
+  2-14-persist-placement-identity-reject-silent-remap: done
+  2-15-bind-peer-identity-to-raft-sender: done
+  2-16-bound-peer-block-transfers-and-replication: done
+  2-17-shard-scoped-light-scrub-peer-routing: done
+  2-18-explicit-public-leader-address-map: done
   epic-2-retrospective: optional
   epic-3: in-progress
   3-1-committed-backend-upload-confirmation: done
@@ -69,6 +83,11 @@ development_status:
   3-6-encryption-compatible-restore-evidence: done
   3-7-backend-durability-and-cold-read-closure-evidence: done
   3-8-make-scrub-coordination-concurrency-deterministic: done
+  3-9-durable-sealblock-intent-and-outbox-reconciliation: done
+  3-10-verified-upload-immutable-generations-term-fenced-workers: done
+  3-11-reject-member-local-filesystem-backend-in-production: done
+  3-12-bounded-cold-restore-worker-and-timeouts: done
+  3-13-deep-scrub-read-parity-and-checkpoint: done
   epic-3-retrospective: optional
   epic-4: in-progress
   4-1-production-security-startup-gate: done
@@ -78,6 +97,12 @@ development_status:
   4-5-scrapctl-openbao-bootstrap-fresh-setup: done
   4-6-scrapctl-openbao-bootstrap-idempotency-and-incompatible-state: done
   4-7-production-security-rehearsal-evidence-closure: done
+  4-8-trusted-ca-bundle-or-explicit-mount-contract: done
+  4-9-route-transit-by-envelope-identity: done
+  4-10-monotonic-rewrap-key-version: done
+  4-11-write-stream-idle-deadlines-and-quotas: done
+  4-12-context-bounded-graceful-shutdown: done
+  4-13-distinct-server-client-tls-per-surface: done
   epic-4-retrospective: optional
   epic-5: in-progress
   5-1-content-scanner-engine-boundary-and-scheduling: done
@@ -87,6 +112,8 @@ development_status:
   5-5-admin-http-quarantine-operations: done
   5-6-scrapctl-quarantine-operator-workflow: done
   5-7-content-safety-closure-evidence: done
+  5-8-replay-safe-content-quarantine-lifecycle: done
+  5-9-wire-production-content-scanner-engine: done
   epic-5-retrospective: optional
   epic-6: in-progress
   6-1-release-evidence-matrix: done
@@ -96,6 +123,10 @@ development_status:
   6-5-tier-2-and-tier-3-release-evidence-gates: done
   6-6-real-s3-iam-production-rehearsal-closure: done
   6-7-closure-policy-and-final-gate-decision: done
-  6-8-reconcile-release-evidence-and-fail-closed-on-contradictions: backlog
-  6-9-add-vertical-data-integrity-evidence-across-shard-raft-backend-encryption-and-scrub: backlog
+  6-8-reconcile-release-evidence-and-fail-closed-on-contradictions: done
+  6-9-add-vertical-data-integrity-evidence-across-shard-raft-backend-encryption-and-scrub: done
+  6-10-exact-sha-release-evidence-and-dockerignore: done
+  6-11-stream-spool-memory-budget-for-max-documents: done
+  6-12-cilium-only-network-policy-component: done
+  6-13-production-identity-and-telemetry-fail-closed: done
   epic-6-retrospective: optional

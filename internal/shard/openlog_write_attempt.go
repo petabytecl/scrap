@@ -82,6 +82,8 @@ func (a *openlogWriteAttempt) commitCommand(result block.AppendResult, createdAt
 				Sha256:             result.SHA256[:],
 				CreatedAtUs:        createdAt.UnixMicro(),
 				EncryptionEnvelope: envelope,
+				// proposal_id correlates this CommitDocument with its waiter (ADR 0033 / H-02).
+				ProposalId: a.writeID,
 			},
 		},
 	}

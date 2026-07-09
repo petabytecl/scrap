@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"strings"
 
 	"google.golang.org/grpc"
 
@@ -81,7 +83,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 		return nil, rollbackStartup(err, cleanup)
 	}
 
-	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), cfg.DataDir, cfg.UploadEnabled)
+	uploadBackend, backendType, err := openConfiguredUploadBackend(context.Background(), cfg)
 	if err != nil {
 		return fail(err)
 	}
@@ -96,7 +98,13 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	if err != nil {
 		return fail(err)
 	}
-	clientAddrs := resolveClientAddrs(cfg, peers)
+	clientAddrs, err := resolveClientAddrs(cfg, peers)
+	if err != nil {
+		return fail(err)
+	}
+	if err := persistPlacementIdentity(cfg.DataDir, topology); err != nil {
+		return fail(err)
+	}
 
 	telemetryRuntime, err := newScrapdTelemetryWithSecurityLabel(
 		context.Background(),
@@ -185,7 +193,7 @@ func newApp(ctx context.Context, cfg Config, logger *slog.Logger, build BuildInf
 	cleanup = append(cleanup, peerLis.Close)
 
 	peerGS := grpc.NewServer(securityRuntime.peerGRPCOptions...)
-	peerSrv := newPeerServer(cfg, topology, shards, securityRuntime, memberIdentity)
+	peerSrv := newPeerServer(cfg, topology, shards, peers, securityRuntime, memberIdentity)
 	peerSrv.SetRaftRouter(shardSetRaftRouter{shards: shards})
 	peer.RegisterServer(peerGS, peerSrv)
 
@@ -270,11 +278,9 @@ func appendTestHookAdminOptions(opts []admin.Option, cfg Config, adapter appShar
 		return opts
 	}
 	opts = append(opts, admin.WithProjectionInjector(adapter))
-	// Peer scrub/rebuild RPCs do not carry Shard ID yet, so light scrub is
-	// exposed only where the single local Shard is unambiguous.
-	if adapter.topology.SingleShardFallback {
-		opts = append(opts, admin.WithLightScrubber(adapter))
-	}
+	// Light Scrub is Shard-scoped on the peer RPC path (M-03). The admin hook
+	// fans out across every local Shard via RunLightScrub.
+	opts = append(opts, admin.WithLightScrubber(adapter))
 	if rotator, ok := transit.(interface{ Rotate() }); ok {
 		opts = append(opts, admin.WithTransitRotator(appTransitRotator{transit: rotator}))
 	}
@@ -620,21 +626,13 @@ func newAppSecurityRuntimeForTelemetry(cfg Config, peers map[uint64]string, logg
 	return newAppSecurityRuntime(cfg, peers, logger.With(telemetryRuntime.logIdentityAttrs()...), rateLimitMetrics, authorizationMetrics)
 }
 
-func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
+func newPeerServer(cfg Config, _ startupTopology, shards *shardSet, peers map[uint64]string, securityRuntime appSecurityRuntime, memberIdentity scrapdMemberIdentity) *peer.Server {
 	peerOpts := []peer.ServerOption{
 		peer.WithReplicationSink(shardSetReplicationSink{shards: shards}),
 		peer.WithBlockDirResolver(shards),
 		peer.WithAuthorizedShards(shards.IDs()...),
-	}
-	// Consistency and rebuild RPCs do not carry Shard ID yet, so they are
-	// fail-closed for multi-Shard placements.
-	if topology.SingleShardFallback {
-		if localShard, ok := shards.singleShard(); ok {
-			peerOpts = append(peerOpts,
-				peer.WithScrubCache(localShard),
-				peer.WithRebuildHandler(localShard),
-			)
-		}
+		peer.WithScrubCacheResolver(shards),
+		peer.WithRebuildHandlerResolver(shards),
 	}
 	if securityRuntime.authorizer != nil {
 		peerOpts = append(peerOpts, peer.WithAuthorizer(securityRuntime.authorizer, security.PeerIdentityConfig{
@@ -642,6 +640,7 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 			MemberHostname: memberIdentity.MemberHostname,
 			MemberID:       memberIdentity.MemberID,
 		}))
+		peerOpts = append(peerOpts, peer.WithPeerRaftIDs(peerRaftIDsFromPeers(peers)))
 	}
 	if securityRuntime.auditSink != nil {
 		peerOpts = append(peerOpts, peer.WithAuditSink(securityRuntime.auditSink))
@@ -655,6 +654,43 @@ func newPeerServer(cfg Config, topology startupTopology, shards *shardSet, secur
 	return peer.NewServer(cfg.DataDir+"/blocks", peerOpts...)
 }
 
+func peerRaftIDsFromPeers(peers map[uint64]string) map[string]uint64 {
+	ids := make(map[string]uint64, len(peers))
+	for raftID, addr := range peers {
+		hostname := peerHostnameFromAddr(addr)
+		if hostname == "" {
+			continue
+		}
+		ids[hostname] = raftID
+	}
+	return ids
+}
+
+func peerHostnameFromAddr(addr string) string {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
+func gracefulStopWithContext(ctx context.Context, gs *grpc.Server) {
+	done := make(chan struct{})
+	go func() {
+		gs.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		gs.Stop()
+		<-done
+	}
+}
+
 func logIdentifierMode(ctx context.Context, logger *slog.Logger, cfg Config, identifierMode telemetry.IdentifierMode) {
 	switch {
 	case identifierMode == telemetry.RawIdentifiersForLocalDebug:
@@ -665,6 +701,9 @@ func logIdentifierMode(ctx context.Context, logger *slog.Logger, cfg Config, ide
 }
 
 func validateStartupSecurityGates(cfg Config) (scrapdMemberIdentity, error) {
+	if err := validateProductionTelemetryIdentity(cfg.SecurityMode, cfg.CellID, cfg.RawTelemetryIDs); err != nil {
+		return scrapdMemberIdentity{}, err
+	}
 	memberIdentity, err := resolveScrapdMemberIdentity(cfg.DataDir, cfg.CellID)
 	if err != nil {
 		return scrapdMemberIdentity{}, err
@@ -678,6 +717,22 @@ func validateStartupSecurityGates(cfg Config) (scrapdMemberIdentity, error) {
 		return scrapdMemberIdentity{}, fmt.Errorf("production security gates: %w", err)
 	}
 	return memberIdentity, nil
+}
+
+func validateProductionTelemetryIdentity(mode security.Mode, cellID string, rawTelemetryIDs bool) error {
+	if mode != security.ModeProduction {
+		return nil
+	}
+	if strings.TrimSpace(cellID) == "" || strings.TrimSpace(cellID) == telemetry.LocalCellID {
+		return errors.New("production telemetry identity: cell_id=local is not permitted")
+	}
+	if rawTelemetryIDs {
+		return errors.New("production telemetry identity: raw telemetry identifiers are not permitted")
+	}
+	if _, present := os.LookupEnv("SCRAP_MEMBER_ID"); present {
+		return errors.New("production telemetry identity: SCRAP_MEMBER_ID override is not permitted")
+	}
+	return nil
 }
 
 // Run serves the client, peer, and admin servers until ctx is cancelled or one
@@ -773,7 +828,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 
-	a.peerGS.GracefulStop()
+	gracefulStopWithContext(ctx, a.peerGS)
 	// peerGS has stopped accepting RPCs, so no new peer writers can be created;
 	// flush and close any block/index writers the peer server still owns.
 	if err := a.peerSrv.Close(); err != nil {
@@ -781,7 +836,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 
-	a.clientGS.GracefulStop()
+	gracefulStopWithContext(ctx, a.clientGS)
 
 	if err := a.shards.Close(); err != nil {
 		a.logger.ErrorContext(ctx, "shard set close failed", "err", err)

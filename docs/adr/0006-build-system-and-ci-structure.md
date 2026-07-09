@@ -33,10 +33,19 @@ The Makefile cross-compiles to `bin/scrapd-${GOOS}-${GOARCH}`, then `docker buil
 copies the binary into a scratch image with OCI labels. SCRAP already uses binary-based
 healthchecks (`scrapd healthcheck`), so no shell is needed.
 
+The image must include a maintained CA trust bundle (or the deployment must mount
+an explicit validated trust store) so production HTTPS to S3 and OpenBao works
+without operator `SSL_CERT_FILE` hacks (finding `H-17`). Docker builds use a
+deny-by-default `.dockerignore` so credentials and ignored artifacts are not
+sent to the daemon (finding `H-19`).
+
+Release evidence gates bind to the exact candidate SHA with freshness checks;
+stale `commit_ref` values fail closed (finding `H-19`). `make static` and
+`make vuln` are non-waivable release blockers.
+
 Considered keeping alpine (debuggability). Rejected because exec-into-pod debugging is
 rare and the attack surface reduction of scratch is worth it for a storage gateway.
-Considered distroless (CA certs, timezone data). Rejected because scrapd does not make
-outbound TLS connections or use timezone data.
+Distroless remains optional only if it is the vehicle for shipping CA roots.
 
 **K8s manifests.** Kustomize with `base/` + `overlays/local-kind/`. The existing raw
 YAML migrates into the base. Overlays patch services to NodePort and set image tags.

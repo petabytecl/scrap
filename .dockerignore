@@ -1,0 +1,5 @@
+# Deny-by-default Docker build context (ADR 0006 / H-19).
+# Only the cross-compiled scrapd binary is copied into the image.
+*
+!bin/
+!bin/scrapd-*

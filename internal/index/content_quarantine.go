@@ -164,6 +164,11 @@ func (idx *Index) ConfirmContentQuarantine(txID, docName string, confirmedAtUs i
 	}
 	quarantine, err := idx.GetContentQuarantine(txID, docName)
 	if err != nil {
+		// H-06 / ADR 0025: committed confirm is replay-safe. A missing record
+		// (prior release won the race) is an idempotent no-op at apply time.
+		if errors.Is(err, ErrContentQuarantineNotFound) {
+			return nil
+		}
 		return err
 	}
 	if quarantine.ConfirmedAtUs > 0 {
@@ -179,6 +184,11 @@ func (idx *Index) ReleaseContentQuarantine(txID, docName string) error {
 		return err
 	}
 	if _, err := idx.GetContentQuarantine(txID, docName); err != nil {
+		// H-06 / ADR 0025: committed release is replay-safe. A missing record
+		// after a prior release is an idempotent no-op at apply time.
+		if errors.Is(err, ErrContentQuarantineNotFound) {
+			return nil
+		}
 		return err
 	}
 	if err := idx.db.Delete(key, pebble.Sync); err != nil {

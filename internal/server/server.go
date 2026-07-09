@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -21,7 +22,10 @@ import (
 	"github.com/petabytecl/scrap/internal/telemetry"
 )
 
-const readBufSize = 64 * 1024 // 64 KiB read buffer for streaming document chunks
+const (
+	readBufSize            = 64 * 1024 // 64 KiB read buffer for streaming document chunks
+	writeStreamIdleTimeout = 30 * time.Second
+)
 
 type documentServer struct {
 	scrapv1.UnimplementedDocumentServiceServer
@@ -58,8 +62,12 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 		return err
 	}
 
-	first, err := stream.Recv()
+	first, err := s.recvWriteMessage(ctx, stream)
 	if err != nil {
+		if status.Code(err) == codes.DeadlineExceeded {
+			rpcCode = codes.DeadlineExceeded
+			return err
+		}
 		rpcCode = codes.InvalidArgument
 		return status.Errorf(codes.InvalidArgument, "receive init message: %v", err)
 	}
@@ -129,7 +137,7 @@ func (s *documentServer) WriteDocument(stream grpc.ClientStreamingServer[scrapv1
 func (s *documentServer) recvChunks(ctx context.Context, stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse], pw *io.PipeWriter, done <-chan struct{}, writeErr *error) error {
 	var totalBytes int64
 	for {
-		msg, err := stream.Recv()
+		msg, err := s.recvWriteMessage(ctx, stream)
 		if err != nil {
 			return s.handleRecvError(ctx, pw, done, totalBytes, err)
 		}
@@ -149,6 +157,28 @@ func (s *documentServer) recvChunks(ctx context.Context, stream grpc.ClientStrea
 		if err := s.writeChunk(ctx, pw, done, writeErr, chunk); err != nil {
 			return err
 		}
+	}
+}
+
+func (s *documentServer) recvWriteMessage(ctx context.Context, stream grpc.ClientStreamingServer[scrapv1.WriteDocumentRequest, scrapv1.WriteDocumentResponse]) (*scrapv1.WriteDocumentRequest, error) {
+	type recvResult struct {
+		msg *scrapv1.WriteDocumentRequest
+		err error
+	}
+	ch := make(chan recvResult, 1)
+	go func() {
+		msg, err := stream.Recv()
+		ch <- recvResult{msg: msg, err: err}
+	}()
+	timer := time.NewTimer(writeStreamIdleTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return nil, status.Error(codes.DeadlineExceeded, "write stream idle deadline exceeded")
+	case res := <-ch:
+		return res.msg, res.err
 	}
 }
 

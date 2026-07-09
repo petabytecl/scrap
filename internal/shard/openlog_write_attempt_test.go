@@ -120,6 +120,9 @@ func TestOpenlogWriteAttemptCommitCommand(t *testing.T) {
 	}, createdAt, []byte(`{"version":1}`))
 
 	got := cmd.GetCommitDoc()
+	if got.GetProposalId() == "" {
+		t.Fatal("commit document proposal_id is empty, want openlog writeID")
+	}
 	want := &scrapv1.CommitDocument{
 		TransactionId:      "tx-1",
 		DocumentName:       "doc.xml",
@@ -132,6 +135,7 @@ func TestOpenlogWriteAttemptCommitCommand(t *testing.T) {
 		Sha256:             sum[:],
 		CreatedAtUs:        123456,
 		EncryptionEnvelope: []byte(`{"version":1}`),
+		ProposalId:         got.GetProposalId(),
 	}
 	if !proto.Equal(got, want) {
 		t.Fatalf("commit document mismatch\ngot:  %v\nwant: %v", got, want)

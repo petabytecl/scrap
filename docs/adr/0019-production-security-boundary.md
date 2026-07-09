@@ -37,6 +37,18 @@ Phase 4.5 is the production security bridge between Phase 4 partial local
 eviction and Phase 5 cold-only reads. Phase 5 implementation must not begin
 until Phase 4.5 has production-mode security gates and evidence.
 
+TLS configuration distinguishes server and client credential roles per surface
+(finding `M-12`). Production startup must not require dual-EKU certificates
+solely because SCRAPCTL or peer outbound paths reuse server validation.
+Outbound peer/client TLS uses client certificate validation; inbound public,
+peer, and admin listeners use server certificate validation.
+
+Production membership must declare explicit multi-voter topology before
+readiness or write admission (finding `H-09`). Member-local filesystem Backend
+is rejected in production multi-Member or eviction-enabled Cells (finding
+`H-10`). Peer authorization binds the authenticated Member principal to the
+Raft sender ID before routing (finding `H-12`).
+
 S.C.R.A.P. has three application security surfaces:
 
 - public client gRPC for `WriteDocument`, `ReadDocument`, `HeadDocument`, and

@@ -31,8 +31,10 @@ type DataKey struct {
 }
 
 type UnwrapDataKeyRequest struct {
-	WrappedKey string
-	Context    []byte
+	WrappedKey   string
+	Context      []byte
+	TransitMount string
+	TransitKey   string
 }
 
 type UnwrappedDataKey struct {
@@ -41,9 +43,11 @@ type UnwrappedDataKey struct {
 }
 
 type RewrapDataKeyRequest struct {
-	WrappedKey string
-	Context    []byte
-	KeyVersion int
+	WrappedKey   string
+	Context      []byte
+	KeyVersion   int
+	TransitMount string
+	TransitKey   string
 }
 
 type RewrappedKey struct {

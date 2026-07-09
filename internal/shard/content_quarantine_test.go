@@ -405,6 +405,36 @@ func TestApplyConfirmAndReleaseContentQuarantine(t *testing.T) {
 	}
 }
 
+// H-06 / ADR 0025: a second release (or confirm after release) must not fail
+// apply — Raft replay of concurrent lifecycle commands must be deterministic.
+func TestApplyReleaseQuarantineMissingIsIdempotent(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest(), 78); err != nil {
+		t.Fatalf("apply first release: %v", err)
+	}
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest(), 79); err != nil {
+		t.Fatalf("apply second release = %v, want nil", err)
+	}
+}
+
+func TestApplyConfirmQuarantineAfterReleaseIsIdempotent(t *testing.T) {
+	idx := openApplyTestIndex(t)
+	s := shardForApplyTest(t, idx)
+	if err := s.applyEntryCommand(quarantineRaftCommandForTest(), 77); err != nil {
+		t.Fatalf("apply quarantine: %v", err)
+	}
+	if err := s.applyEntryCommand(releaseQuarantineRaftCommandForTest(), 78); err != nil {
+		t.Fatalf("apply release: %v", err)
+	}
+	if err := s.applyEntryCommand(confirmQuarantineRaftCommandForTest(), 79); err != nil {
+		t.Fatalf("apply confirm after release = %v, want nil", err)
+	}
+}
+
 func TestShardConfirmContentQuarantineWaitsForApply(t *testing.T) {
 	raft := &quarantineProposalRaft{proposedCh: make(chan []byte, 1)}
 	idx := openApplyTestIndex(t)
@@ -712,6 +742,8 @@ func (r *quarantineProposalRaft) Step(context.Context, raftpb.Message) error { r
 func (r *quarantineProposalRaft) IsLeader() bool { return true }
 
 func (r *quarantineProposalRaft) LeaderID() uint64 { return 1 }
+
+func (r *quarantineProposalRaft) Term() uint64 { return 1 }
 
 func (r *quarantineProposalRaft) AppliedIndex() uint64 { return 0 }
 

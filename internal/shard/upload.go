@@ -53,6 +53,12 @@ type UploadConfig struct {
 
 	RestoreMaxAttempts    int
 	RestoreRetryBaseDelay time.Duration
+	// RestoreConcurrency caps concurrent cold restores across Blocks (M-02).
+	// Zero uses DefaultRestoreConcurrency.
+	RestoreConcurrency int
+	// RestoreTimeout is the mandatory Shard-owned timeout for one restore
+	// attempt (M-02). Zero uses DefaultRestoreTimeout.
+	RestoreTimeout time.Duration
 }
 
 type PendingUpload = index.PendingUpload
@@ -128,6 +134,7 @@ func (s *Shard) applySealBlock(seal *scrapv1.SealBlock) error {
 	if err := s.uploadOutboxLocked().ApplyBlockSealed(blockSealedEventFromCommand(seal)); err != nil {
 		return err
 	}
+	_ = removeSealIntent(s.blocksDir, seal.GetBlockId())
 
 	if s.blockWriter != nil && s.idxWriter != nil && s.blockWriter.BlockID() == seal.GetBlockId() {
 		if err := s.idxWriter.Close(); err != nil {
@@ -263,6 +270,9 @@ func (s *Shard) AddOrphanedSealForTest(seal index.PendingUpload) {
 
 func (s *Shard) retryUploadObligations(ctx context.Context) {
 	s.mu.Lock()
+	if err := s.reconcileClosedBlocksIntoUploadOutboxLocked(); err != nil && s.logger != nil {
+		s.logger.ErrorContext(ctx, "shard: reconcile closed Blocks on leadership", "err", err)
+	}
 	pendingRetry := s.beginUploadObligationRetryLocked(time.Now())
 	s.mu.Unlock()
 

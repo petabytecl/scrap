@@ -164,7 +164,9 @@ func TestNewAppRegistersMultiShardTestHooks(t *testing.T) {
 		}
 	})
 
-	assertAdminPostStatus(t, app, "/test-hooks/light-scrub", `{}`, http.StatusNotFound)
+	// M-03: Light Scrub is Shard-scoped on the peer path and the admin hook
+	// fans out across every local Shard.
+	assertAdminPostStatus(t, app, "/test-hooks/light-scrub", `{}`, http.StatusNoContent)
 	assertAdminPostStatus(t, app, "/test-hooks/transit-rotate", `{}`, http.StatusNoContent)
 	assertAdminPostStatus(t, app, "/test-hooks/projection-key", `{
 		"transaction_id": "tx-multishard-hook",
@@ -282,11 +284,11 @@ func assertAppPeerDeniesRemoteShard(ctx context.Context, t *testing.T, app *App,
 
 func assertAppPeerNoShardRPCsFailClosed(ctx context.Context, t *testing.T, app *App) {
 	t.Helper()
-	if _, err := app.peerSrv.RequestIndexRebuild(ctx, &scrapv1.RequestIndexRebuildRequest{}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("RequestIndexRebuild in multi-Shard placement = %v (%s), want failed precondition", err, status.Code(err))
+	if _, err := app.peerSrv.RequestIndexRebuild(ctx, &scrapv1.RequestIndexRebuildRequest{ShardId: 8}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("RequestIndexRebuild wrong Shard = %v (%s), want permission denied", err, status.Code(err))
 	}
-	if _, err := app.peerSrv.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{ScrubId: "scrub-secret"}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("ConsistencyCheck in multi-Shard placement = %v (%s), want failed precondition", err, status.Code(err))
+	if _, err := app.peerSrv.ConsistencyCheck(ctx, &scrapv1.ConsistencyCheckRequest{ScrubId: "scrub-secret", ShardId: 8}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ConsistencyCheck wrong Shard = %v (%s), want permission denied", err, status.Code(err))
 	}
 }
 
@@ -461,6 +463,7 @@ func TestNewAppRejectsProductionSecurityGatesBeforeSubsystems(t *testing.T) {
 func TestNewAppProductionSecurityGateSentinelReachesBackend(t *testing.T) {
 	t.Setenv("SCRAP_BACKEND_TYPE", "s3")
 	cfg := productionTestAppConfig(t)
+	cfg.UploadEnabled = true
 	cfg.ShardPlacementFile = writeTwoShardPlacementFile(t)
 
 	_, err := newApp(context.Background(), cfg, slog.New(slog.DiscardHandler), BuildInfo{})

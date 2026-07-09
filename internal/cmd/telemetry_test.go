@@ -65,6 +65,41 @@ func TestScrapdTelemetryResourceConfigUsesMemberAndBuildMetadata(t *testing.T) {
 	}
 }
 
+func TestValidateProductionTelemetryIdentityRejectsLocalCell(t *testing.T) {
+	t.Setenv("SCRAP_MEMBER_ID", "")
+
+	err := validateProductionTelemetryIdentity(security.ModeProduction, "local", false)
+	if err == nil || !strings.Contains(err.Error(), "cell_id=local") {
+		t.Fatalf("error = %v, want local cell rejection", err)
+	}
+}
+
+func TestValidateProductionTelemetryIdentityRejectsRawIDs(t *testing.T) {
+	t.Setenv("SCRAP_MEMBER_ID", "")
+
+	err := validateProductionTelemetryIdentity(security.ModeProduction, "cell-a", true)
+	if err == nil || !strings.Contains(err.Error(), "raw telemetry") {
+		t.Fatalf("error = %v, want raw telemetry rejection", err)
+	}
+}
+
+func TestValidateProductionTelemetryIdentityRejectsMemberOverride(t *testing.T) {
+	t.Setenv("SCRAP_MEMBER_ID", "member-override")
+
+	err := validateProductionTelemetryIdentity(security.ModeProduction, "cell-a", false)
+	if err == nil || !strings.Contains(err.Error(), "SCRAP_MEMBER_ID") {
+		t.Fatalf("error = %v, want member override rejection", err)
+	}
+}
+
+func TestValidateProductionTelemetryIdentityAllowsNonProduction(t *testing.T) {
+	t.Setenv("SCRAP_MEMBER_ID", "member-override")
+
+	if err := validateProductionTelemetryIdentity(security.ModeDevelopment, "local", true); err != nil {
+		t.Fatalf("non-production identity rejected: %v", err)
+	}
+}
+
 func TestScrapdTelemetryResourceConfigIncludesSecurityStatus(t *testing.T) {
 	cfg := scrapdTelemetryResourceConfigWithSecurity("scrapd-0", "member-123", 3, 7, BuildInfo{}, security.ModeDevelopment)
 

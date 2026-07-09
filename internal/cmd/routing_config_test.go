@@ -436,11 +436,23 @@ func productionTestAppConfig(t *testing.T) Config {
 	cfg := testAppConfig(t)
 	cfg.SecurityMode = security.ModeProduction
 	cfg.CellID = "cell-a"
-	cfg.UploadEnabled = true
+	cfg.UploadEnabled = false
+	cfg.PeersFlag = "1=localhost:9091,2=localhost:9092,3=localhost:9093"
+	cfg.ClientAddrsFlag = "1=localhost:9090,2=localhost:9090,3=localhost:9090"
 
 	const memberID = "member-1"
-	t.Setenv("SCRAP_MEMBER_ID", memberID)
 	t.Setenv("OPENBAO_TOKEN", "test-token")
+	identityPath := filepath.Join(cfg.DataDir, "identity", "member.json")
+	if err := os.MkdirAll(filepath.Dir(identityPath), memberIdentityDirMode); err != nil {
+		t.Fatalf("MkdirAll identity directory: %v", err)
+	}
+	identityData, err := json.Marshal(memberIdentityRecord{MemberID: memberID})
+	if err != nil {
+		t.Fatalf("Marshal member identity: %v", err)
+	}
+	if err := os.WriteFile(identityPath, identityData, memberIdentityFileMode); err != nil {
+		t.Fatalf("WriteFile member identity: %v", err)
+	}
 
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -511,4 +523,45 @@ func writeTwoShardPlacementFile(t *testing.T) string {
 			{"shard_id": `+strconv.FormatUint(secondShardID, 10)+`, "start_slot": 512, "end_slot": 1023}
 		]
 	}`)
+}
+
+func TestPersistPlacementIdentityRejectsSilentRemap(t *testing.T) {
+	dataDir := t.TempDir()
+	first, err := validateStartupTopology(Config{
+		SecurityMode:       security.ModeTest,
+		ShardPlacementFile: writeTwoShardPlacementFile(t),
+	})
+	if err != nil {
+		t.Fatalf("validateStartupTopology: %v", err)
+	}
+	if err := persistPlacementIdentity(dataDir, first); err != nil {
+		t.Fatalf("persistPlacementIdentity initial: %v", err)
+	}
+	if err := persistPlacementIdentity(dataDir, first); err != nil {
+		t.Fatalf("persistPlacementIdentity idempotent: %v", err)
+	}
+
+	remapped := writePlacementFile(t, `{
+		"slot_count": 1024,
+		"shards": [7, 9],
+		"local_shards": [7, 9],
+		"ranges": [
+			{"shard_id": 9, "start_slot": 0, "end_slot": 511},
+			{"shard_id": 7, "start_slot": 512, "end_slot": 1023}
+		]
+	}`)
+	second, err := validateStartupTopology(Config{
+		SecurityMode:       security.ModeTest,
+		ShardPlacementFile: remapped,
+	})
+	if err != nil {
+		t.Fatalf("validateStartupTopology remapped: %v", err)
+	}
+	err = persistPlacementIdentity(dataDir, second)
+	if err == nil {
+		t.Fatal("persistPlacementIdentity accepted silent remap")
+	}
+	if !errors.Is(err, routing.ErrInvalidPlacement) {
+		t.Fatalf("persistPlacementIdentity error = %v, want ErrInvalidPlacement", err)
+	}
 }

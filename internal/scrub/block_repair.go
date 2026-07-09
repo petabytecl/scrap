@@ -22,8 +22,11 @@ var (
 	ErrPeerBlockQuarantined    = errors.New("scrub: peer Block quarantined")
 )
 
+// BlockTransferer streams a peer Block into durable staging files.
+// Callers must supply empty staging paths; the transferer writes and fsyncs
+// both components without buffering the full Block in memory (ADR 0036 / H-13).
 type BlockTransferer interface {
-	TransferBlock(ctx context.Context, addr string, shardID, blockID uint64) ([]byte, []byte, error)
+	TransferBlockToFiles(ctx context.Context, addr string, shardID, blockID uint64, blkPath, idxPath string) error
 }
 
 type BackendBlockRestorer interface {
@@ -169,21 +172,13 @@ func (r *BlockRepair) verifyStagedReplacement(paths blockRepairPaths, blockID ui
 }
 
 func (r *BlockRepair) repairFromPeer(ctx context.Context, blockID uint64, peerAddr string) error {
-	blkData, idxData, err := r.cfg.Transferer.TransferBlock(ctx, peerAddr, r.cfg.ShardID, blockID)
-	if err != nil {
-		return fmt.Errorf("fetch replacement: %w", err)
-	}
-
 	paths := blockRepairPathsFor(r.cfg.BlocksDir, blockID)
 	if err := cleanupRepairStaging(paths); err != nil {
 		return err
 	}
-	if err := atomicWrite(paths.blkStaged, blkData); err != nil {
-		return fmt.Errorf("write replacement block: %w", fsErrCause(err))
-	}
-	if err := atomicWrite(paths.idxStaged, idxData); err != nil {
+	if err := r.cfg.Transferer.TransferBlockToFiles(ctx, peerAddr, r.cfg.ShardID, blockID, paths.blkStaged, paths.idxStaged); err != nil {
 		_ = cleanupRepairStaging(paths)
-		return fmt.Errorf("write replacement index: %w", fsErrCause(err))
+		return fmt.Errorf("fetch replacement: %w", err)
 	}
 
 	if err := r.verifyStagedReplacement(paths, blockID); err != nil {

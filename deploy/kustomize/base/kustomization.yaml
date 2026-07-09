@@ -3,7 +3,6 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
-  - networkpolicy.yaml
   - service-headless.yaml
   - service.yaml
   - statefulset.yaml

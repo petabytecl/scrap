@@ -7,5 +7,8 @@ resources:
   - networkpolicy-admin.yaml
   - ciliumnetworkpolicy-admin-host.yaml
 
+components:
+  - ../../components/cilium-network-policy
+
 patches:
   - path: statefulset-prodlike-patch.yaml

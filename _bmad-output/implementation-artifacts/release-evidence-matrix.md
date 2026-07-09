@@ -66,12 +66,17 @@ issue snapshot artifact when the row set is too large to inline safely.
 
 ## Current Release Decision
 
+Last reconciled: 2026-07-09 against thermo-nuclear baseline `03798da`.
+Remediation Waves 1–8 implemented in working tree; release remains FAIL until exact-SHA Tier 2/Tier 3/real S3/IAM and fresh thermo-nuclear review.
+Sprint change proposal: `sprint-change-proposal-2026-07-09-thermo-nuclear.md`.
+
 | Gate | Status | Reason | Owner |
 | --- | --- | --- | --- |
-| Feature-scope evidence through Epic 5 | CONCERNS | Epics 1-5 have current linked artifacts, but several rows are intentionally scoped to local/package or prod-like evidence rather than final release closure. | Release owner / Story 6.1 matrix. |
-| Epic 6 release documentation/evidence | FAIL | Runbooks, alert/query references, the Story 6.4 release evidence bundle, the Story 6.5 Tier 2/Tier 3 gate contract, the Story 6.6 real S3/IAM gate contract, and Story 6.7 closure policy/final-decision artifact exist at story scope; current green Tier 2/Tier 3 runtime evidence and real S3/IAM rehearsal are still incomplete. | Story 6.7 / release owner. |
-| Real S3/IAM Backend proof | FAIL | Story 6.6 now defines an enforceable evidence contract and validator, but issue `#429` is still open and real non-local S3/IAM `make production-rehearsal` evidence is missing. | Story 6.6 / issue `#429`. |
-| Final SCRAP release gate | FAIL | FR-16 requires current linked evidence for all required release claims. Story 6.7 now records the closure policy and final decision, and it remains FAIL because issue `#429`, real S3/IAM proof, and Tier 2/Tier 3 runtime artifacts are unresolved. | Story 6.7 / release owner. |
+| Feature-scope evidence through Epic 5 | FAIL | Historical epic artifacts exist, but thermo-nuclear findings reopen Epics 1–5 with remediation stories 1.7–5.9 still backlog. | Release owner / remediation waves. |
+| Epic 6 release documentation/evidence | FAIL | Stories 6.8–6.13 backlog; prior PASS claims contradicted by open High/Medium findings and stale exact-SHA evidence (`H-19`). | Story 6.8 / 6.10 / release owner. |
+| Real S3/IAM Backend proof | FAIL | Exact-SHA freshness required; historical `#429` closure and older `commit_ref` reports cannot certify current HEAD (`H-19`). | Story 6.10 / issue `#429` revalidation. |
+| Thermo-nuclear integrity findings | FAIL | 31 findings (`H-01`–`H-19`, `M-01`–`M-12`) mapped once each in the 2026-07-09 sprint change proposal; unresolved High/Medium keeps release at FAIL. | Stories 1.7–6.13. |
+| Final SCRAP release gate | FAIL | Closure, matrix, and tier-gate artifacts agree on FAIL until Waves 1–9 close on the exact candidate SHA with Story 6.9 vertical integrity evidence. | Story 6.7 / 6.8 / 6.9 / release owner. |
 
 ## FR Evidence Matrix
 

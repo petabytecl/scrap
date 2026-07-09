@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/petabytecl/scrap/internal/security"
 )
 
 func TestResolvePeersDefaultSingleNode(t *testing.T) {
@@ -15,6 +17,26 @@ func TestResolvePeersDefaultSingleNode(t *testing.T) {
 	}
 	if len(peers) != 1 || peers[1] != "localhost:9091" {
 		t.Errorf("peers = %v, want {1: localhost:9091}", peers)
+	}
+}
+
+func TestResolvePeersRejectsProductionSingleVoter(t *testing.T) {
+	_, _, err := resolvePeers(Config{SecurityMode: security.ModeProduction})
+	if err == nil {
+		t.Fatal("expected production single-voter rejection")
+	}
+}
+
+func TestResolvePeersAcceptsProductionMultiVoter(t *testing.T) {
+	peers, _, err := resolvePeers(Config{
+		SecurityMode: security.ModeProduction,
+		PeersFlag:    "1=localhost:9091,2=localhost:9092,3=localhost:9093",
+	})
+	if err != nil {
+		t.Fatalf("resolvePeers: %v", err)
+	}
+	if len(peers) != 3 {
+		t.Fatalf("peers = %v, want 3 entries", peers)
 	}
 }
 
@@ -64,12 +86,15 @@ func TestResolveClientAddrsForK8sUseClientPort(t *testing.T) {
 		3: "scrapd-2.scrap-headless.scrap.svc:9091",
 	}
 
-	addrs := resolveClientAddrs(Config{
+	addrs, err := resolveClientAddrs(Config{
 		ListenAddr:      ":9090",
 		Replicas:        3,
 		HeadlessService: "scrap-headless",
 		Namespace:       "scrap",
 	}, peers)
+	if err != nil {
+		t.Fatalf("resolveClientAddrs: %v", err)
+	}
 
 	if got := addrs[1]; got != "scrapd-0.scrap-headless.scrap.svc:9090" {
 		t.Fatalf("client addr 1 = %q, want client port", got)
@@ -82,10 +107,34 @@ func TestResolveClientAddrsForK8sUseClientPort(t *testing.T) {
 func TestResolveClientAddrsFallbackCopiesPeerAddrs(t *testing.T) {
 	peers := map[uint64]string{1: "localhost:9091"}
 
-	addrs := resolveClientAddrs(Config{ListenAddr: "not-a-host-port"}, peers)
+	addrs, err := resolveClientAddrs(Config{ListenAddr: "not-a-host-port"}, peers)
+	if err != nil {
+		t.Fatalf("resolveClientAddrs: %v", err)
+	}
 	addrs[1] = "changed"
 
 	if got := peers[1]; got != "localhost:9091" {
 		t.Fatalf("peer addr mutated to %q", got)
+	}
+}
+
+func TestResolveClientAddrsRequiresExplicitMapInProduction(t *testing.T) {
+	peers := map[uint64]string{
+		1: "localhost:9091",
+		2: "localhost:9092",
+	}
+	_, err := resolveClientAddrs(Config{SecurityMode: security.ModeProduction}, peers)
+	if err == nil {
+		t.Fatal("expected production client-addrs requirement")
+	}
+	addrs, err := resolveClientAddrs(Config{
+		SecurityMode:    security.ModeProduction,
+		ClientAddrsFlag: "1=localhost:9090,2=localhost:9090",
+	}, peers)
+	if err != nil {
+		t.Fatalf("resolveClientAddrs: %v", err)
+	}
+	if addrs[1] != "localhost:9090" || addrs[2] != "localhost:9090" {
+		t.Fatalf("addrs = %v", addrs)
 	}
 }

@@ -152,6 +152,10 @@ func (c *uploadControllerBoundaryCore) IsLeader() bool {
 	return true
 }
 
+func (c *uploadControllerBoundaryCore) LeadershipEpoch() uint64 {
+	return 1
+}
+
 func (c *uploadControllerBoundaryCore) retryUploadObligations(context.Context) {}
 
 func (c *uploadControllerBoundaryCore) pendingUploads() ([]PendingUpload, error) {

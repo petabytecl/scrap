@@ -14,6 +14,7 @@ import (
 
 	scrapv1 "github.com/petabytecl/scrap/gen/go/scrap/v1"
 	"github.com/petabytecl/scrap/internal/backend"
+	"github.com/petabytecl/scrap/internal/block"
 	"github.com/petabytecl/scrap/internal/index"
 	storeapi "github.com/petabytecl/scrap/internal/store"
 )
@@ -25,6 +26,9 @@ import (
 type uploadCore interface {
 	Propose(ctx context.Context, data []byte) error
 	IsLeader() bool
+	// LeadershipEpoch returns a monotonic token that changes when leadership
+	// identity changes. Upload workers recheck it before ConfirmUpload (H-08).
+	LeadershipEpoch() uint64
 	retryUploadObligations(ctx context.Context)
 	pendingUploads() ([]PendingUpload, error)
 	localUploadSource(blockID uint64) (uploadLocalSource, uploadLocalAvailability)
@@ -322,11 +326,20 @@ func (c *uploadController) handleThrottled(ctx context.Context, state *uploadRet
 }
 
 func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingUpload) error {
+	if !c.core.IsLeader() {
+		return fmt.Errorf("%w: lost leadership before upload", backend.ErrPermanent)
+	}
+	epoch := c.core.LeadershipEpoch()
+
 	prefix := backendKeyPrefix(c.cellID(), upload.ShardID, upload.BlockID, upload.UploadGeneration)
 	// Root backend I/O in the deterministic per-block trace so the PUT/verify spans
 	// share a trace_id with the seal/confirm apply spans and the documents' links.
 	bctx := trace.ContextWithSpanContext(ctx, blockTraceContext(c.cellID(), c.shardID, upload.BlockID))
 	blockAttr := trace.WithAttributes(blockIDAttribute(upload.BlockID))
+
+	if err := c.verifyLocalUploadSource(upload); err != nil {
+		return err
+	}
 
 	putBlkCtx, putBlk := c.telemetry.StartSpan(bctx, "scrap.upload/put.blk", blockAttr)
 	blk, err := c.uploadObject(putBlkCtx, upload.BlockID, prefix, uploadObjectBlock, upload.SealedSizeBytes)
@@ -341,6 +354,10 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 		return err
 	}
 
+	if !c.core.IsLeader() || c.core.LeadershipEpoch() != epoch {
+		return fmt.Errorf("%w: lost leadership before ConfirmUpload", backend.ErrPermanent)
+	}
+
 	return c.proposeConfirmUpload(ctx, index.ConfirmedUpload{
 		BlockID:          upload.BlockID,
 		ShardID:          upload.ShardID,
@@ -350,6 +367,28 @@ func (c *uploadController) uploadAndConfirm(ctx context.Context, upload PendingU
 		BlockObject:      blk,
 		IndexObject:      idx,
 	})
+}
+
+// verifyLocalUploadSource runs Block/.idx integrity checks before PUT so
+// ConfirmUpload cannot certify corrupt local bytes (H-08 / ADR 0037).
+func (c *uploadController) verifyLocalUploadSource(upload PendingUpload) error {
+	source, availability := c.core.localUploadSource(upload.BlockID)
+	if !availability.ready() {
+		c.recordLocalUploadUnavailable(upload.BlockID, availability)
+		return fmt.Errorf("%w: upload source unavailable before verify: %s", backend.ErrPermanent, availability.status)
+	}
+	fileSource, ok := source.(fileUploadSource)
+	if !ok {
+		return nil
+	}
+	result, err := block.VerifyBlock(fileSource.blockPath, fileSource.indexPath)
+	if err != nil {
+		return fmt.Errorf("%w: upload pre-PUT VerifyBlock failed: %w", backend.ErrCorrupt, err)
+	}
+	if len(result.CorruptFrames) > 0 {
+		return fmt.Errorf("%w: upload pre-PUT integrity failed for Block %d", backend.ErrCorrupt, upload.BlockID)
+	}
+	return nil
 }
 
 // uploadSizeUnchecked disables the pre-PUT size check for objects whose size

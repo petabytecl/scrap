@@ -13,7 +13,7 @@ import (
 	"github.com/petabytecl/scrap/internal/block"
 )
 
-func TestApplyCommitDocumentReappliesWithoutDuplicatingIndexEntry(t *testing.T) {
+func TestApplyCommitDocumentReappliesWithoutDuplicatingIndexEntry(t *testing.T) { //nolint:cyclop // regression fixture builds a multi-Document open Block then asserts index/projection invariants
 	s := shardForReplayConflictApplyTest(t)
 
 	// Open Block 1 with two committed Documents on disk (a.xml, b.xml), and keep
@@ -39,7 +39,7 @@ func TestApplyCommitDocumentReappliesWithoutDuplicatingIndexEntry(t *testing.T) 
 	}
 
 	// Replay the committed CommitDocument for b.xml.
-	s.applyCommitDocumentCommand(&scrapv1.CommitDocument{
+	if err := s.applyCommitDocumentCommand(&scrapv1.CommitDocument{
 		TransactionId: "tx-idem",
 		DocumentName:  "b.xml",
 		ContentType:   "application/octet-stream",
@@ -49,7 +49,9 @@ func TestApplyCommitDocumentReappliesWithoutDuplicatingIndexEntry(t *testing.T) 
 		TotalBytes:    second.Size,
 		Sha256:        second.SHA256[:],
 		CreatedAtUs:   time.Unix(20, 0).UnixMicro(),
-	}, 12)
+	}, 12); err != nil {
+		t.Fatalf("applyCommitDocumentCommand: %v", err)
+	}
 
 	// The .idx must still hold exactly one entry for b.xml.
 	ir, err := block.OpenIndexReader(block.IdxFilePath(s.blocksDir, 1))

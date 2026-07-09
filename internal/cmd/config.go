@@ -26,12 +26,13 @@ const (
 // defaults.
 type Config struct {
 	// Command-line flags.
-	DataDir       string
-	ListenAddr    string
-	PeerAddr      string
-	AdminAddr     string
-	BlockSealSize int64
-	PeersFlag     string
+	DataDir         string
+	ListenAddr      string
+	PeerAddr        string
+	AdminAddr       string
+	BlockSealSize   int64
+	PeersFlag       string
+	ClientAddrsFlag string
 
 	// Run-level environment.
 	CellID             string
@@ -72,6 +73,7 @@ func loadConfig(args []string) (Config, error) {
 	adminAddr := fs.String("admin-addr", ":8080", "HTTP admin listen address (health)")
 	blockSealSize := fs.Int64("block-seal-size", shard.DefaultBlockSealSize, "block seal threshold in bytes")
 	peersFlag := fs.String("peers", "", "raft peers (e.g. 1=localhost:9091,2=localhost:9092)")
+	clientAddrsFlag := fs.String("client-addrs", envString("SCRAP_CLIENT_ADDRS", ""), "public DocumentService addresses (e.g. 1=host:9090,2=host:9090)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
 	}
@@ -83,6 +85,7 @@ func loadConfig(args []string) (Config, error) {
 		AdminAddr:          *adminAddr,
 		BlockSealSize:      *blockSealSize,
 		PeersFlag:          *peersFlag,
+		ClientAddrsFlag:    *clientAddrsFlag,
 		CellID:             os.Getenv("SCRAP_CELL_ID"),
 		ShardPlacementFile: os.Getenv("SCRAP_SHARD_PLACEMENT_FILE"),
 		HeadlessService:    os.Getenv("SCRAP_HEADLESS_SERVICE"),

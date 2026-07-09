@@ -34,7 +34,13 @@ The following blockers are non-waivable for a final SCRAP release `PASS`:
   keys, generated certificate material, Document payloads, raw Backend keys, raw
   logs, trace IDs, request IDs, auth claims, data keys, or wrapped-key
   ciphertext;
-- ownerless or mitigation-free release blockers.
+- ownerless or mitigation-free release blockers;
+- unresolved High or Medium thermo-nuclear / data-integrity findings
+  (`H-01`–`H-19`, `M-01`–`M-12`, or equivalent) without accepted story evidence
+  on the exact release SHA;
+- stale evidence whose `commit_ref` does not match the candidate release SHA,
+  or contradictory PASS/FAIL claims across closure artifacts;
+- failing `make static` or `make vuln` on the candidate release SHA.
 
 Waivers must be explicit, dated, ownered, scoped, and linked from the release
 matrix. A waiver can record risk acceptance or explain why a row remains

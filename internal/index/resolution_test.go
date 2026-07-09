@@ -112,6 +112,46 @@ func TestResolverResolveDocumentNotFound(t *testing.T) {
 	}
 }
 
+// M-11 / ADR 0034: ResolveDocument must not return a Document from an early
+// Block when a later Block in the Transaction is corrupt or DocCount drifts.
+func TestResolverResolveDocumentFailsClosedOnLaterBlockCorruption(t *testing.T) {
+	idx, blocksDir := openResolverTestProjection(t)
+	writeResolverIndex(t, blocksDir, 1, []block.IndexEntry{
+		resolverEntry("tx-partial", "a.xml", 40),
+	})
+	if err := idx.Put("tx-partial", 1, 2, false); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := idx.AddBlockID("tx-partial", 2); err != nil {
+		t.Fatalf("AddBlockID: %v", err)
+	}
+	if err := os.WriteFile(block.IdxFilePath(blocksDir, 2), []byte("bad index"), 0o600); err != nil {
+		t.Fatalf("WriteFile corrupt later index: %v", err)
+	}
+
+	resolver := index.NewResolver(idx, resolverIndexPath(blocksDir))
+	_, err := resolver.ResolveDocument("tx-partial", "a.xml")
+	if !errors.Is(err, index.ErrCorrupt) {
+		t.Fatalf("ResolveDocument error = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestResolverResolveDocumentFailsClosedOnDocCountDrift(t *testing.T) {
+	idx, blocksDir := openResolverTestProjection(t)
+	writeResolverIndex(t, blocksDir, 1, []block.IndexEntry{
+		resolverEntry("tx-drift", "a.xml", 40),
+	})
+	if err := idx.Put("tx-drift", 1, 2, false); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	resolver := index.NewResolver(idx, resolverIndexPath(blocksDir))
+	_, err := resolver.ResolveDocument("tx-drift", "a.xml")
+	if !errors.Is(err, index.ErrCorrupt) {
+		t.Fatalf("ResolveDocument error = %v, want ErrCorrupt", err)
+	}
+}
+
 func TestResolverFailsClosedOnCorruptVisibleIndex(t *testing.T) {
 	idx, blocksDir := openResolverTestProjection(t)
 	if err := idx.Put("tx-corrupt", 1, 1, false); err != nil {

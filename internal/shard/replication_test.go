@@ -223,9 +223,12 @@ type replicaRepairTransferer struct {
 	calls     []string
 }
 
-func (t *replicaRepairTransferer) TransferBlock(_ context.Context, addr string, _, _ uint64) ([]byte, []byte, error) {
+func (t *replicaRepairTransferer) TransferBlockToFiles(_ context.Context, addr string, _, _ uint64, blkPath, idxPath string) error {
 	t.calls = append(t.calls, addr)
-	return append([]byte(nil), t.blockData...), append([]byte(nil), t.idxData...), nil
+	if err := os.WriteFile(blkPath, t.blockData, 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(idxPath, t.idxData, 0o600)
 }
 
 func replicaRepairSourceBlock(t *testing.T, indexedDocs, trailingDocs [][]byte) ([]byte, []byte, uint64) {

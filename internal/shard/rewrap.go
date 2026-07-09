@@ -49,7 +49,7 @@ func (s *Shard) RewrapDocument(ctx context.Context, req rewrap.Request) (rewrap.
 	return s.finishRewrap(result, err)
 }
 
-func (s *Shard) rewrapDocumentEnvelope(
+func (s *Shard) rewrapDocumentEnvelope( //nolint:cyclop // rewrap validates envelope identity, Transit routing, and monotonic key versions before proposing
 	ctx context.Context,
 	req rewrap.Request,
 	blockID uint64,
@@ -61,6 +61,9 @@ func (s *Shard) rewrapDocumentEnvelope(
 		result.Reason = rewrap.ReasonIdempotent
 		return result, nil
 	}
+	if req.KeyVersion > 0 && req.KeyVersion < envelope.KeyVersion {
+		return result, fmt.Errorf("%w: rewrap target key version %d is below current %d", rewrap.ErrInvalidRequest, req.KeyVersion, envelope.KeyVersion)
+	}
 
 	rewrapped, err := s.encryption.Transit.RewrapDataKey(ctx, encryption.RewrapDataKeyRequest{
 		WrappedKey: envelope.WrappedDataKey,
@@ -68,7 +71,9 @@ func (s *Shard) rewrapDocumentEnvelope(
 			TransactionID: req.TransactionID,
 			DocumentName:  req.DocumentName,
 		}),
-		KeyVersion: req.KeyVersion,
+		KeyVersion:   req.KeyVersion,
+		TransitMount: envelope.TransitMount,
+		TransitKey:   envelope.TransitKey,
 	})
 	if err != nil {
 		return result, mapRewrapEncryptionError(err)
@@ -80,6 +85,12 @@ func (s *Shard) rewrapDocumentEnvelope(
 	}
 	if rewrapped.Version <= 0 {
 		return result, fmt.Errorf("%w: rewrapped key version is missing", storeapi.ErrDataLoss)
+	}
+	if rewrapped.Version < envelope.KeyVersion {
+		return result, fmt.Errorf("%w: rewrap downgraded key version from %d to %d", storeapi.ErrDataLoss, envelope.KeyVersion, rewrapped.Version)
+	}
+	if req.KeyVersion > 0 && rewrapped.Version != req.KeyVersion {
+		return result, fmt.Errorf("%w: rewrap returned key version %d, want %d", storeapi.ErrDataLoss, rewrapped.Version, req.KeyVersion)
 	}
 
 	updatedEnvelope, err := rewrappedEnvelopeBytes(envelope, rewrapped)

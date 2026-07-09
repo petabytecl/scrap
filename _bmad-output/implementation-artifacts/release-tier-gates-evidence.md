@@ -1,14 +1,20 @@
 # SCRAP Release Tier Gates Evidence
 
-Artifact status: complete for Story 6.5 implementation
+Artifact status: reconciled 2026-07-09 to FAIL baseline with thermo-nuclear remediation
 Release gate status: FAIL
 
 Story: 6.5 - Tier 2 and Tier 3 Release Evidence Gates
 Story baseline commit: `06f2b4f120a165f7034afe74e822d5e7f4ad294c`
 Story creation commit: `d2a9bcc264e1a74273b6cf2f52c7b855e7fd8d20`
 Story implementation commit: `a2738bb8caf9d5b9853c61c7e8889d8a8e43bba0`
+Remediation baseline commit: `03798da1b57429d2243732c061784ca859f3c343`
 Branch: `main`
 Generated: 2026-06-12T20:18:53-04:00
+Last updated: 2026-07-09T17:50:00-04:00
+
+Note: Prior Tier 2/Tier 3 PASS runs on `8f4dce8` are stale relative to the
+thermo-nuclear remediation baseline. Exact-SHA regeneration is required before
+any final PASS (`H-19`, Stories 6.8/6.10/6.9).
 
 ## Scope
 

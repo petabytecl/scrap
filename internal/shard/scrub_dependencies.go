@@ -26,7 +26,66 @@ func (c *scrubCoordinator) ListSealedBlocks(_ uint64) ([]block.Info, error) {
 }
 
 func (c *scrubCoordinator) VerifyBlock(blkPath, idxPath string) (block.VerifyResult, error) {
+	// M-04 / Story 3.13: Deep Scrub must match the read path's identity check.
+	// VerifyBlock alone skips header shard/block IDs; treat mismatches as
+	// header corruption so the scrubber quarantines instead of reporting clean.
+	blockID, ok := blockIDFromBlockPath(blkPath)
+	if !ok {
+		return block.VerifyResult{}, errors.New("shard: deep scrub block path is not a canonical Block file")
+	}
+	if headerIdentityCorrupt(blkPath, c.shardID, blockID) {
+		return block.VerifyResult{
+			CorruptFrames: []block.CorruptFrame{{Offset: 0, Type: block.CorruptionHeader}},
+		}, nil
+	}
 	return block.VerifyBlock(blkPath, idxPath)
+}
+
+func headerIdentityCorrupt(blkPath string, shardID, blockID uint64) bool {
+	return block.VerifyHeader(blkPath, shardID, blockID) != nil
+}
+
+const deepScrubCheckpointFile = ".deep-scrub-checkpoint"
+
+func (c *scrubCoordinator) GetDeepScrubCheckpoint() (uint64, bool) {
+	data, err := os.ReadFile(filepath.Join(c.blocksDir, deepScrubCheckpointFile))
+	if err != nil {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func (c *scrubCoordinator) SetDeepScrubCheckpoint(blockID uint64) {
+	path := filepath.Join(c.blocksDir, deepScrubCheckpointFile)
+	tmp := path + ".tmp"
+	payload := []byte(strconv.FormatUint(blockID, 10))
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		c.baseLogger.Warn("scrub: write deep scrub checkpoint failed", "err", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		c.baseLogger.Warn("scrub: rename deep scrub checkpoint failed", "err", err)
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := syncDir(c.blocksDir); err != nil {
+		c.baseLogger.Warn("scrub: fsync deep scrub checkpoint dir failed", "err", err)
+	}
+}
+
+func (c *scrubCoordinator) ClearDeepScrubCheckpoint() {
+	path := filepath.Join(c.blocksDir, deepScrubCheckpointFile)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		c.baseLogger.Warn("scrub: clear deep scrub checkpoint failed", "err", err)
+		return
+	}
+	if err := syncDir(c.blocksDir); err != nil {
+		c.baseLogger.Warn("scrub: fsync after clearing deep scrub checkpoint failed", "err", err)
+	}
 }
 
 func (c *scrubCoordinator) Quarantine(blkPath string) error {

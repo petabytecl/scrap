@@ -2,16 +2,25 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/petabytecl/scrap/internal/routing"
 	"github.com/petabytecl/scrap/internal/security"
 )
+
+const placementIdentityFileName = "placement-identity.json"
+
+type placementIdentityRecord struct {
+	Digest string `json:"digest"`
+}
 
 type startupTopology struct {
 	Placement           routing.Placement
@@ -178,4 +187,50 @@ func placementShardSet(placement routing.Placement) map[uint64]struct{} {
 		shards[r.ShardID] = struct{}{}
 	}
 	return shards
+}
+
+// persistPlacementIdentity stores a durable digest of the configured placement
+// and rejects silent slot remaps that would move existing Transactions (ADR 0035).
+func persistPlacementIdentity(dataDir string, topology startupTopology) error {
+	digest := placementIdentityDigest(topology)
+	path := filepath.Join(dataDir, placementIdentityFileName)
+	existing, err := os.ReadFile(path) //nolint:gosec // Placement identity lives under the operator-configured data dir.
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read placement identity: %w", err)
+		}
+		return writePlacementIdentity(path, digest)
+	}
+	var record placementIdentityRecord
+	if err := json.Unmarshal(existing, &record); err != nil {
+		return placementConfigError("parse placement identity: %v", err)
+	}
+	if record.Digest == "" {
+		return placementConfigError("placement identity digest is required")
+	}
+	if record.Digest != digest {
+		return placementConfigError("placement identity mismatch: configured digest %s does not match persisted %s", digest, record.Digest)
+	}
+	return nil
+}
+
+func placementIdentityDigest(topology startupTopology) string {
+	sum := sha256.Sum256([]byte(topology.RouteMapSummary))
+	return hex.EncodeToString(sum[:])
+}
+
+func writePlacementIdentity(path, digest string) error {
+	payload, err := json.Marshal(placementIdentityRecord{Digest: digest})
+	if err != nil {
+		return fmt.Errorf("marshal placement identity: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		return fmt.Errorf("write placement identity: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("persist placement identity: %w", err)
+	}
+	return nil
 }

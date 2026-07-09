@@ -4,6 +4,10 @@ Status: Accepted
 
 Date: 2026-06-10
 
+Amended: 2026-07-09 — cold restore must use a Shard-owned bounded worker pool,
+mandatory restore timeout, and process-wide concurrency/byte budget (finding
+`M-02`). Per-Block singleflight alone is insufficient.
+
 ## Context
 
 ADR 0016 limited Phase 4 to partial local eviction. Followers may evict

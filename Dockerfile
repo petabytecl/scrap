@@ -1,3 +1,6 @@
+FROM alpine:3.22 AS certs
+RUN apk add --no-cache ca-certificates
+
 FROM scratch
 
 ARG SCRAP_RELEASE_SHA=unknown
@@ -15,6 +18,9 @@ LABEL org.opencontainers.image.created="${SCRAP_BUILD_TIME}"
 LABEL cl.petabyte.scrap.dirty_tree="${SCRAP_DIRTY_TREE}"
 
 USER 65532:65532
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --chown=65532:65532 ${SCRAPD_IMAGE_BINARY} /scrapd
+
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 ENTRYPOINT ["/scrapd"]

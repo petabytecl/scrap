@@ -94,6 +94,42 @@ func TestPeerServerDeniesUnauthorizedBeforeRaftRoute(t *testing.T) {
 	}
 }
 
+func TestPeerServerBindsRaftMessageSender(t *testing.T) {
+	expected := peerAuthExpectedIdentity()
+	authz := security.NewStaticAuthorizer()
+	srv := NewServer(t.TempDir(),
+		WithAuthorizer(authz, expected),
+		WithPeerRaftIDs(map[string]uint64{"scrapd-1": 2}),
+	)
+	defer func() { _ = srv.Close() }()
+
+	router := &recordingRaftRouter{}
+	srv.SetRaftRouter(router)
+
+	caller := security.PeerIdentityConfig{
+		CellID:         "cell-a",
+		MemberHostname: "scrapd-1",
+		MemberID:       "member-b",
+	}
+	ctx := peerAuthContext(security.NewRoleSet(security.RolePeerMember), caller)
+
+	spoofed := marshalRaftMessageFrom(t, 99)
+	if _, err := srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{Message: spoofed}); !errors.Is(err, security.ErrPermissionDenied) {
+		t.Fatalf("ForwardRaft spoofed From = %v, want permission denied", err)
+	}
+	if router.calls != 0 {
+		t.Fatalf("router calls after spoof = %d, want 0", router.calls)
+	}
+
+	okMsg := marshalRaftMessageFrom(t, 2)
+	if _, err := srv.ForwardRaft(ctx, &scrapv1.ForwardRaftRequest{Message: okMsg}); err != nil {
+		t.Fatalf("ForwardRaft bound sender: %v", err)
+	}
+	if router.calls != 1 {
+		t.Fatalf("router calls after bound sender = %d, want 1", router.calls)
+	}
+}
+
 func TestPeerServerDeniesUnauthorizedShardBeforeRaftRoute(t *testing.T) {
 	expected := peerAuthExpectedIdentity()
 	authz := security.NewStaticAuthorizer()
@@ -457,7 +493,12 @@ func peerAuthContext(roles security.RoleSet, identity security.PeerIdentityConfi
 
 func marshalRaftMessage(t *testing.T) []byte {
 	t.Helper()
-	data, err := (&raftpb.Message{}).Marshal()
+	return marshalRaftMessageFrom(t, 0)
+}
+
+func marshalRaftMessageFrom(t *testing.T, from uint64) []byte {
+	t.Helper()
+	data, err := (&raftpb.Message{From: from}).Marshal()
 	if err != nil {
 		t.Fatalf("marshal raft message: %v", err)
 	}

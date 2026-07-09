@@ -105,6 +105,24 @@ func TestProjectionRebuilderListBlockIndexIDs(t *testing.T) {
 	}
 }
 
+// H-05 / ADR 0034: an orphan .idx without a companion .blk must not become
+// Document visibility during Projection rebuild.
+func TestProjectionRebuilderRefusesOrphanIndexWithoutBlock(t *testing.T) {
+	dataDir := t.TempDir()
+	blocksDir := filepath.Join(dataDir, "blocks")
+	if err := os.MkdirAll(blocksDir, 0o750); err != nil {
+		t.Fatalf("mkdir blocks: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocksDir, "0000000000000001.idx"), []byte("orphan"), 0o600); err != nil {
+		t.Fatalf("write orphan idx: %v", err)
+	}
+	projection := openProjectionForRebuildTest(t)
+	r := newProjectionRebuilder(&projectionRebuildCoreStub{}, dataDir, blocksDir, 7, UploadConfig{}, nil)
+	if _, err := r.rebuildProjectionInto(projection); err == nil {
+		t.Fatal("rebuildProjectionInto succeeded with orphan .idx, want error")
+	}
+}
+
 func TestProjectionRebuilderTriggerWaitAndInProgress(t *testing.T) {
 	dataDir := t.TempDir()
 	blocksDir := filepath.Join(dataDir, "blocks")

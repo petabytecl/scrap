@@ -109,6 +109,9 @@ message CommitDocument {
   bytes  sha256          = 9;
   int64  created_at_us   = 10;
   bytes  encryption_envelope = 11;
+  // proposal_id uniquely correlates one CommitDocument proposal with its waiter
+  // (ADR 0033 / H-02). Empty on historical entries; new proposals must set it.
+  string proposal_id = 12;
 }
 
 message OpenlogEntry {

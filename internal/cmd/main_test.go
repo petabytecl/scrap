@@ -6,7 +6,7 @@ import (
 )
 
 func TestOpenConfiguredUploadBackendDisabled(t *testing.T) {
-	backend, backendType, err := openConfiguredUploadBackend(context.Background(), t.TempDir(), false)
+	backend, backendType, err := openConfiguredUploadBackend(context.Background(), Config{DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("openConfiguredUploadBackend: %v", err)
 	}
@@ -21,7 +21,10 @@ func TestOpenConfiguredUploadBackendDisabled(t *testing.T) {
 func TestOpenConfiguredUploadBackendEnabledFS(t *testing.T) {
 	t.Setenv("SCRAP_BACKEND_TYPE", "fs")
 
-	backend, backendType, err := openConfiguredUploadBackend(context.Background(), t.TempDir(), true)
+	backend, backendType, err := openConfiguredUploadBackend(context.Background(), Config{
+		DataDir:       t.TempDir(),
+		UploadEnabled: true,
+	})
 	if err != nil {
 		t.Fatalf("openConfiguredUploadBackend: %v", err)
 	}

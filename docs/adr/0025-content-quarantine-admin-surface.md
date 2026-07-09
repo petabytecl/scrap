@@ -54,6 +54,11 @@ Confirm and release remain authoritative lifecycle changes. They must propose
 Raft metadata commands and converge through the Shard authority path. Admin
 HTTP handlers and `scrapctl` are operator surfaces, not metadata authority.
 
+Committed confirm/release apply handlers must be deterministic and replay-safe
+(finding `H-06`): missing records after a prior release are idempotent no-ops
+or tombstone hits during Raft replay; not-found rejection is allowed only in
+pre-proposal validation, never as a panic-inducing apply failure.
+
 The implementation still needs the ADR 0008 wire/storage work:
 
 - `QuarantineDocument` Raft command;

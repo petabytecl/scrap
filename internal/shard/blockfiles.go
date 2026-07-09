@@ -20,6 +20,13 @@ import (
 func (s *Shard) sealAndOpenNew(ctx context.Context) error {
 	blockID := s.blockWriter.BlockID()
 	sealedSize := s.blockWriter.Offset()
+	// H-07 / ADR 0037: persist fsynced seal intent before closing the Block so
+	// a crash between close and SealBlock commit cannot lose the upload obligation.
+	if s.upload.Enabled {
+		if err := s.writeSealIntentLocked(blockID, sealedSize); err != nil {
+			return err
+		}
+	}
 	if err := s.idxWriter.Close(); err != nil {
 		return err
 	}
@@ -155,7 +162,7 @@ func blockIDFromLocalLifecycleName(name string) (uint64, bool, error) {
 	// Quarantined Block files must keep reserving their ID: Block IDs are
 	// never reused, and a fully quarantined highest Block would otherwise be
 	// reallocated at the next startup.
-	for _, suffix := range []string{".blk", ".idx", ".blk.eviction.json", ".blk.restore.json", ".blk.quarantine", ".idx.quarantine", ".confirmed-upload.json"} {
+	for _, suffix := range []string{".blk", ".idx", ".blk.eviction.json", ".blk.restore.json", ".blk.quarantine", ".idx.quarantine", ".confirmed-upload.json", ".seal-intent.json"} {
 		if !strings.HasSuffix(name, suffix) {
 			continue
 		}
