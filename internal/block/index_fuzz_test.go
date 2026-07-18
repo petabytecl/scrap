@@ -2,6 +2,8 @@ package block
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,9 +44,15 @@ func FuzzDecodeIndexEntry(f *testing.F) {
 	badHeaderCRC := append([]byte(nil), validV1...)
 	badHeaderCRC[8] ^= 0xff
 	f.Add(badHeaderCRC)
+	// Raw entry payloads so the V1/V2 decoder is fuzzed directly rather than
+	// only through the CRC-gated reader, which rejects mutated payloads before
+	// decodeIndexEntry ever runs.
+	f.Add(encodeIndexEntry(v1))
+	f.Add(encodeIndexEntry(v2))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		fuzzIndexFile(t, data)
+		fuzzIndexEntryPayload(t, data)
 	})
 }
 
@@ -77,6 +85,78 @@ func fuzzIndexFile(t *testing.T, data []byte) {
 		}
 		assertIndexEntrySemantics(t, round, entry)
 	}
+}
+
+// fuzzIndexEntryPayload treats the fuzzer bytes as a single raw entry payload
+// so decodeIndexEntry sees malformed length prefixes, fixed fields, envelopes,
+// and trailing data directly. Re-framing the same payload with a valid CRC and
+// reading it back proves the reader and the decoder stay in agreement.
+func fuzzIndexEntryPayload(t *testing.T, payload []byte) {
+	t.Helper()
+	if len(payload) > idxMaxEntryLen {
+		return
+	}
+
+	entry, decErr := decodeIndexEntry(payload)
+
+	reader, readErr := openFuzzIndexReader(t, frameFuzzIndexEntry(payload))
+	if decErr != nil {
+		if readErr == nil {
+			_ = reader.Close()
+			t.Fatalf("payload fails to decode (%v) but the reader accepted it", decErr)
+		}
+		return
+	}
+	if readErr != nil {
+		t.Fatalf("payload decodes cleanly but the reader rejected it: %v", readErr)
+	}
+
+	got := append([]IndexEntry(nil), reader.Entries()...)
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close framed fuzz Block index: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("framed single entry decoded to %d entries", len(got))
+	}
+	assertIndexEntrySemantics(t, got[0], entry)
+
+	if err := validateEntryFieldLens(entry); err != nil {
+		t.Fatalf("decoded entry violates field bounds: %v", err)
+	}
+	round, err := decodeIndexEntry(encodeIndexEntry(entry))
+	if err != nil {
+		t.Fatalf("re-decode encoded entry: %v", err)
+	}
+	assertIndexEntrySemantics(t, round, entry)
+}
+
+// frameFuzzIndexEntry wraps a raw entry payload in a valid index file: the
+// standard header plus one length-prefixed, CRC-protected entry record.
+func frameFuzzIndexEntry(payload []byte) []byte {
+	var hdr [idxHeaderLen]byte
+	copy(hdr[0:4], idxMagic)
+	binary.LittleEndian.PutUint16(hdr[4:6], idxVersion)
+	binary.LittleEndian.PutUint16(hdr[6:8], idxHeaderLen)
+	binary.LittleEndian.PutUint32(hdr[8:12], crc32.Checksum(hdr[0:8], crcTable))
+
+	buf := append([]byte(nil), hdr[:]...)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(payload))) //nolint:gosec // bounded by idxMaxEntryLen above
+	buf = append(buf, lenBuf[:]...)
+	buf = append(buf, payload...)
+	var crcBuf [4]byte
+	binary.LittleEndian.PutUint32(crcBuf[:], crc32.Checksum(payload, crcTable))
+	buf = append(buf, crcBuf[:]...)
+	return buf
+}
+
+func openFuzzIndexReader(t *testing.T, framed []byte) (*IndexReader, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "framed.idx")
+	if err := os.WriteFile(path, framed, 0o600); err != nil {
+		t.Fatalf("write framed fuzz Block index: %v", err)
+	}
+	return OpenIndexReader(path)
 }
 
 func encodeFuzzIndexFile(f *testing.F, entries []IndexEntry) []byte {
