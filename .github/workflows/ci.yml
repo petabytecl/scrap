@@ -84,24 +84,24 @@ jobs:
         continue-on-error: true
 
       - name: Upload coverage to Codecov
-        if: ${{ always() && steps.test-report.outcome == 'success' && env.ACT != 'true' }}
+        if: ${{ always() && hashFiles('coverage.out') != '' && env.ACT != 'true' }}
         uses: codecov/codecov-action@v6
         with:
           files: ./coverage.out
-          flags: go
-          name: scrap-go
+          flags: product
+          name: scrap-product-unit
           use_oidc: true
           fail_ci_if_error: true
           disable_search: true
 
       - name: Upload test results to Codecov
-        if: ${{ always() && hashFiles('test-results/junit.xml') != '' && env.ACT != 'true' }}
+        if: ${{ always() && hashFiles('test-results/unit.xml') != '' && env.ACT != 'true' }}
         uses: codecov/codecov-action@v6
         with:
           report_type: test_results
-          files: ./test-results/junit.xml
-          flags: go
-          name: scrap-go-tests
+          files: ./test-results/unit.xml
+          flags: product
+          name: scrap-product-unit-tests
           use_oidc: true
           fail_ci_if_error: true
           disable_search: true
@@ -128,6 +128,9 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest # old self-host
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v6
 
@@ -139,8 +142,67 @@ jobs:
             go.sum
             tools.go.sum
 
-      - name: Run integration tests
-        run: make integration
+      - name: Test tagged integrations, cover, and generate JUnit report
+        id: integration-report
+        run: make integration-cover
+        continue-on-error: true
+
+      - name: Upload integration coverage to Codecov
+        if: ${{ always() && hashFiles('integration-coverage.out') != '' && env.ACT != 'true' }}
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./integration-coverage.out
+          flags: product
+          name: scrap-product-integration
+          use_oidc: true
+          fail_ci_if_error: true
+          disable_search: true
+
+      - name: Upload integration test results to Codecov
+        if: ${{ always() && hashFiles('integration-test-results/integration.xml') != '' && env.ACT != 'true' }}
+        uses: codecov/codecov-action@v6
+        with:
+          report_type: test_results
+          files: ./integration-test-results/integration.xml
+          flags: product
+          name: scrap-product-integration-tests
+          use_oidc: true
+          fail_ci_if_error: true
+          disable_search: true
+
+      - name: Fail if integration tests failed
+        if: ${{ steps.integration-report.outcome == 'failure' }}
+        run: exit 1
+
+  fuzz-benchmark:
+    runs-on: ubuntu-latest # old self-host
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            tools.go.sum
+
+      - name: Smoke fuzz parsers
+        run: make fuzz FUZZTIME=1s
+
+      - name: Smoke informational benchmarks
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          make benchmark BENCHTIME=1x | tee artifacts/benchmarks.txt
+
+      - name: Upload benchmark output
+        if: ${{ always() && env.ACT != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-benchmarks-${{ github.run_id }}
+          path: artifacts/benchmarks.txt
+          if-no-files-found: error
 
   build:
     runs-on: ubuntu-latest # old self-host
@@ -235,6 +297,7 @@ jobs:
       - test
       - race
       - integration
+      - fuzz-benchmark
       - build
       - vulnerability
       - e2e
@@ -247,6 +310,7 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           RACE_RESULT: ${{ needs.race.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          FUZZ_BENCHMARK_RESULT: ${{ needs.fuzz-benchmark.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
@@ -257,6 +321,7 @@ jobs:
           test "$TEST_RESULT" = success
           test "$RACE_RESULT" = success
           test "$INTEGRATION_RESULT" = success
+          test "$FUZZ_BENCHMARK_RESULT" = success
           test "$BUILD_RESULT" = success
           test "$VULNERABILITY_RESULT" = success
           echo "Tier 1 commit gate passed across split CI jobs."

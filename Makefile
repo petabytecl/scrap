@@ -37,12 +37,14 @@ KUBECTL ?= kubectl
 ##@ Verification Variables
 
 ##? TEST_PACKAGES Go packages used by test and race targets.
-##? COVER_EXCLUDE_PATTERN Extended regex for packages excluded from coverage instrumentation.
+##? UNIT_TEST_PACKAGES Go packages executed by the unit coverage target.
+##? INTEGRATION_TEST_PACKAGES Go packages executed by integration coverage.
+##? PRODUCT_PACKAGES Shipped Go packages instrumented for coverage.
 
 TEST_PACKAGES ?= ./...
-COVER_TEST_PACKAGES ?= $(shell $(GO) list $(TEST_PACKAGES) | grep -v '/gen/')
-COVER_EXCLUDE_PATTERN ?= (/internal/spike/)
-COVER_PACKAGES ?= $(shell printf '%s\n' $(COVER_TEST_PACKAGES) | grep -Ev '$(COVER_EXCLUDE_PATTERN)')
+UNIT_TEST_PACKAGES ?= $(shell $(GO) list ./... | grep -Ev '(/gen(/|$$)|/test/integration(/|$$))')
+INTEGRATION_TEST_PACKAGES ?= ./test/integration
+PRODUCT_PACKAGES ?= $(shell $(GO) list ./cmd/... ./internal/... | grep -Ev '/internal/(spike|encryption/enctest)(/|$$)')
 
 ##? LINT_TIMEOUT Timeout passed to golangci-lint run.
 LINT_TIMEOUT ?= 5m
@@ -51,15 +53,29 @@ LINT_TIMEOUT ?= 5m
 ##? COVERPROFILE Coverage profile output path.
 ##? JUNIT_REPORT JUnit XML report output path.
 ##? TEST_RESULTS_DIR Directory used for JUnit and coverage artifacts.
+##? INTEGRATION_COVERPROFILE Tagged integration coverage profile output path.
+##? INTEGRATION_JUNIT_REPORT Tagged integration JUnit XML report output path.
+##? INTEGRATION_TEST_RESULTS_DIR Directory used for tagged integration artifacts.
+##? FUZZTIME Per-target duration passed to Go fuzzing.
+##? FUZZ_PARALLEL Maximum fuzz workers per target.
+##? FUZZ_TIMEOUT Timeout for each fuzz command.
+##? BENCHTIME Duration or iteration count passed to Go benchmarks.
 
 COVERMODE ?= atomic
 COVERPROFILE ?= coverage.out
 TEST_RESULTS_DIR ?= test-results
-JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/junit.xml
+JUNIT_REPORT ?= $(TEST_RESULTS_DIR)/unit.xml
+INTEGRATION_COVERPROFILE ?= integration-coverage.out
+INTEGRATION_TEST_RESULTS_DIR ?= integration-test-results
+INTEGRATION_JUNIT_REPORT ?= $(INTEGRATION_TEST_RESULTS_DIR)/integration.xml
+FUZZTIME ?= 10s
+FUZZ_PARALLEL ?= 2
+FUZZ_TIMEOUT ?= 1m
+BENCHTIME ?= 1s
 comma := ,
 empty :=
 space := $(empty) $(empty)
-COVERPKG ?= $(subst $(space),$(comma),$(strip $(COVER_PACKAGES)))
+COVERPKG ?= $(subst $(space),$(comma),$(strip $(PRODUCT_PACKAGES)))
 
 CHECK_TARGETS := \
 	static \
@@ -292,7 +308,7 @@ test-race: ## Run package tests with the Go race detector.
 	$(GO) test -race $(TEST_PACKAGES)
 
 .PHONY: test-cover
-test-cover: ## Run tests producing both coverage profile and JUnit XML in one pass.
+test-cover: coverage-packages-check ## Run unit tests with product-only coverage and JUnit output.
 	mkdir -p "$(TEST_RESULTS_DIR)"
 	$(GOTESTSUM) \
 		--junitfile "$(JUNIT_REPORT)" \
@@ -301,12 +317,66 @@ test-cover: ## Run tests producing both coverage profile and JUnit XML in one pa
 		-covermode=$(COVERMODE) \
 		-coverpkg=$(COVERPKG) \
 		-coverprofile=$(COVERPROFILE) \
-		$(COVER_TEST_PACKAGES)
+		$(UNIT_TEST_PACKAGES)
 	$(GO) tool cover -func="$(COVERPROFILE)" | tail -n 1
 
 .PHONY: integration
 integration: ## Run integration tests.
 	$(GO) test -tags=integration ./test/integration/... -v -timeout 5m
+
+.PHONY: integration-cover
+integration-cover: coverage-packages-check ## Run tagged integration tests with product-only coverage and JUnit output.
+	mkdir -p "$(INTEGRATION_TEST_RESULTS_DIR)"
+	$(GO) list -tags=integration $(INTEGRATION_TEST_PACKAGES) >/dev/null
+	$(GOTESTSUM) \
+		--junitfile "$(INTEGRATION_JUNIT_REPORT)" \
+		--format testname \
+		-- \
+		-tags=integration \
+		-covermode=$(COVERMODE) \
+		-coverpkg=$(COVERPKG) \
+		-coverprofile=$(INTEGRATION_COVERPROFILE) \
+		-timeout=5m \
+		$(INTEGRATION_TEST_PACKAGES)
+	$(GO) tool cover -func="$(INTEGRATION_COVERPROFILE)" | tail -n 1
+
+.PHONY: coverage-packages-check
+coverage-packages-check:
+	@test -n "$(strip $(PRODUCT_PACKAGES))" || { printf 'product coverage package expansion is empty\n' >&2; exit 1; }
+	@test -n "$(strip $(UNIT_TEST_PACKAGES))" || { printf 'unit test package expansion is empty\n' >&2; exit 1; }
+	@packages="$$( $(GO) list ./cmd/... ./internal/... )" || exit $$?; \
+		product="$$(printf '%s\n' "$$packages" | grep -Ev '/internal/(spike|encryption/enctest)(/|$$)')"; \
+		test -n "$$product" || { printf 'product coverage package expansion is empty\n' >&2; exit 1; }
+	@$(GO) list ./... >/dev/null
+	@$(GO) list $(UNIT_TEST_PACKAGES) >/dev/null
+
+.PHONY: fuzz
+fuzz: fuzz-frame fuzz-block-index fuzz-projection-value ## Run all bounded parser fuzz targets.
+
+.PHONY: fuzz-frame
+fuzz-frame:
+	$(GO) test ./internal/block -run='^$$' -fuzz='^FuzzReadFrame$$' -fuzztime='$(FUZZTIME)' -parallel='$(FUZZ_PARALLEL)' -timeout='$(FUZZ_TIMEOUT)'
+
+.PHONY: fuzz-block-index
+fuzz-block-index:
+	$(GO) test ./internal/block -run='^$$' -fuzz='^FuzzDecodeIndexEntry$$' -fuzztime='$(FUZZTIME)' -parallel='$(FUZZ_PARALLEL)' -timeout='$(FUZZ_TIMEOUT)'
+
+.PHONY: fuzz-projection-value
+fuzz-projection-value:
+	$(GO) test ./internal/index -run='^$$' -fuzz='^FuzzDecodeEntry$$' -fuzztime='$(FUZZTIME)' -parallel='$(FUZZ_PARALLEL)' -timeout='$(FUZZ_TIMEOUT)'
+
+.PHONY: benchmark
+benchmark: ## Run informational Block read/verification and Projection Resolution benchmarks.
+	$(GO) test \
+		-run='^$$' \
+		-bench='.' \
+		-benchmem \
+		-benchtime='$(BENCHTIME)' \
+		./internal/block ./internal/index
+
+.PHONY: benchmark-smoke
+benchmark-smoke: BENCHTIME=1x
+benchmark-smoke: benchmark ## Run every informational benchmark once.
 
 .PHONY: build
 build: ## Build all supported command binaries.

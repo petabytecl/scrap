@@ -57,10 +57,28 @@ do not add testify/gomega/gomock without an ADR-level dependency decision.
 ```sh
 make test             # go test ./...
 make test-race        # go test -race ./...
-make test-cover       # coverage profile + JUnit XML (excludes gen/ and internal/spike)
+make test-cover       # unit JUnit + product-only statement coverage
 make integration      # go test -tags=integration ./test/integration/... (Testcontainers)
+make integration-cover # tagged integration JUnit + product-only statement coverage
+make fuzz FUZZTIME=10s # bounded Frame, Block index, and Projection value fuzzing
+make benchmark BENCHTIME=1s # informational Block and Projection Resolution benchmarks
 make vuln             # govulncheck ./...
 ```
+
+Coverage instruments only shipped packages under `cmd/` and `internal/`.
+Generated code, scripts, test harnesses, `internal/spike`, and
+`internal/encryption/enctest` are excluded from `-coverpkg`, while their
+applicable tests remain part of their normal suites. The unit and tagged
+integration jobs upload separate profiles for the same commit; Codecov merges
+them into product statement coverage. This is statement coverage, not branch
+coverage or release evidence.
+
+Each fuzz target has inline valid and corrupt seeds and rejects oversized input
+before decoding. Override `FUZZTIME`, `FUZZ_PARALLEL`, or `FUZZ_TIMEOUT` to tune
+a local run. Benchmarks report
+`ns/op`, `B/op`, `allocs/op`, and logical bytes processed, but enforce no latency
+or percentage threshold. CI uses `BENCHTIME=1x` only to prove that every
+benchmark runs and validates its result on an unpinned runner.
 
 Choose the **narrowest gate that proves the change**:
 
