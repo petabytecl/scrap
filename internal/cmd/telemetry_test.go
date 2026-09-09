@@ -388,8 +388,8 @@ func TestEvictionMetricsPrometheusNamesMatchEvidenceQueries(t *testing.T) {
 	body := rec.Body.String()
 	for _, name := range []string{
 		"scrap_eviction_plans_total",
-		"scrap_eviction_apply_total_total",
-		"scrap_eviction_restore_total_total",
+		"scrap_eviction_apply_total",
+		"scrap_eviction_restore_total",
 		"scrap_eviction_evicted_blocks",
 		"scrap_eviction_restore_failed_blocks",
 	} {

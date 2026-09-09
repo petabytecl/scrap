@@ -7,7 +7,7 @@ targets and `make help-vars` for overridable variables.
 
 ## Prerequisites
 
-- **Go 1.26.4** (matches `go.mod` / `tools.go.mod`).
+- **Go 1.27.1** (matches `go.mod` / `tools.go.mod`).
 - **Docker** — Testcontainers-based integration tests, container builds, local
   `act` workflows.
 - **kubectl** — Kubernetes-oriented targets.
@@ -102,6 +102,11 @@ make tier3-evidence   # Tier 3 evidence gate (requires an evidence Cell)
 ```
 
 ## End-to-End locally
+
+New Kind clusters use a digest-pinned Kubernetes 1.35.8 node image, retaining
+the Kubernetes minor supported by vendored Cilium 1.19.4 while updating Kind.
+Override `KIND_NODE_IMAGE` for an explicitly chosen alternative in Make targets
+or `scripts/local-dev-env.sh`; existing clusters keep their current image.
 
 ```sh
 make e2e-up           # create Kind cluster, load image, deploy, run E2E tests

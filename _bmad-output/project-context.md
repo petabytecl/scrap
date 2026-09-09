@@ -25,14 +25,14 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ## Technology Stack & Versions
 
-- Go module: `github.com/petabytecl/scrap`; Go version is `1.26.4` in `go.mod` and `tools.go.mod`.
+- Go module: `github.com/petabytecl/scrap`; Go version is `1.27.1` in `go.mod` and `tools.go.mod`.
 - Version sources are split intentionally: runtime dependencies live in `go.mod`, Go-managed tools in `tools.go.mod`, and Kind/Helm/Cilium defaults in `Makefile`; re-check those files before changing version claims.
 - API/wire format: gRPC + protobuf. Buf v2 reads `proto/` and writes Go/gRPC output to `gen/go`; generated files may be absent in a fresh checkout. Run `make proto` or `buf generate`; never edit generated files by hand.
-- Core storage/consensus: etcd Raft `v3.6.0`, etcd server `v3.6.11`, Pebble `v1.1.5`.
-- Backend boundary: filesystem and S3 implementations satisfy `internal/backend.Backend`; keep Backend-facing code behind that package boundary. S3 uses AWS SDK for Go v2, including S3 `v1.101.0`.
-- Telemetry: OpenTelemetry API/SDK `v1.44.0`, OTLP exporters `v1.43.0`, `otelgrpc v0.69.0`, Prometheus client `v1.20.5`, Prometheus exporter `v0.53.0`.
+- Core storage/consensus: etcd Raft `v3.6.0`, etcd server `v3.6.14`, Pebble `v1.1.5`; ADR 0039 records dependency compatibility constraints.
+- Backend boundary: filesystem and S3 implementations satisfy `internal/backend.Backend`; keep Backend-facing code behind that package boundary. S3 uses AWS SDK for Go v2, including S3 `v1.112.0`.
+- Telemetry: OpenTelemetry API/SDK and OTLP exporters `v1.46.0`, `otelgrpc v0.71.0`, Prometheus client `v1.24.1`, Prometheus exporter `v0.68.0`.
 - Logging: application code uses Go `log/slog`; `internal/logbridge` adapts zap and etcd Raft logging into `slog`. Zap is not the application logging API.
-- Tooling/environment: Buf `v1.70.0`, golangci-lint `v2.12.2`, gotestsum `v1.13.0`, govulncheck `v1.3.0`, Kustomize `v5.8.1`, Kind `v0.31.0`, Helm `v3.21.0`, Cilium `1.19.4`; E2E Backend behavior is commonly exercised through LocalStack.
+- Tooling/environment: Buf `v1.72.0`, golangci-lint `v2.13.2`, gotestsum `v1.13.0`, govulncheck `v1.8.0`, Kustomize `v5.8.1`, Kind `v0.33.0`, Helm `v3.21.4`, Cilium `1.19.4`; E2E Backend behavior is commonly exercised through LocalStack.
 - Release image: `scrapd` builds with `CGO_ENABLED=0`, uses `FROM scratch`, runs as non-root `65532:65532`, and has entrypoint `/scrapd`; do not assume a shell, package manager, dynamic libraries, or runtime tools exist in the image.
 
 ## Critical Implementation Rules

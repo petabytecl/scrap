@@ -32,14 +32,15 @@ jobs:
             go.sum
             tools.go.sum
 
-      - uses: bufbuild/buf-setup-action@v1
+      - uses: bufbuild/buf-action@v1
         with:
-          version: "1.66.0"
+          version: "1.72.0"
+          setup_only: true
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.13.2
           args: --timeout=5m
 
       - name: Check manifests
@@ -56,7 +57,7 @@ jobs:
 
       - name: Install protoc Go plugins
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
 
       - name: Check protobuf schemas
