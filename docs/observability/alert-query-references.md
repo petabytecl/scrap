@@ -15,8 +15,10 @@ risks that do not yet have dedicated telemetry.
 
 - PromQL examples use the Prometheus-normalized names exported from the OTel
   instruments. For OTel counter names that already end in `.total`, the
-  exporter exposes a `_total_total` counter family; the source metric names
-  are recorded in the evidence artifact.
+  current exporter exposes a single `_total` suffix. Older exporters exposed
+  `_total_total`; compatibility queries use the current name first with `or`
+  before aggregation to include legacy series without counting matching label
+  sets twice. The source metric names are recorded in the evidence artifact.
 - Rate expressions use a `[5m]` window to match the evidence query pack and
   the current OTel export cadence.
 - Alert labels must stay stable and bounded. Use labels for routing dimensions
@@ -99,7 +101,7 @@ clamp_min(sum(rate(scrap_write_stage_duration_seconds_count[5m])) by (scrap_writ
 sum(rate(scrap_rpc_server_requests_total{rpc_service="scrap.v1.DocumentService",rpc_method=~"ReadDocument|HeadDocument|FindDocuments",rpc_grpc_status_code!="0"}[5m])) by (rpc_method, rpc_grpc_status_code)
 
 # Restore operation outcomes by bounded reason, result, and failure reason.
-sum(rate(scrap_eviction_restore_total_total[5m])) by (reason, result, failure_reason)
+sum(rate(scrap_eviction_restore_total[5m]) or rate(scrap_eviction_restore_total_total[5m])) by (reason, result, failure_reason)
 
 # Current restore failure inventory by bounded reason.
 scrap_eviction_restore_failures_by_reason
@@ -113,7 +115,7 @@ scrap_upload_pending_bytes
 scrap_upload_pending_blocks
 
 # Upload outcomes by bounded status.
-sum(rate(scrap_upload_total_total[5m])) by (status)
+sum(rate(scrap_upload_total[5m]) or rate(scrap_upload_total_total[5m])) by (status)
 
 # Pressure level: 0=ok, 1=warn, 2=pressure, 3=critical.
 scrap_upload_pressure_level

@@ -8,7 +8,8 @@ cd "$repo_root"
 command_name=${1:-up}
 
 PROFILE=${SCRAP_LOCAL_DEV_PROFILE:-dev}
-KIND_VERSION=${KIND_VERSION:-v0.31.0}
+KIND_VERSION=${KIND_VERSION:-v0.33.0}
+KIND_NODE_IMAGE=${KIND_NODE_IMAGE:-kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0}
 KIND_CMD=${KIND:-}
 KUBECTL=${KUBECTL:-kubectl}
 MAKE_CMD=${MAKE:-make}
@@ -59,6 +60,7 @@ Commands:
 Useful overrides:
   SCRAP_LOCAL_DEV_PROFILE=$PROFILE
   KIND_CLUSTER=$KIND_CLUSTER
+  KIND_NODE_IMAGE=$KIND_NODE_IMAGE
   IMAGE_NAME=$IMAGE_NAME
   LOCAL_KIND_OVERLAY=$LOCAL_KIND_OVERLAY
   SCRAP_LOCAL_DEV_KIND_NODES=$KIND_NODE_COUNT
@@ -138,7 +140,7 @@ ensure_cluster() {
 	else
 		write_default_kind_config
 		log "creating kind cluster: $KIND_CLUSTER profile=$PROFILE nodes=$KIND_NODE_COUNT"
-		kind_cmd create cluster --name "$KIND_CLUSTER" --config "$KIND_CONFIG"
+		kind_cmd create cluster --name "$KIND_CLUSTER" --config "$KIND_CONFIG" --image "$KIND_NODE_IMAGE"
 	fi
 	kind_cmd export kubeconfig --name "$KIND_CLUSTER" >/dev/null
 }

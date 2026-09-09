@@ -807,7 +807,7 @@ func (s *statsSnapshot) latencyStats() map[string]string {
 		"p99":  sorted[percentileIndex(len(sorted), p99)].String(),
 		"min":  sorted[0].String(),
 		"max":  sorted[len(sorted)-1].String(),
-		"mean": (time.Duration(int64(mean(sorted)))).String(),
+		"mean": time.Duration(int64(mean(sorted))).String(),
 	}
 }
 

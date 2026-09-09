@@ -157,8 +157,7 @@ func validateWriterScanFrameFlags(flags byte, frameSeq uint32) error {
 	return nil
 }
 
-//nolint:revive // txID, docName, contentType are part of the public API contract; callers pass document metadata
-func (w *Writer) AppendDocument(txID, docName, contentType string, body io.Reader) (AppendResult, error) {
+func (w *Writer) AppendDocument(_, _, _ string, body io.Reader) (AppendResult, error) {
 	if w.closed {
 		return AppendResult{}, errors.New("block: writer is closed")
 	}
@@ -190,8 +189,7 @@ func (w *Writer) AppendDocument(txID, docName, contentType string, body io.Reade
 	}, nil
 }
 
-//nolint:revive // txID, docName, contentType are part of the public API contract; callers pass document metadata
-func (w *Writer) AppendDocumentFrames(txID, docName, contentType string, frames DocumentFrames) (AppendResult, error) {
+func (w *Writer) AppendDocumentFrames(_, _, _ string, frames DocumentFrames) (AppendResult, error) {
 	if w.closed {
 		return AppendResult{}, errors.New("block: writer is closed")
 	}

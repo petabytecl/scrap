@@ -30,19 +30,22 @@ glossary and process contract.
 
 | Category | Technology | Version |
 | --- | --- | --- |
-| Language | Go | 1.26.4 |
-| Consensus | `go.etcd.io/raft/v3` + etcd server WAL/snap | raft 3.6.0 / server 3.6.11 |
+| Language | Go | 1.27.1 |
+| Consensus | `go.etcd.io/raft/v3` + etcd server WAL/snap | raft 3.6.0 / server 3.6.14 |
 | Metadata KV | CockroachDB Pebble | 1.1.5 |
-| API / wire | gRPC + Protobuf (buf v2) | buf 1.70.0 |
-| Object store | AWS SDK for Go v2 (S3) + filesystem adapter | s3 1.101.0 |
+| API / wire | gRPC + Protobuf (buf v2) | grpc 1.83.2 / protobuf 1.36.12 / buf 1.72.0 |
+| Object store | AWS SDK for Go v2 (S3) + filesystem adapter | s3 1.112.0 |
 | Envelope encryption | OpenBao Transit | api 1.100.0-dev |
-| Telemetry | OpenTelemetry API/SDK + OTLP exporters; Prometheus exporter | otel 1.44.0 |
+| Telemetry | OpenTelemetry API/SDK + OTLP exporters; Prometheus exporter | otel 1.46.0 |
 | Logging | `log/slog` (zap/etcd bridged via `internal/logbridge`) | stdlib |
-| Tooling | golangci-lint 2.12.2, gotestsum 1.13.0, govulncheck 1.3.0 | — |
-| Deploy | Kustomize 5.8.1, Kind 0.31.0, Helm 3.21.0, Cilium 1.19.4 | — |
+| Tooling | golangci-lint 2.13.2, gotestsum 1.13.0, govulncheck 1.8.0 | — |
+| Deploy | Kustomize 5.8.1, Kind 0.33.0, Helm 3.21.4, Cilium 1.19.4 | — |
 
 Runtime dependencies live in `go.mod`; Go-managed tools in `tools.go.mod`;
 cluster tool defaults in the `Makefile`.
+
+Compatibility constraints for this dependency refresh are recorded in
+[ADR 0039](adr/0039-go-1-27-and-dependency-refresh.md).
 
 ## Architecture at a Glance
 

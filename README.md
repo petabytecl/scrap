@@ -42,7 +42,7 @@ contract for this repository.
 
 ## Requirements
 
-- Go 1.26.4.
+- Go 1.27.1.
 - Docker for Testcontainers-based integration tests, container builds, and local
   `act` workflows.
 - `kubectl` for Kubernetes-oriented targets.

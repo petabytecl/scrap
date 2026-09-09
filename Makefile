@@ -24,13 +24,15 @@ ACT ?= act
 ##? DOCKER Docker CLI used by local image targets.
 ##? KIND kind command used by local cluster targets.
 ##? KIND_VERSION kind version used by the default KIND command.
+##? KIND_NODE_IMAGE Kubernetes node image used for new Kind clusters.
 ##? HELM_VERSION Helm version used by the default HELM command.
 ##? KUBECTL kubectl CLI used by local cluster targets.
 
 DOCKER ?= docker
-HELM_VERSION ?= v3.21.0
+HELM_VERSION ?= v3.21.4
 HELM ?= $(GO) run helm.sh/helm/v3/cmd/helm@$(HELM_VERSION)
-KIND_VERSION ?= v0.31.0
+KIND_VERSION ?= v0.33.0
+KIND_NODE_IMAGE ?= kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
 KIND ?= $(GO) run sigs.k8s.io/kind@$(KIND_VERSION)
 KUBECTL ?= kubectl
 
@@ -503,14 +505,14 @@ kind-cilium-check:
 
 .PHONY: local-kind-create
 local-kind-create:
-	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml
+	$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml --image "$(KIND_NODE_IMAGE)"
 
 .PHONY: local-kind-ensure
 local-kind-ensure:
 	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(KIND_CLUSTER)" >/dev/null 2>&1; then \
 		printf 'kind cluster already exists: %s\n' "$(KIND_CLUSTER)"; \
 	else \
-		$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml; \
+		$(KIND) create cluster --name "$(KIND_CLUSTER)" --config deploy/kind/cluster.yaml --image "$(KIND_NODE_IMAGE)"; \
 	fi
 	$(KIND) export kubeconfig --name "$(KIND_CLUSTER)" >/dev/null
 
@@ -530,14 +532,14 @@ local-kind-deploy: manifests-check
 
 .PHONY: prodlike-kind-create
 prodlike-kind-create:
-	$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"
+	$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)" --image "$(KIND_NODE_IMAGE)"
 
 .PHONY: prodlike-kind-ensure
 prodlike-kind-ensure:
 	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(PRODLIKE_KIND_CLUSTER)" >/dev/null 2>&1; then \
 		printf 'kind cluster already exists: %s\n' "$(PRODLIKE_KIND_CLUSTER)"; \
 	else \
-		$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)"; \
+		$(KIND) create cluster --name "$(PRODLIKE_KIND_CLUSTER)" --config "$(PRODLIKE_KIND_CONFIG)" --image "$(KIND_NODE_IMAGE)"; \
 	fi
 	$(KIND) export kubeconfig --name "$(PRODLIKE_KIND_CLUSTER)" >/dev/null
 	$(MAKE) prodlike-cilium-install
@@ -785,7 +787,7 @@ stress-setup:
 	@if $(KIND) get clusters 2>/dev/null | grep -Fx "$(STRESS_KIND_CLUSTER)" >/dev/null 2>&1; then \
 		printf 'kind cluster already exists: %s\n' "$(STRESS_KIND_CLUSTER)"; \
 	else \
-		$(KIND) create cluster --name "$(STRESS_KIND_CLUSTER)" --config "$(STRESS_KIND_CONFIG)"; \
+		$(KIND) create cluster --name "$(STRESS_KIND_CLUSTER)" --config "$(STRESS_KIND_CONFIG)" --image "$(KIND_NODE_IMAGE)"; \
 	fi
 	$(KIND) export kubeconfig --name "$(STRESS_KIND_CLUSTER)" >/dev/null
 	PRODLIKE_KIND_CLUSTER="$(STRESS_KIND_CLUSTER)" \

@@ -9,7 +9,7 @@ at the repository root.
 ## Project Overview
 
 - **Type:** Monolith (single Go module `github.com/petabytecl/scrap`)
-- **Primary Language:** Go 1.26.4
+- **Primary Language:** Go 1.27.1
 - **Project Type:** Backend service — transaction-scoped document storage gateway
 - **Architecture:** Layered, service-oriented monolith over a per-Shard Raft
   storage engine (gRPC public/peer APIs + admin HTTP)

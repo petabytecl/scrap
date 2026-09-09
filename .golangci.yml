@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  go: "1.26"
+  go: "1.27.1"
   timeout: 5m
   tests: true
 
@@ -25,7 +25,8 @@ formatters:
         - prefix(github.com/petabytecl/scrap)
     gofumpt:
       module-path: github.com/petabytecl/scrap
-      extra-rules: true
+      extra:
+        group-params: true
     gofmt:
       simplify: true
       rewrite-rules:
